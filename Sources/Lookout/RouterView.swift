@@ -75,6 +75,22 @@ extension Store {
             return .failure(error)
         }
     }
+
+    /// The same for a plan: your decision is written for the hook, which gives it to the session as Approve or Keep planning
+    /// in the app would.
+    func answerPlan(_ form: PendingForm, _ decision: PendingForm.PlanDecision, card: String) async -> Result<Void, Error> {
+        if routerIsPretend { return Result { _ = try FormBridge.answerData(form, plan: decision) } }
+        guard let dir = formBridge.dir else { return .failure(FormWriter.Cancelled()) }
+        do {
+            try await FormWriter.write(form, plan: decision, dir: dir) { [weak self] in
+                guard let self else { return false }
+                return self.routerOn && self.router.cards.first(where: { $0.id == card })?.isOpen == true
+            }
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
+    }
 }
 
 /// The one-line summary of live work, built from the session rows alone (no model writes it): how many are working, the
@@ -206,6 +222,25 @@ enum RouterText {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(text)
     }
+
+    /// A plan's Markdown, line by line as written: headings in bold without their #, the rest with its inline styles.
+    static func plan(_ text: String) -> AttributedString {
+        var out = AttributedString()
+        for (i, raw) in text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated() {
+            if i > 0 { out += AttributedString("\n") }
+            let line = String(raw)
+            let trimmed = line.drop { $0 == " " }
+            if trimmed.hasPrefix("#") {
+                var heading = inline(String(trimmed.drop { $0 == "#" }).trimmingCharacters(in: .whitespaces))
+                heading.inlinePresentationIntent = .stronglyEmphasized
+                out += heading
+            } else {
+                out += inline(line)
+            }
+        }
+        return out
+    }
 }
 
 /// A card on two short lines, for the bar's panel: the session and its age, then the kind, the project and the text.
@@ -288,6 +323,9 @@ final class RouterModel {
     /// Forms answered from here, until the session moves on, and what was sent.
     var sent: Set<String> = []
     var delivered: [String: [String: String]] = [:]
+    /// Per plan (by its form's key): the note typed to go with "Keep planning", and what was decided from here.
+    var planNotes: [String: String] = [:]
+    var planDecided: [String: PendingForm.PlanDecision] = [:]
 
     /// The form's controls are shut while its answer is written and once it is.
     func locked(_ form: PendingForm) -> Bool { sending.contains(form.id) || sent.contains(form.id) }
@@ -543,6 +581,39 @@ final class RouterModel {
             }
         }
     }
+
+    // MARK: Plans
+
+    func planNote(_ form: PendingForm) -> String { planNotes[form.id] ?? "" }
+
+    func setPlanNote(_ text: String, of form: PendingForm) {
+        guard !locked(form) else { return }
+        planNotes[form.id] = text
+        formErrors[form.id] = nil
+    }
+
+    /// Approve, or Keep planning with the note if one is typed: written off the main thread like an answer, and passed on
+    /// by the hook as the app's own buttons would.
+    func decidePlan(_ form: PendingForm, approve: Bool, card: String, store: Store) {
+        guard form.isPlan, !sending.contains(form.id), !sent.contains(form.id) else { return }
+        let decision = PendingForm.PlanDecision(approve: approve, feedback: approve ? "" : planNote(form))
+        sending.insert(form.id)
+        lastWrite = Task { [weak self] in
+            let result = await store.answerPlan(form, decision, card: card)
+            guard let self else { return }
+            self.sending.remove(form.id)
+            switch result {
+            case .success:
+                self.sent.insert(form.id)
+                self.planDecided[form.id] = decision
+                self.formErrors[form.id] = nil
+                Announce.say(approve ? "Plan approved" : "Sent back to keep planning")
+            case .failure(let error):
+                self.formErrors[form.id] = error.localizedDescription
+                Announce.say("Couldn't send the decision: \(error.localizedDescription)")
+            }
+        }
+    }
 }
 
 // MARK: - Window content
@@ -660,7 +731,9 @@ struct RouterCardRow: View {
             summary(project, form: form)
                 .contentShape(Rectangle())
                 .onTapGesture { open() }
-            if let form {
+            if let form, form.isPlan {
+                RouterPlanView(form: form, card: card.id, store: store, model: model).padding(.top, 4)
+            } else if let form {
                 RouterFormView(form: form, card: card.id, store: store, model: model).padding(.top, 4)
             }
         }
@@ -825,6 +898,96 @@ struct RouterFormView: View {
             Label("Sent", systemImage: "checkmark").font(Theme.Typography.control).foregroundStyle(Theme.green)
                 .accessibilityLabel("Answer sent")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A plan to approve, decided here: its text, then Approve or Keep planning (with a note for Claude if you write one).
+/// Lookout writes the decision and the hook gives it to the session, like the app's own buttons.
+struct RouterPlanView: View {
+    let form: PendingForm
+    let card: String
+    let store: Store
+    @Bindable var model: RouterModel
+
+    static let maxPlanHeight: CGFloat = 260
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            planText
+            if let decision = model.planDecided[form.id], model.sent.contains(form.id) { decided(decision) } else { controls }
+        }
+        .padding(10)
+        .background(Theme.Radius.shape(Theme.Radius.md).fill(Theme.Fill.faint))
+        .overlay(Theme.Radius.shape(Theme.Radius.md).strokeBorder(Theme.stroke))
+    }
+
+    /// The whole plan, scrolling past a few screens' worth of lines.
+    private var planText: some View {
+        let plan = form.plan ?? ""
+        let text = Text(plan.isEmpty ? AttributedString("The plan is empty.") : RouterText.plan(plan))
+            .font(Theme.Typography.meta)
+            .foregroundStyle(plan.isEmpty ? Theme.tertiary : Theme.text)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+        return ViewThatFits(in: .vertical) {
+            text
+            ScrollView { text }
+        }
+        .frame(maxHeight: Self.maxPlanHeight)
+    }
+
+    /// The note and both buttons; all shut while the decision is being written.
+    private var controls: some View {
+        let locked = model.locked(form)
+        let sending = model.sending.contains(form.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            TextField("Note for Claude, with Keep planning (optional)…",
+                      text: Binding(get: { model.planNote(form) }, set: { model.setPlanNote($0, of: form) }), axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(Theme.Typography.meta)
+                .lineLimit(1...4)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Theme.Radius.shape(Theme.Radius.sm).fill(Theme.Fill.field))
+                .disabled(locked)
+                .accessibilityLabel("Note for Claude")
+            HStack(spacing: 8) {
+                if let error = model.formErrors[form.id] {
+                    Text(error).font(Theme.Typography.caption).foregroundStyle(Theme.red).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                ActionButton(sending ? "Sending…" : "Keep planning") {
+                    model.decidePlan(form, approve: false, card: card, store: store)
+                }
+                .disabled(locked)
+                .tip("Keep planning", "Sends the plan back, with your note if you wrote one; the session stays in plan mode")
+                ActionButton(sending ? "Sending…" : "Approve") {
+                    model.decidePlan(form, approve: true, card: card, store: store)
+                }
+                .disabled(locked)
+                .tip("Approve", "Approves the plan in the session, as Approve in Claude would")
+            }
+        }
+    }
+
+    /// Once sent: what was decided, to read, not to change.
+    private func decided(_ decision: PendingForm.PlanDecision) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if decision.approve {
+                Label("Approved", systemImage: "checkmark").font(Theme.Typography.control).foregroundStyle(Theme.green)
+                    .accessibilityLabel("Plan approved")
+            } else {
+                Label("Sent back to keep planning", systemImage: "arrow.uturn.backward").font(Theme.Typography.control)
+                    .foregroundStyle(Theme.secondary)
+                let note = decision.feedback.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !note.isEmpty {
+                    Text(note).font(Theme.Typography.meta).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

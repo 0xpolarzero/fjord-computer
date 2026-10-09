@@ -555,6 +555,51 @@ import UserNotifications
         #expect(!model.sent.contains(form.id) && model.formErrors[form.id] != nil && model.sending.isEmpty)
     }
 
+    // MARK: Plans
+
+    @Test func aPlanIsApprovedOrSentBackFromItsCard() async throws {
+        let store = demo()
+        let card = try #require(store.openRouterCards.first { $0.kind == .plan })
+        let form = try #require(store.pendingForm(for: card))
+        #expect(form.isPlan && form.plan?.hasPrefix("# Run the JavaScript sandbox") == true)
+        let model = RouterModel()
+        model.setPlanNote("Use the existing CI runner", of: form)
+        model.decidePlan(form, approve: false, card: card.id, store: store)
+        #expect(model.sending.contains(form.id) && model.locked(form))
+        // Nothing changes while it is written, nor once it is.
+        model.setPlanNote("changed my mind", of: form)
+        model.decidePlan(form, approve: true, card: card.id, store: store)
+        await model.lastWrite?.value
+        #expect(model.sent.contains(form.id) && model.formErrors[form.id] == nil && model.sending.isEmpty)
+        #expect(model.planDecided[form.id] == .init(approve: false, feedback: "Use the existing CI runner"))
+        #expect(model.planNote(form) == "Use the existing CI runner")
+    }
+
+    @Test func anApprovalIsWrittenToTheFormsFolder() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("router-forms-\(UUID().uuidString)")
+        let store = writing(dir)
+        defer { store.formBridge.stop(); store.persists = false; try? FileManager.default.removeItem(at: dir) }
+        let card = try #require(store.openRouterCards.first { $0.kind == .plan })
+        let form = try #require(store.pendingForm(for: card))
+        let model = RouterModel()
+        // A note typed, then Approve: an approval carries no note.
+        model.setPlanNote("unused", of: form)
+        model.decidePlan(form, approve: true, card: card.id, store: store)
+        await model.lastWrite?.value
+        #expect(model.planDecided[form.id]?.approve == true)
+        let written = try JSONSerialization.jsonObject(with: Data(contentsOf: FormBridge.answerURL(form.id, in: dir))) as? NSDictionary
+        #expect(written == ["plan": ["approve": true, "feedback": ""]] as NSDictionary)
+    }
+
+    @Test func thePlanCardShowsThePlanAndBothButtons() async throws {
+        let store = demo()
+        let tree = try await AccessibilityTree.render(RouterView(store: store, model: RouterModel(), checksClaudeCode: false))
+        // The plan itself, read as it is written (a line of its body, not the card's title).
+        #expect(tree.all.contains { $0.role == "AXStaticText" && $0.value.contains("talk to it over vsock") })
+        #expect(tree.all.contains { $0.role == "AXButton" && $0.label == "Approve" })
+        #expect(tree.all.contains { $0.role == "AXButton" && $0.label == "Keep planning" })
+    }
+
     @Test func severalChoicesAreJoinedAsTheFormTakesThem() {
         let q = PendingForm.Question(question: "Which?", header: "", multiSelect: true,
                                      options: [.init(label: "A", description: ""), .init(label: "B", description: "")])

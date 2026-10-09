@@ -523,11 +523,12 @@ extension Store {
         return (needsYou, open.count - needsYou)
     }
 
-    /// The form Lookout's hook holds for this card's own question: the one for the very call the card waits on (an older
-    /// card never shows a newer question's form, nor a card a form whose call isn't known yet).
+    /// The form Lookout's hook holds for this card's own question or plan: the one for the very call the card waits on (an
+    /// older card never shows a newer question's form, nor a card a form whose call isn't known yet).
     func pendingForm(for card: RouterCard) -> PendingForm? {
-        guard card.kind == .question, card.isOpen, let call = card.toolUseID,
-              let cli = claudeSessions[card.sessionID]?.cliID, let form = pendingForms[cli], form.toolUseID == call else { return nil }
+        guard card.kind == .question || card.kind == .plan, card.isOpen, let call = card.toolUseID,
+              let cli = claudeSessions[card.sessionID]?.cliID, let form = pendingForms[cli], form.toolUseID == call,
+              form.isPlan == (card.kind == .plan) else { return nil }
         return form
     }
 

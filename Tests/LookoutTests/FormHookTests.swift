@@ -10,21 +10,45 @@ import Testing
         var clock = Date(timeIntervalSince1970: 2_000_000_000)
     }
 
-    private func request(transcript: URL?, tool: String = "AskUserQuestion", event: String = "PermissionRequest") -> Data {
+    private func request(transcript: URL?, tool: String = "AskUserQuestion", event: String = "PermissionRequest",
+                         input: [String: Any] = sampleInput) -> Data {
         try! JSONSerialization.data(withJSONObject: [
             "session_id": "cli-1", "transcript_path": transcript?.path ?? "", "cwd": "/code/app",
-            "hook_event_name": event, "tool_name": tool, "tool_input": sampleInput, "permission_mode": "default",
+            "hook_event_name": event, "tool_name": tool, "tool_input": input, "permission_mode": "default",
         ] as [String: Any])
+    }
+
+    private func planRequest(transcript: URL? = nil) -> Data {
+        request(transcript: transcript, tool: "ExitPlanMode", input: planInput)
     }
 
     private func line(_ obj: [String: Any]) -> Data {
         try! JSONSerialization.data(withJSONObject: obj) + Data("\n".utf8)
     }
 
-    private func toolUse(_ id: String) -> Data {
+    private func toolUse(_ id: String, tool: String = "AskUserQuestion", input: [String: Any] = sampleInput) -> Data {
         line(["type": "assistant", "message": ["role": "assistant", "content": [
-            ["type": "tool_use", "id": id, "name": "AskUserQuestion", "input": sampleInput],
+            ["type": "tool_use", "id": id, "name": tool, "input": input],
         ]]])
+    }
+
+    /// The decision the run printed.
+    private func decision(_ box: Box) throws -> [String: Any] {
+        let obj = try #require(try JSONSerialization.jsonObject(with: box.output) as? [String: Any])
+        let specific = try #require(obj["hookSpecificOutput"] as? [String: Any])
+        #expect(specific["hookEventName"] as? String == "PermissionRequest")
+        return try #require(specific["decision"] as? [String: Any])
+    }
+
+    /// A plan hook's run, decided by Lookout at the third wait; what it held then.
+    private func decidePlan(_ dir: TempDir, _ decision: PendingForm.PlanDecision) -> (FormHook.Outcome, Box, PendingForm?) {
+        var held: PendingForm?
+        let (outcome, box) = run(dir, input: planRequest(), step: { n, forms in
+            guard n == 3, let form = FormBridge.read(dir: forms, alive: { $0 == 4242 })["cli-1"] else { return }
+            held = form
+            try! FormBridge.answer(form, plan: decision, in: forms)
+        })
+        return (outcome, box, held)
     }
 
     private func toolResult(_ id: String) -> Data {
@@ -88,6 +112,55 @@ import Testing
         #expect(updated["answers"] as? [String: String] == ["Which database?": "SQLite", "Which features?": "Auth, Billing"])
         #expect((updated["questions"] as? [Any])?.count == 2)
         #expect(pendingFiles(dir).isEmpty)
+    }
+
+    @Test func anApprovedPlanIsAllowedWithItsInputAsItCame() throws {
+        let dir = TempDir()
+        let (outcome, box, held) = decidePlan(dir, .init(approve: true))
+        #expect(outcome == .answered)
+        let form = try #require(held)
+        #expect(form.isPlan && form.plan == planInput["plan"] as? String)
+        // Claude Code ignores a bare allow for ExitPlanMode: the input goes back with it, unchanged.
+        let decision = try decision(box)
+        #expect(decision["behavior"] as? String == "allow")
+        #expect((decision["updatedInput"] as? NSDictionary)?.isEqual(to: planInput) == true)
+        #expect(decision["message"] == nil && pendingFiles(dir).isEmpty)
+    }
+
+    @Test func aPlanSentBackIsDeniedWithClaudeCodesWordsAndTheNote() throws {
+        let dir = TempDir()
+        let (outcome, box, _) = decidePlan(dir, .init(approve: false, feedback: "Split step 2 in two"))
+        #expect(outcome == .answered)
+        let decision = try decision(box)
+        #expect(decision["behavior"] as? String == "deny" && decision["updatedInput"] == nil)
+        #expect(decision["message"] as? String == FormHook.rejectedWithNote + "Split step 2 in two")
+        // Not interrupted: the session goes on planning.
+        #expect(decision["interrupt"] == nil)
+
+        let bare = TempDir()
+        let (_, plain, _) = decidePlan(bare, .init(approve: false))
+        #expect(try self.decision(plain)["message"] as? String == FormHook.rejected)
+    }
+
+    @Test func anAnswerOfTheWrongKindDecidesNothing() {
+        #expect(FormHook.decision(tool: "ExitPlanMode", input: planInput, answer: ["answers": ["Q": "A"]]) == nil)
+        #expect(FormHook.decision(tool: "AskUserQuestion", input: sampleInput, answer: ["plan": ["approve": true]]) == nil)
+        #expect(FormHook.decision(tool: "ExitPlanMode", input: planInput, answer: ["plan": ["feedback": "no verdict"]]) == nil)
+    }
+
+    @Test func aPlanApprovedInTheAppLeavesQuietly() throws {
+        let dir = TempDir()
+        let transcript = dir.path("t.jsonl")
+        // A question with the plan's input isn't its call: only an ExitPlanMode call is.
+        try (toolUse("ask", input: planInput) + toolUse("plan", tool: "ExitPlanMode", input: planInput)).write(to: transcript)
+        var held: PendingForm?
+        let (outcome, box) = run(dir, input: planRequest(transcript: transcript), step: { n, forms in
+            if n == 1 { held = FormBridge.read(dir: forms, alive: { $0 == 4242 })["cli-1"] }
+            if n == 2 { self.append(self.toolResult("ask"), to: transcript) }
+            if n == 4 { self.append(self.toolResult("plan"), to: transcript) }
+        })
+        #expect(held?.toolUseID == "plan" && held?.isPlan == true)
+        #expect(outcome == .answeredElsewhere && box.sleeps == 4 && box.output.isEmpty && pendingFiles(dir).isEmpty)
     }
 
     @Test func thePendingFileIsPrivate() throws {

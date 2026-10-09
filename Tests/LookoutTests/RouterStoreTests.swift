@@ -201,18 +201,19 @@ import Testing
         #expect(s.pendingForms.isEmpty)
     }
 
-    private func asking(_ s: Store, _ id: String, since: Date, call: String = "toolu_1", turns: Int = 1) {
+    private func asking(_ s: Store, _ id: String, since: Date, call: String = "toolu_1", turns: Int = 1,
+                        tool: String = "AskUserQuestion") {
         var running = session(id, turns: turns)
         running.running = true
         running.summary = nil
         s.ingest([running], appUnread: [], claudeFrontmost: false, now: now)
-        s.claudeActivity = [id: ClaudeActivity(text: "Which one?", since: since, waitsForYou: true, tool: "AskUserQuestion",
-                                               toolUseID: call)]
+        let text = tool == "ExitPlanMode" ? "Approve the plan: Ship it" : "Which one?"
+        s.claudeActivity = [id: ClaudeActivity(text: text, since: since, waitsForYou: true, tool: tool, toolUseID: call)]
     }
 
     /// The hook holds a form for `call` (nil: not found yet): written to the forms folder and read back by the bridge when
     /// the store has one running, else set directly.
-    private func form(_ s: Store, call: String?, key: String = "k") async {
+    private func form(_ s: Store, call: String?, key: String = "k", plan: Bool = false) async {
         guard s.router.enabled, let forms = s.routerPaths?.forms else {
             s.routerFormsLoaded = true
             s.pendingForms = ["cli-local_a": PendingForm(id: key, cliSessionID: "cli-local_a", transcriptPath: "",
@@ -221,9 +222,10 @@ import Testing
             return
         }
         await release(s)
-        var record: [String: Any] = ["key": key, "session_id": "cli-local_a", "tool_input": sampleInput, "created_at": 1,
-                                     "pid": Int(getpid())]
+        var record: [String: Any] = ["key": key, "session_id": "cli-local_a", "tool_input": plan ? planInput : sampleInput,
+                                     "created_at": 1, "pid": Int(getpid())]
         record["tool_use_id"] = call
+        if plan { record["tool_name"] = "ExitPlanMode" }
         try! JSONSerialization.data(withJSONObject: record).write(to: forms.appendingPathComponent("\(key).json"))
         s.formBridge.refresh()
         await waitUntil { s.pendingForms["cli-local_a"]?.id == key }
@@ -372,6 +374,37 @@ import Testing
         s.feedRouter(now: now.addingTimeInterval(7301))
         #expect(s.openRouterCards.isEmpty)
         #expect(s.router.cards.first?.addressedBy == .answered)
+    }
+
+    @Test func aPlanCardShowsItsPlanAndItsDecisionGoesToTheHook() async throws {
+        let dir = TempDir()
+        let s = store(dir, [session("local_a", turns: 1)])
+        await s.routerHookWork?.value
+        asking(s, "local_a", since: now.addingTimeInterval(10), call: "toolu_p", tool: "ExitPlanMode")
+        s.feedRouter(now: now.addingTimeInterval(11))
+        let card = try #require(s.openRouterCards.first)
+        #expect(card.kind == .plan && card.text == "Ship it" && card.toolUseID == "toolu_p")
+        // A question's form held for the same call is not this card's; the plan's is.
+        await form(s, call: "toolu_p", key: "question")
+        #expect(s.pendingForm(for: card) == nil)
+        await form(s, call: "toolu_p", key: "plan", plan: true)
+        let held = try #require(s.pendingForm(for: card))
+        #expect(held.plan == planInput["plan"] as? String)
+        #expect(s.heldForms?["local_a"] == ["toolu_p"])
+
+        // Sent back with a note: the decision is written where the hook waits for it.
+        let forms = try #require(s.routerPaths?.forms)
+        try await FormWriter.write(held, plan: .init(approve: false, feedback: "Add tests"), dir: forms)
+        let written = try JSONSerialization.jsonObject(with: Data(contentsOf: FormBridge.answerURL(held.id, in: forms))) as? NSDictionary
+        #expect(written == ["plan": ["approve": false, "feedback": "Add tests"]] as NSDictionary)
+        // A question's answers aren't taken for a plan.
+        await #expect(throws: FormBridge.Failure.notAQuestion) { try await FormWriter.write(held, answers: ["Q?": "A"], dir: forms) }
+
+        // The hook passes it on and lets go: the card is answered.
+        await release(s)
+        s.claudeActivity = ["local_a": ClaudeActivity(text: "Thinking", since: now.addingTimeInterval(20))]
+        s.feedRouter(now: now.addingTimeInterval(21))
+        #expect(s.openRouterCards.isEmpty && s.router.cards.first?.addressedBy == .answered)
     }
 
     @Test func turningItOnWithAnIdleSessionAndALiveFormKeepsTheWait() async throws {

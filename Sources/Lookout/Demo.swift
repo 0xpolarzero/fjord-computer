@@ -231,6 +231,18 @@ enum Demo {
                 PendingForm.Option(label: "Ask first", description: "Show a prompt before each update"),
             ])],
             createdAt: now.addingTimeInterval(-60), pid: 0, toolUseID: "toolu_demo_lcu")
+        // The Linux sandbox's plan, held the same way: its card shows it, to approve or send back.
+        let linux = "local_demo-linux"
+        store.claudeSessions[linux]?.cliID = "cli-demo-linux"
+        store.pendingForms["cli-demo-linux"] = PendingForm(
+            id: "cli-demo-linux-1-1", cliSessionID: "cli-demo-linux", transcriptPath: "", questions: [],
+            createdAt: now.addingTimeInterval(-540), pid: 0, toolUseID: "toolu_demo_linux", plan: """
+            # Run the JavaScript sandbox in a Firecracker microVM on Linux
+
+            1. Add a `firecracker` backend next to the macOS one, behind the same `Sandbox` protocol.
+            2. Boot a minimal kernel and rootfs with the JS runtime baked in; talk to it over vsock.
+            3. Run the existing sandbox tests against both backends in CI (Linux runner with KVM).
+            """)
         func card(_ session: String, _ kind: RouterCard.Kind, _ text: String, minutes: Double, addressed: RouterCard.Addressed? = nil)
             -> RouterCard {
             let s = store.claudeSessions[session]
@@ -253,6 +265,7 @@ enum Demo {
             card(lcu, .question, question, minutes: 2),
         ]
         state.cards[state.cards.count - 1].toolUseID = "toolu_demo_lcu"
+        if let i = state.cards.firstIndex(where: { $0.sessionID == linux }) { state.cards[i].toolUseID = "toolu_demo_linux" }
         // The question is the wait the session is on now, so its form shows on its card.
         state.waits[lcu] = state.cards.last?.waitMs
         state.chat = [

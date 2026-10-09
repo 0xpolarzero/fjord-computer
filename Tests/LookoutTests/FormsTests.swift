@@ -24,6 +24,9 @@ let sampleInput: [String: Any] = ["questions": [
      "options": [["label": "Auth", "description": ""], ["label": "Billing", "description": ""]]],
 ]]
 
+/// ExitPlanMode's input as Claude Code gives it to the hook (2.1: the plan, and the file it was saved to).
+let planInput: [String: Any] = ["plan": "# Ship it\n\n1. Build\n2. Test", "planFilePath": "/Users/me/.claude/plans/ship-it.md"]
+
 /// What the hook leaves in the forms folder, and how Lookout answers it.
 @Suite struct Forms {
     private func pendingFile(_ key: String, session: String = "cli-1", created: Int64 = 1000, pid: Int32 = getpid()) -> Data {
@@ -41,6 +44,31 @@ let sampleInput: [String: Any] = ["questions": [
         #expect(form.questions[1].multiSelect && form.questions[0].header == "DB")
         #expect(form.createdAt == Date(timeIntervalSince1970: 1))
         #expect(PendingForm.decode(Data("{}".utf8)) == nil)
+    }
+
+    @Test func aPendingPlanIsReadWithItsText() throws {
+        let record: [String: Any] = ["key": "p1", "session_id": "cli-1", "transcript_path": "/tmp/t.jsonl", "tool_name": "ExitPlanMode",
+                                     "tool_input": planInput, "created_at": 1000, "pid": 7, "tool_use_id": "toolu_p"]
+        let form = try #require(PendingForm.decode(try JSONSerialization.data(withJSONObject: record)))
+        #expect(form.isPlan && form.plan == "# Ship it\n\n1. Build\n2. Test" && form.questions.isEmpty)
+        #expect(form.id == "p1" && form.toolUseID == "toolu_p" && form.pid == 7)
+        // A plan with no text is still one to approve; a question record without its tool's name is a question, as before.
+        var empty = record
+        empty["tool_input"] = [String: Any]()
+        #expect(PendingForm.decode(try JSONSerialization.data(withJSONObject: empty))?.plan == "")
+        #expect(PendingForm.decode(pendingFile("q"))?.isPlan == false)
+    }
+
+    @Test func aPlansAnswerIsItsDecisionAndOnlyAPlanTakesOne() throws {
+        let plan = PendingForm(id: "p", cliSessionID: "c", transcriptPath: "", questions: [], createdAt: Date(), pid: 0, plan: "x")
+        let question = try #require(PendingForm.decode(pendingFile("q")))
+        func decoded(_ data: Data) throws -> NSDictionary { try #require(try JSONSerialization.jsonObject(with: data) as? NSDictionary) }
+        #expect(try decoded(FormBridge.answerData(plan, plan: .init(approve: true, feedback: "ignored")))
+            == ["plan": ["approve": true, "feedback": ""]] as NSDictionary)
+        #expect(try decoded(FormBridge.answerData(plan, plan: .init(approve: false, feedback: "  add tests\n")))
+            == ["plan": ["approve": false, "feedback": "add tests"]] as NSDictionary)
+        #expect(throws: FormBridge.Failure.notAPlan) { try FormBridge.answerData(question, plan: .init(approve: true)) }
+        #expect(throws: FormBridge.Failure.notAQuestion) { try FormBridge.validate(plan, [:]) }
     }
 
     @Test func theFolderListsTheNewestFormOfEachLiveSessionAndClearsDeadOnes() throws {

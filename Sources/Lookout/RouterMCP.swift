@@ -748,7 +748,9 @@ final class RouterMCPServer: @unchecked Sendable {
                 fields.merge(["session": card.sessionID, "title": card.title,
                               "project": store.folderName(card.folder ?? ""), "reachable": false]) { a, _ in a }
             }
-            if let form = store.pendingForm(for: card) {
+            if let form = store.pendingForm(for: card), let plan = form.plan {
+                fields["plan"] = plan.count > 4000 ? String(plan.prefix(4000)) + "…" : plan
+            } else if let form = store.pendingForm(for: card) {
                 fields["form"] = form.questions.map { q -> [String: Any] in
                     ["question": q.question, "header": q.header, "multiSelect": q.multiSelect,
                      "options": q.options.map { $0.description.isEmpty ? $0.label : "\($0.label) — \($0.description)" }]
@@ -930,6 +932,9 @@ final class RouterMCPServer: @unchecked Sendable {
         guard let raw = args["answers"] as? [String: Any], !raw.isEmpty else { throw Failure("`answers` must be an object of question → answer") }
         guard let form = store.pendingForm(for: card) else {
             throw Failure("“\(card.title)” has no form Lookout can answer (it isn't stopped on a question Lookout's hook holds). Tell the user to answer it on the card or in Claude.")
+        }
+        guard !form.isPlan else {
+            throw Failure("“\(card.title)” waits on a plan, not a question: the user approves it, or sends it back, on its card or in Claude.")
         }
         var answers: [String: String] = [:]
         for (key, value) in raw {
@@ -1316,9 +1321,7 @@ private extension String {
 
 extension FormWriter {
     /// The answer file, written whole and only if there's none yet (renamed into place with RENAME_EXCL).
-    fileprivate static func exclusive(_ form: PendingForm, answers: [String: String], dir: URL) throws {
-        let clean = try FormBridge.validate(form, answers)
-        let data = try JSONSerialization.data(withJSONObject: ["answers": clean], options: [.sortedKeys])
+    fileprivate static func exclusive(_ form: PendingForm, data: Data, dir: URL) throws {
         let url = FormBridge.answerURL(form.id, in: dir)
         let temp = try PrivateFile.prepare(data, for: url)
         guard renamex_np(temp.path, url.path, UInt32(RENAME_EXCL)) == 0 else {
@@ -1330,8 +1333,8 @@ extension FormWriter {
     }
 }
 
-/// Writes a form's answer for the hook, off the main thread: the Router's `answer_form` and the cards' own answers both go
-/// through here, one write at a time.
+/// Writes a form's answer (or a plan's decision) for the hook, off the main thread: the Router's `answer_form` and the cards'
+/// own answers both go through here, one write at a time.
 enum FormWriter {
     /// One write at a time (tests hold it to look between the check and the write).
     static let queue = DispatchQueue(label: "lookout.forms.writer", qos: .utility)
@@ -1362,7 +1365,18 @@ enum FormWriter {
     @MainActor
     static func write(_ form: PendingForm, answers: [String: String], dir: URL,
                       stillValid: @escaping @MainActor () -> Bool = { true }) async throws {
-        _ = try FormBridge.validate(form, answers)
+        try await write(form, data: FormBridge.answerData(form, answers), dir: dir, stillValid: stillValid)
+    }
+
+    /// The same for a plan: approved, or sent back to keep planning (throws `FormBridge.Failure.notAPlan` for a question).
+    @MainActor
+    static func write(_ form: PendingForm, plan decision: PendingForm.PlanDecision, dir: URL,
+                      stillValid: @escaping @MainActor () -> Bool = { true }) async throws {
+        try await write(form, data: FormBridge.answerData(form, plan: decision), dir: dir, stillValid: stillValid)
+    }
+
+    @MainActor
+    private static func write(_ form: PendingForm, data: Data, dir: URL, stillValid: @escaping @MainActor () -> Bool) async throws {
         guard !Task.isCancelled, stillValid() else { throw Cancelled() }
         // The task's cancellation reaches the queued write: checked right before it commits.
         let cancelled = Flag()
@@ -1376,7 +1390,7 @@ enum FormWriter {
                     let claim = dir.standardizedFileURL.path + "/" + form.id
                     guard !claimed.contains(claim) else { return done.resume(throwing: AlreadyAnswered()) }
                     do {
-                        try exclusive(form, answers: answers, dir: dir)
+                        try exclusive(form, data: data, dir: dir)
                         claimed.append(claim)
                         if claimed.count > 1000 { claimed.removeFirst(claimed.count - 1000) }
                         done.resume()

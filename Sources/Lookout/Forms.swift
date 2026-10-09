@@ -78,7 +78,8 @@ enum PrivateFile {
 
 // MARK: - Pending forms
 
-/// A question form a session has open, held by Lookout's hook until it is answered here or in the app.
+/// A question form, or a plan to approve, that a session has open, held by Lookout's hook until it is answered here or in the
+/// app.
 struct PendingForm: Hashable, Identifiable {
     struct Option: Hashable {
         var label: String
@@ -103,13 +104,32 @@ struct PendingForm: Hashable, Identifiable {
     var pid: Int32
     /// The call (`tool_use` id) the form answers, once the hook has found it in the transcript: what ties it to its card.
     var toolUseID: String? = nil
+    /// For a plan to approve (ExitPlanMode): the plan, in Markdown. Nil for a question form.
+    var plan: String? = nil
+
+    var isPlan: Bool { plan != nil }
+
+    /// What you decide about a plan: approved, or sent back to keep planning with an optional note.
+    struct PlanDecision: Hashable {
+        var approve: Bool
+        var feedback: String = ""
+    }
 
     /// What the hook writes. Unknown fields are left alone.
     static func decode(_ data: Data) -> PendingForm? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let key = obj["key"] as? String, let session = obj["session_id"] as? String,
-              let input = obj["tool_input"] as? [String: Any], let raw = input["questions"] as? [[String: Any]] else { return nil }
-        let questions = raw.compactMap { q -> Question? in
+              let input = obj["tool_input"] as? [String: Any] else { return nil }
+        let ms = (obj["created_at"] as? NSNumber)?.doubleValue ?? 0
+        var form = PendingForm(id: key, cliSessionID: session, transcriptPath: obj["transcript_path"] as? String ?? "",
+                               questions: [], createdAt: Date(timeIntervalSince1970: ms / 1000),
+                               pid: (obj["pid"] as? NSNumber)?.int32Value ?? 0, toolUseID: obj["tool_use_id"] as? String)
+        if obj["tool_name"] as? String == FormHook.planTool {
+            form.plan = input["plan"] as? String ?? ""
+            return form
+        }
+        guard let raw = input["questions"] as? [[String: Any]] else { return nil }
+        form.questions = raw.compactMap { q -> Question? in
             guard let text = q["question"] as? String else { return nil }
             let options = (q["options"] as? [[String: Any]] ?? []).compactMap { o -> Option? in
                 (o["label"] as? String).map { Option(label: $0, description: o["description"] as? String ?? "") }
@@ -117,11 +137,7 @@ struct PendingForm: Hashable, Identifiable {
             return Question(question: text, header: q["header"] as? String ?? "", multiSelect: q["multiSelect"] as? Bool ?? false,
                             options: options)
         }
-        guard !questions.isEmpty else { return nil }
-        let ms = (obj["created_at"] as? NSNumber)?.doubleValue ?? 0
-        return PendingForm(id: key, cliSessionID: session, transcriptPath: obj["transcript_path"] as? String ?? "",
-                           questions: questions, createdAt: Date(timeIntervalSince1970: ms / 1000),
-                           pid: (obj["pid"] as? NSNumber)?.int32Value ?? 0, toolUseID: obj["tool_use_id"] as? String)
+        return form.questions.isEmpty ? nil : form
     }
 }
 
@@ -131,12 +147,17 @@ final class FormBridge: @unchecked Sendable {
         case unanswered(String)
         case empty(String)
         case unknown(String)
+        /// Answers for a plan, or a decision on a plan for a question form.
+        case notAQuestion
+        case notAPlan
 
         var errorDescription: String? {
             switch self {
             case .unanswered(let q): "No answer for “\(q)”"
             case .empty(let q): "The answer for “\(q)” is empty"
             case .unknown(let q): "The form has no question “\(q)”"
+            case .notAQuestion: "This is a plan to approve, not a question"
+            case .notAPlan: "This is a question, not a plan to approve"
             }
         }
     }
@@ -208,6 +229,7 @@ final class FormBridge: @unchecked Sendable {
     }
 
     static func validate(_ form: PendingForm, _ answers: [String: String]) throws -> [String: String] {
+        guard !form.isPlan else { throw Failure.notAQuestion }
         let questions = Set(form.questions.map(\.question))
         if let extra = answers.keys.sorted().first(where: { !questions.contains($0) }) { throw Failure.unknown(extra) }
         var clean: [String: String] = [:]
@@ -221,9 +243,25 @@ final class FormBridge: @unchecked Sendable {
     }
 
     static func answer(_ form: PendingForm, answers: [String: String], in dir: URL) throws {
-        let clean = try validate(form, answers)
-        let data = try JSONSerialization.data(withJSONObject: ["answers": clean], options: [.sortedKeys])
-        try PrivateFile.write(data, to: answerURL(form.id, in: dir))
+        try PrivateFile.write(answerData(form, answers), to: answerURL(form.id, in: dir))
+    }
+
+    /// The answer file for a question form: `{"answers": {question: answer}}`.
+    static func answerData(_ form: PendingForm, _ answers: [String: String]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["answers": validate(form, answers)], options: [.sortedKeys])
+    }
+
+    /// The answer file for a plan: `{"plan": {"approve": Bool, "feedback": String}}`, the note trimmed (only sent back with
+    /// "Keep planning").
+    static func answerData(_ form: PendingForm, plan decision: PendingForm.PlanDecision) throws -> Data {
+        guard form.isPlan else { throw Failure.notAPlan }
+        let note = decision.approve ? "" : decision.feedback.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try JSONSerialization.data(withJSONObject: ["plan": ["approve": decision.approve, "feedback": note] as [String: Any]],
+                                          options: [.sortedKeys])
+    }
+
+    static func answer(_ form: PendingForm, plan decision: PendingForm.PlanDecision, in dir: URL) throws {
+        try PrivateFile.write(answerData(form, plan: decision), to: answerURL(form.id, in: dir))
     }
 
     /// The marker the hook looks for: without it, the hook steps aside at once.
@@ -244,11 +282,22 @@ final class FormBridge: @unchecked Sendable {
 
 // MARK: - Hook mode
 
-/// `Lookout --form-hook`: what Claude Code runs when a session asks a question (a `PermissionRequest` hook on
-/// `AskUserQuestion`). It leaves the form in the forms folder and waits: an answer written by Lookout is printed as the
-/// hook's decision, which answers the form like a click. If the question is answered in the app first, or anything else
-/// ends the wait, it leaves quietly and the app's own form stands. It prints nothing but that one decision.
+/// `Lookout --form-hook`: what Claude Code runs when a session asks a question or has a plan to approve (a
+/// `PermissionRequest` hook on `AskUserQuestion` and `ExitPlanMode`). It leaves the form in the forms folder and waits: an
+/// answer written by Lookout is printed as the hook's decision, which answers the form like a click. If it is answered in the
+/// app first, or anything else ends the wait, it leaves quietly and the app's own form stands. It prints nothing but that one
+/// decision.
+///
+/// A plan's decision is the one the app's own buttons give (checked against Claude Code 2.1): Approve is `allow` with the
+/// input as it came (a bare `allow` is ignored for this tool), and the session leaves plan mode as it would there; Keep
+/// planning is `deny` with Claude Code's own words for a rejection, your note after them, and the session stays in plan mode.
 enum FormHook {
+    static let questionTool = "AskUserQuestion"
+    static let planTool = "ExitPlanMode"
+    /// What Claude Code tells the model when you turn a tool down, alone or followed by what you said.
+    static let rejected = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+    static let rejectedWithNote = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n"
+
     struct Environment {
         var forms: URL
         var input: Data
@@ -313,7 +362,8 @@ enum FormHook {
     static func run(_ env: Environment) -> Outcome {
         let fm = FileManager.default
         guard let request = try? JSONSerialization.jsonObject(with: env.input) as? [String: Any],
-              request["hook_event_name"] as? String == "PermissionRequest", request["tool_name"] as? String == "AskUserQuestion",
+              request["hook_event_name"] as? String == "PermissionRequest",
+              let tool = request["tool_name"] as? String, tool == questionTool || tool == planTool,
               let input = request["tool_input"] as? [String: Any] else { return .ignored }
         guard fm.fileExists(atPath: env.forms.appendingPathComponent(FormBridge.marker).path) else { return .disabled }
         let session = request["session_id"] as? String ?? "unknown"
@@ -325,7 +375,7 @@ enum FormHook {
         let answer = FormBridge.answerURL(key, in: env.forms)
         var record: [String: Any] = [
             "key": key, "session_id": session, "transcript_path": request["transcript_path"] as? String ?? "",
-            "cwd": request["cwd"] as? String ?? "", "tool_input": input,
+            "cwd": request["cwd"] as? String ?? "", "tool_name": tool, "tool_input": input,
             "created_at": Int64(started.timeIntervalSince1970 * 1000), "pid": Int(env.pid),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]),
@@ -335,16 +385,14 @@ enum FormHook {
             try? fm.removeItem(at: answer)
         }
 
-        var transcript = TranscriptWatch(path: request["transcript_path"] as? String, input: input as NSDictionary)
+        var transcript = TranscriptWatch(path: request["transcript_path"] as? String, tool: tool, input: input as NSDictionary)
         while true {
             if let data = try? Data(contentsOf: answer),
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let answers = obj["answers"] as? [String: String] {
-                var updated = input
-                updated["answers"] = answers
+               let verdict = Self.decision(tool: tool, input: input, answer: obj) {
                 let decision: [String: Any] = ["hookSpecificOutput": [
                     "hookEventName": "PermissionRequest",
-                    "decision": ["behavior": "allow", "updatedInput": updated],
+                    "decision": verdict,
                 ]]
                 cleanUp()
                 guard let out = try? JSONSerialization.data(withJSONObject: decision, options: [.sortedKeys]) else { return .failed }
@@ -367,13 +415,30 @@ enum FormHook {
         }
     }
 
+    /// The decision for Lookout's answer file, or nil while it isn't one for this tool: a question's answers go in its input;
+    /// a plan is approved as it came or turned down with Claude Code's words and your note.
+    static func decision(tool: String, input: [String: Any], answer: [String: Any]) -> [String: Any]? {
+        if tool == planTool {
+            guard let plan = answer["plan"] as? [String: Any], let approve = plan["approve"] as? Bool else { return nil }
+            if approve { return ["behavior": "allow", "updatedInput": input] }
+            let note = (plan["feedback"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return ["behavior": "deny", "message": note.isEmpty ? rejected : rejectedWithNote + note]
+        }
+        guard let answers = answer["answers"] as? [String: String] else { return nil }
+        var updated = input
+        updated["answers"] = answers
+        return ["behavior": "allow", "updatedInput": updated]
+    }
+
     /// Follows the session's transcript to see the question answered in the app. Claude Code writes the call (`tool_use`)
-    /// before it runs the hook, so this hook's call is the latest `AskUserQuestion` call whose input is this form's: the first
+    /// before it runs the hook, so this hook's call is the latest call of its tool whose input is this form's: the first
     /// read looks for it backwards from the end, a chunk at a time. Once it is known only a `tool_result` for its id ends the
     /// wait, and only what was added since is read.
     struct TranscriptWatch {
         let path: String?
+        let tool: String
         let input: NSDictionary
+        private let marker: Data
         /// The call this hook answers, once found.
         private(set) var id: String?
         private var offset: UInt64?
@@ -382,9 +447,11 @@ enum FormHook {
         private var done = false
         static let chunk: UInt64 = 1 << 20
 
-        init(path: String?, input: NSDictionary) {
+        init(path: String?, tool: String = FormHook.questionTool, input: NSDictionary) {
             self.path = path
+            self.tool = tool
             self.input = input
+            marker = Data("\"\(tool)\"".utf8)
         }
 
         mutating func answered() -> Bool {
@@ -464,16 +531,15 @@ enum FormHook {
             }
         }
 
-        private static let askMarker = Data("\"AskUserQuestion\"".utf8)
         private static let resultMarker = Data("tool_result".utf8)
 
-        /// The id of the line's last `AskUserQuestion` call with this form's input.
+        /// The id of the line's last call of this tool with this form's input.
         private func call(in line: Data) -> String? {
-            guard line.range(of: Self.askMarker) != nil, let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+            guard line.range(of: marker) != nil, let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                   obj["type"] as? String == "assistant",
                   let parts = (obj["message"] as? [String: Any])?["content"] as? [[String: Any]] else { return nil }
             return parts.last { part in
-                part["type"] as? String == "tool_use" && part["name"] as? String == "AskUserQuestion"
+                part["type"] as? String == "tool_use" && part["name"] as? String == tool
                     && (part["input"] as? NSDictionary)?.isEqual(input) == true
             }?["id"] as? String
         }
@@ -495,7 +561,7 @@ enum FormHook {
 struct FormHookInstaller {
     enum Status: Equatable, Sendable {
         case installed, notInstalled
-        /// Installed for another copy of Lookout (the app moved).
+        /// Installed for another copy of Lookout (the app moved), or by a Lookout that held fewer tools.
         case outdated
     }
 
@@ -525,6 +591,8 @@ struct FormHookInstaller {
     /// What the settings run: the script's path, quoted for the shell if it has to be.
     var command: String { Self.quoted(script.path, onlyIfNeeded: true) }
     static let timeout = 86400
+    /// The tools the hook holds: questions, and plans to approve.
+    static let matcher = "\(FormHook.questionTool)|\(FormHook.planTool)"
     static let attempts = 3
     /// Runs between computing a change and writing it (tests write to the file there, as Claude Code might).
     var beforeReplace: (() -> Void)?
@@ -543,7 +611,7 @@ struct FormHookInstaller {
         let exe = Self.quoted(executable)
         return """
         #!/bin/sh
-        # Lookout's form hook: lets you answer a Claude Code session's questions from Lookout's Router.
+        # Lookout's form hook: lets you answer a Claude Code session's questions, and approve its plans, from Lookout's Router.
         # Lookout manages this file (it is removed when you turn the Router off); edits are overwritten.
         [ -x \(exe) ] || exit 0
         exec \(exe) --form-hook
@@ -552,8 +620,8 @@ struct FormHookInstaller {
     }
 
     func status(executable: String) -> Status {
-        guard let text = try? String(contentsOf: script, encoding: .utf8), hasEntry() else { return .notInstalled }
-        return text == scriptText(executable: executable) ? .installed : .outdated
+        guard let text = try? String(contentsOf: script, encoding: .utf8), let current = entryIsCurrent() else { return .notInstalled }
+        return current && text == scriptText(executable: executable) ? .installed : .outdated
     }
 
     func install(executable: String) throws {
@@ -575,8 +643,11 @@ struct FormHookInstaller {
                     }
                     entries = list
                 }
-                guard !entries.contains(where: runsUs) else { return false }
-                entries.append(["matcher": "AskUserQuestion",
+                let ours = entries.filter(runsUs)
+                if ours.count == 1, isCurrent(ours[0]) { return false }
+                // Ours under another matcher (an older Lookout's) goes; a hook of yours sharing that entry stays as it was.
+                entries = removingUs(from: entries)
+                entries.append(["matcher": Self.matcher,
                                 "hooks": [["type": "command", "command": command, "timeout": Self.timeout]]] as [String: Any])
                 hooks["PermissionRequest"] = entries
                 root["hooks"] = hooks
@@ -593,14 +664,7 @@ struct FormHookInstaller {
         try modify { root in
             guard var hooks = root["hooks"] as? [String: Any], let entries = hooks["PermissionRequest"] as? [Any],
                   entries.contains(where: runsUs) else { return false }
-            let kept = entries.compactMap { entry -> Any? in
-                guard var dict = entry as? [String: Any], let list = dict["hooks"] as? [Any] else { return entry }
-                let others = list.filter { !isUs($0) }
-                if others.count == list.count { return entry }
-                if others.isEmpty { return nil }
-                dict["hooks"] = others
-                return dict
-            }
+            let kept = removingUs(from: entries)
             if kept.isEmpty { hooks.removeValue(forKey: "PermissionRequest") } else { hooks["PermissionRequest"] = kept }
             if hooks.isEmpty { root.removeValue(forKey: "hooks") } else { root["hooks"] = hooks }
             return true
@@ -617,10 +681,28 @@ struct FormHookInstaller {
         ((entry as? [String: Any])?["hooks"] as? [Any])?.contains(where: isUs) == true
     }
 
-    private func hasEntry() -> Bool {
+    private func isCurrent(_ entry: Any) -> Bool { (entry as? [String: Any])?["matcher"] as? String == Self.matcher }
+
+    /// The entries without our hook: an entry left with no hook goes.
+    private func removingUs(from entries: [Any]) -> [Any] {
+        entries.compactMap { entry -> Any? in
+            guard var dict = entry as? [String: Any], let list = dict["hooks"] as? [Any] else { return entry }
+            let others = list.filter { !isUs($0) }
+            if others.count == list.count { return entry }
+            if others.isEmpty { return nil }
+            dict["hooks"] = others
+            return dict
+        }
+    }
+
+    /// Whether the settings run the hook for every tool it holds (false: only under an older matcher); nil when they don't
+    /// run it at all.
+    private func entryIsCurrent() -> Bool? {
         guard let raw = try? readRaw(), let root = try? parse(raw), let hooks = root["hooks"] as? [String: Any],
-              let entries = hooks["PermissionRequest"] as? [Any] else { return false }
-        return entries.contains(where: runsUs)
+              let entries = hooks["PermissionRequest"] as? [Any] else { return nil }
+        let ours = entries.filter(runsUs)
+        if ours.isEmpty { return nil }
+        return ours.count == 1 && isCurrent(ours[0])
     }
 
     /// Through a symlink to the file it points at (settings kept in a dotfiles repo stay there).

@@ -247,6 +247,10 @@ struct RouterWindowShot {
     var answered = false
     /// The composer mid-message: replying to the question, a project tagged, and an @ being typed.
     var composing = false
+    /// The open plan picked, its text and buttons showing.
+    var picksPlan = false
+    /// The plan sent back from the window with a note.
+    var planSentBack = false
     static let size = CGSize(width: 920, height: 640)
 }
 
@@ -408,6 +412,8 @@ enum PlaygroundShots {
         shots.append(window("-off") { $0.scenario = .routerOff })
         shots.append(window("-answered") { $0.routerWindow?.answered = true })
         shots.append(window("-composing") { $0.routerWindow?.composing = true })
+        shots.append(window("-plan") { $0.routerWindow?.picksPlan = true })
+        shots.append(window("-plan-sent-back") { $0.routerWindow?.planSentBack = true })
 
         return shots
     }()
@@ -509,6 +515,12 @@ enum PlaygroundShots {
            let form = store.pendingForm(for: card) {
             model.sent.insert(form.id)
             model.delivered[form.id] = [form.questions[0].question: "Ask first"]
+        }
+        if shot.picksPlan || shot.planSentBack { model.selection = store.openRouterCards.first { $0.kind == .plan }?.id }
+        if shot.planSentBack, let card = store.openRouterCards.first(where: { $0.kind == .plan }),
+           let form = store.pendingForm(for: card) {
+            model.sent.insert(form.id)
+            model.planDecided[form.id] = .init(approve: false, feedback: "Keep the macOS backend as the default; Linux behind a flag.")
         }
         let size = RouterWindowShot.size
         let root = RouterView(store: store, model: model, checksClaudeCode: false)

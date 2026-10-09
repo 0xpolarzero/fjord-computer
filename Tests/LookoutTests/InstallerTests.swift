@@ -11,7 +11,25 @@ import Testing
     }
 
     private func ours(_ installer: FormHookInstaller) -> [String: Any] {
-        ["matcher": "AskUserQuestion", "hooks": [["type": "command", "command": installer.command, "timeout": 86400]]]
+        ["matcher": "AskUserQuestion|ExitPlanMode", "hooks": [["type": "command", "command": installer.command, "timeout": 86400]]]
+    }
+
+    @Test func anOlderLookoutsQuestionsOnlyHookIsOutdatedAndMovesToTheNewMatcher() throws {
+        let dir = TempDir()
+        let installer = FormHookInstaller(claudeDir: dir.url)
+        try installer.install(executable: exe)
+        // What a Lookout before plans wrote: the same command, for questions only, in an entry shared with a hook of yours.
+        let old: [String: Any] = ["hooks": ["PermissionRequest": [
+            ["matcher": "AskUserQuestion", "hooks": [["type": "command", "command": "/x/log.sh"],
+                                                     ["type": "command", "command": installer.command, "timeout": 86400]]],
+        ]]]
+        try JSONSerialization.data(withJSONObject: old).write(to: dir.path("settings.json"))
+        #expect(installer.status(executable: exe) == .outdated)
+        try installer.install(executable: exe)
+        let entries = try #require((try settings(dir)["hooks"] as? [String: Any])?["PermissionRequest"] as? [Any])
+        let yours: [String: Any] = ["matcher": "AskUserQuestion", "hooks": [["type": "command", "command": "/x/log.sh"]]]
+        #expect(NSArray(array: entries).isEqual(to: [yours, ours(installer)]))
+        #expect(installer.status(executable: exe) == .installed)
     }
 
     @Test func installingIntoNoSettingsMakesThemAndTheScript() throws {
@@ -101,7 +119,7 @@ import Testing
         let installer = FormHookInstaller(claudeDir: dir.url)
         // Ours shares an entry with someone else's hook.
         let shared: [String: Any] = ["hooks": ["PermissionRequest": [
-            ["matcher": "AskUserQuestion", "hooks": [["type": "command", "command": "/x/log.sh"],
+            ["matcher": "AskUserQuestion|ExitPlanMode", "hooks": [["type": "command", "command": "/x/log.sh"],
                                                      ["type": "command", "command": installer.command]]],
         ]]]
         try JSONSerialization.data(withJSONObject: shared).write(to: dir.path("settings.json"))
