@@ -481,6 +481,16 @@ struct DaysField: View {
                 if let n = Int(digits), n > 0, n != days { set(n) }
             }
             .onChange(of: focused) { _, now in if !now { text = String(days) } }
+            // Undo, redo or the Router changed it: the field follows, unless it is what you are typing.
+            .onChange(of: days) { _, new in if let shown = Self.synced(text, to: new, focused: focused) { text = shown } }
             .accessibilityLabel("Days without activity")
+    }
+
+    /// What the field shows once `days` changes from elsewhere, or nil to leave it: unfocused, the new value; focused,
+    /// only when the field holds another number (what you are typing, even cleared, stays).
+    static func synced(_ text: String, to days: Int, focused: Bool) -> String? {
+        if !focused { return text == String(days) ? nil : String(days) }
+        guard let typed = Int(text), typed != days else { return nil }
+        return String(days)
     }
 }
