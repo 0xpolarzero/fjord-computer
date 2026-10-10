@@ -17,7 +17,7 @@ enum LookoutDocs {
         var lines: [String] = [
             "A category is {id?, name, symbol (SF Symbol), color, rules, notifies, hidden, actions}. A thing (PR, issue or workflow) is in the FIRST category, top to bottom, that one of its rules matches; things no rule matches aren't in the inbox. A rule is {scope, match (any|all), conditions}: the scope says which things, the conditions when they need you (none: every open thing in scope). Left-out fields are filled in: the list says which are required.",
             "",
-            "Scope {kind: pr|issue|workflow, by?, to?, toRoles?, in?, on?, named?}. `by`/`to` take PEOPLE, `in` takes REPOS. Workflows need `in`, may have `on` (branches) and `named`, and have no by/to. PRs and issues have by/to/in only. `to` reads the roles in `toRoles` (assigned, reviewRequested, mentioned; issues have no reviewRequested).",
+            "Scope {kind: pr|issue|workflow, by?, to?, toRoles?, in?, on?, named?}. `by`/`to` take PEOPLE, `in` takes REPOS. Workflows need `in`, may have `on` (branches) and `named`, and have no by/to. PRs and issues have by/to/in only. `to` reads the roles in `toRoles` (assigned, reviewRequested, mentioned; issues have no reviewRequested); leave `toRoles` out to cover all of them, and only give it to narrow `to` when asked. A rule with no `to` matches anyone: \"PRs and issues in my repos\" is just `in`, no `to` and no `toRoles`.",
             "People and Repos are {\"include\":[…],\"except\":[…]} (empty include: anyone/anywhere). Where a rule names someone or somewhere, the value is one of:",
             "PERSON:",
         ]

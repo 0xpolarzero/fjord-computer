@@ -141,7 +141,7 @@ enum Shapes {
             .init("kind", .choice(ThingKind.allCases.map(\.rawValue)), "`pr`, `issue` or `workflow`."),
             .init("by", people(), "PRs and issues: the author.", fallback: .absent),
             .init("to", people(), "PRs and issues: who it is for (see toRoles).", fallback: .absent),
-            .init("toRoles", .choices(ToRole.allCases.map(\.rawValue)), "What `to` covers: assigned, reviewRequested, mentioned. Issues have no reviewRequested.",
+            .init("toRoles", .choices(ToRole.allCases.map(\.rawValue)), "Only with `to`: which ways it is for them. Leave it out for all (assigned, reviewRequested, mentioned; issues have no reviewRequested), and never narrow it unless asked. Without `to`, it means nothing.",
                   fallback: .value(ToRole.allCases.map(\.rawValue))),
             .init("in", repos(), "Which repos. Required for workflows.", fallback: .absent),
             .init("on", .list(.string("branch")), "Workflows: branches (the repo's default branch when left out).", fallback: .absent),
