@@ -10,7 +10,7 @@ struct GroupsSection: View {
 
     var body: some View {
         SettingsSection("Groups",
-                        description: "Name some people or repos once and use them as one chip in any rule. Editing a group updates every rule that uses it.",
+                        info: ("Groups", "Name people or repos once and use them as one chip in any rule. Editing a group updates every rule that uses it."),
                         action: {
             Menu {
                 Button("People group") { add(.people) }
@@ -24,11 +24,7 @@ struct GroupsSection: View {
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             .accessibilityLabel("New group")
         }, content: {
-            if store.groups.isEmpty {
-                Text("No groups yet. A group can also be made from the values of a rule: “Save as group…”.")
-                    .cdsText(CDS.Density.comfortable.footnote, .regular, CDS.Text.muted)
-                    .padding(.vertical, CDS.Settings.rowPad)
-            } else {
+            if !store.groups.isEmpty {
                 SettingsNest {
                     ForEach(Array(store.groups.enumerated()), id: \.element.id) { i, group in
                         if i > 0 { SettingsDivider() }
@@ -124,7 +120,8 @@ private struct GroupRow: View {
                         Button("Delete group") { store.groups.removeAll { $0.id == group.id } }
                             .buttonStyle(SettingsButtonStyle(variant: .ghost, size: .xxs))
                     } else {
-                        Text("Remove it from its rules to delete it.").cdsText(foot12, .regular, CDS.Text.muted)
+                        Text("In use").cdsText(foot12, .regular, CDS.Text.muted)
+                            .tip("In use", "Remove it from its rules to delete it")
                     }
                 }
             }

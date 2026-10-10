@@ -225,6 +225,7 @@ struct SlotOption<V: Hashable>: Identifiable {
     var detail: String?
     var symbol: String?
     var value: V
+    var tip: String?
     var id: String { title + "|" + String(describing: value) }
 }
 
@@ -392,7 +393,7 @@ struct SlotPopover<V: Codable & Hashable>: View {
         let typed = query.trimmingCharacters(in: .whitespaces)
         if !typed.isEmpty, let value = parse(typed), !rows.contains(where: { $0.value == value }),
            !pick.include.contains(value), !pick.except.contains(value) {
-            rows.append(SlotOption(title: title(value), detail: "as typed", symbol: symbol(value), value: value))
+            rows.append(SlotOption(title: title(value), detail: nil, symbol: symbol(value), value: value))
         }
         return rows
     }
@@ -461,6 +462,7 @@ struct SlotPopover<V: Codable & Hashable>: View {
                             }
                             .padding(.horizontal, 8).frame(height: 26).contentShape(Rectangle())
                         }
+                        .tip(row.title, row.tip)
                         .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: 6, style: .continuous), rest: i == index ? CDS.Fill.ghostHover : .clear,
                                                           hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
                     }

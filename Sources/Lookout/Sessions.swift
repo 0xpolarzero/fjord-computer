@@ -275,12 +275,7 @@ struct LabelEditor: View {
     var body: some View {
         // Claude's compact popover content: 13/19 body, a 12/15 muted hint, a 24pt field and xs buttons, 12 around.
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Label for \(row.session.title)").cdsText(CDS.Density.compact.body, .medium).lineLimit(1)
-                Text("Two letters or an emoji; empty goes back to the \(row.entry.icon != nil ? "icon" : "letters")")
-                    .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Label for \(row.session.title)").cdsText(CDS.Density.compact.body, .medium).lineLimit(1)
             HStack(spacing: 6) {
                 TextField(row.label, text: $text)
                     .accessibilityLabel("Label for \(row.session.title)")
@@ -294,6 +289,7 @@ struct LabelEditor: View {
                     .overlay(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
                         .strokeBorder(focused ? CDS.borderStrong : CDS.border, lineWidth: 1))
                     .onSubmit(save)
+                    .tip("Two letters or an emoji", "Empty goes back to the \(row.entry.icon != nil ? "icon" : "letters")")
                 RowControl(symbol: "face.smiling", help: "Emoji") {
                     focused = true
                     NSApp.orderFrontCharacterPalette(nil)
@@ -908,7 +904,7 @@ struct RateLimitWarning: View {
                 .monospacedDigit()
                 .foregroundStyle(Theme.amber)
                 .tip("GitHub rate limit low",
-                     "Shared with gh and other tools using your account. Syncing pauses at 0 until the hour resets.")
+                     "Shared with gh and other tools. Syncing pauses at 0.")
         }
     }
 }

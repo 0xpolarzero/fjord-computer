@@ -633,7 +633,7 @@ struct CategoriesMenu: View {
             Divider()
             Button("Edit Categories…", action: edit)
         } label: {
-            Image(systemName: "eye")
+            Image(systemName: "slider.horizontal.3")
                 .font(.system(size: CDS.GhostIcon.glyph(IconButton.Size.header), weight: .medium))
                 .foregroundStyle(hover ? Color.white : Theme.secondary)
                 .frame(width: IconButton.Size.header, height: IconButton.Size.header)
@@ -644,8 +644,8 @@ struct CategoriesMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .onHover { hover = $0 }
-        .accessibilityLabel("Show or hide categories")
-        .tip("Show or hide categories", "Hidden ones keep collecting, quietly")
+        .accessibilityLabel("Categories")
+        .tip("Categories", "Hidden ones keep collecting, quietly")
     }
 }
 

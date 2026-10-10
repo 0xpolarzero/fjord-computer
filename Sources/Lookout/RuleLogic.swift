@@ -401,7 +401,7 @@ struct EditorData {
         let taken = Set(pick.include + pick.except)
         let rows = all.filter { !taken.contains($0) && (q.isEmpty || searchKeys($0).contains { $0.contains(q) }) }
         return rows.prefix(q.isEmpty ? 10 : 8).map {
-            SlotOption(title: personTitle($0), detail: personDetail($0), symbol: personSymbol($0), value: $0)
+            SlotOption(title: personTitle($0), detail: personDetail($0), symbol: personSymbol($0), value: $0, tip: personTip($0))
         }
     }
 
@@ -417,8 +417,6 @@ struct EditorData {
 
     private func personDetail(_ p: PersonRef) -> String? {
         switch p {
-        case .maintainers: "on that repo"
-        case .bots: "accounts GitHub marks as bots"
         case .group(let id): group(id).map { plural($0.members.count, "person", "people") }
         default: nil
         }
@@ -437,15 +435,29 @@ struct EditorData {
         let taken = Set(pick.include + pick.except)
         let rows = all.filter { !taken.contains($0) && (q.isEmpty || repoTitle($0).lowercased().contains(q)) }
         return rows.prefix(q.isEmpty ? 9 : 8).map {
-            SlotOption(title: repoTitle($0), detail: repoDetail($0), symbol: repoSymbol($0), value: $0)
+            SlotOption(title: repoTitle($0), detail: repoDetail($0), symbol: repoSymbol($0), value: $0, tip: repoTip($0))
         }
     }
 
     private func repoDetail(_ r: RepoRef) -> String? {
         switch r {
-        case .contributed: "merged a PR there"
-        case .involved: "author, assignee, reviewer…"
         case .group(let id): group(id).map { plural($0.members.count, "repo") }
+        default: nil
+        }
+    }
+
+    private func personTip(_ p: PersonRef) -> String? {
+        switch p {
+        case .maintainers: "People with write access to the repo the thing is in"
+        case .bots: "Accounts GitHub marks as bots"
+        default: nil
+        }
+    }
+
+    private func repoTip(_ r: RepoRef) -> String? {
+        switch r {
+        case .contributed: "Repos where you have merged a PR"
+        case .involved: "Anywhere you are the author, an assignee or a reviewer"
         default: nil
         }
     }

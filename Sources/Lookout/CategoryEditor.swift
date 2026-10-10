@@ -91,7 +91,7 @@ struct CategoryEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     identity
-                    SettingsRow("Notify", description: "Notifies once when a thing comes in, and again only on something new.") {
+                    SettingsRow("Notify", info: ("Notify", "Once when a thing comes in, and again only on something new.")) {
                         SettingsSwitch("Notify for \(draft.name)", isOn: $draft.notifies)
                     }
                     rules
@@ -199,9 +199,8 @@ struct CategoryEditor: View {
             VStack(alignment: .leading, spacing: CDS.Settings.labelGap) {
                 Text(draft.isCI ? "Repos" : "Rules").cdsText(CDS.Density.comfortable.heading, .semibold)
                     .accessibilityAddTraits(.isHeader)
-                Text(draft.isCI ? "Which repos' workflows to watch. Failures stay until they are green again."
-                     : "A thing is here if any rule matches it.")
-                    .cdsText(CDS.Density.comfortable.footnote, .regular, CDS.Text.secondary)
+                    .tip(draft.isCI ? "Repos" : "Rules",
+                         draft.isCI ? "Failures stay until the workflow is green again" : "A thing is here if any rule matches it")
             }
             .padding(.bottom, 12)
             VStack(alignment: .leading, spacing: 6) {

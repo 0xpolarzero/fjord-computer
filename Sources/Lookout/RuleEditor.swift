@@ -36,10 +36,7 @@ struct RuleEditor: View {
                 scopeSlots
                 addSlotMenu
             }
-            if isCI {
-                Text("Notified once for each failure, until it is green again.")
-                    .cdsText(foot12, .regular, CDS.Text.muted)
-            } else {
+            if !isCI {
                 conditions
             }
             messages
@@ -191,8 +188,6 @@ struct RuleEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             if rule.conditions.isEmpty {
                 HStack(spacing: 6) {
-                    Text("No conditions: every open \(kind == .issue ? "issue" : "PR") in scope.")
-                        .cdsText(foot12, .regular, CDS.Text.muted)
                     addConditionMenu
                 }
             } else {

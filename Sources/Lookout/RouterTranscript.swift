@@ -58,10 +58,6 @@ struct RouterTranscript: View {
         let chat = store.router.chat
         let agent = store.routerAgent
         VStack(alignment: .leading, spacing: 0) {
-            if chat.isEmpty {
-                CDSProse(text: "Ask what needs you, answer a session or pass it a message, or start a new one in a project you "
-                         + "tag with @. The Router only does what you say, and says what it did.", color: CDS.Text.muted)
-            }
             ForEach(Array(chat.enumerated()), id: \.element.id) { i, message in
                 CodeMessage(message: message, store: store)
                     .padding(.top, CodeMessage.gap(before: message, after: i == 0 ? nil : chat[i - 1].role, first: i == 0))

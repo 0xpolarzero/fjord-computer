@@ -943,7 +943,7 @@ struct RouterPlanView: View {
         let locked = model.locked(form)
         let sending = model.sending.contains(form.id)
         return VStack(alignment: .leading, spacing: 8) {
-            TextField("Note for Claude, with Keep planning (optional)…",
+            TextField("Note for Claude (optional)",
                       text: Binding(get: { model.planNote(form) }, set: { model.setPlanNote($0, of: form) }), axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(Theme.Typography.meta)
@@ -1107,13 +1107,6 @@ struct RouterChatList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if chat.isEmpty {
-                        Text("Ask what needs you, answer a session or pass it a message, or start a new one. "
-                             + "The Router only does what you say, and says what it did. "
-                             + "Address an aside to the Router with @router; it won't be passed on.")
-                            .font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     ForEach(chat) { RouterMessageView(message: $0, store: store).id($0.id) }
                     if working {
                         Text(agent.phase == .starting ? "Starting…" : "Working…")

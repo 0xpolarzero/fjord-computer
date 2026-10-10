@@ -78,10 +78,10 @@ struct SettingsView: View {
             SettingsDivider()
             // The field goes under the row (its `below`): beside the text it would leave the island no room.
             SettingsRow("Personal access token",
-                        description: "Uses `gh auth token` by default. A pasted token is kept in the Keychain and needs `repo` scope for private repos.",
+                        info: ("Personal access token", "Uses `gh auth token` by default. A pasted token is kept in the Keychain and needs `repo` scope for private repos."),
                         below: AnyView(VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 8) {
-                                SettingsTextField(placeholder: "Paste a personal access token (optional)", text: $token, secure: true,
+                                SettingsTextField(placeholder: "Paste a token (optional)", text: $token, secure: true,
                                                   invalid: tokenError != nil, accessibilityLabel: "GitHub personal access token",
                                                   onSubmit: saveToken)
                                 ActionButton("Save", height: CDS.Settings.field, action: saveToken)
@@ -142,7 +142,7 @@ struct SettingsView: View {
                 }
             }
             SettingsDivider()
-            SettingsRow("Snooze", description: "Snoozing silences banners; the inbox keeps filling up.") {
+            SettingsRow("Snooze banners") {
                 if store.isSnoozed, let until = store.settings.snoozeUntil {
                     HStack(spacing: 12) {
                         Text("Until \(until.formatted(date: .omitted, time: .shortened))")
@@ -156,7 +156,7 @@ struct SettingsView: View {
                         Button("3 hours") { store.snooze(for: 3 * 3600) }
                         Button("Until tomorrow 9:00") { store.snoozeUntilTomorrow() }
                     }
-                    .accessibilityLabel("Snooze")
+                    .accessibilityLabel("Snooze banners")
                     .accessibilityValue("Off")
                 }
             }
@@ -174,14 +174,15 @@ struct SettingsView: View {
 
     private var shortcuts: some View {
         SettingsSection("Shortcuts",
-                        description: "Click a shortcut, then press the new keys (Esc cancels, Delete clears). App-wide ones also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on.") {
+                        info: ("Shortcuts", "Click one, then press the new keys (Esc cancels, Delete clears). Ones that work from any app also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on.")) {
             let actions = ShortcutAction.allCases.filter { (!$0.isAgents || store.agents.enabled) && (!$0.isRouter || store.routerOn) }
             ForEach(actions) { action in
                 if action != actions.first { SettingsDivider() }
                 let needsAccess = action.isGlobal && !accessibilityTrusted
                     && (store.shortcut(action).isModifierTap || store.shortcut(action).mouseButton != nil)
                 SettingsRow(action.title,
-                            description: action.isGlobal ? "Works from any app" : nil,
+                            adornment: action.isGlobal ? AnyView(Image(systemName: "globe").font(.system(size: 11))
+                                .foregroundStyle(CDS.Text.muted).tip("Works from any app")) : nil,
                             below: needsAccess ? AnyView(
                                 Text("Needs Accessibility access (System Settings › Privacy & Security)")
                                     .cdsText(footnote, .regular, CDS.Text.warning)
@@ -190,7 +191,7 @@ struct SettingsView: View {
                 }
             }
             SettingsDivider()
-            SettingsRow("All shortcuts", description: restoreError ?? "Back to the keys Lookout comes with",
+            SettingsRow("All shortcuts", description: restoreError,
                         descriptionColor: restoreError == nil ? CDS.Text.muted : CDS.Text.warning) {
                 ActionButton("Restore defaults") {
                     // Beside the button, and said at each attempt, a repeated one too.
@@ -211,12 +212,9 @@ struct SettingsView: View {
         SettingsSection("Extensions") {
             let installed = Claude.isInstalled
             SettingsRow("Claude sessions",
-                        description: !installed && !store.agents.enabled ? "Needs the Claude desktop app, with Claude Code sessions."
-                            : store.agents.enabled
-                            ? "Your Claude Code sessions on the bar: what is working, done or waiting. Sessions with new activity "
-                                + "arrive as pending; keep the ones you use. Lookout never writes to the app's files."
-                            : "Your Claude Code sessions on the bar, to see which are working, done or waiting, and jump between them.",
-                        adornment: AnyView(Image(systemName: "asterisk").font(.system(size: 11, weight: .bold)).foregroundStyle(CDS.clay))) {
+                        description: !installed && !store.agents.enabled ? "Needs the Claude desktop app" : nil,
+                        adornment: AnyView(Image(systemName: "asterisk").font(.system(size: 11, weight: .bold)).foregroundStyle(CDS.clay)),
+                        info: ("Claude sessions", "Your Claude Code sessions on the bar: working, done or waiting. Sessions with new activity arrive as pending; keep the ones you use. Lookout never writes to the app's files.")) {
                 SettingsSwitch("Claude sessions", isOn: Binding(get: { store.agents.enabled }, set: { store.setAgentsEnabled($0) }))
                     .disabled(!installed && !store.agents.enabled)
             }
@@ -233,9 +231,10 @@ struct SettingsView: View {
 
     /// The Router: its switch, then what it needs and how each part is doing (the hook, Claude Code, routing).
     @ViewBuilder private var router: some View {
-        SettingsRow("Router", description: "One chat above your sessions: what needs you, and your answers passed on",
+        SettingsRow("Router",
                     adornment: AnyView(Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(CDS.Text.secondary))) {
+                        .foregroundStyle(CDS.Text.secondary)),
+                    info: ("Router", "Lookout adds a hook to Claude Code's settings (`~/.claude/settings.json`) so a session's questions can be answered here, and a Claude Code plugin so your messages reach sessions as yours; turning the Router off takes both out. The Router is a Claude Code session Lookout runs: it only messages your sessions, answers their forms and starts new ones when you ask. \(store.shortcut(.router).display) opens it.")) {
             SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setRouterEnabled($0) }))
         }
         .id(Self.routerID)
@@ -248,20 +247,16 @@ struct SettingsView: View {
         }
         if store.router.enabled {
             SettingsRail {
-                SettingsRow("Router only", description: "Hide the session tiles; the Router stands in for them") {
-                    SettingsSwitch("Router only", isOn: Binding(get: { store.router.routerOnly }, set: { store.setRouterOnly($0) }))
+                SettingsRow("Hide session tiles") {
+                    SettingsSwitch("Hide session tiles", isOn: Binding(get: { store.router.routerOnly }, set: { store.setRouterOnly($0) }))
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     SettingsStatusLine(text: hookStatus.0, color: hookStatus.1)
                     let plugin = Self.pluginLine(store.routerPluginStatus, error: store.routerPluginError)
                     SettingsStatusLine(text: plugin.0, color: plugin.1)
                     SettingsStatusLine(text: claudeCodeStatus.0, color: claudeCodeStatus.1)
-                    SettingsStatusLine(text: store.hasTypesafeKey ? "Routing helped by Jev, with your TypeSafe key"
-                                       : "Routing without help: a TypeSafe key (under Icons) lets Jev pick the session", color: Theme.tertiary)
+                    SettingsStatusLine(text: store.hasTypesafeKey ? "Routing helped by Jev" : "Routing without Jev: add a TypeSafe key under Icons", color: Theme.tertiary)
                 }
-                SettingsNote("Lookout adds a hook to Claude Code's settings (`~/.claude/settings.json`) so a session's questions can be answered "
-                             + "here, and a Claude Code plugin so your messages reach sessions as yours; turning the Router off takes both out. The Router is a Claude Code session Lookout runs: it only messages your "
-                             + "sessions, answers their forms and starts new ones when you ask. \(store.shortcut(.router).display) opens it.")
             }
         }
     }
@@ -295,13 +290,14 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var sessionIcons: some View {
-        SettingsRow("Icons picked for you", description: "By Jev, from TypeSafe") {
+        SettingsRow("Icons picked for you",
+                    info: ("Icons picked for you", "Each session in your list gets an icon instead of letters. Its title, project name and first message go to TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, about $0.0002 a session. Keys come from console.typesafe.ai.")) {
             SettingsSwitch("Icons picked for you", isOn: Binding(get: { store.agents.iconsEnabled }, set: { store.setIconsEnabled($0) }))
         }
         if store.agents.iconsEnabled {
             SettingsRail {
                 if store.hasTypesafeKey {
-                    SettingsRow("TypeSafe API key", description: "Saved in the Keychain") {
+                    SettingsRow("TypeSafe API key", info: ("TypeSafe API key", "Saved in the Keychain")) {
                         ActionButton("Remove") { store.setTypesafeKey(nil) }
                     }
                 } else {
@@ -316,10 +312,6 @@ struct SettingsView: View {
                     SettingsNote(error, color: CDS.Text.warning)
                         .onChange(of: error, initial: true) { _, now in Announce.say(now) }
                 }
-                SettingsNote("Each session in your list gets an icon instead of letters. Its title, project name and first message go to "
-                             + "TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), "
-                             + "then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, "
-                             + "about $0.0002 a session. Keys come from console.typesafe.ai.")
             }
         }
     }
@@ -329,14 +321,14 @@ struct SettingsView: View {
         let muted = store.agents.mutedFolders
         let unmuted = store.knownFolders.filter { !muted.contains($0) }
         let name = { (folder: String) in folder.isEmpty ? "Scratch chats" : store.folderName(folder) }
-        SettingsRow("Muted folders", description: "Their sessions stay off the bar.",
+        SettingsRow("Muted folders", info: ("Muted folders", "Their sessions stay off the bar"),
                     below: AnyView(Group {
                         if muted.isEmpty {
-                            Text("No muted folders.").cdsText(footnote, .regular, CDS.Text.secondary)
+                            Text("None").cdsText(footnote, .regular, CDS.Text.secondary)
                         } else {
                             SettingsNest {
                                 ForEach(muted, id: \.self) { folder in
-                                    SettingsRow(name(folder), description: folder.isEmpty ? "Chats not tied to a folder" : folder) {
+                                    SettingsRow(name(folder), description: folder.isEmpty ? nil : folder) {
                                         Button("Unmute") { store.setFolderMuted(folder, false) }
                                             .buttonStyle(SettingsButtonStyle(size: .sm))
                                             .accessibilityLabel("Unmute \(name(folder))")
@@ -441,18 +433,16 @@ struct SettingsView: View {
                 launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
             }
             SettingsDivider()
-            SettingsRow("Keep the bar centered on its edge",
-                        description: store.settings.centerPill == true
-                            ? "Drag the bar to any screen edge; it stays at the middle."
-                            : "Drag the bar to any screen edge.") {
-                SettingsSwitch("Keep the bar centered on its edge", isOn: Binding(
+            SettingsRow("Center the bar on its edge") {
+                SettingsSwitch("Center the bar on its edge", isOn: Binding(
                     get: { store.settings.centerPill ?? false },
                     set: { store.settings.centerPill = $0 }
                 ))
             }
             SettingsDivider()
             // Destructive actions are a secondary button on their row (settings.md §3.5), never red.
-            SettingsRow("Quit Lookout", description: "Stops checking GitHub and takes the bar away until it's opened again.") {
+            SettingsRow("Quit Lookout",
+                        info: ("Quit Lookout", "Stops checking GitHub and takes the bar away until it's opened again")) {
                 ActionButton("Quit Lookout") { NSApp.terminate(nil) }
             }
         }
@@ -469,13 +459,16 @@ private let comfy = CDS.Density.comfortable
 struct SettingsSection<Content: View, Action: View>: View {
     let title: String
     var description: String?
+    /// A tooltip behind a small (i) after the title, for what must stay reachable but needn't be read.
+    var info: (String, String)?
     @ViewBuilder var action: () -> Action
     @ViewBuilder var content: () -> Content
 
-    init(_ title: String, description: String? = nil, @ViewBuilder action: @escaping () -> Action,
+    init(_ title: String, description: String? = nil, info: (String, String)? = nil, @ViewBuilder action: @escaping () -> Action,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.description = description
+        self.info = info
         self.action = action
         self.content = content
     }
@@ -484,8 +477,11 @@ struct SettingsSection<Content: View, Action: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: CDS.Settings.rowGap) {
                 VStack(alignment: .leading, spacing: CDS.Settings.labelGap) {
-                    Text(title).cdsText(comfy.heading, .semibold)
-                        .accessibilityAddTraits(.isHeader)
+                    HStack(spacing: 6) {
+                        Text(title).cdsText(comfy.heading, .semibold)
+                            .accessibilityAddTraits(.isHeader)
+                        if let info { SettingsInfo(title: info.0, detail: info.1) }
+                    }
                     if let description {
                         Text(.init(description)).cdsText(comfy.footnote, .regular, CDS.Text.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -502,8 +498,8 @@ struct SettingsSection<Content: View, Action: View>: View {
 }
 
 extension SettingsSection where Action == EmptyView {
-    init(_ title: String, description: String? = nil, @ViewBuilder content: @escaping () -> Content) {
-        self.init(title, description: description, action: { EmptyView() }, content: content)
+    init(_ title: String, description: String? = nil, info: (String, String)? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.init(title, description: description, info: info, action: { EmptyView() }, content: content)
     }
 }
 
@@ -532,12 +528,14 @@ struct SettingsRow<Control: View>: View {
     var descriptionColor: Color = CDS.Text.muted
     /// A small mark before the label (the label adornment's `gap-1.5`).
     var adornment: AnyView?
+    var info: (String, String)?
     var below: AnyView?
     @ViewBuilder var control: () -> Control
     @Environment(\.settingsRowPadding) private var pad
 
     init(_ label: String?, description: String? = nil, descriptionColor: Color = CDS.Text.muted, adornment: AnyView? = nil,
-         below: AnyView? = nil, @ViewBuilder control: @escaping () -> Control) {
+         info: (String, String)? = nil, below: AnyView? = nil, @ViewBuilder control: @escaping () -> Control) {
+        self.info = info
         self.label = label
         self.description = description
         self.descriptionColor = descriptionColor
@@ -554,6 +552,7 @@ struct SettingsRow<Control: View>: View {
                         HStack(spacing: 6) {
                             if let adornment { adornment }
                             Text(label).cdsText(comfy.body)
+                            if let info { SettingsInfo(title: info.0, detail: info.1) }
                         }
                     }
                     if let description {
@@ -571,8 +570,26 @@ struct SettingsRow<Control: View>: View {
 }
 
 extension SettingsRow where Control == EmptyView {
-    init(_ label: String?, description: String? = nil, descriptionColor: Color = CDS.Text.muted, below: AnyView? = nil) {
-        self.init(label, description: description, descriptionColor: descriptionColor, below: below) { EmptyView() }
+    init(_ label: String?, description: String? = nil, descriptionColor: Color = CDS.Text.muted, info: (String, String)? = nil,
+         below: AnyView? = nil) {
+        self.init(label, description: description, descriptionColor: descriptionColor, info: info, below: below) { EmptyView() }
+    }
+}
+
+/// A small (i) whose tooltip carries what a label can't: what is sent where, what is installed, what a token needs.
+struct SettingsInfo: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: 12))
+            .foregroundStyle(CDS.Text.muted)
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
+            .tip(title, detail)
+            .accessibilityLabel(title)
+            .accessibilityHint(detail)
     }
 }
 

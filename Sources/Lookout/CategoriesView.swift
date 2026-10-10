@@ -60,7 +60,7 @@ struct CategoriesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
                 SettingsSection("Categories",
-                                description: "A thing goes to the first category, from the top, that has a rule matching it. Drag to reorder.",
+                                info: ("Categories", "A thing goes to the first category, from the top, with a rule matching it. Drag to reorder."),
                                 action: {
                     Button { editing = .new } label: {
                         HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("New category") }
@@ -183,15 +183,12 @@ private struct DoneRow: View {
             CategoryTile(symbol: "checkmark", color: .gray)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Done").cdsText(body14)
-                Text("What you marked done")
-                    .cdsText(foot12, .regular, CDS.Text.muted).lineLimit(1)
             }
             Spacer(minLength: 8)
             Text("\(count)")
                 .cdsText((CDS.Badge.font + 1, 16), .medium, CDS.Text.secondary)
                 .padding(.horizontal, 6).frame(minWidth: 22, minHeight: CDS.Badge.height)
                 .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(CDS.Badge.fill))
-            Text("Always there").cdsText(foot12, .regular, CDS.Text.muted).frame(width: 74, alignment: .trailing)
         }
         .padding(.vertical, 8)
         .frame(minHeight: 44)
