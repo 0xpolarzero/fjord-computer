@@ -376,6 +376,8 @@ enum PlaygroundShots {
         shots.append(window("-composing") { $0.routerWindow?.composing = true })
         shots.append(window("-plan") { $0.routerWindow?.picksPlan = true })
         shots.append(window("-plan-sent-back") { $0.routerWindow?.planSentBack = true })
+        // The Router's own conversation, with the cards of what it changed in Lookout.
+        shots.append(window("-changes") { _ in })
 
         return shots
     }()

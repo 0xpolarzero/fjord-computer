@@ -61,6 +61,7 @@ struct RouterTranscript: View {
             ForEach(Array(chat.enumerated()), id: \.element.id) { i, message in
                 CodeMessage(message: message, store: store)
                     .padding(.top, CodeMessage.gap(before: message, after: i == 0 ? nil : chat[i - 1].role, first: i == 0))
+                    .id(message.id)
             }
             if agent.phase == .working || agent.phase == .starting {
                 WorkingStatus(label: agent.phase == .starting ? "Starting" : "Working")
@@ -104,6 +105,10 @@ struct CodeMessage: View {
             PeerCard(title: session ?? "A session", text: message.text)
         case .error:
             DangerBanner(text: message.text)
+        case .automated:
+            AutomatedMessage(message: message)
+        case .change:
+            if let change = message.change { ChangeCard(change: change, store: store) } else { ReceiptStatus(message: message, store: store, session: nil) }
         }
     }
 
@@ -287,6 +292,30 @@ private struct UserBubble: View {
                 shown = false
                 withAnimation(.timingCurve(0.34, 1.3, 0.64, 1, duration: 0.45)) { shown = true }
             }
+    }
+}
+
+/// A category's action asking the Router: "⚡ Category" over what it said, in no bubble (it isn't you).
+private struct AutomatedMessage: View {
+    let message: RouterMessage
+
+    private var source: String { message.source ?? "An action" }
+    private var body_: String {
+        let prefix = "⚡ \(source): "
+        return message.text.hasPrefix(prefix) ? String(message.text.dropFirst(prefix.count)) : message.text
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("⚡ \(source)").cdsText(CDS.Transcript.text, .medium, CDS.Text.secondary)
+            Text(body_).cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
+        .padding(.horizontal, CDS.Transcript.bubblePadX).padding(.vertical, CDS.Transcript.bubblePadY)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: CDS.Transcript.bubbleRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Action from \(source): \(body_)")
     }
 }
 

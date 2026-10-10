@@ -445,6 +445,26 @@ struct AppRootView: View {
             navigator.go(.router)
         }
         .environment(\.pickRouterCard) { card in routerModel.select(card, store: store) }
+        // Chips in the window's own lists: a place, or the Router on the message an action left in its conversation.
+        .environment(\.openApp) { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), routerOn: store.routerOn)) }
+        .environment(\.openRouterMessage) { message in
+            routerModel.show(message: message)
+            navigator.go(.router)
+        }
+        .environment(\.openChange) { change in
+            switch change.target(in: store) {
+            case .category(let id): navigator.go(.categories); hub.openCategory(id)
+            case .group(let id): navigator.go(.categories); hub.openGroup(id)
+            case .categories: navigator.go(.categories)
+            case .settings(let section):
+                navigator.go(.settings)
+                hub.settingsScroll = ScrollRequest(id: section, seq: (hub.settingsScroll?.seq ?? 0) + 1)
+            case .entry(let thing, let category, let isDone):
+                navigator.go(isDone ? .done : (category.map { .category($0) } ?? .done))
+                hub.selection = "i:" + thing
+                hub.requestScroll("i:" + thing)
+            }
+        }
     }
 }
 

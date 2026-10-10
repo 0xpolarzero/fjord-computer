@@ -248,6 +248,12 @@ final class RouterModel {
     var draft = "" {
         didSet { if draft != oldValue { mentionChanged() } }
     }
+    /// Asks the Router's conversation to scroll to a message (an inbox action's), selecting no card.
+    var messageRequest: ScrollRequest?
+    func show(message: UUID) {
+        selection = nil
+        messageRequest = ScrollRequest(id: message.uuidString, seq: (messageRequest?.seq ?? 0) + 1)
+    }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
     var replyTo: String?
     /// Projects tagged with @ (their folders), in the order picked: the Router looks there, and starts a session there.

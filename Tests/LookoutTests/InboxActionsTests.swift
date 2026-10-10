@@ -5,17 +5,17 @@ import Testing
 /// Stands in for the world: records what actions would do.
 @MainActor
 final class FakePerformer: ActionPerformer {
-    var sessions: [(folder: String, prompt: String, title: String)] = []
+    var asked: [(message: String, source: String)] = []
     var comments: [(repo: String, number: Int, body: String)] = []
     var reruns: [Int] = []
-    var clones: [String: String] = [:]
+    var cloneFolders: [String: [String]] = [:]
     var failed: [FailedRun] = []
     var failure: Error?
 
-    func startSession(folder: String, prompt: String, title: String) async throws -> String {
+    func askRouter(_ message: String, source: String) async throws -> UUID {
         if let failure { throw failure }
-        sessions.append((folder, prompt, title))
-        return "local_\(sessions.count)"
+        asked.append((message, source))
+        return UUID()
     }
 
     func comment(repo: String, number: Int, body: String) async throws -> URL? {
@@ -32,12 +32,12 @@ final class FakePerformer: ActionPerformer {
         return 2
     }
 
-    func clone(of repo: String) -> String? { clones[repo] }
+    func clones(of repo: String) -> [String] { cloneFolders[repo] ?? [] }
 }
 
 @MainActor
 @Suite(.serialized) struct InboxActionsTests {
-    private let session = CategoryAction.make(.session(.folder("/p/app"), prompt: "Look at {title} by {author} ({repo}#{number}) {url}"))
+    private let session = CategoryAction.make(.askRouter(prompt: "Look at {title} by {author} ({repo}#{number}) {url}"))
 
     /// A store whose category has `actions` and holds PRs with a Greptile score below 5.
     private func store(_ things: [Thing], actions: [CategoryAction], performer: FakePerformer? = nil) -> (Store, FakePerformer) {
@@ -54,14 +54,14 @@ final class FakePerformer: ActionPerformer {
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])
         await store.runActions()
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
         // A refresh with the same things is still nothing.
         await store.runActions()
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
         // Something new comes in.
         add(store, InboxFixture.pr(3))
         await store.runActions()
-        #expect(performer.sessions.count == 1)
+        #expect(performer.asked.count == 1)
     }
 
     @Test func aRuleChangeTakesWhatMatchesAsOld() async {
@@ -71,10 +71,10 @@ final class FakePerformer: ActionPerformer {
         // The rule now takes score 5 too: PR 2 is in, but it was not new.
         store.categories[0].rules[0].conditions = [.greptileBelow(6)]
         await store.runActions()
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
         add(store, InboxFixture.pr(3, greptile: 5))
         await store.runActions()
-        #expect(performer.sessions.count == 1)
+        #expect(performer.asked.count == 1)
     }
 
     @Test func anActionAddedLaterBaselinesOnlyItself() async {
@@ -87,7 +87,7 @@ final class FakePerformer: ActionPerformer {
         // The comment never touches PR 1 or 2 (it was made after both); the session, already running, takes PR 2.
         await store.runActions()
         #expect(performer.comments.isEmpty)
-        #expect(performer.sessions.count == 1)
+        #expect(performer.asked.count == 1)
     }
 
     @Test func oncePerThingAndNeverAgainWhileItStays() async {
@@ -97,7 +97,7 @@ final class FakePerformer: ActionPerformer {
         await store.runActions()
         await store.runActions()
         await store.runActions()
-        #expect(performer.sessions.count == 1)
+        #expect(performer.asked.count == 1)
     }
 
     @Test func leavingAndComingBackAgainRunsOnlyAfterTheCooldown() async {
@@ -106,19 +106,19 @@ final class FakePerformer: ActionPerformer {
         await store.runActions(now: t0)
         add(store, InboxFixture.pr(4))
         await store.runActions(now: t0)
-        #expect(performer.sessions.count == 1)
+        #expect(performer.asked.count == 1)
         // Out of the category (score 5), then back within the hour: the same visit.
         add(store, InboxFixture.pr(4, greptile: 5))
         await store.runActions(now: t0.addingTimeInterval(60))
         add(store, InboxFixture.pr(4, greptile: 3))
         await store.runActions(now: t0.addingTimeInterval(120))
-        #expect(performer.sessions.count == 1)
+        #expect(performer.asked.count == 1)
         // Out for good measure, forgotten after the cooldown, back: a new visit.
         add(store, InboxFixture.pr(4, greptile: 5))
         await store.runActions(now: t0.addingTimeInterval(120 + InboxActions.reentryCooldown + 10))
         add(store, InboxFixture.pr(4, greptile: 3))
         await store.runActions(now: t0.addingTimeInterval(120 + InboxActions.reentryCooldown + 20))
-        #expect(performer.sessions.count == 2)
+        #expect(performer.asked.count == 2)
     }
 
     @Test func doneThingsDoNotRun() async {
@@ -127,7 +127,7 @@ final class FakePerformer: ActionPerformer {
         add(store, InboxFixture.pr(5))
         store.markDone(store.entries[0])
         await store.runActions()
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
     }
 
     // MARK: On each new fact
@@ -202,9 +202,12 @@ final class FakePerformer: ActionPerformer {
         thing.comments = [commented("c1", by: "bob")]
         add(store, thing)
         await store.runActions()
-        let sent = performer.sessions.first
-        #expect(sent?.folder == "/p/app")
-        #expect(sent?.prompt.hasPrefix("Look at Warm pool by @alice (o/r#12) https://github.com/o/r/pull/12") == true)
+        let sent = performer.asked.first
+        #expect(sent?.source == InboxFixture.category().name)
+        let text = sent?.message ?? ""
+        #expect(text.hasPrefix("⚡ \(InboxFixture.category().name): Look at Warm pool by @alice (o/r#12) https://github.com/o/r/pull/12"))
+        #expect(text.contains("Last comment, by @bob"))
+        #expect(text.contains("Local clones of o/r: none found"))
     }
 
     @Test func aCommentIsPostedWithPlaceholdersAndNothingElse() async {
@@ -222,24 +225,47 @@ final class FakePerformer: ActionPerformer {
         #expect(LocalClones.repo(fromRemote: "ssh://git@github.com/owner/repo.git") == "owner/repo")
         #expect(LocalClones.repo(fromRemote: "https://gitlab.com/owner/repo") == nil)
         let remotes = ["/a/app/.worktrees/x": ["owner/app"], "/a/app": ["owner/app"], "/a/other": ["owner/other"]]
-        #expect(LocalClones.find("Owner/App", in: ["/a/other", "/a/app/.worktrees/x", "/a/app"], remotes: { remotes[$0] ?? [] }) == "/a/app")
-        #expect(LocalClones.find("owner/none", in: ["/a/app"], remotes: { remotes[$0] ?? [] }) == nil)
+        #expect(LocalClones.findAll("Owner/App", in: ["/a/other", "/a/app/.worktrees/x", "/a/app"], remotes: { remotes[$0] ?? [] })
+                == ["/a/app", "/a/app/.worktrees/x"])
+        #expect(LocalClones.findAll("owner/none", in: ["/a/app"], remotes: { remotes[$0] ?? [] }).isEmpty)
     }
 
-    @Test func theRepoClonePicksTheFolderAndFailsWithoutOne() async {
+    @Test func theRouterIsToldTheClonesToChooseFromAndPicksTheFolder() async {
         let performer = FakePerformer()
-        let clone = CategoryAction.make(.session(.clone, prompt: "go"))
-        let (store, _) = store([], actions: [clone], performer: performer)
+        performer.cloneFolders = ["o/r": ["/code/r", "/code/r/.worktrees/x"]]
+        let (store, _) = store([], actions: [.make(.askRouter(prompt: "go"))], performer: performer)
         await store.runActions()
         add(store, InboxFixture.pr(1, repo: "o/r"))
-        add(store, InboxFixture.pr(2, repo: "o/none"))
-        performer.clones = ["o/r": "/code/r"]
         await store.runActions()
-        #expect(performer.sessions.map(\.folder) == ["/code/r"])
-        #expect(store.actionLedger.runs.values.contains { $0.state == .failed })
+        let text = performer.asked.first?.message ?? ""
+        #expect(text.contains("`/code/r`, `/code/r/.worktrees/x`"))
         // A failure is not retried.
+        performer.failure = ActionFailure("the Router is off")
+        add(store, InboxFixture.pr(2, repo: "o/r"))
         await store.runActions()
-        #expect(performer.sessions.count == 1)
+        #expect(store.actionLedger.runs.values.contains { $0.state == .failed && $0.detail == "the Router is off" })
+        performer.failure = nil
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+    }
+
+    @Test func anActionSavedAsASessionReadsAsAskingTheRouter() throws {
+        let old = #"{"session":{"_0":{"folder":{"_0":"/p/app"}},"prompt":"Fix {url}"}}"#
+        #expect(try JSONDecoder().decode(ActionKind.self, from: Data(old.utf8)) == .askRouter(prompt: "Fix {url}"))
+        let oldClone = #"{"session":{"_0":{"clone":{}},"prompt":"go"}}"#
+        #expect(try JSONDecoder().decode(ActionKind.self, from: Data(oldClone.utf8)) == .askRouter(prompt: "go"))
+        for kind in [ActionKind.askRouter(prompt: "a"), .comment("c"), .rerun] {
+            #expect(try JSONDecoder().decode(ActionKind.self, from: JSONEncoder().encode(kind)) == kind)
+        }
+    }
+
+    @Test func theRealPerformerFailsWhileTheRouterIsOff() async {
+        let store = InboxFixture.store([])
+        store.router.enabled = false
+        await #expect(throws: ActionFailure.self) {
+            _ = try await StoreActionPerformer(store: store).askRouter("⚡ Mine: go", source: "Mine")
+        }
+        #expect(store.router.chat.isEmpty)
     }
 
     // MARK: Re-running
@@ -291,16 +317,20 @@ final class FakePerformer: ActionPerformer {
         await store.runActions()
         for n in 1...13 { add(store, InboxFixture.pr(n)) }
         await store.runActions()
-        #expect(performer.sessions.count == 10)
+        #expect(performer.asked.count == 10)
         await store.runActions()
-        #expect(performer.sessions.count == 13)
+        #expect(performer.asked.count == 13)
     }
 
-    @Test func aSessionChipOpensTheSession() async {
+    @Test func theChipSaysTheRouterWasAskedAndThenOpensTheSessionItStarted() async {
         let (store, _) = store([], actions: [session])
         await store.runActions()
         add(store, InboxFixture.pr(2))
         await store.runActions()
+        #expect(store.actionChips(for: store.entries[0]).first?.label == "asked the Router")
+        #expect(store.actionChips(for: store.entries[0]).first?.target == .router)
+        let key = store.actionLedger.runs.keys.first { store.actionLedger.runs[$0]?.state == .done }!
+        store.actionLedger.runs[key]?.sessionID = "local_1"
         #expect(store.actionChips(for: store.entries[0]).first?.target == .session("local_1"))
     }
 
@@ -310,7 +340,7 @@ final class FakePerformer: ActionPerformer {
         await store.runActions()
         add(store, InboxFixture.pr(2))
         await store.runActions()
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
         #expect(store.actionLedger == ActionLedger())
     }
 
@@ -337,13 +367,13 @@ final class FakePerformer: ActionPerformer {
 
     @Test func previewDoesNothing() async {
         let performer = FakePerformer()
-        performer.clones = ["o/r": "/code/r"]
+        performer.cloneFolders = ["o/r": ["/code/r"]]
         let thing = InboxFixture.pr(12, repo: "o/r", title: "Warm pool")
-        let clone = CategoryAction.make(.session(.clone, prompt: "Look at {title}"))
+        let clone = CategoryAction.make(.askRouter(prompt: "Look at {title}"))
         let lines = await InboxActions.preview(clone, category: "Mine", thing: thing, facts: [Fact(key: "k", label: "Greptile 3/5")],
                                                performer: performer)
         #expect(lines.joined(separator: "\n").contains("/code/r"))
         #expect(lines.joined(separator: "\n").contains("Look at Warm pool"))
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
     }
 }

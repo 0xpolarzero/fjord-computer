@@ -69,6 +69,14 @@ struct RouterMain: View {
                 .defaultScrollAnchor(.bottom)
                 .onChange(of: store.router.chat.last?.id) { proxy.scrollTo("end", anchor: .bottom) }
                 .onChange(of: model.selection) { proxy.scrollTo("end", anchor: .bottom) }
+                // A message asked for (an action's chip): after the conversation is shown, and after the scroll to its end.
+                .onChange(of: model.messageRequest, initial: true) { _, request in
+                    guard let request, let id = UUID(uuidString: request.id) else { return }
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(120))
+                        withAnimation(Theme.Motion.hover) { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
             }
             RouterComposer(store: store, model: model, agent: store.routerAgent)
                 .frame(maxWidth: RouterCodeView.column)

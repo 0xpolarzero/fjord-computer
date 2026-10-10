@@ -931,6 +931,8 @@ extension String {
 struct ActionChipView: View {
     let chip: InboxActions.Chip
     let store: Store
+    @Environment(\.openApp) private var openApp
+    @Environment(\.openRouterMessage) private var openRouterMessage
 
     var body: some View {
         let (fill, ink) = FactChip.colors(chip.tint)
@@ -944,7 +946,13 @@ struct ActionChipView: View {
         .frame(height: CDS.Badge.height)
         .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(fill))
         if let target = chip.target {
-            Button { store.openActionTarget(target) } label: { face }
+            Button {
+                if target == .router {
+                    if let message = chip.message { openRouterMessage(message) } else { openApp(.router) }
+                } else {
+                    store.openActionTarget(target)
+                }
+            } label: { face }
                 .buttonStyle(.plain)
                 .help(chip.help)
                 .accessibilityLabel("Action: \(chip.label)")

@@ -90,6 +90,7 @@ struct HubRoot: View {
     var openApp: (AppDestination) -> Void = { _ in }
     var openUpdates: () -> Void = {}
     var openRouter: (String?) -> Void = { _ in }
+    var openRouterMessage: (UUID) -> Void = { _ in }
     var pickRouterCard: (String) -> Void = { _ in }
 
     var body: some View {
@@ -98,6 +99,7 @@ struct HubRoot: View {
             .environment(\.openApp, openApp)
             .environment(\.openUpdates, openUpdates)
             .environment(\.openRouter, openRouter)
+            .environment(\.openRouterMessage, openRouterMessage)
             .environment(\.pickRouterCard, pickRouterCard)
             // Tooltips are drawn over the whole window, outside the hub's clipped shape, so they're never cut off.
             .tipSpace()
@@ -163,6 +165,8 @@ final class HubController {
     var pickRouterCard: (String) -> Void = { _ in } {
         didSet { host.rootView.pickRouterCard = pickRouterCard }
     }
+    /// Scrolls the Router's conversation to a message, before the window opens on it.
+    var pickRouterMessage: (UUID) -> Void = { _ in }
 
     /// The edge `--edge` names, if it names one.
     nonisolated static func edge(in arguments: [String]) -> DockEdge? {
@@ -223,7 +227,9 @@ final class HubController {
         host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout,
                                 openApp: { [weak self] in self?.opened($0) },
                                 openUpdates: { [weak self] in self?.openedUpdates() },
-                                openRouter: { [weak self] in self?.opened(.router, card: $0) }, pickRouterCard: pickRouterCard)
+                                openRouter: { [weak self] in self?.opened(.router, card: $0) },
+                                openRouterMessage: { [weak self] in self?.pickRouterMessage($0); self?.opened(.router) },
+                                pickRouterCard: pickRouterCard)
         window.setFrame(dockFrame(), display: true)
         syncTrigger()
     }

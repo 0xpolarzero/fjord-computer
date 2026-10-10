@@ -51,6 +51,18 @@ struct CategoriesView: View {
             syncStepBack(open)
             if !open { dropUntouched() }
         }
+        // A Router change's Open button asked for a category's editor or a group.
+        .onChange(of: hub?.categoryRequest, initial: true) { _, request in
+            guard let request, let id = UUID(uuidString: request.id) else { return }
+            hub?.categoryRequest = nil
+            if store.categories.contains(where: { $0.id == id }) { editing = .existing(id) }
+        }
+        .onChange(of: hub?.groupRequest, initial: true) { _, request in
+            guard let request, let id = UUID(uuidString: request.id) else { return }
+            hub?.groupRequest = nil
+            editing = nil
+            expandedGroup = id
+        }
         .onChange(of: store.categories) {
             history.observe(store, field: CategoryHistory.typingField())
             store.categoriesEdited()

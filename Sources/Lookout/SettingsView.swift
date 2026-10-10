@@ -20,17 +20,19 @@ struct SettingsView: View {
     static let updatesID = "updates"
     /// The Router's section (shots scroll there).
     static let routerID = "router"
+    static let notificationsID = "notifications"
+    static let generalID = "general"
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
                     account
-                    notifications
+                    notifications.id(Self.notificationsID)
                     claude
                     shortcuts
                     updates.id(Self.updatesID)
-                    general
+                    general.id(Self.generalID)
                 }
                 // The spec's `px-xl pt-2 pb-lg`, kept in the island's narrower panel; 8 more on top, under the hub's header.
                 .padding(.horizontal, CDS.Settings.pagePadX)

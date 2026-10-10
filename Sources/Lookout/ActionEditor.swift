@@ -32,7 +32,7 @@ struct ActionsEditor: View {
 
     private var addMenu: some View {
         Menu {
-            Button("Start a Claude session") { actions.items.append(.make(.session(.clone, prompt: ""))) }
+            Button("Ask the Router") { actions.items.append(.make(.askRouter(prompt: ""))) }
             Button("Comment on GitHub") { actions.items.append(.make(.comment(""))) }
             Button("Re-run failed checks") { actions.items.append(.make(.rerun)) }
         } label: {
@@ -75,25 +75,10 @@ private struct ActionRow: View {
                 IconButton(symbol: "xmark", help: "Remove", label: "Remove \(action.title)", size: 24, tint: CDS.Text.muted, action: remove)
             }
             switch action.kind {
-            case .session(let folder, let prompt):
-                HStack(spacing: 6) {
-                    Word("in")
-                    MenuChip(title: folderTitle(folder), label: "Project folder") {
-                        Toggle("The repo's local clone, found automatically", isOn: Binding(get: { folder == .clone }, set: { _ in
-                            action.kind = .session(.clone, prompt: prompt)
-                        }))
-                        let folders = store.knownFolders.filter { !$0.isEmpty }
-                        if !folders.isEmpty { Divider() }
-                        ForEach(folders, id: \.self) { path in
-                            Toggle(store.folderName(path), isOn: Binding(get: { folder == .folder(path) }, set: { _ in
-                                action.kind = .session(.folder(path), prompt: prompt)
-                            }))
-                        }
-                    }
-                }
-                ActionTextBox(text: Binding(get: { prompt }, set: { action.kind = .session(folder, prompt: $0) }),
+            case .askRouter(let prompt):
+                ActionTextBox(text: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }),
                               placeholder: "What to do, like “Review {url} and fix what Greptile flagged”", label: "Prompt")
-                    .tip("Prompt", "Its title, link, repo, why it is here and the last comment are added for you. {title} {url} {number} {repo} {author} are filled in.")
+                    .tip("Prompt", "The Router decides where it runs: a new session in one of the repo's local clones, or one already open. Its title, link, repo, why it is here and the last comment are added for you. {title} {url} {number} {repo} {author} are filled in.")
             case .comment(let text):
                 ActionTextBox(text: Binding(get: { text }, set: { action.kind = .comment($0) }),
                               placeholder: "The comment, like “Thanks @{author}, taking a look”", label: "Comment")
@@ -134,13 +119,6 @@ private struct ActionRow: View {
         .padding(.horizontal, 12).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
-    }
-
-    private func folderTitle(_ folder: SessionFolder) -> String {
-        switch folder {
-        case .clone: "the repo's local clone"
-        case .folder(let path): store.folderName(path)
-        }
     }
 
     private func tryIt() async {

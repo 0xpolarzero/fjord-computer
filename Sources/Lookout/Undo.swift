@@ -145,6 +145,15 @@ final class CategoryHistory {
         return true
     }
 
+    /// Forgets every step and takes the store as it is now as the start: a change made elsewhere (the Router's) is not a step
+    /// of the page, and undoing one made before it would undo that too.
+    func reset(to store: Store) {
+        undos.removeAll()
+        redos.removeAll()
+        current = Snapshot(categories: store.categories, groups: store.groups)
+        lastField = nil
+    }
+
     /// Takes back the step that just made `id`'s category, when nothing came after it (a new category left untouched).
     func discardCreation(of id: UUID, in store: Store) {
         flush(store)

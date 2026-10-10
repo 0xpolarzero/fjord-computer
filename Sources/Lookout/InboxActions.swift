@@ -13,18 +13,45 @@ enum ActionTrigger: String, Codable, Hashable {
     case eachFact
 }
 
-/// Where a session starts.
-enum SessionFolder: Codable, Hashable {
-    /// The repo's local clone, found by matching the git remotes of the projects Claude knows.
-    case clone
-    case folder(String)
-}
-
 enum ActionKind: Codable, Hashable {
-    case session(SessionFolder, prompt: String)
+    /// Hands the thing to the Router with this prompt; the Router decides where it runs (a new session, or one open).
+    case askRouter(prompt: String)
     case comment(String)
     /// Re-run the failed jobs of the failing workflow runs.
     case rerun
+
+    // Written as the synthesized form was, so what is saved reads back. A `session(folder, prompt:)` saved before the Router
+    // was the only way in is read as `askRouter` with the same prompt (the Router picks the folder now).
+    private enum Key: String, CodingKey { case askRouter, session, comment, rerun }
+    private enum Field: String, CodingKey { case prompt, _0 }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        if c.contains(.askRouter) || c.contains(.session) {
+            let inner = try c.nestedContainer(keyedBy: Field.self, forKey: c.contains(.askRouter) ? .askRouter : .session)
+            self = .askRouter(prompt: (try? inner.decode(String.self, forKey: .prompt)) ?? "")
+        } else if c.contains(.comment) {
+            self = .comment(try c.nestedContainer(keyedBy: Field.self, forKey: .comment).decode(String.self, forKey: ._0))
+        } else if c.contains(.rerun) {
+            self = .rerun
+        } else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unknown action"))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Key.self)
+        switch self {
+        case .askRouter(let prompt):
+            var inner = c.nestedContainer(keyedBy: Field.self, forKey: .askRouter)
+            try inner.encode(prompt, forKey: .prompt)
+        case .comment(let text):
+            var inner = c.nestedContainer(keyedBy: Field.self, forKey: .comment)
+            try inner.encode(text, forKey: ._0)
+        case .rerun:
+            _ = c.nestedContainer(keyedBy: Field.self, forKey: .rerun)
+        }
+    }
 }
 
 struct CategoryAction: Codable, Hashable, Identifiable {
@@ -34,7 +61,7 @@ struct CategoryAction: Codable, Hashable, Identifiable {
 
     var title: String {
         switch kind {
-        case .session: "Start a Claude session"
+        case .askRouter: "Ask the Router"
         case .comment: "Comment on GitHub"
         case .rerun: "Re-run failed checks"
         }
@@ -42,7 +69,7 @@ struct CategoryAction: Codable, Hashable, Identifiable {
 
     var symbol: String {
         switch kind {
-        case .session: "sparkles"
+        case .askRouter: "sparkles"
         case .comment: "text.bubble"
         case .rerun: "arrow.clockwise"
         }
@@ -50,7 +77,7 @@ struct CategoryAction: Codable, Hashable, Identifiable {
 
     func applies(to kind: ThingKind) -> Bool {
         switch self.kind {
-        case .session: true
+        case .askRouter: true
         case .comment: kind != .workflow
         case .rerun: kind != .issue
         }
@@ -89,12 +116,14 @@ struct ActionRun: Codable, Hashable {
     var trigger: String
     var state: State
     var at: Date
-    /// done: "commented", "re-ran 2 jobs", "session started"; failed: why.
+    /// done: "commented", "re-ran 2 jobs", "asked the Router"; failed: why.
     var detail = ""
     /// The comment's page.
     var url: URL?
-    /// The Claude app's id of a session started.
+    /// The Claude app's id of the session the Router started for it.
     var sessionID: String?
+    /// The message left in the Router's chat (an Ask the Router).
+    var message: UUID?
 }
 
 /// Everything actions remember: what was already there when each category (or action) began, and each run.
@@ -284,8 +313,8 @@ enum InboxActions {
         }
     }
 
-    /// A session's first message: your prompt, then the event's context.
-    static func prompt(_ text: String, category: String, thing: Thing, facts: [Fact]) -> String {
+    /// What the Router is told: "⚡ <Category>: your prompt", then the event's context and the folders it may pick from.
+    static func routerMessage(_ text: String, category: String, thing: Thing, facts: [Fact], folders: [String]) -> String {
         var lines = ["Context, from the “\(category)” category of the Lookout inbox:",
                      "- Title: \(thing.title)", "- URL: \(thing.url.absoluteString)",
                      "- \(thing.kind == .pr ? "Pull request" : thing.kind == .issue ? "Issue" : "Workflow"): \(reference(thing))"]
@@ -294,25 +323,27 @@ enum InboxActions {
         if let last = thing.comments.max(by: { $0.at < $1.at }) {
             lines.append("- Last comment, by @\(last.author.login): “\(last.snippet)”")
         }
+        if folders.isEmpty {
+            lines.append("- Local clones of \(thing.repo): none found among the projects Claude knows")
+        } else {
+            lines.append("- Local clones of \(thing.repo), to choose from: " + folders.map { "`\($0)`" }.joined(separator: ", "))
+        }
         let body = substitute(text, thing: thing).trimmingCharacters(in: .whitespacesAndNewlines)
-        return (body.isEmpty ? "" : body + "\n\n") + lines.joined(separator: "\n")
-    }
-
-    /// A short title for the session.
-    static func sessionTitle(_ thing: Thing) -> String {
-        SessionStart.cleanTitle(thing.kind == .workflow ? "CI: \(thing.title)" : "\(thing.repo)#\(thing.number ?? 0) \(thing.title)")
+        return "⚡ \(category): " + (body.isEmpty ? "" : body + "\n\n") + lines.joined(separator: "\n")
     }
 
     // MARK: Chips
 
     /// What a row says about an action: the state of its latest run, or that it is waiting.
     struct Chip: Equatable, Identifiable {
-        enum Target: Equatable { case session(String), url(URL) }
+        enum Target: Equatable { case session(String), url(URL), router }
         var id: UUID
         var label: String
         var tint: FactTint
         var target: Target?
         var help: String
+        /// For `.router`: the message in the Router's chat the chip opens on.
+        var message: UUID? = nil
     }
 
     private static func ago(_ date: Date, now: Date) -> String {
@@ -349,9 +380,13 @@ enum InboxActions {
             return Chip(id: action.id, label: "failed: \(reason)", tint: .danger, target: nil, help: "\(action.title) failed: \(run.detail)")
         case .done:
             switch action.kind {
-            case .session:
-                return Chip(id: action.id, label: "session started \(ago(run.at, now: now))", tint: .neutral,
-                            target: run.sessionID.map { .session($0) }, help: "Open the session in Claude")
+            case .askRouter:
+                if let session = run.sessionID {
+                    return Chip(id: action.id, label: "session started \(ago(run.at, now: now))", tint: .neutral,
+                                target: .session(session), help: "Open the session in Claude")
+                }
+                return Chip(id: action.id, label: "asked the Router", tint: .neutral, target: .router,
+                            help: "Asked the Router \(ago(run.at, now: now)). Open the Router", message: run.message)
             case .comment:
                 return Chip(id: action.id, label: "commented", tint: .neutral, target: run.url.map { .url($0) },
                             help: "Open the comment on GitHub")
@@ -375,16 +410,17 @@ struct FailedRun: Equatable {
 /// What actions do in the world. The Store has the real one; tests and the playground have their own (or none).
 @MainActor
 protocol ActionPerformer: AnyObject {
-    /// Starts a session in `folder`; its id in the Claude app.
-    func startSession(folder: String, prompt: String, title: String) async throws -> String
+    /// Leaves `message` in the Router's chat as coming from `source` (a category) and hands it to the Router, started if it
+    /// isn't running; the message's id. Throws when the Router is off.
+    func askRouter(_ message: String, source: String) async throws -> UUID
     /// Posts a comment; its page when GitHub says.
     func comment(repo: String, number: Int, body: String) async throws -> URL?
     /// The failed runs that re-running would take, for a PR's head commit or a workflow thing.
     func failedRuns(for thing: Thing) async throws -> [FailedRun]
     /// Re-runs one run's failed jobs; how many jobs.
     func rerun(repo: String, run: FailedRun) async throws -> Int
-    /// The local clone of a repo, if one of the known project folders is.
-    func clone(of repo: String) -> String?
+    /// The local clones of a repo among the known project folders.
+    func clones(of repo: String) -> [String]
 }
 
 struct ActionFailure: LocalizedError {
@@ -402,20 +438,11 @@ extension InboxActions {
                             state: .done, at: now)
         do {
             switch job.action.kind {
-            case .session(let where_, let text):
-                let folder: String
-                switch where_ {
-                case .folder(let path): folder = path
-                case .clone:
-                    guard let found = performer.clone(of: thing.repo) else {
-                        throw ActionFailure("no local clone of \(thing.repo) among your projects")
-                    }
-                    folder = found
-                }
-                run.sessionID = try await performer.startSession(
-                    folder: folder, prompt: prompt(text, category: job.category.name, thing: thing, facts: job.facts),
-                    title: sessionTitle(thing))
-                run.detail = "session started"
+            case .askRouter(let text):
+                let message = routerMessage(text, category: job.category.name, thing: thing, facts: job.facts,
+                                            folders: performer.clones(of: thing.repo))
+                run.message = try await performer.askRouter(message, source: job.category.name)
+                run.detail = "asked the Router"
             case .comment(let text):
                 guard let number = thing.number, thing.kind != .workflow else { throw ActionFailure("only PRs and issues take comments") }
                 let body = substitute(text, thing: thing).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -444,19 +471,10 @@ extension InboxActions {
         guard action.applies(to: thing.kind) else { return ["Doesn't apply to \(thing.kind.label.lowercased()): skipped."] }
         var lines = ["On \(reference(thing)): \(thing.title)"]
         switch action.kind {
-        case .session(let where_, let text):
-            switch where_ {
-            case .folder(let path): lines.append("Starts a session in \(path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).")
-            case .clone:
-                if let performer {
-                    lines.append(performer.clone(of: thing.repo).map { "Starts a session in \($0.replacingOccurrences(of: NSHomeDirectory(), with: "~"))." }
-                                 ?? "No local clone of \(thing.repo) among your projects: this would fail.")
-                } else {
-                    lines.append("Starts a session in the local clone of \(thing.repo).")
-                }
-            }
-            lines.append("First message:")
-            lines.append(prompt(text, category: category, thing: thing, facts: facts))
+        case .askRouter(let text):
+            let folders = performer?.clones(of: thing.repo) ?? []
+            lines.append("Asks the Router, which decides where it runs. Message:")
+            lines.append(routerMessage(text, category: category, thing: thing, facts: facts, folders: folders))
         case .comment(let text):
             let body = substitute(text, thing: thing)
             lines.append("Comments on \(reference(thing)):")
@@ -512,11 +530,11 @@ enum LocalClones {
         }
     }
 
-    /// The folder (shortest path first, so a checkout wins over its worktrees) whose remotes name `repo`.
-    static func find(_ repo: String, in folders: [String], remotes: (String) -> [String] = remotes(of:)) -> String? {
+    /// The folders (shortest path first, so a checkout comes before its worktrees) whose remotes name `repo`.
+    static func findAll(_ repo: String, in folders: [String], remotes: (String) -> [String] = remotes(of:)) -> [String] {
         let wanted = repo.lowercased()
         return folders.filter { !$0.isEmpty }.sorted { ($0.count, $0) < ($1.count, $1) }
-            .first { remotes($0).contains(wanted) }
+            .filter { remotes($0).contains(wanted) }
     }
 }
 
@@ -615,6 +633,7 @@ extension Store {
     func openActionTarget(_ target: InboxActions.Chip.Target) {
         switch target {
         case .session(let id): openAgent(id)
+        case .router: break  // the chip opens the window on the Router (it has the environment for it)
         case .url(let url):
             if let interceptOpen { interceptOpen("Open on GitHub · comment") } else { Link.open(url) }
         }
@@ -655,24 +674,11 @@ final class StoreActionPerformer: ActionPerformer {
     private unowned let store: Store
     init(store: Store) { self.store = store }
 
-    func clone(of repo: String) -> String? { LocalClones.find(repo, in: store.knownFolders) }
+    func clones(of repo: String) -> [String] { LocalClones.findAll(repo, in: store.knownFolders) }
 
-    /// The Router's way of making a session (`SessionStart`): a CLI session made in the folder with a uuid, which the Claude
-    /// app imports (`claude://resume`) and starts, and which then registers as a peer, so the Router sees it. The prompt is
-    /// the session's first turn, run by Claude Code itself before the import.
-    func startSession(folder: String, prompt: String, title: String) async throws -> String {
-        guard let binary = store.routerAgent.claudeCode?.path,
-              let peersDir = store.routerFiles?.claudeDir.appendingPathComponent("sessions") else {
-            throw ActionFailure("Claude Code wasn't found")
-        }
-        let uuid = UUID().uuidString.lowercased()
-        let output = try await OneShot.run(binary, SessionStart.promptArguments(uuid: uuid, prompt: prompt),
-                                           cwd: URL(fileURLWithPath: folder), timeout: SessionStart.firstTurnWait)
-        _ = try OneShot.result(output)
-        guard let url = SessionStart.importURL(uuid: uuid) else { throw ActionFailure("couldn't make the link") }
-        if let intercept = store.interceptOpen { intercept("New Claude session in \(store.folderName(folder))") } else { Link.open(url) }
-        _ = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir)
-        return "local_\(uuid)"
+    func askRouter(_ message: String, source: String) async throws -> UUID {
+        guard let id = store.routerAgent.sendAutomated(message, source: source) else { throw ActionFailure("the Router is off") }
+        return id
     }
 
     func comment(repo: String, number: Int, body: String) async throws -> URL? {
@@ -720,14 +726,4 @@ final class StoreActionPerformer: ActionPerformer {
         try await store.gh.post("/repos/\(repo)/actions/runs/\(run.id)/rerun-failed-jobs")
         return jobs?.jobs.filter { ["failure", "timed_out"].contains($0.conclusion ?? "") }.count ?? 0
     }
-}
-
-extension SessionStart {
-    /// A session whose first turn is `prompt`, run headlessly by Claude Code (its permissions are those of your settings).
-    static func promptArguments(uuid: String, prompt: String) -> [String] {
-        ["-p", prompt, "--session-id", uuid, "--output-format", "json"]
-    }
-
-    /// How long that first turn may take.
-    static let firstTurnWait: TimeInterval = 900
 }

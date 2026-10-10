@@ -514,15 +514,21 @@ final class RouterMCPServer: @unchecked Sendable {
         endTurn()
     }
 
-    /// A turn of yours begins (nil: a session's message started it).
-    func beginTurn(_ text: String?) {
+    /// The inbox action's message the current turn answers (its id in the chat), if an action started it.
+    private(set) var automatedRef: UUID?
+
+    /// A turn of yours begins (nil: a session's message started it). `automatedRef`: it is an inbox action's message, which
+    /// can read Lookout but changes nothing in it.
+    func beginTurn(_ text: String?, automatedRef: UUID? = nil) {
         turnText = text
+        self.automatedRef = automatedRef
     }
 
     /// The turn ended or was stopped: unused preparations go, runs under way are stopped, late work acts on nothing.
     func endTurn() {
         turn += 1
         turnText = nil
+        automatedRef = nil
         prepared = [:]
         approved = []
         cancelRuns()
@@ -558,7 +564,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// Right before a side effect: the call must still belong to the Router and the turn as they are now.
     /// `acting` false: a read (board, route), which a session's turn may do too.
-    private func live(_ ticket: Ticket, acting: Bool = true) throws {
+    func live(_ ticket: Ticket, acting: Bool = true) throws {
         guard ticket.epoch == epoch, !Task.isCancelled else { throw Failure("The Router was reset; nothing was done") }
         guard ticket.turn == turn else { throw Failure("Stopped; nothing was done") }
         guard !acting || (ticket.userTurn && turnText != nil) else { throw Failure("Only the user's messages make the Router act") }
@@ -568,7 +574,10 @@ final class RouterMCPServer: @unchecked Sendable {
     /// `live` as a yes/no, for a check made later (the form writer's, right before it writes).
     private func isLive(_ ticket: Ticket) -> Bool { (try? live(ticket)) != nil }
 
-    static let specs: [[String: Any]] = [
+    /// Every tool: the sessions' (below) and Lookout's own (RouterLookout.swift).
+    static let specs: [[String: Any]] = sessionSpecs + LookoutTools.specs
+
+    private static let sessionSpecs: [[String: Any]] = [
         [
             "name": "board",
             "description": "What needs the user now: open cards (with any pending form's questions and options), working sessions, other recent sessions and project names. Each session has `peer` (the exact `to` for SendMessage) and `reachable` (it has a live process). Call it before acting.",
@@ -622,6 +631,7 @@ final class RouterMCPServer: @unchecked Sendable {
                 "properties": [
                     "project": ["type": "string", "description": "A project name from board or the [projects: …] header, or its folder path."],
                     "title": ["type": "string", "description": "A short title for the session, 3 to 6 words."],
+                    "ref": ["type": "string", "description": "When starting it for an inbox action's message (\"⚡ <category>: …\"), the id on that message's `[ref: …]` line: the action's row then links to the session."],
                 ],
                 "required": ["project", "title"], "additionalProperties": false,
             ],
@@ -669,10 +679,10 @@ final class RouterMCPServer: @unchecked Sendable {
                 return RouterRPC.ToolResult(text: try await prepare(store, session: Self.string(args, "session"), ticket: ticket))
             case "start_session":
                 return RouterRPC.ToolResult(text: try await startSession(store, project: Self.string(args, "project"),
-                                                                         title: Self.string(args, "title"), ticket: ticket))
+                                                                         title: Self.string(args, "title"), ref: args["ref"] as? String, ticket: ticket))
             case "open_session": return RouterRPC.ToolResult(text: try openSession(store, Self.string(args, "session"), ticket: ticket))
             case "mark": return RouterRPC.ToolResult(text: try mark(store, args, ticket: ticket))
-            default: return nil
+            default: return await lookout(name, args, store: store, ticket: ticket)
             }
         } catch {
             return .error(error.localizedDescription)
@@ -1205,7 +1215,7 @@ final class RouterMCPServer: @unchecked Sendable {
         return !stem.isEmpty && stem.count < full.count && full.hasPrefix(stem)
     }
 
-    func startSession(_ store: Store, project: String, title: String, ticket: Ticket) async throws -> String {
+    func startSession(_ store: Store, project: String, title: String, ref: String? = nil, ticket: Ticket) async throws -> String {
         let message = try yourMessage()
         let folder = try Self.folder(project, folders: store.knownFolders.filter { !$0.isEmpty }, name: store.folderName)
         let name = store.folderName(folder)
@@ -1231,6 +1241,8 @@ final class RouterMCPServer: @unchecked Sendable {
         try live(ticket)
         ready.newSessionIn = name
         prepared[started.peer] = ready
+        // For an inbox action's message: its row links to the session.
+        if let action = ref.flatMap(UUID.init(uuidString:)) ?? automatedRef { store.noteActionSession(started.sessionID, forMessage: action) }
         return Self.json(["session": started.sessionID, "peer": started.peer, "text": ready.text, "rephrased": ready.rephrased,
                           "next": "SendMessage exactly `text` to `peer` (already prepared)."])
     }

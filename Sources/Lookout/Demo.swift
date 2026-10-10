@@ -213,10 +213,52 @@ enum Demo {
             RouterMessage(role: .you, text: "start a session to bump the version", date: now.addingTimeInterval(-30),
                           projects: ["/Users/me/code/lookout"]),
             RouterMessage(role: .receipt, text: "Cancelled before sending", date: now.addingTimeInterval(-28)),
+            RouterMessage(role: .automated, text: "⚡ Contributions: Address what https://github.com/ziglang/zig/pull/1 is waiting on.\n\n"
+                          + "Context, from the “Contributions” category of the Lookout inbox:\n- Title: Warm pool\n- Local clones of ziglang/zig, to choose from: `/Users/me/code/zig`",
+                          date: now.addingTimeInterval(-20), source: "Contributions"),
             RouterMessage(role: .error, text: "SendMessage to Game recommendations: not delivered (the session isn't open in Claude)",
                           date: now.addingTimeInterval(-10), sessionID: "local_demo-games"),
-        ]
+        ] + lookoutChanges(store, now)
         store.router = state
+    }
+
+    /// The Router changing Lookout itself: what the user asked, and a card for each change (one taken back).
+    private static func lookoutChanges(_ store: Store, _ now: Date) -> [RouterMessage] {
+        let look = InboxCategory(
+            name: "Needs a look", symbol: "eye", color: .aqua,
+            rules: [Rule(scope: Scope(kind: .pr, by: Pick(include: [.maintainers], except: [.bots]), in: Pick(include: [.contributed])),
+                         match: .any,
+                         conditions: [.checks([.failing]), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
+                                      .newReview(by: Pick(include: [.maintainers]), since: .myLastReview)],
+                         createdAt: now)],
+            actions: ActionList([CategoryAction.make(.askRouter(prompt: "Look at it and tell me what is left"))]))
+        let reviews = store.categories.first { $0.name == "Reviews for you" }
+        var quiet = reviews
+        quiet?.notifies = false
+        quiet?.hidden = true
+        func message(_ title: String, _ patch: LookoutChange.Patch, minutes: Double, reverted: Bool = false) -> RouterMessage {
+            var change = LookoutChange(date: now.addingTimeInterval(-minutes * 60), title: title, patch: patch)
+            if reverted {
+                change.revertedAt = now.addingTimeInterval(-60)
+                change.revertNote = "Reverted"
+            }
+            return RouterMessage(role: .change, text: title, date: change.date, change: change)
+        }
+        let doneThings = store.entries.prefix(3).map { EntryChange(thing: $0.id, before: nil, after: EntryMarks(doneAt: now)) }
+        var out = [
+            RouterMessage(role: .you, text: "add a category for my contributions that need a look, and snooze banners for an hour",
+                          date: now.addingTimeInterval(-9 * 60)),
+            message(LookoutChange.title(forCategory: nil, look), .category(index: 1, before: nil, after: look), minutes: 8),
+            message("Changed snooze to 1 hour",
+                    .setting(key: "snooze", before: .date(nil), after: .date(now.addingTimeInterval(3600))), minutes: 8),
+            RouterMessage(role: .you, text: "mark the bot chatter done, and mute reviews for you", date: now.addingTimeInterval(-3 * 60)),
+            message("Marked \(doneThings.count) done", .marks(state: "done", doneThings), minutes: 2),
+        ]
+        if let reviews, let quiet {
+            out.append(message(LookoutChange.title(forCategory: reviews, quiet), .category(index: 1, before: reviews, after: quiet),
+                               minutes: 2, reverted: true))
+        }
+        return out
     }
 
     /// Only the bots' things and the finished ones left: nothing is for you.

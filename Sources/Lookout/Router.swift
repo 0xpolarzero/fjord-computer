@@ -185,6 +185,10 @@ struct RouterMessage: Codable, Identifiable, Hashable {
         case error
         /// A session wrote back to the Router.
         case peer
+        /// A category's action asking the Router (`source` is the category): sent as the Router's input, not yours.
+        case automated
+        /// Something the Router changed in Lookout itself (`change`): a card with Open and Revert.
+        case change
     }
 
     var id = UUID()
@@ -199,6 +203,10 @@ struct RouterMessage: Codable, Identifiable, Hashable {
     var projects: [String]? = nil
     /// A receipt of a message Lookout rephrased before sending: what you wrote (the receipt says what was sent).
     var original: String? = nil
+    /// An automated line: the category it came from.
+    var source: String? = nil
+    /// A change the Router made in Lookout: what it touched, before and after.
+    var change: LookoutChange? = nil
 }
 
 extension RouterMessage {
@@ -213,6 +221,8 @@ extension RouterMessage {
         replyTo = try? c.decodeIfPresent(String.self, forKey: .replyTo)
         projects = try? c.decodeIfPresent([String].self, forKey: .projects)
         original = try? c.decodeIfPresent(String.self, forKey: .original)
+        source = try? c.decodeIfPresent(String.self, forKey: .source)
+        change = try? c.decodeIfPresent(LookoutChange.self, forKey: .change)
     }
 }
 

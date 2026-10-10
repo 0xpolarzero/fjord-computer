@@ -60,16 +60,7 @@ private struct GroupRow: View {
         store.categories.filter { $0.rules.contains { Self.uses($0, group.id) } }.map(\.name)
     }
 
-    static func uses(_ rule: Rule, _ id: UUID) -> Bool {
-        func people(_ p: Pick<PersonRef>?) -> Bool { (p.map { $0.include + $0.except } ?? []).contains(.group(id)) }
-        if people(rule.scope.by) || people(rule.scope.to) { return true }
-        if let repos = rule.scope.in, (repos.include + repos.except).contains(.group(id)) { return true }
-        return rule.conditions.contains { c in
-            if people(c.people) { return true }
-            if case .unresolvedThreads(let a, let b) = c { return people(a) || people(b) }
-            return false
-        }
-    }
+    static func uses(_ rule: Rule, _ id: UUID) -> Bool { GroupUse.uses(rule, id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

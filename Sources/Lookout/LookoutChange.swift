@@ -1,0 +1,337 @@
+import Foundation
+
+// What the Router changed in Lookout itself, kept so the user can see it in the chat and take it back. A record holds the
+// before and after of exactly the one thing it touched (a category, a group, the categories' order, a setting, the marks of
+// some entries), nothing around it. The records live in the Router's chat (`RouterMessage.change`) and are saved with it.
+
+/// A setting's value, whichever kind it is.
+enum SettingValue: Codable, Hashable {
+    case on(Bool)
+    case number(Double)
+    /// A date; `nil` is none (no snooze).
+    case date(Date?)
+}
+
+struct EntryChange: Codable, Hashable {
+    var thing: String
+    var before: EntryMarks?
+    var after: EntryMarks?
+}
+
+struct LookoutChange: Codable, Hashable, Identifiable {
+    var id = UUID()
+    var date: Date
+    /// One line: "Created category Contributions", "Changed snooze to 1 hour", "Marked 3 done".
+    var title: String
+    /// What the card is about, as the model has it.
+    var patch: Patch
+    var revertedAt: Date?
+    /// What the revert said ("Reverted (later edits to it were undone too)").
+    var revertNote: String?
+
+    enum Patch: Codable, Hashable {
+        /// `before` nil: made; `after` nil: deleted. `index`: where it was (or is).
+        case category(index: Int, before: InboxCategory?, after: InboxCategory?)
+        case group(index: Int, before: InboxGroup?, after: InboxGroup?)
+        case order(before: [UUID], after: [UUID])
+        case setting(key: String, before: SettingValue, after: SettingValue)
+        case marks(state: String, [EntryChange])
+    }
+
+    var isReverted: Bool { revertedAt != nil }
+
+    init(date: Date = Date(), title: String, patch: Patch) {
+        self.date = date
+        self.title = title
+        self.patch = patch
+    }
+
+    /// The SF Symbol the card shows for what changed (a category shows its own).
+    var symbol: String {
+        switch patch {
+        case .category(_, let before, let after): (after ?? before)?.symbol ?? "tray"
+        case .group(_, let before, let after): ((after ?? before)?.kind ?? .people) == .people ? "person.2" : "folder"
+        case .order: "arrow.up.arrow.down"
+        case .setting: "gearshape"
+        case .marks: "checkmark.circle"
+        }
+    }
+
+    // MARK: Titles
+
+    static func title(forCategory before: InboxCategory?, _ after: InboxCategory?) -> String {
+        switch (before, after) {
+        case (nil, let after?): "Created category \(after.title)"
+        case (let before?, nil): "Deleted category \(before.title)"
+        case (let before?, let after?): before.name != after.name && rulesAndFlagsSame(before, after)
+            ? "Renamed category \(before.title) to \(after.title)" : "Changed category \(after.title)"
+        default: "Changed a category"
+        }
+    }
+
+    private static func rulesAndFlagsSame(_ a: InboxCategory, _ b: InboxCategory) -> Bool {
+        var a = a, b = b
+        a.name = b.name
+        return a == b
+    }
+
+    static func title(forGroup before: InboxGroup?, _ after: InboxGroup?) -> String {
+        switch (before, after) {
+        case (nil, let after?): "Created group \(after.name)"
+        case (let before?, nil): "Deleted group \(before.name)"
+        case (_, let after?): "Changed group \(after.name)"
+        default: "Changed a group"
+        }
+    }
+
+    // MARK: Previews, in words
+
+    /// What a category change did, field by field (the card shows the rules as chips beside it).
+    static func diff(_ before: InboxCategory, _ after: InboxCategory) -> [String] {
+        var out: [String] = []
+        if before.name != after.name { out.append("Name: \(before.title) → \(after.title)") }
+        if before.symbol != after.symbol { out.append("Icon: \(before.symbol) → \(after.symbol)") }
+        if before.color != after.color { out.append("Color: \(before.color.rawValue) → \(after.color.rawValue)") }
+        if before.notifies != after.notifies { out.append("Notifications: \(before.notifies ? "on" : "off") → \(after.notifies ? "on" : "off")") }
+        if before.hidden != after.hidden { out.append(after.hidden ? "Hidden from the bar" : "Shown in the bar") }
+        if before.rules != after.rules {
+            let removed = before.rules.filter { r in !after.rules.contains { $0.id == r.id } }.count
+            let added = after.rules.filter { r in !before.rules.contains { $0.id == r.id } }.count
+            let edited = after.rules.filter { r in before.rules.first { $0.id == r.id }.map { $0 != r } ?? false }.count
+            let parts = [added > 0 ? "\(added) added" : nil, edited > 0 ? "\(edited) changed" : nil,
+                         removed > 0 ? "\(removed) removed" : nil].compactMap { $0 }
+            out.append("Rules: " + (parts.isEmpty ? "reordered" : parts.joined(separator: ", ")))
+        }
+        if before.actions != after.actions {
+            out.append("Actions: " + (after.actions.isEmpty ? "none" : after.actions.items.map(\.title).joined(separator: ", ")))
+        }
+        return out
+    }
+}
+
+// MARK: - Settings
+
+/// The settings the Router may change: the ones a person sets on the Settings page for how Lookout behaves. Never the
+/// GitHub token, the account, quitting, or the Router's own switch. One table gives `get_settings`, `set_setting`'s schema and
+/// the cards' words, so they can't disagree.
+@MainActor
+struct LookoutSetting {
+    let key: String
+    /// "snooze", for "Changed snooze to 1 hour".
+    let label: String
+    let doc: String
+    /// The JSON schema of the value.
+    let schema: [String: Any]
+    let read: (Store) -> SettingValue
+    /// A value as the Router wrote it, or why not.
+    let parse: (Any, Date) throws -> SettingValue
+    let apply: (Store, SettingValue) throws -> Void
+    let display: (SettingValue) -> String
+
+    /// The real login item; tests stand something in for it.
+    static var launchAtLogin: (read: () -> Bool, write: (Bool) throws -> Void) = ({ LaunchAtLogin.isEnabled }, { try LaunchAtLogin.set($0) })
+
+    private static func flag(_ any: Any) throws -> SettingValue {
+        guard let n = any as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { throw RouterTools.Failure("must be true or false") }
+        return .on(n.boolValue)
+    }
+
+    private static func onOff(_ value: SettingValue) -> String {
+        if case .on(let on) = value { return on ? "on" : "off" }
+        return "?"
+    }
+
+    static let intervals: [Double] = [30, 60, 120, 300]
+
+    static func intervalText(_ seconds: Double) -> String {
+        seconds < 60 ? "\(Int(seconds)) seconds" : seconds == 60 ? "1 minute" : "\(Int(seconds / 60)) minutes"
+    }
+
+    static let snoozes: [(word: String, seconds: TimeInterval?)] = [("off", nil), ("30m", 1800), ("1h", 3600), ("3h", 3 * 3600), ("tomorrow", -1)]
+
+    /// Snooze words and what they mean now; `tomorrow` is 9:00 the next day, as Settings has it.
+    static func snoozeDate(_ word: String, now: Date) -> Date? {
+        switch word {
+        case "30m": return now.addingTimeInterval(1800)
+        case "1h": return now.addingTimeInterval(3600)
+        case "3h": return now.addingTimeInterval(3 * 3600)
+        case "tomorrow":
+            let cal = Calendar.current
+            return cal.date(byAdding: .day, value: 1, to: now).flatMap { cal.date(bySettingHour: 9, minute: 0, second: 0, of: $0) }
+        default: return nil
+        }
+    }
+
+    static let all: [LookoutSetting] = [
+        LookoutSetting(key: "notifications", label: "desktop notifications", doc: "Desktop notifications for the inbox and the Router.",
+                       schema: ["type": "boolean"], read: { .on($0.settings.notifications) }, parse: { v, _ in try flag(v) },
+                       apply: { s, v in if case .on(let on) = v { s.settings.notifications = on } }, display: onOff),
+        LookoutSetting(key: "snooze", label: "snooze", doc: "Silences banners for a while: `off`, `30m`, `1h`, `3h`, or `tomorrow` (9:00).",
+                       schema: ["type": "string", "enum": snoozes.map(\.word)],
+                       read: { .date($0.isSnoozed ? $0.settings.snoozeUntil : nil) },
+                       parse: { v, now in
+                           guard let word = v as? String, snoozes.contains(where: { $0.word == word }) else {
+                               throw RouterTools.Failure("must be one of \(snoozes.map(\.word).joined(separator: ", "))")
+                           }
+                           return .date(snoozeDate(word, now: now))
+                       },
+                       apply: { s, v in if case .date(let date) = v { s.settings.snoozeUntil = date.flatMap { $0 > Date() ? $0 : nil } } },
+                       display: { v in
+                           guard case .date(let date) = v, let date else { return "off" }
+                           return "until " + date.formatted(date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated, time: .shortened)
+                       }),
+        LookoutSetting(key: "pollInterval", label: "check interval", doc: "How often Lookout asks GitHub: 30, 60, 120 or 300 seconds.",
+                       schema: ["type": "integer", "enum": intervals.map { Int($0) }], read: { .number($0.settings.pollInterval) },
+                       parse: { v, _ in
+                           guard let n = v as? NSNumber, intervals.contains(n.doubleValue) else {
+                               throw RouterTools.Failure("must be one of \(intervals.map { String(Int($0)) }.joined(separator: ", ")) (seconds)")
+                           }
+                           return .number(n.doubleValue)
+                       },
+                       apply: { s, v in
+                           if case .number(let n) = v, s.settings.pollInterval != n { s.settings.pollInterval = n; s.restartPolling() }
+                       },
+                       display: { v in if case .number(let n) = v { intervalText(n) } else { "?" } }),
+        LookoutSetting(key: "centerBar", label: "centering the bar", doc: "Keep the bar at the middle of its screen edge (dragging only picks the edge).",
+                       schema: ["type": "boolean"], read: { .on($0.settings.centerPill ?? false) }, parse: { v, _ in try flag(v) },
+                       apply: { s, v in if case .on(let on) = v { s.settings.centerPill = on } }, display: onOff),
+        LookoutSetting(key: "launchAtLogin", label: "launch at login", doc: "Open Lookout when the Mac starts.",
+                       schema: ["type": "boolean"], read: { _ in .on(launchAtLogin.read()) }, parse: { v, _ in try flag(v) },
+                       apply: { _, v in if case .on(let on) = v { try launchAtLogin.write(on) } }, display: onOff),
+        LookoutSetting(key: "sessionIcons", label: "icons picked for sessions", doc: "Icons picked for Claude sessions in the Router (their titles go to TypeSafe; needs its key).",
+                       schema: ["type": "boolean"], read: { .on($0.agents.iconsEnabled) }, parse: { v, _ in try flag(v) },
+                       apply: { s, v in if case .on(let on) = v, s.agents.iconsEnabled != on { s.setIconsEnabled(on) } }, display: onOff),
+    ]
+
+    static func named(_ key: String) -> LookoutSetting? { all.first { $0.key == key } }
+
+    /// The change's one line: "Changed snooze to 1 hour", "Turned off desktop notifications".
+    func title(after: SettingValue, word: String?) -> String {
+        switch after {
+        case .on(let on): return "Turned \(on ? "on" : "off") \(label)"
+        case .date(let date):
+            guard date != nil else { return "Ended \(label)" }
+            let said = ["30m": "30 minutes", "1h": "1 hour", "3h": "3 hours", "tomorrow": "tomorrow 9:00"][word ?? ""] ?? display(after)
+            return "Changed \(label) to \(said)"
+        case .number: return "Changed \(label) to \(display(after))"
+        }
+    }
+}
+
+// MARK: - The store's side
+
+extension Store {
+    /// After a change that is not the editor's: what the editor's undo steps hold is older than this (undoing one would
+    /// quietly undo the change as well), so they go; and the actions take what the categories now match as old news.
+    func categoriesChangedByRouter() {
+        categoryHistory?.reset(to: self)
+        categoriesEdited()
+    }
+
+    /// Takes a change back: only what it touched goes to its state before. A thing edited since is put back all the same,
+    /// and the note says so. Nil when it can't (already reverted, or no longer in the chat).
+    @discardableResult
+    func revertLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
+        guard let message = router.chat.firstIndex(where: { $0.change?.id == id }), var change = router.chat[message].change,
+              !change.isReverted else { return nil }
+        var edited = false
+        switch change.patch {
+        case .category(let index, let before, let after):
+            let current = categories.first { $0.id == (before ?? after)?.id }
+            if let before {
+                if let i = categories.firstIndex(where: { $0.id == before.id }) {
+                    edited = current != after
+                    categories[i] = before
+                } else {
+                    edited = after != nil
+                    categories.insert(before, at: min(index, categories.count))
+                }
+            } else if let after, let i = categories.firstIndex(where: { $0.id == after.id }) {
+                edited = categories[i] != after
+                categories.remove(at: i)
+            }
+            categoriesChangedByRouter()
+        case .group(let index, let before, let after):
+            if let before {
+                if let i = groups.firstIndex(where: { $0.id == before.id }) {
+                    edited = groups[i] != after
+                    groups[i] = before
+                } else {
+                    edited = after != nil
+                    groups.insert(before, at: min(index, groups.count))
+                }
+            } else if let after, let i = groups.firstIndex(where: { $0.id == after.id }) {
+                edited = groups[i] != after
+                groups.remove(at: i)
+            }
+            categoriesChangedByRouter()
+        case .order(let before, let after):
+            edited = categories.map(\.id).filter(after.contains) != after.filter { id in categories.contains { $0.id == id } }
+            categories = Self.ordered(categories, by: before)
+            categoriesChangedByRouter()
+        case .setting(let key, let before, let after):
+            if let setting = LookoutSetting.named(key) {
+                edited = setting.read(self) != after
+                do { try setting.apply(self, before) } catch {
+                    change.revertNote = "Couldn't put it back: \(error.localizedDescription)"
+                    router.chat[message].change = change
+                    return change
+                }
+            }
+        case .marks(_, let changes):
+            for item in changes {
+                if marks[item.thing] != item.after { edited = true }
+                marks[item.thing] = item.before
+            }
+        }
+        change.revertedAt = now
+        change.revertNote = edited ? "Reverted (later edits to it were undone too)" : "Reverted"
+        router.chat[message].change = change
+        return change
+    }
+
+    /// `list` in the order of `ids`; what `ids` doesn't name follows, in its own order.
+    static func ordered(_ list: [InboxCategory], by ids: [UUID]) -> [InboxCategory] {
+        let known = ids.compactMap { id in list.first { $0.id == id } }
+        return known + list.filter { c in !ids.contains(c.id) }
+    }
+}
+
+
+// MARK: - Where Open goes
+
+/// The place in the app a change's Open button shows.
+enum LookoutTarget: Equatable {
+    /// The categories page, on this category's editor.
+    case category(UUID)
+    /// The categories page, with this group unfolded.
+    case group(UUID)
+    /// The categories page.
+    case categories
+    /// Settings, scrolled to a section.
+    case settings(section: String)
+    /// A thing in its list (its category, or Done), picked and scrolled to.
+    case entry(thing: String, category: UUID?, done: Bool)
+}
+
+extension LookoutChange {
+    /// Where Open goes now: a category or group that is gone opens the page that listed it.
+    @MainActor func target(in store: Store) -> LookoutTarget {
+        switch patch {
+        case .category(_, let before, let after):
+            guard let id = (after ?? before)?.id, store.categories.contains(where: { $0.id == id }) else { return .categories }
+            return .category(id)
+        case .group(_, let before, let after):
+            guard let id = (after ?? before)?.id, store.groups.contains(where: { $0.id == id }) else { return .categories }
+            return .group(id)
+        case .order:
+            return .categories
+        case .setting(let key, _, _):
+            return .settings(section: ["notifications", "snooze"].contains(key) ? SettingsView.notificationsID
+                             : key == "sessionIcons" ? SettingsView.routerID : SettingsView.generalID)
+        case .marks(_, let changes):
+            guard let first = changes.first?.thing, let entry = store.entries.first(where: { $0.id == first }) else { return .categories }
+            return .entry(thing: first, category: entry.categoryID, done: entry.isDone)
+        }
+    }
+}

@@ -103,7 +103,7 @@ import Testing
     }
 
     @Test func nothingRunsBetweenAnEditAndItsRebaseline() async {
-        let session = CategoryAction.make(.session(.folder("/p/app"), prompt: "go"))
+        let session = CategoryAction.make(.askRouter(prompt: "go"))
         var category = InboxFixture.category()
         category.actions = ActionList([session])
         let store = InboxFixture.store([InboxFixture.pr(1)], category: category)
@@ -116,15 +116,15 @@ import Testing
         store.categoriesEdited(delay: .milliseconds(50))
         store.things["pr:a/one#2"] = InboxFixture.pr(2, greptile: 5)
         await store.runActions()
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
 
         await store.baselineTask?.value
         await store.runActions()
-        #expect(performer.sessions.isEmpty)
+        #expect(performer.asked.isEmpty)
 
         // What comes in after is new.
         store.things["pr:a/one#3"] = InboxFixture.pr(3, greptile: 5)
         await store.runActions()
-        #expect(performer.sessions.count == 1)
+        #expect(performer.asked.count == 1)
     }
 }

@@ -200,6 +200,8 @@ struct RouterContext: Equatable {
         /// Your words, without the header: what `prepare` hands to Haiku while this turn runs.
         var text: String
         var line: Data?
+        /// An inbox action's message (its id in the chat): nothing it says changes Lookout itself.
+        var ref: UUID?
     }
     @ObservationIgnored private var started = false
     @ObservationIgnored private var resuming = false
@@ -273,11 +275,11 @@ struct RouterContext: Equatable {
 
     @discardableResult
     private func append(_ role: RouterMessage.Role, _ text: String, session: String? = nil, replyTo: String? = nil,
-                        projects: [String]? = nil, original: String? = nil) -> UUID? {
+                        projects: [String]? = nil, original: String? = nil, source: String? = nil) -> UUID? {
         guard let store else { return nil }
         var state = store.router
         let message = RouterMessage(role: role, text: text, date: Date(), sessionID: session, replyTo: replyTo,
-                                    projects: projects, original: original)
+                                    projects: projects, original: original, source: source)
         state.chat.append(message)
         RouterFeed.prune(&state)
         store.router = state
@@ -325,6 +327,20 @@ struct RouterContext: Equatable {
         }
     }
 
+    /// A category's action asking the Router: `text` ("⚡ Category: …") goes in as the Router's input and shows in the chat as
+    /// coming from `source`, not from you. The process is started if it isn't running. Nil while the Router is off.
+    @discardableResult
+    func sendAutomated(_ text: String, source: String) -> UUID? {
+        guard let store, store.router.enabled, store.agents.enabled else { return nil }
+        guard let id = append(.automated, text, source: source) else { return nil }
+        var item = Outgoing(text: text)
+        item.ref = id
+        pending.append(item)
+        // The Router reads the message's id on a last line, to hand to start_session as `ref`.
+        ready(item.id, text + "\n[ref: \(id.uuidString)]")
+        return id
+    }
+
     /// Keeps `send(_:)` callable as a plain function value.
     func send(_ text: String) { send(text, context: RouterContext()) }
 
@@ -367,7 +383,7 @@ struct RouterContext: Equatable {
         guard inFlight == nil, !peerTurn, let next = pending.first, let line = next.line else { return }
         pending.removeFirst()
         inFlight = next
-        tools.beginTurn(next.text)
+        tools.beginTurn(next.text, automatedRef: next.ref)
         write(line, to: stdin)
         setPhase(.working)
     }
@@ -721,9 +737,11 @@ struct RouterContext: Equatable {
                         let eligible = Dictionary(store.router.cards.filter(\.isOpen)
                             .map { ($0.id, store.cardRevisions[$0.id, default: 0]) }, uniquingKeysWith: { a, _ in a })
                         let gen = generation
+                        let action = tools.automatedRef
                         resolvePeer(to) { [weak self] session in
                             guard let self, let session, self.current(gen), let store = self.store else { return }
                             self.patch(line) { $0.sessionID = session }
+                            if let action { store.noteActionSession(session, forMessage: action) }
                             var state = store.router
                             RouterFeed.address(&state, session, .router, Date()) {
                                 eligible[$0.id] == store.cardRevisions[$0.id, default: 0]
@@ -915,6 +933,9 @@ struct RouterContext: Equatable {
             return (input["addressed"] == "false" ? "→ reopened \(title)" : "→ marked \(title) addressed", session, nil)
         case "board", "route", "prepare", "start_session", "ListAgents":
             // Reads, or (a start) said by the first message's receipt.
+            return nil
+        case let tool where LookoutTools.names.contains(tool):
+            // Lookout's own tools leave their card (a change) or only read.
             return nil
         default:
             return ("→ \(Self.shortName(name))", nil, nil)

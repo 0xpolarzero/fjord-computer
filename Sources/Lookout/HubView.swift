@@ -17,6 +17,8 @@ extension EnvironmentValues {
     @Entry var openUpdates: () -> Void = {}
     /// Opens the app window on the Router, on a card if one is given.
     @Entry var openRouter: (String?) -> Void = { _ in }
+    /// Opens the app window on the Router, scrolled to a message of its conversation (an inbox action's).
+    @Entry var openRouterMessage: (UUID) -> Void = { _ in }
     /// Picks a card in the Router (window open or not), after a click on it elsewhere opened its session.
     @Entry var pickRouterCard: (String) -> Void = { _ in }
 }
@@ -48,6 +50,12 @@ final class HubState {
     func showUpdates() {
         settingsScroll = ScrollRequest(id: SettingsView.updatesID, seq: (settingsScroll?.seq ?? 0) + 1)
     }
+    /// Asks the categories page to open a category's editor, or unfold a group (a Router change's Open button): it takes the
+    /// request when it appears, or at once when it is open.
+    var categoryRequest: ScrollRequest?
+    var groupRequest: ScrollRequest?
+    func openCategory(_ id: UUID) { categoryRequest = ScrollRequest(id: id.uuidString, seq: (categoryRequest?.seq ?? 0) + 1) }
+    func openGroup(_ id: UUID) { groupRequest = ScrollRequest(id: id.uuidString, seq: (groupRequest?.seq ?? 0) + 1) }
     var toast: String?
 
     /// The category editor's own step back, set while one is open (see `CategoriesView`).
