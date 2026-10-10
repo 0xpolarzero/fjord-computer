@@ -307,6 +307,21 @@ import Testing
         #expect(s.router.cards.count == 1)
     }
 
+    @Test func aTurnEndedInTheFrontAppIsCardedOnceYouLeaveItUnread() async {
+        let dir = TempDir()
+        let s = store(dir, [session("local_a", turns: 1)])
+        await s.routerHookWork?.value
+        s.claudeIsFrontmost = { true }
+        s.ingest([session("local_a", turns: 2, focused: 1)], appUnread: [], claudeFrontmost: true, now: now)
+        s.feedRouter(now: now.addingTimeInterval(1))
+        #expect(s.router.cards.isEmpty)
+        // Another app in front, and the app has the session unread.
+        s.claudeIsFrontmost = { false }
+        s.ingest([session("local_a", turns: 2, focused: 1)], appUnread: ["local_a"], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(2))
+        #expect(s.openRouterCards.map(\.id) == ["local_a#t2"])
+    }
+
     @Test func reopeningSupersedesTheNewerCard() async {
         let dir = TempDir()
         let s = store(dir, [session("local_a", turns: 1)])

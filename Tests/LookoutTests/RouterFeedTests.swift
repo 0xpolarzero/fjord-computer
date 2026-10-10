@@ -30,9 +30,9 @@ import Testing
     }
 
     private func update(_ state: inout RouterState, _ sessions: [ClaudeSession], activity: [String: ClaudeActivity] = [:],
-                        muted: Set<String> = [], viewing: String? = nil, forms: [String: Set<String>]? = nil,
+                        muted: Set<String> = [], viewing: String? = nil, unread: Set<String>? = nil, forms: [String: Set<String>]? = nil,
                         tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, now: Double) {
-        RouterFeed.update(&state, sessions: sessions, activity: activity, muted: muted, viewing: viewing, forms: forms, tasks: tasks,
+        RouterFeed.update(&state, sessions: sessions, activity: activity, muted: muted, viewing: viewing, unread: unread, forms: forms, tasks: tasks,
                           inventory: inventory, now: at(now))
     }
 
@@ -148,9 +148,35 @@ import Testing
         update(&state, [session(turns: 1, running: true)], activity: ["local_a": question(1)], viewing: "local_a", now: 1)
         update(&state, [session(turns: 2)], viewing: "local_a", now: 2)
         #expect(state.cards.isEmpty)
-        // Looking away later doesn't bring them back.
-        update(&state, [session(turns: 2)], now: 3)
+        // Looking away having read it (the app shows no dot, even past its lag) doesn't bring it back.
+        update(&state, [session(turns: 2)], unread: [], now: 3)
+        update(&state, [session(turns: 2)], unread: [], now: 100)
         #expect(state.cards.isEmpty)
+        #expect(state.pendingTurns.isEmpty)
+    }
+
+    @Test func aTurnEndedWhileYouWatchedIsCardedIfYouLeaveItUnread() {
+        var state = seen([session(turns: 1)])
+        update(&state, [session(turns: 2)], viewing: "local_a", now: 1)
+        update(&state, [session(turns: 2)], viewing: "local_a", now: 2)
+        #expect(state.cards.isEmpty)
+        update(&state, [session(turns: 2)], unread: ["local_a"], now: 3)
+        #expect(state.cards.map(\.id) == ["local_a#t2"])
+    }
+
+    @Test func theAppsDotMayLagAfterYouLeave() {
+        var state = seen([session(turns: 1)])
+        update(&state, [session(turns: 2)], viewing: "local_a", now: 1)
+        update(&state, [session(turns: 2)], unread: [], now: 2)
+        #expect(state.cards.isEmpty)
+        update(&state, [session(turns: 2)], unread: ["local_a"], now: 10)
+        #expect(state.cards.count == 1)
+    }
+
+    @Test func aTurnEndedWhileTheAppIsNotInFrontIsCarded() {
+        var state = seen([session(turns: 1)])
+        update(&state, [session(turns: 2)], viewing: nil, unread: [], now: 1)
+        #expect(state.cards.map(\.id) == ["local_a#t2"])
     }
 
     @Test func aWaitSeenWhileWatchingIsNotCardedOnceYouLookAway() {

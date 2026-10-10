@@ -37,6 +37,27 @@ struct RouterState: Codable, Equatable {
         var turns: Int
         /// Your last message when it ended (ms): a newer one means you've moved on, and no card is made for it.
         var message: Int64?
+        /// Set once the turn ended (or was ready) while you were looking at the session in the app: no card while you are.
+        /// When you leave, the card is made if the app still has the session unread (see `RouterFeed.update`).
+        var held: Bool = false
+        /// When (ms) you were first seen to have left a held session: the app's unread dots lag, so a missing dot only
+        /// means "read" once `RouterFeed.unreadGraceMs` has passed.
+        var leftMs: Int64?
+
+        init(turns: Int, message: Int64?, held: Bool = false, leftMs: Int64? = nil) {
+            self.turns = turns
+            self.message = message
+            self.held = held
+            self.leftMs = leftMs
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            turns = try c.decode(Int.self, forKey: .turns)
+            message = try c.decodeIfPresent(Int64.self, forKey: .message)
+            held = (try? c.decodeIfPresent(Bool.self, forKey: .held)) ?? false
+            leftMs = try? c.decodeIfPresent(Int64.self, forKey: .leftMs)
+        }
     }
 
     init() {}
@@ -250,6 +271,8 @@ enum RouterFeed {
     static let placeholder = "Finished its turn"
     static let maxCards = 300
     static let maxChanges = 500
+    /// How long the app's sidebar dot may lag behind a turn you left unread (it is written to disk up to ~30 s late).
+    static let unreadGraceMs: Int64 = 40_000
 
     /// What changes in a session that the rules care about: turns finished, your last message, when you last opened it.
     struct Stamp: Equatable {
@@ -319,7 +342,7 @@ enum RouterFeed {
     /// no longer running (the app writes the summary after the count goes up) and its background work has been looked at
     /// since: with some still running it is work under way, and the card waits until that is done.
     static func update(_ state: inout RouterState, sessions: [ClaudeSession], activity: [String: ClaudeActivity],
-                       muted: Set<String>, viewing: String?, forms: [String: Set<String>]? = nil,
+                       muted: Set<String>, viewing: String?, unread: Set<String>? = nil, forms: [String: Set<String>]? = nil,
                        tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, now: Date) {
         let live = Dictionary(sessions.filter { !$0.isArchived }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
 
@@ -362,8 +385,10 @@ enum RouterFeed {
                 let quiet = id == viewing || muted.contains(session.folderKey)
                 if session.completedTurns > before.turns {
                     // A newer turn: one still waiting is past (the usual rules apply to this one). It waits too, until it
-                    // can be told whether it left work running (decided below, at once when it can be).
-                    state.pendingTurns[id] = quiet ? nil : RouterState.PendingTurn(turns: session.completedTurns, message: stamp.message)
+                    // can be told whether it left work running (decided below, at once when it can be). One that ended
+                    // while you look at the session is held, not dropped: see below.
+                    state.pendingTurns[id] = muted.contains(session.folderKey) ? nil
+                        : RouterState.PendingTurn(turns: session.completedTurns, message: stamp.message, held: id == viewing)
                 }
                 if let current, current.ms != previous, !quiet {
                     add(&state, RouterCard(id: "\(id)#w\(current.ms)", sessionID: id, kind: current.kind, title: session.title,
@@ -377,9 +402,23 @@ enum RouterFeed {
                 if stamp.message != pending.message || session.completedTurns != pending.turns {
                     state.pendingTurns[id] = nil
                 } else if !session.running, inventory?.contains(id) ?? true, !busy {
-                    state.pendingTurns[id] = nil
-                    if id != viewing, !muted.contains(session.folderKey) {
+                    if muted.contains(session.folderKey) {
+                        state.pendingTurns[id] = nil
+                    } else if id == viewing {
+                        // Being looked at: no card now. If you leave without having read it, it comes then.
+                        state.pendingTurns[id]?.held = true
+                        state.pendingTurns[id]?.leftMs = nil
+                    } else if !pending.held {
+                        state.pendingTurns[id] = nil
                         addTurn(&state, session, turns: pending.turns, message: pending.message, now: now)
+                    } else if unread?.contains(id) == true || unread == nil {
+                        state.pendingTurns[id] = nil
+                        addTurn(&state, session, turns: pending.turns, message: pending.message, now: now)
+                    } else {
+                        // Left, and the app shows it read, or hasn't shown the dot yet: wait out its lag, then let it go.
+                        let left = pending.leftMs ?? Stamp.ms(now)
+                        state.pendingTurns[id]?.leftMs = left
+                        if Stamp.ms(now) - left >= unreadGraceMs { state.pendingTurns[id] = nil }
                     }
                 }
             }
@@ -593,7 +632,7 @@ extension Store {
             RouterFeed.reconcile(&state, sessions: Array(claudeSessions.values), activity: claudeActivity, forms: forms, now: now)
         }
         RouterFeed.update(&state, sessions: Array(claudeSessions.values), activity: claudeActivity,
-                          muted: Set(agents.mutedFolders), viewing: viewingNow, forms: forms, tasks: claudeTasks,
+                          muted: Set(agents.mutedFolders), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
                           inventory: claudeTaskInventory, now: now)
         applyTurnSummaries(&state)
         guard state != router else { return }
