@@ -37,6 +37,14 @@ struct RouterPaths: Equatable, Sendable {
 
 /// Small private files: written whole or not at all, readable by you alone.
 enum PrivateFile {
+    /// A folder for you alone (0700), with its parents, made off the main thread: where the Router's runs of Claude Code
+    /// start, made as a message is prepared and delivered.
+    static func makeFolder(_ url: URL) async {
+        await OffMain.run {
+            _ = try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+    }
+
     static func write(_ data: Data, to url: URL, mode: mode_t = 0o600) throws {
         try commit(prepare(data, for: url, mode: mode), to: url)
     }

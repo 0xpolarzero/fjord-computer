@@ -758,7 +758,7 @@ extension RouterDispatcher.Effects {
                 guard let binary = dispatcher.claudePath(), let home = store.routerFiles?.routerHome else {
                     throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
                 }
-                try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                await PrivateFile.makeFolder(home)
                 return try await RouterSender.send(binary: binary, cwd: home, to: delivery.to, text: delivery.text, tools: tools,
                                                    inbox: await store.relayInbox(forSigned: delivery.text))
             },

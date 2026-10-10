@@ -855,7 +855,7 @@ final class RouterMCPServer: @unchecked Sendable {
         guard let binary = claudePath(), let home = store.routerFiles?.routerHome else {
             throw Failure("Claude Code wasn't found, so the message can't be prepared")
         }
-        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        await PrivateFile.makeFolder(home)
         do {
             return try await tracked { handle in
                 try await Rephrase.run(binary: binary, cwd: home, message: message, title: title, project: project, starting: starting,

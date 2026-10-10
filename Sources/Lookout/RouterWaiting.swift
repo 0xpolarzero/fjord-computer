@@ -232,7 +232,7 @@ extension Store {
             guard let binary = store.routerStatus.claudeCode?.path, let home = store.routerFiles?.routerHome else {
                 throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
             }
-            try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            await PrivateFile.makeFolder(home)
             try await check()
             try await RouterSender.send(binary: binary, cwd: home, to: to, text: ready.text, tools: tools,
                                         inbox: await store.relayInbox(forSigned: ready.text))
