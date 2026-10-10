@@ -65,7 +65,9 @@ struct RouterPage: Equatable {
                      summaries: [RouterSummary] = []) -> RouterPage {
         let open = cards.filter(\.isOpen)
         var page = RouterPage()
-        page.needs = open.filter { $0.kind != .waiting }.sorted(by: ranked)
+        // A turn isn't done while its session still has subagents or commands running: it shows as working until they end.
+        let running = Set(working.filter { !$0.tasks.isEmpty }.map(\.id))
+        page.needs = open.filter { $0.kind != .waiting && !($0.kind == .done && running.contains($0.sessionID)) }.sorted(by: ranked)
         // A session that is working again shows as working.
         let busy = Set(working.map(\.id))
         page.waiting = open.filter { $0.kind == .waiting && !busy.contains($0.sessionID) }.sorted(by: newestFirst)

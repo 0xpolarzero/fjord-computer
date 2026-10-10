@@ -731,7 +731,9 @@ extension Store {
     /// Open cards that need you (questions, plans, asks, stuck turns) and open finished turns; a session waiting is neither.
     var routerCounts: (needsYou: Int, done: Int) {
         let open = router.cards.filter(\.isOpen)
-        return (open.filter { $0.kind.needsYou }.count, open.filter { $0.kind == .done }.count)
+        // As on the page: a turn whose session still has subagents or commands running isn't counted done yet.
+        return (open.filter { $0.kind.needsYou }.count,
+                open.filter { $0.kind == .done && (claudeTasks[$0.sessionID] ?? []).isEmpty }.count)
     }
 
     /// The form Lookout's hook holds for this card's own question or plan: the one for the very call the card waits on (an
