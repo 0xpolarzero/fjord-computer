@@ -175,7 +175,7 @@ struct LookoutHub: View {
             Divider()
             Button("Quit Lookout") { NSApp.terminate(nil) }
         }
-        .environment(\.colorScheme, Brand.scheme)
+        .modifier(Brand.Scheme())
         .background(UpdateAnnouncer(updater: store.updater))
     }
 

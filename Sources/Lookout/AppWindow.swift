@@ -426,7 +426,7 @@ struct AppRootView: View {
         }
         .frame(minWidth: 640, minHeight: 600)
         .foregroundStyle(Theme.text)
-        .environment(\.colorScheme, Brand.scheme)
+        .modifier(Brand.Scheme())
         .tipSpace()
         .ignoresSafeArea(.container, edges: .top)
         .background(CDS.Surface.s1)
