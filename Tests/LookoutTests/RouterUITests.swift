@@ -711,4 +711,33 @@ import UserNotifications
         model.select(other, store: store)
         #expect(model.expandedNeed == other)
     }
+
+    @Test func clickingAnOpenCardShowsItInFullAndRepliesToIt() {
+        let store = demo()
+        let model = RouterModel()
+        let card = store.routerPage.needs[2]
+        let request = model.focusRequest
+        model.tap(card.id, store: store)
+        #expect(model.expandedNeed == card.id && model.replyTo == card.id && model.selection == card.id)
+        #expect(model.focusRequest != request)
+        // Clicked again it stays shown in full.
+        model.tap(card.id, store: store)
+        #expect(store.routerPage.openNeed(preferred: model.expandedNeed) == card.id && model.replyTo == card.id)
+    }
+
+    @Test func clickingAResolvedCardShowsItInFullRepliesToItAndTheReplyGoesToItsSession() {
+        let store = demo()
+        let model = RouterModel()
+        let card = store.router.cards.first { !$0.isOpen }!
+        model.tap(card.id, store: store)
+        #expect(model.expanded.contains(card.id) && model.replyTo == card.id)
+        // Clicked again it folds back; the reply stays armed.
+        model.tap(card.id, store: store)
+        #expect(!model.expanded.contains(card.id) && model.replyTo == card.id)
+        #expect(RouterDispatcher.plan(text: "one more thing", context: RouterContext(replyTo: card.id), store: store)
+            == .reply(session: card.sessionID, card: card.id))
+        model.draft = "one more thing"
+        model.send(store: store)
+        #expect(store.router.decisions.last?.links.cards == [card.id] && model.replyTo == nil)
+    }
 }

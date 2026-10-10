@@ -187,104 +187,11 @@ private struct RouterHistory: View {
     @ViewBuilder private func row(_ entry: RouterPage.Entry) -> some View {
         switch entry {
         case .card(let card):
-            HistoryCardLine(store: store, model: model, card: card)
+            CardView(store: store, model: model, card: card, expanded: model.expanded.contains(card.id))
         case .decision(let decision):
             HistoryDecisionLine(store: store, model: model, decision: decision)
         case .overview(let overview):
             HistoryOverviewLine(overview: overview)
-        }
-    }
-}
-
-/// An addressed item in the history: one line (icon, title, how it was addressed, when), opening on click.
-private struct HistoryCardLine: View {
-    let store: Store
-    @Bindable var model: RouterModel
-    let card: RouterCard
-    @State private var hovered = false
-    @FocusState private var focused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var open: Bool { model.expanded.contains(card.id) }
-    private var canReopen: Bool { card.addressedBy != .superseded && card.addressedBy != .gone }
-    private var how: String {
-        if let note = card.addressedNote { return "addressed by your message: \(RouterDecision.clip(note, 60))" }
-        return card.addressedBy?.label ?? "Addressed"
-    }
-    private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
-
-    var body: some View {
-        let project = store.routerProject(card)
-        let when = card.addressedAt ?? card.createdAt
-        VStack(alignment: .leading, spacing: 0) {
-            Button { toggle() } label: {
-                HStack(spacing: 8) {
-                    if let session = store.sessionRow(card.sessionID) {
-                        SessionGlyph(row: session, size: 16, dot: false).opacity(0.7)
-                    } else {
-                        Image(systemName: card.kind.symbol).font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
-                    }
-                    Text(card.title).cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
-                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
-                    Text("· \(how)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
-                    StatusCaret(hot: hovered, open: open)
-                    Spacer(minLength: 8)
-                    Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
-                }
-                .padding(.horizontal, CDS.Transcript.statusPad)
-                .frame(height: CDS.Transcript.statusRow)
-                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
-                .contentShape(Rectangle())
-                .overlay {
-                    RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                        .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
-                }
-            }
-            .buttonStyle(.plain)
-            .focused($focused)
-            .onHover { hovered = $0 }
-            .accessibilityLabel("\(card.kind.label): \(card.title)")
-            .accessibilityValue("\(how), \(AgentRow.spokenAge(Date().timeIntervalSince(when))) ago, \(open ? "expanded" : "collapsed")")
-            .accessibilityAction(named: "Open in Claude") { store.openAgent(card.sessionID) }
-            .contextMenu { if let s = store.sessionRow(card.sessionID) { SessionMenu(row: s, store: store) } }
-
-            if open {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        KindTag(kind: card.kind)
-                        ProjectLabel(name: project.name, color: project.color)
-                            .cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
-                        if let origin = card.origin { OriginTag(origin: origin) }
-                    }
-                    CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
-                    HStack(spacing: 6) {
-                        if canReopen {
-                            ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
-                                model.reopen(card.id, store: store)
-                            }
-                        }
-                        ClaudeButton("Open in Claude", variant: .ghost, size: .sm, icon: "arrow.up.right.square") {
-                            store.openAgent(card.sessionID)
-                        }
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).fill(CDS.Fill.field))
-                .overlay { RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
-                .padding(.top, 6).padding(.bottom, 4)
-                .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity)
-    }
-
-    private func toggle() {
-        withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) {
-            if open { model.expanded.remove(card.id) } else { model.expanded.insert(card.id) }
         }
     }
 }
@@ -532,7 +439,7 @@ private struct RouterZones: View {
                                                         removal: .scaleFade(0.97, reduce: reduceMotion)))
                         }
                         ForEach(page.needs) { card in
-                            NeedsCard(store: store, model: model, card: card, expanded: card.id == open, formCap: formCap)
+                            CardView(store: store, model: model, card: card, expanded: card.id == open, formCap: formCap)
                                 .id(card.id)
                                 .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
                                 .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
@@ -685,25 +592,33 @@ struct OriginTag: View {
     }
 }
 
-// MARK: - Needs-you card
+// MARK: - Card
 
-/// A card that needs you, warm and solid: a summary row (icon, title, kind, a line of what it asks, project, time), and,
-/// for the one open at a time, its full form or plan to answer in place, or the reply, open and handled buttons.
-private struct NeedsCard: View {
+/// A card, the same in Needs you and in the history. Open, it is warm and solid: a summary row (icon, title, kind, a line of
+/// what it asks, project, time) and, for the one shown in full, its form or plan to answer in place, or its text and Mark
+/// handled. Resolved, it is a dim line (icon, title, how it was addressed, when) opening to its text and Reopen. Clicking
+/// its header shows it in full with the composer ready to reply to it; hovering it shows Open in Claude.
+private struct CardView: View {
     let store: Store
     @Bindable var model: RouterModel
     let card: RouterCard
     let expanded: Bool
     /// The tallest an open form or plan gets before it scrolls inside.
-    let formCap: CGFloat
+    var formCap: CGFloat = 400
     @State private var hovered = false
+    @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.cdsColumnWidth) private var columnWidth
 
-    /// Wide enough for the summary on one line.
+    /// Wide enough for an open card's summary on one line.
     private var wide: Bool { columnWidth >= 620 }
-
     private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
+    private var canReopen: Bool { card.addressedBy != .superseded && card.addressedBy != .gone }
+    private var how: String {
+        if let note = card.addressedNote { return "addressed by your message: \(RouterDecision.clip(note, 60))" }
+        return card.addressedBy?.label ?? "Addressed"
+    }
+    private var when: Date { card.isOpen ? card.createdAt : card.addressedAt ?? card.createdAt }
 
     /// What the card asks, on one line.
     private var excerpt: AttributedString {
@@ -712,16 +627,57 @@ private struct NeedsCard: View {
     }
 
     var body: some View {
+        Group { if card.isOpen { open } else { resolved } }
+            .onHover { hovered = $0 }
+            .contextMenu { if let s = store.sessionRow(card.sessionID) { SessionMenu(row: s, store: store) } }
+    }
+
+    /// The header: clicking it shows the card in full and arms the reply.
+    private func header<Label: View>(@ViewBuilder _ label: () -> Label) -> some View {
+        Button {
+            withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) { model.tap(card.id, store: store) }
+        } label: { label() }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .accessibilityLabel("\(card.kind.label): \(card.title)")
+            .accessibilityValue(card.isOpen
+                ? (expanded ? "expanded" : "collapsed")
+                : "\(how), \(AgentRow.spokenAge(Date().timeIntervalSince(when))) ago, \(expanded ? "expanded" : "collapsed")")
+            .accessibilityAddTraits(expanded ? .isSelected : [])
+            .accessibilityHint("Shows it in full and replies to it")
+            .accessibilityAction(named: "Open in Claude") { openInClaude() }
+    }
+
+    /// Open in Claude, shown while the card is hovered; its room is kept so nothing moves.
+    private var hoverOpen: some View {
+        Button { openInClaude() } label: {
+            Image(systemName: "arrow.up.right.square").font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CDS.Text.secondary)
+                .frame(width: 22, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(CDS.Fill.ghostHover))
+                .contentShape(Rectangle())
+        }
+            .buttonStyle(.plain)
+            .help("Open in Claude")
+            .accessibilityLabel("Open \(card.title) in Claude")
+            .opacity(hovered ? 1 : 0)
+            .allowsHitTesting(hovered)
+            .animation(.easeOut(duration: 0.12), value: hovered)
+            .accessibilityHidden(!hovered)
+    }
+
+    private func openInClaude() {
+        if card.isOpen { model.open(card.id, store: store) } else { store.openAgent(card.sessionID) }
+    }
+
+    // MARK: Open
+
+    private var open: some View {
         let project = store.routerProject(card)
         let form = store.pendingForm(for: card)
         let warm = CDS.Fill.warning
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) { model.expandedNeed = card.id }
-            } label: { summary(project: project) }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(expanded ? .isSelected : [])
-                .accessibilityHint(expanded ? "" : "Shows it in full")
+        return VStack(alignment: .leading, spacing: 0) {
+            header { summary(project: project) }
             if let left = card.left, let total = card.total {
                 Text("\(left.count) of \(total) left").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
                     .padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
@@ -733,8 +689,8 @@ private struct NeedsCard: View {
             }
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
-                    body(form: form)
-                    actions
+                    content(form: form)
+                    if !(wide && form != nil) { markHandled(icon: false) }
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12).padding(.top, 2)
                 .transition(.opacity)
@@ -744,22 +700,22 @@ private struct NeedsCard: View {
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(warm.opacity(expanded ? 0.15 : hovered ? 0.13 : 0.09)))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(warm.opacity(marked || expanded ? 0.8 : 0.4), lineWidth: marked ? 1.5 : 1)
+                .strokeBorder(warm.opacity(marked || expanded || focused ? 0.8 : 0.4), lineWidth: marked ? 1.5 : 1)
         }
         .shadow(color: warm.opacity(expanded ? 0.10 : 0), radius: 10, y: 2)
-        .onHover { hovered = $0 }
-        .contextMenu { if let s = store.sessionRow(card.sessionID) { SessionMenu(row: s, store: store) } }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(card.kind.label): \(card.title)")
+        .accessibilityAction(named: "Mark handled") { model.address(card.id, store: store) }
     }
 
     /// Who, what kind, what it asks and when: one line when there is room, else two.
     private func summary(project: (name: String, color: Color?)) -> some View {
         let glyph = store.sessionRow(card.sessionID)
         let title = Text(card.title).cdsText((14, 20), .semibold, CDS.Text.primary).lineLimit(1)
-        let age = Text(shortAgo(card.createdAt)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
+        let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
-        let handle = expanded && store.pendingForm(for: card) != nil
+        // A form has its own buttons: Mark handled sits in the header beside it.
+        let handle = expanded && wide && store.pendingForm(for: card) != nil
         return VStack(alignment: .leading, spacing: 1) {
             if wide {
                 HStack(spacing: 8) {
@@ -770,29 +726,30 @@ private struct NeedsCard: View {
                     Spacer(minLength: 4)
                     projectLabel(project)
                     age
-                    if handle { handlers }
+                    if handle { markHandled(icon: true) }
+                    hoverOpen
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); Spacer(minLength: 4); projectLabel(project); age }
-                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); Spacer(minLength: 4); age }
-                    HStack(spacing: 8) { lead(glyph); title; Spacer(minLength: 4); age }
+                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); Spacer(minLength: 4); projectLabel(project); age; hoverOpen }
+                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); Spacer(minLength: 4); age; hoverOpen }
+                    HStack(spacing: 8) { lead(glyph); title; Spacer(minLength: 4); age; hoverOpen }
                 }
                 if !expanded { ask.padding(.leading, glyph == nil ? 0 : 28) }
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, wide ? 7 : expanded ? 9 : 7)
+        .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, wide ? 6 : expanded ? 8 : 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
-    /// Open in Claude and Mark handled as icons in the header of an open question or plan (its form has its own buttons).
-    private var handlers: some View {
-        HStack(spacing: 2) {
-            ClaudeButton(icon: "arrow.up.right.square", label: "Open in Claude", variant: .ghost, size: .sm) {
-                model.open(card.id, store: store)
-            }
+    @ViewBuilder private func markHandled(icon: Bool) -> some View {
+        if icon {
             ClaudeButton(icon: "checkmark", label: "Mark handled", variant: .ghost, size: .sm) { model.address(card.id, store: store) }
+        } else if card.kind.isTurn {
+            ClaudeButton("Mark handled", primary: true, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
+        } else {
+            ClaudeButton("Mark handled", variant: .ghost, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
         }
     }
 
@@ -806,7 +763,7 @@ private struct NeedsCard: View {
     }
 
     /// The card's full content: its form or plan (capped, scrolling inside), else what it said.
-    @ViewBuilder private func body(form: PendingForm?) -> some View {
+    @ViewBuilder private func content(form: PendingForm?) -> some View {
         if let form {
             ScrollView {
                 Group {
@@ -823,31 +780,66 @@ private struct NeedsCard: View {
         }
     }
 
-    @ViewBuilder private var actions: some View {
-        if wide, store.pendingForm(for: card) != nil {
-            EmptyView()
-        } else { actionRow }
-    }
+    // MARK: Resolved
 
-    private var actionRow: some View {
-        HStack(spacing: 6) {
-            if card.kind.isTurn {
-                ClaudeButton("Mark handled", primary: true, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
-                ClaudeButton("Reply", variant: .secondary, size: .sm, icon: "arrowshape.turn.up.left") {
-                    model.reply(to: card.id, store: store)
+    private var resolved: some View {
+        let project = store.routerProject(card)
+        return VStack(alignment: .leading, spacing: 0) {
+            header {
+                HStack(spacing: 8) {
+                    if let session = store.sessionRow(card.sessionID) {
+                        SessionGlyph(row: session, size: 16, dot: false).opacity(0.7)
+                    } else {
+                        Image(systemName: card.kind.symbol).font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
+                    }
+                    Text(card.title).cdsText(CDS.Transcript.text, .regular, hovered || expanded ? CDS.Text.secondary : CDS.Text.muted)
+                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    Text("· \(how)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    StatusCaret(hot: hovered, open: expanded)
+                    Spacer(minLength: 8)
+                    // Open in Claude takes the time's place on hover, so the line lines up with the runs around it.
+                    Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                        .opacity(hovered ? 0 : 1)
+                        .overlay(alignment: .trailing) { hoverOpen }
                 }
-                ClaudeButton("Open in Claude", variant: .ghost, size: .sm, icon: "arrow.up.right.square") {
-                    model.open(card.id, store: store)
+                .padding(.horizontal, CDS.Transcript.statusPad)
+                .frame(height: CDS.Transcript.statusRow)
+                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+                .overlay {
+                    RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                        .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
                 }
-            } else if columnWidth < 420 {
-                handlers
-            } else {
-                ClaudeButton("Open in Claude", variant: .ghost, size: .sm, icon: "arrow.up.right.square") {
-                    model.open(card.id, store: store)
+            }
+            .accessibilityAction(named: "Reopen") { model.reopen(card.id, store: store) }
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        KindTag(kind: card.kind)
+                        ProjectLabel(name: project.name, color: project.color)
+                            .cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                        if let origin = card.origin { OriginTag(origin: origin) }
+                    }
+                    CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
+                    if canReopen {
+                        ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
+                            model.reopen(card.id, store: store)
+                        }
+                    }
                 }
-                ClaudeButton("Mark handled", variant: .ghost, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).fill(CDS.Fill.field))
+                .overlay { RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
+                .padding(.top, 6).padding(.bottom, 4)
+                .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity)
     }
 }
 

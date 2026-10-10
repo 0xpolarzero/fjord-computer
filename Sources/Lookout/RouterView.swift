@@ -365,7 +365,7 @@ final class RouterModel {
     var highlighted: String?
     /// The card of Needs you shown in full (see `RouterPage.openNeed`); the others are summary rows.
     var expandedNeed: String?
-    /// Addressed cards opened out in the history.
+    /// Addressed cards and runs opened out in the history.
     var expanded: Set<String> = []
     @ObservationIgnored private var highlightTask: Task<Void, Never>?
 
@@ -459,6 +459,16 @@ final class RouterModel {
         select(card, store: store)
         replyTo = card
         focusRequest &+= 1
+    }
+
+    /// A card's header clicked: shown in full, with the composer ready to reply to it. A resolved card already shown in full
+    /// folds back; the reply stays armed.
+    func tap(_ id: String, store: Store) {
+        if let card = store.router.cards.first(where: { $0.id == id }), !card.isOpen, expanded.contains(id) {
+            expanded.remove(id)
+            return
+        }
+        reply(to: id, store: store)
     }
 
     // MARK: Chips and @
