@@ -31,6 +31,15 @@ enum InboxSync {
     /// rule still gets its first queries: they are taken a turn per rule, not the first rules' all.
     static func searches(categories: [InboxCategory], groups: [InboxGroup], me: String, contributed: Set<String>,
                          myTeams: Set<String> = [], now: Date = Date()) -> [String] {
+        searchPlan(categories: categories, groups: groups, me: me, contributed: contributed, myTeams: myTeams, now: now).searches
+    }
+
+    /// The searches a refresh makes, out of all the rules ask for: each rule's first query, then the others a window at a
+    /// time from `cursor` (or the first queries themselves a window at a time, when they alone pass the cap), so that past
+    /// the cap every query gets its turn over the refreshes. `next` is where the next refresh's window starts.
+    static func searchPlan(categories: [InboxCategory], groups: [InboxGroup], me: String, contributed: Set<String>,
+                           myTeams: Set<String> = [], now: Date = Date(), cursor: Int = 0)
+        -> (searches: [String], all: Set<String>, next: Int) {
         let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-Double(closedDays) * 86400)).prefix(10)
         var perRule: [[String]] = []
         for category in categories {
@@ -41,16 +50,32 @@ enum InboxSync {
                 })
             }
         }
-        var out: [String] = []
+        var firsts: [String] = [], rest: [String] = []
         var seen = Set<String>()
         var turn = 0
-        while out.count < maxSearches, perRule.contains(where: { turn < $0.count }) {
-            for queries in perRule where turn < queries.count && out.count < maxSearches {
-                if seen.insert(queries[turn]).inserted { out.append(queries[turn]) }
+        while perRule.contains(where: { turn < $0.count }) {
+            for queries in perRule where turn < queries.count && seen.insert(queries[turn]).inserted {
+                if turn == 0 { firsts.append(queries[turn]) } else { rest.append(queries[turn]) }
             }
             turn += 1
         }
-        return out
+        func window(_ list: [String], _ count: Int) -> ([String], Int) {
+            guard list.count > count else { return (list, 0) }
+            let start = cursor % list.count
+            return ((0..<count).map { list[(start + $0) % list.count] }, (start + count) % list.count)
+        }
+        if firsts.count >= maxSearches {
+            let (taken, next) = window(firsts, maxSearches)
+            return (taken, seen, next)
+        }
+        let (more, next) = window(rest, maxSearches - firsts.count)
+        return (firsts + more, seen, next)
+    }
+
+    /// Results each search asks for on a page, so that what all of them ask for stays within `budget` things.
+    static func pageSizes(searches: Int, budget: Int) -> Int {
+        guard searches > 0 else { return 0 }
+        return max(1, min(pageSize, budget / searches))
     }
 
     /// People a slot names as search logins, nil when search can't say it (anyone, maintainers, bots).
@@ -255,11 +280,11 @@ enum InboxSync {
     }
 
     /// A request for several searches, each from its own cursor.
-    fileprivate static func request(_ searches: [(alias: String, query: String, cursor: String?)]) -> String {
+    fileprivate static func request(_ searches: [(alias: String, query: String, cursor: String?)], first: Int = pageSize) -> String {
         let body = searches.map { s in
             let after = s.cursor.map { ", after: \"\(escape($0))\"" } ?? ""
             return """
-            \(s.alias): search(query: "\(escape(s.query))", type: ISSUE, first: \(pageSize)\(after)) {
+            \(s.alias): search(query: "\(escape(s.query))", type: ISSUE, first: \(first)\(after)) {
               pageInfo { hasNextPage endCursor }
               nodes { __typename ...P ...I }
             }
@@ -587,6 +612,13 @@ enum InboxSync {
 struct InboxSyncState {
     /// When looking your teams up last failed: asked again after `InboxSync.teamsRetry`, not a day.
     var teamsFailedAt: Date?
+    /// Where the next refresh's window of searches starts (`InboxSync.searchPlan`).
+    var searchCursor = 0
+    /// By thing, the searches that found it: one not found this time stays while a search that found it hasn't run since.
+    var foundBy: [String: Set<String>] = [:]
+    /// The searches run since launch: until all have, a thing no search is known to have found (kept from the last
+    /// session) stays.
+    var ranSinceLaunch: Set<String> = []
 }
 
 // MARK: - Repos that moved
@@ -711,8 +743,9 @@ extension Store {
                 if ownedRepos.isEmpty && contributedRepos.isEmpty { inboxError = error.localizedDescription; return }
             }
         }
-        let searches = InboxSync.searches(categories: categories, groups: groups, me: me, contributed: contributedRepos,
-                                          myTeams: myTeams)
+        let plan = InboxSync.searchPlan(categories: categories, groups: groups, me: me, contributed: contributedRepos,
+                                        myTeams: myTeams, cursor: inboxSyncState.searchCursor)
+        let searches = plan.searches
         let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
                                                 contributed: contributedRepos)
         guard !searches.isEmpty || !targets.isEmpty else {
@@ -764,6 +797,7 @@ extension Store {
         inboxError = searchFailure ?? fetched.error ?? workflowFailure
         // A search that failed can't say what is gone: the things stay as they were.
         guard searchFailure == nil else { return }
+        inboxSyncState.searchCursor = plan.next
         var next = found
         // Nor can an answer GitHub gave in part: what it left out stays, and so does a thing it gave without some of its
         // parts (its comments, its threads), which would otherwise lose facts and announce them again when they come back.
@@ -772,6 +806,8 @@ extension Store {
                 next[id] = old
             }
         }
+        // Past the cap the searches take turns: what those not run this time found stays until they run.
+        next.merge(keepingUnvisited(fetched, ran: searches, all: plan.all)) { a, _ in a }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
@@ -788,23 +824,30 @@ extension Store {
         var things: [Thing] = []
         var partial: Set<String> = []
         var error: String?
+        /// By thing, the searches that returned it.
+        var foundBy: [String: Set<String>] = [:]
     }
 
-    /// Searches, a page at a time for those with more, until the caps. An answer with no data at all throws; one with data
-    /// and errors (a node GitHub couldn't give, a part of one) is taken for what it has, and says so.
+    /// Searches, a page at a time for those with more, until the caps: what a round asks for is shared out of the things
+    /// left before it is asked, so a refresh never takes in more than `maxThings`. An answer with no data at all throws;
+    /// one with data and errors (a node GitHub couldn't give, a part of one) is taken for what it has, and says so.
     func fetchThings(_ searches: [String]) async throws -> Fetched {
         var found: [String: Thing] = [:]
         var partial = Set<String>()
         var error: String?
+        var foundBy: [String: Set<String>] = [:]
         var cursors: [Int: String?] = Dictionary(uniqueKeysWithValues: searches.indices.map { ($0, String?.none) })
         var pages = 0
         while !cursors.isEmpty, pages < InboxSync.maxPages, found.count < InboxSync.maxThings {
             pages += 1
             var next: [Int: String?] = [:]
-            let active = cursors.keys.sorted()
+            let left = InboxSync.maxThings - found.count
+            // More searches than things left: the first of them, one each.
+            let active = Array(cursors.keys.sorted().prefix(left))
+            let first = InboxSync.pageSizes(searches: active.count, budget: left)
             for start in stride(from: 0, to: active.count, by: InboxSync.searchesPerRequest) {
                 let batch = active[start..<min(start + InboxSync.searchesPerRequest, active.count)]
-                let json = try await gh.graphql(InboxSync.request(batch.map { ("s\($0)", searches[$0], cursors[$0] ?? nil) }))
+                let json = try await gh.graphql(InboxSync.request(batch.map { ("s\($0)", searches[$0], cursors[$0] ?? nil) }, first: first))
                 let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
                 guard let data = json["data"] as? [String: Any] else {
                     throw GitHubError(message: (errors.first?["message"] as? String) ?? "GitHub gave no answer")
@@ -822,6 +865,7 @@ extension Store {
                     // A node GitHub couldn't give is null: the others are still things.
                     for (n, value) in ((result["nodes"] as? [Any]) ?? []).enumerated() {
                         guard let node = value as? [String: Any], let thing = InboxSync.thing(node) else { continue }
+                        foundBy[thing.id, default: []].insert(searches[i])
                         // Given whole by another search, it is whole.
                         if broken.contains(["s\(i)", String(n)]) {
                             if found[thing.id] == nil { partial.insert(thing.id); found[thing.id] = thing }
@@ -836,7 +880,31 @@ extension Store {
             }
             cursors = next
         }
-        return Fetched(things: Array(found.values), partial: partial, error: error)
+        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy)
+    }
+
+    /// Notes which searches found what, and gives back the things this refresh didn't find that a search it didn't run
+    /// may still find: one that found it before, or, for a thing kept from before launch, any not yet run since.
+    func keepingUnvisited(_ fetched: Fetched, ran: [String], all: Set<String>) -> [String: Thing] {
+        var state = inboxSyncState
+        let ran = Set(ran)
+        state.ranSinceLaunch = state.ranSinceLaunch.union(ran).intersection(all)
+        var kept: [String: Thing] = [:]
+        var foundBy: [String: Set<String>] = [:]
+        for (id, thing) in things where thing.kind != .workflow && fetched.foundBy[id] == nil {
+            if let before = state.foundBy[id] {
+                let maybe = before.intersection(all).subtracting(ran)
+                if !maybe.isEmpty { kept[id] = thing; foundBy[id] = maybe }
+            } else if !all.isSubset(of: state.ranSinceLaunch) {
+                kept[id] = thing
+            }
+        }
+        for (id, by) in fetched.foundBy {
+            foundBy[id] = (state.foundBy[id] ?? []).intersection(all).subtracting(ran).union(by)
+        }
+        state.foundBy = foundBy
+        inboxSyncState = state
+        return kept
     }
 
     private func workflowThings(_ repo: String, _ requested: String?) async throws -> [Thing] {

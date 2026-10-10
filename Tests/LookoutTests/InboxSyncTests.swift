@@ -186,6 +186,22 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(q.filter { $0.contains("is:issue") } == ["is:issue archived:false user:me user:org sort:updated-desc is:open"])
     }
 
+    @Test func pastTheCapTheWindowMovesSoEveryQueryGetsATurn() {
+        let rules = (0..<17).map { Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u\($0)")]))) }
+        let categories = [InboxCategory(name: "x", symbol: "star", color: .blue, rules: rules)]
+        let first = InboxSync.searchPlan(categories: categories, groups: [], me: "me", contributed: [])
+        #expect(first.all.count == 17 && first.searches.count == InboxSync.maxSearches && first.next == 16)
+        let second = InboxSync.searchPlan(categories: categories, groups: [], me: "me", contributed: [], cursor: first.next)
+        #expect(Set(first.searches).union(second.searches) == first.all)
+        #expect(second.searches.first?.contains("author:u16") == true)
+        // Under the cap: all of them, each time.
+        let few = InboxSync.searchPlan(categories: [InboxCategory(name: "x", symbol: "star", color: .blue, rules: Array(rules.prefix(3)))],
+                                       groups: [], me: "me", contributed: [], cursor: 5)
+        #expect(few.searches.count == 3 && few.next == 0)
+        #expect(InboxSync.pageSizes(searches: 1, budget: 150) == InboxSync.pageSize)
+        #expect(InboxSync.pageSizes(searches: 16, budget: 150) == 9 && InboxSync.pageSizes(searches: 4, budget: 3) == 1)
+    }
+
     @Test func closedThingsAreOnlyFetchedWhenAskedForAndRecent() {
         let plain = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.me])))])
         #expect(plain.count == 1)
@@ -402,6 +418,46 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         let t = try! #require(InboxSync.thing(node()))
         #expect(InboxSync.isEvent("comment:c1", of: t) && !InboxSync.isEvent("comment:gone", of: t))
         #expect(InboxSync.isEvent("requested:bob:1", of: t) && !InboxSync.isEvent("checks:failing", of: t))
+    }
+
+    @Test func pastTheCapTheSearchesTakeTurnsAndWhatTheOthersFoundStays() async {
+        final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var firsts: Set<String> = [] }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        // Seventeen rules of one search each: one more than a refresh makes.
+        s.categories = [InboxCategory(name: "People", symbol: "star", color: .blue, rules: (0..<17).map {
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u\($0)")])))
+        })]
+        let pattern = try! NSRegularExpression(pattern: #"(s\d+): search\(query: \"[^"]*author:u(\d+) [^"]*\", type: ISSUE, first: (\d+)"#)
+        s.gh.session = StubbedGitHub.session { request in
+            let body = try JSONSerialization.jsonObject(with: Data(InboxSyncRefresh.body(request).utf8)) as? [String: Any]
+            let text = body?["query"] as? String ?? ""
+            var data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000]]
+            for m in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let part = { (i: Int) in String(text[Range(m.range(at: i), in: text)!]) }
+                let n = Int(part(2))!
+                box.asked.append("u\(n)")
+                box.firsts.insert(part(3))
+                let found = box.hidden.contains(n) ? [] : [node(["id": "PR_\(n)", "number": n, "url": "https://github.com/o/r/pull/\(n)"])]
+                data[part(1)] = ["pageInfo": ["hasNextPage": false], "nodes": found]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(box.asked.count == 16 && !box.asked.contains("u16") && s.things.count == 16)
+        // What the sixteen searches ask for is within the cap before they are made.
+        #expect(box.firsts == ["\(InboxSync.maxThings / 16)"])
+        box.asked = []
+        await s.syncInbox()
+        // The seventeenth gets its turn; the one left out this time keeps what it found.
+        #expect(box.asked.contains("u16") && !box.asked.contains("u15"))
+        #expect(s.things.count == 17 && s.things["pr:o/r#15"] != nil)
+        // A search that ran and didn't find it again: gone.
+        box.hidden = [0]
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#0"] == nil && s.things.count == 16)
     }
 
     @Test func marksOfThingsGoneForAMonthAreForgotten() {
