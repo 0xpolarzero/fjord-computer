@@ -62,6 +62,15 @@ enum AppWindowShots {
             model.tokens = [folder]
             model.draft = "check the failing tests in \(MentionText.markString) and tell me what you find"
         }),
+        // Typing paused: Jev's pick of where the draft goes is a ghost chip over the composer, its card marked on the page.
+        Shot(name: "router-predicting", destination: { _ in .router }, compose: { model, store in
+            guard let card = store.openRouterCards.first(where: { $0.kind == .question }) ?? store.openRouterCards.first else { return }
+            model.draft = "use sqlite for now, and add an index on the user id"
+            let target = "answer:\(card.id)"
+            model.live.preview(.init(target: target, title: card.title, detail: store.routerDispatcher.describe(target, store: store),
+                                     text: model.draft, mark: card.id))
+            model.highlighted = card.id
+        }),
         Shot(name: "router-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let d = store.router.decisions.first(where: { !$0.links.changes.isEmpty }) { model.expanded.insert(d.id.uuidString) }
