@@ -302,24 +302,25 @@ import Testing
         #expect(state.cards.first { $0.sessionID == "local_b" }?.isOpen == true)
     }
 
-    @Test func pruningDropsTheOldestAddressedCardsFirst() {
+    @Test func pruningDropsTheOldestAddressedCardsAndNeverAnOpenOne() {
         var state = RouterState()
-        for i in 0..<310 {
+        for i in 0..<320 {
             var card = RouterCard(id: "c\(i)", sessionID: "s\(i)", kind: .done, title: "", folder: nil, text: "",
                                   createdAt: at(Double(i)))
-            if i % 2 == 0 { card.addressedAt = at(Double(i)); card.addressedBy = .you }
+            // The 10 oldest are open: older than every addressed one, they still stay.
+            if i >= 10 { card.addressedAt = at(Double(i)); card.addressedBy = .you }
             state.cards.append(card)
         }
         RouterFeed.prune(&state)
-        #expect(state.cards.count == RouterFeed.maxCards)
-        #expect(state.cards.filter(\.isOpen).count == 155)
-        #expect(!state.cards.contains { $0.id == "c18" } && state.cards.contains { $0.id == "c20" })
+        #expect(state.cards.filter { !$0.isOpen }.count == RouterFeed.maxCards)
+        #expect(state.cards.filter(\.isOpen).count == 10)
+        #expect(!state.cards.contains { $0.id == "c19" } && state.cards.contains { $0.id == "c20" })
 
-        // All open: the oldest open ones go.
-        state.cards = (0..<305).map { RouterCard(id: "o\($0)", sessionID: "s", kind: .done, title: "", folder: nil, text: "",
+        // All open, more than the cap: none goes.
+        state.cards = (0..<305).map { RouterCard(id: "o\($0)", sessionID: "s\($0)", kind: .done, title: "", folder: nil, text: "",
                                                   createdAt: at(Double($0))) }
         RouterFeed.prune(&state)
-        #expect(state.cards.count == RouterFeed.maxCards && state.cards.first?.id == "o5")
+        #expect(state.cards.count == 305)
     }
 
     @Test func theChangesKeepTheLatest() {

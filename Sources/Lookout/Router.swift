@@ -685,20 +685,14 @@ enum RouterFeed {
         state.cards.append(card)
     }
 
-    /// Keeps the file small: the oldest addressed cards go first, then the oldest open ones; the changes keep the latest.
-    /// A handled turn's card that goes leaves its turn number behind (`handledTurns`).
+    /// Keeps the file small: past `maxCards` addressed cards, the oldest of them go. An open card never does (there is one
+    /// per session at most, so they stay few): it still wants you. A handled turn's card that goes leaves its turn number
+    /// behind (`handledTurns`); the changes keep the latest.
     static func prune(_ state: inout RouterState) {
-        if state.cards.count > maxCards {
-            var excess = state.cards.count - maxCards
-            let addressed = state.cards.enumerated().filter { !$0.element.isOpen }
-                .sorted { $0.element.createdAt < $1.element.createdAt }.prefix(excess).map(\.offset)
-            var drop = Set(addressed)
-            excess -= drop.count
-            if excess > 0 {
-                drop.formUnion(state.cards.enumerated().filter { $0.element.isOpen }
-                    .sorted { $0.element.createdAt < $1.element.createdAt }.prefix(excess).map(\.offset))
-            }
-            for i in drop where !state.cards[i].isOpen && state.cards[i].kind.isTurn {
+        let addressed = state.cards.enumerated().filter { !$0.element.isOpen }
+        if addressed.count > maxCards {
+            let drop = Set(addressed.sorted { $0.element.createdAt < $1.element.createdAt }.prefix(addressed.count - maxCards).map(\.offset))
+            for i in drop where state.cards[i].kind.isTurn {
                 let card = state.cards[i]
                 guard let range = card.id.range(of: "#t", options: .backwards), let turn = Int(card.id[range.upperBound...]) else { continue }
                 state.handledTurns[card.sessionID] = max(state.handledTurns[card.sessionID] ?? 0, turn)
