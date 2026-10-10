@@ -258,3 +258,29 @@ extension RouterLiveTarget {
         if keepingPin { (pinned, pinnedTitle) = (pin, title) }
     }
 }
+
+extension RouterLiveTarget {
+    /// What can be routed to changed (a card addressed or superseded, a session gone, one no longer working): a pick or a pin
+    /// whose target can't be sent to any more goes; a pick still good marks where its target now is on the page. Whether the
+    /// pick went.
+    @discardableResult
+    func revalidate(store: Store) -> Bool {
+        let dispatcher = store.routerDispatcher
+        if let pin = pinned, !dispatcher.eligible(pin, store: store) {
+            pinned = nil
+            pinnedTitle = nil
+            chosen = nil
+        }
+        guard var p = prediction else { return false }
+        guard p.target != dismissed, dispatcher.eligible(p.target, store: store) else {
+            clear()
+            return true
+        }
+        let mark = Self.mark(p.target, store: store)
+        if mark != p.mark {
+            p.mark = mark
+            prediction = p
+        }
+        return false
+    }
+}

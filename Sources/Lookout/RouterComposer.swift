@@ -49,6 +49,8 @@ struct RouterComposer: View {
                     }
                 }
                 .zIndex(1)
+            // And what it can go to: a chip whose target was addressed, superseded or is gone goes with it.
+            LiveTargetWatch(store: store, model: model)
         }
         .motion(Theme.Motion.fade, value: suggestions.map(\.folder))
         .motion(Theme.Motion.fade, value: model.live.prediction?.target)
@@ -420,5 +422,30 @@ private struct AnchorView: NSViewRepresentable {
         }
 
         deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+    }
+}
+
+/// Where a message can go now, watched in a view of its own (the composer doesn't redraw for every session's activity): when
+/// it changes, Jev's pick and the target you pinned are checked against it (`RouterModel.revalidateTarget`).
+private struct LiveTargetWatch: View {
+    let store: Store
+    let model: RouterModel
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+            .onChange(of: RouterModel.targets(store)) { model.revalidateTarget(store: store) }
+    }
+}
+
+extension RouterModel {
+    /// What a pick or a pin can go to, and where the page shows it: the open cards, the working sessions, the sessions kept.
+    static func targets(_ store: Store) -> [String] {
+        store.openRouterCards.map(\.id) + store.routerWorkingRows.map { workingID($0.id) }
+            + store.claudeSessions.values.filter { !$0.isArchived }.map(\.id).sorted()
+    }
+
+    /// The targets changed: a pick or pin that can't go there any more goes (and Jev is asked again for the draft as it is).
+    func revalidateTarget(store: Store) {
+        if live.revalidate(store: store) { predictTarget(store: store) }
     }
 }

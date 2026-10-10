@@ -140,4 +140,37 @@ import Testing
         model.live.suspend()
         #expect(model.live.prediction == nil)
     }
+
+    @Test func aPickWhoseCardIsAddressedGoesWithItsMark() async {
+        let (s, model, _) = setup()
+        type("use sqlite for the database", model, s)
+        await waitUntil(within: 2) { model.live.prediction != nil }
+        let before = RouterModel.targets(s)
+        s.setCardAddressed("local_a#w1", true)
+        #expect(RouterModel.targets(s) != before, "the composer watches what can be routed to")
+        model.revalidateTarget(store: s)
+        #expect(model.live.prediction == nil)
+    }
+
+    @Test func aPickStillGoodMarksWhereItsSessionNowIs() {
+        let (s, model, _) = setup()
+        model.live.preview(.init(target: "session:local_a", title: "Fix the login bug", detail: "", text: "x",
+                                 mark: RouterModel.workingID("local_a")))
+        // No longer working: its open card is where the page shows it.
+        model.revalidateTarget(store: s)
+        #expect(model.live.prediction?.mark == "local_a#w1")
+    }
+
+    @Test func aPinnedSessionThatIsGoneIsUnpinned() {
+        let (s, model, _) = setup()
+        model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "", text: "x", mark: nil))
+        model.draft = "x"
+        model.pinPrediction(store: s)
+        #expect(model.live.pinned == "session:local_b")
+        model.revalidateTarget(store: s)
+        #expect(model.live.pinned == "session:local_b", "still there: kept")
+        s.claudeSessions["local_b"] = nil
+        model.revalidateTarget(store: s)
+        #expect(model.live.pinned == nil && model.live.pinnedTitle == nil && model.context(s).target == nil)
+    }
 }
