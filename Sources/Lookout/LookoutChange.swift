@@ -273,6 +273,10 @@ extension Store {
     /// and the note says so. Nil when it can't (already reverted, or no longer kept).
     @discardableResult
     func revertLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
+        changingInbox(.revert) { revertingLookoutChange(id, now: now) }
+    }
+
+    private func revertingLookoutChange(_ id: UUID, now: Date) -> LookoutChange? {
         guard let message = router.changes.firstIndex(where: { $0.id == id }), !router.changes[message].isReverted else { return nil }
         var change = router.changes[message]
         var edited = false

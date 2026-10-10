@@ -118,6 +118,10 @@ extension RouterTools {
         do {
             let reads = LookoutTools.tools.first { $0.name == name }?.reads == true
             try live(ticket, acting: !reads)
+            // What a tool does to the categories and groups is the Router's, in this run, in the log.
+            let source = store.inboxSource
+            store.inboxSource = .routerTool(decision: decision)
+            defer { store.inboxSource = source }
             let text: String
             switch name {
             case "list_categories": text = try listCategories(store, args)

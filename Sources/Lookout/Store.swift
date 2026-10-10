@@ -10,11 +10,15 @@ final class Store {
 
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).
     var categories: [InboxCategory] = InboxStore.defaultCategories {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1; logCategories(from: oldValue) }
     }
     var groups: [InboxGroup] = [] {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1; logGroups(from: oldValue) }
     }
+    /// Who is changing the categories and groups now, for the log (see `InboxLog`); nil is the editor.
+    @ObservationIgnored var inboxSource: InboxChangeSource?
+    /// Where those log lines go; the tests read them.
+    @ObservationIgnored var inboxLog: (String) -> Void = InboxLog.write
     var things: [String: Thing] = [:] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
     }
@@ -567,8 +571,10 @@ final class Store {
         settings = state.settings
         agents = state.agents ?? AgentsState()
         router = state.router ?? RouterState()
-        if let c = state.categories { categories = c }
-        groups = state.groups ?? []
+        changingInbox(.load) {
+            if let c = state.categories { categories = c }
+            groups = state.groups ?? []
+        }
         things = state.things ?? [:]
         marks = state.marks ?? [:]
         categoryBaselines = state.categoryBaselines ?? [:]

@@ -556,13 +556,13 @@ extension Store {
         }
         var next = categories
         for c in next.indices { for r in next[c].rules.indices { rewrite(&next[c].rules[r].scope.in) } }
-        if next != categories { categories = next }
+        if next != categories { changingInbox(.sync) { categories = next } }
         var nextGroups = groups
         for g in nextGroups.indices where nextGroups[g].kind == .repos {
             var seen = Set<String>()
             nextGroups[g].members = nextGroups[g].members.map { moves[$0] ?? $0 }.filter { seen.insert($0.lowercased()).inserted }
         }
-        if nextGroups != groups { groups = nextGroups }
+        if nextGroups != groups { changingInbox(.sync) { groups = nextGroups } }
     }
 }
 

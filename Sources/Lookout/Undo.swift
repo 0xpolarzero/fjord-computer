@@ -133,7 +133,7 @@ final class CategoryHistory {
         flush(store)
         guard let previous = undos.popLast() else { return false }
         redos.append(current)
-        apply(previous, to: store)
+        apply(previous, to: store, as: .undo)
         return true
     }
 
@@ -141,7 +141,7 @@ final class CategoryHistory {
         flush(store)
         guard let next = redos.popLast() else { return false }
         undos.append(current)
-        apply(next, to: store)
+        apply(next, to: store, as: .redo)
         return true
     }
 
@@ -159,11 +159,13 @@ final class CategoryHistory {
         observe(store, field: lastField, now: lastAt)
     }
 
-    private func apply(_ snapshot: Snapshot, to store: Store) {
+    private func apply(_ snapshot: Snapshot, to store: Store, as source: InboxChangeSource) {
         current = snapshot
         lastField = nil
-        store.categories = snapshot.categories
-        store.groups = snapshot.groups
+        store.changingInbox(source) {
+            store.categories = snapshot.categories
+            store.groups = snapshot.groups
+        }
     }
 }
 

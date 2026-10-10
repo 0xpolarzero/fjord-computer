@@ -178,7 +178,7 @@ extension Store {
         made.name = made.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !made.name.isEmpty else { return false }
         for i in made.rules.indices { made.rules[i].createdAt = now }
-        categories.append(made)
+        changingInbox(.newCategoryButton) { categories.append(made) }
         history?.observe(self)
         return true
     }
