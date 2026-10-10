@@ -76,6 +76,8 @@ final class RouterLiveTarget {
         var mark: String?
         /// What Jev made of the draft (its task's size), for the send to use.
         var found: RouterDispatcher.Classification? = nil
+        /// The @projects it was made with.
+        var projects: [String] = []
     }
 
     private(set) var prediction: Prediction?
@@ -127,6 +129,7 @@ final class RouterLiveTarget {
             self.asking = nil
             self.task = nil
             self.prediction = found.flatMap { self.prediction(from: $0, text: text, store: store) }
+            self.prediction?.projects = context.projects
             self.predicted = self.prediction == nil ? nil : key
         }
     }
@@ -210,7 +213,10 @@ extension RouterModel {
         // Jev's pick you clicked, while the draft still goes there (as the pinned target or the reply to its card).
         if let chosen = live.chosen, chosen.target == live.pinned || reply.map({ "answer:\($0)" }) == chosen.target {
             context.predicted = chosen.target
-            context.jev = chosen.found
+            // What he made of the words he read, not of words edited since: the pin stays, his reading of them goes.
+            if RouterDispatcher.liveKey(chosen.text, chosen.projects) == RouterDispatcher.liveKey(plainDraft(store), projects) {
+                context.jev = chosen.found
+            }
         }
         return context
     }
