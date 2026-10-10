@@ -431,6 +431,31 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(searches([rule(Scope(kinds: [.pr], to: Pick(include: [.team("a/x")]), toRoles: [.assigned]))]).isEmpty)
     }
 
+    @Test @MainActor func teamsAreResolvedWhenJevRatesReviewRequestsEvenWithNoRuleNamingThem() async {
+        let none = [InboxCategory(name: "Mine", symbol: "star", color: .blue,
+                                  rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])))])]
+        #expect(!InboxSync.needsTeams(categories: none, jevReads: false))
+        #expect(InboxSync.needsTeams(categories: none, jevReads: true))
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = none
+        s.gh.session = StubbedGitHub.session { request in
+            let data: [String: Any] = InboxSyncRefresh.body(request).contains("organizations")
+                ? ["viewer": ["organizations": ["nodes": [["teams": ["nodes": [["combinedSlug": "acme/core"]]]]]]]]
+                : ["rateLimit": ["cost": 1, "remaining": 4000], "s0": ["pageInfo": ["hasNextPage": false], "nodes": []]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        // Jev switched off: not asked.
+        s.settings.jevReadsInbox = false
+        s.inboxAsker = { _, _ in [:] }
+        await s.syncInbox()
+        #expect(s.myTeams.isEmpty)
+        s.settings.jevReadsInbox = true
+        await s.syncInbox()
+        #expect(s.myTeams == ["acme/core"])
+    }
+
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {
         let s = Store()
         s.persists = false

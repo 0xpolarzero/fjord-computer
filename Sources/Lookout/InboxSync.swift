@@ -72,6 +72,12 @@ enum InboxSync {
         return unique.isEmpty ? nil : unique
     }
 
+    /// Whether a refresh needs the teams you're in: a rule names `My teams`, or Jev rates review requests, those to a team of
+    /// yours among them.
+    static func needsTeams(categories: [InboxCategory], jevReads: Bool) -> Bool {
+        jevReads || categories.contains { $0.rules.contains { $0.scope.to?.include.contains(.myTeams) == true } }
+    }
+
     /// `org/team` a slot names: its teams, and yours for `My teams`.
     static func teams(_ pick: Pick<PersonRef>?, myTeams: Set<String>) -> [String] {
         var found: [String] = []
@@ -613,7 +619,7 @@ extension Store {
         let needsRepos = categories.contains { $0.rules.contains { rule in
             (rule.scope.in?.include ?? []).contains { $0 == .owned || $0 == .contributed }
         } }
-        let needsTeams = categories.contains { $0.rules.contains { $0.scope.to?.include.contains(.myTeams) == true } }
+        let needsTeams = InboxSync.needsTeams(categories: categories, jevReads: jevReadsInboxNow)
         if needsTeams, teamsResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true { await resolveTeams(me: me) }
         if needsRepos, reposResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true {
             // A failure leaves what was known; with nothing known, the refresh waits: it would read as "nothing there".

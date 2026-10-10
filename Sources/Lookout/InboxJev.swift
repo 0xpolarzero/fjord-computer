@@ -215,6 +215,9 @@ extension Store {
     /// Settings' "Let Jev read new comments" (default on).
     var jevReadsInbox: Bool { settings.jevReadsInbox ?? true }
 
+    /// Jev reads the inbox at the next refresh: switched on, with a key (or a test's asker).
+    var jevReadsInboxNow: Bool { jevReadsInbox && (inboxAsker != nil || !(typesafeKey ?? "").isEmpty) }
+
     /// Jev's reading of what is new, in one call: before the refresh announces, so noise is known before it would show a
     /// banner. Switched off or without a key nothing is asked; a failure leaves everything as it was and waits a while.
     func readInbox() async {
