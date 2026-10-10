@@ -21,11 +21,11 @@ import Testing
     @Test func aRepoWithOnlyExternalChecksHasAStateNamesAndAChangeTime() {
         let failed = Store.readCI(runs: [], sha: nil, checks: [check("build", "completed", "failure", started: 10, completed: 90),
                                                                 check("lint", started: 5, completed: 40)], combined: combined())
-        #expect(failed.state == .failure)
-        #expect(failed.failing == ["build"])
+        #expect(failed.workflows.map(\.state) == [.failure])
+        #expect(failed.workflows.first?.failing == ["build"])
         #expect(failed.changedAt == t0.addingTimeInterval(90))
         let running = Store.readCI(runs: [], sha: nil, checks: [check("build", "in_progress", nil, started: 30)], combined: combined())
-        #expect(running.state == .pending)
+        #expect(running.workflows.map(\.state) == [.pending])
         // Still running: it last changed when it started.
         #expect(running.changedAt == t0.addingTimeInterval(30))
     }
@@ -33,7 +33,8 @@ import Testing
     @Test func aRepoWithOnlyLegacyStatusesHasAChangeTime() {
         let status = GHCombinedStatus.Status(context: "ci/jenkins", state: "failure", createdAt: t0, updatedAt: t0.addingTimeInterval(20))
         let reading = Store.readCI(runs: [], sha: nil, checks: [], combined: combined([status]))
-        #expect(reading.state == .failure && reading.failing == ["ci/jenkins"] && reading.changedAt == t0.addingTimeInterval(20))
+        #expect(reading.workflows.map(\.state) == [.failure] && reading.workflows.first?.failing == ["ci/jenkins"])
+        #expect(reading.changedAt == t0.addingTimeInterval(20))
         let neverUpdated = GHCombinedStatus.Status(context: "ci/x", state: "success", createdAt: t0, updatedAt: nil)
         #expect(Store.readCI(runs: [], sha: nil, checks: [], combined: combined([neverUpdated])).changedAt == t0)
     }
@@ -47,10 +48,12 @@ import Testing
         let mirror = check("build", started: 0, completed: 900, app: "github-actions")
         let external = check("deploy", started: 10, completed: 70)
         let reading = Store.readCI(runs: [run, other], sha: "s", checks: [mirror, external], combined: combined())
-        #expect(reading.state == .success)
+        // The run on another commit is left out, and the mirror adds no failure or change of its own.
+        #expect(reading.workflows.map(\.id) == ["1", Store.externalWorkflowID])
+        #expect(reading.workflows.map(\.state) == [.success, .success])
         #expect(reading.changedAt == t0.addingTimeInterval(70))
         let nothing = Store.readCI(runs: [], sha: nil, checks: [], combined: combined())
-        #expect(nothing.state == .none && nothing.failing.isEmpty && nothing.changedAt == nil && nothing.workflows.isEmpty)
+        #expect(nothing.changedAt == nil && nothing.workflows.isEmpty)
     }
 
     private func workflow(_ name: String, id: Int, suite: Int?, _ conclusion: String?, sha: String = "s",
@@ -65,34 +68,36 @@ import Testing
                     check("macOS test", "completed", "success", app: "github-actions", suite: 10),
                     check("Windows test", "completed", "timed_out", app: "github-actions", suite: 10)]
         let reading = Store.readCI(runs: [ci], sha: "s", checks: jobs, combined: combined())
-        #expect(reading.state == .failure)
-        #expect(reading.failing == ["Linux build", "Windows test"])
+        #expect(reading.workflows.map(\.state) == [.failure])
+        #expect(reading.workflows.first?.failing == ["Linux build", "Windows test"])
     }
 
     @Test func aFailedWorkflowWithNoJobsKeepsItsOwnName() {
         let ci = workflow("CI", id: 1, suite: 10, "failure")
         // No job at all, a job of another suite, and a job with no suite known.
-        #expect(Store.readCI(runs: [ci], sha: "s", checks: [], combined: combined()).failing == ["CI"])
+        #expect(Store.readCI(runs: [ci], sha: "s", checks: [], combined: combined()).workflows.map(\.failing) == [["CI"]])
         let elsewhere = [check("Other", "completed", "failure", app: "github-actions", suite: 99)]
-        #expect(Store.readCI(runs: [ci], sha: "s", checks: elsewhere, combined: combined()).failing == ["CI"])
+        #expect(Store.readCI(runs: [ci], sha: "s", checks: elsewhere, combined: combined()).workflows.map(\.failing) == [["CI"]])
         let unknown = workflow("CI", id: 1, suite: nil, "failure")
         let job = [check("Linux build", "completed", "failure", app: "github-actions")]
-        #expect(Store.readCI(runs: [unknown], sha: "s", checks: job, combined: combined()).failing == ["CI"])
+        #expect(Store.readCI(runs: [unknown], sha: "s", checks: job, combined: combined()).workflows.map(\.failing) == [["CI"]])
     }
 
     @Test func jobsOfRunsThatDoNotCountAreLeftOut() {
         // A failed job of a workflow run the push's selection didn't take (another trigger, an older run) says nothing.
         let ci = workflow("CI", id: 1, suite: 10, "success")
         let stray = [check("Triage", "completed", "failure", app: "github-actions", suite: 30)]
-        #expect(Store.readCI(runs: [ci], sha: "s", checks: stray, combined: combined()).state == .success)
+        let reading = Store.readCI(runs: [ci], sha: "s", checks: stray, combined: combined())
+        #expect(reading.workflows.map(\.state) == [.success] && reading.workflows.map(\.failing) == [[]])
     }
 
-    @Test func actionsJobsAndExternalChecksFailTogether() {
+    @Test func actionsJobsAndExternalChecksFailEachInTheirOwnWorkflow() {
         let ci = workflow("CI", id: 1, suite: 10, "failure")
         let checks = [check("Linux build", "completed", "failure", app: "github-actions", suite: 10),
                       check("deploy", "completed", "failure")]
         let reading = Store.readCI(runs: [ci], sha: "s", checks: checks, combined: combined())
-        #expect(reading.failing == ["Linux build", "deploy"])
+        #expect(reading.workflows.map(\.id) == ["1", Store.externalWorkflowID])
+        #expect(reading.workflows.map(\.failing) == [["Linux build"], ["deploy"]])
     }
 
     @Test func theSuiteLinksAJobToItsWorkflowRunInGitHubsJSON() throws {
@@ -135,8 +140,6 @@ import Testing
         #expect(reading.workflows.map(\.state) == [.failure, .pending, .success])
         #expect(reading.workflows[0].failing == ["Linux build", "Windows test"])
         #expect(reading.workflows[1].failing.isEmpty && reading.workflows[2].failing.isEmpty)
-        // The whole is what it always was.
-        #expect(reading.state == .failure && reading.failing == ["Linux build", "Windows test"])
     }
 
     @Test func externalChecksAndStatusesAreOneWorkflowOfTheirOwn() {
@@ -179,9 +182,10 @@ import Testing
             }
         }
         let status = try await store.fetchBranchCI("a/x", branch: "main")
-        #expect(status.state == .failure && status.failing == ["build"] && status.title == "Fix")
+        #expect(status.title == "Fix")
         #expect(status.workflows.map(\.name) == ["CI", "Lint"])
         #expect(status.workflows.map(\.state) == [.failure, .success])
+        #expect(status.workflows.map(\.failing) == [["build"], []])
         #expect(status.workflows[0].url?.absoluteString == "https://github.com/a/x/actions/runs/1")
         // One list of runs, the commit's checks and statuses: three calls for the repo, however many workflows.
         #expect(paths.all.count == 3)
@@ -201,12 +205,12 @@ private final class PathLog: @unchecked Sendable {
 @Suite struct FailingChecks {
     @Test func theChipNamesTheFailingChecksAndCountsTheRest() {
         #expect(FailingNames.summary(["build"]) == "build")
-        #expect(FailingNames.summary(["build", "lint"]) == "build, lint")
-        #expect(FailingNames.summary(["build", "lint", "test", "deploy"]) == "build, lint +2")
+        #expect(FailingNames.summary(["build", "lint", "test"]) == "build, lint, test")
+        #expect(FailingNames.summary(["build", "lint", "test", "deploy", "docs"]) == "build, lint, test +2")
     }
 
     @Test func aLongNameIsCutShort() {
-        #expect(FailingNames.summary(["Linux build (release, arm64)"]) == "Linux build (re…")
-        #expect(FailingNames.summary(["exactly sixteen!"]) == "exactly sixteen!")
+        #expect(FailingNames.summary(["Linux build (release, arm64)"]) == "Linux build (release, a…")
+        #expect(FailingNames.summary(["exactly twenty-four long"]) == "exactly twenty-four long")
     }
 }

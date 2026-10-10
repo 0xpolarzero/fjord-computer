@@ -116,35 +116,24 @@ import Testing
             #expect(eager >= 280 && eager <= 300, "adaptive \(n): \(eager)")
             let lazy = height(of: CappedScroll(cap: 300, lazy: true) { LazyVStack(spacing: 0) { rows(n) } })
             #expect(lazy >= 280 && lazy <= 300, "lazy \(n): \(lazy)")
-            let grid = height(of: CappedScroll(cap: 300, lazy: true) {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 0) { rows(n * 2) }
-            })
-            #expect(grid >= 280 && grid <= 300, "grid \(n): \(grid)")
         }
     }
 
     private struct LazyRows: View {
         let count: Count
-        let grid: Bool
         var body: some View {
             CappedScroll(cap: 300, lazy: true) {
-                if grid {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 1) {
-                        ForEach(0..<count.n, id: \.self) { i in Text("row \(i)").frame(height: 41).frame(maxWidth: .infinity).capEdge() }
-                    }.padding(.vertical, 8)
-                } else {
-                    AdaptiveStack(count: count.n, spacing: 1) {
-                        ForEach(0..<count.n, id: \.self) { i in Text("row \(i)").frame(height: 41).frame(maxWidth: .infinity).capEdge() }
-                    }.padding(.vertical, 8)
-                }
+                AdaptiveStack(count: count.n, spacing: 1) {
+                    ForEach(0..<count.n, id: \.self) { i in Text("row \(i)").frame(height: 41).frame(maxWidth: .infinity).capEdge() }
+                }.padding(.vertical, 8)
             }
         }
     }
 
     /// Hosts the list, settles it, and returns its height after each row-count change.
-    private func heights(grid: Bool, counts: [Int]) -> [CGFloat] {
+    private func heights(counts: [Int]) -> [CGFloat] {
         let count = Count(counts[0])
-        let hosting = NSHostingView(rootView: LazyRows(count: count, grid: grid).frame(width: 300))
+        let hosting = NSHostingView(rootView: LazyRows(count: count).frame(width: 300))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 900), styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = hosting
         window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
@@ -166,32 +155,21 @@ import Testing
     }
 
     @Test func lazyListEndsOnAWholeRow() {
-        let h = heights(grid: false, counts: [200])[0]
+        let h = heights(counts: [200])[0]
         #expect(h <= 300.5 && h >= 250 && onRowBoundary(h), "lazy: \(h)")
     }
 
-    @Test func lazyGridEndsOnAWholeGridRow() {
-        let h = heights(grid: true, counts: [400])[0]
-        #expect(h <= 300.5 && h >= 250 && onRowBoundary(h), "grid: \(h)")
-    }
-
     @Test func lazyListsResizeAcrossRowCountChanges() {
-        for grid in [false, true] {
-            let r = heights(grid: grid, counts: [3, 400, 2])
-            let per = grid ? 2 : 1
-            let short = { (n: Int) in 16 + CGFloat((n + per - 1) / per) * 42 - 1 }
-            #expect(abs(r[0] - short(3)) < 1.5, "grid \(grid) 3: \(r)")
-            #expect(r[1] <= 300.5 && r[1] >= 250 && onRowBoundary(r[1]), "grid \(grid) 400: \(r)")
-            #expect(abs(r[2] - short(2)) < 1.5, "grid \(grid) 2: \(r)")
-        }
+        let r = heights(counts: [3, 400, 2])
+        let short = { (n: Int) in 16 + CGFloat(n) * 42 - 1 }
+        #expect(abs(r[0] - short(3)) < 1.5, "3: \(r)")
+        #expect(r[1] <= 300.5 && r[1] >= 250 && onRowBoundary(r[1]), "400: \(r)")
+        #expect(abs(r[2] - short(2)) < 1.5, "2: \(r)")
     }
 
     @Test func lazyListsShrinkFromOverflowToShort() {
-        for grid in [false, true] {
-            let r = heights(grid: grid, counts: [400, 4])
-            let rows = grid ? 2 : 4
-            #expect(abs(r[1] - (16 + CGFloat(rows) * 42 - 1)) < 1.5, "grid \(grid): \(r)")
-        }
+        let r = heights(counts: [400, 4])
+        #expect(abs(r[1] - (16 + 4 * 42 - 1)) < 1.5, "\(r)")
     }
 
     private struct VariableRows: View {

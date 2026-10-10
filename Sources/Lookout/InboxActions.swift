@@ -59,7 +59,7 @@ struct CategoryAction: Codable, Hashable, Identifiable {
     static func make(_ kind: ActionKind) -> CategoryAction { CategoryAction(kind: kind) }
 }
 
-/// A category's actions. Written as a plain array; a category saved before actions has none.
+/// A category's actions. Written as a plain array.
 struct ActionList: Codable, Hashable {
     var items: [CategoryAction] = []
     var isEmpty: Bool { items.isEmpty }
@@ -69,13 +69,6 @@ struct ActionList: Codable, Hashable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         try c.encode(items)
-    }
-}
-
-extension KeyedDecodingContainer {
-    /// Absent key: no actions (what the synthesized coding of `InboxCategory` needs for a file from before them).
-    func decode(_ type: ActionList.Type, forKey key: Key) throws -> ActionList {
-        try decodeIfPresent(type, forKey: key) ?? ActionList()
     }
 }
 

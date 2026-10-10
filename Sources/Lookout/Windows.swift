@@ -31,8 +31,6 @@ enum DockEdge: String {
 }
 
 class FloatingPanel: NSPanel {
-    var allowsKey = false
-
     init(size: NSSize) {
         super.init(contentRect: NSRect(origin: .zero, size: size),
                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -51,7 +49,7 @@ class FloatingPanel: NSPanel {
         allowsToolTipsWhenApplicationIsInactive = true
     }
 
-    override var canBecomeKey: Bool { allowsKey }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
 

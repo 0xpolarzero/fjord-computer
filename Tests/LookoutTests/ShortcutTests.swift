@@ -287,7 +287,7 @@ import Testing
         let held = Shortcut(keyCode: UInt16(kVK_ANSI_G), modifiers: [.control, .command])
         store.setShortcut(held, for: .togglePanel)
         registrar.taken = [held, ShortcutAction.sessionSwitcher.defaultShortcut]
-        store.agents.enabled = false
+        store.router.enabled = false
         var said: [String] = []
         let globals = GlobalShortcuts(store: store, registrar: registrar, perform: { _ in }) { said.append($0) }
         globals.start()
@@ -376,14 +376,23 @@ import Testing
         withExtendedLifetime(globals) {}
     }
 
-    @MainActor @Test func theSessionSwitcherIsRegisteredOnlyWhileTheRouterIsOn() {
+    /// The Router's switch is what turns it off and on (Claude's sessions follow it): its keys go and come back with it.
+    @MainActor @Test func theRoutersKeysAreRegisteredOnlyWhileTheRouterIsOn() async {
         let store = Store()
         let registrar = FakeRegistrar()
         let globals = connected(store, registrar)
-        #expect(registrar.registered[2] != nil)
-        store.agents.enabled = false
-        globals.register(.sessionSwitcher)
-        #expect(registrar.registered[2] == nil)
+        #expect(registrar.registered[2] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        #expect(registrar.registered[3] == ShortcutAction.router.defaultShortcut)
+        store.router.enabled = false
+        await waitUntil { registrar.registered[2] == nil && registrar.registered[3] == nil }
+        #expect(registrar.registered[2] == nil && registrar.registered[3] == nil)
+        // The window's key isn't the Router's: it stays.
+        #expect(registrar.registered[1] == ShortcutAction.togglePanel.defaultShortcut)
+        store.router.enabled = true
+        await waitUntil { registrar.registered[2] != nil && registrar.registered[3] != nil }
+        #expect(registrar.registered[2] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        #expect(registrar.registered[3] == ShortcutAction.router.defaultShortcut)
+        withExtendedLifetime(globals) {}
     }
 }
 

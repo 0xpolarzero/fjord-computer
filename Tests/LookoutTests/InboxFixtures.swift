@@ -1,13 +1,13 @@
 import Foundation
 @testable import Lookout
 
-/// Things and a category for the tests of the hub, the search and Done: PRs of `a/one` that carry a Greptile score below 5
-/// (the fact that puts them in the category), so each is in "Mine" with the fact `Greptile 3/5`.
+/// Things and a category for the inbox's tests: PRs of `a/one` that carry a Greptile score below 5 (the fact that puts them
+/// in the category), so each is in "Mine" with the fact `Greptile 3/5`.
 enum InboxFixture {
     static let author = Person(login: "me")
 
-    static func category(name: String = "Mine") -> InboxCategory {
-        InboxCategory(name: name, symbol: "star", color: .blue,
+    static func category() -> InboxCategory {
+        InboxCategory(name: "Mine", symbol: "star", color: .blue,
                       rules: [Rule(scope: Scope(kind: .pr), conditions: [.greptileBelow(5)], createdAt: .distantPast)])
     }
 

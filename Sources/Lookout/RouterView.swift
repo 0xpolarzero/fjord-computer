@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
 
-// The Router as two columns (the app window shows `RouterCodeView`): what needs you on the left (its cards), the chat with
-// the Router on the right. The bar only says how many cards are open and what is running; everything else is here.
+// What the Router's window is built on (`RouterCodeView` lays it out): the store's side of the Router, the cards' lines and
+// tags, the window's model (the pick, the draft, its chips and @, the forms and plans being answered), the notice of what
+// stands in the way, and the Working list the bar shows.
 
 // MARK: - Store
 
@@ -34,9 +35,6 @@ extension Store {
     static func workingStart(_ row: AgentRow) -> Date? {
         row.session.running ? row.workingSince : row.tasks.map(\.since).min()
     }
-
-    /// The cards the window lists: the open ones, or all of them.
-    func routerCards(all: Bool) -> [RouterCard] { all ? routerCards : openRouterCards }
 
     /// The Router's own process must never reach real sessions from a demo or a playground: it answers for itself there.
     var routerIsPretend: Bool { Store.isDemo || !persists }
@@ -257,8 +255,6 @@ final class RouterModel {
     /// What the sidebar's search holds, and whether the keyboard is asked for it (what the sessions shortcut does).
     var search = ""
     var searchWanted = false
-    /// Every card, not only the open ones.
-    var showAll = false
     var draft = "" {
         didSet { if draft != oldValue { mentionChanged() } }
     }
@@ -277,8 +273,6 @@ final class RouterModel {
     var focusRequest = 0
     /// The keys that put the focus in the composer, typed into it once it has it.
     @ObservationIgnored var pendingKeys: [NSEvent] = []
-    /// Asks the card list to scroll to a card.
-    var scrollRequest: ScrollRequest?
     /// Per form (by its key): the options picked for each question, and the words typed in "Other".
     var picks: [String: [String: [String]]] = [:]
     var other: [String: [String: String]] = [:]
@@ -302,7 +296,27 @@ final class RouterModel {
     /// The cards listed at the last reconcile, in order: where a picked card that left the list was.
     @ObservationIgnored private var listed: [String] = []
 
-    func cards(_ store: Store) -> [RouterCard] { store.routerCards(all: showAll) }
+    /// The cards the sidebar lists, in its sections, as the search leaves them: what needs you (questions, plans, stuck
+    /// turns), then the finished turns, both open; then the latest addressed ones (Earlier). The sidebar draws these, and the
+    /// keys walk the same cards in the same order (the Working section between Done and Earlier is sessions, not cards).
+    func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let found = q.isEmpty ? store.routerCards
+            : store.routerCards.filter { $0.title.lowercased().contains(q) || $0.text.lowercased().contains(q) }
+        let open = found.filter(\.isOpen)
+        // `routerCards` has each part newest first.
+        let earlier = found.filter { !$0.isOpen }.prefix(Self.earlierLimit)
+        return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, Array(earlier))
+    }
+
+    /// How many addressed cards Earlier lists.
+    static let earlierLimit = 8
+
+    /// Every card the sidebar lists, top to bottom: what the keys walk.
+    func cards(_ store: Store) -> [RouterCard] {
+        let s = sections(store)
+        return s.needs + s.done + s.earlier
+    }
 
     /// Whether a message can go to the Router now: it is on (with the sessions extension) and Claude Code is there.
     func canSend(_ store: Store) -> Bool {
@@ -319,7 +333,7 @@ final class RouterModel {
         if claudeCodeMissing != !found { claudeCodeMissing = !found }
     }
 
-    /// The pick follows the list: kept while it is listed; when the filter or the cards change and it isn't, the nearest
+    /// The pick follows the list: kept while it is listed; when the search or the cards change and it isn't, the nearest
     /// card listed after it (or before it) is picked, else none. Every key acts on the list as it is now.
     func reconcile(store: Store) {
         let ids = cards(store).map(\.id)
@@ -331,15 +345,11 @@ final class RouterModel {
             next = listed[(i + 1)...].first(where: visible.contains) ?? listed[..<i].reversed().first(where: visible.contains)
         }
         selection = next
-        if let next { scrollRequest = ScrollRequest(id: next, seq: (scrollRequest?.seq ?? 0) + 1) }
     }
 
-    /// Picks a card (and scrolls to it); a card the Open filter hides shows every card.
+    /// Picks a card, or none (the Router's own chat).
     func select(_ id: String?, store: Store) {
-        if let id, !showAll, store.openRouterCards.first(where: { $0.id == id }) == nil,
-           store.router.cards.contains(where: { $0.id == id }) { showAll = true }
         selection = id
-        if let id { scrollRequest = ScrollRequest(id: id, seq: (scrollRequest?.seq ?? 0) + 1) }
     }
 
     /// ↑↓: the next card up or down, the first (or last) when none is picked.
@@ -351,15 +361,21 @@ final class RouterModel {
         select(ids[min(max(i + (down ? 1 : -1), 0), ids.count - 1)], store: store)
     }
 
-    /// Space: addressed, or open again. Under Open, an addressed card leaves the list, so the next one is picked.
+    /// Space: addressed, or open again. An addressed card goes down to Earlier, so the next open card is picked (or the one
+    /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card.
     func toggleAddressed(store: Store) {
         reconcile(store: store)
-        let ids = cards(store).map(\.id)
-        guard let id = selection, ids.contains(id), let card = store.router.cards.first(where: { $0.id == id }) else { return }
-        let next = ids.firstIndex(of: id).map { i in ids.indices.contains(i + 1) ? ids[i + 1] : i > 0 ? ids[i - 1] : nil } ?? nil
+        let shown = cards(store)
+        guard let id = selection, let card = shown.first(where: { $0.id == id }) else { return }
+        if card.addressedBy == .superseded {
+            if let newer = store.openRouterCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
+            return
+        }
+        let open = shown.filter(\.isOpen).map(\.id)
+        let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
         store.setCardAddressed(id, card.isOpen)
         Announce.say(card.isOpen ? "Addressed" : "Open again")
-        if card.isOpen, !showAll { select(next, store: store) }
+        if card.isOpen { select(next, store: store) }
     }
 
     /// Sends the draft with its reply and project chips (which go with it); the composer keeps the focus for the next one.
@@ -374,8 +390,8 @@ final class RouterModel {
         projects = []
     }
 
-    /// A card clicked: its session opens in Claude first (a finished turn is addressed by that), then the card is picked as it
-    /// now is (one the Open filter no longer lists shows every card), so the pick stays on it.
+    /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes down to Earlier),
+    /// then the card is picked as it now is, so the pick stays on it.
     func open(_ id: String, store: Store) {
         store.openCard(id)
         select(id, store: store)
@@ -578,26 +594,7 @@ final class RouterModel {
     }
 }
 
-// MARK: - Chat
-
-/// The chat with the Router, then the status line and the composer; what's missing to use it, first.
-struct RouterChatColumn: View {
-    let store: Store
-    @Bindable var model: RouterModel
-    let agent: RouterAgent
-
-    var body: some View {
-        VStack(spacing: 0) {
-            RouterSetupNotice(store: store, model: model, agent: agent)
-            RouterChatList(store: store, agent: agent)
-            Hairline()
-            RouterComposer(store: store, model: model, agent: agent)
-                .padding(.horizontal, Theme.Space.lg)
-                .padding(.vertical, Theme.Space.md)
-                .padding(.top, 2)
-        }
-    }
-}
+// MARK: - Notice
 
 /// What stands in the way of using the Router, in one line, and the fix. Nothing when all is well.
 struct RouterSetupNotice: View {
@@ -634,216 +631,6 @@ struct RouterSetupNotice: View {
         }
         .onAppear { Announce.say(text) }
     }
-}
-
-/// The conversation, newest at the bottom; one line saying what the Router does while it is empty.
-struct RouterChatList: View {
-    let store: Store
-    let agent: RouterAgent
-
-    var body: some View {
-        let chat = store.router.chat
-        let working = agent.phase == .working || agent.phase == .starting
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(chat) { RouterMessageView(message: $0, store: store).id($0.id) }
-                    if working {
-                        Text(agent.phase == .starting ? "Starting…" : "Working…")
-                            .font(Theme.Typography.meta).foregroundStyle(Theme.tertiary)
-                            .id("working")
-                    }
-                }
-                .padding(Theme.Space.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: chat.last?.id) { _, id in if let id { proxy.scrollTo(id, anchor: .bottom) } }
-            .onChange(of: working) { _, now in if now { proxy.scrollTo("working", anchor: .bottom) } }
-        }
-    }
-}
-
-/// One line of the chat: yours on the right, the Router's on the left, its actions as small receipts that link to the
-/// session, errors in red, and what a session wrote back.
-struct RouterMessageView: View {
-    let message: RouterMessage
-    let store: Store
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    var body: some View {
-        switch message.role {
-        case .you:
-            VStack(alignment: .trailing, spacing: 4) {
-                if message.replyTo != nil || !(message.projects ?? []).isEmpty { sentChips }
-                youBubble
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("You\(spokenChips): \(message.text)")
-        case .router:
-            Text(RouterText.inline(message.text))
-                .font(Theme.Typography.body)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.trailing, 60)
-                .accessibilityLabel("Router: \(message.text)")
-        case .receipt:
-            receipt
-        case .error:
-            Label(message.text, systemImage: "exclamationmark.triangle.fill")
-                .font(Theme.Typography.meta)
-                .foregroundStyle(Theme.red)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel("Error: \(message.text)")
-        case .peer:
-            PeerMessageView(message: message, store: store, title: sessionTitle)
-        }
-    }
-
-    private var sessionTitle: String? { message.sessionID.flatMap { store.claudeSessions[$0]?.title } }
-
-    /// Your words, in their bubble.
-    private var youBubble: some View {
-        Text(message.text)
-            .font(Theme.Typography.body)
-            .textSelection(.enabled)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
-            .background(Theme.Radius.shape(Theme.Radius.lg).fill(Theme.Fill.selected))
-            .overlay {
-                if contrast == .increased { Theme.Radius.shape(Theme.Radius.lg).strokeBorder(Theme.text.opacity(0.5)) }
-            }
-            .padding(.leading, 80)
-    }
-
-    private var replyTitle: String? {
-        message.replyTo.map { id in store.router.cards.first { $0.id == id }?.title ?? "a card" }
-    }
-
-    /// What went with your line: the card it replied to, the projects tagged.
-    private var sentChips: some View {
-        HStack(spacing: 4) {
-            if let title = replyTitle {
-                Label(title, systemImage: "arrowshape.turn.up.left.fill").labelStyle(.titleAndIcon)
-            }
-            ForEach(message.projects ?? [], id: \.self) { Text("@" + store.folderName($0)) }
-        }
-        .font(Theme.Typography.caption)
-        .foregroundStyle(Theme.tertiary)
-        .lineLimit(1)
-    }
-
-    private var spokenChips: String {
-        var parts: [String] = []
-        if let title = replyTitle { parts.append("replying to \(title)") }
-        parts += (message.projects ?? []).map { "project \(store.folderName($0))" }
-        return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
-    }
-
-    private var receipt: some View { ReceiptView(message: message, store: store, title: sessionTitle) }
-}
-
-/// "→ lookout: first line", the arrow drawn rather than typed, then a link to the session it was about. A message Lookout
-/// rephrased before sending (it named the session, or held parts for others) says so; your own words are on the mark's
-/// tooltip, and under the line once it is clicked.
-struct ReceiptView: View {
-    let message: RouterMessage
-    let store: Store
-    let title: String?
-    @State private var showsOriginal = false
-
-    var body: some View {
-        let text = message.text.hasPrefix("→") ? String(message.text.dropFirst()).trimmingCharacters(in: .whitespaces) : message.text
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "arrow.turn.down.right").font(Theme.Typography.glyph(9, .bold)).foregroundStyle(Theme.tertiary)
-                    .accessibilityHidden(true)
-                Text(text).font(Theme.Typography.meta).foregroundStyle(Theme.secondary).lineLimit(2).textSelection(.enabled)
-                if let original = message.original {
-                    let mark = "rephrased"
-                    Button { showsOriginal.toggle() } label: {
-                        Text(mark).font(Theme.Typography.caption.weight(.semibold)).foregroundStyle(Theme.purple)
-                            .padding(.horizontal, 6).frame(height: 16)
-                            .background(Capsule().fill(Theme.purple.opacity(0.14)))
-                    }
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .tip(mark.capitalized, "You wrote: \(original)")
-                    .accessibilityLabel(mark.capitalized)
-                    .accessibilityValue("You wrote: \(original)")
-                    .accessibilityHint(showsOriginal ? "Hides your words" : "Shows your words")
-                }
-                if let id = message.sessionID, store.claudeSessions[id] != nil {
-                    Button("Open") { store.openAgent(id) }
-                        .buttonStyle(.link).font(Theme.Typography.meta).foregroundStyle(Theme.accent)
-                        .accessibilityLabel("Open \(title ?? "the session") in Claude")
-                }
-            }
-            if showsOriginal, let original = message.original {
-                Text("You wrote: \(original)").font(Theme.Typography.caption).foregroundStyle(Theme.tertiary)
-                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 15)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Done: \(text)")
-    }
-}
-
-/// What a session wrote back to the Router, as it wrote it: its name with a link to it, the text cut to three lines with
-/// More to read the rest.
-struct PeerMessageView: View {
-    let message: RouterMessage
-    let store: Store
-    let title: String?
-    static let lines = 3
-    @State private var expanded = false
-    @State private var truncated = false
-
-    var body: some View {
-        let name = title ?? "a session"
-        HStack(alignment: .top, spacing: 8) {
-            Capsule().fill(Theme.claude).frame(width: 2)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text("From \(name)").font(Theme.Typography.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                        .lineLimit(1)
-                    if let id = message.sessionID, store.claudeSessions[id] != nil {
-                        Button("Open") { store.openAgent(id) }
-                            .buttonStyle(.link).font(Theme.Typography.caption).foregroundStyle(Theme.accent)
-                            .accessibilityLabel("Open \(name) in Claude")
-                    }
-                }
-                Text(RouterText.inline(message.text)).font(Theme.Typography.body).textSelection(.enabled)
-                    .lineLimit(expanded ? nil : Self.lines)
-                    .fixedSize(horizontal: false, vertical: true)
-                    // Whether three lines cut it: the same text laid out without a limit is taller.
-                    .background {
-                        Text(RouterText.inline(message.text)).font(Theme.Typography.body)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .hidden()
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full in
-                                let cut = full > Self.lineHeight * CGFloat(Self.lines) + 2
-                                if truncated != cut { truncated = cut }
-                            }
-                    }
-                if truncated {
-                    Button(expanded ? "Less" : "More") { expanded.toggle() }
-                        .buttonStyle(.link).font(Theme.Typography.caption).foregroundStyle(Theme.accent)
-                        .accessibilityLabel(expanded ? "Show less of \(name)'s message" : "Show all of \(name)'s message")
-                }
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.trailing, 60)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("From \(name): \(message.text)")
-    }
-
-    /// One line of body text (12.5pt).
-    static let lineHeight: CGFloat = 16
 }
 
 /// The projects an @ word matches: names that start with it first, then ones that contain it, then ones that hold its

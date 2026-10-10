@@ -240,9 +240,8 @@ extension [DockEdge] {
     static let rightAndTop: [DockEdge] = [.right, .top]
 }
 
-/// The Router in a shot (it fills the app window's content): every card or only the open ones, and the card picked.
+/// The Router in a shot (it fills the app window's content): the card picked, and what was done there.
 struct RouterWindowShot {
-    var all = false
     /// The open question picked, its form showing.
     var picksQuestion = false
     /// The question's form answered from the window ("Sent", and what was sent).
@@ -360,8 +359,8 @@ enum PlaygroundShots {
             + Shot.edges("peek-\(slug)", on: .rightAndTop) { $0.section = .inbox; $0.environment = environment }
     }
 
-    /// The Router: its cell at rest and its peek on every edge; the Router itself, with the cards open or all, the
-    /// question's form picked, under Increase Contrast, and switched off.
+    /// The Router: its cell at rest and its peek on every edge; the Router itself, with the question's form picked, under
+    /// Increase Contrast, switched off, the form answered, mid-message, and with the plan picked and sent back.
     private static let routerShots: [Shot] = {
         var shots = Shot.edges("rest-router") { $0.scenario = .router }
         shots += Shot.edges("peek-router") { $0.scenario = .router; $0.section = .router }
@@ -371,7 +370,6 @@ enum PlaygroundShots {
             return shot
         }
         shots.append(window("") { $0.routerWindow?.picksQuestion = true })
-        shots.append(window("-all") { $0.routerWindow?.all = true })
         shots.append(window("-contrast") { $0.environment = .contrast })
         shots.append(window("-off") { $0.scenario = .routerOff })
         shots.append(window("-answered") { $0.routerWindow?.answered = true })
@@ -463,7 +461,6 @@ enum PlaygroundShots {
     /// The Router, offscreen, as the app window shows it.
     private static func openRouterWindow(_ shot: RouterWindowShot, store: Store, environment: ShotEnvironment) -> NSWindow {
         let model = RouterModel()
-        model.showAll = shot.all
         if shot.picksQuestion { model.selection = store.openRouterCards.first { $0.kind == .question }?.id }
         if shot.composing, let card = store.openRouterCards.first(where: { $0.kind == .question }) {
             model.replyTo = card.id

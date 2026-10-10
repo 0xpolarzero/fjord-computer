@@ -10,6 +10,8 @@ struct AXNode: Equatable {
     let children: [AXNode]
     /// What a static text says (its value, not its label).
     var value = ""
+    /// What the app identifies it by, for tests to find it (`accessibilityIdentifier`); empty for most.
+    var identifier = ""
 
     /// This element and everything under it.
     var all: [AXNode] { [self] + children.flatMap(\.all) }
@@ -97,7 +99,7 @@ enum AccessibilityTree {
         // A scroll bar's parts are the system's own.
         let children = role == "AXScrollBar" ? [] : ((object.value(forKey: "accessibilityChildren") as? [Any]) ?? []).map(node)
         return AXNode(role: role, label: string("accessibilityLabel"), children: children,
-                      value: role == "AXStaticText" ? value() : "")
+                      value: role == "AXStaticText" ? value() : "", identifier: string("accessibilityIdentifier"))
     }
 }
 
@@ -137,6 +139,7 @@ enum AccessibilityTree {
         #expect(missing.isEmpty, "\(missing)")
     }
 
+    /// The Router place has a question picked, so its form's controls are counted too.
     @Test func everyPlaceOfTheAppWindowNamesItsControls() async throws {
         var missing: [String] = []
         let places: [(String, (Store) -> AppDestination)] = [
@@ -148,26 +151,19 @@ enum AccessibilityTree {
             Demo.populate(store, .router)
             // The categories ask GitHub for suggestions: a GitHub of its own, with nothing to suggest.
             store.gh.session = StubbedGitHub.session { _ in .init(200, "[]") }
+            let model = RouterModel()
+            if name == "Router" { model.selection = store.openRouterCards.first { $0.kind == .question }?.id }
             let root = AppRootView(store: store, navigator: AppNavigator(start: destination(store), defaults: nil),
-                                   routerModel: RouterModel(), hub: HubState(), checksClaudeCode: false)
+                                   routerModel: model, hub: HubState(), checksClaudeCode: false)
             let tree = try await AccessibilityTree.render(root, size: CGSize(width: 1200, height: 800))
             missing += tree.all.filter { AXNode.controls.contains($0.role) && $0.label.isEmpty }
                 .map { "\(name): \($0.role) has no label" }
+            if name == "Router" {
+                #expect(model.selection != nil)
+                #expect(tree.all.contains { $0.label == "Message the Router" }, "\(tree.all.map(\.label))")
+            }
         }
         #expect(missing.isEmpty, "\(missing)")
-    }
-
-    @Test func theRouterWindowNamesEveryControl() async throws {
-        let store = Store()
-        Demo.populate(store, .router)
-        let model = RouterModel()
-        model.selection = store.openRouterCards.first { $0.kind == .question }?.id
-        let tree = try await AccessibilityTree.render(RouterCodeView(store: store, model: model))
-        let controls = tree.all.filter { AXNode.controls.contains($0.role) }
-        #expect(controls.count > 5, "\(tree.all.map(\.role))")
-        let unnamed = controls.filter { $0.label.isEmpty }.map(\.role)
-        #expect(unnamed.isEmpty, "\(unnamed)")
-        #expect(tree.all.contains { $0.label == "Message the Router" })
     }
 }
 

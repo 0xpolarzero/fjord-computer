@@ -31,11 +31,6 @@ import Testing
         }
     }
 
-    @Test func noShotShowsTheExpandedHubAnymore() {
-        let names = PlaygroundShots.catalog.map(\.name)
-        #expect(!names.contains { $0.contains("-open") || $0.contains("-focus") || $0.contains("-search") })
-    }
-
     @Test func aFilterKeepsTheShotsWhoseNameContainsIt() {
         #expect(PlaygroundShots.select([]).count == PlaygroundShots.catalog.count)
         #expect(PlaygroundShots.select(["right-rest"]).map(\.name).contains("right-rest"))

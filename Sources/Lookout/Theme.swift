@@ -162,22 +162,6 @@ struct Avatar: View {
     }
 }
 
-/// CI's state as Claude's status dot (global §1.7): 6pt, flat; running blinks .3 → 1 → .3 over 1.2 s.
-struct CIDot: View {
-    let state: CIState
-    var size: CGFloat = CDS.Dot.size
-
-    var body: some View {
-        if state == .pending {
-            PulseBlock(color: state.color, diameter: size, from: 1, to: CDS.Dot.blinkLow, duration: CDS.Dot.blink / 2)
-        } else {
-            Circle()
-                .fill(state == .none ? state.color.opacity(CDS.Dot.ringOpacity) : state.color)
-                .frame(width: size, height: size)
-        }
-    }
-}
-
 /// A tab, as Claude's Tabs draw one (search-tabs-avatars.md §2, compact base): 24 tall, 8 padding, 13pt at 460; muted,
 /// secondary on hover, primary when picked; hovered or picked, a white 7.5% pill (radius 6, inset 1 at each side). A count
 /// follows as a Badge, 6 after the label: neutral, or `countTint`'s variant (amber: warning).

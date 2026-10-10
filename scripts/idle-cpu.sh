@@ -5,11 +5,11 @@
 # along the top (the full-width strip is where the window grows). The demo does not poll or watch Claude's files, so this
 # measures the bar itself: the ring, the clock, the hover trigger.
 #
-# What is measured has to have a ring that is looping. The app says so on stdout (`--lifecycle`, for this script only):
-# `lifecycle: sessions=S working=W rings=R showing=0|1 reduceMotion=0|1`, once after a few seconds and again whenever that
-# changes. The script fails when no session works, no ring loops or Reduce Motion is on, at the start or at any moment of the
-# window: a locked or covered screen and Reduce Motion each stop the bar's animation, and a number from a bar that stands
-# still proves nothing. ALLOW_HIDDEN=1 turns that failure into a warning.
+# What is measured has to have a working session, with Reduce Motion off. The app says so on stdout (`--lifecycle`, for this
+# script only): `lifecycle: sessions=S working=W showing=0|1 reduceMotion=0|1`, once after a few seconds and again whenever
+# Reduce Motion changes. The script fails when no session works, or when Reduce Motion is on at the start or at any moment of
+# the window: it stops the bar's animation, and a number from a bar that stands still proves nothing. ALLOW_HIDDEN=1 turns
+# that failure into a warning.
 #
 # A sample that is missing or malformed, a window that is not positive or a CPU time that goes backwards is a failure,
 # never a 0%. WindowServer's share over the same window is printed apart and is not part of the verdict: it draws the
@@ -64,25 +64,22 @@ cpu_seconds() {
     }'
 }
 
-# ring_problem <first>: why the rings were not looping at some point since the <first>th report of the app (the last report
-# before a window is the state it begins in), or nothing when they were. A report that never came is a problem too.
-ring_problem() {
+# motion_problem <first>: why the bar stood still at some point since the <first>th report of the app (the last report
+# before a window is the state it begins in), or nothing when it did not. A report that never came is a problem too.
+motion_problem() {
     awk -v first="$1" '
         /^lifecycle:/ {
             n++
             if (n < first) next
-            rings = showing = reduce = ""
+            reduce = ""
             for (i = 2; i <= NF; i++) {
                 split($i, kv, "=")
-                if (kv[1] == "rings") rings = kv[2]
-                else if (kv[1] == "showing") showing = kv[2]
-                else if (kv[1] == "reduceMotion") reduce = kv[2]
+                if (kv[1] == "reduceMotion") reduce = kv[2]
             }
             seen = 1
-            if (reduce == "1") { print "Reduce Motion is on: the rings are static, so the number would mean nothing (turn it off in System Settings)"; exit }
-            if (rings + 0 < 1) { print "no ring is looping (rings=" rings ", window showing=" showing "): locked or asleep screen, or a covered bar"; exit }
+            if (reduce == "1") { print "Reduce Motion is on: the bar is static, so the number would mean nothing (turn it off in System Settings)"; exit }
         }
-        END { if (!seen) print "the app made no report of its rings" }
+        END { if (!seen) print "the app made no report of its state" }
     ' "$out"
 }
 
@@ -146,7 +143,7 @@ sample() {
     # The reports so far; the window starts from the last of them.
     local reports problem
     reports=$(grep -c '^lifecycle:' "$out")
-    if [ "$scenario" = agents ] && problem=$(ring_problem "$reports") && [ -n "$problem" ]; then
+    if [ "$scenario" = agents ] && problem=$(motion_problem "$reports") && [ -n "$problem" ]; then
         echo "idle-cpu: $label $edge: $problem"
         if [ "${ALLOW_HIDDEN:-0}" != "1" ]; then
             failed=1
@@ -165,8 +162,8 @@ sample() {
     fi
     app1=$(cpu_seconds "$pid") || { echo "idle-cpu: $label $edge: no CPU sample of Lookout at the end"; failed=1; return; }
     ws1=$(cpu_seconds "${ws:-0}") || ws1=
-    # Nothing may have stopped the rings while the window ran: a stretch with none looping costs nothing and passes for free.
-    if [ "$scenario" = agents ] && problem=$(ring_problem "$reports") && [ -n "$problem" ]; then
+    # Nothing may have stopped the bar's animation while the window ran: a stretch standing still costs nothing and passes for free.
+    if [ "$scenario" = agents ] && problem=$(motion_problem "$reports") && [ -n "$problem" ]; then
         echo "idle-cpu: $label $edge: $problem (during the measurement)"
         [ "${ALLOW_HIDDEN:-0}" = "1" ] || failed=1
     fi

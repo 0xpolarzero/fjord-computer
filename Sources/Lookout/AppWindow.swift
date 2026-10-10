@@ -103,9 +103,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         return i.isNull ? 0 : i.width * i.height
     }
 
-    /// Opens the window, or closes it when it is open (the keep-open shortcut's job now).
-    func toggle(_ destination: AppDestination? = nil) {
-        if isOpen { close() } else { show(destination) }
+    /// Settings, scrolled to Updates: where Check for Updates shows what it found. The request is the window's own, so it
+    /// reaches the Settings page shown here whether it opens now or was open already.
+    func showUpdates() {
+        show(.settings)
+        hub.showUpdates()
     }
 
     /// An inbox entry picked and scrolled to, on its category (Done if it was done since): where a banner's click lands.

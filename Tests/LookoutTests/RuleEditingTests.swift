@@ -23,17 +23,13 @@ import Testing
         #expect(dropped.contains("review requested"))
     }
 
-    @Test @MainActor func theRequiredWorkflowInSlotTakesASecondRepoThroughItsPicker() {
-        var pick = Pick<RepoRef>(include: [.repo("a/one")])
+    @Test @MainActor func aRepoTypedInAPickerIsARepoOrAWholeOwner() {
         let data = EditorData(store: Store())
-        // The picker's row for another repo, picked the way the popover does.
-        let value = data.parseRepo("b/two")
-        #expect(value == .repo("b/two"))
-        if let value, !pick.include.contains(value) { pick.include.append(value) }
-        #expect(pick.include == [.repo("a/one"), .repo("b/two")])
-        // The word is a SlotWord with nothing to remove, so its footer has no "Remove".
-        let word = SlotWord(name: "in", text: "in", remove: nil)
-        #expect(word.remove == nil)
+        #expect(data.parseRepo(" b/two ") == .repo("b/two"))
+        #expect(data.parseRepo("b/*") == .owner("b"))
+        // Not owner/name: nothing to add.
+        #expect(data.parseRepo("two") == nil && data.parseRepo("b/") == nil && data.parseRepo("b/two/x") == nil)
+        #expect(data.parseRepo("b c/two") == nil)
     }
 
     @Test func sameKindChangesNothing() {

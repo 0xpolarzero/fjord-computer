@@ -88,6 +88,7 @@ struct HubRoot: View {
     let hub: HubState
     let layout: HubLayout
     var openApp: (AppDestination) -> Void = { _ in }
+    var openUpdates: () -> Void = {}
     var openRouter: (String?) -> Void = { _ in }
     var pickRouterCard: (String) -> Void = { _ in }
 
@@ -95,6 +96,7 @@ struct HubRoot: View {
         GeometryReader { _ in content }
             .coordinateSpace(.named(LookoutHub.rootSpace))
             .environment(\.openApp, openApp)
+            .environment(\.openUpdates, openUpdates)
             .environment(\.openRouter, openRouter)
             .environment(\.pickRouterCard, pickRouterCard)
             // Tooltips are drawn over the whole window, outside the hub's clipped shape, so they're never cut off.
@@ -147,6 +149,10 @@ final class HubController {
     /// Opens the app window on a place (the app's delegate owns it).
     var openApp: (AppDestination) -> Void = { _ in } {
         didSet { host.rootView.openApp = { [weak self] in self?.opened($0) } }
+    }
+    /// Opens the app window on Settings, scrolled to Updates: the window's own Settings is the one that scrolls.
+    var openUpdates: () -> Void = {} {
+        didSet { host.rootView.openUpdates = { [weak self] in self?.openedUpdates() } }
     }
     /// Picks a card in the Router, before the window opens on it.
     var pickRouterCard: (String) -> Void = { _ in } {
@@ -211,6 +217,7 @@ final class HubController {
         layout.floating = false
         host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout,
                                 openApp: { [weak self] in self?.opened($0) },
+                                openUpdates: { [weak self] in self?.openedUpdates() },
                                 openRouter: { [weak self] in self?.opened(.router, card: $0) }, pickRouterCard: pickRouterCard)
         window.setFrame(dockFrame(), display: true)
         syncTrigger()
@@ -324,6 +331,13 @@ final class HubController {
         hub.cancelDwell()
         if let card { pickRouterCard(card) }
         openApp(destination)
+    }
+
+    /// Check for Updates, from the bar's menu: the app window opens on Settings, scrolled to Updates.
+    private func openedUpdates() {
+        hub.section = nil
+        hub.cancelDwell()
+        openUpdates()
     }
 
     /// The app window is open (or closed): the bar leaves the edge, and comes back where it was. The pointer may be over it

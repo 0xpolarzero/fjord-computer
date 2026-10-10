@@ -389,6 +389,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.onClose = { [weak hub] in hub?.setWindowOpen(false) }
         window.barScreen = { [weak hub] in hub?.dockedScreen }
         hub.openApp = { [weak self] in self?.showWindow($0) }
+        hub.openUpdates = { [weak self] in
+            self?.appWindow?.showUpdates()
+            self?.hub?.setWindowOpen(true)
+        }
         hub.pickRouterCard = { [weak window, weak store] id in if let store { window?.routerModel.select(id, store: store) } }
         // Banners for new cards that need you; a demo posts none.
         if !demo {

@@ -106,8 +106,8 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     }
 
     @Test func eachWorkflowOfABranchIsAThingOfItsOwn() {
-        let status = CIStatus(state: .failure, branch: "main", sha: "abc", url: URL(string: "https://github.com/o/r/commit/abc"),
-                              failing: ["build", "lint"], checkedAt: Date(), title: "Fix", updatedAt: Date(timeIntervalSince1970: 100),
+        let status = CIStatus(branch: "main", sha: "abc", url: URL(string: "https://github.com/o/r/commit/abc"),
+                              checkedAt: Date(), title: "Fix", updatedAt: Date(timeIntervalSince1970: 100),
                               workflows: [
                                   CIStatus.Workflow(id: "11", name: "CI", state: .failure, failing: ["build"],
                                                     url: URL(string: "https://github.com/o/r/actions/runs/5"),

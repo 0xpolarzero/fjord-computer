@@ -13,6 +13,8 @@ enum InboxTab: Hashable {
 extension EnvironmentValues {
     /// Opens the app window on a place. The window controller in the app; a toast in shots.
     @Entry var openApp: (AppDestination) -> Void = { _ in }
+    /// Opens the app window on Settings, scrolled to Updates.
+    @Entry var openUpdates: () -> Void = {}
     /// Opens the app window on the Router, on a card if one is given.
     @Entry var openRouter: (String?) -> Void = { _ in }
     /// Picks a card in the Router (window open or not), after a click on it elsewhere opened its session.
@@ -105,6 +107,7 @@ struct LookoutHub: View {
     @Environment(\.accessibilityReduceMotion) var reduce
     /// Opens the app window on a place, or on a Router card.
     @Environment(\.openApp) var openApp
+    @Environment(\.openUpdates) var openUpdates
     @Environment(\.openRouter) var openRouter
     @Environment(\.pickRouterCard) var pickRouterCard
 
@@ -157,8 +160,7 @@ struct LookoutHub: View {
             if store.updater.isRelease {
                 // Settings' update row says what the check finds (up to date, or why it failed); the bar has no room to.
                 Button("Check for Updates") {
-                    hub.showUpdates()
-                    openApp(.settings)
+                    openUpdates()
                     Task { await store.updater.update(manual: true) }
                 }
             }
@@ -323,55 +325,7 @@ struct RateNotice: View {
     }
 }
 
-// MARK: Island pieces (Claude's frame: dots, dividers, group labels)
-
-/// Claude's sidebar status dot (spec §1.7): 6pt; needs you amber, done blue, working muted and blinking, quiet a hollow
-/// ring. CI's states use the same dot: failing danger, running clay, passing git green.
-struct IslandDot: View {
-    enum Kind: Equatable {
-        case awaiting, ready, running, idle
-        case custom(Color)
-
-        static func ci(_ state: CIState) -> Kind {
-            switch state {
-            case .failure: .custom(CDS.Text.danger)
-            case .pending: .custom(CDS.clay)
-            case .success: .custom(CDS.Git.added)
-            case .none: .idle
-            }
-        }
-    }
-
-    let kind: Kind
-    @Environment(\.accessibilityReduceMotion) private var reduce
-    @State private var low = false
-
-    var body: some View {
-        Group {
-            switch kind {
-            case .awaiting: Circle().fill(CDS.Dot.awaiting)
-            case .ready: Circle().fill(CDS.Dot.ready)
-            case .custom(let color): Circle().fill(color)
-            case .idle:
-                Circle().strokeBorder(CDS.Dot.running, lineWidth: CDS.Dot.ringWidth).opacity(CDS.Dot.ringOpacity)
-            case .running:
-                Circle().fill(CDS.Dot.running)
-                    .opacity(reduce ? CDS.Dot.still : low ? CDS.Dot.blinkLow : 1)
-                    .onAppear { blink() }
-                    .onChange(of: reduce) { blink() }
-            }
-        }
-        .frame(width: CDS.Dot.size, height: CDS.Dot.size)
-        .accessibilityHidden(true)
-    }
-
-    /// `dframe-dot-blink`: .3 → 1 → .3, ease-in-out, 1.2 s a cycle.
-    private func blink() {
-        guard !reduce else { low = false; return }
-        low = false
-        withAnimation(.easeInOut(duration: CDS.Dot.blink / 2).repeatForever(autoreverses: true)) { low = true }
-    }
-}
+// MARK: Island pieces (Claude's frame: dividers, group labels)
 
 /// Claude's divider: `--cds-border` (white 10%) at 0.5pt. `inset` trims both ends.
 struct IslandRule: View {

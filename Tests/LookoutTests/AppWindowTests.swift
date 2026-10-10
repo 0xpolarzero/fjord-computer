@@ -101,14 +101,23 @@ import Testing
         await waitUntil { !window.isOpen }
     }
 
-    @Test func toggleOpensThenCloses() async {
+    /// Check for Updates (the bar's menu) asks the window's own Settings for Updates, which takes the request: from another
+    /// place, and again while Settings is open already.
+    @Test func checkForUpdatesScrollsTheWindowsSettingsToUpdates() async {
         let (window, _) = controller()
-        window.toggle()
+        window.show(.done)
         away(window)
-        #expect(window.isOpen)
-        window.toggle()
+        window.showUpdates()
+        #expect(window.isOpen && window.navigator.selection == .settings)
+        #expect(window.hub.settingsScroll?.id == SettingsView.updatesID)
+        await waitUntil { window.hub.settingsScroll == nil }
+        #expect(window.hub.settingsScroll == nil)
+        window.showUpdates()
+        #expect(window.hub.settingsScroll?.id == SettingsView.updatesID)
+        await waitUntil { window.hub.settingsScroll == nil }
+        #expect(window.hub.settingsScroll == nil)
+        window.close()
         await waitUntil { !window.isOpen }
-        #expect(!window.isOpen)
     }
 }
 

@@ -26,8 +26,8 @@ import Testing
         return s
     }
 
-    /// Not listed until its next activity (an entry kept only for a label or an icon).
-    private func hide(_ s: Store, _ id: String) {
+    /// Unlisted until its next activity, as an entry made only to hold an icon picked for it is (see `Store.ensureEntry`).
+    private func holdOnlyForAnIcon(_ s: Store, _ id: String) {
         guard let i = s.agents.entries.firstIndex(where: { $0.id == id }) else { return }
         s.agents.entries[i].hiddenAt = s.agents.entries[i].seen
     }
@@ -36,8 +36,9 @@ import Testing
 
     @Test func searchShowsTheSavedLabelOfAHiddenSession() {
         let s = store([session("a"), session("b")])
+        // Labels are no longer set, but state saved by an older version may still carry one.
         s.agents.entries[0].label = "🔥"
-        hide(s, "a")
+        holdOnlyForAnIcon(s, "a")
         #expect(s.allAgentRows.map(\.id) == ["b"])
         #expect(s.searchSessions("session").first { $0.id == "a" }?.label == "🔥")
     }
@@ -50,7 +51,7 @@ import Testing
 
     @Test func askingForAnIconOfAHiddenSessionPicksIt() {
         let s = store([session("a"), session("b")])
-        hide(s, "a")
+        holdOnlyForAnIcon(s, "a")
         #expect(s.allAgentRows.map(\.id) == ["b"])
         keySaved(s)
         s.repickIcon("a")  // the key is not read yet, so nothing is asked for yet
@@ -89,7 +90,7 @@ import Testing
         var hidden = session("a")
         hidden.cliID = "cli-a"
         let s = iconStore([hidden, session("b")])
-        hide(s, "a")
+        holdOnlyForAnIcon(s, "a")
         s.repickIcon("a")
         await finishIcons(s)
         #expect(entry(s, "a")?.icon != nil)
@@ -126,7 +127,7 @@ import Testing
         untitled.cliID = "cli-u"
         let s = iconStore([untitled, session("b")])
         s.iconFirstMessage = { reads.ids.append($0); return nil }
-        hide(s, "u")
+        holdOnlyForAnIcon(s, "u")
         s.repickIcon("u")
         await finishIcons(s)
         #expect(entry(s, "b")?.icon != nil)
@@ -160,10 +161,14 @@ import Testing
 
     @Test func finishedTurnMarksUnread() {
         let s = store([session("a")])
-        s.toggleAgentRead("a")
-        s.toggleAgentRead("a")
         #expect(entry(s, "a")?.unread == false)
         s.ingest([session("a", turns: 4, minutesAgo: 0)], appUnread: [], claudeFrontmost: false, now: now)
+        #expect(entry(s, "a")?.unread == true)
+        // Opened from Lookout, then another turn finishes: unread again.
+        s.interceptOpen = { _ in }
+        s.openAgent("a")
+        #expect(entry(s, "a")?.unread == false)
+        s.ingest([session("a", turns: 5, minutesAgo: 0)], appUnread: [], claudeFrontmost: false, now: now)
         #expect(entry(s, "a")?.unread == true)
     }
 
@@ -189,23 +194,28 @@ import Testing
         let s = store([session("a")], dots: [])
         s.ingest([session("a")], appUnread: ["a"], claudeFrontmost: false, now: now)
         #expect(entry(s, "a")?.unread == true)
-        // Marked read in Lookout: the app still shows the dot, unchanged, so Lookout keeps your choice.
-        s.toggleAgentRead("a")
+        // Opened from Lookout: the app still shows the dot, unchanged, so Lookout keeps your choice.
+        s.interceptOpen = { _ in }
+        s.openAgent("a")
         s.ingest([session("a")], appUnread: ["a"], claudeFrontmost: false, now: now)
         #expect(entry(s, "a")?.unread == false)
-        // Marked unread here, then the app clears its dot: read again.
-        s.toggleAgentRead("a")
+        // Unreadable dots (nil) change nothing.
+        s.ingest([session("a")], appUnread: nil, claudeFrontmost: false, now: now)
+        #expect(entry(s, "a")?.unread == false)
+        // The app clears its dot: read, as it was.
         s.ingest([session("a")], appUnread: [], claudeFrontmost: false, now: now)
         #expect(entry(s, "a")?.unread == false)
-        // Unreadable dots (nil) change nothing.
-        s.toggleAgentRead("a")
+        // A dot appears again: unread.
+        s.ingest([session("a")], appUnread: ["a"], claudeFrontmost: false, now: now)
+        #expect(entry(s, "a")?.unread == true)
+        // Then the dots can't be read: it stays unread.
         s.ingest([session("a")], appUnread: nil, claudeFrontmost: false, now: now)
         #expect(entry(s, "a")?.unread == true)
     }
 
-    @Test func dismissedPendingComesBackOnNewActivity() {
+    @Test func aSessionHeldOnlyForAnIconIsListedAgainOnNewActivity() {
         let s = store([session("a")])
-        hide(s, "a")
+        holdOnlyForAnIcon(s, "a")
         #expect(s.allAgentRows.isEmpty)
         s.ingest([session("a")], appUnread: [], claudeFrontmost: false, now: now)
         #expect(s.allAgentRows.isEmpty)
@@ -233,50 +243,26 @@ import Testing
         #expect(entry(s, "stale") == nil)
     }
 
-    @Test func theAgeVoiceOverHearsIsTheOneTheRowShowsAndMovesWithTheClock() throws {
-        let s = store([session("f", minutesAgo: 4), session("w", messageMinutesAgo: 2, running: true)])
-        let rows = s.allAgentRows
-        let finished = try #require(rows.first { $0.id == "f" }), working = try #require(rows.first { $0.id == "w" })
-        #expect(finished.statusText(now: now) == "4m" && finished.spokenValue(now: now) == "idle, app, 4 minutes")
-        #expect(working.workingText(now: now).hasSuffix("2m") && working.spokenValue(now: now) == "working, app, 2 minutes")
-        // Three minutes on, both say it: the value is not the one the row was drawn with.
-        let later = now.addingTimeInterval(180)
-        #expect(finished.statusText(now: later) == "7m" && finished.spokenValue(now: later) == "idle, app, 7 minutes")
-        #expect(working.workingText(now: later).hasSuffix("5m") && working.spokenValue(now: later) == "working, app, 5 minutes")
+    @Test func agesInWordsCountLikeTheShortOnes() {
         #expect(AgentRow.spokenAge(20) == "just now" && AgentRow.spokenAge(3600) == "1 hour" && AgentRow.spokenAge(2 * 86400) == "2 days")
-    }
-
-    @Test func aFinishedSessionSpeaksHowManyCommandsItLeftRunningAndTheirNames() throws {
-        let s = store([session("f", minutesAgo: 4)])
-        s.claudeTasks = ["f": [ClaudeTask(id: "a", kind: .agent, title: "Review the changes", since: now),
-                               ClaudeTask(id: "b", kind: .command, title: "Run the full test suite", since: now)]]
-        let row = try #require(s.allAgentRows.first { $0.id == "f" })
-        #expect(row.spokenValue(now: now) == "working, 2 running, app, 4 minutes")
-        #expect(row.spokenHint == "Opens it in Claude. Running: Review the changes, Run the full test suite.")
-        // Nothing left running: neither says anything of it.
-        s.claudeTasks = [:]
-        let clear = try #require(s.allAgentRows.first { $0.id == "f" })
-        #expect(!clear.spokenValue(now: now).contains("running") && clear.spokenHint == "Opens it in Claude")
     }
 
     @Test func anUnreadSessionWithWorkStillRunningIsWorkingUntilItEnds() throws {
         let s = store([session("f", minutesAgo: 4)], dots: ["f"])
         s.claudeTasks = ["f": [ClaudeTask(id: "a", kind: .agent, title: "Review the changes", since: now)]]
         let row = try #require(s.allAgentRows.first { $0.id == "f" })
-        #expect(row.unread && row.group == .working && row.status == .running && row.tint == nil)
-        #expect(row.stateName == "working, 1 running" && row.statusText(now: now) == "working")
+        #expect(row.unread && row.group == .working)
         // The work ends: still unread, so it is done again.
         s.claudeTasks = [:]
         let done = try #require(s.allAgentRows.first { $0.id == "f" })
-        #expect(done.unread && done.group == .done && done.status == .finished && done.tint == Theme.accent)
-        #expect(done.stateName == "done, unread")
+        #expect(done.unread && done.group == .done)
     }
 
     @Test func aBlockedSessionWithWorkStillRunningStillNeedsYou() throws {
         let s = store([session("b", minutesAgo: 4, blocked: true)], dots: ["b"])
         s.claudeTasks = ["b": [ClaudeTask(id: "c", kind: .command, title: "Run the full test suite", since: now)]]
         let row = try #require(s.allAgentRows.first { $0.id == "b" })
-        #expect(row.group == .needsYou && row.status == .blocked && row.tint == Theme.amber)
+        #expect(row.group == .needsYou)
     }
 
     @Test func sessionsOfSameNamedProjectsSayWhichProjectTheyAreIn() throws {
@@ -285,9 +271,6 @@ import Testing
         let a = try #require(rows.first { $0.id == "a" }), b = try #require(rows.first { $0.id == "b" })
         #expect(a.projectName == "customer-a/app" && b.projectName == "customer-b/app")
         #expect(s.searchSessions("customer-b").map(\.id) == ["b"])
-        // Same title, same state: VoiceOver still tells them apart by project, wherever a session is shown.
-        #expect(a.stateName == b.stateName && a.spokenValue() != b.spokenValue())
-        #expect(a.spokenValue().contains("customer-a/app") && b.spokenValue().contains("customer-b/app"))
         // The name follows the folders: with the other project gone, the folder's own name is enough again.
         s.claudeSessions["a"] = nil
         #expect(s.folderName("/customer-b/app") == "app")

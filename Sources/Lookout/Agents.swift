@@ -79,10 +79,6 @@ enum ClaudeLink: Equatable {
 
 // MARK: - Rows
 
-enum AgentStatus {
-    case running, blocked, finished, idle
-}
-
 /// What a session is doing for the Router: needs you, finished, working, or quiet (listed for `Store.recentWindow` after its
 /// last activity).
 enum AgentGroup: Int, CaseIterable {
@@ -101,8 +97,6 @@ struct AgentRow: Identifiable, Hashable {
     var activity: ClaudeActivity?
     /// Turn over, but subagents or commands it started are still running.
     var tasks: [ClaudeTask] = []
-    /// The turn's summary as Markdown (**bold**, `code`), parsed once when the row is built; empty when there is none.
-    var summaryText = AttributedString()
 
     /// The picked icon, unless you chose letters or an emoji yourself.
     var icon: String? { entry.label == nil ? entry.icon : nil }
@@ -128,72 +122,14 @@ struct AgentRow: Identifiable, Hashable {
         return .idle
     }
 
-    var status: AgentStatus {
-        if waitsForYou { return .blocked }
-        if session.running { return .running }
-        if session.summary?.blocked == true { return .blocked }
-        if !tasks.isEmpty { return .running }
-        return entry.unread ? .finished : .idle
-    }
-
-    /// What the strip shows: amber waiting, blue done and unread, grey otherwise (working, or left something running).
-    var tint: Color? {
-        switch group {
-        case .needsYou: Theme.amber
-        case .done: Theme.accent
-        default: nil
-        }
-    }
-
     /// When the running turn began, if known.
     var workingSince: Date? { session.lastUserMessage ?? activity?.since }
-
-    /// "Running swift test · 3m" while working: the current step, and how long the turn has run.
-    func workingText(now: Date = Date()) -> String {
-        let elapsed = Self.duration(now.timeIntervalSince(workingSince ?? now))
-        return "\(activity?.text ?? "Working") · \(elapsed)"
-    }
 
     static func duration(_ t: TimeInterval) -> String {
         let s = max(0, Int(t))
         if s < 60 { return "\(s)s" }
         if s < 3600 { return "\(s / 60)m" }
         return "\(s / 3600)h \(s % 3600 / 60)m"
-    }
-
-    func statusText(now: Date = Date()) -> String {
-        switch status {
-        case .running: "working"
-        case .blocked: "waiting"
-        case .finished: shortAgo(session.lastActivity, now: now) == "now" ? "done just now" : "done \(shortAgo(session.lastActivity, now: now))"
-        case .idle: shortAgo(session.lastActivity, now: now)
-        }
-    }
-
-    /// The state in words, for VoiceOver and anywhere colour alone would carry it: waiting / working / done / pending.
-    var stateName: String {
-        // A pending session keeps what it left running: "pending, 2 running".
-        let running = tasks.isEmpty ? "" : ", \(tasks.count) running"
-        switch status {
-        case .blocked: return "waiting"
-        case .running: return "working" + running
-        case .finished: return (unread ? "done, unread" : "done") + running
-        case .idle: return "idle" + running
-        }
-    }
-
-    /// What VoiceOver reads after the title, on every surface that shows a session: its state and its project, so two sessions
-    /// with the same title in `customer-a/app` and `customer-b/app` don't sound alike, and the age the row shows: how long the
-    /// turn has run while it works, else since it last did anything.
-    func spokenValue(now: Date = Date()) -> String {
-        let since = session.running ? workingSince ?? now : session.lastActivity
-        return "\(stateName), \(projectName), \(Self.spokenAge(now.timeIntervalSince(since)))"
-    }
-
-    /// For VoiceOver, after the value: what it left running, by name (the row shows a count, and the tooltip lists them).
-    var spokenHint: String {
-        guard !tasks.isEmpty else { return "Opens it in Claude" }
-        return "Opens it in Claude. Running: " + tasks.map(\.title).joined(separator: ", ") + "."
     }
 
     /// `shortAgo` and `duration` in words, counted the same way.
@@ -206,15 +142,6 @@ struct AgentRow: Identifiable, Hashable {
 
     /// "3 running": what's left in the background, after the status.
     var tasksText: String? { tasks.isEmpty ? nil : "\(tasks.count) running" }
-
-    var statusColor: Color {
-        switch status {
-        case .running: Theme.claude
-        case .blocked: entry.unread || waitsForYou ? Theme.amber : Theme.secondary
-        case .finished: Theme.accent
-        case .idle: Theme.tertiary
-        }
-    }
 }
 
 // MARK: - Labels
@@ -311,11 +238,6 @@ extension Store {
         let labels = AgentLabel.assign(pending.map { (id: $0.0.id, title: $0.0.title, custom: $0.1.label) },
                                        folders: Dictionary(pending.map { ($0.0.id, $0.0.folderName) }, uniquingKeysWith: { a, _ in a }))
         let allRows = pending.map { makeRow($0.0, $0.1, label: labels[$0.0.id]) }
-        // Summaries of sessions that are gone (or have a newer one) needn't stay parsed.
-        if summaryTexts.count > allRows.count + 32 {
-            let current = Set(allRows.compactMap { $0.session.summary?.detail })
-            summaryTexts = summaryTexts.filter { current.contains($0.key) }
-        }
         return AgentCache(all: allRows, entries: byID, labels: Dictionary(allRows.map { ($0.id, $0.label) }, uniquingKeysWith: { a, _ in a }))
     }
 
@@ -344,18 +266,7 @@ extension Store {
                  label: label ?? entry?.label ?? AgentLabel.candidates(session.title, folder: session.folderName).first ?? "··",
                  color: projectColor(session.folderKey), project: folderName(session.folderKey),
                  activity: session.running ? claudeActivity[session.id] : nil,
-                 tasks: session.running ? [] : claudeTasks[session.id] ?? [],
-                 summaryText: summaryText(session.summary?.detail))
-    }
-
-    /// Parsed once per distinct summary (the rows are rebuilt on every change, the summaries rarely change).
-    private func summaryText(_ detail: String?) -> AttributedString {
-        guard let detail, !detail.isEmpty else { return AttributedString() }
-        if let hit = summaryTexts[detail] { return hit }
-        let text = (try? AttributedString(markdown: detail, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(detail)
-        summaryTexts[detail] = text
-        return text
+                 tasks: session.running ? [] : claudeTasks[session.id] ?? [])
     }
 
     func projectColor(_ folder: String) -> Color? {
@@ -550,10 +461,6 @@ extension Store {
     func openAgent(_ id: String) {
         if let interceptOpen { interceptOpen("Open in Claude · \(claudeSessions[id]?.title ?? id)") } else { Claude.open(id) }
         mutateAgent(id) { $0.unread = false }
-    }
-
-    func toggleAgentRead(_ id: String) {
-        mutateAgent(id) { $0.unread.toggle() }
     }
 
     /// Sessions Lookout holds no entry for (old, muted, past the first read's cap) get one when an icon is picked for them:

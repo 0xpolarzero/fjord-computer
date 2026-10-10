@@ -46,25 +46,25 @@ import Testing
         #expect(other == ["id": 7])
     }
 
-    @Test func aPollThroughEveryRepositoryKeepsEveryAnswerItAsksForAgain() async throws {
+    @Test func aPollThroughEveryWorkflowRepositoryKeepsEveryAnswerItAsksForAgain() async throws {
         let client = GitHubClient()
         let server = Server()
         client.session = server.session
-        let repositories = 40
+        // More answers in a poll than the client keeps without being told: the reservation is what keeps them.
+        let repositories = 100
         client.reserveETags(forRepositories: repositories)
         let sha = String(repeating: "a", count: 40)
-        // Six answers a repository, visited in turn as a poll does, twice.
+        // A branch's three answers (its runs, then its commit's check runs and status), each repository in turn as a poll
+        // visits them, twice.
         for _ in 0..<2 {
             for r in 0..<repositories {
-                for path in ["issues", "issues/comments", "pulls/comments", "actions/runs"] {
-                    let _: Counted = try await client.get("/repos/o/r\(r)/\(path)")
-                }
-                let _: Counted = try await client.get("/repos/o/r\(r)/commits/\(sha)/check-runs")
+                let _: Counted = try await client.get("/repos/o/r\(r)/actions/runs", ["branch": "main", "event": "push", "per_page": "30"])
+                let _: Counted = try await client.get("/repos/o/r\(r)/commits/\(sha)/check-runs", ["per_page": "100"])
                 let _: Counted = try await client.get("/repos/o/r\(r)/commits/\(sha)/status")
             }
         }
         // Only the first visit was answered in full: the second was all 304s.
-        #expect(server.full.withLock { $0 } == repositories * 6)
+        #expect(server.full.withLock { $0 } == repositories * 3)
     }
 
     @Test func aNewCommitsAnswersTakeThePlaceOfTheOldOnes() async throws {

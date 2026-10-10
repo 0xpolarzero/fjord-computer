@@ -43,11 +43,9 @@ enum CIState: String, Codable {
 }
 
 struct CIStatus: Codable, Hashable {
-    var state: CIState
     var branch: String
     var sha: String?
     var url: URL?
-    var failing: [String]
     var checkedAt: Date
     /// Headline of the latest commit on the branch, and when its runs last changed.
     var title: String?

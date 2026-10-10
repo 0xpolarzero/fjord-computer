@@ -275,8 +275,6 @@ final class Store {
     @ObservationIgnored var claudeTimer: Timer?
     @ObservationIgnored private var claudeObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var screensAsleep = false
-    /// Parsed Markdown of session summaries (see `AgentRow.summaryText`).
-    @ObservationIgnored var summaryTexts: [String: AttributedString] = [:]
 
     private nonisolated static func isClaude(_ note: Notification) -> Bool {
         (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier == Claude.bundleID
@@ -897,19 +895,15 @@ final class Store {
         let commit = sha ?? combined.sha
         // The headline comes from the Actions run; a repo with only external CI asks the commit for it (once per commit).
         let title = await ciHeadline(name, commit: commit, runTitle: actions.workflowRuns.first?.displayTitle)
-        return CIStatus(state: reading.state, branch: branch, sha: commit,
-                        url: URL(string: "https://github.com/\(name)/commit/\(commit)"),
-                        failing: reading.failing, checkedAt: Date(), title: title, updatedAt: reading.changedAt,
-                        workflows: reading.workflows)
+        return CIStatus(branch: branch, sha: commit, url: URL(string: "https://github.com/\(name)/commit/\(commit)"),
+                        checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows)
     }
 
     /// What CI's three sources say about one commit.
     struct CIReading: Equatable {
-        var state: CIState
-        var failing: [String]
         /// The latest change among them: an Actions run, an external check run or a legacy status.
         var changedAt: Date?
-        /// The same, per workflow (the external checks and legacy statuses together are one more, `external`).
+        /// Each workflow's state and failed jobs (the external checks and legacy statuses together are one more, `external`).
         var workflows: [CIStatus.Workflow] = []
     }
 
@@ -917,8 +911,8 @@ final class Store {
     nonisolated static let externalWorkflowID = "external"
 
     /// Folds Actions runs (the latest of each workflow, on `sha`) and their jobs, external check runs and legacy statuses
-    /// into one state, the names that failed and when it last changed, and into each workflow's own. Any of the three can
-    /// be all a repo has.
+    /// into each workflow's state and failed names, and when any of them last changed. Any of the three can be all a repo
+    /// has.
     nonisolated static func readCI(runs: [GHWorkflowRuns.Run], sha: String?, checks: [GHCheckRuns.Run],
                                    combined: GHCombinedStatus) -> CIReading {
         var latest: [Int: GHWorkflowRuns.Run] = [:]
@@ -950,11 +944,7 @@ final class Store {
                                                state: !failing.isEmpty ? .failure : pending ? .pending : .success,
                                                failing: failing, url: nil, updatedAt: changed.max()))
         }
-        let failing = workflows.flatMap(\.failing)
-        let state: CIState = !failing.isEmpty ? .failure : workflows.contains { $0.state == .pending } ? .pending
-            : workflows.isEmpty ? .none : .success
-        return CIReading(state: state, failing: failing, changedAt: workflows.compactMap(\.updatedAt).max(),
-                         workflows: workflows)
+        return CIReading(changedAt: workflows.compactMap(\.updatedAt).max(), workflows: workflows)
     }
 
     /// The commit's headline: the Actions run's title when there is one; else what the commit says, asked once per

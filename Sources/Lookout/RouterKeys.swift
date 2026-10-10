@@ -5,7 +5,8 @@ import Foundation
 /// The Router's keys in the app window. In the composer: Return sends, ⇧Return starts a new line, ↑↓ pick a card while it is empty;
 /// with @ suggestions showing, ↑↓ walk them and Return or Tab picks one; Backspace at the very start takes the last chip off.
 /// Elsewhere: ↑↓ pick a card, Space marks it addressed (or open again), Return replies to it, and typing goes to the
-/// composer. Esc dismisses the suggestions, then the reply chip, then closes the window.
+/// composer. The cards are walked as the sidebar lists them (`RouterModel.cards`). Esc dismisses the suggestions, then the
+/// reply chip, then closes the window.
 @MainActor
 final class RouterKeys {
     let store: Store

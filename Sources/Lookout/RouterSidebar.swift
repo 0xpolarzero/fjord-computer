@@ -12,20 +12,19 @@ struct RouterSidebar: View {
     typealias M = CDS.Sidebar
 
     var body: some View {
-        let open = filtered(store.openRouterCards)
-        let needs = open.filter { $0.kind != .done }
-        let done = open.filter { $0.kind == .done }
+        // The cards' sections are the model's, which the keys walk in the same order.
+        let (needs, done, earlier) = model.sections(store)
         let working = store.allAgentRows.filter { $0.group == .working }
         // Searching also finds any session, listed or not, to open in Claude.
         let found = query.trimmingCharacters(in: .whitespaces).isEmpty ? [] : Array(store.searchSessions(query).prefix(8))
-        let earlier = filtered(store.router.cards.filter { !$0.isOpen }).sorted { $0.createdMs > $1.createdMs }.prefix(8)
         var sections: [(String, [AnyView])] = []
         if !needs.isEmpty { sections.append(("Needs you", needs.map { cardRow($0) })) }
         if !done.isEmpty { sections.append(("Done", done.map { cardRow($0) })) }
         if !working.isEmpty {
             sections.append(("Working", working.map { row in
                 AnyView(SidebarRow(dot: .working, glyph: row, title: row.session.title, on: false) { store.openAgent(row.id) }
-                    .contextMenu { SessionMenu(row: row, store: store) })
+                    .contextMenu { SessionMenu(row: row, store: store) }
+                    .accessibilityIdentifier(Self.workingRowID))
             }))
         }
         if !earlier.isEmpty { sections.append(("Earlier", earlier.map { cardRow($0) })) }
@@ -79,11 +78,8 @@ struct RouterSidebar: View {
 
     private var query: String { model.search }
 
-    private func filtered(_ cards: [RouterCard]) -> [RouterCard] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return cards }
-        return cards.filter { $0.title.lowercased().contains(q) || $0.text.lowercased().contains(q) }
-    }
+    /// What each row of the Working section is identified by in the accessibility tree.
+    static let workingRowID = "router-working-row"
 
     /// §2.3: a 26pt field, white 5% with a 1pt white 10% inset ring, the magnifying glass in a 24pt slot, muted text.
     private var search: some View { SearchField(query: $model.search, wanted: $model.searchWanted) }

@@ -57,16 +57,42 @@ import UserNotifications
         let model = RouterModel()
         var closed = false
         let keys = RouterKeys(store: store, model: model) { closed = true }
-        let open = store.openRouterCards.map(\.id)
+        let open = model.cards(store).filter(\.isOpen).map(\.id)
         #expect(keys.key(key(kVK_DownArrow), responder: nil))
         #expect(model.selection == open[0])
         #expect(keys.key(key(kVK_DownArrow), responder: nil))
         #expect(model.selection == open[1])
         #expect(keys.key(key(kVK_Space, " "), responder: nil))
         #expect(store.router.cards.first { $0.id == open[1] }?.addressedBy == .you)
-        // Under Open, the addressed card leaves the list: the next one is picked.
+        // The addressed card goes down to Earlier: the next open one is picked.
         #expect(model.selection == open[2])
         #expect(keys.key(key(kVK_Escape), responder: nil) && closed)
+    }
+
+    @Test func theArrowsWalkTheCardsInTheOrderTheSidebarShowsThem() {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        // What needs you, then the finished turns, then Earlier: not the newest first, which puts a finished turn second.
+        let (needs, done, earlier) = model.sections(store)
+        let sidebar = (needs + done + earlier).map(\.id)
+        #expect(!needs.isEmpty && !done.isEmpty && !earlier.isEmpty)
+        #expect(sidebar != store.routerCards.map(\.id))
+        var walked: [String] = []
+        for _ in sidebar {
+            #expect(keys.key(key(kVK_DownArrow), responder: nil))
+            walked += model.selection.map { [$0] } ?? []
+        }
+        #expect(walked == sidebar)
+        // At the bottom it stays there; ↑ walks back the same way.
+        #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == sidebar.last)
+        #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == sidebar[sidebar.count - 2])
+        // A search walks only what it leaves listed, in the same order.
+        model.search = needs[0].title
+        let found = model.cards(store).map(\.id)
+        model.selection = nil
+        #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == found.first)
+        #expect(found.allSatisfy(sidebar.contains) && found == sidebar.filter(found.contains))
     }
 
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
@@ -103,33 +129,6 @@ import UserNotifications
         #expect(store.router.chat.isEmpty && model.draft == "hello")
     }
 
-    @Test func aCardTheOpenFilterHidesShowsEveryCard() {
-        let store = demo()
-        let model = RouterModel()
-        let addressed = store.router.cards.first { !$0.isOpen }!.id
-        model.select(addressed, store: store)
-        #expect(model.showAll && model.selection == addressed)
-    }
-
-    @Test func thePickFollowsTheFilter() {
-        let store = demo()
-        let model = RouterModel()
-        model.showAll = true
-        model.reconcile(store: store)
-        let all = store.routerCards.map(\.id)
-        let addressed = store.routerCards.first { !$0.isOpen }!.id
-        model.selection = addressed
-        model.reconcile(store: store)
-        model.showAll = false
-        model.reconcile(store: store)
-        // The addressed card isn't listed any more: the nearest listed one is picked, and Space acts on that one only.
-        let open = Set(store.openRouterCards.map(\.id))
-        #expect(model.selection.map(open.contains) == true)
-        let i = all.firstIndex(of: addressed)!
-        let expected = all[(i + 1)...].first(where: open.contains) ?? all[..<i].reversed().first(where: open.contains)
-        #expect(model.selection == expected)
-    }
-
     @Test func spaceNeverReopensACardThatWasSupersededUnderIt() {
         let store = demo()
         let model = RouterModel()
@@ -137,7 +136,7 @@ import UserNotifications
         let question = store.openRouterCards.first { $0.kind == .question }!
         model.select(question.id, store: store)
         model.reconcile(store: store)
-        // A newer card for the same session supersedes the picked one, which leaves the Open list.
+        // A newer card for the same session supersedes the picked one, which is no longer open.
         var newer = question
         newer.id = question.id + "-newer"
         newer.createdAt = Date()
@@ -146,7 +145,7 @@ import UserNotifications
         #expect(keys.key(key(kVK_Space, " "), responder: nil))
         let old = store.router.cards.first { $0.id == question.id }!
         #expect(old.addressedBy == .superseded)
-        #expect(model.selection != question.id)
+        #expect(model.selection != question.id && !store.openRouterCards.contains { $0.id == question.id })
         // Nothing picked at all: Space does nothing.
         model.selection = nil
         let before = store.router.cards
@@ -362,26 +361,25 @@ import UserNotifications
         let done = store.openRouterCards.first { $0.kind == .done }!
         model.open(done.id, store: store)
         model.reconcile(store: store)
-        // Opening addressed it; the pick stayed on it (every card shows).
+        // Opening addressed it (down to Earlier); the pick stayed on it.
         #expect(store.router.cards.first { $0.id == done.id }?.isOpen == false)
-        #expect(model.selection == done.id && model.showAll)
+        #expect(model.selection == done.id)
     }
 
     @Test func returnRepliesOnlyToAListedCard() {
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
+        // Picked, then gone from the list (the file dropped it): Return replies to the listed card next to it.
+        let listed = model.cards(store).map(\.id)
+        model.selection = listed[1]
         model.reconcile(store: store)
-        // Picked, then addressed elsewhere: under Open it isn't listed any more.
-        let open = store.openRouterCards.map(\.id)
-        model.selection = open[1]
-        model.reconcile(store: store)
-        store.setCardAddressed(open[1], true)
+        store.router.cards.removeAll { $0.id == listed[1] }
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil))
-        #expect(model.replyTo != open[1] && !model.showAll)
-        #expect(model.replyTo.map { id in store.openRouterCards.contains { $0.id == id } } == true)
-        // Nothing listed at all: Return only focuses the composer.
-        for id in store.openRouterCards.map(\.id) { store.setCardAddressed(id, true) }
+        #expect(model.replyTo == listed[2])
+        // Nothing listed at all (the search finds none): Return only focuses the composer.
+        model.search = "no card says this"
+        #expect(model.cards(store).isEmpty)
         model.replyTo = nil
         let request = model.focusRequest
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil))
@@ -610,21 +608,20 @@ import UserNotifications
     }
 
     @Test func theWindowListsWhatIsWorking() async throws {
-        for scenario in [Demo.Scenario.router] {
-            let store = demo(scenario)
-            let tree = try await AccessibilityTree.render(RouterCodeView(store: store, model: RouterModel(), checksClaudeCode: false))
-            // A line per working session, the one that left things running included, each a button that opens it.
-            let lines = tree.all.filter { $0.role == "AXButton" && ["Agent completion notifications", "CI failure diagnosis"].contains($0.label) }
-            #expect(lines.count >= 2, "\(scenario): \(tree.all.map(\.label))")
-        }
+        let store = demo(.router)
+        let tree = try await AccessibilityTree.render(RouterCodeView(store: store, model: RouterModel(), checksClaudeCode: false))
+        // A row per working session in the sidebar's Working section, the one that left things running included, each a
+        // button that opens it (a finished turn's card can bear the same title elsewhere in the sidebar).
+        let rows = tree.all.filter { $0.identifier == RouterSidebar.workingRowID }
+        #expect(rows.allSatisfy { $0.role == "AXButton" }, "\(rows)")
+        #expect(rows.map(\.label).sorted() == ["Agent completion notifications", "CI failure diagnosis"], "\(tree.all.map(\.label))")
     }
 
-    @Test func theBarHasNoSessionsOfItsOwn() async throws {
+    @Test func theBarNamesTheRouterAtRestAndPeeking() async throws {
         for edge in [DockEdge.right, .top] {
             for peeking in [false, true] {
                 let tree = try await AccessibilityTree.render(edge: edge, scenario: .router,
                                                               configure: { _, hub in hub.section = peeking ? .router : nil })
-                #expect(!tree.all.contains { $0.label == "Sessions" || $0.label == "New session" }, "\(edge) \(peeking)")
                 #expect(tree.all.contains { $0.label == "Router" }, "\(edge) \(peeking)")
             }
         }
@@ -641,52 +638,6 @@ import UserNotifications
         #expect(!rows.contains { $0.waitsForYou })
         store.openAgent(rows[1].id)
         #expect(opened.first?.contains("Agent completion notifications") == true)
-    }
-
-    /// "All" once froze the window. With a few hundred cards, a card picked far down and the minute clock running, flipping
-    /// the filter and scrolling to the picked card stay well within a frame budget.
-    @Test(.hostsWindows) func theFilterFlipsQuicklyWithManyCards() async throws {
-        let store = demo()
-        let base = store.router.cards
-        for i in 0..<300 {
-            var card = base[i % base.count]
-            card.id = "\(card.sessionID)#t\(1000 + i)"
-            card.kind = i % 2 == 0 ? .done : .stuck
-            card.createdAt = Date().addingTimeInterval(-Double(i) * 60)
-            if i % 5 != 0 { card.addressedAt = card.createdAt; card.addressedBy = .opened }
-            card.text = String(repeating: "A summary long enough to wrap onto more lines. ", count: 1 + i % 4)
-            store.router.cards.append(card)
-        }
-        let model = RouterModel()
-        model.selection = store.openRouterCards.last?.id
-        // Offscreen and borderless, as the other window tests (it never needs the keyboard, and a loaded CI runner is slow
-        // to bring a titled window up).
-        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
-            .frame(width: 920, height: 640))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 920, height: 640), styleMask: .borderless,
-                              backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        window.orderFrontRegardless()
-        defer { window.close() }
-        hosting.layoutSubtreeIfNeeded()
-        // Only the synchronous work is timed, in one go (no suspension where other tests could take the main actor), with a
-        // budget a loaded runner keeps well within. A watchdog notes a deadline passed but never ends the process.
-        let watchdog = Deadline(seconds: 60, "theFilterFlipsQuicklyWithManyCards: flipping the filter took over a minute")
-        let work = ContinuousClock().measure {
-            for all in [true, false, true, false] {
-                model.showAll = all
-                hosting.layoutSubtreeIfNeeded()
-                hosting.display()
-            }
-            model.select(store.routerCards.last?.id, store: store)
-            hosting.layoutSubtreeIfNeeded()
-            hosting.display()
-        }
-        watchdog.done()
-        #expect(work < .seconds(10), "\(work)")
-        #expect(!watchdog.passed)
     }
 
     // MARK: Banners
@@ -752,32 +703,5 @@ private final class Registrar: HotKeyRegistrar {
     func set(_ id: UInt32, _ shortcut: Shortcut?, handler: @escaping () -> Void) -> Bool {
         registered[id] = shortcut
         return true
-    }
-}
-
-/// A watchdog on a thread of its own: a main thread stuck in layout can't time itself.
-final class Deadline: @unchecked Sendable {
-    private let lock = NSLock()
-    private var finished = false
-    private var late = false
-
-    /// Whether `seconds` went by before `done()`.
-    var passed: Bool { lock.withLock { late } }
-
-    /// After `seconds` without `done()`, says so on stderr (a test stuck on the main thread shows in the log) and marks it
-    /// passed for the test to fail on once it returns. It never ends the process.
-    init(seconds: Double, _ message: String) {
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds) { [self] in
-            let report = lock.withLock { () -> Bool in
-                guard !finished else { return false }
-                late = true
-                return true
-            }
-            if report { FileHandle.standardError.write(Data("Deadline passed: \(message)\n".utf8)) }
-        }
-    }
-
-    func done() {
-        lock.withLock { finished = true }
     }
 }

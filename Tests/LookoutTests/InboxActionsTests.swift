@@ -346,20 +346,15 @@ final class FakePerformer: ActionPerformer {
         #expect(store.actionLedger == ActionLedger())
     }
 
-    @Test func categoriesWithoutActionsDecodeAndTheLedgerSurvivesARestart() throws {
-        let old = #"{"id":"6E9A5C2C-0000-4000-8000-000000000001","name":"Old","symbol":"star","color":"blue","rules":[],"notifies":true,"hidden":false,"isCI":false}"#
-        let category = try JSONDecoder().decode(InboxCategory.self, from: Data(old.utf8))
-        #expect(category.actions.isEmpty)
-        var saved = category
-        saved.actions = ActionList([session])
-        let again = try JSONDecoder().decode(InboxCategory.self, from: JSONEncoder().encode(saved))
-        #expect(again.actions == saved.actions)
-
+    @Test func aCategorysActionsAndTheLedgerSurviveARestart() throws {
+        var category = InboxFixture.category()
+        category.actions = ActionList([session])
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let first = Store()
         first.stateFile = folder.appendingPathComponent("state.json")
+        first.categories = [category]
         first.actionLedger.set(ActionRun(category: category.id, thing: "pr:a/b#1", action: session.id, trigger: "enter",
                                          state: .running, at: Date()))
         first.save()
@@ -367,6 +362,7 @@ final class FakePerformer: ActionPerformer {
         let second = Store()
         second.stateFile = folder.appendingPathComponent("state.json")
         second.load()
+        #expect(second.categories.first?.actions == category.actions)
         // What was running when the app quit is said to have been interrupted, never run again.
         #expect(second.actionLedger.runs.values.first?.state == .failed)
         #expect(second.actionLedger.runs.values.first?.detail == "interrupted")

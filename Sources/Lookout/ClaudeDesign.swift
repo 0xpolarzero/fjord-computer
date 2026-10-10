@@ -346,18 +346,9 @@ extension CDS {
         static let separatorInset: CGFloat = 8
     }
 
-    /// The sidebar's status dots (global-sidebar-titlebar.md §1.7): 6pt; running blinks .3 → 1 → .3 over 1.2 s
-    /// (static at .7 where motion is off); idle is a 1pt ring in muted at 50%.
+    /// The sidebar's status dots (global-sidebar-titlebar.md §1.7): 6pt.
     enum Dot {
         static let size: CGFloat = 6
-        static let blink: Double = 1.2
-        static let blinkLow: Double = 0.3
-        static let still: Double = 0.7
-        static let ringWidth: CGFloat = 1
-        static let ringOpacity: Double = 0.5
-        static let awaiting = Fill.warning
-        static let ready = Fill.accent
-        static let running = Text.muted
     }
 
     /// The compact SegmentedControl (forms-buttons.md §5.4, global §2.2): track white 5% with 1pt padding, the thumb white

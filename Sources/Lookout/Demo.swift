@@ -585,7 +585,7 @@ enum ClaudeCheck {
         func dump(_ reason: String) {
             store.refreshClaude()
             let lines = store.allAgentRows.map { r in
-                "\(r.label) \(r.unread ? "UNREAD" : "read  ") \(r.statusText().padding(toLength: 10, withPad: " ", startingAt: 0)) \(r.session.title)"
+                "\(r.label) \(r.unread ? "UNREAD" : "read  ") \(String(describing: r.group).padding(toLength: 8, withPad: " ", startingAt: 0)) \(r.session.title)"
             }
             let text = lines.joined(separator: "\n")
             guard text != last else { return }

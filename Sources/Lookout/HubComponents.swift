@@ -78,7 +78,7 @@ struct CappedScroll<Content: View>: View {
     let cap: CGFloat
     /// Read here, in this view's own body, so the parent doesn't depend on it.
     var hub: HubState?
-    /// The content is a lazy stack or grid: it only measures the rows its viewport reaches, so the list starts at the
+    /// The content is a lazy stack: it only measures the rows its viewport reaches, so the list starts at the
     /// cap (a full viewport) and only shrinks once content measured *at the cap* turns out shorter.
     var lazy = false
     @ViewBuilder let content: () -> Content
@@ -232,7 +232,7 @@ struct EntryRow: View {
         var seen = Set<String>()
         var out = entry.facts.filter { seen.insert($0.label).inserted }
         if thing.kind == .workflow, let job = thing.failingJobs.first, !out.contains(where: { $0.label.contains(job) }) {
-            out.append(Fact(key: "jobs", label: FailingNames.summary(thing.failingJobs, shown: 3, width: 24), tint: .danger))
+            out.append(Fact(key: "jobs", label: FailingNames.summary(thing.failingJobs), tint: .danger))
         }
         return out
     }
@@ -855,7 +855,7 @@ enum SVGPath {
 /// Names of failing jobs as a fact's chip.
 enum FailingNames {
     /// The first few, cut short, and how many more ("build, lint +3").
-    static func summary(_ names: [String], shown: Int = 2, width: Int = 16) -> String {
+    static func summary(_ names: [String], shown: Int = 3, width: Int = 24) -> String {
         func cut(_ name: String) -> String { name.count > width ? name.prefix(width - 1).trimmingCharacters(in: .whitespaces) + "…" : name }
         let head = names.prefix(shown).map(cut).joined(separator: ", ")
         return names.count > shown ? "\(head) +\(names.count - shown)" : head
