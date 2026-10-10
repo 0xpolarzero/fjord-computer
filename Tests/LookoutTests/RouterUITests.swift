@@ -181,11 +181,12 @@ import UserNotifications
         model.select(card.id, store: store)
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil))
         #expect(model.replyTo == card.id)
-        model.projects = ["/Users/me/code/lookout"]
-        model.draft = "go ahead"
+        model.tokens = ["/Users/me/code/lookout"]
+        model.draft = "go ahead in \(MentionText.markString)"
         model.send(store: store)
         let line = store.router.chat.last { $0.role == .you }
         #expect(line?.replyTo == card.id && line?.projects == ["/Users/me/code/lookout"])
+        #expect(line?.text.hasPrefix("go ahead in @") == true && line?.text.contains(MentionText.markString) == false)
         // The chips go with the message.
         #expect(model.replyTo == nil && model.projects.isEmpty && model.draft.isEmpty)
     }
@@ -220,12 +221,13 @@ import UserNotifications
         #expect(keys.key(key(kVK_DownArrow), responder: view))
         let second = model.suggestions(store)[1].folder
         #expect(keys.key(key(kVK_Tab, "\t"), responder: view))
-        #expect(model.projects == [second] && model.draft == "check " && model.caretRequest == 6)
+        #expect(model.projects == [second] && model.tokens == [second])
+        #expect(model.draft == "check \(MentionText.markString) " && model.caretRequest == 8)
         // Picked projects aren't suggested again; Return picks too.
-        view = editor(model, "and @")
+        view = editor(model, "check \(MentionText.markString) and @")
         #expect(!model.suggestions(store).map(\.folder).contains(second))
         #expect(keys.key(key(kVK_Return, "\r"), responder: view))
-        #expect(model.projects.count == 2)
+        #expect(model.projects.count == 2 && model.tokens[0] == second && model.draft.filter { $0 == MentionText.mark }.count == 2)
         // An @ inside a word (an email) is not a tag.
         #expect(RouterModel.mentionQuery(in: "me@lookout") == nil)
         #expect(RouterModel.mentionQuery(in: "@look out") == nil)
@@ -241,7 +243,7 @@ import UserNotifications
         let view = editor(model, "ask @lc about the tests", caret: 7)
         #expect(model.suggestions(store).first?.name == "lcu")
         #expect(keys.key(key(kVK_Return, "\r"), responder: view))
-        #expect(model.draft == "ask about the tests" && model.caretRequest == 4)
+        #expect(model.draft == "ask \(MentionText.markString) about the tests" && model.caretRequest == 6)
         #expect(model.projects.count == 1)
         // The caret moved off a trailing @ word: no suggestions, and ↑↓ and Return are the composer's again.
         let away = editor(model, "tell @mi", caret: 2)
@@ -265,25 +267,19 @@ import UserNotifications
         window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
         window.makeKeyAndOrderFront(nil)
         defer { window.close() }
-        // Other tests' windows may hold the keyboard: the composer's own field is given it here, once it is drawn.
-        func fields(_ view: NSView) -> [NSTextField] { (view as? NSTextField).map { [$0] } ?? [] + view.subviews.flatMap(fields) }
-        // The editable field lowest in the window (the sidebar's search is at the top): the composer draws its placeholder
-        // itself (macOS ignores a placeholder's colour), so it can't be found by that.
-        func findComposer() -> NSTextField? {
-            fields(hosting).filter(\.isEditable).min { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }
-        }
-        await waitUntil { findComposer() != nil }
-        // The composer asks for the keyboard as it appears, two main-queue hops later, and focusing a field selects all of
-        // it: that is done with before the test types and moves the caret, so it can't land in the middle.
+        // Other tests' windows may hold the keyboard: the composer's own text view is given it here, once it is drawn.
+        func fields(_ view: NSView) -> [MentionTextView] { (view as? MentionTextView).map { [$0] } ?? [] + view.subviews.flatMap(fields) }
+        await waitUntil { !fields(hosting).isEmpty }
+        // The composer asks for the keyboard as it appears, two main-queue hops later: that is done with before the test
+        // types and moves the caret, so it can't land in the middle.
         for _ in 0..<3 {
             await drainMainQueue()
             hosting.layoutSubtreeIfNeeded()
         }
-        await waitUntilSteady(turns: 10) { (window.firstResponder as? NSTextView)?.selectedRange() }
-        let composer = findComposer()
+        let composer = fields(hosting).first
         await waitUntil {
-            if !(window.firstResponder is NSTextView), let composer { window.makeFirstResponder(composer) }
-            return window.firstResponder is NSTextView
+            if window.firstResponder !== composer, let composer { window.makeFirstResponder(composer) }
+            return window.firstResponder === composer
         }
         let field = try #require(window.firstResponder as? NSTextView)
         /// What the view does happens on its next update, which other tests' work on the main actor can hold back.
@@ -364,26 +360,21 @@ import UserNotifications
         #expect(model.replyTo == nil && model.focusRequest != request)
     }
 
-    @Test func backspaceAtTheStartTakesTheLastChipOff() {
+    @Test func backspaceAtTheStartTakesTheReplyOff() {
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
         let editor = NSTextView()
         model.composerFocused = true
         model.replyTo = store.openRouterCards[0].id
-        model.projects = ["/a", "/b"]
         #expect(keys.key(key(kVK_Delete), responder: editor))
-        #expect(model.projects == ["/a"])
-        #expect(keys.key(key(kVK_Delete), responder: editor))
-        #expect(keys.key(key(kVK_Delete), responder: editor))
-        #expect(model.projects.isEmpty && model.replyTo == nil)
-        // Nothing left: the key is the field's.
+        #expect(model.replyTo == nil)
+        // Nothing left: the key is the field's. Not at the start: the field's.
         #expect(!keys.key(key(kVK_Delete), responder: editor))
-        // Not at the start: the field's.
+        model.replyTo = store.openRouterCards[0].id
         editor.string = "abc"
         editor.setSelectedRange(NSRange(location: 3, length: 0))
-        model.projects = ["/a"]
-        #expect(!keys.key(key(kVK_Delete), responder: editor) && model.projects == ["/a"])
+        #expect(!keys.key(key(kVK_Delete), responder: editor) && model.replyTo != nil)
     }
 
     @Test func aFailedRemovalStaysInSightWithTheRouterOffAndCanBeTriedAgain() async throws {

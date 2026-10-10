@@ -2,15 +2,17 @@ import AppKit
 import SwiftUI
 
 /// Where you write to the Router, drawn as the Claude Code tab's composer (docs/design/spec/composer-overlays.md): the
-/// context strip over the card (who the message goes to: the card it replies to and the projects tagged with @, each with
-/// its ×; Backspace at the start takes the last off), the card (Return sends, ⇧Return starts a new line, see `RouterKeys`),
-/// and the chin under it (a + menu to start over, the @ hint, "Router" where Claude names the model). Typing @ suggests
-/// projects over the caret (↑↓, Return or Tab picks, Esc dismisses). Stop while the Router works.
+/// context strip over the card (the card the message replies to, with its ×; Backspace at the start takes it off) and the
+/// card (Return sends, ⇧Return starts a new line, see `RouterKeys`). Typing @ suggests projects over the caret (↑↓, Return
+/// or Tab picks, Esc dismisses); a pick is a pill in the text where the @ was (see `MentionField`). Stop while the Router
+/// works.
 struct RouterComposer: View {
     let store: Store
     @Bindable var model: RouterModel
     let agent: RouterAgent
-    @FocusState private var focused: Bool
+    /// Mirrors the text view's first responder; `focusTick` asks it for the keyboard.
+    @State private var focused = false
+    @State private var focusTick = 0
     /// The suggestions' height, to hang them over the caret.
     @State private var listHeight: CGFloat = 0
     /// Where the field is in its window: tells its text view from every other one.
@@ -30,7 +32,7 @@ struct RouterComposer: View {
         let suggestions = model.suggestions(store)
         VStack(alignment: .leading, spacing: 0) {
             // Who your words go to, as the Code tab's strip over its composer: the card's session, the projects you tagged.
-            if model.replyTo != nil || !model.projects.isEmpty {
+            if model.replyTo != nil {
                 strip.padding(.bottom, C.dockGap)
             }
             card(on: on, working: working)
@@ -47,7 +49,6 @@ struct RouterComposer: View {
                     }
                 }
                 .zIndex(1)
-            chin
         }
         .motion(Theme.Motion.fade, value: suggestions.map(\.folder))
         .onAppear { if on { requestFocus() } }
@@ -83,17 +84,12 @@ struct RouterComposer: View {
 
     // MARK: Strip
 
-    /// The reply first, then the projects, each removable.
+    /// The card the message replies to, removable.
     private var strip: some View {
         FlowLayout(spacing: C.stripGap) {
             if let id = model.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
                 ComposerChip(symbol: "arrow.right", text: card.title, tint: card.kind.color,
                              removeLabel: "Stop replying to \(card.title)") { model.replyTo = nil }
-            }
-            ForEach(model.projects, id: \.self) { folder in
-                let name = store.folderName(folder)
-                ComposerChip(symbol: nil, text: "@" + name, tint: store.projectColor(folder) ?? CDS.Text.muted,
-                             removeLabel: "Remove project \(name)") { model.projects.removeAll { $0 == folder } }
             }
         }
         .padding(CDS.Density.compact.pad.md)
@@ -124,7 +120,7 @@ struct RouterComposer: View {
         .shadow(color: focused ? C.dropFocus : C.drop, radius: 10, y: 4)
         .contentShape(shape)
         .onHover { hovering = $0 }
-        .onTapGesture { if on { focused = true } }
+        .onTapGesture { if on { focusTick &+= 1 } }
         .animation(.easeOut(duration: 0.2), value: hot)
     }
 
@@ -133,11 +129,9 @@ struct RouterComposer: View {
         let limit = min(C.maxHeight, windowHeight > 0 ? windowHeight * C.maxHeightShare : C.maxHeight)
         let lines = max(1, Int((limit - 2 * C.pad - (C.row - 20)) / 20))
         let placeholder = model.replyTo == nil ? "Tell the Router what to pass on, or ask" : "Reply, or tell the Router"
-        // AppKit paints a field's own prompt in its placeholder colour, not Claude's muted ink: ours is drawn behind it.
-        return TextField("", text: $model.draft, axis: .vertical)
-        .textFieldStyle(.plain)
-        .cdsText(CDS.Density.compact.prose)
-        .lineLimit(1...lines)
+        return MentionField(store: store, model: model, maxHeight: CGFloat(lines) * 20, editable: on, focusTick: focusTick) {
+            focused = $0
+        }
         .frame(minHeight: 20)
         .background(alignment: .topLeading) {
             if model.draft.isEmpty {
@@ -146,11 +140,6 @@ struct RouterComposer: View {
                     .allowsHitTesting(false).accessibilityHidden(true)
             }
         }
-        .focused($focused)
-        .focusEffectDisabled()
-        .accessibilityLabel("Message the Router")
-        .accessibilityHint("Return sends, Shift Return starts a new line, @ tags a project")
-        .disabled(!on)
     }
 
     /// Claude's ghost icon button: send (ArrowReturn) or, while the Router works, stop (StopCircle).
@@ -165,40 +154,6 @@ struct RouterComposer: View {
                 .disabled(empty)
                 .tip("Send", "Return · ⇧Return for a new line")
         }
-    }
-
-    // MARK: Chin
-
-    /// Claude's chin: `mt-1.5`, an xs row of 12 pt items, secondary on the left, the model-like label primary on the right.
-    private var chin: some View {
-        HStack(spacing: 0) {
-            menu
-            Text("@ a project")
-                .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
-                .padding(.horizontal, 6)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Text("Router")
-                .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.primary)
-                .padding(.horizontal, 6)
-                .lineLimit(1)
-        }
-        // `--cmp-chin-start` / `--cmp-chin-end` less the controls' own touch inset.
-        .padding(.leading, 3)
-        .padding(.trailing, 4)
-        .frame(height: C.chinRow)
-        .padding(.top, C.dockGap)
-    }
-
-    private var menu: some View {
-        ChinPlus {
-            Button("New Conversation") {
-                if store.routerIsPretend { store.router.chat = [] } else { agent.newConversation() }
-            }
-            .disabled(store.router.chat.isEmpty && store.router.claudeSessionID == nil)
-        }
-        .accessibilityLabel("Router menu")
-        .tip("More", "New conversation")
     }
 
     // MARK: Caret
@@ -220,7 +175,7 @@ struct RouterComposer: View {
 
     private func requestFocus() {
         DispatchQueue.main.async {
-            focused = true
+            focusTick &+= 1
             DispatchQueue.main.async { typePendingKeys() }
         }
     }
@@ -255,28 +210,6 @@ private struct GhostIcon: View {
                                           rest: .clear, hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostSelected,
                                           pressed: CDS.Fill.ghostSelected))
         .accessibilityLabel(label)
-    }
-}
-
-/// The chin's + : a ghost icon button (24 pt, radius 6) whose glyph is secondary and turns primary on hover, opening a menu.
-private struct ChinPlus<Content: View>: View {
-    @ViewBuilder let content: () -> Content
-    @State private var hovering = false
-
-    var body: some View {
-        Menu(content: content) {
-            Image(systemName: "plus")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(hovering ? CDS.Text.primary : CDS.Text.secondary)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .frame(width: 24, height: 24)
-        .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-            .fill(hovering ? CDS.Fill.ghostHover : .clear))
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
     }
 }
 

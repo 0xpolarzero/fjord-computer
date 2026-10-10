@@ -29,6 +29,8 @@ enum AppWindowShots {
         let destination: (Store) -> AppDestination
         var sidebarHidden = false
         var size = CGSize(width: 1280, height: 800)
+        /// Sets the Router's composer up (a draft with a pill in it).
+        var compose: ((RouterModel, Store) -> Void)?
     }
 
     static let catalog: [Shot] = [
@@ -37,6 +39,11 @@ enum AppWindowShots {
         Shot(name: "ci") { store in store.shownCategories.first(where: \.isCI)?.id.asCategory ?? .done },
         Shot(name: "done") { _ in .done },
         Shot(name: "router") { _ in .router },
+        Shot(name: "router-composing", destination: { _ in .router }, compose: { model, store in
+            let folder = store.knownFolders.first { !$0.isEmpty } ?? "/Users/me/code/lookout"
+            model.tokens = [folder]
+            model.draft = "check the failing tests in \(MentionText.markString) and tell me what you find"
+        }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
         Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),
@@ -73,7 +80,9 @@ enum AppWindowShots {
         let store = Store()
         Demo.populate(store, .router)
         let navigator = AppNavigator(start: shot.destination(store), defaults: nil)
-        let root = AppRootView(store: store, navigator: navigator, routerModel: RouterModel(), hub: HubState(),
+        let routerModel = RouterModel()
+        shot.compose?(routerModel, store)
+        let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: HubState(),
                                checksClaudeCode: false,
                                sidebar: SidebarState(defaults: nil, collapsed: shot.sidebarHidden))
         let controller = NSHostingController(rootView: root)

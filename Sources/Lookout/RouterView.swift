@@ -256,8 +256,14 @@ final class RouterModel {
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
     var replyTo: String?
-    /// Projects tagged with @ (their folders), in the order picked: the Router looks there, and starts a session there.
-    var projects: [String] = []
+    /// The pills in the draft (their projects' folders), one for each `MentionText.mark` in it, in order.
+    var tokens: [String] = []
+    /// Projects tagged with @ (their folders), in the order they stand in the draft: the Router looks there, and starts a
+    /// session there.
+    var projects: [String] {
+        var seen = Set<String>()
+        return tokens.filter { seen.insert($0).inserted }
+    }
     /// While an @ is being typed: what follows it, and the suggestion picked with ↑↓.
     private(set) var mention: String?
     var mentionIndex = 0
@@ -373,16 +379,18 @@ final class RouterModel {
         if card.isOpen { select(next, store: store) }
     }
 
-    /// Sends the draft with its reply and project chips (which go with it); the composer keeps the focus for the next one.
+    /// Sends the draft with its reply and its @pills (written as "@name" where they stand, their projects going with it);
+    /// the composer keeps the focus for the next one.
     func send(store: Store) {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = MentionText.plain(draft, tokens: tokens, name: store.folderName)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, canSend(store) else { return }
         let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
         store.sendToRouter(text, replyTo: reply, projects: projects)
         caret = nil
+        tokens = []
         draft = ""
         replyTo = nil
-        projects = []
     }
 
     /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes down to Earlier),
@@ -404,10 +412,9 @@ final class RouterModel {
 
     // MARK: Chips and @
 
-    /// Backspace at the start of the composer: the last chip goes (the projects', then the reply).
+    /// Backspace at the start of the composer: the reply chip goes.
     @discardableResult
     func removeLastChip() -> Bool {
-        if !projects.isEmpty { projects.removeLast(); return true }
         if replyTo != nil { replyTo = nil; return true }
         return false
     }
@@ -423,10 +430,10 @@ final class RouterModel {
         let offset = min(caret ?? utf16.count, utf16.count)
         guard let caretIndex = utf16.index(utf16.startIndex, offsetBy: offset, limitedBy: utf16.endIndex),
               let at = text[..<caretIndex].lastIndex(of: "@") else { return nil }
-        if at != text.startIndex, !text[text.index(before: at)].isWhitespace { return nil }
+        if at != text.startIndex, !MentionText.isBreak(text[text.index(before: at)]) { return nil }
         let typed = text[text.index(after: at)..<caretIndex]
-        guard !typed.contains(where: \.isWhitespace) else { return nil }
-        let end = text[caretIndex...].firstIndex(where: \.isWhitespace) ?? text.endIndex
+        guard !typed.contains(where: MentionText.isBreak) else { return nil }
+        let end = text[caretIndex...].firstIndex(where: MentionText.isBreak) ?? text.endIndex
         return (at..<end, String(typed))
     }
 
@@ -462,22 +469,24 @@ final class RouterModel {
         return RouterMentions.rank(folders.map { ($0, store.folderName($0)) }, query: query, limit: 6)
     }
 
-    /// Return or Tab on a suggestion: the @ word becomes that project's chip.
+    /// Return or Tab on a suggestion: the @ word becomes that project's pill, in its place, with a space after it.
     func pickMention(_ folder: String) {
         guard mention != nil, let found = Self.mention(in: draft, caret: caret) else { return }
-        if !projects.contains(folder) { projects.append(folder) }
         let start = draft.utf16.distance(from: draft.utf16.startIndex, to: found.range.lowerBound.samePosition(in: draft.utf16)!)
+        let before = draft[..<found.range.lowerBound].filter { $0 == MentionText.mark }.count
+        let offset = draft.distance(from: draft.startIndex, to: found.range.lowerBound)
         var text = draft
-        var range = found.range
-        // No double space where the word was.
-        if range.upperBound < text.endIndex, text[range.upperBound] == " ",
-           range.lowerBound == text.startIndex || text[text.index(before: range.lowerBound)] == " " {
-            range = range.lowerBound..<text.index(after: range.upperBound)
-        }
-        text.removeSubrange(range)
-        caret = start
+        text.replaceSubrange(found.range, with: MentionText.markString)
+        // One space after it, the one already there if any.
+        let after = text.index(text.startIndex, offsetBy: offset + 1)
+        let spaced = after < text.endIndex && text[after] == " "
+        if !spaced { text.insert(" ", at: after) }
+        var next = tokens
+        next.insert(folder, at: min(before, next.count))
+        caret = start + 2
+        tokens = next
         draft = text
-        caretRequest = start
+        caretRequest = start + 2
         mention = nil
     }
 
