@@ -193,7 +193,7 @@ struct RouterPageView: View {
     }
 
     private var divider: some View {
-        RouterDivider(zonesBig: RouterSplit.zonesAreBig(shown: zonesShown, page: height),
+        RouterDivider(zonesBig: RouterSplit.zonesAreBig(share: share),
                       share: height > 0 ? zonesShown / height : share, trailing: max(4, gutter - 22),
                       drag: { dy in
                           let base = dragBase ?? zonesShown
@@ -206,7 +206,7 @@ struct RouterPageView: View {
                           dragShare = nil
                       },
                       toggle: {
-                          let next = RouterSplit.toggled(shown: zonesShown, page: height)
+                          let next = RouterSplit.toggled(share: share)
                           withAnimation(spring) { store.setZonesShare(next) }
                       },
                       adjust: { up in store.setZonesShare(RouterSplit.adjusted(shown: zonesShown, page: height, up: up)) })
@@ -786,12 +786,27 @@ private struct RouterZones: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
-    /// The zones less Needs you's scroll (Working, the headers, the margins): what Needs you's cap leaves room for.
-    @State private var total: CGFloat = 0
-    @State private var needsShown: CGFloat = 0
+    /// The zones' height and their two scrolls' as last measured (kept out of the view's state: they change with every layout).
+    @State private var heights = RouterSplit.ZoneHeights()
+    /// What the caps read of them: the headers and margins, and Working's scroll, changed only by a point or more, so the caps
+    /// never chase their own rounding.
+    @State private var chrome: CGFloat = 0
+    @State private var workingShown: CGFloat = 0
 
-    /// Needs you's cap: the room less the rest of the zones, never under a card and a half.
-    private var needsCap: CGFloat { max(120, room - max(0, total - needsShown)) }
+    /// Working's and Needs you's caps: the room less the headers and margins, shared between the two.
+    private var caps: (working: CGFloat, needs: CGFloat) {
+        RouterSplit.caps(room: room, chrome: chrome, workingShown: workingShown, needsEmpty: page.needs.isEmpty && page.asks.isEmpty)
+    }
+    private var needsCap: CGFloat { caps.needs }
+
+    private func measured(_ set: (RouterSplit.ZoneHeights) -> Void) {
+        set(heights)
+        let needsEmpty = page.needs.isEmpty && page.asks.isEmpty
+        let working = page.working.isEmpty && page.waiting.isEmpty ? 0 : heights.working
+        let rest = max(0, heights.total - working - (needsEmpty ? 0 : heights.needs))
+        if abs(rest - chrome) >= 1 { chrome = rest }
+        if abs(working - workingShown) >= 1 { workingShown = working }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -803,7 +818,7 @@ private struct RouterZones: View {
         .padding(.top, 8)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { total = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.total = h } }
     }
 
     // MARK: Working
@@ -823,7 +838,7 @@ private struct RouterZones: View {
             .accessibilityAddTraits(.isHeader)
             .accessibilityLabel("Working, \(page.working.count)" + (page.waiting.isEmpty ? "" : ", \(page.waiting.count) waiting"))
             if !page.working.isEmpty { overview }
-            ZoneScroll(maxHeight: RouterSplit.workingCap(room: room, needsEmpty: page.needs.isEmpty && page.asks.isEmpty),
+            ZoneScroll(maxHeight: caps.working,
                        reveal: model.revealRequest,
                        ids: Set(page.working.map { RouterModel.workingID($0.id) } + page.waiting.map { RouterModel.workingID($0.sessionID) })) {
                 VStack(spacing: 0) {
@@ -844,6 +859,7 @@ private struct RouterZones: View {
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.03)))
                 .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.working = h } }
         }
     }
 
@@ -915,7 +931,7 @@ private struct RouterZones: View {
                     // The card's ring and shadow need a little room inside the scroll.
                     .padding(.vertical, 1)
                 }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { needsShown = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.needs = h } }
             }
         }
     }
