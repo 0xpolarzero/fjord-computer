@@ -7,11 +7,13 @@ enum InboxStore {
         var entries: [InboxEntry] = []
     }
 
-    /// Done is always there and isn't a category. CI is built in and starts with no rule (you say which repos' checks it
-    /// watches); My repos starts with the PRs and issues in the repos you own.
-    static let defaultCategories: [InboxCategory] = [ci, myRepos]
+    /// Done is always there and isn't a category. A new inbox starts with My repos: the PRs and issues in the repos you own.
+    static let defaultCategories: [InboxCategory] = [myRepos]
 
-    static let ci = InboxCategory(name: "CI", symbol: "xmark.seal", color: .red, rules: [], isCI: true)
+    /// The CI category: failing workflows, counted as failures. Not a default; deleting it is like deleting any other.
+    static let ci = InboxCategory(name: "CI", symbol: "xmark.seal", color: .red,
+                                  rules: [Rule(scope: Scope(kinds: [.workflow], in: Pick()), conditions: [.workflow([.failing])])],
+                                  isCI: true)
     static let myRepos = InboxCategory(name: "My repos", symbol: "folder", color: .blue,
                                        rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.owned])))], notifies: false)
 }

@@ -16,7 +16,7 @@ enum LookoutValidate {
         if NSImage(systemSymbolName: c.symbol, accessibilityDescription: nil) == nil {
             out.append("`symbol` “\(c.symbol)” isn't an SF Symbol. Some that are: " + CategoryIcon.all.prefix(14).joined(separator: ", "))
         }
-        if c.isCI != (old?.isCI ?? false) { out.append("`isCI` can't be changed: the CI category is the default one, and it is the only one") }
+        if c.isCI != (old?.isCI ?? false) { out.append("`isCI` can't be changed: there is one CI category, and no other can become it") }
         let kinds = Set(c.rules.flatMap(\.scope.kinds))
         for (i, rule) in c.rules.enumerated() {
             let label = "rules[\(i)] (\(RuleWords(store: store).summary(rule)))"

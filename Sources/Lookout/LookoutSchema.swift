@@ -168,7 +168,7 @@ enum Shapes {
             .init("rules", .list(.named("Rule")), "A thing is in the category if any rule matches.", fallback: .value([Any]())),
             .init("notifies", .bool, "Native notifications.", fallback: .value(true)),
             .init("hidden", .bool, "Hidden from the bar and muted; still collects.", fallback: .value(false)),
-            .init("isCI", .bool, "The default CI category only (can't be created, changed or deleted).", fallback: .value(false)),
+            .init("isCI", .bool, "The CI category only (can't be created or changed; it can be deleted).", fallback: .value(false)),
             .init("actions", .list(.named("Action")), "What it does by itself for a thing that comes in (never GitHub comments unless asked).",
                   fallback: .value([Any]())),
         ]),

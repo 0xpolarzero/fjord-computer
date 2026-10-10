@@ -319,7 +319,7 @@ import Testing
         #expect(!bad.ok && bad.text.contains("CI category only has workflow rules"))
         #expect(await call(t, "update_category", ["category": ["id": ci.id.uuidString, "isCI": false]]).ok == false)
         let delete = await call(t, "delete_category", ["category": ci.id.uuidString])
-        #expect(!delete.ok && delete.text.contains("can't be deleted") && s.categories.count == 1)
+        #expect(delete.ok && s.categories.isEmpty)
     }
 
     @Test func revertingPutsBackOnlyThatCategory() async throws {

@@ -59,7 +59,7 @@ import Testing
         #expect(store.settings.pollInterval == 30 && !store.settings.notifications)
         #expect(store.things.isEmpty && store.marks.isEmpty && store.groups.isEmpty)
         // The default categories stand.
-        #expect(store.categories.map(\.name) == ["CI", "My repos"])
+        #expect(store.categories.map(\.name) == ["My repos"])
     }
 
     @Test func theRulesAboutYouMatchAtLaunchBeforeGitHubSaysWhoYouAre() throws {
@@ -92,7 +92,7 @@ import Testing
         store.stateFile = file
         store.load()
         #expect(store.settings.pollInterval == 45)
-        #expect(store.categories.map(\.name) == ["CI", "My repos"])
+        #expect(store.categories.map(\.name) == ["My repos"])
     }
 
     // MARK: Notification clicks

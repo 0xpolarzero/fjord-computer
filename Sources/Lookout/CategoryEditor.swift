@@ -67,7 +67,7 @@ struct CategoryEditor: View {
                     }
                     rules(c)
                     ActionsEditor(actions: draft.actions, store: store, rules: c.rules, categoryName: c.name)
-                    if !c.isCI, !isNew { deleteRow(c) }
+                    if !isNew { deleteRow(c) }
                 }
                 .padding(.horizontal, CDS.Settings.pagePadX)
                 .padding(.top, 4)

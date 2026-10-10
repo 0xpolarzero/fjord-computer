@@ -252,10 +252,8 @@ private struct CategoryRow: View {
                 .disabled(!store.canMoveCategory(category.id, by: -1))
             Button("Move down") { store.moveCategory(category.id, by: 1) }
                 .disabled(!store.canMoveCategory(category.id, by: 1))
-            if !category.isCI {
-                Divider()
-                Button("Delete", role: .destructive) { store.categories.removeAll { $0.id == category.id } }
-            }
+            Divider()
+            Button("Delete", role: .destructive) { store.categories.removeAll { $0.id == category.id } }
         }
     }
 

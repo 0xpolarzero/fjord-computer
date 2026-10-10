@@ -361,7 +361,6 @@ extension RouterTools {
 
     func deleteCategory(_ store: Store, _ args: [String: Any]) throws -> String {
         let c = try category(store, Self.string(try checked("delete_category", args), "category"))
-        guard !c.isCI else { throw Failure("The CI category can't be deleted. Hide it with update_category (`hidden`: true)") }
         guard let index = store.categories.firstIndex(where: { $0.id == c.id }) else { throw Failure("The category is gone") }
         store.categories.remove(at: index)
         store.categoriesChangedByRouter()
