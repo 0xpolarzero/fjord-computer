@@ -86,6 +86,40 @@ import Testing
         await waitUntil { closed == 2 }
     }
 
+    /// The categories page kept from a close has an undo history of what was done before it: a change the Router made while
+    /// the window was closed is newer, so ⌘Z after opening again must not take the page back to before it.
+    @Test func aRouterChangeWhileClosedIsNotUndoneByTheKeptCategoriesPage() async throws {
+        let (window, store) = controller()
+        // The page asks GitHub for repos to suggest when it has none.
+        store.suggestions = ["octo/repo"]
+        var closed = 0
+        window.onClose = { closed += 1 }
+        window.show(.categories)
+        away(window)
+        await waitUntil { store.categoryHistory != nil }
+        // A step of the page's own, so it has something to undo.
+        var renamed = try #require(store.categories.first)
+        renamed.name += " (edited)"
+        store.categories[0] = renamed
+        await waitUntil { store.categoryHistory?.canUndo == true }
+        #expect(store.categoryHistory?.canUndo == true)
+        window.close()
+        await waitUntil { closed == 1 }
+        #expect(store.categoryHistory == nil)
+        var made = CategoriesView.newDraft(after: store.categories)
+        made.name = "From the Router"
+        store.categories.append(made)
+        store.categoriesChangedByRouter()
+        window.show(.categories)
+        away(window)
+        await waitUntil { store.categoryHistory != nil }
+        await waitUntilSteady { store.categoryHistory?.canUndo }
+        store.categoryHistory?.undo(store)
+        #expect(store.categories.contains { $0.id == made.id })
+        window.close()
+        await waitUntil { closed == 2 }
+    }
+
     @Test func aPlaceThatIsGoneOpensOnTheFirstCategory() async {
         let (window, store) = controller()
         window.show(.category(UUID()))
