@@ -305,6 +305,11 @@ enum RouterFeed {
             focus = session.lastFocused.map(Self.ms)
         }
 
+        private init(turns: Int) { self.turns = turns }
+
+        /// A session before anything happened in it.
+        static let start = Stamp(turns: 0)
+
         init?(_ text: String) {
             let parts = text.split(separator: "|", omittingEmptySubsequences: false)
             guard parts.count == 3, let turns = Int(parts[0]) else { return nil }
@@ -373,7 +378,9 @@ enum RouterFeed {
         for session in live.values.sorted(by: { $0.id < $1.id }) {
             let id = session.id
             let stamp = Stamp(session)
-            let before = state.seen[id].flatMap(Stamp.init)
+            // A session Lookout started has no backlog: seen for the first time after its first turn ended (a quick reply
+            // can end before the next look), that turn is still new.
+            let before = state.seen[id].flatMap(Stamp.init) ?? (state.lookoutStarted[id] != nil ? Stamp.start : nil)
             let busy = !(tasks[id] ?? []).isEmpty
             let previous = state.waits[id]
             let read = session.running ? activity[id] : nil

@@ -183,6 +183,14 @@ import Testing
         #expect(state.lookoutStarted["local_a"] != nil)
     }
 
+    @Test func aSessionLookoutStartedWhoseTurnEndedBeforeTheFeedSawItIsCarded() {
+        var state = RouterState()
+        state.lookoutStarted["local_a"] = at(-10)
+        update(&state, [session(turns: 3, message: -9)], viewing: "local_a", unread: [], now: 1)
+        #expect(state.cards.map(\.id) == ["local_a#t3"])
+        #expect(state.lookoutStarted["local_a"] != nil)
+    }
+
     @Test func aQuestionInASessionLookoutStartedIsCardedWhileTheAppShowsIt() {
         var state = seen([session(turns: 0, running: true)])
         state.lookoutStarted["local_a"] = at(-10)
