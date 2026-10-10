@@ -179,9 +179,12 @@ struct EntryRow: View {
     static let line: CGFloat = 16
 
     var body: some View {
+        // Worked out once per redraw: the subtitle and the avatar both name who acted; the chips are drawn and read out.
+        let actor = actor
+        let chips = chips
         Button { store.open(entry) } label: {
             HStack(alignment: .top, spacing: CDS.Sidebar.rowGap) {
-                lead.frame(width: CDS.Sidebar.leadingSlot, height: Self.line * 2 + 2)
+                lead(actor).frame(width: CDS.Sidebar.leadingSlot, height: Self.line * 2 + 2)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 6) {
                         Text(thing.title)
@@ -196,7 +199,7 @@ struct EntryRow: View {
                     }
                     .frame(height: Self.line)
                     HStack(spacing: 6) {
-                        Text(subtitle)
+                        Text(subtitle(actor))
                             .font(Theme.Typography.meta)
                             .foregroundStyle(CDS.Text.muted)
                             .lineLimit(1)
@@ -247,7 +250,7 @@ struct EntryRow: View {
         return latest?.0 ?? thing.author
     }
 
-    private var subtitle: String {
+    private func subtitle(_ actor: Person?) -> String {
         let name = String(thing.repo.split(separator: "/").last ?? "")
         switch thing.kind {
         case .workflow:
@@ -258,7 +261,7 @@ struct EntryRow: View {
         }
     }
 
-    @ViewBuilder private var lead: some View {
+    @ViewBuilder private func lead(_ actor: Person?) -> some View {
         if thing.kind == .workflow {
             let color = switch thing.checks {
             case .failing?: Theme.red
@@ -273,25 +276,26 @@ struct EntryRow: View {
                 .overlay(alignment: .topTrailing) { if unread { Circle().fill(tint).frame(width: CDS.Dot.size, height: CDS.Dot.size).offset(x: 3, y: -1) } }
                 .frame(maxHeight: .infinity, alignment: .center)
         } else {
-            avatar.frame(maxHeight: .infinity, alignment: .center)
+            avatar(actor).frame(maxHeight: .infinity, alignment: .center)
         }
     }
 
     /// The author's avatar; unread, Claude's 6pt status dot at its top-right corner, cut out of it (2pt clear around), in
     /// the category's colour.
-    private var avatar: some View {
+    private func avatar(_ actor: Person?) -> some View {
         let size = Self.avatar
         let r = CDS.Dot.size / 2
         let centre = CGPoint(x: size - r + 1, y: r - 1)
         return Avatar(url: actor?.avatar, size: size, name: actor?.login)
+            // Read, a plain mask: the cut-out's blend needs a layer of its own, drawn offscreen, so only an unread row pays it.
             .mask {
-                Rectangle()
-                    .overlay {
-                        if unread {
-                            Circle().frame(width: 2 * (r + 2), height: 2 * (r + 2)).position(centre).blendMode(.destinationOut)
-                        }
-                    }
-                    .compositingGroup()
+                if unread {
+                    Rectangle()
+                        .overlay { Circle().frame(width: 2 * (r + 2), height: 2 * (r + 2)).position(centre).blendMode(.destinationOut) }
+                        .compositingGroup()
+                } else {
+                    Rectangle()
+                }
             }
             .overlay {
                 if unread {

@@ -2,9 +2,38 @@ import Foundation
 
 // The Store's inbox: categories, groups, things fetched from GitHub, and what you did with them.
 enum InboxStore {
+    /// The inbox worked out once per `Store.inboxRevision`, which everything it is made of bumps (things, marks, categories
+    /// and their rules, groups, who you are, your repos and teams): what the window, the bar and the hub read on every redraw.
     struct Memo {
         var revision = -1
         var entries: [InboxEntry] = []
+        /// Each category's open entries, newest first.
+        var open: [UUID: [InboxEntry]] = [:]
+        /// How many of those are unread.
+        var unread: [UUID: Int] = [:]
+        /// Done entries, most recently done first.
+        var done: [InboxEntry] = []
+        /// Each entry's search text, lowercased (see `Store.inboxRows`): made on the first search after a change.
+        var searchKeys: [String: String]?
+
+        init() {}
+
+        /// Groups and sorts `entries` in one pass.
+        init(revision: Int, entries: [InboxEntry], marks: [String: EntryMarks]) {
+            self.revision = revision
+            self.entries = entries
+            var doneAt: [(Date, InboxEntry)] = []
+            for entry in entries {
+                if entry.isDone {
+                    doneAt.append((marks[entry.id]?.doneAt ?? .distantPast, entry))
+                } else {
+                    open[entry.categoryID, default: []].append(entry)
+                    if entry.isUnread { unread[entry.categoryID, default: 0] += 1 }
+                }
+            }
+            for id in open.keys { open[id]?.sort { $0.thing.updatedAt > $1.thing.updatedAt } }
+            done = doneAt.sorted { $0.0 > $1.0 }.map(\.1)
+        }
     }
 
     /// Done is always there and isn't a category. A new inbox starts with My repos: the PRs and issues in the repos you own.
@@ -24,28 +53,45 @@ extension Store {
                       myTeams: myTeams)
     }
 
-    /// Every entry, memoized on `inboxRevision`.
-    var entries: [InboxEntry] {
-        if inboxMemo.revision == inboxRevision { return inboxMemo.entries }
-        let result = InboxEngine.evaluate(things: Array(things.values), categories: categories, marks: marks,
-                                          context: inboxContext)
-        inboxMemo = InboxStore.Memo(revision: inboxRevision, entries: result)
-        return result
+    /// The inbox as of `inboxRevision`, worked out again only when that has moved.
+    var inbox: InboxStore.Memo {
+        if inboxMemo.revision != inboxRevision {
+            let result = InboxEngine.evaluate(things: Array(things.values), categories: categories, marks: marks,
+                                              context: inboxContext)
+            inboxMemo = InboxStore.Memo(revision: inboxRevision, entries: result, marks: marks)
+        }
+        return inboxMemo
     }
+
+    /// Every entry, memoized on `inboxRevision`.
+    var entries: [InboxEntry] { inbox.entries }
 
     /// Open entries of a category, newest first.
-    func entries(in category: UUID) -> [InboxEntry] {
-        entries.filter { $0.categoryID == category && !$0.isDone }.sorted { $0.thing.updatedAt > $1.thing.updatedAt }
-    }
+    func entries(in category: UUID) -> [InboxEntry] { inbox.open[category] ?? [] }
 
     /// Done entries, most recently done first.
-    var doneEntries: [InboxEntry] {
-        entries.filter(\.isDone).sorted { (marks[$0.id]?.doneAt ?? .distantPast) > (marks[$1.id]?.doneAt ?? .distantPast) }
-    }
+    var doneEntries: [InboxEntry] { inbox.done }
 
     /// The bar's number for a category: its open entries.
     func count(_ category: UUID) -> Int { entries(in: category).count }
-    func unreadCount(_ category: UUID) -> Int { entries(in: category).filter(\.isUnread).count }
+    func unreadCount(_ category: UUID) -> Int { inbox.unread[category] ?? 0 }
+
+    /// Each entry's search text, lowercased, by entry id: made once per `inboxRevision`, on the first search.
+    var inboxSearchKeys: [String: String] {
+        let memo = inbox
+        if let keys = memo.searchKeys { return keys }
+        let names = Dictionary(categories.map { ($0.id, $0.name.lowercased()) }, uniquingKeysWith: { first, _ in first })
+        var keys: [String: String] = [:]
+        keys.reserveCapacity(memo.entries.count)
+        for entry in memo.entries {
+            let t = entry.thing
+            let key = "\(t.title) \(t.repo) #\(t.number ?? 0) @\(t.author?.login ?? "") \(t.workflowName ?? "") \(names[entry.categoryID] ?? "") "
+                + entry.facts.map(\.label).joined(separator: " ")
+            keys[entry.id] = key.lowercased()
+        }
+        inboxMemo.searchKeys = keys
+        return keys
+    }
 
     func markDone(_ entry: InboxEntry) {
         var m = marks[entry.id] ?? EntryMarks()

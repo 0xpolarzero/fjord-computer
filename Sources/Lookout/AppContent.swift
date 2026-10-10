@@ -26,11 +26,12 @@ struct InboxListView: View {
 
     private var entries: [InboxEntry] { store.inboxRows(tab, search: search.query) }
     private var searching: Bool { search.isSearching }
-    private var unread: Int { tab == .done && !searching ? 0 : entries.filter(\.isUnread).count }
 
     var body: some View {
+        // Worked out once per redraw: the header, the list and the toolbar read the same rows.
         let entries = entries
-        AppPage(title: title, subtitle: subtitle, leadingInset: leadingInset) {
+        let unread = tab == .done && !searching ? 0 : entries.reduce(0) { $1.isUnread ? $0 + 1 : $0 }
+        AppPage(title: title, subtitle: subtitle(entries, unread: unread), leadingInset: leadingInset) {
             InboxSearchField(search: search)
             if unread > 0 {
                 IconButton(symbol: "checkmark.circle", help: "Mark all as seen", detail: store.shortcut(.markAllRead).display,
@@ -77,8 +78,7 @@ struct InboxListView: View {
         }
     }
 
-    private var subtitle: String {
-        let all = entries
+    private func subtitle(_ all: [InboxEntry], unread: Int) -> String {
         if searching { return all.isEmpty ? "" : "\(all.count) found" }
         if all.isEmpty { return "" }
         if tab == .done { return "\(all.count) moved to Done" }

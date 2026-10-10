@@ -154,10 +154,17 @@ struct Avatar: View {
         }
     }
 
-    /// The avatar URL asking GitHub for twice the point size, in pixels.
+    private static let sizedURLs = RenderCache<URL?>(countLimit: 1000)
+
+    /// The avatar URL asking GitHub for twice the point size, in pixels; made once per URL and size (rows ask on every redraw).
     static func sizedURL(_ url: URL?, size: CGFloat) -> URL? {
-        guard let url, var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
-        comps.queryItems = (comps.queryItems ?? []).filter { $0.name != "s" } + [URLQueryItem(name: "s", value: "\(Int(size * 2))")]
+        guard let url else { return nil }
+        return sizedURLs.value("\(Int(size * 2)) \(url.absoluteString)") { resized(url, pixels: Int(size * 2)) }
+    }
+
+    private static func resized(_ url: URL, pixels: Int) -> URL? {
+        guard var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        comps.queryItems = (comps.queryItems ?? []).filter { $0.name != "s" } + [URLQueryItem(name: "s", value: "\(pixels)")]
         return comps.url
     }
 }

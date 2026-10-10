@@ -67,3 +67,26 @@ final class ImageCache: @unchecked Sendable {
         return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 }
+
+/// What a view would otherwise work out on every redraw (an avatar's sized URL, a card's Markdown), kept by a string key.
+/// Bounded: NSCache lets entries go past its count and cost limits, and under memory pressure.
+final class RenderCache<Value>: @unchecked Sendable {
+    private final class Box {
+        let value: Value
+        init(_ value: Value) { self.value = value }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+
+    init(countLimit: Int, totalCostLimit: Int = 0) {
+        cache.countLimit = countLimit
+        cache.totalCostLimit = totalCostLimit
+    }
+
+    func value(_ key: String, cost: Int = 0, make: () -> Value) -> Value {
+        if let hit = cache.object(forKey: key as NSString) { return hit.value }
+        let value = make()
+        cache.setObject(Box(value), forKey: key as NSString, cost: cost)
+        return value
+    }
+}

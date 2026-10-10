@@ -163,9 +163,14 @@ struct KindTag: View {
 
 /// Card text is the app's own summary or the session's question: inline Markdown (**bold**, `code`) as the sessions show it.
 enum RouterText {
+    /// Parsed once per text: cards, the page and the transcript ask again on every redraw. Up to 1000 texts, 4 MB of them.
+    private static let parsed = RenderCache<AttributedString>(countLimit: 1000, totalCostLimit: 4 << 20)
+
     static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
+        parsed.value(text, cost: text.utf8.count) {
+            (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                ?? AttributedString(text)
+        }
     }
 
     /// A plan's Markdown, line by line as written: headings in bold without their #, the rest with its inline styles.
