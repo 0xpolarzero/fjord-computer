@@ -1255,6 +1255,25 @@ struct TriageChips: View {
             .fixedSize()
             .help(help)
     }
+
+    /// What a card's header says to VoiceOver besides its kind and title: how many questions it asks (or are left), its
+    /// chips, then whether it is shown in full.
+    static func spoken(_ card: RouterCard, expanded: Bool) -> String {
+        var parts: [String] = []
+        let asked = card.triage?.questions.count ?? 0
+        if let left = card.left, let total = card.total {
+            parts.append("\(left.count) of \(total) questions left")
+        } else if asked > 1 {
+            parts.append("\(asked) questions")
+        }
+        if let triage = card.triage {
+            if triage.circles { parts.append("going in circles") }
+            if triage.unverified { parts.append("unverified") }
+            if let work = triage.workLabel { parts.append("changes \(work)") }
+        }
+        parts.append(expanded ? "expanded" : "collapsed")
+        return parts.joined(separator: ", ")
+    }
 }
 
 // MARK: - Origin
@@ -1319,7 +1338,7 @@ private struct CardView: View {
             .buttonStyle(.plain)
             .focused($focused)
             .accessibilityLabel("\(card.kind.label): \(card.title)")
-            .accessibilityValue(expanded ? "expanded" : "collapsed")
+            .accessibilityValue(TriageChips.spoken(card, expanded: expanded))
             .accessibilityAddTraits(expanded ? .isSelected : [])
             .accessibilityHint("Shows it in full and replies to it")
             .accessibilityAction(named: "Open in Claude") { openInClaude() }

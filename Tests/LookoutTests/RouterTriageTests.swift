@@ -137,6 +137,17 @@ import Testing
         #expect(page.waiting.map(\.id) == ["wait"])
     }
 
+    @Test func voiceOverHearsTheChipsAndTheQuestionsOfACard() {
+        var c = card("a", .asks, minutes: 1)
+        #expect(TriageChips.spoken(c, expanded: false) == "collapsed")
+        c.triage = RouterTriage(state: .asks, questions: ["Push?", "Tag?"], unverified: true, work: .committed)
+        #expect(TriageChips.spoken(c, expanded: true) == "2 questions, unverified, changes not pushed, expanded")
+        c.left = ["Tag?"]
+        c.total = 2
+        c.triage?.circles = true
+        #expect(TriageChips.spoken(c, expanded: false) == "1 of 2 questions left, going in circles, unverified, changes not pushed, collapsed")
+    }
+
     @Test func theKeysWalkTheSameOrderLeavingWaitingOut() {
         let s = InboxFixture.store([])
         s.router.cards = [card("done", .done, minutes: 1), card("asks", .asks, minutes: 2, urgency: 3), card("ok", .approval, minutes: 9),
