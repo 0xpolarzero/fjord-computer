@@ -344,6 +344,8 @@ extension Claude {
     private(set) var attempted: [String: String] = [:]
     /// The launch's look back at the sessions' latest turns has been made.
     var rescanned = false
+    /// Waiting cards whose session is being told its wait is over (never saved: a send cut short by quitting is not one).
+    var telling: Set<String> = []
     private var running = 0
 
     /// Waits until no triage is under way (tests).

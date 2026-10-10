@@ -129,6 +129,27 @@ import Testing
         #expect(sent.messages.count == 1 && !s.router.cards[0].isOpen)
     }
 
+    @Test func beingSentIsNotSavedOnlyBeingTold() async throws {
+        let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
+        var release: CheckedContinuation<Void, Never>?
+        s.routerTriager.sender = { session, text in
+            await withCheckedContinuation { release = $0 }
+            sent.messages.append((session, text))
+        }
+        s.resolveWaits()
+        s.tellWaiting("a#t3")
+        await settle()
+        // Under way: not told twice, and nothing saved says it was told (quitting now leaves it to tell again).
+        s.tellWaiting("a#t3")
+        #expect(s.routerTriager.telling == ["a#t3"] && s.router.cards[0].triage?.told == nil && s.router.cards[0].isOpen)
+        let saved = try JSONDecoder().decode(RouterState.self, from: JSONEncoder().encode(s.router))
+        #expect(saved.cards[0].triage?.told == nil && saved.cards[0].isOpen)
+        release?.resume()
+        await settle()
+        #expect(sent.messages.count == 1 && s.router.cards[0].triage?.told != nil && !s.router.cards[0].isOpen)
+        #expect(s.routerTriager.telling.isEmpty)
+    }
+
     @Test func continuingAutomaticallySendsOnItsOwnAsLookoutsRun() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
         var ready = 0

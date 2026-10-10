@@ -127,12 +127,14 @@ extension Store {
     }
 
     /// Sends a waiting session the message that what it waited on is done, and logs it (`automatic`: as Lookout's own run).
-    /// Once per wait: a send that fails can be tried again.
+    /// Once per wait: a send that fails can be tried again. That it is being sent is kept in memory only (quitting midway
+    /// leaves it untold, to be told again); that it was told is saved once it was delivered.
     func tellWaiting(_ cardID: String, automatic: Bool = false, now: Date = Date()) {
         guard let i = router.cards.firstIndex(where: { $0.id == cardID }), router.cards[i].isOpen,
-              let triage = router.cards[i].triage, triage.told == nil, let text = RouterWaits.message(triage) else { return }
+              let triage = router.cards[i].triage, triage.told == nil, !routerTriager.telling.contains(cardID),
+              let text = RouterWaits.message(triage) else { return }
         let card = router.cards[i]
-        router.cards[i].triage?.told = now
+        routerTriager.telling.insert(cardID)
         var entry = RouterDecision(at: now, trigger: automatic ? .system : .you("Tell it to continue"),
                                    decision: .init(target: card.title, intent: "continue"),
                                    links: .init(sessions: [card.sessionID], cards: [card.id]))
@@ -143,20 +145,22 @@ extension Store {
             do {
                 try await send(card.sessionID, text)
                 guard let self else { return }
+                self.routerTriager.telling.remove(card.id)
                 self.updateDecision(id) {
                     $0.add(.sent(to: card.title, text: text, original: nil), session: card.sessionID, card: card.id)
                     $0.outcome = .done
                 }
                 var state = self.router
+                if let j = state.cards.firstIndex(where: { $0.id == card.id }) { state.cards[j].triage?.told = Date() }
                 RouterFeed.address(&state, card.sessionID, .router, Date()) { $0.id == card.id }
                 if state != self.router { self.router = state }
             } catch {
                 guard let self else { return }
+                self.routerTriager.telling.remove(card.id)
                 self.updateDecision(id) {
                     $0.add(.failed(RouterDecision.clip(error.localizedDescription, 120)), session: card.sessionID, card: card.id)
                     $0.outcome = .done
                 }
-                if let j = self.router.cards.firstIndex(where: { $0.id == card.id }) { self.router.cards[j].triage?.told = nil }
             }
         }
     }
