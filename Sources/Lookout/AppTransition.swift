@@ -176,6 +176,8 @@ enum AppTransition {
         private(set) var image: CGImage?
         /// Whether that picture was taken while the window had the keyboard (its buttons as the real window will show them).
         private(set) var imageIsKey: Bool
+        /// The place that picture shows, as its window says (nil: none, or not known).
+        var shows: AppDestination?
         /// When the animation under way has settled (media time): the overlay does not go before.
         private var settlesAt: CFTimeInterval = 0
         /// The opening has handed over: its picture is gone and the real window's live pixels show (the overlay's shadow

@@ -157,6 +157,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         } else {
             run?.end()
             current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar)
+            current?.shows = kept?.destination
         }
         run = current
         guard let current else {
@@ -166,9 +167,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             return
         }
         // No picture yet, or another place's: the fresh one fades in over it. A close turned round keeps the picture it
-        // took, of the window as it still is, unless it now goes to another place.
-        let place = reversing ? closedPicture?.destination : kept?.destination
-        let other = place != navigator.selection
+        // shows, of the window as it still is, unless that is of another place (one the opening it cut short still owed a
+        // fresh picture of, or where it now goes).
+        let other = current.shows != navigator.selection
         pending = mine
         let stale = !reversing || other || !current.imageIsKey
         owed = stale ? (generation: mine, crossFade: other || (!reversing && kept == nil)) : nil
@@ -180,7 +181,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             if self.owed != nil {
                 self.owed = nil
                 self.stopKeyWatch()
-                current.refresh(window)
+                self.refresh(current, window)
             }
             current.handoff(reveal: { self.reveal(window) }, finished: { self.finishOpening(mine) })
         }
@@ -213,7 +214,13 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         self.owed = nil
         stopKeyWatch()
-        run.refresh(window, crossFade: owed.crossFade)
+        refresh(run, window, crossFade: owed.crossFade)
+    }
+
+    /// The overlay's picture taken again, of the place the window shows now.
+    private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false) {
+        run.refresh(window, crossFade: crossFade)
+        run.shows = navigator.selection
     }
 
     /// What an opening's window shows changed after its overlay's picture was taken (another place, a card, a row or a
@@ -274,16 +281,18 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         } else {
             run?.end()
             current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar())
+            current?.shows = navigator.selection
         }
         guard let current else {
             finishClosing(sender, mine)
             return false
         }
         run = current
-        // Kept for the next opening to start on, when it was taken with the window key.
-        if let image = current.image, current.imageIsKey {
+        // Kept for the next opening to start on, when it was taken with the window key, of the place it shows (an opening
+        // cut short may still show the place it started on).
+        if let image = current.image, current.imageIsKey, let place = current.shows {
             closedPicture = AppTransition.Picture(image: image, frame: sender.frame, scale: sender.backingScaleFactor,
-                                                  destination: navigator.selection)
+                                                  destination: place)
         }
         let start = { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }

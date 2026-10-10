@@ -431,6 +431,28 @@ import Testing
         }
     }
 
+    /// Closed before its fresh picture came, an opening to another place keeps the picture it started on as that of the
+    /// place it shows: turned round, it still owes the fresh one.
+    @Test func aCloseCutShortBeforeItsFreshPictureStillOwesItWhenTurnedRound() {
+        morphing { controller, ticks in
+            openAndStartClosing(controller, ticks, on: .router)
+            controller.run?.complete()
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            #expect(controller.phase == .idle && controller.window?.isVisible == false)
+            // Settings starts on the Router's picture; the window does not get the keyboard before the toggle.
+            AppTransition.isKey = { _ in false }
+            controller.show(.settings)
+            guard let run = controller.run, let started = run.image else { return #expect(Bool(false), "no kept picture") }
+            controller.close()
+            #expect(controller.phase == .closing && controller.run === run)
+            controller.show(.settings)
+            #expect(controller.phase == .opening && controller.run === run && run.image === started)
+            run.complete()
+            #expect(run.image != nil && run.image !== started)
+        }
+    }
+
     @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
         morphing { controller, ticks in
             controller.show(.settings)
