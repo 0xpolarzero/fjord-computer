@@ -221,6 +221,8 @@ struct SettingsView: View {
                 SettingsDivider()
                 sessionModels
                 SettingsDivider()
+                draftsJev
+                SettingsDivider()
                 inboxJev
                 SettingsDivider()
                 sessionIcons
@@ -296,6 +298,15 @@ struct SettingsView: View {
             SettingsSegmented(label: "Model for sessions the Router starts",
                               options: [("Your default", false), ("Let Jev pick", true)],
                               selection: Binding(get: { store.jevPicksSessionModels }, set: { store.settings.jevPicksSessionModels = $0 }))
+        }
+    }
+
+    /// Whether the Router's draft goes to TypeSafe while you type, for Jev's pick over the composer (RouterLiveTarget).
+    private var draftsJev: some View {
+        SettingsRow("Let Jev read what you type",
+                    info: ("Let Jev read what you type", "With a TypeSafe API key, once you pause typing in the Router, your draft goes to TypeSafe (api.typesafe.ai) so Jev can show where it would go before you send it. What goes: the draft's words and its @projects, the Router's last decisions, how you routed messages before, and what it could go to: your Claude sessions' titles, projects and what each is doing, the open cards' titles and what they ask, and your projects' names. The same goes when you send a message, to route it. Off, nothing goes while you type: a message is routed when you send it.")) {
+            SettingsSwitch("Let Jev read what you type",
+                           isOn: Binding(get: { store.jevReadsDrafts }, set: { store.settings.jevReadsDrafts = $0 }))
         }
     }
 

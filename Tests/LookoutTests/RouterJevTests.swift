@@ -55,6 +55,29 @@ import Testing
         #expect(model.highlighted == nil)
     }
 
+    @Test func withJevNotReadingWhatYouTypeNothingIsAskedUntilYouSend() async {
+        let (s, model, calls) = setup()
+        s.settings.jevReadsDrafts = false
+        type("use sqlite for the database", model, s)
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(calls() == 0 && model.live.prediction == nil)
+        #expect(await s.routerDispatcher.predict("use sqlite for the database", projects: []) == nil && calls() == 0)
+        // Switched off while he is asked: what comes back is dropped.
+        s.settings.jevReadsDrafts = true
+        let sure = s.routerDispatcher.asker!
+        s.routerDispatcher.asker = { questions, state in
+            s.settings.jevReadsDrafts = false
+            return try await sure(questions, state)
+        }
+        #expect(await s.routerDispatcher.predict("use sqlite for the database", projects: []) == nil)
+        // Sending still routes it.
+        s.settings.jevReadsDrafts = false
+        s.routerDispatcher.asker = sure
+        #expect(s.routerDispatcher.submit("use sqlite for the database") != nil)
+        await waitUntil(within: 2) { calls() == 2 }
+        #expect(calls() == 2)
+    }
+
     @Test func nothingIsAskedWhileAReplyFixesTheTarget() async {
         let (s, model, calls) = setup()
         model.replyTo = "local_a#w1"

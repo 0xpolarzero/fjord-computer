@@ -82,6 +82,8 @@ struct AppSettings: Codable {
     /// Jev reads new comments and rates review requests in the inbox (default on, with a TypeSafe key); off, nothing of the
     /// inbox goes to TypeSafe and what Jev said counts for nothing.
     var jevReadsInbox: Bool?
+    /// Jev reads the Router's draft while you type, to show where it would go (default on); off, it is routed when sent.
+    var jevReadsDrafts: Bool?
 }
 
 struct PersistedState: Codable {

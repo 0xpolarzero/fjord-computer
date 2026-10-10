@@ -99,7 +99,7 @@ extension Store {
     func jevAllows(_ use: JevUse) -> Bool {
         switch use {
         case .routing: routerOn
-        case .drafts: routerOn
+        case .drafts: routerOn && jevReadsDrafts
         case .triage, .cards: router.enabled
         case .icons: agents.enabled && agents.iconsEnabled
         case .inbox: jevReadsInbox

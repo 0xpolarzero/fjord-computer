@@ -513,7 +513,7 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's routing of a draft while you type: the same call a send makes, kept by its words and projects for
     /// `liveFor` so that sending them asks nothing again. Nil when he can't be asked.
     func predict(_ text: String, projects: [String]) async -> Classification? {
-        guard let store, store.routerOn else { return nil }
+        guard let store, store.jevAllows(.drafts) else { return nil }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = Self.liveKey(text, projects)
         if let hit = live(key) { return hit }
@@ -526,7 +526,9 @@ struct RouterAskBack: Identifiable, Equatable {
         let pending = Task { [weak self] () -> Classification? in
             guard let self else { return nil }
             defer { if self.livePending[key]?.id == id { self.livePending[key] = nil } }
-            guard let ranking = try? await self.effects.rank(tools, text, projects, history) else { return nil }
+            // Switched off meanwhile ("Let Jev read what you type"): nothing more goes, and what came is dropped.
+            guard self.store?.jevAllows(.drafts) == true, let ranking = try? await self.effects.rank(tools, text, projects, history),
+                  self.store?.jevAllows(.drafts) == true else { return nil }
             var found = Classification(ranking)
             found.live = true
             self.liveCache = self.liveCache.filter { Date().timeIntervalSince($0.value.at) < Self.liveFor }

@@ -57,6 +57,9 @@ enum SessionScope {
 extension Store {
     /// Sessions the Router starts without a model or effort named get Jev's pick (Settings → Claude); on unless turned off.
     var jevPicksSessionModels: Bool { settings.jevPicksSessionModels ?? true }
+
+    /// Settings' "Let Jev read what you type": the draft goes to TypeSafe while you type (on unless turned off).
+    var jevReadsDrafts: Bool { settings.jevReadsDrafts ?? true }
 }
 
 // MARK: - The target while you type
@@ -106,7 +109,7 @@ final class RouterLiveTarget {
     func update(text: String, context: RouterContext, store: Store) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let fixed = pinned != nil || RouterDispatcher.plan(text: text, context: context, store: store) != .classify
-        guard store.routerOn, !Store.isDemo, !fixed, text.count >= Self.minLength else {
+        guard store.routerOn, store.jevReadsDrafts, !Store.isDemo, !fixed, text.count >= Self.minLength else {
             cancel()
             clear()
             if text.isEmpty { dismissed = nil }
