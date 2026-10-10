@@ -177,6 +177,8 @@ private struct RouterHistory: View {
                         }
                         Color.clear.frame(height: 1).id(RouterModel.endID)
                     }
+                    // Lines arrive, leave and change without moving; only a line opened or closed by its click animates.
+                    .transaction { if !$0.historyToggle { $0.animation = nil } }
                     .frame(maxWidth: CDS.Transcript.measure, alignment: .leading)
                     .padding(.horizontal, gutter)
                     .frame(maxWidth: .infinity)
@@ -211,6 +213,23 @@ private struct RouterHistory: View {
             HistoryOverviewLine(overview: overview, now: now).equatable()
         }
     }
+}
+
+private struct HistoryToggleKey: TransactionKey { static let defaultValue = false }
+
+private extension Transaction {
+    /// A history line opening or closing by its click: the one change the history animates.
+    var historyToggle: Bool {
+        get { self[HistoryToggleKey.self] }
+        set { self[HistoryToggleKey.self] = newValue }
+    }
+}
+
+/// Runs `change` as a history line opening or closing: animated (unless Reduce Motion is on), and only that animates.
+@MainActor private func toggleHistoryLine(reduceMotion: Bool, _ change: () -> Void) {
+    var transaction = Transaction(animation: Theme.Motion.spring.resolved(reduce: reduceMotion))
+    transaction.historyToggle = true
+    withTransaction(transaction, change)
 }
 
 /// An overview in the history: one line (icon, the text, when); the whole text on hover.
@@ -300,7 +319,7 @@ private struct HistoryDecisionLine: View, Equatable {
     }
 
     private func toggle() {
-        withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) {
+        toggleHistoryLine(reduceMotion: reduceMotion) {
             if open { model.expanded.remove(key) } else { model.expanded.insert(key) }
         }
     }
@@ -364,7 +383,7 @@ private struct HistoryCardLine: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) { model.tap(card.id, store: store) }
+                toggleHistoryLine(reduceMotion: reduceMotion) { model.tap(card.id, store: store) }
             } label: {
                 HStack(spacing: 8) {
                     CardGlyph(store: store, sessionID: card.sessionID, symbol: card.kind.symbol)
