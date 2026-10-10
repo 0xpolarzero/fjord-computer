@@ -6,6 +6,8 @@ enum InboxStore {
         var revision = -1
         /// Whether what Jev said counted (a setting, not an inbox change).
         var jev = true
+        /// When time alone changes what matches: the next `no activity` threshold a thing crosses.
+        var expires: Date?
         var entries: [InboxEntry] = []
     }
 
@@ -26,12 +28,18 @@ extension Store {
                       myTeams: myTeams, jevSignals: jevReadsInbox)
     }
 
-    /// Every entry, memoized on `inboxRevision` and whether Jev's reading counts.
+    /// Every entry, memoized on `inboxRevision` and whether Jev's reading counts, until a thing crosses a `no activity`
+    /// threshold.
     var entries: [InboxEntry] {
-        if inboxMemo.revision == inboxRevision, inboxMemo.jev == jevReadsInbox { return inboxMemo.entries }
+        if inboxMemo.revision == inboxRevision, inboxMemo.jev == jevReadsInbox, inboxMemo.expires.map({ Date() < $0 }) ?? true {
+            return inboxMemo.entries
+        }
         let context = inboxContext
-        let result = InboxEngine.evaluate(things: Array(things.values), categories: categories, marks: marks, context: context)
-        inboxMemo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals, entries: result)
+        let all = Array(things.values)
+        let result = InboxEngine.evaluate(things: all, categories: categories, marks: marks, context: context)
+        inboxMemo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals,
+                                    expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
+                                    entries: result)
         return result
     }
 

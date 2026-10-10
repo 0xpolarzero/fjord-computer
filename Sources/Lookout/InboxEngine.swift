@@ -58,6 +58,23 @@ enum InboxEngine {
         return entries
     }
 
+    /// The next moment time alone changes what matches: a thing crossing a `no activity` threshold of some rule; nil when
+    /// none is ahead.
+    static func nextChange(things: [Thing], categories: [InboxCategory], after now: Date) -> Date? {
+        let days = Set(categories.flatMap(\.rules).flatMap(\.conditions).compactMap { condition -> Int? in
+            if case .noActivity(let days) = condition { days } else { nil }
+        })
+        guard !days.isEmpty else { return nil }
+        var next: Date?
+        for thing in things {
+            for d in days {
+                let at = thing.updatedAt.addingTimeInterval(Double(d) * 86_400)
+                if at > now, next.map({ at < $0 }) ?? true { next = at }
+            }
+        }
+        return next
+    }
+
     /// The facts by which `rule` matches `thing`, or nil when it doesn't.
     /// A rule without conditions matches every open thing in scope by one neutral fact (key "open"), so Done and
     /// notifications have something to hold on to.
