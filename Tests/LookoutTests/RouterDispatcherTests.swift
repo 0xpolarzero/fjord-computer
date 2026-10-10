@@ -102,8 +102,7 @@ import Testing
         #expect(entry?.done == [.sent(to: "peer-local_a", text: "body-local_a", original: "orig")])
         #expect(entry?.outcome == .done && entry?.links.sessions == ["local_a"] && entry?.links.cards == ["local_a#w1"])
         #expect(d.progress.isEmpty)
-        // Your message is in the chat as yours; sending it doesn't address the card (Jev decides, and there is no key here).
-        #expect(s.router.chat.last?.role == .you && s.router.chat.last?.replyTo == "local_a#w1")
+        // Sending it doesn't address the card (Jev decides, and there is no key here).
         #expect(s.router.cards[0].isOpen)
     }
 
@@ -266,9 +265,8 @@ import Testing
     @Test func changingLookoutIsAFreshRunWhoseChangesJoinItsEntry() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "change_lookout", p: 0.92), .init(target: "unclear", p: 0.08)]
-        // Another run is "active" in the log: the change must still go to this run's entry.
+        // Another entry is in the log: the change must go to this run's entry.
         let other = s.logDecision(RouterDecision(trigger: .you("other")))
-        s.activeDecision = other
         f.whileRunning = { tools in _ = await tools.call("set_setting", ["key": "notifications", "value": false]) }
         let id = d.submit("turn the notifications off")
         await finish(d, f, id)
@@ -277,7 +275,7 @@ import Testing
         let entry = decision(s, id)
         #expect(entry?.decision.label == "change_lookout" && entry?.reply == "Done." && entry?.note == "set it")
         #expect(entry?.links.changes.count == 1 && decision(s, other)?.links.changes.isEmpty == true)
-        #expect(s.router.chat.compactMap(\.change).count == 1, "a card with Revert")
+        #expect(s.router.changes.count == 1, "a card with Revert")
         #expect(entry?.outcome == .done && entry?.summary == "changed Lookout")
         #expect(f.sent.isEmpty && f.prepared.isEmpty)
     }
@@ -301,13 +299,12 @@ import Testing
         #expect(f.runs.map(\.intent) == [.compound] && f.sent.isEmpty)
     }
 
-    @Test func aFailureIsInTheEntryAndTheChatAndNothingIsLeftPending() async {
+    @Test func aFailureIsInTheEntryAndNothingIsLeftPending() async {
         let (s, d, f) = setup()
         f.failSend = "isn't running in the Claude app: open it first"
         let id = d.submit("use sqlite", context: RouterContext(replyTo: "local_a#w1"))
         await finish(d, f, id)
         #expect(decision(s, id)?.done == [.failed("isn't running in the Claude app: open it first")] && decision(s, id)?.outcome == .done)
-        #expect(s.router.chat.last?.role == .error)
         #expect(s.router.cards[0].isOpen, "nothing was sent, so the card stays")
     }
 
@@ -457,7 +454,6 @@ import Testing
         tools.beginTurn("hello")
         tools.prepared["Docs"] = Prepared(text: "hello", original: "hello", rephrased: false)
         try await RouterSender.send(binary: standIn(dir), cwd: dir.url, to: "Docs", text: "hello", tools: tools, timeout: 30)
-        #expect(tools.takeApproved("Docs", "hello") != nil, "the gate let exactly the prepared text through")
         let asked = try String(contentsOf: dir.path("stdin.txt"), encoding: .utf8)
         #expect(asked.contains("SendMessage to: Docs") && asked.contains("---BEGIN---"))
         let answer = try String(contentsOf: dir.path("answer.txt"), encoding: .utf8)

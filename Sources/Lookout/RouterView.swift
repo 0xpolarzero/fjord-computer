@@ -45,9 +45,10 @@ extension Store {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if routerIsPretend {
-            router.chat.append(RouterMessage(role: .you, text: text, date: now, replyTo: replyTo,
-                                             projects: projects.isEmpty ? nil : projects))
-            router.chat.append(RouterMessage(role: .router, text: "In a demo the Router only says what it would do.", date: now))
+            var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
+                                       links: .init(cards: replyTo.map { [$0] } ?? []))
+            entry.reply = "In a demo the Router only says what it would do."
+            logDecision(entry)
         } else {
             routerDispatcher.submit(text, context: RouterContext(replyTo: replyTo, projects: projects))
         }
@@ -324,15 +325,15 @@ final class RouterModel {
 
     /// Whether a message can go to the Router now: it is on (with the sessions extension) and Claude Code is there.
     func canSend(_ store: Store) -> Bool {
-        store.routerOn && !(claudeCodeMissing == true && store.routerAgent.claudeCode == nil)
+        store.routerOn && !(claudeCodeMissing == true && store.routerStatus.claudeCode == nil)
     }
 
     /// Looks for Claude Code once the window shows (the app updates its copy now and then): until the search has finished
     /// nothing is said, and Send waits. In a demo it is never missing.
     func checkClaudeCode(_ store: Store) async {
-        if store.routerIsPretend || store.routerAgent.claudeCode != nil { claudeCodeMissing = false; return }
-        guard let root = store.routerAgent.codeRoot else { claudeCodeMissing = false; return }
-        let found = await Task.detached(priority: .utility) { RouterAgent.find(in: root) != nil }.value
+        if store.routerIsPretend || store.routerStatus.claudeCode != nil { claudeCodeMissing = false; return }
+        guard let root = store.routerStatus.codeRoot else { claudeCodeMissing = false; return }
+        let found = await Task.detached(priority: .utility) { RouterStatus.find(in: root) != nil }.value
         if claudeCodeMissing != !found { claudeCodeMissing = !found }
     }
 
@@ -661,19 +662,16 @@ final class RouterModel {
 struct RouterSetupNotice: View {
     let store: Store
     let model: RouterModel
-    let agent: RouterAgent
 
     var body: some View {
         Group {
             if !store.agents.enabled || !store.router.enabled {
                 line("The Router is off.", color: Theme.amber, action: "Turn on") { store.switchRouter(true) }
-            } else if model.claudeCodeMissing == true && agent.claudeCode == nil {
+            } else if model.claudeCodeMissing == true && store.routerStatus.claudeCode == nil {
                 line("Claude Code wasn't found. Install or open the Claude desktop app.", color: Theme.amber,
                      action: "Look again") { Task { await model.checkClaudeCode(store) } }
             } else if let error = store.routerHookError {
                 line("The form hook couldn't be installed: \(error)", color: Theme.red, action: nil) {}
-            } else if case .failed(let reason) = agent.phase {
-                line(reason, color: Theme.red, action: nil) {}
             }
         }
     }

@@ -41,13 +41,8 @@ final class Store {
     /// What the categories' actions have done and what was already there when they began (InboxActions.swift); kept in its
     /// own file next to the state.
     var actionLedger = ActionLedger() {
-        didSet {
-            saveActions()
-            if !pendingActionSessions.isEmpty { linkPendingActionSessions() }
-        }
+        didSet { saveActions() }
     }
-    /// Sessions the Router started for an action message whose run wasn't recorded yet: linked when it is.
-    @ObservationIgnored var pendingActionSessions: [UUID: String] = [:]
     /// Does what actions do; nil is the real one (and nothing at all in the playground and tests).
     @ObservationIgnored var actionPerformer: ActionPerformer?
     @ObservationIgnored var actionsBusy = false
@@ -101,7 +96,7 @@ final class Store {
             save()
         }
     }
-    /// The Router (see Router.swift): its cards and its chat.
+    /// The Router (see Router.swift): its cards, its decision log and the changes it made.
     var router = RouterState() {
         didSet {
             routerRevision &+= 1
@@ -225,19 +220,18 @@ final class Store {
     @ObservationIgnored var claudeIsFrontmost: () -> Bool = { Claude.isFrontmost }
     /// The Router was just switched on: its open cards are settled against how things are now at the next feed.
     @ObservationIgnored var routerReconcilePending = false
-    /// The decision whose run is under way (your message's turn): receipts and changes join it.
-    @ObservationIgnored var activeDecision: UUID?
     /// The forms folder has been read since the Router was switched on: until then no form is known to be gone.
     @ObservationIgnored var routerFormsLoaded = false
     /// The sessions whose background work the last read looked at (see `ClaudeSnapshot.taskInventory`); nil until a read
     /// has said (a test feeding sessions by hand: every one).
     @ObservationIgnored var claudeTaskInventory: Set<String>?
     @ObservationIgnored let formBridge = FormBridge()
-    @ObservationIgnored lazy var routerAgent = RouterAgent(store: self)
-    /// Your messages to the Router, as typed runs (each its own); the agent keeps what these don't cover yet.
+    /// Claude Code's binary, which the Router's runs use.
+    @ObservationIgnored lazy var routerStatus = RouterStatus()
+    /// Your messages to the Router, as typed runs (each its own).
     @ObservationIgnored lazy var routerDispatcher: RouterDispatcher = {
         let dispatcher = RouterDispatcher(store: self)
-        dispatcher.claudePath = { [weak self] in self?.routerAgent.claudeCode?.path }
+        dispatcher.claudePath = { [weak self] in self?.routerStatus.claudeCode?.path }
         return dispatcher
     }()
     /// Where the Router's files go, in a test (see `routerFiles`).

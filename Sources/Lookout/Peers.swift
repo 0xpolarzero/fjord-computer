@@ -44,4 +44,21 @@ enum ClaudePeers {
         }
         return found
     }
+
+    /// The desktop session (`hostSessionId`) a `SendMessage` `to` stands for, by Claude Code's registry of live processes: the
+    /// exact peer name, or "name [ref]" with the ref telling apart peers of the same name. Nil when it matches none, or more
+    /// than one.
+    nonisolated static func session(named to: String, peers: [String: Peer]) -> String? {
+        let exact = peers.filter { $0.value.name == to }
+        if exact.count == 1 { return exact.first?.key }
+        guard let match = to.range(of: #"^(.*) \[([^\]]+)\]$"#, options: .regularExpression) else { return nil }
+        let text = String(to[match])
+        guard let open = text.range(of: " [", options: .backwards) else { return nil }
+        let name = String(text[..<open.lowerBound])
+        let ref = String(text[open.upperBound...].dropLast())
+        let named = peers.filter { $0.value.name == name }
+        if named.count == 1 { return named.first?.key }
+        let narrowed = named.filter { String($0.value.pid) == ref || $0.key == ref || $0.key.hasPrefix(ref) || $0.key.hasSuffix(ref) }
+        return narrowed.count == 1 ? narrowed.first?.key : nil
+    }
 }

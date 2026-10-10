@@ -3,7 +3,7 @@ import Testing
 @testable import Lookout
 
 /// The Router's second surface, Lookout itself: its tools' schemas, what each change applies and refuses, the record each
-/// leaves in the chat and what taking it back restores.
+/// leaves in the history and what taking it back restores.
 @MainActor
 @Suite(.serialized) struct RouterLookout {
     private let me = "me"
@@ -17,9 +17,9 @@ import Testing
         return s
     }
 
-    private func tools(_ s: Store, turn: String? = "do it", automated: UUID? = nil) -> RouterTools {
+    private func tools(_ s: Store, turn: String? = "do it") -> RouterTools {
         let t = RouterTools(store: s)
-        t.beginTurn(turn, automatedRef: automated)
+        if let turn { t.beginTurn(turn) }
         return t
     }
 
@@ -39,7 +39,7 @@ import Testing
 
     private let prByMe: [String: Any] = ["scope": ["kind": "pr", "by": ["include": [["me": [String: Any]()]]]]]
 
-    private var changes: (Store) -> [LookoutChange] { { $0.router.chat.compactMap(\.change) } }
+    private var changes: (Store) -> [LookoutChange] { { $0.router.changes } }
 
     // MARK: Schemas and grammar
 
@@ -81,8 +81,6 @@ import Testing
         }
         let create = try #require(specs.first { $0["name"] as? String == "create_category" })
         #expect((create["description"] as? String)?.contains("{\"me\": {}}") == true, "the grammar is in the description")
-        let start = try #require(specs.first { $0["name"] as? String == "start_session" })
-        #expect(((start["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])?["ref"] != nil)
     }
 
     /// One of each, so a case added to the model without a place in the grammar fails here.
@@ -195,9 +193,7 @@ import Testing
         #expect(made.rules[0].conditions == [.checks([.failing])] && made.rules[0].scope.toRoles == Set(ToRole.allCases))
         #expect(s.categories.count == 2, "the default CI category is kept")
 
-        let card = try #require(s.router.chat.last)
-        #expect(card.role == .change && card.text == "Created category Mine")
-        let change = try #require(card.change)
+        let change = try #require(s.router.changes.last)
         #expect(change.title == "Created category Mine" && !change.isReverted)
         guard case .category(let index, let before, let after) = change.patch else { Issue.record("not a category patch"); return }
         #expect(index == 1 && before == nil && after == made)
@@ -213,11 +209,11 @@ import Testing
     }
 
     private func refused(_ s: Store, _ args: [String: Any], _ words: [String], sourceLocation: SourceLocation = #_sourceLocation) async {
-        let before = s.categories, chat = s.router.chat.count
+        let before = s.categories, logged = s.router.changes.count
         let out = await call(tools(s), "create_category", ["category": args])
         #expect(!out.ok, "\(args)", sourceLocation: sourceLocation)
         for word in words { #expect(out.text.contains(word), "“\(word)” missing from: \(out.text)", sourceLocation: sourceLocation) }
-        #expect(s.categories == before && s.router.chat.count == chat, "nothing changes", sourceLocation: sourceLocation)
+        #expect(s.categories == before && s.router.changes.count == logged, "nothing changes", sourceLocation: sourceLocation)
     }
 
     @Test func rulesThatCanNeverMatchAreRefusedWithTheEditorsReasons() async {
@@ -322,7 +318,7 @@ import Testing
         #expect(reverted.revertNote == "Reverted" && reverted.isReverted)
         #expect(s.categories.first { $0.id == one.id } == one, "back to what it was")
         #expect(s.categories.first { $0.id == two.id } == two, "the other one is not touched")
-        #expect(s.router.chat.compactMap(\.change).last?.isReverted == true, "the card in the chat says so")
+        #expect(s.router.changes.last?.isReverted == true, "the card in the history says so")
         #expect(s.revertLookoutChange(renamed.id) == nil, "once")
         // Taking back a creation removes it.
         let created = try #require(changes(s).first)
@@ -545,15 +541,11 @@ import Testing
 
     // MARK: Who may change things
 
-    @Test func aSessionsTurnAndAnInboxActionCanReadButNeverChange() async throws {
+    @Test func aTurnWithoutAUserMessageCanReadButNeverChange() async throws {
         let s = store()
         let session = tools(s, turn: nil)
         #expect(await call(session, "list_categories", [:]).ok)
         #expect(await call(session, "create_category", ["category": category("X", rules: [prByMe])]).text.contains("Only the user's messages"))
-        let action = tools(s, automated: UUID())
-        #expect(await call(action, "list_categories", [:]).ok)
-        let refused = await call(action, "set_setting", ["key": "notifications", "value": false])
-        #expect(!refused.ok && refused.text.contains("inbox action") && s.settings.notifications)
         #expect(s.categories.count == 1 && changes(s).isEmpty)
         // Off, nothing at all.
         s.router.enabled = false
@@ -583,13 +575,12 @@ import Testing
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let back = try decoder.decode(RouterState.self, from: encoder.encode(s.router))
-        let before = changes(s), after = back.chat.compactMap(\.change)
+        let before = changes(s), after = back.changes
         #expect(after.count == 2 && after.map(\.id) == before.map(\.id) && after.map(\.title) == before.map(\.title))
         #expect(after[0].isReverted && after[0].revertNote == "Reverted" && !after[1].isReverted)
         if case .category(_, _, let made?) = after[0].patch, case .category(_, _, let original?) = before[0].patch {
             #expect(made.rules.map(\.id) == original.rules.map(\.id) && made.actions.items.map(\.kind) == original.actions.items.map(\.kind))
         } else { Issue.record("the category isn't in the record") }
-        #expect(back.chat.map(\.role) == [.change, .change])
     }
 
     @Test func aCardPreviewReadsLikeTheEditorsSentence() async throws {
@@ -636,23 +627,6 @@ import Testing
 
     // MARK: Inbox actions
 
-    @Test func anInboxActionsMessageLinksItsRowToTheSessionTheRouterUsed() async throws {
-        let s = store()
-        let message = UUID()
-        let run = ActionRun(category: UUID(), thing: "pr:a/one#1", action: UUID(), trigger: "enter", state: .done, at: Date(), message: message)
-        s.actionLedger.runs["k"] = run
-        s.noteActionSession("local_new", forMessage: message)
-        #expect(s.actionLedger.runs["k"]?.sessionID == "local_new")
-        // One already linked keeps its session.
-        s.noteActionSession("local_other", forMessage: message)
-        #expect(s.actionLedger.runs["k"]?.sessionID == "local_new")
-        // A run recorded after the Router acted is linked when it is recorded.
-        let late = UUID()
-        s.noteActionSession("local_late", forMessage: late)
-        s.actionLedger.runs["late"] = ActionRun(category: UUID(), thing: "t", action: UUID(), trigger: "enter", state: .done, at: Date(), message: late)
-        #expect(s.actionLedger.runs["late"]?.sessionID == "local_late")
-    }
-
     @Test func theRouterWindowScrollsToAMessageAnActionLeft() {
         let model = RouterModel()
         model.selection = "card"
@@ -665,18 +639,15 @@ import Testing
         #expect(chip.message == id)
     }
 
-    @Test func theRoleNamesLookoutsToolsAndKeepsTheRouterOffGitHub() {
-        for name in LookoutTools.names { #expect(RouterPrompt.role.contains(name), "\(name) isn't in the role") }
-        #expect(RouterPrompt.role.contains("Claude Code sessions") && RouterPrompt.role.contains("Lookout itself"))
-        #expect(RouterPrompt.role.contains("don't act on GitHub"))
-        #expect(RouterPrompt.role.contains("\"⚡ <category>:\"") && RouterPrompt.role.contains("local clone"))
-        #expect(RouterPrompt.role.contains("Revert"))
-        // The tools it may call are the sessions' and Lookout's own: one server, so one allowance.
-        #expect(RouterAgent.arguments(config: "c", settings: "s", resume: nil).contains("ListAgents,mcp__lookout"))
-    }
-
-    @Test func aLookoutToolLeavesNoReceiptLineOnlyItsCard() {
-        let s = store()
-        for name in LookoutTools.names { #expect(s.routerAgent.receipt("mcp__lookout__\(name)", [:]) == nil, "\(name)") }
+    @Test func aRunsRoleKeepsItOffGitHubAndItsToolsFollowItsIntent() {
+        for intent in RouterRun.Intent.allCases {
+            #expect(RouterRun.role(intent).contains("don't act on GitHub"), "\(intent)")
+        }
+        #expect(RouterRun.role(.changeLookout).contains("Revert"))
+        #expect(RouterRun.toolNames(.changeLookout) == LookoutTools.names)
+        // A question only reads; the board and Lookout's own tools are all a run is offered.
+        #expect(RouterRun.toolNames(.question).isSubset(of: LookoutTools.names.union(["board"])))
+        #expect(RouterRun.specs(.changeLookout).count == LookoutTools.names.count)
+        #expect(Set(RouterTools.specs.compactMap { $0["name"] as? String }) == LookoutTools.names.union(["board"]))
     }
 }

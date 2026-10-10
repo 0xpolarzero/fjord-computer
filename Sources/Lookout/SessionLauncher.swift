@@ -93,7 +93,7 @@ extension SessionLauncher.Effects {
         SessionLauncher.Effects(
             bootstrap: { [weak launcher] folder, title, model, effort in
                 guard let store = launcher?.store else { throw RouterTools.Failure("Lookout isn't ready") }
-                guard let binary = store.routerAgent.claudeCode?.path,
+                guard let binary = store.routerStatus.claudeCode?.path,
                       let peersDir = store.routerFiles?.claudeDir.appendingPathComponent("sessions") else {
                     throw RouterTools.Failure("Claude Code wasn't found, so no session can be started")
                 }
@@ -131,7 +131,7 @@ extension SessionLauncher.Effects {
             },
             send: { [weak launcher] peer, prepared in
                 guard let store = launcher?.store else { throw RouterTools.Failure("Lookout isn't ready") }
-                guard let binary = store.routerAgent.claudeCode?.path, let home = store.routerFiles?.routerHome else {
+                guard let binary = store.routerStatus.claudeCode?.path, let home = store.routerFiles?.routerHome else {
                     throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
                 }
                 try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])

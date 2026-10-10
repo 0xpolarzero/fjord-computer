@@ -97,40 +97,6 @@ import Testing
         await #expect(throws: RouterTools.Failure.self) { try await SessionStart.waitForPeer(uuid: "other", dir: peers, timeout: 0.5) }
     }
 
-    // MARK: The chat line
-
-    @Test func aChatLineReadsLeniently() throws {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let id = UUID().uuidString
-        let full = #"{"id":"\#(id)","role":"you","text":"hi","date":"2026-10-09T10:00:00Z","replyTo":"local_a#t1","projects":["/code/a"]}"#
-        let line = try decoder.decode(RouterMessage.self, from: Data(full.utf8))
-        #expect(line.replyTo == "local_a#t1" && line.projects == ["/code/a"] && line.original == nil && line.id.uuidString == id)
-        let odd = #"{"role":"receipt","text":"→ a: b","date":"2026-10-09T10:00:00Z","projects":"oops","original":"tell a to b"}"#
-        let kept = try decoder.decode(RouterMessage.self, from: Data(odd.utf8))
-        #expect(kept.projects == nil && kept.original == "tell a to b" && kept.text == "→ a: b")
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        #expect(try decoder.decode(RouterMessage.self, from: encoder.encode(line)) == line)
-    }
-
-    @Test func theHeaderSaysTheReplyAndTheProjectsInTheWordsTheRoleExplains() {
-        let reply = RouterAgent.Reply(card: "local_a#t1", title: "Fix login", project: "lookout", peer: "Lookout dev")
-        let header = RouterAgent.header("ship it", reply: reply, projects: [("lookout", "/code/lookout"), ("api", "/code/api")])
-        for part in ["local_a#t1", "Fix login", "Lookout dev", "lookout = /code/lookout", "api = /code/api"] {
-            #expect(header.contains(part), "\(part)")
-        }
-        #expect(header.hasSuffix("\nship it"))
-        let gone = RouterAgent.Reply(card: "local_a#t1", title: "Fix login", project: "lookout", peer: nil)
-        #expect(RouterAgent.header("x", reply: gone, projects: []).contains("not reachable"))
-        #expect(RouterAgent.header("plain", reply: nil, projects: []) == "plain")
-        // Each of its lines opens with a marker the Router's role tells it how to read.
-        for line in header.split(separator: "\n").dropLast() {
-            let marker = String(line.prefix { $0 != ":" })
-            #expect(RouterPrompt.role.contains(marker), "\(marker)")
-        }
-    }
-
     // MARK: One run, bounded
 
     private func script(_ dir: TempDir, _ name: String, _ body: String) -> String {

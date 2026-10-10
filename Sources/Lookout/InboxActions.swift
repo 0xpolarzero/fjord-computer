@@ -125,7 +125,7 @@ struct ActionRun: Codable, Hashable {
     var url: URL?
     /// The Claude app's id of the session the Router started for it.
     var sessionID: String?
-    /// The message left in the Router's chat (an Ask the Router before sessions were started directly).
+    /// The entry in the Router's history (its decision log id) the run left.
     var message: UUID?
 }
 
@@ -393,7 +393,7 @@ enum InboxActions {
         var tint: FactTint
         var target: Target?
         var help: String
-        /// For `.router`: the message in the Router's chat the chip opens on.
+        /// For `.router`: the entry in the Router's history the chip opens on.
         var message: UUID? = nil
     }
 

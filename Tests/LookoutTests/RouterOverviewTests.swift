@@ -85,7 +85,7 @@ import Testing
         let early = RouterOverview(at: now.addingTimeInterval(-100), text: "early")
         let late = RouterOverview(at: now, text: "late")
         let decision = RouterDecision(at: now.addingTimeInterval(-50), trigger: .system)
-        let page = RouterPage.make(cards: [], chat: [], working: [], decisions: [decision], overviews: [late, early])
+        let page = RouterPage.make(cards: [], working: [], decisions: [decision], overviews: [late, early])
         #expect(page.history.map(\.id) == ["overview-" + early.id.uuidString, decision.id.uuidString, "overview-" + late.id.uuidString])
     }
 

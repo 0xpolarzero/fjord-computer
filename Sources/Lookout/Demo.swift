@@ -200,28 +200,7 @@ enum Demo {
         if let i = state.cards.firstIndex(where: { $0.sessionID == linux }) { state.cards[i].toolUseID = "toolu_demo_linux" }
         // The question is the wait the session is on now, so its form shows on its card.
         state.waits[lcu] = state.cards.last?.waitMs
-        state.chat = [
-            RouterMessage(role: .you, text: "what needs me?", date: now.addingTimeInterval(-300)),
-            RouterMessage(role: .router, text: "**3 need you**: *LCU update notifications* asks how updates install; the Linux "
-                          + "sandbox has a plan to approve; *Calculator display reading* is stuck on the VPN.\nDone: CI failure diagnosis.",
-                          date: now.addingTimeInterval(-290)),
-            RouterMessage(role: .you, text: "transfer: remove the old remote", date: now.addingTimeInterval(-200)),
-            RouterMessage(role: .receipt, text: "→ Repository ownership transfer setup: Remove the old remote.",
-                          date: now.addingTimeInterval(-195), sessionID: "local_demo-transfer",
-                          original: "transfer: remove the old remote"),
-            RouterMessage(role: .peer, text: "Removed `old-origin`; only the new org's remote is left. I also checked the branch "
-                          + "protection rules on the new org: `main` requires one review and passing checks, as before. The deploy key "
-                          + "was carried over, and the webhook for CI now points at the new repository. Two open PRs still target the "
-                          + "old fork; I left them alone.", date: now.addingTimeInterval(-60), sessionID: "local_demo-transfer"),
-            RouterMessage(role: .you, text: "start a session to bump the version", date: now.addingTimeInterval(-30),
-                          projects: ["/Users/me/code/lookout"]),
-            RouterMessage(role: .receipt, text: "Cancelled before sending", date: now.addingTimeInterval(-28)),
-            RouterMessage(role: .automated, text: "⚡ Contributions: Address what https://github.com/ziglang/zig/pull/1 is waiting on.\n\n"
-                          + "Context, from the “Contributions” category of the Lookout inbox:\n- Title: Warm pool\n- Local clones of ziglang/zig, to choose from: `/Users/me/code/zig`",
-                          date: now.addingTimeInterval(-20), source: "Contributions"),
-            RouterMessage(role: .error, text: "SendMessage to Game recommendations: not delivered (the session isn't open in Claude)",
-                          date: now.addingTimeInterval(-10), sessionID: "local_demo-games"),
-        ] + lookoutChanges(store, now)
+        state.changes = lookoutChanges(store, now)
         // The decision log behind the same story: what you said and what the Router did with it.
         func entry(_ minutes: Double, _ trigger: RouterDecision.Trigger, _ intent: String, _ done: [RouterDecision.Done],
                    outcome: RouterDecision.Outcome = .done) -> RouterDecision {
@@ -235,11 +214,20 @@ enum Demo {
             }
             return d
         }
-        let changes = state.chat.compactMap(\.change)
+        let changes = state.changes
+        var asked = entry(5, .you("what needs me?"), "question", [])
+        asked.reply = "**3 need you**: *LCU update notifications* asks how updates install; the Linux sandbox has a plan to approve; "
+            + "*Calculator display reading* is stuck on the VPN.\nDone: CI failure diagnosis."
+        asked.note = "answered"
+        var undelivered = entry(0.2, .you("tell Game recommendations to rebase"), "reply",
+                                [.failed("SendMessage to Game recommendations: not delivered (the session isn't open in Claude)")])
+        undelivered.links.sessions = ["local_demo-games"]
         state.decisions = [
+            asked,
             entry(3.3, .you("transfer: remove the old remote"), "reply",
                   [.sent(to: "Repository ownership transfer setup", text: "Remove the old remote.", original: "transfer: remove the old remote")]),
             entry(0.5, .you("start a session to bump the version"), "start", [.failed("Cancelled")]),
+            undelivered,
             entry(0.3, .action(category: "Contributions", thing: "ziglang/zig#1", actionID: "demo", runID: nil), "action",
                   [.started(session: nil, project: "zig", model: nil, effort: nil)]),
             entry(9, .you("add a category for my contributions that need a look, and snooze banners for an hour"), "change",
@@ -268,8 +256,8 @@ enum Demo {
             progress: [running.id: "sending"])
     }
 
-    /// The Router changing Lookout itself: what the user asked, and a card for each change (one taken back).
-    private static func lookoutChanges(_ store: Store, _ now: Date) -> [RouterMessage] {
+    /// The Router changing Lookout itself: a record for each change (one taken back).
+    private static func lookoutChanges(_ store: Store, _ now: Date) -> [LookoutChange] {
         let look = InboxCategory(
             name: "Needs a look", symbol: "eye", color: .aqua,
             rules: [Rule(scope: Scope(kind: .pr, by: Pick(include: [.maintainers], except: [.bots]), in: Pick(include: [.contributed])),
@@ -282,22 +270,19 @@ enum Demo {
         var quiet = reviews
         quiet?.notifies = false
         quiet?.hidden = true
-        func message(_ title: String, _ patch: LookoutChange.Patch, minutes: Double, reverted: Bool = false) -> RouterMessage {
+        func message(_ title: String, _ patch: LookoutChange.Patch, minutes: Double, reverted: Bool = false) -> LookoutChange {
             var change = LookoutChange(date: now.addingTimeInterval(-minutes * 60), title: title, patch: patch)
             if reverted {
                 change.revertedAt = now.addingTimeInterval(-60)
                 change.revertNote = "Reverted"
             }
-            return RouterMessage(role: .change, text: title, date: change.date, change: change)
+            return change
         }
         let doneThings = store.entries.prefix(3).map { EntryChange(thing: $0.id, before: nil, after: EntryMarks(doneAt: now)) }
         var out = [
-            RouterMessage(role: .you, text: "add a category for my contributions that need a look, and snooze banners for an hour",
-                          date: now.addingTimeInterval(-9 * 60)),
             message(LookoutChange.title(forCategory: nil, look), .category(index: 1, before: nil, after: look), minutes: 8),
             message("Changed snooze to 1 hour",
                     .setting(key: "snooze", before: .date(nil), after: .date(now.addingTimeInterval(3600))), minutes: 8),
-            RouterMessage(role: .you, text: "mark the bot chatter done, and mute reviews for you", date: now.addingTimeInterval(-3 * 60)),
             message("Marked \(doneThings.count) done", .marks(state: "done", doneThings), minutes: 2),
         ]
         if let reviews, let quiet {

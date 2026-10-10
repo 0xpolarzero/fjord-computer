@@ -10,7 +10,6 @@ import SwiftUI
 struct RouterPage: Equatable {
     /// One line of the history.
     enum Entry: Identifiable, Equatable {
-        case message(RouterMessage)
         /// An addressed card, at the time it was addressed.
         case card(RouterCard)
         /// A run of the Router, from the decision log.
@@ -22,14 +21,12 @@ struct RouterPage: Equatable {
             switch self {
             case .overview(let o): "overview-" + o.id.uuidString
             case .decision(let d): d.id.uuidString
-            case .message(let m): m.id.uuidString
             case .card(let c): c.id
             }
         }
 
         var date: Date {
             switch self {
-            case .message(let m): m.date
             case .card(let c): c.addressedAt ?? c.createdAt
             case .decision(let d): d.at
             case .overview(let o): o.at
@@ -44,7 +41,7 @@ struct RouterPage: Equatable {
     var asks: [RouterAskBack] = []
     /// Sessions working on their own, the longest running first.
     var working: [AgentRow] = []
-    /// Oldest first: the Router's conversation and the addressed cards by time.
+    /// Oldest first: the Router's runs, the overviews and the addressed cards by time.
     var history: [Entry] = []
 
     /// The card shown in full: the one asked for while it is still waiting, else the newest.
@@ -53,14 +50,14 @@ struct RouterPage: Equatable {
         return needs.first?.id
     }
 
-    static func make(cards: [RouterCard], chat: [RouterMessage], working: [AgentRow],
+    static func make(cards: [RouterCard], working: [AgentRow],
                      decisions: [RouterDecision] = [], overviews: [RouterOverview] = [], asks: [RouterAskBack] = []) -> RouterPage {
         let open = cards.filter(\.isOpen).sorted(by: newestFirst)
         var page = RouterPage()
         page.needs = open.filter { $0.kind != .done } + open.filter { $0.kind == .done }
         page.working = working
         page.asks = asks
-        let entries = chat.map(Entry.message) + decisions.map(Entry.decision) + overviews.map(Entry.overview) + cards.filter { !$0.isOpen }.map(Entry.card)
+        let entries = decisions.map(Entry.decision) + overviews.map(Entry.overview) + cards.filter { !$0.isOpen }.map(Entry.card)
         page.history = entries.enumerated().sorted { a, b in
             a.element.date != b.element.date ? a.element.date < b.element.date : a.offset < b.offset
         }.map(\.element)
@@ -75,11 +72,8 @@ struct RouterPage: Equatable {
 extension Store {
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
-        // The decision log stands for what you said, what the Router did and what it changed; the chat keeps what it doesn't
-        // carry yet (the Router's own words, notices, sessions' messages).
-        let kept = router.chat.filter { [.router, .error, .peer].contains($0.role) }
-        return .make(cards: router.cards, chat: kept, working: routerWorkingRows, decisions: router.decisions,
-                     overviews: router.overviews, asks: routerDispatcher.askBacks)
+        .make(cards: router.cards, working: routerWorkingRows, decisions: router.decisions,
+              overviews: router.overviews, asks: routerDispatcher.askBacks)
     }
 }
 
@@ -97,7 +91,6 @@ private extension EnvironmentValues {
 struct RouterPageView: View {
     let store: Store
     @Bindable var model: RouterModel
-    let agent: RouterAgent
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var ns
     @State private var height: CGFloat = 700
@@ -131,8 +124,8 @@ struct RouterPageView: View {
 
     /// While the Router itself works: one slim line over the zones.
     @ViewBuilder private var routerStatus: some View {
-        if agent.phase == .working || agent.phase == .starting {
-            WorkingStatus(label: agent.phase == .starting ? "The Router is starting" : "The Router is working")
+        if store.routerDispatcher.isBusy {
+            WorkingStatus(label: "The Router is working")
                 .padding(.horizontal, gutter + CDS.Transcript.textInset)
                 .padding(.bottom, 6)
                 .transition(.opacity)
@@ -162,7 +155,8 @@ private struct RouterHistory: View {
                     }
                     ForEach(Array(entries.enumerated()), id: \.element.id) { i, entry in
                         row(entry)
-                            .padding(.top, i == 0 ? 0 : Self.gap(entry, entries[i - 1]))
+                            // A line sits close to its neighbours.
+                            .padding(.top, i == 0 ? 0 : 2)
                             .id(entry.id)
                     }
                     Color.clear.frame(height: 1).id(RouterModel.endID)
@@ -192,25 +186,12 @@ private struct RouterHistory: View {
 
     @ViewBuilder private func row(_ entry: RouterPage.Entry) -> some View {
         switch entry {
-        case .message(let message):
-            CodeMessage(message: message, store: store)
-                .opacity(0.82)
         case .card(let card):
             HistoryCardLine(store: store, model: model, card: card)
         case .decision(let decision):
             HistoryDecisionLine(store: store, model: model, decision: decision)
         case .overview(let overview):
             HistoryOverviewLine(overview: overview)
-        }
-    }
-
-    /// The conversation keeps the transcript's rhythm; a card line sits close to its neighbours.
-    static func gap(_ entry: RouterPage.Entry, _ previous: RouterPage.Entry) -> CGFloat {
-        switch (entry, previous) {
-        case (.message(let m), .message(let p)): CodeMessage.gap(before: m, after: p.role, first: false)
-        case (.message, _): 12
-        case (_, .message): 12
-        default: 2
         }
     }
 }
@@ -395,7 +376,7 @@ private struct HistoryDecisionLine: View {
                 Text(line).cdsText((12, 16), .regular, CDS.Text.muted).fixedSize(horizontal: false, vertical: true)
             }
             ForEach(decision.links.changes, id: \.self) { id in
-                if let change = store.router.chat.first(where: { $0.change?.id == id })?.change {
+                if let change = store.router.changes.first(where: { $0.id == id }) {
                     ChangeCard(change: change, store: store)
                 }
             }

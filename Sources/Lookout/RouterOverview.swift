@@ -222,7 +222,7 @@ extension Store {
     }
 
     private static func haiku(store: Store) -> Runner {
-        let find = store.routerClaudeBinary ?? { RouterAgent.find(in: Claude.root.appendingPathComponent("claude-code", isDirectory: true))?.path }
+        let find = store.routerClaudeBinary ?? { RouterStatus.findDefault() }
         let home = store.routerFiles?.routerHome
         return { context in
             guard let binary = find(), let home else { throw RouterTools.Failure("Claude Code wasn't found") }

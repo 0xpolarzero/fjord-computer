@@ -183,15 +183,10 @@ import Testing
         return s
     }
 
-    private func route(_ t: RouterTools, _ args: [String: Any]) async throws -> [String: Any] {
-        let out = try #require(await t.call("route", args))
-        return try #require(json(Data(out.text.utf8)) as? [String: Any])
-    }
-
     /// Tools in a turn of the user's (side effects need one).
     private func tools(_ s: Store, turn: String? = "do it") -> RouterTools {
         let tools = RouterTools(store: s)
-        tools.beginTurn(turn)
+        if let turn { tools.beginTurn(turn) }
         return tools
     }
 
@@ -217,13 +212,8 @@ import Testing
         let dir = TempDir()
         let store = await store(dir)
         let s = tools(store)
-        #expect(await s.call("route", [:])?.isError == true)
-        #expect(await s.call("route", ["message": 3])?.isError == true)
-        #expect(await s.call("start_session", ["project": "lookout", "title": "  "])?.isError == true)
-        #expect(await s.call("mark", ["card": "local_a#w500"])?.isError == true)
-        #expect(await s.call("mark", ["card": "nope", "addressed": true])?.isError == true)
-        #expect(await s.call("answer_form", ["card": "local_a#w500"])?.isError == true)
-        #expect(await s.call("open_session", ["session": "Nobody"])?.isError == true)
+        #expect(await s.tool("start_session", ["project": "lookout", "title": "  "])?.isError == true)
+        #expect(await s.tool("answer_form", ["card": "local_a#w500"])?.isError == true)
         #expect(await s.call("rm", [:]) == nil)
     }
 
@@ -231,16 +221,16 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
-        let bad = try #require(await t.call("answer_form", ["card": "local_a#w500", "answers": ["Which colour?": "Red"]]))
+        let bad = try #require(await t.tool("answer_form", ["card": "local_a#w500", "answers": ["Which colour?": "Red"]]))
         #expect(bad.isError && bad.text.contains("no question"))
-        let out = try #require(await t.call("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
+        let out = try #require(await t.tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
         #expect(!out.isError, "\(out.text)")
         let file = FormBridge.answerURL("cli-local_a-1-1", in: dir.path("support").appendingPathComponent("forms"))
         let written = try #require(json(try Data(contentsOf: file)) as? [String: Any])
         #expect(written["answers"] as? [String: String] == ["Which database?": "SQLite"])
         // A card without a form held by the hook can't be answered here.
         s.pendingForms = [:]
-        let none = try #require(await t.call("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
+        let none = try #require(await t.tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
         #expect(none.isError && none.text.contains("no form"))
     }
 
@@ -255,9 +245,9 @@ import Testing
             return SessionStart.Started(sessionID: "local_new", peer: title)
         }
         t.beginTurn("Add a test")
-        let out = try #require(await t.call("start_session", ["project": "LOOKOUT", "title": "Add a test"]))
+        let out = try #require(await t.tool("start_session", ["project": "LOOKOUT", "title": "Add a test"]))
         #expect(!out.isError && started == ["/code/lookout · Add a test"])
-        let unknown = try #require(await t.call("start_session", ["project": "web", "title": "Hi there"]))
+        let unknown = try #require(await t.tool("start_session", ["project": "web", "title": "Hi there"]))
         #expect(unknown.isError && unknown.text.contains("api") && unknown.text.contains("lookout"))
         #expect(started.count == 1)
         #expect(try RouterTools.folder("/code/api/", folders: ["/code/api"], name: { $0 }) == "/code/api")
@@ -266,155 +256,20 @@ import Testing
         }
     }
 
-    @Test func openingAndMarking() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        var opened: [String] = []
-        s.interceptOpen = { opened.append($0) }
-        let t = tools(s)
-        #expect(await t.call("open_session", ["session": "write the readme"])?.isError == false)
-        #expect(opened == ["Open in Claude · Write the README"])
-        #expect(await t.call("mark", ["card": "local_a#w500", "addressed": true])?.isError == false)
-        #expect(s.router.cards[0].addressedBy == .you)
-        #expect(await t.call("mark", ["card": "local_a#w500", "addressed": false])?.isError == false)
-        #expect(s.router.cards[0].isOpen)
-    }
-
-    // MARK: route
-
-    @Test func routeSendsOnlyWhenSureAndClearlyAhead() {
-        #expect(RouterTools.decision([("session:a", 0.95), ("session:b", 0.05)]) == "send")
-        // Unsure, or sure but with a close runner-up, or sure it's unclear: ask.
-        #expect(RouterTools.decision([("session:a", 0.5), ("session:b", 0.05)]) == "ask")
-        #expect(RouterTools.decision([("session:a", 0.85), ("session:b", 0.8)]) == "ask")
-        #expect(RouterTools.decision([("unclear", 0.95)]) == "ask")
-        #expect(RouterTools.decision([]) == "ask")
-    }
-
-    @Test func routeAsksJevAndMapsItsPickBack() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s)
-        var asked: [String] = []
-        var hints: [String: String] = [:]
-        t.chooser = { options, h, state, _ in
-            asked = options
-            hints = h
-            #expect(state == ["user message": "use sqlite"])
-            // The card's option first: answer it.
-            return JevClient.Choice(choice: options[0], confidence: 0.9, probabilities: [options[0]: 0.9, options[1]: 0.05, options.last!: 0.05])
-        }
-        let out = try await route(t, ["message": "use sqlite"])
-        #expect(asked.count == 6)
-        #expect(hints[asked[0]]?.contains("question card") == true)
-        #expect(out["decision"] as? String == "send" && out["assisted"] as? Bool == true)
-        let top = try #require((out["candidates"] as? [[String: Any]])?.first)
-        #expect(top["target"] as? String == "answer:local_a#w500" && top["peer"] as? String == "Fix the login bug")
-    }
-
-    @Test func withoutJevRouteMatchesWordsAndAsks() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s)
-        // No key, no chooser: unassisted.
-        let vague = try await route(t, ["message": "how is the login going?"])
-        #expect(vague["decision"] as? String == "ask" && vague["assisted"] as? Bool == false)
-        #expect((vague["note"] as? String)?.contains("no TypeSafe key") == true)
-        #expect((vague["candidates"] as? [[String: Any]])?.first?["target"] as? String == "answer:local_a#w500")
-        let named = try await route(t, ["message": "tell Write the README to add badges"])
-        #expect(named["decision"] as? String == "send")
-        #expect((named["candidates"] as? [[String: Any]])?.first?["target"] as? String == "session:local_b")
-
-        // A failing Jev falls back the same way, and says why.
-        t.chooser = { _, _, _, _ in throw JevClient.Failure(message: "TypeSafe is busy") }
-        let failed = try await route(t, ["message": "api: add badges"])
-        #expect((failed["note"] as? String)?.contains("TypeSafe is busy") == true)
-        // The project names one session only: that one.
-        #expect(failed["decision"] as? String == "send")
-        #expect((failed["candidates"] as? [[String: Any]])?.first?["target"] as? String == "session:local_b")
-    }
-
     // MARK: Review fixes
-
-    @Test func markTakesOnlyARealBoolean() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s)
-        let one = try #require(await t.call("mark", ["card": "local_a#w500", "addressed": NSNumber(value: 1)]))
-        #expect(one.isError)
-        #expect(await t.call("mark", ["card": "local_a#w500", "addressed": "true"])?.isError == true)
-        #expect(s.router.cards[0].isOpen)
-        // As JSON gives it.
-        let args = try #require(json(Data(#"{"card":"local_a#w500","addressed":true}"#.utf8)) as? [String: Any])
-        #expect(await t.call("mark", args)?.isError == false)
-        #expect(!s.router.cards[0].isOpen)
-    }
-
-    @Test func aCallFromBeforeAResetChangesNothing() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s)
-        var opened: [String] = []
-        s.interceptOpen = { opened.append($0) }
-        let gate = RouterGate()
-        t.chooser = { options, _, _, _ in
-            await gate.wait()
-            return JevClient.Choice(choice: options[0], confidence: 1, probabilities: [options[0]: 1])
-        }
-        let epoch = t.epoch
-        let routing = Task { await t.call("route", ["message": "use sqlite"], epoch: epoch) }
-        while !gate.waiting { await Task.yield() }
-        // Reset while route waits on Jev; then the call goes on, and the same request tries to act.
-        t.reset()
-        gate.open()
-        let routed = await routing.value
-        #expect(routed?.isError == true && routed?.text.contains("reset") == true)
-        #expect(await t.call("mark", ["card": "local_a#w500", "addressed": true], epoch: epoch)?.isError == true)
-        #expect(await t.call("start_session", ["project": "lookout", "title": "Hi"], epoch: epoch)?.isError == true)
-        #expect(await t.call("open_session", ["session": "local_b"], epoch: epoch)?.isError == true)
-        #expect(await t.call("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]], epoch: epoch)?.isError == true)
-        #expect(s.router.cards[0].isOpen && opened.isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: FormBridge.answerURL("cli-local_a-1-1", in: dir.path("support/forms")).path))
-        // A call of the Router as it is now (a new turn of yours) still works.
-        t.beginTurn("mark it")
-        #expect(await t.call("mark", ["card": "local_a#w500", "addressed": true])?.isError == false)
-    }
-
-    @Test func jevWithoutADistributionFallsBackToUnassisted() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s)
-        func answering(_ body: String) -> ([String], [String: String], [String: String], String) async throws -> JevClient.Choice {
-            { options, _, _, _ in
-                let keys = Dictionary(uniqueKeysWithValues: options.map { (JevClient.key(for: $0), $0) })
-                return try JevClient.parse(Data(body.replacingOccurrences(of: "FIRST", with: options[0]).utf8), keys: keys)
-            }
-        }
-        // Jev names a pick but gives no probabilities: nothing is made up, the route is unassisted and asks.
-        t.chooser = answering(#"{"answers":{"pick":{"choice":"FIRST","confidence":0.99}}}"#)
-        let missing = try await route(t, ["message": "use sqlite"])
-        #expect(missing["assisted"] as? Bool == false && missing["decision"] as? String == "ask")
-        #expect((missing["note"] as? String)?.contains("no probabilities") == true)
-        // A full distribution is used as given.
-        t.chooser = answering(#"{"answers":{"pick":{"choice":"FIRST","probabilities":{"FIRST":1}}}}"#)
-        let sure = try await route(t, ["message": "use sqlite"])
-        #expect(sure["assisted"] as? Bool == true && sure["decision"] as? String == "send")
-    }
 
     @Test func switchedOffMeansNoSideEffectEvenForACurrentCall() async throws {
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
-        var opened: [String] = []
-        s.interceptOpen = { opened.append($0) }
-        let epoch = t.epoch
+        let answers: [String: Any] = ["card": "local_a#w500", "answers": ["Which database?": "SQLite"]]
         s.router.enabled = false
-        let marked = try #require(await t.call("mark", ["card": "local_a#w500", "addressed": true], epoch: epoch))
-        #expect(marked.isError && marked.text.contains("off"))
+        let answered = try #require(await t.tool("answer_form", answers))
+        #expect(answered.isError && answered.text.contains("off"))
         s.router.enabled = true
         s.agents.enabled = false
-        #expect(await t.call("open_session", ["session": "local_b"], epoch: epoch)?.isError == true)
-        #expect(s.router.cards[0].isOpen && opened.isEmpty)
+        #expect(await t.tool("answer_form", answers)?.isError == true)
+        #expect(s.router.cards[0].isOpen)
     }
 
     @Test func theFormWriterChecksRightBeforeWriting() async throws {
@@ -467,7 +322,7 @@ import Testing
         // The writer is busy: the answer waits behind it.
         let hold = DispatchSemaphore(value: 0)
         FormWriter.queue.async { hold.wait() }
-        let answering = Task { await t.call("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]) }
+        let answering = Task { await t.tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]) }
         try await Task.sleep(nanoseconds: 200_000_000)
         s.setCardAddressed("local_a#w500", true)
         hold.signal()
@@ -499,11 +354,11 @@ import Testing
         }
         // No message of yours in this turn (a session's turn): nothing to prepare.
         t.endTurn()
-        #expect(await t.call("prepare", ["session": "local_a"])?.isError == true)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
         t.beginTurn("tell it to bump the version")
         // By session id, or by its peer name; any `message` the Router adds is not an input.
-        #expect(await t.call("prepare", ["session": "local_a", "message": "something else"])?.isError == false)
-        let out = try #require(await t.call("prepare", ["session": "Fix the login bug"]))
+        #expect(await t.tool("prepare", ["session": "local_a", "message": "something else"])?.isError == false)
+        let out = try #require(await t.tool("prepare", ["session": "Fix the login bug"]))
         let first = try #require(json(Data(out.text.utf8)) as? [String: Any])
         // What to send is the body signed for the session's plugin (its Claude Code session id from the registry).
         let text = try #require(first["text"] as? String)
@@ -512,9 +367,9 @@ import Testing
         #expect(t.prepared["Fix the login bug"]?.body == "Bump the version.")
         #expect(asked == Array(repeating: "Fix the login bug · lookout · tell it to bump the version", count: 2))
         // A session with no process can't get your words: refused.
-        let away = try #require(await t.call("prepare", ["session": "Write the README"]))
+        let away = try #require(await t.tool("prepare", ["session": "Write the README"]))
         #expect(away.isError && away.text.contains("isn't running"))
-        #expect(await t.call("prepare", ["session": "nobody"])?.isError == true)
+        #expect(await t.tool("prepare", ["session": "nobody"])?.isError == true)
     }
 
     @Test func theGateLetsThroughOnlyThePreparedTextOnce() async throws {
@@ -524,7 +379,7 @@ import Testing
         t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         t.beginTurn("tell lookout to bump the version")
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").reason?.contains("Not prepared") == true)
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         // Another text, a field of its own, a preview that isn't the message: refused, and the preparation stays.
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version!").reason?.contains("isn't the prepared text") == true)
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", extra: ["notify_when_idle": "true"])
@@ -532,13 +387,12 @@ import Testing
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", others: ["files"]).reason?.contains("files") == true)
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", extra: ["summary": "Delete everything"]).allow == false)
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", extra: ["recipient": "someone else"]).allow == false)
-        let signed = sealed(t, "Fix the login bug", "Bump the version.")
+        _ = sealed(t, "Fix the login bug", "Bump the version.")
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow)
         // Once.
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow == false)
-        #expect(t.takeApproved("Fix the login bug", signed)?.original == "tell lookout to bump the version")
         // A preparation of an earlier turn, or stopped, is gone.
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         t.endTurn()
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow == false)
     }
@@ -549,9 +403,9 @@ import Testing
         let t = tools(s)
         t.beginTurn("tell lookout to bump the version")
         t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         t.rephrase = { _, _, _ in throw RouterTools.Failure("Couldn't prepare the message") }
-        #expect(await t.call("prepare", ["session": "local_a"])?.isError == true)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
         #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow == false)
     }
 
@@ -561,7 +415,7 @@ import Testing
         let t = tools(s, turn: "tell lookout: first line of a longer note that goes past sixty characters for sure, yes\nsecond line")
         let text = "first line of a longer note that goes past sixty characters for sure, yes\nsecond line"
         t.rephrase = { message, _, _ in Prepared(text: text, original: message, rephrased: true) }
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         #expect(t.approveSend(claudeInput("Fix the login bug", sealed(t, "Fix the login bug", text)), otherFields: []) == nil)
     }
 
@@ -572,50 +426,24 @@ import Testing
         t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         let held = RouterGate()
         t.afterLookup = { await held.wait() }
-        let late = Task { await t.call("prepare", ["session": "local_a"]) }
+        let late = Task { await t.tool("prepare", ["session": "local_a"]) }
         while !held.waiting { await Task.yield() }
         // The turn ends; the next one prepares the same target.
         t.endTurn()
         t.beginTurn("tell lookout to tag the release")
         t.afterLookup = nil
         t.rephrase = { message, _, _ in Prepared(text: "Tag the release.", original: message, rephrased: true) }
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         held.open()
         #expect(await late.value?.isError == true)
         #expect(t.prepared["Fix the login bug"]?.body == "Tag the release.")
-    }
-
-    @Test func aBatchHasOneTicketSoItsLaterEntriesCantActAfterAStop() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s)
-        let held = RouterGate()
-        t.chooser = { options, _, _, _ in
-            await held.wait()
-            return JevClient.Choice(choice: options[0], confidence: 1, probabilities: [options[0]: 1])
-        }
-        let body = try JSONSerialization.data(withJSONObject: [
-            ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "route", "arguments": ["message": "x"]]],
-            ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "mark", "arguments": ["card": "local_a#w500", "addressed": true]]],
-        ])
-        // As the server does: one ticket when the request comes.
-        let ticket = t.ticket()
-        let answering = Task { await RouterRPC.handle(body, tools: RouterTools.specs) { name, args in await t.call(name, args, ticket: ticket) } }
-        while !held.waiting { await Task.yield() }
-        t.endTurn()
-        t.beginTurn("a new message")
-        held.open()
-        let replies = try #require(json(await answering.value.body) as? [[String: Any]])
-        #expect(replies.allSatisfy { ($0["result"] as? [String: Any])?["isError"] as? Bool == true })
-        #expect(s.router.cards[0].isOpen)
     }
 
     @Test func nothingActsInATurnASessionStarted() async throws {
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: nil)
-        #expect(await t.call("mark", ["card": "local_a#w500", "addressed": true])?.isError == true)
-        #expect(s.router.cards[0].isOpen)
+        #expect(await t.tool("answer_form", ["card": "local_a#w500", "answers": ["Which database?": "SQLite"]])?.isError == true)
         #expect(t.approveSend(["to": "Fix the login bug", "message": "x"], otherFields: []) != nil)
         // Reading still works.
         #expect(await t.call("board", [:])?.isError == false)
@@ -627,11 +455,11 @@ import Testing
         let t = tools(s)
         t.beginTurn("hi")
         t.rephrase = { _, _, _ in throw RouterTools.Failure("Couldn't prepare the message (No answer in 20 s); nothing was sent") }
-        let out = try #require(await t.call("prepare", ["session": "local_a"]))
+        let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError && out.text.contains("nothing was sent") && t.prepared.isEmpty)
         // Without a binary (a test has none) and without a stand-in, it's an error too.
         t.rephrase = nil
-        #expect(await t.call("prepare", ["session": "local_a"])?.text.contains("Claude Code wasn't found") == true)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.text.contains("Claude Code wasn't found") == true)
     }
 
     @Test func startingPreparesFirstThenStartsAndHandsBackThePeer() async throws {
@@ -646,13 +474,13 @@ import Testing
         t.beginTurn("start a session in lookout to bump the version")
         // Haiku fails: no session is made.
         t.rephrase = { _, _, _ in throw RouterTools.Failure("Couldn't prepare the message") }
-        #expect(await t.call("start_session", ["project": "lookout", "title": "Bump the version"])?.isError == true)
+        #expect(await t.tool("start_session", ["project": "lookout", "title": "Bump the version"])?.isError == true)
         #expect(started == 0)
         t.rephrase = { message, title, project in
             #expect(title == "Bump the version" && project == "lookout" && message == "start a session in lookout to bump the version")
             return Prepared(text: "Bump the version.", original: message, rephrased: true)
         }
-        let out = try #require(await t.call("start_session", ["project": "lookout", "title": "  Bump the\nversion "]))
+        let out = try #require(await t.tool("start_session", ["project": "lookout", "title": "  Bump the\nversion "]))
         let result = try #require(json(Data(out.text.utf8)) as? [String: Any])
         #expect(result["session"] as? String == "local_new" && result["peer"] as? String == "Bump the version")
         // Signed for the new session (its Claude Code id is the bootstrap's uuid).
@@ -676,29 +504,13 @@ import Testing
             return Prepared(text: message, original: message, rephrased: false)
         }
         t.beginTurn("start a session in lookout to bump the version")
-        let starting = Task { await t.call("start_session", ["project": "lookout", "title": "Bump"]) }
+        let starting = Task { await t.tool("start_session", ["project": "lookout", "title": "Bump"]) }
         while !held.waiting { await Task.yield() }
         t.endTurn()
         held.open()
         let out = await starting.value
         #expect(out?.isError == true && out?.text.contains("Stopped") == true)
         #expect(started == 0 && t.prepared.isEmpty)
-    }
-
-    @Test func taggedProjectsNarrowTheRoute() async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s)
-        var offered: [String: String] = [:]
-        t.chooser = { options, hints, _, _ in
-            offered = hints
-            return JevClient.Choice(choice: options[0], confidence: 1, probabilities: [options[0]: 1])
-        }
-        _ = try await route(t, ["message": "add badges", "projects": ["/code/api"]])
-        #expect(offered.values.allSatisfy { !$0.contains("lookout") })
-        #expect(offered.values.contains { $0.contains("Write the README") })
-        #expect(await t.call("route", ["message": "x", "projects": ["nowhere"]])?.isError == true)
-        #expect(await t.call("route", ["message": "x", "projects": "api"])?.isError == true)
     }
 
     /// Claude Code's own input for a SendMessage of `message`, as 2.1.293 builds it (captured from the binary).
@@ -725,13 +537,13 @@ import Testing
         let code = "    let x = 1\n    let y = 2"
         let t = tools(s, turn: "tell lookout:\n" + code)
         t.rephrase = { message, _, _ in Prepared(text: code, original: message, rephrased: true) }
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         // Claude Code's previews of the signed text pass; the body, indent and all, is what was prepared.
         let signed = sealed(t, "Fix the login bug", code)
         #expect(signed.hasSuffix("\n" + Data(code.utf8).base64EncodedString()))
         #expect(t.approveSend(claudeInput("Fix the login bug", signed), otherFields: []) == nil)
         // The message itself is still held byte for byte: the same code without its indent is refused.
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         let header = sealed(t, "Fix the login bug", code).components(separatedBy: "\n")[0]
         let flattened = header + "\n" + Data("let x = 1\n    let y = 2".utf8).base64EncodedString()
         #expect(t.approveSend(claudeInput("Fix the login bug", flattened), otherFields: []) != nil)
@@ -752,7 +564,7 @@ import Testing
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout to bump the version")
         t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         let input = claudeInput("Fix the login bug", sealed(t, "Fix the login bug", "Bump the version."))
         // Off, and asked right away (the agent's switch observer hasn't run): refused, and nothing used up.
         s.router.enabled = false
@@ -777,26 +589,26 @@ import Testing
         let peer = try JSONSerialization.data(withJSONObject: ["pid": Int(getppid()), "hostSessionId": "local_b", "sessionId": "cli-local_b",
                                                                "name": "Write the README", "status": "idle"])
         try peer.write(to: sessions.appendingPathComponent("\(getppid()).json"))
-        let stale = try #require(await t.call("prepare", ["session": "local_b"]))
+        let stale = try #require(await t.tool("prepare", ["session": "local_b"]))
         #expect(stale.isError)
         #expect(t.prepared.isEmpty)
         // Two processes claim the same desktop session with different ids: ambiguous, refused.
         let twin = try JSONSerialization.data(withJSONObject: ["pid": 1, "hostSessionId": "local_a", "sessionId": "cli-other",
                                                                "name": "Fix the login bug", "status": "idle"])
         try twin.write(to: sessions.appendingPathComponent("1.json"))
-        #expect(await t.call("prepare", ["session": "local_a"])?.isError == true)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
         try FileManager.default.removeItem(at: sessions.appendingPathComponent("1.json"))
         // The plugin not installed at all: said, and nothing prepared, nor any session started.
         s.routerPluginStatus = .notInstalled
-        #expect(await t.call("prepare", ["session": "local_a"])?.isError == true)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
         var started = 0
         t.starter = { _, title in started += 1; return SessionStart.Started(sessionID: "local_new", peer: title) }
-        #expect(await t.call("start_session", ["project": "lookout", "title": "Ship"])?.isError == true)
+        #expect(await t.tool("start_session", ["project": "lookout", "title": "Ship"])?.isError == true)
         #expect(started == 0 && t.prepared.isEmpty)
         // Installed but with no key to sign with: refused too (no presence counts without the key it was written under).
         s.routerPluginStatus = .installed
         try FileManager.default.removeItem(at: dir.path("support/relay.key"))
-        let keyless = await t.call("prepare", ["session": "local_a"])
+        let keyless = await t.tool("prepare", ["session": "local_a"])
         #expect(keyless?.isError == true && t.prepared.isEmpty)
     }
 
@@ -805,7 +617,7 @@ import Testing
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout to bump the version")
         t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         // The body alone (unsigned) is refused; so is the header with another body.
         #expect(t.approveSend(claudeInput("Fix the login bug", "Bump the version."), otherFields: []) != nil)
         let signed = sealed(t, "Fix the login bug", "Bump the version.")
@@ -833,13 +645,13 @@ import Testing
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) {
             PluginFixture.live(presence.lastPathComponent, support: support, claude: claude)
         }
-        let out = try #require(await t.call("start_session", ["project": "lookout", "title": "Bump it"]))
+        let out = try #require(await t.tool("start_session", ["project": "lookout", "title": "Bump it"]))
         #expect(!out.isError, "\(out.text)")
         #expect(t.prepared["Bump it"]?.text.hasPrefix("⟦lookout v1 late ") == true)
         // It never comes up: nothing to send, said.
         t.starter = { _, title in SessionStart.Started(sessionID: "local_never", peer: title) }
         t.pluginWait = 0.5
-        let never = try #require(await t.call("start_session", ["project": "lookout", "title": "Never"]))
+        let never = try #require(await t.tool("start_session", ["project": "lookout", "title": "Never"]))
         #expect(never.isError && never.text.contains("plugin didn't come up") && t.prepared["Never"] == nil)
     }
 
@@ -851,7 +663,7 @@ import Testing
         #expect(nfc == nfd)
         let t = tools(s, turn: "tell lookout: " + nfc)
         t.rephrase = { message, _, _ in Prepared(text: nfc, original: message, rephrased: true) }
-        _ = await t.call("prepare", ["session": "local_a"])
+        _ = await t.tool("prepare", ["session": "local_a"])
         let signed = sealed(t, "Fix the login bug", nfc)
         let header = signed.components(separatedBy: "\n")[0]
         // The same words as Swift sees them, other bytes: refused, and the preparation stays for the real one.
@@ -875,7 +687,7 @@ import Testing
         }
         // The first prepare: nothing cached yet, read then, and signed.
         s.relayKeyCache = nil
-        let first = try #require(await t.call("prepare", ["session": "local_a"]))
+        let first = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(!first.isError, "\(first.text)")
         #expect(verifies("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"))
         // The key changes on disk: the next prepare reads the new one and signs with it.
@@ -884,12 +696,12 @@ import Testing
         try Data(newKey.utf8).write(to: dir.path("support/relay.key"))
         // (The session's plugin takes the new key too.)
         PluginFixture.live("cli-local_a", support: dir.path("support"), claude: dir.path("claude"))
-        let second = try #require(await t.call("prepare", ["session": "local_a"]))
+        let second = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(!second.isError, "\(second.text)")
         #expect(verifies(newKey))
         // No key at all: refused, nothing prepared.
         try FileManager.default.removeItem(at: dir.path("support/relay.key"))
-        #expect(await t.call("prepare", ["session": "local_a"])?.isError == true)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
         #expect(t.prepared.isEmpty)
     }
 
@@ -903,7 +715,7 @@ import Testing
         t.keyReloadWait = 0.05
         s.relayKeyCache = nil
         // The read never finishes, yet the prepare returns (signed if the store's own read got there, else refused).
-        let out = try #require(await t.call("prepare", ["session": "local_a"]))
+        let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError ? out.text.contains("couldn't sign") : t.prepared["Fix the login bug"] != nil)
         // Its reload did start (it may start after the deadline already passed): waited for, then let go.
         await waitUntil(within: 120) { held.waiting }
@@ -928,7 +740,7 @@ import Testing
         let form = try #require(s.pendingForms["cli-local_a"])
         // You click Postgres on the card; the Router's answer comes after.
         try await FormWriter.write(form, answers: ["Which database?": "Postgres"], dir: dir.path("support/forms"))
-        let late = try #require(await t.call("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
+        let late = try #require(await t.tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
         #expect(late.isError && late.text.contains("Already answered"))
         #expect(try answer(dir) == ["Which database?": "Postgres"])
     }
@@ -938,7 +750,7 @@ import Testing
         let s = await store(dir)
         let t = tools(s, turn: "answer sqlite")
         let form = try #require(s.pendingForms["cli-local_a"])
-        #expect(await t.call("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]])?.isError == false)
+        #expect(await t.tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]])?.isError == false)
         await #expect(throws: FormWriter.AlreadyAnswered.self) {
             try await FormWriter.write(form, answers: ["Which database?": "Postgres"], dir: dir.path("support/forms"))
         }
@@ -987,20 +799,20 @@ import Testing
         let t = tools(s, turn: "Bump the version and push (@router this one is slow, don't wait on it)")
         // Haiku left the aside in: refused, nothing prepared.
         t.rephrase = { message, _, _ in Prepared(text: message, original: message, rephrased: false) }
-        let kept = try #require(await t.call("prepare", ["session": "local_a"]))
+        let kept = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(kept.isError && kept.text.contains("@router") && t.prepared.isEmpty)
         // Any case.
         t.rephrase = { message, _, _ in Prepared(text: "Bump it (@ROUTER later)", original: message, rephrased: true) }
-        #expect(await t.call("prepare", ["session": "local_a"])?.isError == true)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
         // Haiku took it out: it goes, without the aside.
         t.rephrase = { message, _, _ in Prepared(text: "Bump the version and push", original: message, rephrased: true) }
-        #expect(await t.call("prepare", ["session": "local_a"])?.isError == false)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == false)
         #expect(t.prepared["Fix the login bug"]?.body == "Bump the version and push")
         // A new session's first message is held to the same, before any session is made.
         var started = 0
         t.starter = { _, title in started += 1; return SessionStart.Started(sessionID: "local_new", peer: title) }
         t.rephrase = { message, _, _ in Prepared(text: "Ship it (@router quietly)", original: message, rephrased: true) }
-        #expect(await t.call("start_session", ["project": "lookout", "title": "Ship it"])?.isError == true)
+        #expect(await t.tool("start_session", ["project": "lookout", "title": "Ship it"])?.isError == true)
         #expect(t.prepared["Ship it"] == nil && started == 0)
     }
 
@@ -1010,7 +822,7 @@ import Testing
         let t = tools(s, turn: "@router what needs me?")
         // Haiku's answer for it, read by the real parser.
         t.rephrase = { message, _, _ in try Rephrase.parse(#"{"rephrased": true, "text": ""}"#, original: message) }
-        let out = try #require(await t.call("prepare", ["session": "local_a"]))
+        let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError && out.text.hasPrefix("Nothing to pass on"))
         #expect(t.prepared.isEmpty)
     }
@@ -1046,7 +858,7 @@ import Testing
         let s = await store(dir)
         let t = tools(s, turn: "Ship it " + text)
         t.rephrase = { message, _, _ in Prepared(text: "Ship it " + text, original: message, rephrased: true) }
-        let out = try #require(await t.call("prepare", ["session": "local_a"]))
+        let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError && out.text.contains("@router") && t.prepared.isEmpty, "\(text)")
     }
 

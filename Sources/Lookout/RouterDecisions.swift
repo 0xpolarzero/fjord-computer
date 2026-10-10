@@ -219,7 +219,7 @@ extension Store {
 
     /// A change made in Lookout: part of the run under way, else an entry of its own.
     func logChange(_ change: LookoutChange, into run: UUID? = nil) {
-        if let id = run ?? activeDecision, router.decisions.contains(where: { $0.id == id }) {
+        if let id = run, router.decisions.contains(where: { $0.id == id }) {
             updateDecision(id) { $0.add(.changed(change.id)) }
         } else {
             logDecision(RouterDecision(at: change.date, trigger: .system, decision: RouterDecision.Decided(intent: change.title),
@@ -231,7 +231,7 @@ extension Store {
     func noteReverted(_ change: UUID) {
         guard let i = router.decisions.firstIndex(where: { $0.links.changes.contains(change) }) else { return }
         let all = router.decisions[i].links.changes.allSatisfy { id in
-            router.chat.contains { $0.change?.id == id && $0.change?.isReverted == true }
+            router.changes.contains { $0.id == id && $0.isReverted }
         }
         if all { updateDecision(router.decisions[i].id) { $0.outcome = .reverted } }
     }

@@ -462,37 +462,32 @@ final class RouterMCPServer: @unchecked Sendable {
 
 // MARK: - Tools
 
-/// What the Router can do besides messaging: read the board, pick a target, answer a form, start or open a session, mark a
-/// card. Each acts on the store, on the main thread.
+/// What a Router run can use: the board and Lookout's own tools (RouterLookout.swift), and what the dispatcher calls
+/// directly (prepare, answer a form, start a session, the gate). Each acts on the store, on the main thread.
 @MainActor final class RouterTools {
-    private weak var store: Store?
+    private(set) weak var store: Store?
     /// Jev's pick for `route`; tests answer for it (else TypeSafe, with the user's key).
     var chooser: (([String], [String: String], [String: String], String) async throws -> JevClient.Choice)?
-    /// Bumped when the Router is reset (new conversation, quit, switched off): a call that began before acts on nothing.
-    private(set) var epoch = 0
     /// Bumped when a turn ends (its result, or Stop): the turn's unfinished work acts on nothing.
     private(set) var turn = 0
-    /// What a call belongs to: the process (`epoch`) and the turn, taken once per request (a batch shares it). Side
-    /// effects need a turn of yours (`userTurn`): a session's message never makes the Router act.
+    /// What a call belongs to: the turn, taken once per request (a batch shares it). Side effects need a turn of yours
+    /// (`userTurn`): a session's message never makes the Router act.
     struct Ticket: Equatable {
-        var epoch: Int
         var turn: Int
         var userTurn = true
     }
 
     /// The ticket of a request arriving now.
-    func ticket(epoch: Int? = nil) -> Ticket {
-        Ticket(epoch: epoch ?? self.epoch, turn: turn, userTurn: turnText != nil)
+    func ticket() -> Ticket {
+        Ticket(turn: turn, userTurn: turnText != nil)
     }
-    /// The text of your message the current turn is about (without Lookout's header lines); nil in a turn a session's
-    /// message started. `prepare` and `start_session` take the words from here, never from the Router.
+    /// The text of your message the current turn is about; nil once the turn is over. `prepare` and `startSession` take the
+    /// words from here, never from the model.
     private(set) var turnText: String?
     /// Haiku and bootstrap runs under way: ended with their turn.
     private var runs: [ObjectIdentifier: OneShot.Handle] = [:]
     /// Called after a target is looked up, before anything is changed (tests hold a call there).
     var afterLookup: (() async -> Void)?
-    /// Sends the gate let through, in order, until their tool_use is seen (for receipts).
-    private var approved: [(to: String, text: String, prepared: Prepared)] = []
 
     init(store: Store) {
         self.store = store
@@ -505,35 +500,23 @@ final class RouterMCPServer: @unchecked Sendable {
     var rephrase: ((String, String, String) async throws -> Prepared)?
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
     var starter: ((String, String) async throws -> SessionStart.Started)?
-    /// Claude Code's bundled binary, as the agent found it.
+    /// Claude Code's bundled binary, as `RouterStatus` found it.
     var claudePath: () -> String? = { nil }
 
-    /// The process ended: everything of it is void, and its runs are stopped.
-    func reset() {
-        epoch += 1
-        endTurn()
-    }
-
-    /// The inbox action's message the current turn answers (its id in the chat), if an action started it.
-    private(set) var automatedRef: UUID?
     /// The decision-log entry of the run this instance serves (a typed run of the dispatcher, see RouterDispatcher): its
-    /// changes join that entry, not whichever run is `activeDecision`.
+    /// changes join that entry.
     var decision: UUID?
 
-    /// A turn of yours begins (nil: a session's message started it). `automatedRef`: it is an inbox action's message, which
-    /// can read Lookout but changes nothing in it.
-    func beginTurn(_ text: String?, automatedRef: UUID? = nil) {
+    /// A turn of yours begins.
+    func beginTurn(_ text: String) {
         turnText = text
-        self.automatedRef = automatedRef
     }
 
     /// The turn ended or was stopped: unused preparations go, runs under way are stopped, late work acts on nothing.
     func endTurn() {
         turn += 1
         turnText = nil
-        automatedRef = nil
         prepared = [:]
-        approved = []
         cancelRuns()
     }
 
@@ -559,16 +542,10 @@ final class RouterMCPServer: @unchecked Sendable {
     /// as the same): the wire text is signed, and only exactly it goes.
     nonisolated private static func sameBytes(_ a: String, _ b: String) -> Bool { Data(a.utf8) == Data(b.utf8) }
 
-    /// The send the gate let through for (to, message), once: its receipt says what was prepared.
-    func takeApproved(_ to: String, _ message: String) -> Prepared? {
-        guard let i = approved.firstIndex(where: { $0.to == to && Self.sameBytes($0.text, message) }) else { return nil }
-        return approved.remove(at: i).prepared
-    }
-
     /// Right before a side effect: the call must still belong to the Router and the turn as they are now.
     /// `acting` false: a read (board, route), which a session's turn may do too.
     func live(_ ticket: Ticket, acting: Bool = true) throws {
-        guard ticket.epoch == epoch, !Task.isCancelled else { throw Failure("The Router was reset; nothing was done") }
+        guard !Task.isCancelled else { throw Failure("Stopped; nothing was done") }
         guard ticket.turn == turn else { throw Failure("Stopped; nothing was done") }
         guard !acting || (ticket.userTurn && turnText != nil) else { throw Failure("Only the user's messages make the Router act") }
         guard let store, store.router.enabled, store.agents.enabled else { throw Failure("The Router is off; nothing was done") }
@@ -577,119 +554,25 @@ final class RouterMCPServer: @unchecked Sendable {
     /// `live` as a yes/no, for a check made later (the form writer's, right before it writes).
     private func isLive(_ ticket: Ticket) -> Bool { (try? live(ticket)) != nil }
 
-    /// Every tool: the sessions' (below) and Lookout's own (RouterLookout.swift).
-    static let specs: [[String: Any]] = sessionSpecs + LookoutTools.specs
+    /// Every tool a run may be offered: the board and Lookout's own (RouterLookout.swift).
+    static let specs: [[String: Any]] = [boardSpec] + LookoutTools.specs
 
-    private static let sessionSpecs: [[String: Any]] = [
-        [
-            "name": "board",
-            "description": "What needs the user now: open cards (with any pending form's questions and options), working sessions, other recent sessions and project names. Each session has `peer` (the exact `to` for SendMessage) and `reachable` (it has a live process). Call it before acting.",
-            "inputSchema": ["type": "object", "properties": [String: Any](), "additionalProperties": false],
-        ],
-        [
-            "name": "route",
-            "description": "Picks the target of a user message among open cards (answer:<card>), sessions (session:<id>) and projects (new:<folder>), or `unclear`. Returns the top candidates with probabilities and `decision`: act only on \"send\"; on \"ask\", ask the user.",
-            "inputSchema": [
-                "type": "object",
-                "properties": [
-                    "message": ["type": "string", "description": "The user's message, verbatim."],
-                    "projects": ["type": "array", "items": ["type": "string"],
-                                 "description": "The projects the user tagged (from the [projects: …] header): only their sessions and cards are candidates."],
-                ],
-                "required": ["message"], "additionalProperties": false,
-            ],
-        ],
-        [
-            "name": "prepare",
-            "description": "Required before every SendMessage: Lookout takes the user's current message itself and returns `to` and `text`, the part for this session as it must be sent (addressing like \"tell lookout to\" removed, otherwise unchanged). SendMessage exactly `text` to `to`, with no other fields: anything else is refused. On an error, tell the user and don't send.",
-            "inputSchema": [
-                "type": "object",
-                "properties": [
-                    "session": ["type": "string", "description": "The target: its session id from board, or its peer name."],
-                ],
-                "required": ["session"], "additionalProperties": false,
-            ],
-        ],
-        [
-            "name": "answer_form",
-            "description": "Answers a session's pending question form, as if the user clicked it. One answer per question: an option's label, labels joined with \", \" (or a list) for multi-select, or the user's own words.",
-            "inputSchema": [
-                "type": "object",
-                "properties": [
-                    "card": ["type": "string", "description": "The question card's id, from board."],
-                    "answers": [
-                        "type": "object",
-                        "description": "Question text → answer.",
-                        "additionalProperties": ["anyOf": [["type": "string"], ["type": "array", "items": ["type": "string"]]]],
-                    ],
-                ],
-                "required": ["card", "answers"], "additionalProperties": false,
-            ],
-        ],
-        [
-            "name": "start_session",
-            "description": "Starts a new session in a project, only when the user asks for one. Lookout takes the user's current message as its first message, prepared already; it waits until the session runs and returns its `peer` and `text`: SendMessage exactly `text` to `peer` next, with no prepare.",
-            "inputSchema": [
-                "type": "object",
-                "properties": [
-                    "project": ["type": "string", "description": "A project name from board or the [projects: …] header, or its folder path."],
-                    "title": ["type": "string", "description": "A short title for the session, 3 to 6 words."],
-                    "ref": ["type": "string", "description": "When starting it for an inbox action's message (\"⚡ <category>: …\"), the id on that message's `[ref: …]` line: the action's row then links to the session."],
-                ],
-                "required": ["project", "title"], "additionalProperties": false,
-            ],
-        ],
-        [
-            "name": "open_session",
-            "description": "Opens a session in the Claude app, e.g. one that isn't reachable so it can get a live process.",
-            "inputSchema": [
-                "type": "object",
-                "properties": ["session": ["type": "string", "description": "The session's id from board, or its exact title."]],
-                "required": ["session"], "additionalProperties": false,
-            ],
-        ],
-        [
-            "name": "mark",
-            "description": "Marks a card addressed (done with) or open again, when the user says so.",
-            "inputSchema": [
-                "type": "object",
-                "properties": [
-                    "card": ["type": "string", "description": "The card's id, from board."],
-                    "addressed": ["type": "boolean", "description": "true: addressed; false: open again."],
-                ],
-                "required": ["card", "addressed"], "additionalProperties": false,
-            ],
-        ],
+    private static let boardSpec: [String: Any] = [
+        "name": "board",
+        "description": "What needs the user now: open cards (with any pending form's questions and options), working sessions, other recent sessions and project names.",
+        "inputSchema": ["type": "object", "properties": [String: Any](), "additionalProperties": false],
     ]
 
-    /// Runs a tool; nil when there is no tool by that name. `epoch`: the Router's when the request came (now by default).
-    /// `ticket`: the request's (a batch shares one); now's by default.
-    func call(_ name: String, _ args: [String: Any], epoch: Int? = nil, ticket given: Ticket? = nil) async -> RouterRPC.ToolResult? {
+    /// Runs a tool; nil when there is no tool by that name. `ticket`: the request's (a batch shares one); now's by default.
+    func call(_ name: String, _ args: [String: Any], ticket given: Ticket? = nil) async -> RouterRPC.ToolResult? {
         guard let store else { return .error("Lookout isn't ready") }
-        let ticket = given ?? self.ticket(epoch: epoch)
-        do {
-            switch name {
-            case "board":
-                let text = await board(store)
-                try live(ticket, acting: false)
-                return RouterRPC.ToolResult(text: text)
-            case "route":
-                let text = try await route(store, message: Self.string(args, "message"), projects: try Self.strings(args, "projects"))
-                try live(ticket, acting: false)
-                return RouterRPC.ToolResult(text: text)
-            case "answer_form": return RouterRPC.ToolResult(text: try await answerForm(store, args, ticket: ticket))
-            case "prepare":
-                return RouterRPC.ToolResult(text: try await prepare(store, session: Self.string(args, "session"), ticket: ticket))
-            case "start_session":
-                return RouterRPC.ToolResult(text: try await startSession(store, project: Self.string(args, "project"),
-                                                                         title: Self.string(args, "title"), ref: args["ref"] as? String, ticket: ticket))
-            case "open_session": return RouterRPC.ToolResult(text: try openSession(store, Self.string(args, "session"), ticket: ticket))
-            case "mark": return RouterRPC.ToolResult(text: try mark(store, args, ticket: ticket))
-            default: return await lookout(name, args, store: store, ticket: ticket)
-            }
-        } catch {
-            return .error(error.localizedDescription)
+        let ticket = given ?? self.ticket()
+        if name == "board" {
+            let text = await board(store)
+            do { try live(ticket, acting: false) } catch { return .error(error.localizedDescription) }
+            return RouterRPC.ToolResult(text: text)
         }
+        return await lookout(name, args, store: store, ticket: ticket)
     }
 
     struct Failure: LocalizedError {
@@ -711,14 +594,6 @@ final class RouterMCPServer: @unchecked Sendable {
         guard let value = args[key] else { return [] }
         guard let list = value as? [String] else { throw Failure("`\(key)` must be a list of strings") }
         return list
-    }
-
-    /// A JSON boolean, not a number that happens to be 0 or 1.
-    static func bool(_ args: [String: Any], _ key: String) throws -> Bool {
-        guard let value = args[key] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else {
-            throw Failure("`\(key)` must be true or false")
-        }
-        return value.boolValue
     }
 
     // MARK: board
@@ -877,59 +752,6 @@ final class RouterMCPServer: @unchecked Sendable {
         return (ranked, named)
     }
 
-    func route(_ store: Store, message: String, projects: [String] = []) async throws -> String {
-        let tagged = try projects.map { try Self.folder($0, folders: store.knownFolders.filter { !$0.isEmpty }, name: store.folderName) }
-        let targets = targets(store, projects: tagged.isEmpty ? nil : Set(tagged))
-        let byTarget = Dictionary(targets.map { ($0.target, $0) }, uniquingKeysWith: { a, _ in a })
-        let peers = await peers(store)
-        func row(_ target: String, _ extra: [String: Any]) -> [String: Any] {
-            var fields = extra
-            fields["target"] = target
-            if let t = byTarget[target] {
-                if !t.title.isEmpty { fields["title"] = t.title }
-                if !t.project.isEmpty { fields["project"] = t.project }
-                if let id = t.sessionID, let session = store.claudeSessions[id] {
-                    let peer = peers[id]
-                    fields["peer"] = peer?.name.isEmpty == false ? peer!.name : session.title
-                    fields["reachable"] = peer != nil
-                }
-            }
-            return fields
-        }
-        let key = store.typesafeKey ?? ""
-        let choose = chooser ?? (key.isEmpty ? nil : { options, hints, state, instructions in
-            try await JevClient(key: key).choose(options, hints: hints, for: state, instructions: instructions)
-        })
-        var why = "no TypeSafe key is set"
-        if let choose {
-            // Plain keys for Jev (card ids and paths have characters it may not take), mapped back after.
-            let keys = targets.indices.map { "o\($0)" }
-            let hints = Dictionary(uniqueKeysWithValues: zip(keys, targets.map(\.hint)))
-            do {
-                let pick = try await choose(keys, hints, ["user message": message],
-                    "Which of the user's Claude Code sessions, open cards or projects is this message for? Pick unclear unless the message makes it clear.")
-                let ranked = pick.probabilities.compactMap { key, p -> (target: String, p: Double)? in
-                    guard let i = keys.firstIndex(of: key) else { return nil }
-                    return (targets[i].target, p)
-                }.sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
-                let top = ranked.prefix(4).map { row($0.target, ["p": (($0.p * 100).rounded() / 100)]) }
-                return Self.json(["decision": Self.decision(ranked), "assisted": true, "candidates": top])
-            } catch {
-                why = "TypeSafe failed: \(error.localizedDescription)"
-            }
-        }
-        let (ranked, named) = Self.unassisted(message, targets)
-        var top = ranked.prefix(4).map { row($0.target, ["score": $0.score]) }
-        if let named {
-            // The target the user named leads.
-            let score = ranked.first { $0.target == named }?.score ?? 0
-            top.removeAll { $0["target"] as? String == named }
-            top.insert(row(named, ["score": score]), at: 0)
-        }
-        return Self.json(["decision": named == nil ? "ask" : "send", "assisted": false, "candidates": top,
-                          "note": "Routing is unassisted (\(why)): candidates by matching words; send only to the target the user named."])
-    }
-
     // MARK: actions
 
     private func card(_ store: Store, _ id: String) throws -> RouterCard {
@@ -1020,7 +842,7 @@ final class RouterMCPServer: @unchecked Sendable {
         }
     }
 
-    /// Haiku, through the binary the agent found (or what a test put in), stopped with the turn.
+    /// Haiku, through the binary `RouterStatus` found (or what a test put in), stopped with the turn.
     private func rephrased(_ store: Store, _ message: String, title: String, project: String) async throws -> Prepared {
         if let rephrase { return try await rephrase(message, title, project) }
         guard let binary = claudePath(), let home = store.routerFiles?.routerHome else {
@@ -1060,7 +882,7 @@ final class RouterMCPServer: @unchecked Sendable {
         }
         let titled = store.claudeSessions.values.filter { !$0.isArchived && $0.title.lowercased() == query.lowercased() }
         guard let session = store.claudeSessions[query]
-            ?? RouterAgent.peerSession(query, peers: peers).flatMap({ store.claudeSessions[$0] })
+            ?? ClaudePeers.session(named: query, peers: peers).flatMap({ store.claudeSessions[$0] })
             ?? (titled.count == 1 ? titled[0] : nil) else {
             throw Failure("No session “\(query)”; call board")
         }
@@ -1175,11 +997,11 @@ final class RouterMCPServer: @unchecked Sendable {
         return Self.json(["to": to, "text": sealed.text, "rephrased": ready.rephrased])
     }
 
-    /// Claude Code asks before a SendMessage runs (the native permission prompt, answered by the agent over stdin): only the
+    /// Claude Code asks before a SendMessage runs (the native permission prompt, answered over stdin): only the
     /// text prepared for that target in this turn goes, once, with no field of its own added. Nil allows; else why not.
     func approveSend(_ input: [String: String], otherFields: [String]) -> String? {
         guard turnText != nil else { return "Only the user's messages are sent" }
-        // Switched off, and the switch not seen by the agent yet: nothing goes, nothing is used up.
+        // Switched off, and the switch not seen yet: nothing goes, nothing is used up.
         guard let store, store.router.enabled, store.agents.enabled else { return "The Router is off" }
         guard otherFields.isEmpty else { return "Unexpected fields: \(otherFields.joined(separator: ", ")). Send only `to` and `message`" }
         // What Claude Code adds itself (a preview, the kind of recipient) is checked against the message; nothing else.
@@ -1198,7 +1020,6 @@ final class RouterMCPServer: @unchecked Sendable {
             return "The call doesn't match the prepared message"
         }
         prepared[to] = nil
-        approved.append((to, message, ready))
         return nil
     }
 
@@ -1218,7 +1039,7 @@ final class RouterMCPServer: @unchecked Sendable {
         return !stem.isEmpty && stem.count < full.count && full.hasPrefix(stem)
     }
 
-    func startSession(_ store: Store, project: String, title: String, ref: String? = nil, ticket: Ticket) async throws -> String {
+    func startSession(_ store: Store, project: String, title: String, ticket: Ticket) async throws -> String {
         let message = try yourMessage()
         let folder = try Self.folder(project, folders: store.knownFolders.filter { !$0.isEmpty }, name: store.folderName)
         let name = store.folderName(folder)
@@ -1244,8 +1065,6 @@ final class RouterMCPServer: @unchecked Sendable {
         try live(ticket)
         ready.newSessionIn = name
         prepared[started.peer] = ready
-        // For an inbox action's message: its row links to the session.
-        if let action = ref.flatMap(UUID.init(uuidString:)) ?? automatedRef { store.noteActionSession(started.sessionID, forMessage: action) }
         return Self.json(["session": started.sessionID, "peer": started.peer, "text": ready.text, "rephrased": ready.rephrased,
                           "next": "SendMessage exactly `text` to `peer` (already prepared)."])
     }
@@ -1291,30 +1110,6 @@ final class RouterMCPServer: @unchecked Sendable {
         if let intercept = store.interceptOpen { intercept("New Claude session in \(name)") } else { Link.open(url) }
         let peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir) { [weak self] in try self?.live(ticket) }
         return SessionStart.Started(sessionID: "local_\(uuid)", peer: peer)
-    }
-
-    func openSession(_ store: Store, _ query: String, ticket: Ticket) throws -> String {
-        let session: ClaudeSession
-        if let s = store.claudeSessions[query] {
-            session = s
-        } else {
-            let titled = store.claudeSessions.values.filter { !$0.isArchived && $0.title.lowercased() == query.lowercased() }
-            guard titled.count == 1 else {
-                throw Failure(titled.isEmpty ? "No session “\(query)”; call board" : "More than one session is called “\(query)”; use its id")
-            }
-            session = titled[0]
-        }
-        try live(ticket)
-        store.openAgent(session.id)
-        return "Opened “\(session.title)” in Claude."
-    }
-
-    func mark(_ store: Store, _ args: [String: Any], ticket: Ticket) throws -> String {
-        let card = try card(store, Self.string(args, "card"))
-        let addressed = try Self.bool(args, "addressed")
-        try live(ticket)
-        store.setCardAddressed(card.id, addressed)
-        return addressed ? "Marked “\(card.title)” addressed." : "Opened “\(card.title)” again."
     }
 }
 

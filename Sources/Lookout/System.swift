@@ -460,9 +460,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // The Router's process goes with the app.
+        // The Router's runs go with the app.
         store?.routerDispatcher.stopAll()
-        store?.routerAgent.shutdown()
         store?.flushSave()
     }
 

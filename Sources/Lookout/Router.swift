@@ -3,21 +3,20 @@ import Foundation
 
 // MARK: - Persisted state
 
-/// The Router: one chat above the Claude sessions, and the cards for what needs you in them.
+/// The Router: the cards for what needs you in the Claude sessions, and the log of what it did.
 struct RouterState: Codable, Equatable {
     /// Off by default; only offered while the Claude sessions extension is on.
     var enabled = false
     var enabledAt: Date?
     /// Oldest first.
     var cards: [RouterCard] = []
-    /// The conversation with the Router, oldest first.
-    var chat: [RouterMessage] = []
+    /// What the Router changed in Lookout itself, oldest first: the records behind the decision log's change cards (see
+    /// LookoutChange.swift).
+    var changes: [LookoutChange] = []
     /// The decision log, oldest first (see RouterDecisions.swift).
     var decisions: [RouterDecision] = []
     /// The overviews you asked for, oldest first (see RouterOverview.swift).
     var overviews: [RouterOverview] = []
-    /// The Router's own Claude Code session, to resume it.
-    var claudeSessionID: String?
     /// What the feed last saw of each session (see `RouterFeed.Stamp`): a change is an event, the same is not.
     var seen: [String: String] = [:]
     /// The question or plan each session is stopped on, by when it began (ms since 1970, exactly as the transcript says):
@@ -42,15 +41,46 @@ struct RouterState: Codable, Equatable {
 
     init() {}
 
+    /// A line of the chat an older file kept: only the change it may hold is read.
+    private struct LegacyLine: Decodable {
+        var change: LookoutChange?
+        enum CodingKeys: String, CodingKey { case change }
+        init(from decoder: Decoder) throws {
+            change = try? decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(LookoutChange.self, forKey: .change)
+        }
+    }
+
+    /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
+    private enum CodingKeys: String, CodingKey {
+        case enabled, enabledAt, cards, changes, chat, decisions, overviews, seen, waits, waitTools, formSeen, pendingTurns, origins
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encodeIfPresent(enabledAt, forKey: .enabledAt)
+        try c.encode(cards, forKey: .cards)
+        try c.encode(changes, forKey: .changes)
+        try c.encode(decisions, forKey: .decisions)
+        try c.encode(overviews, forKey: .overviews)
+        try c.encode(seen, forKey: .seen)
+        try c.encode(waits, forKey: .waits)
+        try c.encode(waitTools, forKey: .waitTools)
+        try c.encode(formSeen, forKey: .formSeen)
+        try c.encode(pendingTurns, forKey: .pendingTurns)
+        try c.encode(origins, forKey: .origins)
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? false
         enabledAt = try? c.decodeIfPresent(Date.self, forKey: .enabledAt)
         cards = (try? c.decodeIfPresent([RouterCard].self, forKey: .cards)) ?? []
-        chat = (try? c.decodeIfPresent([RouterMessage].self, forKey: .chat)) ?? []
+        changes = (try? c.decodeIfPresent([LookoutChange].self, forKey: .changes)) ?? []
+        // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
+        if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
         decisions = (try? c.decodeIfPresent([RouterDecision].self, forKey: .decisions)) ?? []
         overviews = (try? c.decodeIfPresent([RouterOverview].self, forKey: .overviews)) ?? []
-        claudeSessionID = try? c.decodeIfPresent(String.self, forKey: .claudeSessionID)
         seen = (try? c.decodeIfPresent([String: String].self, forKey: .seen)) ?? [:]
         waits = (try? c.decodeIfPresent([String: Int64].self, forKey: .waits)) ?? [:]
         waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]
@@ -212,57 +242,6 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 }
 
-/// A line of the Router chat.
-struct RouterMessage: Codable, Identifiable, Hashable {
-    enum Role: String, Codable {
-        case you, router
-        /// One line per action the Router took ("→ lookout: …").
-        case receipt
-        case error
-        /// A session wrote back to the Router.
-        case peer
-        /// A category's action asking the Router (`source` is the category): sent as the Router's input, not yours.
-        case automated
-        /// Something the Router changed in Lookout itself (`change`): a card with Open and Revert.
-        case change
-    }
-
-    var id = UUID()
-    var role: Role
-    var text: String
-    var date: Date
-    /// The session a receipt or a peer line is about.
-    var sessionID: String?
-    /// Your line: the card you replied to.
-    var replyTo: String? = nil
-    /// Your line: the projects you tagged (folder paths).
-    var projects: [String]? = nil
-    /// A receipt of a message Lookout rephrased before sending: what you wrote (the receipt says what was sent).
-    var original: String? = nil
-    /// An automated line: the category it came from.
-    var source: String? = nil
-    /// A change the Router made in Lookout: what it touched, before and after.
-    var change: LookoutChange? = nil
-}
-
-extension RouterMessage {
-    /// Lenient: a line that can't be read in full keeps what it can (the fields added later are optional).
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
-        role = try c.decode(Role.self, forKey: .role)
-        text = try c.decode(String.self, forKey: .text)
-        date = try c.decode(Date.self, forKey: .date)
-        sessionID = try? c.decodeIfPresent(String.self, forKey: .sessionID)
-        replyTo = try? c.decodeIfPresent(String.self, forKey: .replyTo)
-        projects = try? c.decodeIfPresent([String].self, forKey: .projects)
-        original = try? c.decodeIfPresent(String.self, forKey: .original)
-        source = try? c.decodeIfPresent(String.self, forKey: .source)
-        change = try? c.decodeIfPresent(LookoutChange.self, forKey: .change)
-    }
-}
-
-
 // MARK: - Feed
 
 /// Turns reads of the sessions into cards. Pure: the same reads give the same cards, so the rules are tested here.
@@ -270,7 +249,7 @@ enum RouterFeed {
     /// What a turn card says until the app writes the turn's summary.
     static let placeholder = "Finished its turn"
     static let maxCards = 300
-    static let maxChat = 500
+    static let maxChanges = 500
 
     /// What changes in a session that the rules care about: turns finished, your last message, when you last opened it.
     struct Stamp: Equatable {
@@ -530,7 +509,7 @@ enum RouterFeed {
         state.cards.append(card)
     }
 
-    /// Keeps the file small: the oldest addressed cards go first, then the oldest open ones; the chat keeps its latest lines.
+    /// Keeps the file small: the oldest addressed cards go first, then the oldest open ones; the changes keep the latest.
     static func prune(_ state: inout RouterState) {
         if state.cards.count > maxCards {
             var excess = state.cards.count - maxCards
@@ -544,13 +523,20 @@ enum RouterFeed {
             }
             state.cards = state.cards.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
         }
-        if state.chat.count > maxChat { state.chat.removeFirst(state.chat.count - maxChat) }
+        if state.changes.count > maxChanges { state.changes.removeFirst(state.changes.count - maxChanges) }
     }
 }
 
 // MARK: - Store
 
 extension Store {
+    /// Counts each card's changes (made, addressed, reopened, retitled…), so a late action can tell a card that changed and
+    /// changed back from one that never moved.
+    func countCardChanges(from old: [RouterCard]) {
+        let before = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for card in router.cards where before[card.id] != card { cardRevisions[card.id, default: 0] &+= 1 }
+    }
+
     /// Open cards first, newest first in each part.
     var routerCards: [RouterCard] {
         router.cards.sorted { a, b in
@@ -720,7 +706,7 @@ extension Store {
         }
         let executable = routerExecutable ?? Bundle.main.executablePath ?? CommandLine.arguments[0]
         let runner = routerPluginRunner ?? (UnderTest.isRunning ? nil : ClaudePluginInstaller.processRunner)
-        let findBinary = routerClaudeBinary ?? { RouterAgent.find(in: Claude.root.appendingPathComponent("claude-code", isDirectory: true))?.path }
+        let findBinary = routerClaudeBinary ?? { RouterStatus.findDefault() }
         let version = ClaudePlugin.version(app: routerAppVersion)
         let previous = routerHookWork
         routerHookWork = Task { [weak self] in

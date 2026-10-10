@@ -9,7 +9,6 @@ import SwiftUI
 struct RouterComposer: View {
     let store: Store
     @Bindable var model: RouterModel
-    let agent: RouterAgent
     /// Mirrors the text view's first responder; `focusTick` asks it for the keyboard.
     @State private var focused = false
     @State private var focusTick = 0
@@ -27,7 +26,7 @@ struct RouterComposer: View {
     private typealias C = CDS.Composer
 
     var body: some View {
-        let working = agent.phase == .working || agent.phase == .starting
+        let working = store.routerDispatcher.isBusy
         let on = model.canSend(store)
         let suggestions = model.suggestions(store)
         VStack(alignment: .leading, spacing: 0) {
@@ -145,9 +144,9 @@ struct RouterComposer: View {
     /// Claude's ghost icon button: send (ArrowReturn) or, while the Router works, stop (StopCircle).
     @ViewBuilder private func action(on: Bool, working: Bool) -> some View {
         if working {
-            GhostIcon(symbol: "stop.circle", label: "Stop") { agent.stop() }
-                .accessibilityHint("Interrupts the Router's turn")
-                .tip("Stop", "Interrupts the Router's turn")
+            GhostIcon(symbol: "stop.circle", label: "Stop") { store.routerDispatcher.stopAll() }
+                .accessibilityHint("Stops the Router's runs")
+                .tip("Stop", "Stops the Router's runs")
         } else {
             let empty = !on || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             GhostIcon(symbol: "arrow.turn.down.left", label: "Send") { model.send(store: store) }

@@ -1,8 +1,8 @@
 import Foundation
 
-// What the Router changed in Lookout itself, kept so the user can see it in the chat and take it back. A record holds the
+// What the Router changed in Lookout itself, kept so the user can see it in the history and take it back. A record holds the
 // before and after of exactly the one thing it touched (a category, a group, the categories' order, a setting, the marks of
-// some entries), nothing around it. The records live in the Router's chat (`RouterMessage.change`) and are saved with it.
+// some entries), nothing around it. The records live in the Router's state (`RouterState.changes`) and are saved with it.
 
 /// A setting's value, whichever kind it is.
 enum SettingValue: Codable, Hashable {
@@ -229,11 +229,11 @@ extension Store {
     }
 
     /// Takes a change back: only what it touched goes to its state before. A thing edited since is put back all the same,
-    /// and the note says so. Nil when it can't (already reverted, or no longer in the chat).
+    /// and the note says so. Nil when it can't (already reverted, or no longer kept).
     @discardableResult
     func revertLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
-        guard let message = router.chat.firstIndex(where: { $0.change?.id == id }), var change = router.chat[message].change,
-              !change.isReverted else { return nil }
+        guard let message = router.changes.firstIndex(where: { $0.id == id }), !router.changes[message].isReverted else { return nil }
+        var change = router.changes[message]
         var edited = false
         switch change.patch {
         case .category(let index, let before, let after):
@@ -274,7 +274,7 @@ extension Store {
                 edited = setting.read(self) != after
                 do { try setting.apply(self, before) } catch {
                     change.revertNote = "Couldn't put it back: \(error.localizedDescription)"
-                    router.chat[message].change = change
+                    router.changes[message] = change
                     return change
                 }
             }
@@ -286,7 +286,7 @@ extension Store {
         }
         change.revertedAt = now
         change.revertNote = edited ? "Reverted (later edits to it were undone too)" : "Reverted"
-        router.chat[message].change = change
+        router.changes[message] = change
         noteReverted(change.id)
         return change
     }

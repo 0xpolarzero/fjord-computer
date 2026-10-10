@@ -277,7 +277,7 @@ struct SettingsView: View {
     }
 
     private var claudeCodeStatus: (String, Color) {
-        if let found = store.routerAgent.claudeCode { return ("Claude Code \(found.version), from the Claude app", Theme.tertiary) }
+        if let found = store.routerStatus.claudeCode { return ("Claude Code \(found.version), from the Claude app", Theme.tertiary) }
         return ("Claude Code not found: it comes with the Claude desktop app", Theme.amber)
     }
 
@@ -954,7 +954,7 @@ extension Store {
         let executable = routerExecutable ?? Bundle.main.executablePath ?? CommandLine.arguments[0]
         let runner = routerPluginRunner ?? (UnderTest.isRunning ? nil : ClaudePluginInstaller.processRunner)
         let findBinary = routerClaudeBinary
-            ?? { RouterAgent.find(in: Claude.root.appendingPathComponent("claude-code", isDirectory: true))?.path }
+            ?? { RouterStatus.findDefault() }
         let version = ClaudePlugin.version(app: routerAppVersion)
         let previous = routerHookWork
         routerHookWork = Task { [weak self] in

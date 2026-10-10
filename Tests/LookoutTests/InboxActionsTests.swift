@@ -296,7 +296,6 @@ final class FakePerformer: ActionPerformer {
         await #expect(throws: ActionFailure.self) {
             _ = try await StoreActionPerformer(store: store).startSession(request)
         }
-        #expect(store.router.chat.isEmpty)
     }
 
     // MARK: Re-running

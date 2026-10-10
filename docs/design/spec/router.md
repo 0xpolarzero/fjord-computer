@@ -12,7 +12,7 @@ Every trigger is a typed event that runs a short workflow. Deterministic rules f
 ## Workflows
 ### A. From Claude Code (session asks, plans, finishes, is stuck, works)
 Deterministic, as today (RouterFeed): cards, banners, the live Working line. The feed is the subscription.
-- A session messaging the Router becomes a card, never a model turn.
+- A session cannot message the Router: with no long-lived process there is no peer named "Lookout" to receive it (Claude Code delivers `SendMessage` over a per-process socket it lists in `~/.claude/sessions/<pid>.json`, a private protocol Lookout does not imitate). What a session wants from you reaches you as its own cards (question, plan, done, stuck).
 - Working cards are live, with a 1–2 sentence explanation of what is happening, and a 1–2 sentence summary of what the turn did when it ends. Source: the session's activity stream and the Claude app's own summary when present; Haiku fills gaps, only on change (turn start, at most every ~30 s while tools run, turn end). The end-of-turn line is the card's text in the history and context for later runs.
 
 ### B. You type
@@ -40,7 +40,7 @@ The decision log: one entry per run (trigger, decision, what was done, outcome: 
 Bottom-anchored: Needs you (prominent, one card open), Working (live lines), above them the history (the decision log and addressed cards, one line each, expandable). The composer has inline @project pills.
 
 ## Removed
-The long-lived process, `--resume`, the transcript, peer turns, the single serial queue (runs are independent), the role prompt's header grammar.
+The long-lived process, `--resume`, the transcript (`chat`), peer turns and the ability of a session to message the Router, the single serial queue (runs are independent), the role prompt's header grammar. What stays of the old file: `changes` (the records behind change cards); old `chat` and `claudeSessionID` keys are read (changes migrated) and dropped on the next save.
 
 ## Phases (each tested and committed on its own)
 1. Decision log, and the history built on it.

@@ -51,10 +51,10 @@ struct RouterMain: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            RouterSetupNotice(store: store, model: model, agent: store.routerAgent)
-            RouterPageView(store: store, model: model, agent: store.routerAgent)
+            RouterSetupNotice(store: store, model: model)
+            RouterPageView(store: store, model: model)
                 .frame(maxHeight: .infinity)
-            RouterComposer(store: store, model: model, agent: store.routerAgent)
+            RouterComposer(store: store, model: model)
                 .frame(maxWidth: RouterCodeView.column)
                 .padding(.horizontal, 32)
                 .padding(.bottom, 16)

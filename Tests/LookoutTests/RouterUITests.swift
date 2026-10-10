@@ -85,12 +85,12 @@ import UserNotifications
         let editor = NSTextView()
         model.composerFocused = true
         model.draft = "tell lookout to run the tests"
-        let before = store.router.chat.count
+        let before = store.router.decisions.count
         #expect(keys.key(key(kVK_Return, "\r", .shift), responder: editor))
-        #expect(store.router.chat.count == before && !model.draft.isEmpty)
+        #expect(store.router.decisions.count == before && !model.draft.isEmpty)
         #expect(keys.key(key(kVK_Return, "\r"), responder: editor))
         #expect(model.draft.isEmpty)
-        #expect(store.router.chat.dropFirst(before).first?.role == .you)
+        #expect(store.router.decisions.dropFirst(before).first?.triggerText == "tell lookout to run the tests")
         // Typing in the composer is its own.
         #expect(!keys.key(key(kVK_ANSI_A, "a"), responder: editor))
     }
@@ -133,7 +133,7 @@ import UserNotifications
     @Test func theComposerIsShutWhileTheRouterOrTheSessionsAreOff() {
         let store = demo()
         let model = RouterModel()
-        let before = store.router.chat.count
+        let before = store.router.decisions.count
         #expect(model.canSend(store))
         store.router.enabled = false
         #expect(!model.canSend(store))
@@ -142,7 +142,7 @@ import UserNotifications
         #expect(!model.canSend(store))
         model.draft = "hello"
         model.send(store: store)
-        #expect(model.draft == "hello" && store.router.chat.count == before)
+        #expect(model.draft == "hello" && store.router.decisions.count == before)
         // Typing with nothing focused doesn't go to a composer that can't send.
         let keys = RouterKeys(store: store, model: model) {}
         #expect(!keys.key(key(kVK_ANSI_H, "h"), responder: nil))
@@ -153,7 +153,7 @@ import UserNotifications
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // A store of a real Router (not a demo's), the app's folder of Claude Code in `dir`.
         let store = writing(nil)
-        store.routerAgent.codeRoot = dir
+        store.routerStatus.codeRoot = dir
         defer { store.persists = false; try? FileManager.default.removeItem(at: dir) }
         let model = RouterModel()
         #expect(model.claudeCodeMissing == nil && model.canSend(store))
@@ -184,9 +184,9 @@ import UserNotifications
         model.tokens = ["/Users/me/code/lookout"]
         model.draft = "go ahead in \(MentionText.markString)"
         model.send(store: store)
-        let line = store.router.chat.last { $0.role == .you }
-        #expect(line?.replyTo == card.id && line?.projects == ["/Users/me/code/lookout"])
-        #expect(line?.text.hasPrefix("go ahead in @") == true && line?.text.contains(MentionText.markString) == false)
+        let line = store.router.decisions.last
+        #expect(line?.links.cards == [card.id])
+        #expect(line?.triggerText.hasPrefix("go ahead in @") == true && line?.triggerText.contains(MentionText.markString) == false)
         // The chips go with the message.
         #expect(model.replyTo == nil && model.projects.isEmpty && model.draft.isEmpty)
     }
@@ -249,9 +249,9 @@ import UserNotifications
         let away = editor(model, "tell @mi", caret: 2)
         #expect(model.suggestions(store).isEmpty)
         #expect(!keys.key(key(kVK_DownArrow), responder: away))
-        let before = store.router.chat.count
+        let before = store.router.decisions.count
         #expect(keys.key(key(kVK_Return, "\r"), responder: away))
-        #expect(store.router.chat.count > before)
+        #expect(store.router.decisions.count > before)
     }
 
     /// The composer in a window: typing through its own text view, then moving the caret, drives the suggestions.
@@ -643,12 +643,11 @@ import UserNotifications
         // Working: the sessions running on their own, none of them stopped on you.
         #expect(Set(page.working.map(\.id)) == Set(store.routerWorkingRows.map(\.id)))
         #expect(!page.working.isEmpty && page.working.allSatisfy { !$0.waitsForYou })
-        // History: oldest first, addressed cards and messages together, no open card.
+        // History: oldest first, addressed cards, runs and overviews together, no open card.
         #expect(page.history.map(\.date) == page.history.map(\.date).sorted())
         let cardLines = page.history.compactMap { entry -> RouterCard? in if case .card(let c) = entry { c } else { nil } }
         #expect(!cardLines.isEmpty && cardLines.allSatisfy { !$0.isOpen })
-        let shown = store.router.chat.filter { [.router, .error, .peer].contains($0.role) }.count
-        #expect(page.history.count == shown + store.router.decisions.count + store.router.overviews.count + store.router.cards.filter { !$0.isOpen }.count)
+        #expect(page.history.count == store.router.decisions.count + store.router.overviews.count + store.router.cards.filter { !$0.isOpen }.count)
         // The sidebar's order is the page's: the keys walk Needs you the way it is shown.
         let (needs, done, _) = RouterModel().sections(store)
         #expect(page.needs.map(\.id) == (needs + done).map(\.id))

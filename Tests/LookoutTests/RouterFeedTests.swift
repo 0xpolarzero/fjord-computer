@@ -223,11 +223,32 @@ import Testing
         #expect(state.cards.count == RouterFeed.maxCards && state.cards.first?.id == "o5")
     }
 
-    @Test func theChatKeepsItsLatestLines() {
+    @Test func theChangesKeepTheLatest() {
         var state = RouterState()
-        state.chat = (0..<510).map { RouterMessage(role: .you, text: "\($0)", date: at(Double($0))) }
+        state.changes = (0..<510).map {
+            LookoutChange(date: at(Double($0)), title: "\($0)", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        }
         RouterFeed.prune(&state)
-        #expect(state.chat.count == RouterFeed.maxChat && state.chat.first?.text == "10")
+        #expect(state.changes.count == RouterFeed.maxChanges && state.changes.first?.title == "10")
+    }
+
+    @Test func anOlderFileWithAChatAndAConversationStillLoads() throws {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let change = LookoutChange(date: at(1), title: "Changed snooze", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        let line = try JSONSerialization.jsonObject(with: enc.encode(change))
+        let old: [String: Any] = [
+            "enabled": true, "claudeSessionID": "abc",
+            "chat": [["role": "you", "text": "hi", "date": "2026-10-09T10:00:00Z"],
+                     ["role": "change", "text": "Changed snooze", "date": "2026-10-09T10:00:00Z", "change": line]],
+        ]
+        let state = try dec.decode(RouterState.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(state.enabled && state.changes.map(\.id) == [change.id])
+        // Saved again, the chat and the conversation are gone and the changes stay.
+        let saved = try JSONSerialization.jsonObject(with: enc.encode(state)) as? [String: Any]
+        #expect(saved?["chat"] == nil && saved?["claudeSessionID"] == nil && (saved?["changes"] as? [Any])?.count == 1)
     }
 
     @Test func aSavedWaitIsTheSameWaitAfterARelaunch() throws {
@@ -247,7 +268,7 @@ import Testing
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         let empty = try dec.decode(RouterState.self, from: Data("{}".utf8))
-        #expect(!empty.enabled && empty.cards.isEmpty && empty.chat.isEmpty)
+        #expect(!empty.enabled && empty.cards.isEmpty && empty.changes.isEmpty)
         let odd = try dec.decode(RouterState.self, from: Data(#"{"enabled":true,"cards":[{"kind":"nope"}],"seen":3}"#.utf8))
         #expect(odd.enabled && odd.cards.isEmpty && odd.seen.isEmpty)
     }

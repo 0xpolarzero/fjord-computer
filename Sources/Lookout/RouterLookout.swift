@@ -1,7 +1,7 @@
 import Foundation
 
 // The Router's second surface: Lookout itself (its categories, groups, inbox and settings), besides the Claude Code sessions.
-// It never touches GitHub. Reads answer from the store; a change applies at once and leaves a record in the chat (a card with
+// It never touches GitHub. Reads answer from the store; a change applies at once and leaves a record in the history (a card with
 // Open and Revert, see LookoutChange).
 
 // MARK: - JSON
@@ -59,7 +59,7 @@ enum LookoutTools {
     }
 
     private static let categoryRef = JSONShape.Field("category", .string("id or name"), "A category's id or name.")
-    private static let changeNote = " The change applies at once and the user gets a card in the chat with its before and after, an Open button and a Revert button: don't repeat it back."
+    private static let changeNote = " The change applies at once and the user gets a card in the history with its before and after, an Open button and a Revert button: don't repeat it back."
 
     static let tools: [Tool] = [
         Tool(name: "list_categories", doc: "Lists Lookout's inbox categories in priority order (a thing is in the first one a rule matches), each with its rules as JSON (the form create_category and update_category take), a plain-words summary of each rule, its actions and how many open and unread things it holds. Also says how many things are done.", fields: [], reads: true),
@@ -118,8 +118,6 @@ extension RouterTools {
         do {
             let reads = LookoutTools.tools.first { $0.name == name }?.reads == true
             try live(ticket, acting: !reads)
-            // An inbox action's message can read Lookout, not change it: its words come from a PR's, which anyone can write.
-            if !reads, automatedRef != nil { throw Failure("A message from an inbox action can't change Lookout itself; nothing was changed") }
             let text: String
             switch name {
             case "list_categories": text = try listCategories(store, args)
@@ -224,11 +222,11 @@ extension RouterTools {
         throw Failure("“\(q)” fits \(found.count) things: " + found.prefix(5).map { "\(reference($0.thing)) \($0.thing.title)" }.joined(separator: "; ") + ". Use a thing id from list_inbox.")
     }
 
-    /// The record of a change, in the chat, for the card.
+    /// The record of a change, for the card.
     @discardableResult
     private func record(_ store: Store, _ change: LookoutChange) -> LookoutChange {
         var state = store.router
-        state.chat.append(RouterMessage(role: .change, text: change.title, date: change.date, change: change))
+        state.changes.append(change)
         RouterFeed.prune(&state)
         store.router = state
         store.logChange(change, into: decision)
@@ -562,26 +560,4 @@ extension RouterTools {
 
 private extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
-}
-
-extension Store {
-    /// The session an inbox action's message ended up in (a new one, or one it was passed to): the action's row links to it.
-    /// The run of that message is recorded when the action returns, which may be after the Router has acted: then it waits
-    /// for that run.
-    func noteActionSession(_ session: String, forMessage message: UUID) {
-        pendingActionSessions[message] = session
-        linkPendingActionSessions()
-    }
-
-    /// Links each session the Router reported to the runs of its message; one not recorded yet waits for its run.
-    func linkPendingActionSessions() {
-        var ledger = actionLedger
-        for (message, session) in pendingActionSessions {
-            let keys = ledger.runs.filter { $0.value.message == message }.map(\.key)
-            guard !keys.isEmpty else { continue }
-            pendingActionSessions[message] = nil
-            for key in keys where ledger.runs[key]?.sessionID == nil { ledger.runs[key]?.sessionID = session }
-        }
-        if ledger != actionLedger { actionLedger = ledger }
-    }
 }

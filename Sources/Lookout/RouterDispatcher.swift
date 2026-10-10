@@ -7,6 +7,20 @@ import Observation
 // log, and the line on the page shows how far it is. When Jev isn't sure, nothing is sent: an ask-back card puts the question
 // to you, and your pick is logged (as a correction when it isn't what Jev suggested).
 
+/// What a message of yours comes with besides its text: the card you're replying to (its session is the target) and the
+/// projects you tagged (routing is narrowed to them, and a new session starts there).
+struct RouterContext: Equatable {
+    /// A card id.
+    var replyTo: String?
+    /// Folder paths.
+    var projects: [String]
+
+    init(replyTo: String? = nil, projects: [String] = []) {
+        self.replyTo = replyTo
+        self.projects = projects
+    }
+}
+
 // MARK: - The ask-back card
 
 /// "Where should this go?": a message waiting for you to say where. Nothing is sent until you pick.
@@ -95,7 +109,7 @@ struct RouterAskBack: Identifiable, Equatable {
 
     @ObservationIgnored private weak var store: Store?
     @ObservationIgnored var effects: Effects
-    /// Claude Code's binary, as the agent found it.
+    /// Claude Code's binary, as `RouterStatus` found it.
     @ObservationIgnored var claudePath: () -> String? = { nil }
     /// Set up each run's tools before it starts (tests).
     @ObservationIgnored var configure: ((RouterTools) -> Void)?
@@ -139,7 +153,6 @@ struct RouterAskBack: Identifiable, Equatable {
         var seen = Set<String>()
         let projects = context.projects.filter { seen.insert($0).inserted }
         let context = RouterContext(replyTo: context.replyTo, projects: projects)
-        append(.you, text, replyTo: context.replyTo, projects: projects.isEmpty ? nil : projects)
         let id = store.logDecision(RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
                                                   links: .init(cards: context.replyTo.map { [$0] } ?? [])))
         launch(Job(id: id, text: text, context: context, tools: makeTools(id, text)), stage: "starting") { [self] job in
@@ -222,21 +235,12 @@ struct RouterAskBack: Identifiable, Equatable {
     private func fail(_ job: Job, _ reason: String) {
         let first = reason.split(separator: "\n").first.map(String.init) ?? "failed"
         store?.updateDecision(job.id) { $0.add(.failed(RouterDecision.clip(first, 120))) }
-        append(.error, first)
     }
 
     private func stage(_ job: Job, _ text: String) { progress[job.id] = text }
 
     private func note(_ job: Job, _ item: RouterDecision.Done, session: String? = nil, card: String? = nil) {
         store?.updateDecision(job.id) { $0.add(item, session: session, card: card) }
-    }
-
-    private func append(_ role: RouterMessage.Role, _ text: String, replyTo: String? = nil, projects: [String]? = nil) {
-        guard let store else { return }
-        var state = store.router
-        state.chat.append(RouterMessage(role: role, text: text, date: Date(), replyTo: replyTo, projects: projects))
-        RouterFeed.prune(&state)
-        store.router = state
     }
 
     // MARK: Workflow B
