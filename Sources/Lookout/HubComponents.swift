@@ -680,8 +680,7 @@ private struct CategoryCellLabel: View {
             .contentShape(Rectangle())
             .onHover { hover = $0 }
             .motion(Theme.Motion.hover, value: hover)
-            .tip(badge == 0 ? category.title : "\(category.title) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
-                 badge == 0 ? (category.isCI ? "Nothing failing" : "Nothing new") : "Opens it in the inbox")
+            // No tooltip: hovering it peeks its list, which says more.
     }
 }
 
