@@ -1076,6 +1076,7 @@ private struct ZoneScroll<Content: View>: View {
     let ids: Set<String>
     @ViewBuilder let content: () -> Content
     @State private var natural: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1093,7 +1094,7 @@ private struct ZoneScroll<Content: View>: View {
             })
             .onChange(of: reveal) { _, request in
                 guard let request, ids.contains(request.id) else { return }
-                withAnimation(Theme.Motion.hover) { proxy.scrollTo(request.id, anchor: .center) }
+                withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: .center) }
             }
         }
     }
@@ -1113,6 +1114,7 @@ private struct WorkingCard: View {
     @State private var hovered = false
     @State private var expanded = false
     @Environment(\.cdsColumnWidth) private var columnWidth
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let summarizer = model.summarizer
@@ -1125,7 +1127,7 @@ private struct WorkingCard: View {
         let marked = model.highlighted == RouterModel.workingID(row.id)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Button { withAnimation(Theme.Motion.hover) { expanded.toggle() } } label: {
+                Button { withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { expanded.toggle() } } label: {
                     HStack(spacing: 8) {
                         SessionGlyph(row: row, size: 18, dot: false)
                         Text(row.session.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
