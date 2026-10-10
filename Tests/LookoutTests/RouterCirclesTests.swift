@@ -106,4 +106,27 @@ import Testing
         await s.routerTriager.idle()
         #expect(s.router.cards[1].kind == .stuck && announced.isEmpty)
     }
+
+    @Test func aQuestionOrAnOKAskedInAStreakIsAnnouncedAllTheSame() async {
+        for state in ["asks", "approval"] {
+            let (s, _) = store(earlier: alike, circles: 0.9)
+            let answer = s.routerTriager.asker!
+            s.routerTriager.asker = { questions, st in
+                var a = try await answer(questions, st)
+                a["state"] = .choice(.init(choice: state, confidence: 0.9, probabilities: [state: 0.9, "done": 0.1]))
+                return a
+            }
+            var before = card(3, minutes: -5)
+            before.triage = RouterTriage(state: .done)
+            before.triage?.circles = true
+            before.kind = .stuck
+            s.router.cards = [before, card(4)]
+            var announced: [String] = []
+            s.onNewRouterCards = { announced += $0.map(\.id) }
+            s.triageTurns()
+            await s.routerTriager.idle()
+            #expect(s.router.cards[1].triage?.circles == true && s.router.cards[1].kind.rawValue == state)
+            #expect(announced == ["a#t4"])
+        }
+    }
 }

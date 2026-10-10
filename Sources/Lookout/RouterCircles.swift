@@ -39,9 +39,10 @@ enum RouterCircles {
             apply: { answers, triage in triage.circles = (answers["circles"]?.yes ?? 0) >= floor })
     }
 
-    /// The card goes in circles and so did its session's turn card before it: the same streak, already announced.
+    /// The card is stuck going in circles and so did its session's turn card before it: the same streak, already announced.
+    /// Only that alert is said once: a turn of the streak that asks you something, or asks your OK, is a banner of its own.
     static func again(_ card: RouterCard, in cards: [RouterCard]) -> Bool {
-        guard card.triage?.circles == true else { return false }
+        guard card.kind == .stuck, card.triage?.circles == true else { return false }
         let before = cards.filter { $0.sessionID == card.sessionID && $0.id != card.id && $0.kind.isTurn && $0.createdMs <= card.createdMs }
             .max { $0.createdMs < $1.createdMs }
         return before?.triage?.circles == true
