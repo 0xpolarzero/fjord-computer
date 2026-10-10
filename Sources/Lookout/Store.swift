@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OSLog
 
 @Observable
 @MainActor
@@ -15,12 +16,16 @@ final class Store {
     var groups: [InboxGroup] = [] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1; logGroups(from: oldValue) }
     }
+    /// The bar's sections, in order (CategorySections.swift); every inbox starts with GitHub's.
+    var categorySections: [CategorySection] = [.github] {
+        didSet { persistedRevision &+= 1 }
+    }
     /// Who is changing the categories and groups now, for the log (see `InboxLog`); nil is the editor.
     @ObservationIgnored var inboxSource: InboxChangeSource?
     /// Where those log lines go; the tests read them.
     @ObservationIgnored var inboxLog: (String) -> Void = InboxLog.write
     var things: [String: Thing] = [:] {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits() }
     }
     var marks: [String: EntryMarks] = [:] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
@@ -58,6 +63,9 @@ final class Store {
     @ObservationIgnored var actionsAgain = false
     /// What the last inbox refresh failed at, if it did (InboxSync.swift); the things it had stay.
     var inboxError: String?
+    /// Why Jev couldn't read the inbox's new comments and requests (InboxJev.swift): what rests on his reading (asks me,
+    /// noise, importance) stays as it was until he can.
+    var inboxReadError: String?
     /// Repos (lowercased) GitHub said don't exist, or can't be seen: their chips are red and block Save.
     var missingRepos: Set<String> = []
     /// What GitHub said of each repo named, this session (lowercased name to its canonical name).
@@ -71,12 +79,12 @@ final class Store {
     }
     /// When myTeams was last resolved (this session; at most daily).
     @ObservationIgnored var teamsResolvedAt: Date?
+    /// What the inbox's refreshes keep between them (InboxSync.swift).
+    @ObservationIgnored var inboxSyncState = InboxSyncState()
     /// Default branches found for workflow things, by repo.
     @ObservationIgnored var defaultBranches: [String: String] = [:]
     /// A commit's headline by repo, asked once per commit (see `ciHeadline`).
     @ObservationIgnored var headlines: [String: (commit: String, title: String)] = [:]
-    /// When a thing was first missing from a refresh: its marks are dropped after 30 days of that.
-    @ObservationIgnored var goneSince: [String: Date] = [:]
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()
@@ -86,7 +94,6 @@ final class Store {
         didSet {
             persistedRevision &+= 1
             armSnoozeExpiry()
-            save()
         }
     }
 
@@ -97,7 +104,6 @@ final class Store {
             persistedRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
-            save()
         }
     }
     /// The Router (see Router.swift): its cards, its decision log and the changes it made.
@@ -112,7 +118,6 @@ final class Store {
                 let next = RouterPage.history(cards: router.cards, decisions: router.decisions, summaries: router.summaries)
                 if next != routerHistory { routerHistory = next }
             }
-            save()
         }
     }
     /// The Router page's history (see `RouterPage.history`), worked out when the router changes and only then: the page
@@ -167,7 +172,12 @@ final class Store {
     var claudeLink: ClaudeLink = .off
 
     var me: GHUser? {
-        didSet { if let name = me?.login, name != login { login = name } }
+        didSet {
+            guard let name = me?.login, name != login else { return }
+            // Someone else: what was known of the last account (its repos, its teams) isn't theirs.
+            if !login.isEmpty, name.caseInsensitiveCompare(login) != .orderedSame { forgetAccountCaches() }
+            login = name
+        }
     }
     /// Who `me` was last time, kept so the inbox's "me" rules (by me, to me, Repos I own) match at launch, before GitHub
     /// answers who the token is; a sign-in as someone else replaces it.
@@ -214,10 +224,12 @@ final class Store {
     @ObservationIgnored private var retriedReset: Date?
     @ObservationIgnored private var sleepObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var saveTask: Task<Void, Never>?
-    @ObservationIgnored private var saveDirty = false
-    /// Bumped by every persisted property's didSet: a poll saves only if this moved.
-    @ObservationIgnored private var persistedRevision = 0
-    /// `persistedRevision` as of the last `save()`: a poll saves whatever changed since, whoever changed it.
+    /// Bumped by every persisted property's didSet, and the one place a change is saved from: a Done, a category edit or a
+    /// mark is written shortly after, poll or not.
+    @ObservationIgnored private var persistedRevision = 0 {
+        didSet { save() }
+    }
+    /// `persistedRevision` as of the last write (or load): quitting writes only if it moved since.
     @ObservationIgnored private var savedRevision = 0
     /// When the one-shot Claude timer fires (it only ever moves earlier until it does).
     @ObservationIgnored private var claudeDeadline: Date?
@@ -234,8 +246,12 @@ final class Store {
     /// The system-wide shortcuts the system last refused to register (another app holds the key), by the key it refused:
     /// one still stored does nothing, and Settings says so.
     var refusedShortcuts: [ShortcutAction: Shortcut] = [:]
-    /// Cards the feed just made (for banners).
+    /// Cards the feed just made, or that Jev's triage found need you (for banners).
     @ObservationIgnored var onNewRouterCards: (([RouterCard]) -> Void)?
+    /// What finished turns ended on, by Jev (see RouterTriage.swift).
+    @ObservationIgnored let routerTriager = RouterTriager()
+    /// What decides whether something interrupts you, and what came while you were away (see RouterAttention.swift).
+    @ObservationIgnored let routerAttention = RouterAttention()
     /// Whether the Claude app is in front (tests answer for it).
     @ObservationIgnored var claudeIsFrontmost: () -> Bool = { Claude.isFrontmost }
     /// The Router was just switched on: its open cards are settled against how things are now at the next feed.
@@ -288,6 +304,12 @@ final class Store {
     @ObservationIgnored var iconFirstMessage: (@Sendable (String) -> String?)?
     @ObservationIgnored var iconChooser: (([String], [String: String], [String: String], String) async throws -> JevClient.Choice)?
     @ObservationIgnored var typesafeKeyCache: String?
+    /// Jev's reading of the inbox (InboxJev.swift): tests answer for TypeSafe.
+    @ObservationIgnored var inboxAsker: InboxJev.Asker?
+    /// What every call to Jev goes through (JevGate.swift).
+    @ObservationIgnored let jevGate = JevGate()
+    /// Banners held back for Jev to read their message first, by thing id and fact key: how many refreshes each has waited.
+    @ObservationIgnored var inboxBannerWaits: [String: Int] = [:]
     /// What keeps a key in the Keychain (tests answer for it).
     @ObservationIgnored var keychainWrite: ((String, String) -> Bool)?
     @ObservationIgnored private var transcriptWatcher: FolderWatcher?
@@ -348,6 +370,7 @@ final class Store {
                 self.typesafeKeyCache = key
                 self.hasTypesafeKey = !key.isEmpty
                 self.pickIcons()
+                self.typesafeKeyArrived()
             }
         }
     }
@@ -574,13 +597,18 @@ final class Store {
         guard let file, let data = try? Data(contentsOf: file) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        guard let state = try? dec.decode(PersistedState.self, from: data) else { return }
+        guard let state = try? dec.decode(PersistedState.self, from: data) else {
+            keepAside(file, data, dropped: ["everything"])
+            return
+        }
+        if !state.dropped.isEmpty { keepAside(file, data, dropped: state.dropped) }
         settings = state.settings
         agents = state.agents ?? AgentsState()
         router = state.router ?? RouterState()
         changingInbox(.load) {
             if let c = state.categories { categories = c }
             groups = state.groups ?? []
+            categorySections = state.categorySections ?? [.github]
         }
         things = state.things ?? [:]
         marks = state.marks ?? [:]
@@ -594,48 +622,97 @@ final class Store {
         loadActions()
     }
 
+    /// A file read only in part is copied aside (`state.json.bak-<date>`) before anything is written over it: what this
+    /// build couldn't read (a newer build's, or a damaged part) can still be brought back by hand.
+    private func keepAside(_ file: URL, _ data: Data, dropped: [String]) {
+        guard persists else { return }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy-MM-dd-HHmmss"
+        let stamp = format.string(from: Date())
+        let backup = file.deletingLastPathComponent().appendingPathComponent("\(file.lastPathComponent).bak-\(stamp)")
+        do {
+            try data.write(to: backup, options: .withoutOverwriting)
+            Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup.lastPathComponent, privacy: .public)")
+        } catch {
+            Self.stateLog.error("the saved state was read only in part, and keeping it aside failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private static let writer = DispatchQueue(label: "lookout.save")
 
     /// Coalesced: the write happens shortly after the last call, off the main thread.
-    func save() {
+    func save() { scheduleSave(after: .milliseconds(500)) }
+
+    private func scheduleSave(after delay: Duration) {
         // (Asked now, not when the write comes: a test that reaches the user's file is stopped where it did.)
         guard persists, !loading, file != nil else { return }
-        savedRevision = persistedRevision
-        saveDirty = true
         saveTask?.cancel()
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             self?.writeSnapshot(wait: false)
         }
     }
 
-    /// Writes any pending change now (quitting).
+    /// Writes any pending change now (quitting): one that failed before is tried again, twice if need be.
     func flushSave() {
         saveTask?.cancel()
         writeSnapshot(wait: true)
+        if persistedRevision != savedRevision { writeSnapshot(wait: true) }
     }
 
+    /// Writes that failed in a row: the next is tried after a longer wait (2, 4, 8… seconds, a minute at most).
+    @ObservationIgnored private var saveFailures = 0
+    private static let stateLog = Logger(subsystem: InboxLog.subsystem, category: "state")
+
     private func writeSnapshot(wait: Bool) {
-        guard saveDirty, persists, !loading else {
+        guard persistedRevision != savedRevision, persists, !loading else {
             if wait { Self.writer.sync {} }
             return
         }
         guard let url = file else { return }
-        saveDirty = false
+        let revision = persistedRevision
         let box = SnapshotBox(state: PersistedState(settings: settings, agents: agents, router: router, categories: categories,
-                                                       groups: groups, things: things, marks: marks,
+                                                       groups: groups, categorySections: categorySections, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
                                                        contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
                                                        myTeams: myTeams, login: login.isEmpty ? nil : login))
-        let write: @Sendable () -> Void = {
+        let write: @Sendable () -> String? = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
-            if let data = try? enc.encode(box.state) {
-                try? data.write(to: url, options: .atomic)
+            enc.userInfo[Scope.withLegacyKind] = true
+            do {
+                try enc.encode(box.state).write(to: url, options: .atomic)
+                return nil
+            } catch {
+                return error.localizedDescription
             }
         }
-        if wait { Self.writer.sync(execute: write) } else { Self.writer.async(execute: write) }
+        if wait {
+            wrote(revision, failure: Self.writer.sync(execute: write), retry: false)
+        } else {
+            Self.writer.async {
+                let failure = write()
+                Task { @MainActor [weak self] in self?.wrote(revision, failure: failure, retry: true) }
+            }
+        }
+    }
+
+    /// Only a write that happened counts as saved: one that failed leaves the change pending, says why in the log, and is
+    /// tried again later (and when quitting).
+    private func wrote(_ revision: Int, failure: String?, retry: Bool) {
+        guard let failure else {
+            saveFailures = 0
+            savedRevision = revision
+            return
+        }
+        saveFailures += 1
+        Self.stateLog.error("saving the state failed (\(self.saveFailures, privacy: .public) in a row): \(failure, privacy: .public)")
+        // (A change made since has a write of its own coming, which retries in turn.)
+        if retry, persistedRevision == revision {
+            scheduleSave(after: .seconds(min(60, 1 << min(saveFailures, 6))))
+        }
     }
 
     private struct SnapshotBox: @unchecked Sendable { let state: PersistedState }
@@ -867,7 +944,6 @@ final class Store {
                     sleeper?.cancel()
                 }
             }
-            if persistedRevision != savedRevision { save() }
             if refreshQueued {
                 refreshQueued = false
                 Task { await pollAll() }
@@ -884,7 +960,7 @@ final class Store {
         }
         guard me != nil else { return }
         defer { if gh.tokenRejected { dropRejectedToken() } }
-        await syncInbox()
+        await syncInbox(manual: asked)
     }
 
     /// Asks GitHub for the CI of a repo's default branch (found once, then remembered), and the commit's headline.
@@ -982,6 +1058,12 @@ final class Store {
 
     func notify(id: String, title: String, subtitle: String, body: String, quiet: Bool, url: URL? = nil) {
         guard settings.notifications, !isSnoozed else { return }
+        // Away, a thing's banner comes only if Jev rates it high or urgent; the others are counted for when you're back.
+        if id.hasPrefix(Self.inboxNotificationPrefix) {
+            let thing = things[String(id.dropFirst(Self.inboxNotificationPrefix.count))]
+            let importance = thing.flatMap { InboxEngine.importance($0, context: inboxContext) }
+            if !routerAttention.admitInbox(importance) { return }
+        }
         notifier.post(id: id, title: title, subtitle: subtitle, body: body, quiet: quiet, url: url)
     }
 

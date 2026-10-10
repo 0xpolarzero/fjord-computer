@@ -38,6 +38,13 @@ struct RouterState: Codable, Equatable {
     /// on its own, so "viewed" and "read" mean nothing for it: its cards come at once, until you write in it yourself from
     /// the app (a message no run of Lookout's sent: see `RouterFeed.update`), after which the usual rules apply.
     var lookoutStarted: [String: Date] = [:]
+    /// Tell a waiting session on its own once what it waits on is done (Settings), off by default; and, by session, your
+    /// choice over that.
+    var autoContinue = false
+    var autoContinueSessions: [String: Bool] = [:]
+    /// By session, the latest turn whose card was handled and then pruned away (`RouterFeed.prune`): the launch's look back
+    /// never makes such a turn a card again, though its card is gone.
+    var handledTurns: [String: Int] = [:]
 
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
@@ -91,7 +98,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions, handledTurns
     }
 
     func encode(to encoder: Encoder) throws {
@@ -111,18 +118,23 @@ struct RouterState: Codable, Equatable {
         try c.encode(heldWaits, forKey: .heldWaits)
         try c.encode(lookoutStarted, forKey: .lookoutStarted)
         try c.encodeIfPresent(zonesShare, forKey: .zonesShare)
+        try c.encode(autoContinue, forKey: .autoContinue)
+        try c.encode(autoContinueSessions, forKey: .autoContinueSessions)
+        try c.encode(handledTurns, forKey: .handledTurns)
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? false
         enabledAt = try? c.decodeIfPresent(Date.self, forKey: .enabledAt)
-        cards = (try? c.decodeIfPresent([RouterCard].self, forKey: .cards)) ?? []
-        changes = (try? c.decodeIfPresent([LookoutChange].self, forKey: .changes)) ?? []
+        // Card by card: one this version can't read is left out, not every card.
+        cards = ((try? c.decodeIfPresent([Lossy<RouterCard>].self, forKey: .cards)) ?? []).compactMap(\.value)
+        // The same for the changes, decisions and summaries.
+        changes = ((try? c.decodeIfPresent([Lossy<LookoutChange>].self, forKey: .changes)) ?? []).compactMap(\.value)
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
         if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
-        decisions = (try? c.decodeIfPresent([RouterDecision].self, forKey: .decisions)) ?? []
-        summaries = (try? c.decodeIfPresent([RouterSummary].self, forKey: .summaries)) ?? []
+        decisions = ((try? c.decodeIfPresent([Lossy<RouterDecision>].self, forKey: .decisions)) ?? []).compactMap(\.value)
+        summaries = ((try? c.decodeIfPresent([Lossy<RouterSummary>].self, forKey: .summaries)) ?? []).compactMap(\.value)
         seen = (try? c.decodeIfPresent([String: String].self, forKey: .seen)) ?? [:]
         waits = (try? c.decodeIfPresent([String: Int64].self, forKey: .waits)) ?? [:]
         waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]
@@ -132,7 +144,16 @@ struct RouterState: Codable, Equatable {
         heldWaits = (try? c.decodeIfPresent([String: HeldWait].self, forKey: .heldWaits)) ?? [:]
         lookoutStarted = (try? c.decodeIfPresent([String: Date].self, forKey: .lookoutStarted)) ?? [:]
         zonesShare = try? c.decodeIfPresent(Double.self, forKey: .zonesShare)
+        autoContinue = (try? c.decodeIfPresent(Bool.self, forKey: .autoContinue)) ?? false
+        autoContinueSessions = (try? c.decodeIfPresent([String: Bool].self, forKey: .autoContinueSessions)) ?? [:]
+        handledTurns = (try? c.decodeIfPresent([String: Int].self, forKey: .handledTurns)) ?? [:]
     }
+}
+
+/// An element of a saved array read on its own: nil when it can't be, so one bad element doesn't take the rest with it.
+struct Lossy<Value: Decodable>: Decodable {
+    var value: Value?
+    init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
 }
 
 /// Where a session came from when an inbox action started it: the category, the thing, the action and its run.
@@ -156,13 +177,39 @@ struct RouterCard: Codable, Identifiable, Hashable {
         case plan
         /// Finished its turn.
         case done
-        /// Finished its turn, and its summary says it is blocked.
+        /// Finished its turn, and its summary (or Jev's triage) says it is blocked.
         case stuck
+        /// Finished its turn asking you something in its final message (Jev's triage, see RouterTriage.swift).
+        case asks
+        /// Finished its turn asking your OK for something consequential (push, publish, delete, spend…).
+        case approval
+        /// Finished its turn waiting on something outside it (CI, a deploy, another session…): shown with the working
+        /// sessions, not in Needs you.
+        case waiting
 
         /// Made when a turn ends (the others while one waits).
-        var isTurn: Bool { self == .done || self == .stuck }
-        /// Counted as needing you (amber); `done` is only news.
-        var needsYou: Bool { self != .done }
+        var isTurn: Bool { self != .question && self != .plan }
+        /// The kind a build from before the triage reads instead (it knew only question, plan, done and stuck): saved as
+        /// `kind`, with this one beside it as `kindDetail`, so going back to such a build keeps the cards.
+        var legacy: Kind {
+            switch self {
+            case .question, .plan, .done, .stuck: self
+            case .asks, .approval: .stuck
+            case .waiting: .done
+            }
+        }
+        /// Counted as needing you (amber); `done` is only news, and a session `waiting` is still on its way.
+        var needsYou: Bool { self != .done && self != .waiting }
+        /// Needs you's order: an OK asked first, then what stops a session on a question, then a stuck one, then news.
+        var rank: Int {
+            switch self {
+            case .approval: 0
+            case .question, .plan, .asks: 1
+            case .stuck: 2
+            case .done: 3
+            case .waiting: 4
+            }
+        }
     }
 
     /// How a card stopped being open.
@@ -207,6 +254,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
     var total: Int?
     /// Your message that resolved the card, when Jev judged it did.
     var addressedNote: String?
+    /// What Jev made of a finished turn's final message (see RouterTriage.swift); nil until then, or without a key.
+    var triage: RouterTriage?
 
     /// What a message (ms) must come after to be a reply to this card.
     var replyAfter: Int64 { turnMessage ?? createdMs }
@@ -234,7 +283,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionID, kind, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote
+        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage
     }
 
     /// Files from before `createdMs` have `createdAt` (a date) instead.
@@ -242,7 +291,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         sessionID = try c.decode(String.self, forKey: .sessionID)
-        kind = try c.decode(Kind.self, forKey: .kind)
+        // The precise kind when this version knows it, else the older builds' one.
+        kind = try (try? c.decodeIfPresent(Kind.self, forKey: .kindDetail)) ?? c.decode(Kind.self, forKey: .kind)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         folder = try c.decodeIfPresent(String.self, forKey: .folder)
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
@@ -259,13 +309,15 @@ struct RouterCard: Codable, Identifiable, Hashable {
         left = try? c.decodeIfPresent([String].self, forKey: .left)
         total = try? c.decodeIfPresent(Int.self, forKey: .total)
         addressedNote = try? c.decodeIfPresent(String.self, forKey: .addressedNote)
+        triage = try? c.decodeIfPresent(RouterTriage.self, forKey: .triage)
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(sessionID, forKey: .sessionID)
-        try c.encode(kind, forKey: .kind)
+        try c.encode(kind.legacy, forKey: .kind)
+        if kind.legacy != kind { try c.encode(kind, forKey: .kindDetail) }
         try c.encode(title, forKey: .title)
         try c.encodeIfPresent(folder, forKey: .folder)
         try c.encode(text, forKey: .text)
@@ -278,6 +330,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(left, forKey: .left)
         try c.encodeIfPresent(total, forKey: .total)
         try c.encodeIfPresent(addressedNote, forKey: .addressedNote)
+        try c.encodeIfPresent(triage, forKey: .triage)
     }
 
     /// The wait a question or plan card was made for (ms since 1970), from its id.
@@ -493,7 +546,7 @@ enum RouterFeed {
             // The summary is written after the turn ends: the open card of that turn takes it when it comes.
             if let summary = session.summary,
                let i = state.cards.firstIndex(where: { $0.id == "\(id)#t\(session.completedTurns)" && $0.isOpen }) {
-                let kind: RouterCard.Kind = summary.blocked ? .stuck : .done
+                let kind = RouterTriage.kind(blocked: summary.blocked, triage: state.cards[i].triage)
                 let text = summary.detail.isEmpty ? placeholder : summary.detail
                 if state.cards[i].kind != kind { state.cards[i].kind = kind }
                 if state.cards[i].text != text { state.cards[i].text = text }
@@ -513,6 +566,8 @@ enum RouterFeed {
         state.formSeen = state.formSeen.filter { live[$0.key] != nil }
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
+        state.autoContinueSessions = state.autoContinueSessions.filter { live[$0.key] != nil }
+        state.handledTurns = state.handledTurns.filter { live[$0.key] != nil }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
         state.lookoutStarted = state.lookoutStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
         prune(&state)
@@ -537,6 +592,20 @@ enum RouterFeed {
         add(&state, RouterCard(id: "\(session.id)#t\(turns)", sessionID: session.id, kind: blocked ? .stuck : .done,
                                title: session.title, folder: session.folder, text: detail.isEmpty ? placeholder : detail,
                                createdAt: now, turnMessage: message), now)
+    }
+
+    /// The card of a finished turn found after the fact (the launch's look back, see `Store.rescanTurns`), with its triage
+    /// and as of when the turn ended; nil when the turn had a card already.
+    static func addTurn(_ state: inout RouterState, _ session: ClaudeSession, triage: RouterTriage, text: String, at: Date,
+                        now: Date = Date()) -> RouterCard? {
+        let id = "\(session.id)#t\(session.completedTurns)"
+        guard !state.cards.contains(where: { $0.id == id }) else { return nil }
+        var card = RouterCard(id: id, sessionID: session.id, kind: RouterTriage.kind(blocked: session.summary?.blocked == true, triage: triage),
+                              title: session.title, folder: session.folder, text: text, createdAt: at,
+                              turnMessage: session.lastUserMessage.map(Stamp.ms))
+        card.triage = triage
+        add(&state, card, now)
+        return state.cards.last
     }
 
     /// Turning the Router on again: what happened to the open cards while it was off is judged from how things are now
@@ -616,17 +685,17 @@ enum RouterFeed {
         state.cards.append(card)
     }
 
-    /// Keeps the file small: the oldest addressed cards go first, then the oldest open ones; the changes keep the latest.
+    /// Keeps the file small: past `maxCards` addressed cards, the oldest of them go. An open card never does (there is one
+    /// per session at most, so they stay few): it still wants you. A handled turn's card that goes leaves its turn number
+    /// behind (`handledTurns`); the changes keep the latest.
     static func prune(_ state: inout RouterState) {
-        if state.cards.count > maxCards {
-            var excess = state.cards.count - maxCards
-            let addressed = state.cards.enumerated().filter { !$0.element.isOpen }
-                .sorted { $0.element.createdAt < $1.element.createdAt }.prefix(excess).map(\.offset)
-            var drop = Set(addressed)
-            excess -= drop.count
-            if excess > 0 {
-                drop.formUnion(state.cards.enumerated().filter { $0.element.isOpen }
-                    .sorted { $0.element.createdAt < $1.element.createdAt }.prefix(excess).map(\.offset))
+        let addressed = state.cards.enumerated().filter { !$0.element.isOpen }
+        if addressed.count > maxCards {
+            let drop = Set(addressed.sorted { $0.element.createdAt < $1.element.createdAt }.prefix(addressed.count - maxCards).map(\.offset))
+            for i in drop where state.cards[i].kind.isTurn {
+                let card = state.cards[i]
+                guard let range = card.id.range(of: "#t", options: .backwards), let turn = Int(card.id[range.upperBound...]) else { continue }
+                state.handledTurns[card.sessionID] = max(state.handledTurns[card.sessionID] ?? 0, turn)
             }
             state.cards = state.cards.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
         }
@@ -654,11 +723,13 @@ extension Store {
 
     var openRouterCards: [RouterCard] { routerCards.filter(\.isOpen) }
 
-    /// Open cards that need you (questions, plans, stuck turns) and open finished turns.
+    /// Open cards that need you (questions, plans, asks, stuck turns) and open finished turns; a session waiting is neither.
     var routerCounts: (needsYou: Int, done: Int) {
         let open = router.cards.filter(\.isOpen)
-        let needsYou = open.filter { $0.kind.needsYou }.count
-        return (needsYou, open.count - needsYou)
+        // As on the page: a turn whose session still has subagents or commands running isn't counted done yet.
+        let tasks = routerTasks
+        return (open.filter { $0.kind.needsYou }.count,
+                open.filter { $0.kind == .done && RouterPage.shows($0, tasks: tasks) }.count)
     }
 
     /// The form Lookout's hook holds for this card's own question or plan: the one for the very call the card waits on (an
@@ -703,11 +774,15 @@ extension Store {
                           muted: Set(agents.mutedFolders), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
                           inventory: claudeTaskInventory, now: now)
         applyTurnSummaries(&state)
-        guard state != router else { return }
-        let known = Set(router.cards.map(\.id))
-        router = state
-        let fresh = state.cards.filter { $0.isOpen && !known.contains($0.id) }
-        if !fresh.isEmpty { onNewRouterCards?(fresh) }
+        if state != router {
+            let known = Set(router.cards.map(\.id))
+            router = state
+            let fresh = state.cards.filter { $0.isOpen && !known.contains($0.id) }
+            if !fresh.isEmpty { announceRouterCards(fresh) }
+        }
+        // What the turns ended on (Jev), and the waits that are over.
+        triageTurns()
+        resolveWaits(now: now)
     }
 
     /// By hand: addressed, or open again (which supersedes the session's other open cards).
@@ -753,6 +828,8 @@ extension Store {
             routerReconcilePending = true
         }
         router = state
+        // Off: a triage under way comes to nothing, and no banner held for one comes.
+        if !on { routerTriager.turnedOff() }
         applyRouterSwitch(install: true)
         if on {
             feedRouter(now: now)

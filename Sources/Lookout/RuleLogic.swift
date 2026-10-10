@@ -36,6 +36,9 @@ enum RuleEditing {
         case .labeled: "labeled"
         case .noActivity: "noActivity"
         case .greptileBelow: "greptileBelow"
+        case .asksMe: "asksMe"
+        case .noise: "noise"
+        case .importance: "importance"
         case .workflow: "workflow"
         }
     }
@@ -48,7 +51,7 @@ enum RuleEditing {
         case .approved, .changesRequested: "Review"
         case .checks, .hasConflicts, .behindBase: "Checks"
         case .status, .labeled, .noActivity, .workflow: "Status"
-        case .greptileBelow: "Signals"
+        case .greptileBelow, .asksMe, .noise, .importance: "Signals"
         }
     }
 
@@ -70,6 +73,9 @@ enum RuleEditing {
         case .labeled: "Labeled…"
         case .noActivity: "No activity for N days"
         case .greptileBelow: "Greptile score below N"
+        case .asksMe: "A comment asks me"
+        case .noise: "New comment is noise, or from a person"
+        case .importance: "Rated important"
         case .workflow: "Is failing, passing, running"
         }
     }
@@ -92,6 +98,9 @@ enum RuleEditing {
         case .labeled: "labels"
         case .noActivity: "no activity for N days"
         case .greptileBelow: "Greptile score"
+        case .asksMe: "asks me"
+        case .noise: "noise"
+        case .importance: "importance"
         case .workflow: "workflow states"
         }
     }
@@ -194,6 +203,10 @@ enum RuleEditing {
         return allowed
     }
 
+    static func noiseTitle(_ noise: Bool) -> String { noise ? "noise" : "from a person" }
+    /// Every level the importance condition can ask for; at least low is any rating Jev was sure of.
+    static let importances = Importance.allCases
+
     static func statusSet(_ c: Condition) -> Set<ThingStatus>? { if case .status(let s) = c { s } else { nil } }
     static func checkSet(_ c: Condition) -> Set<CheckState>? { if case .checks(let s) = c { s } else { nil } }
     static func workflowSet(_ c: Condition) -> Set<CheckState>? { if case .workflow(let s) = c { s } else { nil } }
@@ -283,9 +296,17 @@ extension Condition {
 
     /// What hovering the condition's words says.
     var tip: String? {
-        self == .behindBase
-            ? "GitHub only says a PR is behind its base branch when the base has branch protection that requires branches to be up to date before merging"
-            : nil
+        switch self {
+        case .behindBase:
+            "GitHub only says a PR is behind its base branch when the base has branch protection that requires branches to be up to date before merging"
+        case .asksMe:
+            "Jev (TypeSafe, with your key) reads each new comment, review and thread reply once and says whether it asks you something. A reply of yours there ends it"
+        case .noise:
+            "Noise: bots, and what Jev (TypeSafe, with your key) reads as automated: CI, coverage, deploy previews, dependency and lint bots. Jev's noise never shows a banner"
+        case .importance:
+            "Jev (TypeSafe, with your key) rates each review request to you or your teams, and each assignment, once: from its title, size, who asks, age, labels and checks. At least low is any rating it was sure of"
+        default: nil
+        }
     }
 
     /// The words before the values.
@@ -306,6 +327,9 @@ extension Condition {
         case .labeled: "labeled"
         case .noActivity: "no activity for"
         case .greptileBelow: "Greptile score below"
+        case .asksMe: "a comment asks me"
+        case .noise: "new comment is"
+        case .importance: "rated at least"
         case .workflow: "is"
         }
     }
@@ -668,18 +692,17 @@ enum CategoryIcon {
     static let fallback = "tray"
 
     /// A symbol for a category called `name`: Jev picks a kind of icon, then an icon of it (the sessions' way).
-    static func pick(name: String, key: String) async throws -> String {
+    static func pick(name: String, choose: Claude.Chooser) async throws -> String {
         let open = SessionIcons.open(excluding: [])
         guard !open.isEmpty else { return fallback }
         let state = ["category name": name,
                      "what it is": "a folder in a developer's GitHub inbox that collects the pull requests, issues and failing workflows that need them"]
-        let client = JevClient(key: key)
-        let kinds = try await client.choose(open.map(\.category.key),
-                                            hints: Dictionary(uniqueKeysWithValues: open.map { ($0.category.key, $0.category.about) }),
-                                            for: state, instructions: "Which kind of icon would best show what this inbox category is about?")
+        let kinds = try await choose(open.map(\.category.key),
+                                     Dictionary(uniqueKeysWithValues: open.map { ($0.category.key, $0.category.about) }),
+                                     state, "Which kind of icon would best show what this inbox category is about?")
         let options = SessionIcons.shortlist(open, probabilities: kinds.probabilities)
-        let choice = try await client.choose(options, hints: SessionIcons.hints, for: state,
-                                             instructions: "Pick the icon that best shows what this inbox category is about, so its owner can tell categories apart at a glance.")
+        let choice = try await choose(options, SessionIcons.hints, state,
+                                      "Pick the icon that best shows what this inbox category is about, so its owner can tell categories apart at a glance.")
         return choice.choice
     }
 

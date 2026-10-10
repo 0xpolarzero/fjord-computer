@@ -62,6 +62,15 @@ enum AppWindowShots {
             model.tokens = [folder]
             model.draft = "check the failing tests in \(MentionText.markString) and tell me what you find"
         }),
+        // Typing paused: Jev's pick of where the draft goes is a ghost chip over the composer, its card marked on the page.
+        Shot(name: "router-predicting", destination: { _ in .router }, compose: { model, store in
+            guard let card = store.openRouterCards.first(where: { $0.kind == .question }) ?? store.openRouterCards.first else { return }
+            model.draft = "use sqlite for now, and add an index on the user id"
+            let target = "answer:\(card.id)"
+            model.live.preview(.init(target: target, title: card.title, detail: store.routerDispatcher.describe(target, store: store),
+                                     text: model.draft, mark: card.id))
+            model.highlighted = card.id
+        }),
         Shot(name: "router-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let d = store.router.decisions.first(where: { !$0.links.changes.isEmpty }) { model.expanded.insert(d.id.uuidString) }
@@ -98,8 +107,34 @@ enum AppWindowShots {
             manyNeeds(store)
             store.setZonesShare(RouterSplit.zonesBig)
         }),
+        // Jev's triage: an OK asked, a turn asking two questions, chips on the finished ones; and the sessions waiting.
+        Shot(name: "router-triage-needs", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { model, store in
+            Demo.routerTriage(store)
+            store.setZonesShare(RouterSplit.zonesBig)
+            model.expandedNeed = store.router.cards.first { $0.kind == .asks }?.id
+        }),
+        Shot(name: "router-triage-waiting", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { _, store in
+            Demo.routerTriage(store)
+            store.setZonesShare(RouterSplit.zonesBig)
+        }),
+        // A session going in circles in Needs you, one that builds on another's work ready to continue; then what came while
+        // you were away at the top of Needs you.
+        Shot(name: "router-jev-circles", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { _, store in
+            Demo.routerJevAttention(store, away: false)
+            store.setZonesShare(RouterSplit.zonesBig)
+        }),
+        Shot(name: "router-jev-away", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { _, store in
+            Demo.routerJevAttention(store, away: true)
+            store.setZonesShare(RouterSplit.zonesBig)
+        }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
+        // Two sections, one folded: its row with the counts added up and its caret turned, its categories gone from the sidebar.
+        Shot(name: "categories-sections", destination: { _ in .categories }, compose: { _, store in
+            let builds = store.createSection(name: "Builds")
+            for c in store.categories where c.isCI { store.moveCategory(c.id, toSection: builds.id) }
+            store.toggleCollapsed(builds.id)
+        }),
         Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),
         Shot(name: "router-collapsed", destination: { _ in .router }, sidebarHidden: true),
         Shot(name: "router-760", destination: { _ in .router }, size: CGSize(width: 760, height: 1000)),

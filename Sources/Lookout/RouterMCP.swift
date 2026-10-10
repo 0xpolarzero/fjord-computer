@@ -496,6 +496,9 @@ final class RouterMCPServer: @unchecked Sendable {
     /// The messages `prepare` (and `start_session`) made, by the `to` they're for: the next SendMessage there must carry
     /// exactly that text.
     var prepared: [String: Prepared] = [:]
+    /// Why a send may no longer go, asked at each of its gates right before it is let through (the approval, the inbox's
+    /// write, the fallback process's permission): a reason stops it. Nil for the Router's own turns.
+    var deliveryCheck: (@MainActor () -> String?)?
     /// Haiku's rephrasing (message, title, project); tests answer for it.
     var rephrase: ((String, String, String) async throws -> Prepared)?
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
@@ -691,6 +694,12 @@ final class RouterMCPServer: @unchecked Sendable {
         return top.p >= 0.75 && top.p - second >= 0.3 ? "send" : "ask"
     }
 
+    /// A session's words in one of Jev's hints: one line, without control or hidden characters, bounded, unable to open or
+    /// close a session fence.
+    static func hinted(_ text: String, _ limit: Int) -> String {
+        SessionFence.neutralized(UntrustedText.clean(text, limit: limit))
+    }
+
     /// `projects`: folders the user tagged; only their cards, sessions and new-session targets are offered then.
     func targets(_ store: Store, projects: Set<String>? = nil) -> [Target] {
         // The projects narrow first; the limits apply to what's left.
@@ -698,7 +707,7 @@ final class RouterMCPServer: @unchecked Sendable {
         for card in store.openRouterCards.filter({ projects?.contains($0.folder ?? "") ?? true }).prefix(60) {
             let project = store.folderName(card.folder ?? "")
             out.append(Target(target: "answer:\(card.id)",
-                              hint: "Reply to the \(card.kind.rawValue) card of session “\(card.title)” (project \(project)): \(card.text)",
+                              hint: "Reply to the \(card.kind.rawValue) card of session “\(Self.hinted(card.title, 120))” (project \(Self.hinted(project, 80))): \(Self.hinted(card.text, 300))",
                               title: card.title, project: project, sessionID: card.sessionID, folder: card.folder ?? ""))
         }
         let (working, recent) = candidates(store, projects: projects)
@@ -706,12 +715,12 @@ final class RouterMCPServer: @unchecked Sendable {
             let project = store.folderName(s.folderKey)
             let about = store.claudeActivity[s.id]?.text ?? s.summary?.detail ?? ""
             out.append(Target(target: "session:\(s.id)",
-                              hint: "Session “\(s.title)” in project \(project)\(about.isEmpty ? "" : ": \(about)")",
+                              hint: "Session “\(Self.hinted(s.title, 120))” in project \(Self.hinted(project, 80))\(about.isEmpty ? "" : ": \(Self.hinted(about, 300))")",
                               title: s.title, project: project, sessionID: s.id, folder: s.folderKey))
         }
         for folder in store.knownFolders.filter({ !$0.isEmpty && (projects?.contains($0) ?? true) }).prefix(60) {
             let name = store.folderName(folder)
-            out.append(Target(target: "new:\(folder)", hint: "Start a new session in project \(name)", title: "", project: name,
+            out.append(Target(target: "new:\(folder)", hint: "Start a new session in project \(Self.hinted(name, 80))", title: "", project: name,
                               folder: folder))
         }
         out.append(Target(target: "unclear", hint: "The message doesn't make clear which session, card or project it is for",
@@ -852,7 +861,7 @@ final class RouterMCPServer: @unchecked Sendable {
         guard let binary = claudePath(), let home = store.routerFiles?.routerHome else {
             throw Failure("Claude Code wasn't found, so the message can't be prepared")
         }
-        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        await PrivateFile.makeFolder(home)
         do {
             return try await tracked { handle in
                 try await Rephrase.run(binary: binary, cwd: home, message: message, title: title, project: project, starting: starting,
@@ -1010,6 +1019,8 @@ final class RouterMCPServer: @unchecked Sendable {
         guard turnText != nil else { return "Only the user's messages are sent" }
         // Switched off, and the switch not seen yet: nothing goes, nothing is used up.
         guard let store, store.router.enabled, store.agents.enabled else { return "The Router is off" }
+        // What the send was for may be over by now (a wait handled, the session going on, auto-continue turned off).
+        if let refusal = deliveryCheck?() { return refusal }
         guard otherFields.isEmpty else { return "Unexpected fields: \(otherFields.joined(separator: ", ")). Send only `to` and `message`" }
         // What Claude Code adds itself (a preview, the kind of recipient) is checked against the message; nothing else.
         let known: Set<String> = ["to", "message", "summary", "content", "type", "recipient", "recipient_kind"]

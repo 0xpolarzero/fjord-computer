@@ -22,6 +22,7 @@ enum InboxEngine {
         var entries: [InboxEntry] = []
         for thing in things {
             let m = marks[thing.id]
+            let doneIn = m?.doneAt == nil ? nil : m?.doneIn
             for category in categories {
                 var union: [Fact] = []
                 var keys = Set<String>()
@@ -29,15 +30,49 @@ enum InboxEngine {
                     guard let matched = facts(rule, thing, marks: m, resolved: resolved) else { continue }
                     for fact in matched where keys.insert(fact.key).inserted { union.append(fact) }
                 }
-                if union.isEmpty { continue }
                 let acked = m?.acked ?? []
                 let seen = m?.seen ?? []
+                // Done here and nothing new since: it stays Done here with what it was Done with, as long as the rules
+                // still take it when Done's cutoff is left aside (an edited rule, or a thing that changed, lets it go).
+                if category.id == doneIn, keys.isSubset(of: acked), let kept = m?.doneFacts, !kept.isEmpty {
+                    var routing = m
+                    routing?.doneAt = nil
+                    let stays = category.rules.contains {
+                        !off.contains($0.id) && facts($0, thing, marks: routing, resolved: resolved) != nil
+                    }
+                    if stays {
+                        var all = Set(kept.map(\.key))
+                        let shown = kept + union.filter { all.insert($0.key).inserted }
+                        entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: shown, isDone: true,
+                                                  isUnread: !all.isSubset(of: seen), importance: importance(thing, resolved)))
+                        break
+                    }
+                }
+                if union.isEmpty { continue }
                 entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: union,
-                                          isDone: keys.isSubset(of: acked), isUnread: !keys.isSubset(of: seen)))
+                                          isDone: keys.isSubset(of: acked), isUnread: !keys.isSubset(of: seen),
+                                          importance: importance(thing, resolved)))
                 break
             }
         }
         return entries
+    }
+
+    /// The next moment time alone changes what matches: a thing crossing a `no activity` threshold of some rule; nil when
+    /// none is ahead.
+    static func nextChange(things: [Thing], categories: [InboxCategory], after now: Date) -> Date? {
+        let days = Set(categories.flatMap(\.rules).flatMap(\.conditions).compactMap { condition -> Int? in
+            if case .noActivity(let days) = condition { days } else { nil }
+        })
+        guard !days.isEmpty else { return nil }
+        var next: Date?
+        for thing in things {
+            for d in days {
+                let at = thing.updatedAt.addingTimeInterval(Double(d) * 86_400)
+                if at > now, next.map({ at < $0 }) ?? true { next = at }
+            }
+        }
+        return next
     }
 
     /// The facts by which `rule` matches `thing`, or nil when it doesn't.
@@ -118,7 +153,7 @@ enum InboxEngine {
                 else if !kinds.contains(.pr), s.isDisjoint(with: [.open, .closed]) { add("Issues are only open or closed") }
             case .greptileBelow(let n):
                 if n <= 1 { add("Greptile scores start at 1") }
-            case .hasConflicts, .behindBase, .noActivity:
+            case .hasConflicts, .behindBase, .noActivity, .asksMe, .noise, .importance:
                 break
             }
         }
@@ -166,11 +201,12 @@ enum InboxEngine {
              .approved(by: Pick()), .changesRequested(by: Pick()),
              .checks([.failing]), .hasConflicts, .behindBase,
              .status([.draft]), .labeled(Pick()), .noActivity(days: 7),
-             .greptileBelow(5)]
+             .greptileBelow(5), .asksMe, .noise(true), .importance(.high)]
         case .issue:
             [.newComment(by: Pick()), .mentions(Pick(include: [.me])),
              .lastComment(by: Pick()),
-             .status([.closed]), .labeled(Pick()), .noActivity(days: 7)]
+             .status([.closed]), .labeled(Pick()), .noActivity(days: 7),
+             .asksMe, .noise(true), .importance(.high)]
         case .workflow:
             [.workflow([.failing])]
         }
@@ -188,9 +224,11 @@ enum InboxEngine {
         var groupRepos: [UUID: (exact: Set<String>, owners: Set<String>)] = [:]
         var contributed: Set<String>
         var myTeams: Set<String>
+        var jev: Bool
 
         init(_ context: InboxContext) {
             me = InboxEngine.normalize(context.me)
+            jev = context.jevSignals
             now = context.now
             contributed = Set(context.contributedRepos.map { $0.lowercased() })
             myTeams = Set(context.myTeams.map { $0.lowercased() })
@@ -272,8 +310,9 @@ enum InboxEngine {
         switch thing.kind {
         case .workflow:
             // The fetched thing already carries its branch (the default one unless the rule says otherwise).
-            if let on = scope.on, let branch = thing.branch, !on.contains(branch) { return false }
-            if let named = scope.named {
+            // An empty `on` or `named` is the slot's default: the default branch, every workflow.
+            if let on = InboxSync.given(scope.on), let branch = thing.branch, !on.contains(branch) { return false }
+            if let named = InboxSync.given(scope.named) {
                 guard let name = thing.workflowName?.lowercased(), named.contains(where: { $0.lowercased() == name })
                 else { return false }
             }
@@ -418,6 +457,23 @@ enum InboxEngine {
         case .greptileBelow(let n):
             guard let score = thing.greptileScore, score < n else { return [] }
             return [Fact(key: "greptile:\(score)", label: "Greptile \(score)/5", tint: .attention)]
+        case .asksMe:
+            // Answering there is what stops a question asking: only what came after your latest word, and after Done.
+            let after = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast,
+                            signals(thing, r)?.answeredAt ?? .distantPast)
+            return messages(thing).filter { m in
+                m.at > after && !isMe(m.author, r) && signals(thing, r)?.messages[m.id]?.asksMe == true
+            }.map { Fact(key: "asks:\($0.id)", label: "Asks you", tint: .attention) }
+        case .noise(let wanted):
+            return messages(thing).filter { m in m.at > cutoff && !isMe(m.author, r) && isNoise(m, signals(thing, r)) == wanted }.map {
+                wanted ? Fact(key: "noise:\($0.id)", label: "noise from @\($0.author.login)")
+                    : Fact(key: "person:\($0.id)", label: "comment by @\($0.author.login)", tint: .attention)
+            }
+        case .importance(let least):
+            guard let level = importance(thing, r), level >= least, let stamp = importanceStamp(thing, r) else { return [] }
+            // Keyed by what was rated too: a new request after Done on an old one is new.
+            return [Fact(key: "importance:\(level.rawValue):\(stamp)", label: level == .urgent ? "urgent" : "\(level.rawValue) importance",
+                         tint: level == .urgent ? .danger : level == .high ? .attention : .neutral)]
         case .workflow(let states):
             guard let state = thing.checks, states.contains(state) else { return [] }
             // The state alone is the key: a failure notifies once, until it goes green and fails again.
@@ -425,6 +481,87 @@ enum InboxEngine {
             if state == .failing, !thing.failingJobs.isEmpty { label += ": " + thing.failingJobs.joined(separator: ", ") }
             return [Fact(key: "workflow:\(state.rawValue)", label: label, tint: tint(state))]
         }
+    }
+
+    // MARK: - Jev's signals
+
+    /// A comment, a review's words or a thread's latest reply: what Jev reads, and what `asksMe` and `noise` are about.
+    struct Message: Hashable {
+        var id: String
+        var author: Person
+        var at: Date
+        var text: String
+        var isReview = false
+        /// A thread's file (empty when GitHub didn't say) for a reply in one; nil for the conversation.
+        var path: String?
+    }
+
+    /// Every message of a thing, oldest first.
+    static func messages(_ thing: Thing) -> [Message] {
+        let comments = thing.comments.map { Message(id: $0.id, author: $0.author, at: $0.at, text: $0.snippet, isReview: $0.isReview) }
+        let replies = thing.threads.map {
+            Message(id: $0.lastReplyID, author: $0.lastReplyBy, at: $0.lastReplyAt, text: $0.snippet, path: $0.path ?? "")
+        }
+        return (comments + replies).sorted { $0.at < $1.at }
+    }
+
+    /// A login as signals keep it: lowercased, without `@` or `[bot]`.
+    static func viewer(_ login: String) -> String { normalize(login) }
+
+    /// What Jev said of a thing for `me` (any login form): nothing when it was read for someone else.
+    static func signals(_ thing: Thing, _ me: String) -> ThingSignals? {
+        guard let signals = thing.signals, !me.isEmpty, signals.viewer == normalize(me) else { return nil }
+        return signals
+    }
+
+    /// Your latest comment or thread reply on a thing, as it was fetched.
+    static func latestWord(_ thing: Thing, by me: String) -> Date? {
+        let me = normalize(me)
+        guard !me.isEmpty else { return nil }
+        let comments = thing.comments.filter { normalize($0.author.login) == me }.map(\.at)
+        let replies = thing.threads.filter { normalize($0.lastReplyBy.login) == me }.map(\.lastReplyAt)
+        return (comments + replies).max()
+    }
+
+    /// What Jev said that counts: nothing when it was for someone else, or Jev's reading is switched off.
+    static func signals(_ thing: Thing, context: InboxContext) -> ThingSignals? {
+        context.jevSignals ? signals(thing, context.me) : nil
+    }
+
+    private static func signals(_ thing: Thing, _ r: Resolved) -> ThingSignals? { r.jev ? signals(thing, r.me) : nil }
+
+    /// Noise: what Jev said of it once it read it (nil when it wasn't sure); before that, whether a bot wrote it.
+    private static func isNoise(_ m: Message, _ signals: ThingSignals?) -> Bool? {
+        guard let signal = signals?.messages[m.id] else { return m.author.isBot }
+        return signal.noise
+    }
+
+    private static func isMe(_ person: Person, _ r: Resolved) -> Bool { !r.me.isEmpty && normalize(person.login) == r.me }
+
+    /// What an importance rating is for: the review request (to you or a team of yours) by when it was made, else your
+    /// assignment. Nil when it is neither, or not open.
+    static func importanceStamp(_ thing: Thing, context: InboxContext) -> String? { importanceStamp(thing, Resolved(context)) }
+    /// Jev's rating of what is asked of you now, as the inbox counts it (for you, Jev's reading on, the request it rated).
+    static func importance(_ thing: Thing, context: InboxContext) -> Importance? { importance(thing, Resolved(context)) }
+
+    private static func importanceStamp(_ thing: Thing, _ r: Resolved) -> String? {
+        guard thing.kind != .workflow, thing.status == .open || thing.status == .draft, !r.me.isEmpty else { return nil }
+        if thing.kind == .pr {
+            let mine = thing.requestedReviewers.filter { normalize($0) == r.me || r.myTeams.contains(normalize($0)) }
+            let at = mine.map { who in
+                thing.reviewRequests.first { $0.reviewer.caseInsensitiveCompare(who) == .orderedSame }?.at ?? thing.createdAt
+            }.max()
+            if let at { return "requested:\(Int(at.timeIntervalSince1970))" }
+        }
+        guard thing.assignees.contains(where: { normalize($0) == r.me }) else { return nil }
+        // By when you were assigned: taken off and assigned again is a new thing to rate.
+        return thing.assignedAt?.first { normalize($0.key) == r.me }.map { "assigned:\(Int($0.value.timeIntervalSince1970))" } ?? "assigned"
+    }
+
+    /// Jev's rating of what is asked of you now; nil when nothing is, or it wasn't rated (or wasn't sure).
+    private static func importance(_ thing: Thing, _ r: Resolved) -> Importance? {
+        guard let signal = signals(thing, r)?.importance, let stamp = importanceStamp(thing, r), signal.stamp == stamp else { return nil }
+        return signal.level
     }
 
     private static func tint(_ state: CheckState) -> FactTint {
@@ -464,7 +601,7 @@ enum InboxEngine {
 
     private static func offered(_ condition: Condition) -> Set<ThingKind> {
         switch condition {
-        case .newComment, .mentions, .lastComment, .status, .labeled, .noActivity: [.pr, .issue]
+        case .newComment, .mentions, .lastComment, .status, .labeled, .noActivity, .asksMe, .noise, .importance: [.pr, .issue]
         case .newReview, .newCommits, .unresolvedThreads, .approved, .changesRequested, .checks, .hasConflicts,
              .behindBase, .greptileBelow: [.pr]
         case .workflow: [.workflow]

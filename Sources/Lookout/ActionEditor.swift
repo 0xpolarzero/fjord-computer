@@ -78,7 +78,7 @@ private struct ActionRow: View {
             case .askRouter(let prompt):
                 ActionTextBox(text: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }),
                               placeholder: "What to do, like “Review {url} and fix what Greptile flagged”", label: "Prompt")
-                    .tip("Prompt", "The Router starts a new session in a local clone of the repo (Jev picks when there are several; no clone, no session). Its title, link, repo, why it is here and the last comment are added for you. {title} {url} {number} {repo} {author} are filled in.")
+                    .tip("Prompt", "The Router starts a new session in a local clone of the repo (Jev picks when there are several; no clone, no session). Its title, link, repo, why it is here and the last comment are added for you, in a block marked as written by others. {repo} {number} {url} are filled in; {title} and {author} point to that block, so nothing others wrote reads as your words.")
                 HStack(spacing: 8) {
                     MenuChip(title: "Model: " + (action.model?.capitalized ?? "Default"), label: "Model") {
                         Toggle("Default", isOn: Binding(get: { action.model == nil }, set: { _ in action.model = nil }))

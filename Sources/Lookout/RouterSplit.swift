@@ -44,25 +44,35 @@ enum RouterSplit {
         share(of: shown - dy, page: height)
     }
 
-    /// Whether the zones take more than the history-big split gives them: the chevron then gives the history the room.
-    static func zonesAreBig(shown: CGFloat, page height: CGFloat) -> Bool {
-        shown > room(page: height, share: historyBig) + 1
-    }
+    /// Whether the share you chose is past the history-big snap: the chevron then gives the history the room. Read from the
+    /// share, not from the zones' height: zones that can't fit the history-big room would else keep it switching the same way.
+    static func zonesAreBig(share: CGFloat) -> Bool { share > historyBig + 0.01 }
 
-    /// The other snap point from where the line is.
-    static func toggled(shown: CGFloat, page height: CGFloat) -> CGFloat {
-        zonesAreBig(shown: shown, page: height) ? historyBig : zonesBig
-    }
+    /// The other snap point from the one chosen.
+    static func toggled(share: CGFloat) -> CGFloat { zonesAreBig(share: share) ? historyBig : zonesBig }
 
     /// A step up (the zones grow) or down.
     static func adjusted(shown: CGFloat, page height: CGFloat, up: Bool) -> CGFloat {
         share(of: shown + (up ? step : -step) * height, page: height)
     }
 
-    /// The Working card's cap within the zones' room: all of it but the headers with nothing waiting on you, else a part of it
-    /// (Needs you takes the rest).
-    static func workingCap(room: CGFloat, needsEmpty: Bool) -> CGFloat {
-        needsEmpty ? max(88, room - 70) : max(56, room * 0.4)
+    /// The zones' height and their two scrolls', as last measured.
+    final class ZoneHeights {
+        var total: CGFloat = 0
+        var working: CGFloat = 0
+        var needs: CGFloat = 0
+    }
+
+    /// The least each zone's scroll shows, however short the room: a line of it.
+    static let scrollFloor: CGFloat = 32
+
+    /// The two scrolls' heights within the zones' room, their headers and margins (`chrome`) taken out first, so the zones
+    /// with their headers fit it: Working a part of what is left (all of it with nothing waiting on you), Needs you what
+    /// Working shows (`workingShown`) leaves. Each keeps a line however short the room.
+    static func caps(room: CGFloat, chrome: CGFloat, workingShown: CGFloat, needsEmpty: Bool) -> (working: CGFloat, needs: CGFloat) {
+        let space = max(0, room - chrome)
+        let working = max(scrollFloor, needsEmpty ? space : space * 0.4)
+        return (working, max(scrollFloor, space - min(workingShown, working)))
     }
 }
 

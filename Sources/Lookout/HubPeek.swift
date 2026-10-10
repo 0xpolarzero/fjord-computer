@@ -332,7 +332,7 @@ private struct ControlsGearLabel: View {
     var body: some View {
         Image(systemName: "gearshape")
             .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-            .foregroundStyle(hover ? Color.white : CDS.Text.secondary)
+            .foregroundStyle(hover ? Brand.ink : CDS.Text.secondary)
             .frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control)
     }
 }

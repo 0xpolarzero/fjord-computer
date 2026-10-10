@@ -186,6 +186,22 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(q.filter { $0.contains("is:issue") } == ["is:issue archived:false user:me user:org sort:updated-desc is:open"])
     }
 
+    @Test func pastTheCapTheWindowMovesSoEveryQueryGetsATurn() {
+        let rules = (0..<17).map { Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u\($0)")]))) }
+        let categories = [InboxCategory(name: "x", symbol: "star", color: .blue, rules: rules)]
+        let first = InboxSync.searchPlan(categories: categories, groups: [], me: "me", contributed: [])
+        #expect(first.all.count == 17 && first.searches.count == InboxSync.maxSearches && first.next == 16)
+        let second = InboxSync.searchPlan(categories: categories, groups: [], me: "me", contributed: [], cursor: first.next)
+        #expect(Set(first.searches).union(second.searches) == first.all)
+        #expect(second.searches.first?.contains("author:u16") == true)
+        // Under the cap: all of them, each time.
+        let few = InboxSync.searchPlan(categories: [InboxCategory(name: "x", symbol: "star", color: .blue, rules: Array(rules.prefix(3)))],
+                                       groups: [], me: "me", contributed: [], cursor: 5)
+        #expect(few.searches.count == 3 && few.next == 0)
+        #expect(InboxSync.pageSizes(searches: 1, budget: 150) == InboxSync.pageSize)
+        #expect(InboxSync.pageSizes(searches: 16, budget: 150) == 9 && InboxSync.pageSizes(searches: 4, budget: 3) == 1)
+    }
+
     @Test func closedThingsAreOnlyFetchedWhenAskedForAndRecent() {
         let plain = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.me])))])
         #expect(plain.count == 1)
@@ -199,6 +215,17 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(t.map { "\($0.repo)@\($0.branch ?? "")" } == ["o/r@main", "o/r@dev"])
         let none = InboxSync.workflowTargets(categories: [InboxStore.ci], groups: [], owned: [], contributed: [])
         #expect(none.isEmpty)
+        // Wildcards are their owner's repos, as known; an empty `on` (or blank names in it) is the default branch.
+        let group = InboxGroup(name: "G", kind: .repos, members: ["b/*"])
+        let wild = rule(Scope(kinds: [.workflow], in: Pick(include: [.owner("A"), .group(group.id)], except: [.repo("a/skip")]), on: ["", " "]))
+        let owners = InboxSync.workflowOwners(categories: [wild], groups: [group])
+        #expect(owners == ["a", "b"])
+        let found = InboxSync.workflowTargets(categories: [wild], groups: [group], owned: [], contributed: [],
+                                              ownerRepos: ["a": ["a/one", "a/skip"], "b": ["b/two"]])
+        #expect(found.map { "\($0.repo)@\($0.branch ?? "")" } == ["a/one@", "b/two@"])
+        let notB = rule(Scope(kinds: [.workflow], in: Pick(include: [.owner("a"), .owner("b")], except: [.owner("B")])))
+        #expect(InboxSync.workflowTargets(categories: [notB], groups: [], owned: [], contributed: [],
+                                          ownerRepos: ["a": ["a/one"], "b": ["b/two"]]).map(\.repo) == ["a/one"])
     }
 }
 
@@ -208,6 +235,9 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         var queries: [String] = []
         var posted: [String] = []
         var score = 3
+        /// The GraphQL points the answers say are left, and when they come back.
+        var remaining = 4000
+        var resetAt = "2030-01-01T00:00:00Z"
     }
 
     nonisolated static func body(_ request: URLRequest) -> String {
@@ -233,7 +263,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             let text = Self.body(request)
             log.queries.append(text)
             let pr = node(["body": "<!-- greptile_confidence_score:\(log.score) -->"])
-            let reply: [String: Any] = ["data": ["rateLimit": ["cost": 3, "remaining": 4000],
+            let reply: [String: Any] = ["data": ["rateLimit": ["cost": 3, "remaining": log.remaining, "resetAt": log.resetAt],
                                                   "s0": ["pageInfo": ["hasNextPage": false], "nodes": [pr]]]]
             return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
         }
@@ -303,6 +333,144 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.marks["pr:o/r#12"]?.notified == ["greptile:2"])
     }
 
+    @Test func spentPointsWaitForTheirResetAndARefreshByHandTriesAnyway() async {
+        let log = Log()
+        let (s, _) = store(log)
+        log.remaining = 50
+        await s.syncInbox()
+        #expect(s.gh.graphqlRemaining == 50 && s.gh.graphqlResetsAt == iso("2030-01-01T00:00:00Z"))
+        await s.syncInbox()
+        #expect(log.queries.count == 1)
+        // By hand: asked anyway, and the answer says the points come back an hour ago.
+        log.resetAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600))
+        await s.syncInbox(manual: true)
+        #expect(log.queries.count == 2)
+        // Past the reset, polls search again even though the last answer still said 50.
+        await s.syncInbox()
+        #expect(log.queries.count == 3)
+        let now = Date()
+        #expect(InboxSync.waitsForPoints(remaining: 50, resetsAt: now.addingTimeInterval(60), manual: false, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 50, resetsAt: now.addingTimeInterval(60), manual: true, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 50, resetsAt: now.addingTimeInterval(-1), manual: false, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 50, resetsAt: nil, manual: false, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 500, resetsAt: now.addingTimeInterval(60), manual: false, now: now))
+    }
+
+    @Test func anAnswerGivenInPartKeepsWhatItLeftOutAndSaysSo() async {
+        final class Phase: @unchecked Sendable { var partial = false }
+        let phase = Phase()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { _ in
+            let other = node(["id": "PR_2", "number": 13, "url": "https://github.com/o/r/pull/13"])
+            var reply: [String: Any] = ["data": ["rateLimit": ["cost": 1, "remaining": 4000],
+                                                  "s0": ["pageInfo": ["hasNextPage": false], "nodes": [node(), other]]]]
+            if phase.partial {
+                // #12 without its comments, #13 not at all: GitHub's errors say where.
+                reply = ["data": ["rateLimit": ["cost": 1, "remaining": 4000],
+                                  "s0": ["pageInfo": ["hasNextPage": false], "nodes": [node(["comments": NSNull()]), NSNull()]]],
+                         "errors": [["message": "Something went wrong", "path": ["s0", "nodes", 0, "comments"]],
+                                    ["message": "Something went wrong", "path": ["s0", "nodes", 1]]]]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        var category = InboxCategory(name: "Mine", symbol: "star", color: .blue)
+        category.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])), conditions: [.lastComment(by: Pick())])]
+        s.categories = [category]
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.identifier) }
+        await s.syncInbox()
+        #expect(s.things.keys.sorted() == ["pr:o/r#12", "pr:o/r#13"] && s.inboxError == nil)
+        phase.partial = true
+        await s.syncInbox()
+        #expect(s.inboxError == "Something went wrong")
+        #expect(s.things.keys.sorted() == ["pr:o/r#12", "pr:o/r#13"])
+        #expect(s.things["pr:o/r#12"]?.comments.map(\.id) == ["c1", "r2"])
+        // Whole again: nothing is new.
+        phase.partial = false
+        await s.syncInbox()
+        #expect(s.inboxError == nil && posted.isEmpty)
+    }
+
+    @Test func anEventAnnouncedOnceStaysAnnouncedThoughTheRuleStopsMatchingForAWhile() async {
+        final class Checks: @unchecked Sendable { var state = "SUCCESS" }
+        let checks = Checks()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { _ in
+            let pr = node(["commits": ["nodes": [["commit": ["oid": "abc", "committedDate": "2026-10-08T11:00:00Z",
+                                                             "author": ["user": ["login": "me"]],
+                                                             "statusCheckRollup": ["state": checks.state]]]]]])
+            let reply: [String: Any] = ["data": ["rateLimit": ["cost": 1, "remaining": 4000],
+                                                  "s0": ["pageInfo": ["hasNextPage": false], "nodes": [pr]]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        var category = InboxCategory(name: "Mine", symbol: "star", color: .blue)
+        category.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])), match: .all,
+                               conditions: [.newComment(by: Pick()), .checks([.failing])], createdAt: .distantPast)]
+        s.categories = [category]
+        var bodies: [String] = []
+        s.notifier.onPost = { bodies.append($0.content.body) }
+        await s.syncInbox()
+        checks.state = "FAILURE"
+        await s.syncInbox()
+        #expect(bodies.count == 1 && bodies[0].contains("comment by @greptile-apps[bot]"))
+        // Passing, then failing again: the failure is new, the comment isn't.
+        checks.state = "SUCCESS"
+        await s.syncInbox()
+        #expect(s.marks["pr:o/r#12"]?.notified.contains("comment:c1") == true)
+        #expect(s.marks["pr:o/r#12"]?.notified.contains("checks:failing") == false)
+        checks.state = "FAILURE"
+        await s.syncInbox()
+        #expect(bodies.count == 2 && !bodies[1].contains("comment"))
+        // Not an event once the thing no longer has it.
+        let t = try! #require(InboxSync.thing(node()))
+        #expect(InboxSync.isEvent("comment:c1", of: t) && !InboxSync.isEvent("comment:gone", of: t))
+        #expect(InboxSync.isEvent("requested:bob:1", of: t) && !InboxSync.isEvent("checks:failing", of: t))
+    }
+
+    @Test func pastTheCapTheSearchesTakeTurnsAndWhatTheOthersFoundStays() async {
+        final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var firsts: Set<String> = [] }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        // Seventeen rules of one search each: one more than a refresh makes.
+        s.categories = [InboxCategory(name: "People", symbol: "star", color: .blue, rules: (0..<17).map {
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u\($0)")])))
+        })]
+        let pattern = try! NSRegularExpression(pattern: #"(s\d+): search\(query: \"[^"]*author:u(\d+) [^"]*\", type: ISSUE, first: (\d+)"#)
+        s.gh.session = StubbedGitHub.session { request in
+            let body = try JSONSerialization.jsonObject(with: Data(InboxSyncRefresh.body(request).utf8)) as? [String: Any]
+            let text = body?["query"] as? String ?? ""
+            var data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000]]
+            for m in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let part = { (i: Int) in String(text[Range(m.range(at: i), in: text)!]) }
+                let n = Int(part(2))!
+                box.asked.append("u\(n)")
+                box.firsts.insert(part(3))
+                let found = box.hidden.contains(n) ? [] : [node(["id": "PR_\(n)", "number": n, "url": "https://github.com/o/r/pull/\(n)"])]
+                data[part(1)] = ["pageInfo": ["hasNextPage": false], "nodes": found]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(box.asked.count == 16 && !box.asked.contains("u16") && s.things.count == 16)
+        // What the sixteen searches ask for is within the cap before they are made.
+        #expect(box.firsts == ["\(InboxSync.maxThings / 16)"])
+        box.asked = []
+        await s.syncInbox()
+        // The seventeenth gets its turn; the one left out this time keeps what it found.
+        #expect(box.asked.contains("u16") && !box.asked.contains("u15"))
+        #expect(s.things.count == 17 && s.things["pr:o/r#15"] != nil)
+        // A search that ran and didn't find it again: gone.
+        box.hidden = [0]
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#0"] == nil && s.things.count == 16)
+    }
+
     @Test func marksOfThingsGoneForAMonthAreForgotten() {
         let (s, _) = store(Log())
         s.marks = ["pr:o/r#9": EntryMarks(seen: ["x"])]
@@ -311,6 +479,32 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.marks["pr:o/r#9"] != nil)
         s.applyThings([:], now: now.addingTimeInterval(31 * 86400))
         #expect(s.marks["pr:o/r#9"] == nil)
+    }
+
+    @Test func aThingsMonthGoneGoesOnAcrossARestart() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-gone-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let now = Date()
+        let first = Store()
+        first.stateFile = file
+        first.marks = ["pr:o/r#9": EntryMarks(seen: ["x"]), "pr:o/r#1": EntryMarks(seen: ["y"])]
+        first.applyThings(["pr:o/r#1": InboxFixture.pr(1, repo: "o/r")], now: now)
+        first.flushSave()
+
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        second.persists = false
+        #expect(second.marks["pr:o/r#9"]?.goneSince != nil && second.marks["pr:o/r#1"]?.goneSince == nil)
+        // A month after it went (not after the restart), it is forgotten; the one still there stays.
+        second.applyThings(["pr:o/r#1": InboxFixture.pr(1, repo: "o/r")], now: now.addingTimeInterval(31 * 86400))
+        #expect(second.marks["pr:o/r#9"] == nil && second.marks["pr:o/r#1"] != nil)
+        // Back before the month is out: the count starts again.
+        second.marks["pr:o/r#1"]?.goneSince = now
+        second.applyThings(["pr:o/r#1": InboxFixture.pr(1, repo: "o/r")], now: now)
+        #expect(second.marks["pr:o/r#1"]?.goneSince == nil)
     }
 }
 
@@ -347,6 +541,8 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
             case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            // The repos of an owner a rule names with a wildcard.
+            case "/graphql": return .init(200, #"{"data":{"o0":{"repositories":{"nodes":[{"nameWithOwner":"a/x"}]}}}}"#)
             default: return .init(404, #"{"message":"unrouted"}"#)
             }
         }
@@ -382,6 +578,15 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.count(ci) == 3 && posted == ["inbox:workflow:a/x:13@main", "inbox:workflow:a/x:12@main"])
     }
 
+    @Test func anOwnersWildcardIsItsReposAndEmptySlotsAreTheirDefaults() async {
+        let (s, ci) = store(State()) { _ in }
+        // `on` and `named` added and left empty: the default branch, every workflow.
+        s.categories[0].rules[0].scope = Scope(kinds: [.workflow], in: Pick(include: [.owner("A")]), on: [], named: [" "])
+        await s.syncInbox()
+        #expect(s.inboxSyncState.ownerRepos == ["a": ["a/x"]])
+        #expect(s.entries(in: ci).map(\.id).sorted() == ["workflow:a/x:11@main", "workflow:a/x:12@main"])
+    }
+
     @Test func aRuleCanNameTheWorkflowsItWants() async {
         let state = State()
         let (s, _) = store(state) { _ in }
@@ -412,6 +617,47 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(at["gone"] == nil && t.reviewRequests.count == 2)
     }
 
+    @Test func everyPendingRequestIsAskedForAndOneStillPendingKeepsWhenItWasMade() throws {
+        #expect(InboxSync.fragments.contains("reviewRequests(first: 100)"))
+        let old = try #require(InboxSync.thing(node()))
+        // Later requests pushed bob's event out of the ones fetched: he is still asked, since the same time.
+        let later = (0..<50).map { ["createdAt": "2026-10-05T10:00:00Z", "requestedReviewer": ["login": "r\($0)"]] as [String: Any] }
+        let fetched = try #require(InboxSync.thing(node(["requestEvents": ["nodes": later]])))
+        #expect(fetched.reviewRequests.isEmpty)
+        let kept = InboxSync.keepingRequestTimes(fetched, from: old)
+        #expect(kept.reviewRequests.first { $0.reviewer == "bob" }?.at == iso("2026-10-04T10:00:00Z"))
+        // An event fetched is the truth: asked again later is a new request.
+        let again = try #require(InboxSync.thing(node(["requestEvents": ["nodes": [
+            ["createdAt": "2026-10-09T10:00:00Z", "requestedReviewer": ["login": "bob"]]]]])))
+        #expect(InboxSync.keepingRequestTimes(again, from: old).reviewRequests.first { $0.reviewer == "bob" }?.at == iso("2026-10-09T10:00:00Z"))
+        // No longer pending before: nothing to keep.
+        var gone = old
+        gone.requestedReviewers = []
+        #expect(InboxSync.keepingRequestTimes(fetched, from: gone).reviewRequests.isEmpty)
+    }
+
+    @Test func anAssignmentIsRatedByWhenItWasMadeSoAssignedAgainIsNew() throws {
+        #expect(InboxSync.fragments.contains("ASSIGNED_EVENT") && InboxSync.fragments.contains("assignees(first: 10)"))
+        let events: [[String: Any]] = [
+            ["createdAt": "2026-10-02T10:00:00Z", "assignee": ["login": "Me"]],
+            ["createdAt": "2026-10-03T10:00:00Z", "assignee": ["login": "gone"]],
+        ]
+        let first = try #require(InboxSync.thing(node(["assignees": ["nodes": [["login": "Me"]]], "reviewRequests": ["nodes": []],
+                                                        "assignEvents": ["nodes": events]])))
+        #expect(first.assignedAt == ["me": try #require(iso("2026-10-02T10:00:00Z"))])
+        let context = InboxContext(me: "me")
+        let stamp = InboxEngine.importanceStamp(first, context: context)
+        #expect(stamp == "assigned:\(Int(try #require(iso("2026-10-02T10:00:00Z")).timeIntervalSince1970))")
+        // Taken off and assigned again: another stamp, so Jev's rating of the first doesn't count for it.
+        let again = try #require(InboxSync.thing(node(["assignees": ["nodes": [["login": "Me"]]], "reviewRequests": ["nodes": []],
+                                                        "assignEvents": ["nodes": [["createdAt": "2026-10-08T10:00:00Z",
+                                                                                     "assignee": ["login": "Me"]]]]])))
+        #expect(InboxEngine.importanceStamp(again, context: context) != stamp)
+        // Still assigned, its event past the ones fetched: the time is kept.
+        let later = try #require(InboxSync.thing(node(["assignees": ["nodes": [["login": "Me"]]], "reviewRequests": ["nodes": []]])))
+        #expect(InboxEngine.importanceStamp(InboxSync.keepingRequestTimes(later, from: first), context: context) == stamp)
+    }
+
     @Test func behindBaseAndTheHeadCommitAreRead() throws {
         let t = try #require(InboxSync.thing(node()))
         #expect(t.behindBase && t.headSha == "abc")
@@ -429,6 +675,92 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(searches([rule(Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))]).isEmpty)
         // Teams only count for review requests.
         #expect(searches([rule(Scope(kinds: [.pr], to: Pick(include: [.team("a/x")]), toRoles: [.assigned]))]).isEmpty)
+    }
+
+    @Test @MainActor func teamsAreResolvedWhenJevRatesReviewRequestsEvenWithNoRuleNamingThem() async {
+        let none = [InboxCategory(name: "Mine", symbol: "star", color: .blue,
+                                  rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])))])]
+        #expect(!InboxSync.needsTeams(categories: none, jevReads: false))
+        #expect(InboxSync.needsTeams(categories: none, jevReads: true))
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = none
+        s.gh.session = StubbedGitHub.session { request in
+            let data: [String: Any] = InboxSyncRefresh.body(request).contains("organizations")
+                ? ["viewer": ["organizations": ["nodes": [["teams": ["nodes": [["combinedSlug": "acme/core"]]]]]]]]
+                : ["rateLimit": ["cost": 1, "remaining": 4000], "s0": ["pageInfo": ["hasNextPage": false], "nodes": []]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        // Jev switched off: not asked.
+        s.settings.jevReadsInbox = false
+        s.inboxAsker = { _, _ in [:] }
+        await s.syncInbox()
+        #expect(s.myTeams.isEmpty)
+        s.settings.jevReadsInbox = true
+        await s.syncInbox()
+        #expect(s.myTeams == ["acme/core"])
+    }
+
+    @Test @MainActor func aFailedTeamsLookupIsSaidKeepsTheThingsAndIsAskedAgainSoon() async throws {
+        final class Box: @unchecked Sendable { var fails = true; var teamAsks = 0; var searches = 0 }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [InboxCategory(name: "Team", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))])]
+        s.settings.jevReadsInbox = false
+        s.gh.session = StubbedGitHub.session { request in
+            if InboxSyncRefresh.body(request).contains("organizations") {
+                box.teamAsks += 1
+                if box.fails { return StubbedGitHub.Reply(502, #"{"message":"Server Error"}"#) }
+                let data = ["viewer": ["organizations": ["nodes": [["teams": ["nodes": [["combinedSlug": "acme/core"]]]]]]]]
+                return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+            }
+            box.searches += 1
+            let data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000], "s0": ["pageInfo": ["hasNextPage": false], "nodes": [node()]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        let kept = try #require(InboxSync.thing(node()))
+        s.things = [kept.id: kept]
+        await s.syncInbox()
+        #expect(s.inboxError?.contains("teams") == true && s.things.keys.sorted() == [kept.id])
+        #expect(s.teamsResolvedAt == nil && box.searches == 0)
+        // Not asked again at every poll, and the things still stay.
+        await s.syncInbox()
+        #expect(box.teamAsks == 1 && s.things.keys.sorted() == [kept.id] && s.inboxError != nil)
+        // A quarter of an hour later it is.
+        s.inboxSyncState.teamsFailedAt = Date().addingTimeInterval(-InboxSync.teamsRetry - 1)
+        box.fails = false
+        await s.syncInbox()
+        #expect(box.teamAsks == 2 && s.myTeams == ["acme/core"] && box.searches == 1 && s.inboxError == nil)
+        #expect(s.inboxSyncState.teamsFailedAt == nil && s.teamsResolvedAt != nil)
+    }
+
+    @Test @MainActor func anotherAccountStartsWithoutTheLastOnesReposAndTeams() async throws {
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.ownedRepos = ["me/own"]
+        s.contributedRepos = ["o/merged"]
+        s.myTeams = ["acme/core"]
+        s.reposResolvedAt = Date()
+        s.teamsResolvedAt = Date()
+        s.inboxSyncState.ownerRepos = ["acme": ["acme/x"]]
+        // The same account, however written: kept.
+        s.me = GHUser(login: "Me", avatarUrl: nil, type: "User")
+        #expect(s.contributedRepos == ["o/merged"] && s.myTeams == ["acme/core"])
+        s.me = GHUser(login: "someone", avatarUrl: nil, type: "User")
+        #expect(s.ownedRepos.isEmpty && s.contributedRepos.isEmpty && s.myTeams.isEmpty)
+        #expect(s.reposResolvedAt == nil && s.teamsResolvedAt == nil && s.inboxSyncState.ownerRepos.isEmpty)
+        // An answer asked for the last account, landing now, isn't taken.
+        s.gh.session = StubbedGitHub.session { _ in
+            let data = ["viewer": ["organizations": ["nodes": [["teams": ["nodes": [["combinedSlug": "acme/core"]]]]]]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        await s.resolveTeams(me: "me")
+        #expect(s.myTeams.isEmpty && s.teamsResolvedAt == nil)
     }
 
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {

@@ -308,6 +308,20 @@ import Testing
         #expect(try JSONDecoder().decode(Scope.self, from: Data(json.utf8)) == both)
     }
 
+    @Test func aBuildFromBeforeKindsReadsTheFirstKindOfEachRuleSaved() throws {
+        // The scope as builds from before `kinds` declared it.
+        struct OneKind: Decodable { var kind: ThingKind }
+        let saving = JSONEncoder()
+        saving.userInfo[Scope.withLegacyKind] = true
+        for (kinds, first) in [([ThingKind.issue, .pr], ThingKind.pr), ([.issue], .issue), ([.workflow], .workflow)] {
+            let data = try saving.encode(Scope(kinds: Set(kinds)))
+            #expect(try JSONDecoder().decode(OneKind.self, from: data).kind == first)
+            #expect(try JSONDecoder().decode(Scope.self, from: data) == Scope(kinds: Set(kinds)))
+        }
+        // Only the saved state has it: not the rules' fingerprint, nor what the Router reads.
+        #expect(!String(decoding: try JSONEncoder().encode(Scope(kinds: [.pr])), as: UTF8.self).contains(#""kind":"#))
+    }
+
     @Test func oldSavedConditionsDecodeWithTheDefaultSince() throws {
         let labeled = Data(#"{"newComment":{"by":{"include":[{"me":{}}],"except":[]}}}"#.utf8)
         #expect(try JSONDecoder().decode(Condition.self, from: labeled) == .newComment(by: Pick(include: [.me])))

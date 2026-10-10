@@ -23,7 +23,9 @@ struct CategoriesView: View {
     let store: Store
     @State private var editing: CategoryEditing?
     @State private var expandedGroup: UUID?
-    @State private var dropTarget: UUID?
+    @State private var dropTarget: String?
+    /// A section just made by New section: its name field takes the focus.
+    @State private var focusSection: UUID?
     /// Every edit applies at once; this is what takes them back.
     @State private var history: CategoryHistory
     /// What New category opened: not in the store (not listed, matched or saved) until Create; leaving drops it.
@@ -79,6 +81,7 @@ struct CategoriesView: View {
             store.categoriesEdited()
         }
         .onChange(of: store.groups) { history.observe(store, field: CategoryHistory.typingField()) }
+        .onChange(of: store.categorySections) { history.observe(store, field: CategoryHistory.typingField()) }
         // Kept from a close (see `AppWindowController`), the page comes back with the history it had: what the categories
         // became meanwhile (the Router's changes) is no step of it, and undoing one from before would undo that too. It
         // starts afresh, as when the page was made anew on every open.
@@ -92,18 +95,18 @@ struct CategoriesView: View {
         }
     }
 
-    /// The page's history takes ⌘Z, except while a draft is open: its fields keep their own (the draft is no step of the page).
+    /// The page's history stays the store's while a draft is open, so a Router change made then still clears its steps; but
+    /// ⌘Z isn't its then: the draft's fields keep their own (the draft is no step of the page).
     private func syncHistory() {
-        if editing == .new {
-            if store.categoryHistory === history { store.categoryHistory = nil }
-        } else {
-            store.categoryHistory = history
-        }
+        history.drafting = editing == .new
+        store.categoryHistory = history
     }
 
-    /// New category: the editor on a draft. Nothing is made until Create.
-    private func create() {
-        draft = Self.newDraft(after: store.categories)
+    /// New category: the editor on a draft, in `section` (the first when nil). Nothing is made until Create.
+    private func create(in section: UUID?) {
+        var made = Self.newDraft(after: store.categories)
+        made.section = section
+        draft = made
         editing = .new
     }
 
@@ -130,32 +133,35 @@ struct CategoriesView: View {
 
     // MARK: The list
 
-    /// Claude's list pattern (settings.md §4): a titled section, then the rows in a nest card.
+    /// Claude's list pattern (settings.md §4): a titled section, then the rows in a nest card. With sections, a tree: each
+    /// section's header and its categories under it, everything dragged into place.
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
                 SettingsSection("Categories",
-                                info: ("Categories", "A thing goes to the first category, from the top, with a rule matching it. Drag to reorder."),
-                                action: {
-                    Button(action: create) {
-                        HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("New category") }
-                    }
-                    .buttonStyle(SettingsButtonStyle(size: .sm))
-                    .accessibilityLabel("New category")
-                }, content: {
+                                info: ("Categories", store.categorySections.isEmpty
+                                       ? "A thing goes to the first category, from the top, with a rule matching it. Drag to reorder."
+                                       : "A thing goes to the first category, from the top, with a rule matching it. Drag a category to reorder it or into another section; drag a section to move it with its categories.")) {
                     SettingsNest {
-                        ForEach(Array(store.categories.enumerated()), id: \.element.id) { i, category in
-                            if i > 0 { SettingsDivider() }
-                            CategoryRow(store: store, category: category, dropping: dropTarget == category.id) { editing = .existing(category.id) }
-                                .draggable(category.id.uuidString)
-                                .dropDestination(for: String.self) { items, _ in
-                                    move(items.first, onto: category.id)
-                                } isTargeted: { dropTarget = $0 ? category.id : (dropTarget == category.id ? nil : dropTarget) }
+                        if store.categorySections.isEmpty {
+                            ForEach(Array(store.categories.enumerated()), id: \.element.id) { i, category in
+                                if i > 0 { SettingsDivider() }
+                                categoryRow(category)
+                            }
+                            if !store.categories.isEmpty { SettingsDivider() }
+                            NewRow(title: "New category", symbol: "plus") { create(in: nil) }
+                        } else {
+                            ForEach(Array(store.categorySections.enumerated()), id: \.element.id) { i, section in
+                                if i > 0 { SettingsDivider() }
+                                sectionBlock(section)
+                            }
                         }
+                        SettingsDivider()
+                        NewRow(title: "New section", symbol: "plus") { focusSection = store.createSection(name: "").id }
                         SettingsDivider()
                         DoneRow(count: store.doneEntries.count)
                     }
-                })
+                }
                 GroupsSection(store: store, expanded: $expandedGroup)
             }
             .padding(.horizontal, CDS.Settings.pagePadX)
@@ -166,12 +172,74 @@ struct CategoriesView: View {
         .task { await store.loadSuggestions() }
     }
 
-    /// A dragged row takes the place of the one it is dropped on.
-    private func move(_ dragged: String?, onto id: UUID) -> Bool {
-        guard let dragged, let from = store.categories.firstIndex(where: { $0.id.uuidString == dragged }),
-              let to = store.categories.firstIndex(where: { $0.id == id }), from != to else { return false }
-        store.moveCategory(from: IndexSet(integer: from), to: from < to ? to + 1 : to)
+    /// A section's header, then its categories, indented under it (or, with none, a place to drop one).
+    @ViewBuilder private func sectionBlock(_ section: CategorySection) -> some View {
+        let key = "section:\(section.id.uuidString)"
+        SectionHeaderRow(store: store, section: section, dropping: dropTarget == key, focusing: $focusSection) { create(in: section.id) }
+            .draggable(key)
+            .dropDestination(for: String.self) { items, _ in
+                drop(items.first) { dragged in
+                    switch dragged {
+                    case .category(let id): store.moveCategory(id, toTopOf: section.id)
+                    case .section(let id): store.moveSection(id, onto: section.id)
+                    }
+                }
+            } isTargeted: { target(key, $0) }
+        let inside = store.categories.filter { store.sectionID(of: $0) == section.id }
+        if inside.isEmpty {
+            let empty = "empty:\(section.id.uuidString)"
+            Text("Drag categories here")
+                .cdsText(foot12, .regular, CDS.Text.muted)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .padding(.leading, 12)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(dropTarget == empty ? CDS.Fill.accent : CDS.border, style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+                .padding(.leading, Self.indent).padding(.bottom, 8)
+                .dropDestination(for: String.self) { items, _ in
+                    drop(items.first) { dragged in
+                        if case .category(let id) = dragged { store.moveCategory(id, toSection: section.id) }
+                    }
+                } isTargeted: { target(empty, $0) }
+        }
+        ForEach(inside) { category in
+            SettingsDivider().padding(.leading, Self.indent)
+            categoryRow(category).padding(.leading, Self.indent)
+        }
+    }
+
+    /// How far a section's categories sit in under its header.
+    private static let indent: CGFloat = 22
+
+    private func categoryRow(_ category: InboxCategory) -> some View {
+        let key = "category:\(category.id.uuidString)"
+        return CategoryRow(store: store, category: category, dropping: dropTarget == key) { editing = .existing(category.id) }
+            .draggable(key)
+            .dropDestination(for: String.self) { items, _ in
+                drop(items.first) { dragged in
+                    switch dragged {
+                    case .category(let id): store.moveCategory(id, onto: category.id)
+                    // A section dropped on a category goes where that category's section is.
+                    case .section(let id): if let to = store.sectionID(of: category) { store.moveSection(id, onto: to) }
+                    }
+                }
+            } isTargeted: { target(key, $0) }
+    }
+
+    private enum Dragged { case category(UUID), section(UUID) }
+
+    /// What a drag carries: "category:<id>" or "section:<id>" (a bare id is a category, as the bar's tabs drag them).
+    private func drop(_ payload: String?, _ apply: (Dragged) -> Void) -> Bool {
+        guard let payload else { return false }
+        let parts = payload.split(separator: ":", maxSplits: 1).map(String.init)
+        let raw = parts.count == 2 ? parts[1] : payload
+        guard let id = UUID(uuidString: raw) else { return false }
+        apply(parts.first == "section" ? .section(id) : .category(id))
+        dropTarget = nil
         return true
+    }
+
+    private func target(_ key: String, _ over: Bool) {
+        if over { dropTarget = key } else if dropTarget == key { dropTarget = nil }
     }
 }
 
@@ -184,7 +252,8 @@ extension Store {
         made.name = made.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !made.name.isEmpty else { return false }
         for i in made.rules.indices { made.rules[i].createdAt = now }
-        changingInbox(.newCategoryButton) { categories.append(made) }
+        // At the end of its section (the tree's order is the order things match in).
+        changingInbox(.newCategoryButton) { categories = treeOrdered(categories + [made]) }
         history?.observe(self)
         return true
     }
@@ -253,6 +322,14 @@ private struct CategoryRow: View {
         .contextMenu {
             Button("Edit", action: open)
             Button(category.hidden ? "Show in the bar" : "Hide from the bar") { update { $0.hidden.toggle() } }
+            if store.categorySections.count > 1 {
+                Menu("Move to section") {
+                    ForEach(store.categorySections) { section in
+                        Button(section.title) { store.moveCategory(category.id, toSection: section.id) }
+                            .disabled(store.sectionID(of: category) == section.id)
+                    }
+                }
+            }
             Divider()
             Button("Move up") { store.moveCategory(category.id, by: -1) }
                 .disabled(!store.canMoveCategory(category.id, by: -1))
@@ -266,6 +343,33 @@ private struct CategoryRow: View {
     private func update(_ change: (inout InboxCategory) -> Void) {
         guard let i = store.categories.firstIndex(where: { $0.id == category.id }) else { return }
         change(&store.categories[i])
+    }
+}
+
+/// The last row of the tree: a dashed tile with a plus, and what it makes ("New section"; "New category" with no sections).
+private struct NewRow: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(CDS.Text.muted.opacity(hovered ? 0.9 : 0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                    .frame(width: 22, height: 22)
+                    .overlay(Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(hovered ? CDS.Text.secondary : CDS.Text.muted))
+                Text(title).cdsText(CDS.Density.comfortable.body, .regular, hovered ? CDS.Text.secondary : CDS.Text.muted)
+                Spacer(minLength: 8)
+            }
+            .frame(minHeight: 40)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .accessibilityLabel(title)
     }
 }
 

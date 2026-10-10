@@ -100,6 +100,9 @@ struct Scope: Hashable {
 
 extension Scope: Codable {
     private enum CodingKeys: String, CodingKey { case kinds, kind, by, to, toRoles, `in`, on, named }
+    /// Set (to anything) in an encoder's userInfo: the legacy `kind` is written too (the saved state; not the rules'
+    /// fingerprint, which must not change for it, nor what the Router reads and writes).
+    static let withLegacyKind = CodingUserInfoKey(rawValue: "lookout.scope.withLegacyKind")!
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -116,7 +119,11 @@ extension Scope: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         // In the kinds' order, so the same rule is always the same JSON.
-        try c.encode(ThingKind.allCases.filter(kinds.contains), forKey: .kinds)
+        let ordered = ThingKind.allCases.filter(kinds.contains)
+        try c.encode(ordered, forKey: .kinds)
+        // In the saved state, the first of them as `kind` too, as builds from before `kinds` read it: going back to one keeps
+        // the categories (it reads one kind of each rule) rather than losing every one for a rule it can't read.
+        if encoder.userInfo[Self.withLegacyKind] != nil { try c.encodeIfPresent(ordered.first, forKey: .kind) }
         try c.encodeIfPresent(by, forKey: .by)
         try c.encodeIfPresent(to, forKey: .to)
         try c.encode(ToRole.allCases.filter(toRoles.contains), forKey: .toRoles)
@@ -174,8 +181,23 @@ enum Condition: Codable, Hashable {
     case noActivity(days: Int)
     // Signals
     case greptileBelow(Int)
+    /// Jev read a comment, review or thread reply (not yours) since you last answered there or marked it done, and it asks
+    /// you something.
+    case asksMe
+    /// A new comment (not yours) is noise (`true`: bots, and what Jev reads as automated) or from a person (`false`).
+    case noise(Bool)
+    /// Jev rates the review request or assignment at least this important.
+    case importance(Importance)
     // Workflows
     case workflow(Set<CheckState>)
+}
+
+/// How much a review request or an assignment matters, as Jev rates it (InboxJev.swift).
+enum Importance: String, Codable, CaseIterable, Comparable, Hashable {
+    case low, normal, high, urgent
+
+    var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+    static func < (a: Importance, b: Importance) -> Bool { a.rank < b.rank }
 }
 
 // Rules saved before `since` have no such key: the activity cases are read by hand, the rest as they always were.
@@ -204,6 +226,9 @@ extension Condition {
         case labeled(Pick<String>)
         case noActivity(days: Int)
         case greptileBelow(Int)
+        case asksMe
+        case noise(Bool)
+        case importance(Importance)
         case workflow(Set<CheckState>)
 
         init?(_ c: Condition) {
@@ -220,6 +245,9 @@ extension Condition {
             case .labeled(let p): self = .labeled(p)
             case .noActivity(let d): self = .noActivity(days: d)
             case .greptileBelow(let n): self = .greptileBelow(n)
+            case .asksMe: self = .asksMe
+            case .noise(let b): self = .noise(b)
+            case .importance(let i): self = .importance(i)
             case .workflow(let s): self = .workflow(s)
             }
         }
@@ -237,6 +265,9 @@ extension Condition {
             case .labeled(let p): .labeled(p)
             case .noActivity(let d): .noActivity(days: d)
             case .greptileBelow(let n): .greptileBelow(n)
+            case .asksMe: .asksMe
+            case .noise(let b): .noise(b)
+            case .importance(let i): .importance(i)
             case .workflow(let s): .workflow(s)
             }
         }
@@ -313,9 +344,29 @@ struct InboxCategory: Codable, Hashable, Identifiable {
     var isCI = false
     /// What it does by itself when a thing comes in (InboxActions.swift).
     var actions = ActionList()
+    /// The bar's section it is in (CategorySections.swift); nil, or one deleted since, is the first.
+    var section: UUID? = nil
 
     /// What the bar and the lists call it; a category still being named is "Untitled".
     var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : name }
+}
+
+extension InboxCategory {
+    /// Tolerant of a file from an older build: a field added since it was written (`actions`, `section`) takes its
+    /// default, where the synthesized decoding lost every category for it.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        color = try c.decode(CategoryColor.self, forKey: .color)
+        rules = try c.decodeIfPresent([Rule].self, forKey: .rules) ?? []
+        notifies = try c.decodeIfPresent(Bool.self, forKey: .notifies) ?? true
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        isCI = try c.decodeIfPresent(Bool.self, forKey: .isCI) ?? false
+        actions = try c.decodeIfPresent(ActionList.self, forKey: .actions) ?? ActionList()
+        section = try c.decodeIfPresent(UUID.self, forKey: .section)
+    }
 }
 
 struct InboxGroup: Codable, Hashable, Identifiable {
@@ -403,6 +454,8 @@ struct Thing: Codable, Hashable, Identifiable {
     var status: ThingStatus = .open
     var labels: [String] = []
     var assignees: [String] = []
+    /// When each current assignee (lowercased) was assigned, the latest `AssignedEvent` for them, when GitHub said.
+    var assignedAt: [String: Date]?
     /// Logins, and `org/team` for teams.
     var requestedReviewers: [String] = []
     /// Logins @-mentioned in the body or any comment, lowercased.
@@ -426,6 +479,76 @@ struct Thing: Codable, Hashable, Identifiable {
     var workflowName: String?
     var branch: String?
     var failingJobs: [String] = []
+    /// PRs: the size of the change, when GitHub said.
+    var additions: Int?
+    var deletions: Int?
+    var changedFiles: Int?
+    /// What Jev made of it (InboxJev.swift), kept across refreshes; nil before it was asked anything.
+    var signals: ThingSignals?
+}
+
+extension Thing {
+    /// Tolerant of a file from an older build: a field added since it was written (`behindBase`, `reviewRequests`…) takes
+    /// its default, where the synthesized decoding lost the thing (and, with it, every thing).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(ThingKind.self, forKey: .kind)
+        repo = try c.decode(String.self, forKey: .repo)
+        number = try c.decodeIfPresent(Int.self, forKey: .number)
+        title = try c.decode(String.self, forKey: .title)
+        url = try c.decode(URL.self, forKey: .url)
+        author = try c.decodeIfPresent(Person.self, forKey: .author)
+        status = try c.decodeIfPresent(ThingStatus.self, forKey: .status) ?? .open
+        labels = try c.decodeIfPresent([String].self, forKey: .labels) ?? []
+        assignees = try c.decodeIfPresent([String].self, forKey: .assignees) ?? []
+        requestedReviewers = try c.decodeIfPresent([String].self, forKey: .requestedReviewers) ?? []
+        mentioned = try c.decodeIfPresent([String].self, forKey: .mentioned) ?? []
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        comments = try c.decodeIfPresent([ThingComment].self, forKey: .comments) ?? []
+        reviews = try c.decodeIfPresent([ThingReview].self, forKey: .reviews) ?? []
+        threads = try c.decodeIfPresent([ThingThread].self, forKey: .threads) ?? []
+        commits = try c.decodeIfPresent([ThingCommit].self, forKey: .commits) ?? []
+        checks = try c.decodeIfPresent(CheckState.self, forKey: .checks)
+        hasConflicts = try c.decodeIfPresent(Bool.self, forKey: .hasConflicts) ?? false
+        behindBase = try c.decodeIfPresent(Bool.self, forKey: .behindBase) ?? false
+        headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
+        reviewRequests = try c.decodeIfPresent([ThingReviewRequest].self, forKey: .reviewRequests) ?? []
+        greptileScore = try c.decodeIfPresent(Int.self, forKey: .greptileScore)
+        workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        failingJobs = try c.decodeIfPresent([String].self, forKey: .failingJobs) ?? []
+        additions = try c.decodeIfPresent(Int.self, forKey: .additions)
+        deletions = try c.decodeIfPresent(Int.self, forKey: .deletions)
+        changedFiles = try c.decodeIfPresent(Int.self, forKey: .changedFiles)
+        signals = try c.decodeIfPresent(ThingSignals.self, forKey: .signals)
+    }
+}
+
+/// Jev's verdicts on a thing, each asked once for what it was judged on.
+struct ThingSignals: Codable, Hashable {
+    /// By comment, review or thread reply id: every message Jev read.
+    var messages: [String: MessageSignal] = [:]
+    var importance: ImportanceSignal?
+    /// Whose inbox Jev read it for (a login as `InboxEngine.viewer` writes it): signed in as someone else, it says nothing.
+    var viewer: String?
+    /// Your latest word there as ever seen: someone's later reply in a thread takes the place of yours in what GitHub
+    /// returns, and must not make a question you answered ask again.
+    var answeredAt: Date?
+}
+
+/// What Jev said of one message; nil where it wasn't sure.
+struct MessageSignal: Codable, Hashable {
+    var asksMe: Bool?
+    var noise: Bool?
+}
+
+struct ImportanceSignal: Codable, Hashable {
+    /// Nil: Jev wasn't sure.
+    var level: Importance?
+    /// What it was rated on (the request or assignment and the head commit): a new one is rated again.
+    var stamp: String
 }
 
 // MARK: - What the engine says
@@ -452,6 +575,8 @@ struct InboxEntry: Hashable, Identifiable {
     var isDone: Bool
     /// Some fact not seen yet.
     var isUnread: Bool
+    /// Jev's rating of what it asks of you (a review request, an assignment), when it rated it.
+    var importance: Importance?
     var id: String { thing.id }
 }
 
@@ -464,6 +589,27 @@ struct EntryMarks: Codable, Hashable {
     /// Fact keys already notified.
     var notified: Set<String> = []
     var doneAt: Date?
+    /// The category it was Done in, and its facts then: it stays Done there while it still belongs there, even once what
+    /// counts after Done leaves the category's rules nothing new to match (so it doesn't fall into a later category).
+    var doneIn: UUID?
+    var doneFacts: [Fact]?
+    /// When the thing was first missing from a refresh (it is still missing): its marks are forgotten a month after. Kept
+    /// with them, so a restart doesn't start the month again.
+    var goneSince: Date?
+}
+
+extension EntryMarks {
+    /// Tolerant of a file from an older build: a set it didn't write yet is empty.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seen = try c.decodeIfPresent(Set<String>.self, forKey: .seen) ?? []
+        acked = try c.decodeIfPresent(Set<String>.self, forKey: .acked) ?? []
+        notified = try c.decodeIfPresent(Set<String>.self, forKey: .notified) ?? []
+        doneAt = try c.decodeIfPresent(Date.self, forKey: .doneAt)
+        doneIn = try c.decodeIfPresent(UUID.self, forKey: .doneIn)
+        doneFacts = try c.decodeIfPresent([Fact].self, forKey: .doneFacts)
+        goneSince = try c.decodeIfPresent(Date.self, forKey: .goneSince)
+    }
 }
 
 /// Resolves what slots name that the engine can't know alone.
@@ -474,4 +620,6 @@ struct InboxContext {
     /// `org/team` of every team you're in.
     var myTeams: Set<String> = []
     var now = Date()
+    /// What Jev said of things counts (Settings' "Let Jev read new comments"); off, it is as if Jev had said nothing.
+    var jevSignals = true
 }

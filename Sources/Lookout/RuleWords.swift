@@ -102,7 +102,11 @@ struct RuleWords {
             out += [.chip("\(days)"), .word("days")]
         case .greptileBelow(let n):
             out += [.chip("\(n) / 5")]
-        case .hasConflicts, .behindBase:
+        case .noise(let noise):
+            out += [.chip(RuleEditing.noiseTitle(noise))]
+        case .importance(let level):
+            out += [.chip(level.rawValue)]
+        case .hasConflicts, .behindBase, .asksMe:
             break
         }
         return out

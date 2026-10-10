@@ -418,4 +418,62 @@ import Testing
         let card = try #require(s.openRouterCards.first)
         #expect(card.kind == .question && s.pendingForm(for: card) != nil)
     }
+
+    @Test func aStuckTurnsBannerWaitsForJevSoAStreakGoingInCirclesIsSaidOnce() async {
+        let dir = TempDir()
+        let s = store(dir, [session("local_a", turns: 1)])
+        await s.routerHookWork?.value
+        s.routerTriager.rescanned = true
+        s.routerTriager.reader = { _ in "The linker still fails with undefined symbol _foo after rebuilding the framework target." }
+        s.routerTriager.earlier = { _ in ["The linker fails with undefined symbol _foo after rebuilding the framework.",
+                                          "Rebuilt the framework target; the linker still fails: undefined symbol _foo."] }
+        final class Jev { var down = false; var hang = false }
+        let jev = Jev()
+        s.routerTriager.asker = { questions, _ in
+            if jev.down { throw URLError(.notConnectedToInternet) }
+            while jev.hang { try await Task.sleep(for: .milliseconds(5)) }
+            var a: [String: JevClient.Answer] = ["urgency": .score(2, confidence: 0.8)]
+            if questions["circles"] != nil { a["circles"] = .noul(0.9) }
+            return a
+        }
+        // The banners as the app decides them.
+        var bannered: [String] = []
+        s.settings.notifications = true
+        s.notifier.onPost = { bannered.append(String($0.identifier.dropFirst(RouterBanners.prefix.count))) }
+        s.onNewRouterCards = { [weak s] in if let s { RouterBanners.post($0, store: s, windowIsKey: false) } }
+        func blocked(_ turns: Int) -> ClaudeSession {
+            var x = session("local_a", turns: turns)
+            x.summary = .init(blocked: true, detail: "Still failing")
+            return x
+        }
+        // A stuck turn: no banner until Jev answers, then one, going in circles.
+        s.ingest([blocked(2)], appUnread: [], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(1))
+        #expect(s.router.cards.last?.id == "local_a#t2" && s.router.cards.last?.kind == .stuck && bannered.isEmpty)
+        await s.routerTriager.idle()
+        #expect(bannered == ["local_a#t2"] && s.router.cards.last?.triage?.circles == true)
+        // The next one of the streak: none at all.
+        s.ingest([blocked(3)], appUnread: [], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(2))
+        await s.routerTriager.idle()
+        #expect(s.router.cards.last?.id == "local_a#t3" && s.router.cards.last?.kind == .stuck && bannered == ["local_a#t2"])
+        // Jev down: the banner comes all the same, as soon as that is known.
+        jev.down = true
+        s.ingest([blocked(4)], appUnread: [], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(3))
+        await s.routerTriager.idle()
+        #expect(bannered == ["local_a#t2", "local_a#t4"])
+        // Jev slow: it comes after a little, and once only when he answers.
+        jev.down = false
+        jev.hang = true
+        s.routerTriager.bannerWait = .milliseconds(20)
+        s.routerTriager.earlier = { _ in [] }
+        s.ingest([blocked(5)], appUnread: [], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(4))
+        for _ in 0..<400 where bannered.count < 3 { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(bannered == ["local_a#t2", "local_a#t4", "local_a#t5"] && s.router.cards.last?.triage == nil)
+        jev.hang = false
+        await s.routerTriager.idle()
+        #expect(s.router.cards.last?.triage != nil && bannered.count == 3)
+    }
 }

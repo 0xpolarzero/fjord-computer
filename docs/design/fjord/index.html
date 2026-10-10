@@ -139,7 +139,7 @@ a{color:var(--link);text-decoration:underline;text-underline-offset:3px;text-dec
     <div class="rows">
       <div class="row"><b>Name</b><span>Set in Geist 500, tracking −4%, like every studio product. No product glyph: the studio's mark is amont^, and products are names. The app icon comes from the fjord render (03).</span></div>
       <div class="row"><b>Type</b><span>Geist for the interface, Geist Mono for refs, times and counts, Newsreader for questions and quoted comments. All three ship in the app, replacing Anthropic Sans read from Claude's bundle.</span></div>
-      <div class="row"><b>Colour</b><span>Fonte for selection, links and live work. Green, amber and red only for state (passing, needs you, failing). Projects keep their dots; categories lose their own hues.</span></div>
+      <div class="row"><b>Colour</b><span>The app keeps its blue and its category, project and state colours.</span></div>
       <div class="row"><b>Shape and motion</b><span>4 px radius, hairline rules, the studio curve <code>cubic-bezier(.2,.7,.2,1)</code>, no overshoot.</span></div>
     </div>
   </div>
@@ -156,166 +156,26 @@ a{color:var(--link);text-decoration:underline;text-underline-offset:3px;text-dec
 <section><div class="wrap sec">
   <span class="lbl">04 App</span>
   <div>
-    <h2>The app, at full density.</h2>
-    <p class="lead">Today's screens and data, redrawn in the studio system. Switch the theme to see both.</p>
-
-    <div class="screen"><div class="ui">
-      <aside class="side">
-        <div class="lights"><i></i><i></i><i></i></div>
-        <div class="find"><i class="ti ti-search"></i><span>Search everything</span><kbd>⌘K</kbd></div>
-        <div class="grp"><span>Triage</span><span>⌃⌥L</span></div>
-        <div class="nav"><i class="ti ti-bell"></i><b>Needs you</b><span class="c w">7</span></div>
-        <div class="nav on"><i class="ti ti-git-pull-request"></i><b>Contributions</b><span class="c">3</span></div>
-        <div class="nav"><i class="ti ti-eye"></i><b>Reviews for you</b><span class="c w">2</span></div>
-        <div class="nav"><i class="ti ti-circle-dashed-check"></i><b>CI</b><span class="c f">2 failing</span></div>
-        <div class="nav"><i class="ti ti-robot"></i><b>Bot chatter</b><span class="c">12</span></div>
-        <div class="nav"><i class="ti ti-archive"></i><b>Done</b><span class="c"></span></div>
-        <div class="grp"><span>Router</span><span class="live"><i class="pulse"></i>2</span></div>
-        <div class="nav"><i class="ti ti-route"></i><b>All sessions</b><span class="c w">3</span></div>
-        <div class="sess"><i class="pd" style="background:#3FB57F"></i><span>lookout · tests 3/7</span><span class="mono" style="font-size:10.5px;color:var(--u-mute)">12m</span></div>
-        <div class="sess"><i class="pd" style="background:#9D8CF2"></i><span>microsandbox · review</span><span class="mono" style="font-size:10.5px;color:var(--u-mute)">3m</span></div>
-        <div class="sess"><i class="pd" style="background:#E879B9"></i><span style="color:var(--u-warn)">lcu · needs you</span><span class="mono" style="font-size:10.5px;color:var(--u-mute)">2m</span></div>
-        <div class="grp"><span>Tools</span></div>
-        <div class="nav"><i class="ti ti-git-compare"></i><b>Diff</b><span class="soon">soon</span></div>
-        <div class="nav"><i class="ti ti-eraser"></i><b>Sweep</b><span class="soon">soon</span></div>
-        <div class="foot">
-          <div class="rate"><span>Synced 12s ago</span><span>4,812 / 5,000</span></div>
-          <div class="bar"><i style="width:96%"></i></div>
-          <div class="me"><span class="av" style="background:#0F9AC3">0x</span><span style="flex:1">0xpolarzero</span><i class="ti ti-settings"></i></div>
-        </div>
-      </aside>
-      <div class="main">
-        <div class="top"><i class="ti ti-layout-sidebar"></i><i class="ti ti-chevron-left"></i><i class="ti ti-chevron-right" style="opacity:.4"></i>
-          <span class="crumb">Triage / <b>Contributions</b></span><span class="mono" style="font-size:11px;color:var(--u-mute)">3 unread of 4</span>
-          <span class="sp"></span><span class="live"><i class="pulse"></i>watching 14 repos</span><span class="btn"><i class="ti ti-adjustments-horizontal"></i>Rules</span></div>
-        <div class="body" style="grid-template-columns:540px minmax(0,1fr)">
-          <div class="list">
-            <div class="lh"><div class="seg"><span class="on">All</span><span>Unread</span><span>Mine</span></div><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">Latest ↓</span></div>
-            <div class="gh"><span>Needs you</span><span>3</span></div>
-            <div class="it sel"><i class="unread"></i><span class="av" style="background:#C2733F">AK</span>
-              <div style="min-width:0"><div class="t">std.Io: add vectored reads to File</div>
-                <div class="meta"><span>zig#21877</span><span>vectored-io → master</span><span class="add">+184</span><span class="del">−12</span></div>
-                <div class="chips"><span class="chip f"><i class="ti ti-git-pull-request-closed"></i>changes requested</span><span class="chip">1 unresolved</span><span class="chip">Greptile 3/5</span><span class="chip a"><i class="ti ti-bolt"></i>queued</span></div></div>
-              <div class="right"><span>3m</span><span class="mx"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="r"></i><i class="x"></i></span><span><i class="ti ti-message"></i> 14</span></div></div>
-            <div class="it"><i class="unread"></i><span class="av" style="background:#5B7FD6">TK</span>
-              <div style="min-width:0"><div class="t">Add GitHub Enterprise host setting</div>
-                <div class="meta"><span>lookout#15</span><span>ghe-host → main</span><span class="add">+96</span><span class="del">−8</span></div>
-                <div class="chips"><span class="chip">2 unresolved</span><span class="chip">Greptile 4/5</span><span class="chip a"><i class="ti ti-bolt"></i>session started 2m ago</span></div></div>
-              <div class="right"><span>12m</span><span class="mx"><i></i><i></i><i></i><i></i><i></i><i></i></span><span><i class="ti ti-message"></i> 6</span></div></div>
-            <div class="it"><i class="unread"></i><span class="av" style="background:#3E9B78">AL</span>
-              <div style="min-width:0"><div class="t">Respect trailing comma config in collection literals</div>
-                <div class="meta"><span>swift-format#1042</span><span>trailing-commas → main</span><span class="add">+41</span><span class="del">−3</span></div>
-                <div class="chips"><span class="chip o"><i class="ti ti-check"></i>approved by @allevato</span><span class="chip a"><i class="ti ti-bolt"></i>asked the Router</span></div></div>
-              <div class="right"><span>18m</span><span class="mx"><i></i><i></i><i></i><i></i></span><span><i class="ti ti-message"></i> 3</span></div></div>
-            <div class="gh"><span>Earlier</span><span>3</span></div>
-            <div class="it read"><span class="av" style="background:#101418;border:1px solid var(--u-line)">0x</span>
-              <div style="min-width:0"><div class="t">Bump the Swift tools version</div>
-                <div class="meta"><span>lcu#31</span><span>swift-6.2 → main</span><span class="add">+2</span><span class="del">−2</span></div>
-                <div class="chips"><span class="chip f"><i class="ti ti-git-merge"></i>has conflicts</span><span class="chip f"><i class="ti ti-bolt"></i>failed: the Router is off</span></div></div>
-              <div class="right"><span>4h</span><span class="mx"><i class="x"></i><i></i><i></i></span></div></div>
-            <div class="it read"><span class="av" style="background:#8A6FD1">MH</span>
-              <div style="min-width:0"><div class="t">Sandbox: cap guest memory at the host's limit</div>
-                <div class="meta"><span>microsandbox#208</span><span>mem-cap → main</span><span class="add">+57</span><span class="del">−9</span></div>
-                <div class="chips"><span class="chip o"><i class="ti ti-git-merge"></i>merged</span><span class="chip">addressed</span></div></div>
-              <div class="right"><span>6h</span><span class="mx"><i></i><i></i><i></i><i></i><i></i></span></div></div>
-            <div class="it read"><span class="av" style="background:#D08A3A">JK</span>
-              <div style="min-width:0"><div class="t">Docs: the hook's permission model</div>
-                <div class="meta"><span>lcu#28</span><span>issue</span></div>
-                <div class="chips"><span class="chip">resolved</span><span class="chip">you replied</span></div></div>
-              <div class="right"><span>1d</span></div></div>
-          </div>
-          <div class="det">
-            <div class="dh"><span class="state"><i class="ti ti-git-pull-request"></i>Open</span>
-              <div class="dt">std.Io: add vectored reads to File</div>
-              <div class="meta" style="margin:0"><span>ziglang/zig #21877</span><span>andrewrk wants to merge 3 commits</span></div></div>
-            <div class="tabs"><span class="on">Activity<i>14</i></span><span>Checks<i>12</i></span><span>Files<i>6</i></span></div>
-            <div class="db">
-              <div class="blk"><div class="bh"><i class="ti ti-message-2"></i><b>andrewrk</b><span style="color:var(--u-mute)">review comment · lib/std/Io/File.zig:214</span><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">3m</span></div>
-                <div class="code"><div><span class="ln">212</span><span> </span><span>pub fn readv(file: File, iovecs: []const posix.iovec) !usize {</span></div><div class="m"><span class="ln">213</span><span>−</span><span>    var buf = try allocator.dupe(u8, iovecs[0].base[0..len]);</span></div><div class="p"><span class="ln">213</span><span>+</span><span>    return posix.readv(file.handle, iovecs);</span></div></div>
-                <div class="say">“This should take the buffer by slice instead, otherwise we copy twice on the hot path.”</div></div>
-              <div class="blk"><div class="bh"><i class="ti ti-circle-dashed-check"></i><b>Checks</b><span style="color:var(--u-mute)">10 of 12 passing</span><span class="segbar"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="r"></i><i class="x"></i></span></div>
-                <div class="ck"><i class="ti ti-circle-x fl"></i><span><span class="n">x86_64-windows-debug</span><div class="mono" style="font-size:11px;color:var(--u-fail)">test-std: 1 failed · Io.File.readv</div></span><span class="d">3m 48s</span></div>
-                <div class="ck"><i class="ti ti-loader-2 wr"></i><span><span class="n">wasm32-wasi-release</span><div class="prog"><i></i></div></span><span class="d">2m 10s</span></div>
-                <div class="ck"><i class="ti ti-circle-check ok"></i><span class="n">aarch64-macos-release</span><span class="d">6m 03s</span></div>
-                <div class="ck"><i class="ti ti-circle-check ok"></i><span class="n">x86_64-linux-debug · +8 more</span><span class="d">4m 12s</span></div></div>
-              <div class="blk"><div class="bh"><i class="ti ti-timeline"></i><b>Since your last visit</b><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">4 events</span></div>
-                <div class="ck"><i class="ti ti-git-commit" style="color:var(--u-mute)"></i><span class="n">pushed 2 commits <span style="color:var(--u-mute)">a3f9c21 · e81b07d</span></span><span class="d">11m</span></div>
-                <div class="ck"><i class="ti ti-sparkles" style="color:var(--u-mute)"></i><span class="n">greptile-apps reviewed <span style="color:var(--u-mute)">3/5 · 2 comments</span></span><span class="d">9m</span></div>
-                <div class="ck"><i class="ti ti-git-pull-request-closed fl"></i><span class="n">andrewrk requested changes</span><span class="d">3m</span></div>
-                <div class="ck"><i class="ti ti-bolt ac"></i><span class="n">rule queued: start a session in <span style="color:var(--u-mute)">~/code/zig</span></span><span class="d">3m</span></div></div>
-              <div class="why"><i class="ti ti-filter"></i>Contributions · a review comment after your last commit</div>
-            </div>
-            <div class="acts"><span class="btn p">Open<kbd>↵</kbd></span><span class="btn"><i class="ti ti-route"></i>Ask the Router<kbd>⌘↵</kbd></span><span class="btn">Reply<kbd>R</kbd></span><span class="sp"></span><span class="btn">Done<kbd>⌫</kbd></span></div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <div class="now"><img src="shots/window-category.png" alt="Contributions today"><span class="meta">Today: <code>--window-shots category</code></span></div>
-
-    <div class="screen"><div class="ui">
-      <aside class="side">
-        <div class="lights"><i></i><i></i><i></i></div>
-        <div class="find"><i class="ti ti-search"></i><span>Search everything</span><kbd>⌘K</kbd></div>
-        <div class="grp"><span>Triage</span><span>⌃⌥L</span></div>
-        <div class="nav"><i class="ti ti-bell"></i><b>Needs you</b><span class="c w">7</span></div>
-        <div class="nav"><i class="ti ti-git-pull-request"></i><b>Contributions</b><span class="c">3</span></div>
-        <div class="nav"><i class="ti ti-eye"></i><b>Reviews for you</b><span class="c w">2</span></div>
-        <div class="nav"><i class="ti ti-circle-dashed-check"></i><b>CI</b><span class="c f">2 failing</span></div>
-        <div class="grp"><span>Router</span><span class="live"><i class="pulse"></i>2</span></div>
-        <div class="nav on"><i class="ti ti-route"></i><b>All sessions</b><span class="c w">3</span></div>
-        <div class="sess"><i class="pd" style="background:#3FB57F"></i><span>lookout · tests 3/7</span></div>
-        <div class="sess"><i class="pd" style="background:#9D8CF2"></i><span>microsandbox · review</span></div>
-        <div class="sess"><i class="pd" style="background:#E879B9"></i><span style="color:var(--u-warn)">lcu · needs you</span></div>
-        <div class="grp"><span>Tools</span></div>
-        <div class="nav"><i class="ti ti-git-compare"></i><b>Diff</b><span class="soon">soon</span></div>
-        <div class="nav"><i class="ti ti-eraser"></i><b>Sweep</b><span class="soon">soon</span></div>
-        <div class="foot">
-          <div class="rate"><span>Hook · plugin signed</span><span class="ok">●</span></div>
-          <div class="me"><span class="av" style="background:#0F9AC3">0x</span><span style="flex:1">0xpolarzero</span><i class="ti ti-settings"></i></div>
-        </div>
-      </aside>
-      <div class="main">
-        <div class="top"><i class="ti ti-layout-sidebar"></i><i class="ti ti-chevron-left"></i><i class="ti ti-chevron-right" style="opacity:.4"></i>
-          <span class="crumb">Router / <b>LCU JavaScript sandbox on Linux</b></span>
-          <span class="sp"></span><span class="live" style="color:var(--u-warn)">● 3 need you</span><span class="live"><i class="pulse"></i>2 working</span><span class="btn">Open in Claude<kbd>O</kbd></span></div>
-        <div class="body" style="grid-template-columns:300px minmax(0,1fr)">
-          <div class="list sl">
-            <div class="gh"><span>Needs you</span><span>3</span></div>
-            <div class="it sel"><div style="min-width:0"><div class="t">LCU JavaScript sandbox on Linux</div><div class="meta"><span class="kind" style="color:var(--u-merge)">plan</span><span>microsandbox</span></div></div><div class="right"><span>9m</span></div></div>
-            <div class="it"><div style="min-width:0"><div class="t">LCU update notifications</div><div class="meta"><span class="kind wr">question</span><span>lcu</span></div></div><div class="right"><span>2m</span></div></div>
-            <div class="it"><div style="min-width:0"><div class="t">Calculator display reading</div><div class="meta"><span class="kind fl">stuck</span><span>lcu-research · VPN is down</span></div></div><div class="right"><span>6m</span></div></div>
-            <div class="gh"><span>Working</span><span>2</span></div>
-            <div class="it"><div style="min-width:0"><div class="t">Agent completion notifications</div><div class="meta"><i class="pulse"></i><span>lookout · tests 3/7 · 2 agents</span></div><div class="prog" style="margin-top:6px"><i style="background:var(--u-acc)"></i></div></div><div class="right"><span>12m</span></div></div>
-            <div class="it"><div style="min-width:0"><div class="t">CI failure diagnosis</div><div class="meta"><i class="pulse"></i><span>microsandbox · quiet 3 min</span></div></div><div class="right"><span>6m</span></div></div>
-            <div class="gh"><span>Done</span><span>1</span></div>
-            <div class="it read"><div style="min-width:0"><div class="t">Repository ownership transfer</div><div class="meta"><span>passed on by the Router</span></div></div><div class="right"><span>1h</span></div></div>
-          </div>
-          <div class="conv">
-            <div class="cv">
-              <div class="blk"><div class="bh"><i class="ti ti-history"></i><b>Decisions in this session</b><span style="color:var(--u-mute)">3 earlier</span><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">show all <i class="ti ti-chevron-down"></i></span></div>
-                <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto auto"><i class="ti ti-circle-check ok"></i><span>Answered <em class="mono" style="font-style:normal;color:var(--u-sec);font-size:11px">which runtime?</em> → Firecracker, not gVisor</span><span class="k">you · 1d</span><i class="ti ti-arrow-up-right" style="color:var(--u-mute)"></i></div>
-                <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto auto"><i class="ti ti-route ac"></i><span>Passed on “keep the VM warm between scripts”</span><span class="k">Router · 3h</span><i class="ti ti-arrow-up-right" style="color:var(--u-mute)"></i></div>
-                <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto auto"><i class="ti ti-arrow-back-up" style="color:var(--u-warn)"></i><span>Sent the first plan back: “no root in the guest”</span><span class="k">you · 2h</span><i class="ti ti-arrow-up-right" style="color:var(--u-mute)"></i></div></div>
-              <div class="msg"><span class="av" style="background:#9D8CF2">MS</span><div><div class="who"><b>microsandbox</b> · Claude · plan mode · 9m</div>
-                <div class="agent">The sandbox can run in a Firecracker microVM on Linux. Here's the plan; nothing is written until you approve.</div></div></div>
-              <div class="blk" style="margin-left:32px"><div class="bh"><span class="kind" style="color:var(--u-merge)">Plan</span><b>Firecracker runner for Linux</b><span class="sp"></span><span class="mono" style="font-size:11px"><span class="add">+412</span> <span class="del">−38</span> · 7 files</span></div>
-                <div class="step"><span class="k">1</span><span>Boot a minimal guest from the shared rootfs <code>crates/vm/src/firecracker.rs</code></span><span class="k">new</span></div>
-                <div class="step"><span class="k">2</span><span>Mount the project read-only over virtio-fs <code>crates/vm/src/mounts.rs</code></span><span class="k">edit</span></div>
-                <div class="step"><span class="k">3</span><span>Route the JS runtime through the VM's vsock <code>crates/js/src/runtime.rs</code></span><span class="k">edit</span></div>
-                <div class="step"><span class="k">4</span><span>Fall back to the process sandbox when KVM is absent</span><span class="k">edit</span></div>
-                <div class="step"><span class="k">5</span><span>Integration test: 200 scripts, cold boot under 150 ms</span><span class="k">test</span></div>
-                <div class="opts"><span class="btn p">Approve<kbd>⌘↵</kbd></span><span class="btn">Keep planning<kbd>K</kbd></span><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute);align-self:center">plan v2 · <span style="text-decoration:underline;text-underline-offset:3px">compare with v1</span></span></div></div>
-              <div class="msg"><span class="av" style="background:#3FB57F">LO</span><div style="min-width:0"><div class="who"><b>lookout</b> · Agent completion notifications · running</div>
-                <div class="blk"><div class="log"><div class="cmd">$ swift test --filter PillDragTests</div><div><span class="ok">✓</span> 48 tests passed <span style="color:var(--u-mute)">(12.4 s)</span></div><div class="cmd">$ swift test --filter RouterTests</div><div><span class="wr">◌</span> suite 3 of 7 · RouterFormsTests <span class="caret"></span></div></div>
-                                    <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto"><i class="ti ti-subtask ac"></i><span>write-tests</span><span class="k wr">running 42s</span></div></div></div></div>
-            </div>
-            <div class="comp"><div style="display:flex;gap:8px;align-items:center"><span class="pill"><i class="ti ti-folder"></i>microsandbox</span><span>approve it, but keep the guest image under 200 MB</span><span class="caret" style="background:var(--u-text);width:1.5px"></span></div>
-              <div style="display:flex;gap:10px;align-items:center;margin-top:10px;color:var(--u-mute);font-size:11.5px"><span><i class="ti ti-at"></i> project</span><span><i class="ti ti-paperclip"></i></span><span class="sp"></span><span class="mono">passes your words on as they are</span><span class="btn p">Send<kbd>⌘↵</kbd></span></div></div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <div class="now"><img src="shots/window-router.png" alt="Router today"><span class="meta">Today: <code>--window-shots router</code></span></div>
+    <h2>The current design, as Fjord.</h2>
+    <p class="lead">The real app, now the default look (light or dark follows the Mac, live; <code>FJORD_THEME=dark|light|claude</code> pins one). Layout, icons, colours and cards stay; the type and neutrals move to the studio's.</p>
+    <div class="pair">
+      <div><img class="shot" src="shots/window-category.png" alt="Contributions today"><div class="cap"><span class="meta">Today</span><span class="meta">Claude palette, Anthropic Sans</span></div></div>
+      <div><img class="shot" src="preview/category-dark.png" alt="Contributions as Fjord, dark"><div class="cap"><span class="meta">Fjord dark</span><span class="meta">ink ramp, Geist</span></div></div>
+    </div>
+    <div class="pair">
+      <div><img class="shot" src="preview/category-light.png" alt="Contributions as Fjord, light"><div class="cap"><span class="meta">Fjord light</span><span class="meta">paper ramp</span></div></div>
+      <div><img class="shot" src="preview/router-light.png" alt="Router as Fjord, light"><div class="cap"><span class="meta">Router, light</span><span class="meta">new: the app had no light mode</span></div></div>
+    </div>
+    <div class="pair">
+      <div><img class="shot" src="shots/window-router.png" alt="Router today"><div class="cap"><span class="meta">Router today</span><span class="meta"></span></div></div>
+      <div><img class="shot" src="preview/router-dark.png" alt="Router as Fjord, dark"><div class="cap"><span class="meta">Router, Fjord dark</span><span class="meta"></span></div></div>
+    </div>
+    <div class="rows">
+      <div class="row"><b>Type</b><span>Anthropic Sans, read from Claude's bundle, becomes Geist; SF Mono becomes Geist Mono. Both ship with the app.</span></div>
+      <div class="row"><b>Neutrals</b><span>Claude's warm greys become the studio's cool ink ramp, each surface keeping its lightness; light mode flips them onto paper.</span></div>
+      <div class="row"><b>Accent</b><span>Claude's blue stays in the app. Fonte remains the studio's colour for the site and the mark.</span></div>
+      <div class="row"><b>Kept</b><span>Layout, icons, category colours, the amber "needs you" cards, tags, density. Clay stays for what is Claude's.</span></div>
+    </div>
   </div>
 </div></section>
 
@@ -325,7 +185,7 @@ a{color:var(--link);text-decoration:underline;text-underline-offset:3px;text-dec
     <div class="rows" style="margin-top:0">
       <div class="row"><b>1</b><span>Follow the studio system as is (themes, fonte, type), with amber and red as the only additions.</span></div>
       <div class="row"><b>2</b><span>No product glyph; app icon from the fjord render.</span></div>
-      <div class="row"><b>3</b><span>The screens in 04: dense and technical (checks, diffs, logs, subagents), with colour reserved for state.</span></div>
+      <div class="row"><b>3</b><span>Keep the current design; adapt it as in 04 (type, neutrals, accent, a light mode).</span></div>
       <div class="row"><b>4</b><span>Nærøyfjord as the image.</span></div>
     </div>
   </div>

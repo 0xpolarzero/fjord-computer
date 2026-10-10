@@ -29,12 +29,14 @@ import Testing
         away(window)
         #expect(window.isOpen && window.navigator.selection == .settings)
         // A regular app while the window is open: a Dock icon and ⌘-Tab.
-        #expect(NSApp.activationPolicy() == .regular)
+        // (Wanted only: a test run never applies it, or its helper would land in the Dock.)
+        #expect(AppPolicy.current == .regular)
+        #expect(NSApp.activationPolicy() != .regular)
         window.close()
         await waitUntil { closed == 1 }
         #expect(!window.isOpen && closed == 1)
         // The bar only again: no Dock icon.
-        #expect(NSApp.activationPolicy() == .accessory)
+        #expect(AppPolicy.current == .accessory)
     }
 
     @Test func showingWithoutAPlaceOpensWhereItWasLeft() async {
@@ -201,12 +203,12 @@ import Testing
         var fronts = 0, closed = 0
         window.onFront = { _ in fronts += 1 }
         window.onClose = { closed += 1 }
-        let policy = NSApp.activationPolicy()
+        let policy = AppPolicy.current
         window.prepare()
         let content = try #require(window.content)
         #expect(window.window?.isVisible == false && !window.isOpen && !window.isFront && fronts == 0)
         #expect(window.window?.contentViewController == nil && content.view.window == nil)
-        #expect(NSApp.activationPolicy() == policy)
+        #expect(AppPolicy.current == policy)
         #expect(!NSApp.windows.contains { $0.isVisible && $0 === window.window })
         // Twice is once.
         window.prepare()
@@ -244,7 +246,7 @@ import Testing
     /// controller out of one stands still (no body runs as the store behind it changes).
     @Test func contentTakenOutOfTheWindowStandsStill() async {
         let model = ProbeModel(), count = ProbeCount()
-        let window = NSWindow(contentRect: NSRect(x: -5000, y: -5000, width: 400, height: 300), styleMask: [.titled],
+        let window = AwayWindow(contentRect: NSRect(x: -5000, y: -5000, width: 400, height: 300), styleMask: [.titled],
                               backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false
         let content = NSHostingController(rootView: ProbeView(model: model, count: count))
@@ -521,7 +523,7 @@ import Testing
             let turns = ticks.turns
             ticks.turns = []
             turns.dropLast().forEach { $0() }
-            #expect(closed == 0 && controller.isOpen && NSApp.activationPolicy() == .regular)
+            #expect(closed == 0 && controller.isOpen && AppPolicy.current == .regular)
             #expect(controller.window?.contentViewController != nil)
             turns.last?()
             #expect(closed == 0 && controller.window?.isVisible == true)

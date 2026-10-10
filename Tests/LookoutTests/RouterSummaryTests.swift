@@ -49,7 +49,8 @@ import Testing
         var linked = RouterDecision(at: now.addingTimeInterval(-90), trigger: .you("tell it to rebase"), done: [.answered(card: "x")])
         linked.links.sessions = ["s1"]
         let decisions = [linked, RouterDecision(at: now.addingTimeInterval(-80), trigger: .you("unrelated message"))]
-        let context = RouterSummaryContext.build(subject(), previous: previous, steps: ["You: fix it", "Step: Running swift test"],
+        let context = RouterSummaryContext.build(subject(), previous: previous, steps: [.init(at: nil, text: "You: fix it"),
+                                                                                          .init(at: nil, text: "Step: Running swift test")],
                                                  cards: cards, decisions: decisions, now: now)
         #expect(context.contains("Notifications (project lookout)"))
         #expect(context.contains("It was calm."))
@@ -67,6 +68,46 @@ import Testing
         let context = RouterSummaryContext.build(subject(), previous: nil, steps: [], cards: cards, decisions: [], now: now)
         #expect(context.contains("no previous summary"))
         #expect(context.contains("Did a thing.") && !context.contains("Did another."))
+    }
+
+    @Test func onlyTheStepsSinceThePreviousSummaryAreReadWithTheirTimes() {
+        let steps: [Claude.TranscriptStep] = [
+            .init(at: now.addingTimeInterval(-3 * 3600), text: "Step: Hours ago"),
+            .init(at: now.addingTimeInterval(-900), text: "Step: Before the summary"),
+            .init(at: now.addingTimeInterval(-300), text: "Step: Since the summary"),
+        ]
+        let previous = RouterSummary(at: now.addingTimeInterval(-600), text: "It was calm.", sessionID: "s1")
+        let repeated = RouterSummaryContext.build(subject(), previous: previous, steps: steps, cards: [], decisions: [], now: now)
+        #expect(repeated.contains("Since the summary") && !repeated.contains("Before the summary") && !repeated.contains("Hours ago"))
+        let clock = now.addingTimeInterval(-300).formatted(date: .omitted, time: .shortened)
+        #expect(repeated.contains("- \(clock) <session-content"))
+        // The first summary describes the last hour: steps hours old stay out of it.
+        let first = RouterSummaryContext.build(subject(), previous: nil, steps: steps, cards: [], decisions: [], now: now)
+        #expect(first.contains("Before the summary") && !first.contains("Hours ago"))
+        // Nothing since: it says so rather than repeating old steps.
+        let quiet = RouterSummaryContext.build(subject(), previous: previous, steps: Array(steps.prefix(2)), cards: [], decisions: [],
+                                               now: now)
+        #expect(quiet.contains("took no steps since") && !quiet.contains("Before the summary"))
+    }
+
+    @Test func anOlderCardAddressedSinceIsReadWithHowItWasAddressed() {
+        var old = card("s1", .question, "Old", "Which badge colour?", ago: 7200, addressed: 300)
+        old.addressedBy = .reply
+        old.addressedNote = "Use amber"
+        let stale = card("s1", .done, "Stale", "Long settled.", ago: 7200, addressed: 5000)
+        let context = RouterSummaryContext.build(subject(), previous: nil, steps: [], cards: [old, stale], decisions: [], now: now)
+        #expect(context.contains("Which badge colour?") && !context.contains("Long settled."))
+        #expect(context.contains("you replied to the session") && context.contains("Use amber"))
+        let made = now.addingTimeInterval(-7200).formatted(date: .omitted, time: .shortened)
+        let addressed = now.addingTimeInterval(-300).formatted(date: .omitted, time: .shortened)
+        #expect(context.contains("question, \(made), addressed \(addressed)"))
+    }
+
+    @Test func theTranscriptsStepsKeepTheirTimes() {
+        let line = #"{"type":"user","timestamp":"2027-01-15T08:00:00.250Z","message":{"content":"go"}}"#
+        let steps = Claude.recentTimedSteps(tail: Data(line.utf8))
+        #expect(steps.map(\.text) == ["You: go"])
+        #expect(steps.first?.at.map { abs($0.timeIntervalSince1970 - 1_800_000_000.25) < 0.01 } == true)
     }
 
     @Test func theTranscriptsLatestStepsAreItsWordsYoursAndItsTools() {
@@ -188,21 +229,70 @@ import Testing
         #expect(summarizer.errors[row.id] != nil && summarizer.busy.isEmpty)
     }
 
+    @MainActor @Test func whatHappensWhileASummaryIsMadeIsInTheNextOne() async throws {
+        let store = working(1)
+        let row = try #require(store.routerWorkingRows.first)
+        let summarizer = RouterSummarizer()
+        // While Haiku writes the first summary, the session stops on a question.
+        summarizer.runner = { _ in
+            try? await Task.sleep(for: .milliseconds(30))
+            await MainActor.run {
+                store.router.cards.append(RouterCard(id: row.id + "#late", sessionID: row.id, kind: .question, title: "Late",
+                                                     folder: nil, text: "Asked during the call", createdAt: Date()))
+            }
+            try? await Task.sleep(for: .milliseconds(30))
+            return "First."
+        }
+        summarizer.request(row.id, store: store)
+        await summarizer.idle()
+        let first = try #require(store.router.summaries.last)
+        #expect(first.covers.map { $0 < first.at } == true)
+        final class Seen: @unchecked Sendable { var context = "" }
+        let seen = Seen()
+        summarizer.runner = { context in seen.context = context; return "Second." }
+        summarizer.request(row.id, store: store)
+        await summarizer.idle()
+        #expect(seen.context.contains("Asked during the call"))
+        // Older files have no cutoff: the time it was made stands in.
+        let old = try JSONDecoder().decode(RouterSummary.self, from: Data(#"{"id":"\#(UUID())","at":0,"text":"Old."}"#.utf8))
+        #expect(old.covers == nil)
+    }
+
     @MainActor @Test func theHeadersButtonSummarizesEverySessionAFewAtATime() async {
         let store = working(5)
         let ids = store.routerWorkingRows.map(\.id)
         #expect(ids.count == 5)
+        // The first `concurrency` calls wait for each other (a signal, not a sleep: on a loaded machine a timed overlap may
+        // never happen), so the bound is reached for certain; a fourth that started early would show as a higher peak.
+        let bound = RouterSummarizer.concurrency
         final class Calls: @unchecked Sendable {
+            let bound: Int
+            init(bound: Int) { self.bound = bound }
             let lock = NSLock()
             var now = 0, most = 0, total = 0
-            func change(_ by: Int) { lock.withLock { now += by; most = max(most, now); if by > 0 { total += 1 } } }
+            var waiting: [CheckedContinuation<Void, Never>] = []
+            func enter() async {
+                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                    let release: [CheckedContinuation<Void, Never>]? = lock.withLock {
+                        now += 1; total += 1; most = max(most, now)
+                        guard total <= bound else { return [c] }
+                        waiting.append(c)
+                        guard total == bound else { return nil }
+                        defer { waiting = [] }
+                        return waiting
+                    }
+                    release?.forEach { $0.resume() }
+                }
+            }
+            func leave() { lock.withLock { now -= 1 } }
         }
-        let calls = Calls()
+        let calls = Calls(bound: bound)
         let summarizer = RouterSummarizer()
         summarizer.runner = { _ in
-            calls.change(1)
-            try await Task.sleep(for: .milliseconds(40))
-            calls.change(-1)
+            await calls.enter()
+            // Yield, so the others in flight have started before this one ends.
+            await Task.yield()
+            calls.leave()
             return "Fine."
         }
         summarizer.request(ids[0], store: store)

@@ -28,6 +28,53 @@ import Testing
         #expect(HistoryPin.next(pinned: false, scrolling: true, .init(content: 1000, visibleBottom: 990)) == .pin(true))
     }
 
+    /// macOS 14's history: its scroll view says when you scroll, so scrolling up unpins it (and the lines drawn stay).
+    @Test func onMacOS14AScrollUpUnpinsTheHistoryAndLayoutDoesNot() {
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 200, height: 300))
+        let document = Flipped(frame: NSRect(x: 0, y: 0, width: 200, height: 1000))
+        scrollView.borderType = .noBorder
+        scrollView.documentView = document
+        var seen: [(HistoryPin.Geometry, Bool)] = []
+        let observer = HistoryScrollObserver(scrollView) { seen.append(($0, $1)) }
+        defer { withExtendedLifetime(observer) {} }
+        // At the bottom, then scrolled up by you.
+        document.scroll(NSPoint(x: 0, y: 700))
+        document.scroll(NSPoint(x: 0, y: 200))
+        #expect(seen.count == 2)
+        #expect(seen.last.map { $0.1 && $0.0 == HistoryPin.Geometry(content: 1000, visibleBottom: 500) } == true)
+        #expect(seen.last.map { HistoryPin.next(pinned: true, scrolling: $0.1, $0.0) } == .pin(false))
+        // Back to the bottom: pinned again.
+        document.scroll(NSPoint(x: 0, y: 700))
+        #expect(seen.last.map { HistoryPin.next(pinned: false, scrolling: $0.1, $0.0) } == .pin(true))
+        // A line arrives while pinned (the content grows, what shows moves): layout, not a scroll; back to the bottom.
+        let before = seen.count
+        document.setFrameSize(NSSize(width: 200, height: 1100))
+        document.scroll(NSPoint(x: 0, y: 750))
+        let layout = seen.dropFirst(before).first
+        #expect(layout.map { !$0.1 } == true)
+        #expect(layout.map { HistoryPin.next(pinned: true, scrolling: $0.1, $0.0) } == .stick)
+    }
+
+    @Test func linesShownEarlierStayWhenTheOldestGoPastWhatIsKept() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let all = (0..<300).map { i in
+            RouterPage.Entry.decision(RouterDecision(at: start.addingTimeInterval(Double(i) * 60), trigger: .you("message \(i)")))
+        }
+        // At the bottom: the newest page.
+        #expect(HistoryWindow.drawn(all, from: nil, page: 100).first?.id == all[200].id)
+        // Show earlier drew from line 50 on.
+        let boundary = HistoryWindow.Boundary(all[50])
+        #expect(HistoryWindow.drawn(all, from: boundary, page: 100).startIndex == 50)
+        // Retention drops the first 60 lines, the boundary with them: what followed it holds the top, not the newest 100.
+        let kept = Array(all.dropFirst(60))
+        let drawn = HistoryWindow.drawn(kept, from: boundary, page: 100)
+        #expect(drawn.first?.id == all[60].id && drawn.count == 240)
+        // Retention drops only the boundary: the line after it.
+        let without = all.filter { $0.id != all[50].id }
+        #expect(HistoryWindow.drawn(without, from: boundary, page: 100).first?.id == all[51].id)
+    }
+
     /// A store whose history is long (300 runs) and whose Needs you is empty, so the history has the room.
     private func store() -> Store {
         let store = Store()

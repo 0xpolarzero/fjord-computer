@@ -62,6 +62,7 @@ struct CategoryEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     identity(c)
+                    CategorySectionPicker(store: store, category: draft)
                     SettingsRow("Notify", info: ("Notify", "Once when a thing comes in, and again only on something new.")) {
                         SettingsSwitch("Notify for \(c.title)", isOn: draft.notifies)
                     }
@@ -162,8 +163,8 @@ struct CategoryEditor: View {
         guard iconAuto, name.count >= 2 else { return }
         try? await Task.sleep(for: .milliseconds(800))
         guard !Task.isCancelled, iconAuto else { return }
-        if let key = store.typesafeKey, !key.isEmpty,
-           let symbol = try? await CategoryIcon.pick(name: name, key: key) {
+        if let choose = store.jevChooser(.categoryIcons),
+           let symbol = try? await CategoryIcon.pick(name: name, choose: choose) {
             guard !Task.isCancelled, iconAuto else { return }
             draft.wrappedValue.symbol = symbol
         } else if !Task.isCancelled, iconAuto, let symbol = CategoryIcon.local(name: name) {
@@ -228,7 +229,7 @@ struct CategoryEditor: View {
 }
 
 /// Every symbol Lookout knows, filtered by what is typed.
-private struct SymbolPicker: View {
+struct SymbolPicker: View {
     let selection: String
     let color: CategoryColor
     let pick: (String) -> Void

@@ -889,19 +889,32 @@ struct RelayInbox: Sendable {
     /// Writes `text` for `session` and waits for the plugin's answer. Throws `unanswered` when there's none within `timeout`
     /// (the message is withdrawn first), `refused` when the plugin says no. Returns the plugin's answer: "ok", with what it
     /// applied after it when the message carried settings ("ok model=opus effort=high").
+    /// `gate` says, on the main actor and right before the message is written (nothing awaited between the two), why it
+    /// may no longer go: a reason refuses it, unwritten.
     @discardableResult
-    func deliver(_ text: String, to session: String, interval: TimeInterval = 0.03) async throws -> String {
+    func deliver(_ text: String, to session: String, interval: TimeInterval = 0.03,
+                 gate: (@MainActor () -> String?)? = nil) async throws -> String {
         guard let header = Self.header(of: text), header.target == session, Self.safe(session), Self.safe(header.nonce) else {
             throw Failure.refused("not a message signed for this session")
         }
         let dir = folder(for: session)
         let message = dir.appendingPathComponent("\(header.nonce).msg"), ack = dir.appendingPathComponent("\(header.nonce).ack")
         let fm = FileManager.default
-        try await OffMain.run { Swift.Result { try Self.sweep(dir); try PrivateFile.write(Data(text.utf8), to: message) } }.get()
+        if let gate {
+            try await OffMain.run { Swift.Result { try Self.sweep(dir) } }.get()
+            try await MainActor.run {
+                if let refusal = gate() { throw Failure.refused(refusal) }
+                try PrivateFile.write(Data(text.utf8), to: message)
+            }
+        } else {
+            try await OffMain.run { Swift.Result { try Self.sweep(dir); try PrivateFile.write(Data(text.utf8), to: message) } }.get()
+        }
         func withdraw() { try? fm.removeItem(at: message); try? fm.removeItem(at: ack) }
         func answer() -> String? {
             guard let data = try? Data(contentsOf: ack), let text = String(data: data, encoding: .utf8) else { return nil }
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // An empty file is an answer still being written (it is created, then filled): not an answer yet.
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
         }
         func outcome(_ reply: String) throws -> String {
             withdraw()

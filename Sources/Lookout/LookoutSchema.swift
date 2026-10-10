@@ -134,6 +134,11 @@ enum Shapes {
             .init("labeled", .object([.init("_0", .named("Labels"), "Label names.")]), "Has a label."),
             .init("noActivity", .object([.init("days", .int, "Days, at least 1.")]), "Nothing happened for N days."),
             .init("greptileBelow", .object([.init("_0", .int, "1 to 5.")]), "PRs: Greptile's score is below N."),
+            .init("asksMe", nil, "PRs and issues: Jev read a comment, review or thread reply (not yours, after your latest word there) and it asks you something. Needs a TypeSafe key; without one it never matches."),
+            .init("noise", .object([.init("_0", .bool, "`true`: noise (bots, and what Jev reads as automated: CI, coverage, deploy previews, dependency and lint bots); `false`: from a person.")]),
+                  "PRs and issues: a new comment (not yours) is noise, or from a person. Jev's noise never shows a banner."),
+            .init("importance", .object([.init("_0", .choice(Importance.allCases.map(\.rawValue)), "At least this level.")]),
+                  "PRs and issues: Jev rates the review request to you (or a team of yours), or your assignment, at least this important. Needs a TypeSafe key."),
             .init("workflow", .object([.init("_0", .choices(CheckState.allCases.map(\.rawValue)), "Any of these states (`pending` is running).")]),
                   "Workflows: the latest run is."),
         ]),
@@ -184,7 +189,7 @@ enum Shapes {
     /// without a second list to keep).
     static var actionVariants: [JSONShape.Variant] {
         let samples: [(ActionKind, String)] = [
-            (.askRouter(prompt: "prompt"), "Hands the thing to the Router with the prompt; it starts a session or passes it to one. `{title} {url} {number} {repo} {author}` are filled in."),
+            (.askRouter(prompt: "prompt"), "Hands the thing to the Router with the prompt; it starts a session or passes it to one. `{repo} {number} {url}` are filled in; `{title}` and `{author}` point to the block of GitHub content that follows the prompt (what others wrote never goes in the prompt itself)."),
             (.comment("text"), "Comments on the PR or issue on GitHub. `{title} {url} {number} {repo} {author}` are filled in. Only when the user asked."),
             (.rerun, "Re-runs the failed jobs of the failing workflow runs (PRs and workflows)."),
         ]

@@ -115,7 +115,7 @@ private final class LauncherLog {
         let log = LauncherLog()
         var asked = false
         let started = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher(store, log),
-                                                     chooser: { _, _, _, _ in asked = true; throw JevClient.Failure(message: "no") })
+                                                     chooser: { _, _, _, _ in asked = true; throw URLError(.notConnectedToInternet) })
         #expect(!asked && log.bootstraps.map(\.folder) == ["/code/r"])
         #expect(started == ActionSessionStarted(sessionID: "local_abc", project: "r"))
     }
@@ -136,10 +136,53 @@ private final class LauncherLog {
         #expect(hints.values.contains { $0.contains("/code/r/.worktrees/x") })
     }
 
+    @Test func withNoModelNamedTheCloneAndJevsPickOfModelAreOneCallAndTheHistorySaysSo() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        log.ack = "ok model=opus effort=max"
+        let launcher = launcher(store, log)
+        var calls: [(questions: [String], state: [String: String])] = []
+        launcher.asker = { questions, state in
+            calls.append((questions.keys.sorted(), state))
+            return ["clone": .choice(.init(choice: "o1", confidence: 0.9, probabilities: ["o0": 0.1, "o1": 0.9])),
+                    "scope": .score(3.8, confidence: 0.8)]
+        }
+        _ = try await ActionSessions.start(Self.request(message: "Redesign the pool's eviction"), store: store,
+                                           clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
+        #expect(calls.map(\.questions) == [["clone", "scope"]])
+        // A message without its GitHub block is read as GitHub's, fenced whole.
+        #expect(calls.first?.state["task"] == InboxActions.fenceWarning + "\n" + InboxActions.fenceOpen + "\nRedesign the pool's eviction\n" + InboxActions.fenceClose)
+        #expect(log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"])
+        #expect(log.signedSettings == [SessionSettings(model: "opus", effort: "max")])
+        #expect(store.router.decisions.last?.doneLines == ["started a session in x (opus, max · picked by Jev)"])
+
+        // The action's own settings, or "Your default": Jev isn't asked about them.
+        _ = try await ActionSessions.start(Self.request(model: "haiku"), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
+        store.settings.jevPicksSessionModels = false
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
+        #expect(calls.count == 1)
+        #expect(log.signedSettings.dropFirst() == [SessionSettings(model: "haiku", effort: nil), nil])
+    }
+
+    @Test func aCloneOrASizeJevIsntSureOfIsNotTaken() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        let launcher = launcher(store, log)
+        // A near tie between the clones, and a size he is unsure of: the first clone (no session in either), your defaults.
+        launcher.asker = { _, _ in
+            ["clone": .choice(.init(choice: "o1", confidence: 0.3, probabilities: ["o0": 0.45, "o1": 0.55])),
+             "scope": .score(3.8, confidence: 0.2)]
+        }
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
+        #expect(log.bootstraps.map(\.folder) == ["/code/r"] && log.signedSettings == [nil])
+        #expect(!ActionSessions.clearLead(.init(choice: "o1", confidence: 1, probabilities: ["o1": 0.45, "o0": 0.3, "o2": 0.25])))
+        #expect(ActionSessions.clearLead(.init(choice: "o1", confidence: 1, probabilities: ["o1": 0.7, "o0": 0.3])))
+    }
+
     @Test func withoutAnAnswerFromJevTheMostRecentSessionsFolderWinsElseTheFirst() async throws {
         let store = ready()
         let log = LauncherLog()
-        let failing: ActionSessions.Chooser = { _, _, _, _ in throw JevClient.Failure(message: "down") }
+        let failing: ActionSessions.Chooser = { _, _, _, _ in throw URLError(.notConnectedToInternet) }
         func session(_ id: String, _ folder: String, ago: TimeInterval) -> ClaudeSession {
             ClaudeSession(id: id, title: id, folder: folder, completedTurns: 1, lastActivity: Date().addingTimeInterval(-ago),
                           lastUserMessage: nil, summary: nil, running: false, cliID: nil)

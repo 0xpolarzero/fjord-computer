@@ -180,4 +180,15 @@ private final class RepoCalls: @unchecked Sendable {
         #expect(data.parsePerson("my teams", teams: true) == .myTeams)
         #expect(data.parsePerson("@bob", teams: true) == .user("bob"))
     }
+
+    @Test func theDaysFieldFollowsUndoUnlessYouAreTypingIt() {
+        // Undo took 14 back to 7 while the field wasn't being typed in: it shows 7.
+        #expect(DaysField.synced("14", to: 7, focused: false) == "7")
+        #expect(DaysField.synced("7", to: 7, focused: false) == nil)
+        // Typing: what you typed is what set it, and a field you cleared to type in stays clear.
+        #expect(DaysField.synced("14", to: 14, focused: true) == nil)
+        #expect(DaysField.synced("", to: 7, focused: true) == nil)
+        // An undo while the field has the keyboard still shows what it is now.
+        #expect(DaysField.synced("14", to: 7, focused: true) == "7")
+    }
 }

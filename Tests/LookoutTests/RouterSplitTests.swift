@@ -36,19 +36,37 @@ import Testing
         #expect(abs(RouterSplit.adjusted(shown: 300, page: 1000, up: false) - 0.2) < 0.0001)
     }
 
-    @Test func theChevronSwitchesToTheOtherSnapPoint() {
-        // Zones taking more than the history-big split gives them: down, to give the history the room.
-        #expect(RouterSplit.zonesAreBig(shown: 600, page: 1000))
-        #expect(RouterSplit.toggled(shown: 600, page: 1000) == RouterSplit.historyBig)
-        // At the history-big split (or smaller): up.
-        #expect(!RouterSplit.zonesAreBig(shown: 250, page: 1000))
-        #expect(RouterSplit.toggled(shown: 250, page: 1000) == RouterSplit.zonesBig)
+    @Test func theChevronSwitchesTheSnapPointChosenWhateverTheZonesShow() {
+        // Past the history-big snap: down, to give the history the room; at it (or under): up.
+        #expect(RouterSplit.zonesAreBig(share: RouterSplit.zonesBig))
+        #expect(RouterSplit.toggled(share: RouterSplit.zonesBig) == RouterSplit.historyBig)
+        #expect(RouterSplit.zonesAreBig(share: 0.4))
+        #expect(!RouterSplit.zonesAreBig(share: RouterSplit.historyBig))
+        #expect(RouterSplit.toggled(share: RouterSplit.historyBig) == RouterSplit.zonesBig)
+        // Zones taller than the history-big room (two working rows, a tall card, a 600-point page) still switch back and
+        // forth: each click changes the snap chosen, so the chevron never selects the same one twice.
+        var share = RouterSplit.initial
+        var seen: [CGFloat] = []
+        for _ in 0..<4 { share = RouterSplit.toggled(share: share); seen.append(share) }
+        #expect(seen == [RouterSplit.historyBig, RouterSplit.zonesBig, RouterSplit.historyBig, RouterSplit.zonesBig])
     }
 
-    @Test func theWorkingCardTakesAPartOfTheRoomUnlessNothingWaits() {
-        #expect(RouterSplit.workingCap(room: 700, needsEmpty: false) == 280)
-        #expect(RouterSplit.workingCap(room: 700, needsEmpty: true) == 630)
-        #expect(RouterSplit.workingCap(room: 100, needsEmpty: false) == 56)
+    @Test func theZonesAndTheirHeadersFitTheirRoomTogether() {
+        // A 600-point page at the history-big snap: 150 for the zones, of which the headers and margins take 100.
+        let room = RouterSplit.room(page: 600, share: RouterSplit.historyBig)
+        #expect(room == 150)
+        let caps = RouterSplit.caps(room: room, chrome: 100, workingShown: 32, needsEmpty: false)
+        #expect(100 + 32 + caps.needs <= room + 16, "needs \(caps.needs) with working and the headers overflow \(room)")
+        // A roomy page: Working takes its part, Needs you the rest, and with the headers they fill the room.
+        let big = RouterSplit.caps(room: 700, chrome: 100, workingShown: 240, needsEmpty: false)
+        #expect(big.working == 240 && big.needs == 360)
+        // Working needs less than its part: Needs you has the rest.
+        #expect(RouterSplit.caps(room: 700, chrome: 100, workingShown: 90, needsEmpty: false).needs == 510)
+        // Nothing waits on you: Working may take all of it.
+        #expect(RouterSplit.caps(room: 700, chrome: 70, workingShown: 0, needsEmpty: true).working == 630)
+        // A room shorter than the headers: each scroll keeps a line.
+        let short = RouterSplit.caps(room: 120, chrome: 140, workingShown: 32, needsEmpty: false)
+        #expect(short.working == RouterSplit.scrollFloor && short.needs == RouterSplit.scrollFloor)
     }
 
     @Test func theSplitIsKeptAcrossLaunches() throws {
@@ -97,10 +115,12 @@ import Testing
     @Test func eachSnapPointGivesItsSideTheRoomOnAFullPage() async {
         let historyBig = await historyHeight(share: RouterSplit.historyBig, copies: 6)
         let zonesBig = await historyHeight(share: RouterSplit.zonesBig, copies: 6)
-        #expect(historyBig > zonesBig + 200, "history big \(historyBig), zones big \(zonesBig)")
+        // History big: the zones, their headers with them, keep to their quarter (taller cards and rows scroll), so the
+        // history has three quarters of the page and the chevron has something to switch.
+        #expect(historyBig > zonesBig + 300, "history big \(historyBig), zones big \(zonesBig)")
         #expect(zonesBig >= 140, "the history keeps its floor: \(zonesBig)")
-        // Nothing needs you and nothing works: the zones take only their line, whatever their share.
+        // Nothing needs you: the zones take only what they need, whatever their share.
         let empty = await historyHeight(share: RouterSplit.zonesBig, copies: 0, working: false)
-        #expect(empty > historyBig, "content wins: \(empty)")
+        #expect(empty > zonesBig + 200, "content wins: \(empty)")
     }
 }

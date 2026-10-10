@@ -1,0 +1,141 @@
+import Foundation
+
+// Which of the Router's changes to Lookout wait for you. A run acts on your message, but it reads what sessions and GitHub
+// wrote, and words there could try to steer it. So a change whose effect reaches outside Lookout (an action that comments on
+// GitHub, starts sessions or re-runs CI by itself; what such a category runs on; session titles sent to TypeSafe), one that
+// takes something away (a category or group deleted, many things marked at once), and one your message didn't speak of (a
+// setting it never named, marks it never asked for) is not applied: its card says why, with Apply and Discard. A local change
+// you asked for applies at once, with Revert.
+
+enum LookoutGate {
+    /// Things marked at once beyond which marking waits for Apply.
+    static let manyMarks = 5
+
+    /// Why `change` waits for your Apply, or nil when it applies at once. `request`: your message for the run;
+    /// `categories`: the categories as they are now.
+    static func reason(_ change: LookoutChange, request: String, categories: [InboxCategory]) -> String? {
+        let said = words(request)
+        switch change.patch {
+        case .category(_, let before, let after):
+            guard let after else { return "Deleting a category waits for you" }
+            let new = after.actions.items.filter { action in !(before?.actions.items.contains(action) ?? false) }
+            if !new.isEmpty {
+                return "It adds an action that runs by itself (" + new.map(\.title).joined(separator: ", ") + ")"
+            }
+            if !after.actions.isEmpty, before?.rules != after.rules {
+                return "It changes what a category with actions runs on"
+            }
+            return nil
+        case .group(_, let before, let after):
+            guard let after else { return "Deleting a group waits for you" }
+            guard before != nil else { return nil }
+            let users = categories.filter { !$0.actions.isEmpty && uses($0, group: after.id) }
+            return users.isEmpty ? nil : "Categories with actions use this group (" + users.map(\.title).joined(separator: ", ") + ")"
+        case .order(let before, let after):
+            let acting = Set(categories.filter { !$0.actions.isEmpty }.map(\.id))
+            guard !acting.isEmpty else { return nil }
+            let moved = acting.contains { before.firstIndex(of: $0) != after.firstIndex(of: $0) }
+                || before.filter { !acting.contains($0) } != after.filter { !acting.contains($0) }
+            return moved ? "The order decides which category's actions run on a thing" : nil
+        case .setting(let key, _, let after):
+            if key == "sessionIcons", case .on(true) = after { return "It sends your sessions' titles to TypeSafe" }
+            guard let topic = topics[key], !said.contains(where: { word in topic.contains { word.hasPrefix($0) } }) else { return nil }
+            return "Your message didn't speak of this setting"
+        case .marks(_, let changes):
+            if changes.count > manyMarks { return "It marks \(changes.count) things at once" }
+            return said.contains(where: { word in markWords.contains { word.hasPrefix($0) } }) ? nil : "Your message didn't ask to mark anything"
+        }
+    }
+
+    /// The words that name each setting (a word of your message starting with one counts).
+    private static let topics: [String: [String]] = [
+        "notifications": ["notif", "banner", "alert", "mute", "silen", "quiet", "disturb"],
+        "snooze": ["snooze", "notif", "banner", "alert", "mute", "silen", "quiet", "disturb", "pause"],
+        "pollInterval": ["interval", "poll", "often", "frequen", "check", "refresh", "second", "minute", "sync"],
+        "centerBar": ["center", "centre", "middle", "bar"],
+        "launchAtLogin": ["login", "log", "launch", "start", "boot"],
+        "sessionIcons": ["icon"],
+    ]
+
+    private static let markWords = ["done", "seen", "read", "unread", "mark", "restor", "clear", "archiv", "dismiss", "ack", "undone", "reopen", "back"]
+
+    private static func words(_ text: String) -> [String] {
+        text.lowercased().split { !($0.isLetter || $0.isNumber) }.map(String.init)
+    }
+
+    /// Whether a category's rules name the group (by its id, anywhere in them).
+    private static func uses(_ category: InboxCategory, group: UUID) -> Bool {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(category.rules) else { return true }
+        return String(decoding: data, as: UTF8.self).contains(group.uuidString)
+    }
+}
+
+extension LookoutChange {
+    /// Made, but waiting for your Apply (or Discard): nothing of it is applied yet.
+    var isPending: Bool { pending != nil && !isReverted }
+    /// Discarded before it was applied.
+    var isDiscarded: Bool { pending != nil && isReverted }
+}
+
+extension Store {
+    /// Applies a change that waited for you, as it was made: what it touched goes to its state after. Nil when it can't
+    /// (not waiting, or no longer kept).
+    @discardableResult
+    func applyLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
+        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
+        var change = router.changes[i]
+        let decision = router.decisions.first { $0.links.changes.contains(id) }?.id
+        do {
+            try changingInbox(.routerTool(decision: decision)) { try applyPatch(change.patch) }
+        } catch {
+            change.revertNote = "Couldn't apply it: \(error.localizedDescription)"
+            router.changes[i] = change
+            return change
+        }
+        change.pending = nil
+        router.changes[i] = change
+        return change
+    }
+
+    /// Lets a waiting change go: nothing of it was applied, and nothing is.
+    @discardableResult
+    func discardLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
+        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
+        var change = router.changes[i]
+        change.revertedAt = now
+        change.revertNote = "Discarded"
+        router.changes[i] = change
+        noteReverted(change.id)
+        return change
+    }
+
+    /// What a change makes of what it touched: its after.
+    func applyPatch(_ patch: LookoutChange.Patch) throws {
+        switch patch {
+        case .category(let index, let before, let after):
+            if let after {
+                if let i = categories.firstIndex(where: { $0.id == after.id }) { categories[i] = after }
+                else { categories.insert(after, at: min(max(index, 0), categories.count)) }
+            } else if let before, let i = categories.firstIndex(where: { $0.id == before.id }) {
+                categories.remove(at: i)
+            }
+            categoriesChangedByRouter()
+        case .group(let index, let before, let after):
+            if let after {
+                if let i = groups.firstIndex(where: { $0.id == after.id }) { groups[i] = after }
+                else { groups.insert(after, at: min(max(index, 0), groups.count)) }
+            } else if let before, let i = groups.firstIndex(where: { $0.id == before.id }) {
+                groups.remove(at: i)
+            }
+            categoriesChangedByRouter()
+        case .order(_, let after):
+            categories = Self.ordered(categories, by: after)
+            categoriesChangedByRouter()
+        case .setting(let key, _, let after):
+            try LookoutSetting.named(key)?.apply(self, after)
+        case .marks(_, let changes):
+            for item in changes { marks[item.thing] = item.after }
+        }
+    }
+}

@@ -109,8 +109,6 @@ struct LookoutHub: View {
     @State var peekLeave: Task<Void, Never>?
     /// The bar's size and the open panel's natural size, to place the panel against the bar's ends.
     @State var barSize: CGSize = .zero
-    @State var inboxCellsHeight: CGFloat = 0
-    @State var inboxMarkHeight: CGFloat = 0
     @State var peekSizes: [HubSection: CGSize] = [:]
     @Environment(\.accessibilityReduceMotion) var reduce
     /// Opens the app window on a place, or on a Router card.
@@ -175,7 +173,7 @@ struct LookoutHub: View {
             Divider()
             Button("Quit Lookout") { NSApp.terminate(nil) }
         }
-        .environment(\.colorScheme, .dark)
+        .modifier(Brand.Scheme())
         .background(UpdateAnnouncer(updater: store.updater))
     }
 
@@ -204,24 +202,30 @@ struct LookoutHub: View {
     }
 
     @ViewBuilder var mainRows: some View {
-        // Inbox: the GitHub mark and the categories' cells under it, in one well, apart from the Router.
-        VStack(spacing: 0) {
-            inboxIcon.padding(.top, 2).padding(.bottom, 2)
+        // Inbox: each section's well, its icon and its categories' cells under it, apart from the Router. With nothing shown,
+        // the GitHub mark alone.
+        let sections = store.barSections
+        VStack(spacing: 6) {
+            if sections.isEmpty { inboxIcon.padding(.vertical, 2).frame(width: Self.cell) }
+            ForEach(Array(sections.enumerated()), id: \.element.id) { i, part in
+                VStack(spacing: 0) {
+                    if let section = part.section {
+                        sectionCell(section, part).padding(.vertical, 2).frame(width: Self.cell)
+                    }
+                    if part.section?.isCollapsed != true {
+                        VStack(spacing: 0) { categoryCells(part.categories) }.frame(width: Self.cell)
+                    }
+                }
+                .padding(.bottom, 2)
                 .frame(width: Self.cell)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inboxMarkHeight = $0 }
-            VStack(spacing: 0) { categoryCells }.frame(width: Self.cell)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inboxCellsHeight = $0 }
-        }
-        .frame(width: Self.cell)
-        .background(alignment: .top) {
-            if !store.shownCategories.isEmpty {
-                RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous)
-                    .fill(CDS.Fill.ghostSelected)
-                    .frame(width: Self.cell - 8, height: inboxMarkHeight + inboxCellsHeight + 2)
-                    .frame(width: Self.cell)
-                    .padding(.top, 1)
+                .background {
+                    if part.section != nil { sectionWell(first: i == 0).fill(CDS.alpha(0.06)).padding(.horizontal, 6) }
+                }
             }
         }
+        // Down from the bar's top as far as a well is in from its sides, so the first sits inset all round.
+        .padding(.top, 6)
+        .frame(width: Self.cell)
         .modifier(probe(.inbox))
         // The Router: its cell and counts.
         if store.routerOn {
@@ -234,6 +238,15 @@ struct LookoutHub: View {
                 .frame(width: Self.cell)
                 .transition(.scaleFade(0.8, reduce: reduce))
         }
+    }
+
+    /// A section's well, 6pt inside the bar's sides. The first's top corners follow the bar's (concentric where the bar is
+    /// rounded, the tile's radius where it meets the screen edge); every other corner is the tile's.
+    func sectionWell(first: Bool) -> UnevenRoundedRectangle {
+        let base = CDS.Tile.radius + 4, bar = barOutline.cornerRadii
+        func inner(_ r: CGFloat) -> CGFloat { first ? max(base, r - 6) : base }
+        return UnevenRoundedRectangle(topLeadingRadius: inner(bar.topLeading), bottomLeadingRadius: base,
+                                      bottomTrailingRadius: base, topTrailingRadius: inner(bar.topTrailing), style: .continuous)
     }
 
     /// A short rule centred in the bar.
@@ -253,15 +266,21 @@ struct LookoutHub: View {
 
     /// The bar along the top or bottom: the inbox's segment, the Router's, the gear, the update button.
     @ViewBuilder var strip: some View {
-        HStack(spacing: 0) {
-            inboxIcon
-            // The categories' cells beside the mark.
-            HStack(spacing: 0) { categoryCells }
-        }
-        .background {
-            if !store.shownCategories.isEmpty {
-                RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous).fill(CDS.Fill.ghostSelected)
-                    .padding(.vertical, 5).padding(.horizontal, -3)
+        let sections = store.barSections
+        HStack(spacing: 12) {
+            if sections.isEmpty { inboxIcon }
+            ForEach(sections) { part in
+                HStack(spacing: 0) {
+                    if let section = part.section { sectionCell(section, part) }
+                    // The categories' cells beside its icon.
+                    if part.section?.isCollapsed != true { HStack(spacing: 0) { categoryCells(part.categories) } }
+                }
+                .background {
+                    if part.section != nil {
+                        RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous).fill(CDS.alpha(0.06))
+                            .padding(.vertical, 5).padding(.horizontal, -3)
+                    }
+                }
             }
         }
         .padding(.leading, Self.inset + 1)

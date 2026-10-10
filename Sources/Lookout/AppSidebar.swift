@@ -85,26 +85,14 @@ struct AppSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    groupLabel("Inbox")
-                    ForEach(store.shownCategories) { category in
-                        let badge = store.badge(category)
-                        AppSidebarRow(title: category.title, on: navigator.selection == .category(category.id),
-                                      badge: badge > 0 ? RailBadge(count: badge, fill: category.color.swatch, ink: category.color.ink) : nil,
-                                      tip: badge == 0 ? category.title : "\(category.title) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
-                                      action: { navigator.go(.category(category.id)) }) { on in
-                            Image(systemName: category.symbol)
-                                .font(.system(size: M.symbol, weight: .medium))
-                                .foregroundStyle(category.color.swatch.opacity(badge > 0 || on ? 1 : 0.6))
-                        } trailing: {
-                            if badge > 0 {
-                                CountText(badge, color: category.color.swatch)
-                            } else if !category.isCI {
-                                CountText(store.count(category.id), color: CDS.Text.muted)
-                            }
+                    InboxHeading(on: navigator.selection == .categories, collapsed: collapsed) { navigator.go(.categories) }
+                    // Section by section: its row (a caret folds it, its categories' counts then added up on it), then its
+                    // categories while it is open.
+                    ForEach(store.barSections) { part in
+                        if let section = part.section { sectionRow(section, part) }
+                        if part.section?.isCollapsed != true {
+                            ForEach(part.categories) { category in categoryRow(category) }
                         }
-                        .padding(.bottom, rowGap)
-                        .accessibilityValue(badge == 0 ? "Nothing new" : category.isCI ? "\(badge) failing" : "\(badge) unread")
-                        .contextMenu { categoryMenu(category) }
                     }
                     AppSidebarRow(title: "Done", on: navigator.selection == .done,
                                   tip: "Done · \(store.doneEntries.count)", action: { navigator.go(.done) }) { on in
@@ -149,11 +137,6 @@ struct AppSidebar: View {
                     Image(systemName: "gearshape").font(.system(size: M.symbol, weight: .medium))
                         .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
                 }
-                AppSidebarRow(title: "Inbox categories", on: navigator.selection == .categories, tip: "Inbox categories",
-                              action: { navigator.go(.categories) }) { on in
-                    Image(systemName: "tray.2").font(.system(size: M.symbol, weight: .medium))
-                        .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
-                }
             }
             .padding(.top, 6)
             .overlay(alignment: .top) {
@@ -170,6 +153,49 @@ struct AppSidebar: View {
         // Always laid out at its full width: the frame around it narrows, so nothing here reflows or moves.
         .frame(width: AppRootView.sidebarWidth, alignment: .topLeading)
         .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func categoryRow(_ category: InboxCategory) -> some View {
+        let badge = store.badge(category)
+        return AppSidebarRow(title: category.title, on: navigator.selection == .category(category.id),
+                             badge: badge > 0 ? RailBadge(count: badge, fill: category.color.swatch, ink: category.color.ink) : nil,
+                             tip: badge == 0 ? category.title : "\(category.title) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
+                             action: { navigator.go(.category(category.id)) }) { on in
+            Image(systemName: category.symbol)
+                .font(.system(size: M.symbol, weight: .medium))
+                .foregroundStyle(category.color.swatch.opacity(badge > 0 || on ? 1 : 0.6))
+        } trailing: {
+            if badge > 0 {
+                CountText(badge, color: category.color.swatch)
+            } else if !category.isCI {
+                CountText(store.count(category.id), color: CDS.Text.muted)
+            }
+        }
+        .padding(.bottom, rowGap)
+        .accessibilityValue(badge == 0 ? "Nothing new" : category.isCI ? "\(badge) failing" : "\(badge) unread")
+        .contextMenu { categoryMenu(category) }
+    }
+
+    /// A section: its icon and name, and a caret. A click folds or unfolds it (in the bar too); folded, its categories'
+    /// counts are added up on it.
+    private func sectionRow(_ section: CategorySection, _ part: BarSection) -> some View {
+        let badge = section.isCollapsed ? store.sectionBadge(part) : nil
+        return AppSidebarRow(title: section.title, on: false, badge: badge,
+                             tip: badge.map { "\(section.title) · \($0.count) new" } ?? section.title,
+                             action: { withAnimation(SidebarState.animation) { store.toggleCollapsed(section.id) } }) { _ in
+            SectionGlyph(symbol: section.symbol, size: M.symbol, color: CDS.Text.secondary)
+        } trailing: {
+            HStack(spacing: 6) {
+                if let badge { CountText(badge.count, color: badge.fill) }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(CDS.Text.muted)
+                    .rotationEffect(.degrees(section.isCollapsed ? -90 : 0))
+            }
+        }
+        .padding(.bottom, rowGap)
+        .accessibilityValue(section.isCollapsed ? "collapsed" + (badge.map { ", \($0.count) new" } ?? "") : "expanded")
+        .accessibilityHint(section.isCollapsed ? "Shows its categories" : "Folds its categories")
     }
 
     /// A category row's menu, in the expanded sidebar and on the rail alike. Edits go through the store as the categories page
@@ -211,17 +237,6 @@ struct AppSidebar: View {
     private static func routerTip(_ c: (needsYou: Int, done: Int)) -> String {
         let parts = [c.needsYou > 0 ? "\(c.needsYou) need you" : nil, c.done > 0 ? "\(c.done) done" : nil].compactMap { $0 }
         return parts.isEmpty ? "Router" : "Router · " + parts.joined(separator: ", ")
-    }
-
-    /// §2.6: a group label, 12/16 muted, its text inset 10.
-    private func groupLabel(_ title: String) -> some View {
-        Text(title).cdsText((M.groupFont, 16), .regular, CDS.Text.muted)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, M.labelInset)
-            .padding(.top, M.groupTop).padding(.bottom, 4)
-            .sidebarText(collapsed)
-            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -346,4 +361,58 @@ private struct SidebarTextModifier: ViewModifier {
 
 private extension View {
     func sidebarText(_ collapsed: Bool) -> some View { modifier(SidebarTextModifier(collapsed: collapsed)) }
+}
+
+/// The sidebar's Inbox label (§2.6, 12/16 muted, its text inset 10), with an edit button at its right on hover that opens the
+/// categories page (shown while that page is open).
+private struct InboxHeading: View {
+    let on: Bool
+    let collapsed: Bool
+    let edit: () -> Void
+    @State private var hovered = false
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("Inbox").cdsText((M.groupFont, 16), .regular, CDS.Text.muted).lineLimit(1)
+            Spacer(minLength: 4)
+            EditButton(on: on, action: edit)
+                .opacity(hovered || on ? 1 : 0)
+        }
+        .frame(height: 20)
+        .padding(.leading, M.labelInset)
+        // Its pencil over the rows' counts.
+        .padding(.trailing, M.rowPadding + 2)
+        .padding(.top, M.groupTop - 2).padding(.bottom, 2)
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .sidebarText(collapsed)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Inbox")
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The Inbox label's edit button: a small pencil in the label's own muted ink, brighter on hover; a faint tile behind it while
+/// the categories are open.
+private struct EditButton: View {
+    let on: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "pencil")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(on || hovered ? CDS.Text.secondary : CDS.Text.muted)
+                .frame(width: 18, height: 18)
+                .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(on ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .tip("Edit categories")
+        .accessibilityLabel("Edit inbox categories")
+    }
 }

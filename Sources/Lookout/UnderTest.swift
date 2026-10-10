@@ -11,6 +11,9 @@ enum UnderTest {
         _dyld_get_image_name(index).map { String(cString: $0).contains(".xctest/") } ?? false
     }
 
+    /// Where a test run's windows go: off every screen, so nothing flashes on the screens of whoever is at the Mac.
+    static let away = NSPoint(x: -5000, y: -5000)
+
     /// What reaching the real thing does. Only the test of this guard replaces it, to see that it was reached.
     nonisolated(unsafe) static var onReach: (String) -> Void = { what in
         fatalError("A test reached \(what). It must stand something in for it, or the code under test must not go there.")
@@ -21,6 +24,14 @@ enum UnderTest {
         guard isRunning else { return false }
         onReach(what)
         return true
+    }
+}
+
+/// A window that stays where a test run puts it. A titled window is pulled back onto the nearest screen as it comes to the
+/// front, so `UnderTest.away` alone would land it on one (the screen beside the main one, often): under a test it isn't.
+class AwayWindow: NSWindow {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        UnderTest.isRunning ? frameRect : super.constrainFrameRect(frameRect, to: screen)
     }
 }
 

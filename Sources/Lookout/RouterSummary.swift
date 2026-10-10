@@ -13,15 +13,20 @@ struct RouterSummary: Codable, Equatable, Identifiable {
     var sessionID: String?
     /// The session's title when it was made, for the history (the session may be gone by the time you read it).
     var title: String?
+    /// How far what it was made from reaches: when its context was read, before the call that wrote it (`at` is when that
+    /// ended). The next summary reads what came after this, so nothing that happened during the call is missed. Nil in older
+    /// files, where `at` stands in.
+    var covers: Date?
 
     static let maxKept = 200
 
-    init(id: UUID = UUID(), at: Date, text: String, sessionID: String? = nil, title: String? = nil) {
+    init(id: UUID = UUID(), at: Date, text: String, sessionID: String? = nil, title: String? = nil, covers: Date? = nil) {
         self.id = id
         self.at = at
         self.text = text
         self.sessionID = sessionID
         self.title = title
+        self.covers = covers
     }
 }
 
@@ -120,16 +125,15 @@ enum RouterSummaryContext {
     """
 
     private static func fence(_ text: String, _ limit: Int = 240) -> String {
-        let clean = text.replacingOccurrences(of: open, with: "").replacingOccurrences(of: close, with: "")
-        return open + RouterDecision.clip(clean, limit) + close
+        open + RouterDecision.clip(SessionFence.neutralized(text), limit) + close
     }
 
     private static func clock(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
 
     /// What the one Haiku call reads: the session, its previous summary, its latest steps, and what happened to it since.
-    static func build(_ subject: Subject, previous: RouterSummary?, steps: [String], cards: [RouterCard],
+    static func build(_ subject: Subject, previous: RouterSummary?, steps: [Claude.TranscriptStep], cards: [RouterCard],
                       decisions: [RouterDecision], now: Date) -> String {
-        let since = previous?.at ?? now.addingTimeInterval(-firstWindow)
+        let since = previous.map { $0.covers ?? $0.at } ?? now.addingTimeInterval(-firstWindow)
         var out: [String] = []
         out.append("Now: \(clock(now)).")
         out.append("The session: \(subject.title) (project \(subject.name)).")
@@ -146,16 +150,28 @@ enum RouterSummaryContext {
             out.append("Left running:")
             for task in subject.running.prefix(perSection) { out.append("- " + fence(task)) }
         }
-        if !steps.isEmpty {
-            out.append("Its latest steps, oldest first:")
-            for step in steps.suffix(Self.steps) { out.append("- " + fence(step)) }
+        // Only the steps since the previous summary (or within the hour): older ones are what that summary told already.
+        let fresh = steps.filter { $0.at.map { $0 > since } ?? true }
+        if !fresh.isEmpty {
+            out.append("Its steps since \(clock(since)), oldest first:")
+            for step in fresh.suffix(Self.steps) { out.append("- " + (step.at.map { clock($0) + " " } ?? "") + fence(step.text)) }
+        } else if !steps.isEmpty {
+            out.append("It took no steps since \(clock(since)).")
         }
 
-        let mine = cards.filter { $0.sessionID == subject.id && $0.createdAt > since }.sorted { $0.createdAt < $1.createdAt }
+        // Made since, or addressed since (however long ago it was made), with how.
+        func last(_ card: RouterCard) -> Date { max(card.createdAt, card.addressedAt ?? card.createdAt) }
+        let mine = cards.filter { $0.sessionID == subject.id && last($0) > since }.sorted { last($0) < last($1) }
         if !mine.isEmpty {
-            out.append("What it stopped on since:")
+            out.append("What it stopped on, or what became of it, since:")
             for card in mine.suffix(perSection) {
-                out.append("- \(card.kind.rawValue)\(card.isOpen ? "" : " (addressed)"): " + fence(card.text))
+                var line = "- \(card.kind.rawValue), \(clock(card.createdAt))"
+                if let at = card.addressedAt {
+                    line += ", addressed \(clock(at))" + (card.addressedBy.map { " (\(reason($0)))" } ?? "")
+                }
+                line += ": " + fence(card.text)
+                if let note = card.addressedNote { line += " Your message that resolved it: " + fence(note) }
+                out.append(line)
             }
         }
         let recent = decisions.filter { $0.at > since && $0.links.sessions.contains(subject.id) }
@@ -164,6 +180,19 @@ enum RouterSummaryContext {
             for decision in recent.suffix(perSection) { out.append("- " + fence(decision.contextLine(now: now))) }
         }
         return out.joined(separator: "\n")
+    }
+
+    /// How a card stopped being open, in words.
+    static func reason(_ addressed: RouterCard.Addressed) -> String {
+        switch addressed {
+        case .you: "you marked it"
+        case .reply: "you replied to the session"
+        case .router: "the Router messaged the session"
+        case .answered: "the question or plan was answered"
+        case .opened: "you opened the session"
+        case .superseded: "a newer card replaced it"
+        case .gone: "the session was archived or deleted"
+        }
     }
 
     /// Haiku's answer as plain text, two sentences at most.
@@ -180,7 +209,20 @@ extension Claude {
     /// A transcript's latest steps, oldest first: your messages, the agent's words, and the tools it ran (as the rows describe
     /// them); tool results and Claude Code's own notes are left out.
     static func recentSteps(tail: Data, count: Int = RouterSummaryContext.steps) -> [String] {
-        var steps: [String] = []
+        recentTimedSteps(tail: tail, count: count).map(\.text)
+    }
+
+    /// A transcript step and when it was written (nil when the line doesn't say).
+    struct TranscriptStep: Equatable, Sendable {
+        var at: Date?
+        var text: String
+    }
+
+    private static let stepTime = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+
+    /// `recentSteps` with each step's time, so a summary reads only those since its previous one.
+    static func recentTimedSteps(tail: Data, count: Int = RouterSummaryContext.steps) -> [TranscriptStep] {
+        var steps: [TranscriptStep] = []
         func clip(_ text: String) -> String? {
             let flat = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             return flat.isEmpty ? nil : RouterDecision.clip(flat, 300)
@@ -190,16 +232,20 @@ extension Claude {
                   let type = obj["type"] as? String, type == "assistant" || type == "user", obj["isMeta"] as? Bool != true
             else { continue }
             let content = (obj["message"] as? [String: Any])?["content"]
+            let at = (obj["timestamp"] as? String).flatMap { try? Date($0, strategy: stepTime) }
             if let text = content as? String {
-                if type == "user", let text = clip(text) { steps.append("You: " + text) }
+                if type == "user", let text = clip(text) { steps.append(.init(at: at, text: "You: " + text)) }
                 continue
             }
             for part in (content as? [[String: Any]] ?? []).reversed() where steps.count < count {
                 switch part["type"] as? String {
                 case "text":
-                    if let text = (part["text"] as? String).flatMap(clip) { steps.append((type == "user" ? "You: " : "Claude: ") + text) }
+                    if let text = (part["text"] as? String).flatMap(clip) {
+                        steps.append(.init(at: at, text: (type == "user" ? "You: " : "Claude: ") + text))
+                    }
                 case "tool_use" where type == "assistant":
-                    steps.append("Step: " + describe(tool: part["name"] as? String ?? "", input: part["input"] as? [String: Any] ?? [:]))
+                    steps.append(.init(at: at, text: "Step: " + describe(tool: part["name"] as? String ?? "",
+                                                                         input: part["input"] as? [String: Any] ?? [:])))
                 default: break
                 }
             }
@@ -298,7 +344,9 @@ extension Store {
 
     private func generate(_ id: String, store: Store) async {
         guard let row = store.sessionRow(id) else { errors[id] = "Couldn't summarize: the session is gone"; return }
-        let subject = store.summarySubject(row)
+        // What the summary reads is as of now; the call takes a while, and what happens meanwhile is the next one's.
+        let covers = Date()
+        let subject = store.summarySubject(row, now: covers)
         do {
             let text: String
             if store.routerIsPretend && runner == nil {
@@ -308,16 +356,16 @@ extension Store {
                 let cli = row.session.cliID
                 let reader = store.activityReader
                 let steps = await Task.detached(priority: .utility) {
-                    cli.flatMap { reader.transcript($0) }.map { Claude.recentSteps(tail: Claude.tail(of: $0)) } ?? []
+                    cli.flatMap { reader.transcript($0) }.map { Claude.recentTimedSteps(tail: Claude.tail(of: $0)) } ?? []
                 }.value
                 let context = RouterSummaryContext.build(subject, previous: store.router.summaries.last { $0.sessionID == id },
                                                          steps: steps, cards: store.router.cards, decisions: store.router.decisions,
-                                                         now: Date())
+                                                         now: covers)
                 let answer = try await (runner ?? Self.haiku(store: store))(context)
                 guard let cleaned = RouterSummaryContext.clean(answer) else { throw RouterTools.Failure("Haiku's answer was empty") }
                 text = cleaned
             }
-            store.addSummary(RouterSummary(at: Date(), text: text, sessionID: id, title: row.session.title))
+            store.addSummary(RouterSummary(at: Date(), text: text, sessionID: id, title: row.session.title, covers: covers))
         } catch {
             errors[id] = "Couldn't summarize: " + RouterDecision.clip(error.localizedDescription, 80)
         }

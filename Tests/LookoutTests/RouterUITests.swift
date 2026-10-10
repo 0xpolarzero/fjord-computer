@@ -47,7 +47,7 @@ import UserNotifications
         #expect(model.selection == open[1])
         #expect(keys.key(key(kVK_Space, " "), responder: nil))
         #expect(store.router.cards.first { $0.id == open[1] }?.addressedBy == .you)
-        // The addressed card goes down to Earlier: the next open one is picked.
+        // The addressed card goes up to the history: the next open one is picked.
         #expect(model.selection == open[2])
         #expect(keys.key(key(kVK_Escape), responder: nil) && closed)
     }
@@ -56,20 +56,68 @@ import UserNotifications
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
-        // What needs you, then the finished turns, then Earlier: not the newest first, which puts a finished turn second.
+        reopenTransfer(store)
+        // Two addressed cards in the history, the one addressed now below the older one.
+        store.setCardAddressed(store.openRouterCards.first { $0.kind == .stuck }!.id, true)
+        // Down the page: the history's addressed cards as it draws them (oldest first, above), then what needs you, then the
+        // finished turns. Not the newest first, which puts a finished turn second and walks the history upwards.
         let (needs, done, earlier) = model.sections(store)
-        let listed = (needs + done + earlier).map(\.id)
-        #expect(!needs.isEmpty && !done.isEmpty && !earlier.isEmpty)
-        #expect(listed != store.routerCards.map(\.id))
+        let listed = (earlier + needs + done).map(\.id)
+        #expect(!needs.isEmpty && !done.isEmpty && earlier.count > 1)
+        #expect(earlier.map(\.id) == store.routerHistory.compactMap { if case .card(let c) = $0 { c.id } else { nil } })
+        #expect(earlier.map(\.addressedAt!) == earlier.map(\.addressedAt!).sorted())
+        #expect(model.cards(store).map(\.id) == listed)
+        // None picked, ↓ starts at the top of Needs you and goes down the screen.
         var walked: [String] = []
-        for _ in listed {
+        for _ in needs + done {
             #expect(keys.key(key(kVK_DownArrow), responder: nil))
             walked += model.selection.map { [$0] } ?? []
         }
-        #expect(walked == listed)
-        // At the bottom it stays there; ↑ walks back the same way.
+        #expect(walked == (needs + done).map(\.id))
+        // At the bottom it stays there; ↑ walks back up the same way, into the history up to its oldest card.
         #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == listed.last)
-        #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed[listed.count - 2])
+        walked = []
+        for _ in 1..<listed.count {
+            #expect(keys.key(key(kVK_UpArrow), responder: nil))
+            walked += model.selection.map { [$0] } ?? []
+        }
+        #expect(walked == listed.dropLast().reversed())
+        #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed.first)
+    }
+
+    /// The demo's finished turn whose session is idle, open again: its only open one is from a session still running things.
+    private func reopenTransfer(_ store: Store) {
+        guard let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-transfer" && $0.kind == .done }) else { return }
+        store.router.cards[i].addressedAt = nil
+        store.router.cards[i].addressedBy = nil
+    }
+
+    @Test func aFinishedTurnNotShownWhileItsSessionRunsThingsIsNotWalkedPickedNorCounted() {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        let hidden = store.openRouterCards.first { $0.sessionID == "local_demo-ci" && $0.kind == .done }!
+        #expect(!(store.claudeTasks["local_demo-ci"] ?? []).isEmpty)
+        #expect(!store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(!model.cards(store).contains { $0.id == hidden.id })
+        // The arrows never land on it, a pick on it moves off, and Return and Space can't reach it.
+        for _ in 0...model.cards(store).count {
+            #expect(keys.key(key(kVK_DownArrow), responder: nil))
+            #expect(model.selection != hidden.id)
+        }
+        model.selection = hidden.id
+        model.reconcile(store: store)
+        #expect(model.selection != hidden.id)
+        #expect(keys.key(key(kVK_Return, "\r"), responder: nil) && model.replyTo != hidden.id)
+        // Away, it isn't said to have finished, nor counted.
+        #expect(AwayStrip(since: Date(), cards: [hidden.id]).line(store.routerShownCards) == nil)
+        #expect(store.routerCounts.done == 0)
+        // Once what it ran ends, it is everywhere.
+        store.claudeTasks["local_demo-ci"] = nil
+        #expect(store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(model.cards(store).contains { $0.id == hidden.id })
+        #expect(AwayStrip(since: Date(), cards: [hidden.id]).line(store.routerShownCards) == "1 finished")
+        #expect(store.routerCounts.done == 1)
     }
 
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
@@ -171,7 +219,7 @@ import UserNotifications
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
-        let card = store.openRouterCards[1]
+        let card = model.cards(store).filter(\.isOpen)[1]
         model.select(card.id, store: store)
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil))
         #expect(model.replyTo == card.id)
@@ -254,8 +302,8 @@ import UserNotifications
         let model = RouterModel()
         let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
             .frame(width: 1100, height: 720))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .titled, backing: .buffered,
-                              defer: false)
+        let window = AwayWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .titled, backing: .buffered,
+                                defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
@@ -294,8 +342,8 @@ import UserNotifications
         #expect(model.caret == 7 && model.suggestions(store).first?.name == "microsandbox")
         // Other text views moving their caret (another window's, one elsewhere in this window, even holding the same text)
         // leave the composer's alone.
-        let other = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 100), styleMask: .titled, backing: .buffered,
-                             defer: false)
+        let other = AwayWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 100), styleMask: .titled, backing: .buffered,
+                               defer: false)
         other.isReleasedWhenClosed = false
         defer { other.close() }
         let elsewhere = NSTextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
@@ -585,7 +633,8 @@ import UserNotifications
         RouterBanners.post(cards, store: store, windowIsKey: true)
         #expect(posted.isEmpty)
         RouterBanners.post(cards, store: store, windowIsKey: false)
-        #expect(posted.sorted() == cards.filter(\.kind.needsYou).map { RouterBanners.prefix + $0.id }.sorted())
+        #expect(posted.sorted() == cards.filter { RouterAttention.bannerNow($0, away: false) }.map { RouterBanners.prefix + $0.id }.sorted())
+        #expect(!posted.isEmpty)
         posted = []
         store.settings.snoozeUntil = Date().addingTimeInterval(600)
         RouterBanners.post(cards, store: store, windowIsKey: false)
@@ -618,12 +667,13 @@ import UserNotifications
     @Test func thePageGroupsAndOrdersItsThreeZones() {
         let store = demo()
         let page = store.routerPage
-        // Needs you: blockers first, then finished turns, newest first in each; only open cards.
+        // Needs you: blockers first (a question or plan before a stuck turn, newest first among equals), then finished
+        // turns; only open cards.
         #expect(!page.needs.isEmpty && page.needs.allSatisfy(\.isOpen))
         let kinds = page.needs.map { $0.kind == .done }
         #expect(kinds == kinds.sorted { !$0 && $1 })
         let blockers = page.needs.filter { $0.kind != .done }
-        #expect(blockers.map(\.createdAt) == blockers.map(\.createdAt).sorted(by: >))
+        #expect(blockers.map(\.kind) == [.question, .plan, .stuck])
         // Working: the sessions running on their own, none of them stopped on you.
         #expect(Set(page.working.map(\.id)) == Set(store.routerWorkingRows.map(\.id)))
         #expect(!page.working.isEmpty && page.working.allSatisfy { !$0.waitsForYou })

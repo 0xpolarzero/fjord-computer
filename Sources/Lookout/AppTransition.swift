@@ -121,9 +121,11 @@ enum AppTransition {
     private static var sharedOverlay: NSWindow?
 
     fileprivate static func overlay(on screen: NSScreen) -> NSWindow {
-        if let sharedOverlay, sharedOverlay.frame == screen.frame { return sharedOverlay }
+        // A test run's overlay covers no screen (its layers are laid out on `screen` all the same).
+        let frame = UnderTest.isRunning ? NSRect(origin: UnderTest.away, size: screen.frame.size) : screen.frame
+        if let sharedOverlay, sharedOverlay.frame == frame { return sharedOverlay }
         sharedOverlay?.orderOut(nil)
-        let overlay = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let overlay = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         overlay.isOpaque = false
         overlay.backgroundColor = .clear
         overlay.hasShadow = false

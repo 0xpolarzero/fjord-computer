@@ -5,8 +5,8 @@ import Foundation
 /// The Router's keys in the app window. In the composer: Return sends, ⇧Return starts a new line, ↑↓ pick a card while it is empty;
 /// with @ suggestions showing, ↑↓ walk them and Return or Tab picks one; Backspace at the very start takes the last chip off.
 /// Elsewhere: ↑↓ pick a card, Space marks it addressed (or open again), Return replies to it, and typing goes to the
-/// composer. The cards are walked in the order the page shows them (`RouterModel.cards`). Esc dismisses the suggestions, then the
-/// reply chip, then closes the window.
+/// composer. The cards are walked in the order the page shows them (`RouterModel.cards`). Esc dismisses the suggestions, then
+/// Jev's pick of a target, then the pinned target, then the reply chip, then closes the window.
 @MainActor
 final class RouterKeys {
     let store: Store
@@ -30,6 +30,8 @@ final class RouterKeys {
         if model.composerFocused, let editor = responder as? NSTextView { model.followCaret(editor) }
         if code == kVK_Escape, flags.isEmpty {
             if model.mention != nil { model.dismissMention() }
+            else if model.live.prediction != nil { model.dismissPrediction() }
+            else if model.live.pinned != nil { model.live.reset() }
             else if model.replyTo != nil { model.replyTo = nil }
             else { close() }
             return true
@@ -99,8 +101,9 @@ final class RouterKeys {
     }
 }
 
-/// A banner for each new card that needs you (a question, a plan, a stuck turn), unless notifications are off or snoozed or
-/// the app window is open on the Router. Clicking it opens the window on that card.
+/// A banner for each new card that needs you and can't wait (a question, a plan, an OK asked, a stuck turn, a turn asking you
+/// something soon: RouterAttention.swift decides) and for a waiting session ready to continue, unless notifications are off
+/// or snoozed or the app window is open on the Router. Clicking it opens the window on that card.
 @MainActor
 enum RouterBanners {
     /// Banner ids: the card's, after this.
@@ -109,6 +112,9 @@ enum RouterBanners {
     /// Hooks the store's new cards to banners, and banner clicks to `open`.
     static func attach(store: Store, windowIsKey: @escaping () -> Bool, open: @escaping (String) -> Void) {
         store.onNewRouterCards = { cards in post(cards, store: store, windowIsKey: windowIsKey()) }
+        store.routerTriager.onReady = { card in postReady(card, store: store, windowIsKey: windowIsKey()) }
+        store.routerAttention.onBack = { strip in postBack(strip, store: store, windowIsKey: windowIsKey()) }
+        store.routerAttention.start { [weak store] in store?.routerShownCards ?? [] }
         let previous = store.notifier.onOpen
         store.notifier.onOpen = { id, url in
             if id.hasPrefix(prefix) { open(String(id.dropFirst(prefix.count))) } else { previous?(id, url) }
@@ -116,11 +122,34 @@ enum RouterBanners {
     }
 
     static func post(_ cards: [RouterCard], store: Store, windowIsKey: Bool) {
+        // What can wait waits (RouterAttention.swift).
+        // Turned off meanwhile (a triage that came back after, say): nothing.
+        guard store.router.enabled else { return }
+        let now = store.routerAttention.admit(cards)
         guard !windowIsKey, store.settings.notifications, !store.isSnoozed else { return }
-        for card in cards where card.kind.needsYou {
+        for card in now {
             let project = store.routerProject(card).name
+            // A turn that asks you says what, as it asked it.
+            let asked = card.triage?.questions ?? []
             store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "\(card.kind.label) · \(project)",
-                                body: card.text, quiet: false)
+                                body: asked.isEmpty ? card.text : asked.joined(separator: "\n"), quiet: false)
+            store.routerAttention.posted(card.id)
         }
+    }
+
+    /// A waiting session's wait is over: it is ready to continue.
+    static func postReady(_ card: RouterCard, store: Store, windowIsKey: Bool) {
+        guard store.router.enabled, store.routerAttention.admitReady(card), !windowIsKey, store.settings.notifications, !store.isSnoozed, let triage = card.triage,
+              let message = RouterWaits.message(triage) else { return }
+        store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "Ready to continue · \(store.routerProject(card).name)",
+                            body: message, quiet: false)
+    }
+
+    /// Back after being away: one banner for what came meanwhile, opening on the most urgent of it.
+    static func postBack(_ strip: AwayStrip, store: Store, windowIsKey: Bool) {
+        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(store.routerShownCards) else { return }
+        let first = strip.listed(store.routerShownCards).first
+        store.notifier.post(id: first.map { prefix + $0.id } ?? Notifier.summaryPrefix + UUID().uuidString,
+                            title: "While you were away", subtitle: "", body: line, quiet: false)
     }
 }

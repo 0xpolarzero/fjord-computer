@@ -41,16 +41,16 @@ extension Store {
 
     /// Your message to the Router, with the card it replies to and the projects you tagged; in a demo, a canned reply
     /// instead of a real process.
-    func sendToRouter(_ text: String, replyTo: String? = nil, projects: [String] = [], now: Date = Date()) {
+    func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if routerIsPretend {
             var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
-                                       links: .init(cards: replyTo.map { [$0] } ?? []))
+                                       links: .init(cards: context.replyTo.map { [$0] } ?? []))
             entry.reply = "In a demo the Router only says what it would do."
             logDecision(entry)
         } else {
-            routerDispatcher.submit(text, context: RouterContext(replyTo: replyTo, projects: projects))
+            routerDispatcher.submit(text, context: context)
         }
     }
 
@@ -108,6 +108,9 @@ extension RouterCard.Kind {
         case .plan: "Plan"
         case .done: "Done"
         case .stuck: "Stuck"
+        case .asks: "Asks you"
+        case .approval: "Needs your OK"
+        case .waiting: "Waiting"
         }
     }
 
@@ -117,6 +120,9 @@ extension RouterCard.Kind {
         case .plan: Theme.purple
         case .done: Theme.accent
         case .stuck: Theme.red
+        case .asks: Theme.amber
+        case .approval: RouterTriage.approvalTint
+        case .waiting: RouterTriage.waitingTint
         }
     }
 
@@ -126,6 +132,9 @@ extension RouterCard.Kind {
         case .plan: "list.bullet.clipboard.fill"
         case .done: "checkmark"
         case .stuck: "exclamationmark.triangle.fill"
+        case .asks: "bubble.left.and.text.bubble.right.fill"
+        case .approval: "hand.raised.fill"
+        case .waiting: "hourglass"
         }
     }
 }
@@ -263,6 +272,8 @@ final class RouterModel {
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
     var replyTo: String?
+    /// Jev's pick for the draft while you type, and the target you fixed from it (see RouterJev.swift).
+    let live = RouterLiveTarget()
     /// The pills in the draft (their projects' folders), one for each `MentionText.mark` in it, in order.
     var tokens: [String] = []
     /// Projects tagged with @ (their folders), in the order they stand in the draft: the Router looks there, and starts a
@@ -305,22 +316,24 @@ final class RouterModel {
     /// The cards listed at the last reconcile, in order: where a picked card that left the list was.
     @ObservationIgnored private var listed: [String] = []
 
-    /// The cards the keys walk, in the order the page shows them: what needs you (questions, plans, stuck turns), then the
-    /// finished turns, both open; then the latest addressed ones (Earlier).
+    /// The cards the keys walk, in the order the page shows them top to bottom: the addressed ones as the history above
+    /// draws them (oldest first, the older ones it hasn't drawn yet before them); then what needs you (see
+    /// `RouterPage.ranked`) and the finished turns, both open. Sessions waiting are with the working ones.
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
-        let open = store.routerCards.filter(\.isOpen)
-        // `routerCards` has each part newest first.
-        let earlier = store.routerCards.filter { !$0.isOpen }.prefix(Self.earlierLimit)
-        return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, Array(earlier))
+        // Only what the page shows: a finished turn whose session still runs things isn't there yet.
+        let open = store.routerShownCards.filter { $0.isOpen && $0.kind != .waiting }.sorted(by: RouterPage.ranked)
+        let byID = Dictionary(store.router.cards.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let earlier = store.routerHistory.compactMap { entry -> RouterCard? in
+            guard case .card(let card) = entry, let now = byID[card.id], !now.isOpen else { return nil }
+            return now
+        }
+        return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, earlier)
     }
-
-    /// How many addressed cards the keys walk after the open ones.
-    static let earlierLimit = 8
 
     /// Every card the keys walk, top to bottom.
     func cards(_ store: Store) -> [RouterCard] {
         let s = sections(store)
-        return s.needs + s.done + s.earlier
+        return s.earlier + s.needs + s.done
     }
 
     /// Whether a message can go to the Router now: it is on (with the sessions extension) and Claude Code is there.
@@ -357,6 +370,8 @@ final class RouterModel {
         selection = id
         guard let id else { reveal(Self.endID, highlight: false); return }
         if let card = store.router.cards.first(where: { $0.id == id }) {
+            // A session waiting is a row of Working.
+            if card.isOpen, card.kind == .waiting { if shows { reveal(Self.workingID(card.sessionID)) }; return }
             if card.isOpen { expandedNeed = id } else { expanded.insert(id) }
         }
         if shows { reveal(id) }
@@ -415,16 +430,21 @@ final class RouterModel {
         select(id, store: store)
     }
 
-    /// ↑↓: the next card up or down, the first (or last) when none is picked.
+    /// ↑↓: the next card up or down the page. None picked, ↓ picks the first open card (the history is above it) and ↑ the
+    /// last card.
     func move(down: Bool, store: Store) {
         reconcile(store: store)
-        let ids = cards(store).map(\.id)
-        guard !ids.isEmpty else { return }
-        let i = ids.firstIndex(of: selection ?? "") ?? (down ? -1 : ids.count)
+        let shown = cards(store)
+        guard !shown.isEmpty else { return }
+        let ids = shown.map(\.id)
+        guard let i = ids.firstIndex(of: selection ?? "") else {
+            select(down ? (shown.first(where: \.isOpen) ?? shown[0]).id : ids[ids.count - 1], store: store)
+            return
+        }
         select(ids[min(max(i + (down ? 1 : -1), 0), ids.count - 1)], store: store)
     }
 
-    /// Space: addressed, or open again. An addressed card goes down to Earlier, so the next open card is picked (or the one
+    /// Space: addressed, or open again. An addressed card goes up to the history, so the next open card is picked (or the one
     /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card.
     func toggleAddressed(store: Store) {
         reconcile(store: store)
@@ -442,21 +462,20 @@ final class RouterModel {
         if card.isOpen { select(next, store: store) }
     }
 
-    /// Sends the draft with its reply and its @pills (written as "@name" where they stand, their projects going with it);
-    /// the composer keeps the focus for the next one.
+    /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the
+    /// target you pinned; the composer keeps the focus for the next one.
     func send(store: Store) {
-        let text = MentionText.plain(draft, tokens: tokens, name: store.folderName)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = plainDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
-        let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
-        store.sendToRouter(text, replyTo: reply, projects: projects)
+        store.sendToRouter(text, context: context(store))
         caret = nil
         tokens = []
         draft = ""
         replyTo = nil
+        live.reset()
     }
 
-    /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes down to Earlier),
+    /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes up to the history),
     /// then the card is picked as it now is, so the pick stays on it.
     func open(_ id: String, store: Store) {
         store.openCard(id)
@@ -486,9 +505,10 @@ final class RouterModel {
 
     // MARK: Chips and @
 
-    /// Backspace at the start of the composer: the reply chip goes.
+    /// Backspace at the start of the composer: the pinned target's chip goes, then the reply chip.
     @discardableResult
     func removeLastChip() -> Bool {
+        if live.pinned != nil { live.reset(); return true }
         if replyTo != nil { replyTo = nil; return true }
         return false
     }

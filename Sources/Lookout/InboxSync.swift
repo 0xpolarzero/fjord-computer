@@ -31,6 +31,15 @@ enum InboxSync {
     /// rule still gets its first queries: they are taken a turn per rule, not the first rules' all.
     static func searches(categories: [InboxCategory], groups: [InboxGroup], me: String, contributed: Set<String>,
                          myTeams: Set<String> = [], now: Date = Date()) -> [String] {
+        searchPlan(categories: categories, groups: groups, me: me, contributed: contributed, myTeams: myTeams, now: now).searches
+    }
+
+    /// The searches a refresh makes, out of all the rules ask for: each rule's first query, then the others a window at a
+    /// time from `cursor` (or the first queries themselves a window at a time, when they alone pass the cap), so that past
+    /// the cap every query gets its turn over the refreshes. `next` is where the next refresh's window starts.
+    static func searchPlan(categories: [InboxCategory], groups: [InboxGroup], me: String, contributed: Set<String>,
+                           myTeams: Set<String> = [], now: Date = Date(), cursor: Int = 0)
+        -> (searches: [String], all: Set<String>, next: Int) {
         let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-Double(closedDays) * 86400)).prefix(10)
         var perRule: [[String]] = []
         for category in categories {
@@ -41,16 +50,32 @@ enum InboxSync {
                 })
             }
         }
-        var out: [String] = []
+        var firsts: [String] = [], rest: [String] = []
         var seen = Set<String>()
         var turn = 0
-        while out.count < maxSearches, perRule.contains(where: { turn < $0.count }) {
-            for queries in perRule where turn < queries.count && out.count < maxSearches {
-                if seen.insert(queries[turn]).inserted { out.append(queries[turn]) }
+        while perRule.contains(where: { turn < $0.count }) {
+            for queries in perRule where turn < queries.count && seen.insert(queries[turn]).inserted {
+                if turn == 0 { firsts.append(queries[turn]) } else { rest.append(queries[turn]) }
             }
             turn += 1
         }
-        return out
+        func window(_ list: [String], _ count: Int) -> ([String], Int) {
+            guard list.count > count else { return (list, 0) }
+            let start = cursor % list.count
+            return ((0..<count).map { list[(start + $0) % list.count] }, (start + count) % list.count)
+        }
+        if firsts.count >= maxSearches {
+            let (taken, next) = window(firsts, maxSearches)
+            return (taken, seen, next)
+        }
+        let (more, next) = window(rest, maxSearches - firsts.count)
+        return (firsts + more, seen, next)
+    }
+
+    /// Results each search asks for on a page, so that what all of them ask for stays within `budget` things.
+    static func pageSizes(searches: Int, budget: Int) -> Int {
+        guard searches > 0 else { return 0 }
+        return max(1, min(pageSize, budget / searches))
     }
 
     /// People a slot names as search logins, nil when search can't say it (anyone, maintainers, bots).
@@ -70,6 +95,21 @@ enum InboxSync {
         var seen = Set<String>()
         let unique = found.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
         return unique.isEmpty ? nil : unique
+    }
+
+    /// Whether a refresh needs the teams you're in: a rule names `My teams`, or Jev rates review requests, those to a team of
+    /// yours among them.
+    static func needsTeams(categories: [InboxCategory], jevReads: Bool) -> Bool {
+        jevReads || categories.contains { $0.rules.contains { $0.scope.to?.include.contains(.myTeams) == true } }
+    }
+
+    /// How soon the teams are asked again after looking them up failed.
+    static let teamsRetry: TimeInterval = 15 * 60
+
+    /// Teams are looked up once a day, and a failed look again after `teamsRetry`.
+    static func teamsDue(resolvedAt: Date?, failedAt: Date?, now: Date = Date()) -> Bool {
+        if let failedAt, now.timeIntervalSince(failedAt) < teamsRetry { return false }
+        return resolvedAt.map { now.timeIntervalSince($0) > 86400 } ?? true
     }
 
     /// `org/team` a slot names: its teams, and yours for `My teams`.
@@ -202,17 +242,19 @@ enum InboxSync {
 
     private static let person = "author { login __typename avatarUrl } authorAssociation"
     private static let personNode = "login __typename avatarUrl"
+    private static let assignEvents = "assignEvents: timelineItems(itemTypes: [ASSIGNED_EVENT], last: 20) { nodes { ... on AssignedEvent { createdAt assignee { ... on User { login } } } } }"
 
     static let fragments = """
     fragment C on Comment { id createdAt body authorAssociation author { \(personNode) } }
     fragment P on PullRequest {
-      id number title url isDraft state merged createdAt updatedAt body mergeable mergeStateStatus
+      id number title url isDraft state merged createdAt updatedAt body mergeable mergeStateStatus additions deletions changedFiles
       repository { nameWithOwner }
       \(person)
       labels(first: 10) { nodes { name } }
-      assignees(first: 5) { nodes { login } }
-      reviewRequests(first: 5) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
-      requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 5) { nodes { ... on ReviewRequestedEvent {
+      assignees(first: 10) { nodes { login } }
+      \(assignEvents)
+      reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
+      requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 50) { nodes { ... on ReviewRequestedEvent {
         createdAt requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } } }
       comments(last: 10) { nodes { ...C } }
       latestOpinionatedReviews(first: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
@@ -227,7 +269,8 @@ enum InboxSync {
       repository { nameWithOwner }
       \(person)
       labels(first: 10) { nodes { name } }
-      assignees(first: 5) { nodes { login } }
+      assignees(first: 10) { nodes { login } }
+      \(assignEvents)
       comments(last: 10) { nodes { ...C } }
     }
     """
@@ -237,17 +280,17 @@ enum InboxSync {
     }
 
     /// A request for several searches, each from its own cursor.
-    fileprivate static func request(_ searches: [(alias: String, query: String, cursor: String?)]) -> String {
+    fileprivate static func request(_ searches: [(alias: String, query: String, cursor: String?)], first: Int = pageSize) -> String {
         let body = searches.map { s in
             let after = s.cursor.map { ", after: \"\(escape($0))\"" } ?? ""
             return """
-            \(s.alias): search(query: "\(escape(s.query))", type: ISSUE, first: \(pageSize)\(after)) {
+            \(s.alias): search(query: "\(escape(s.query))", type: ISSUE, first: \(first)\(after)) {
               pageInfo { hasNextPage endCursor }
               nodes { __typename ...P ...I }
             }
             """
         }
-        return "query { rateLimit { cost remaining } \(body.joined(separator: "\n")) }\n" + fragments
+        return "query { rateLimit { cost remaining resetAt } \(body.joined(separator: "\n")) }\n" + fragments
     }
 
     /// The repos you own and have merged or open PRs in.
@@ -352,6 +395,14 @@ enum InboxSync {
         thing.author = person(node["author"], association: node["authorAssociation"])
         thing.labels = nodes(node["labels"]).compactMap { $0["name"] as? String }
         thing.assignees = nodes(node["assignees"]).compactMap { $0["login"] as? String }
+        // When each current assignee was assigned: the latest event for them.
+        var assigned: [String: Date] = [:]
+        for event in nodes(node["assignEvents"]) {
+            guard let who = (dict(event["assignee"])?["login"] as? String)?.lowercased(), let at = date(event["createdAt"]),
+                  thing.assignees.contains(where: { $0.lowercased() == who }) else { continue }
+            if assigned[who].map({ $0 < at }) ?? true { assigned[who] = at }
+        }
+        thing.assignedAt = assigned.isEmpty ? nil : assigned
         var mentioned = mentions(body)
 
         var comments: [ThingComment] = []
@@ -382,6 +433,9 @@ enum InboxSync {
             thing.behindBase = node["mergeStateStatus"] as? String == "BEHIND"
             thing.greptileScore = greptileScore(body)
             thing.hasConflicts = node["mergeable"] as? String == "CONFLICTING"
+            thing.additions = node["additions"] as? Int
+            thing.deletions = node["deletions"] as? Int
+            thing.changedFiles = node["changedFiles"] as? Int
 
             // Each reviewer's latest opinion; a review that only commented stands for reviewers with no opinion.
             var reviews: [ThingReview] = []
@@ -471,31 +525,129 @@ enum InboxSync {
         "workflow:\(repo):\(workflow)@\(branch)"
     }
 
+    /// Searches wait while GitHub's GraphQL points are nearly spent, until they come back at the reset. A refresh by hand
+    /// tries anyway, and so does one that doesn't know when they come back: its answer says how many there are now.
+    static func waitsForPoints(remaining: Int?, resetsAt: Date?, manual: Bool, now: Date = Date()) -> Bool {
+        guard let remaining, remaining < 100, !manual, let resetsAt else { return false }
+        return now < resetsAt
+    }
+
+    /// A fetched thing with the times its requests were made (and its assignees assigned) kept from before, for those still
+    /// pending whose event is past the ones fetched: that time is its identity (its facts' keys, what Jev rated), and must
+    /// not move.
+    static func keepingRequestTimes(_ thing: Thing, from old: Thing?) -> Thing {
+        guard let old, thing.kind != .workflow else { return thing }
+        var thing = thing
+        for who in thing.assignees.map({ $0.lowercased() }) where thing.assignedAt?[who] == nil
+            && old.assignees.contains(where: { $0.lowercased() == who }) {
+            if let before = old.assignedAt?[who] { thing.assignedAt = (thing.assignedAt ?? [:]).merging([who: before]) { a, _ in a } }
+        }
+        let known = Set(thing.reviewRequests.map { $0.reviewer.lowercased() })
+        for who in thing.requestedReviewers where !known.contains(who.lowercased())
+            && old.requestedReviewers.contains(where: { $0.caseInsensitiveCompare(who) == .orderedSame }) {
+            if let before = old.reviewRequests.first(where: { $0.reviewer.caseInsensitiveCompare(who) == .orderedSame }) {
+                thing.reviewRequests.append(ThingReviewRequest(reviewer: who, at: before.at))
+            }
+        }
+        return thing
+    }
+
+    /// Whether a fact's key is an event the thing still has (a comment, a review, a commit, a thread's reply, a pending
+    /// request by when it was made), rather than a state that comes and goes (checks, a label, a score, conflicts).
+    static func isEvent(_ key: String, of thing: Thing) -> Bool {
+        let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return false }
+        let id = parts[1]
+        switch parts[0] {
+        case "comment", "mention", "last", "asks", "noise", "person":
+            return thing.comments.contains { $0.id == id } || thing.threads.contains { $0.lastReplyID == id }
+        case "review", "approved", "changes":
+            return thing.reviews.contains { $0.id == id }
+        case "commit":
+            return thing.commits.contains { $0.id == id }
+        case "thread":
+            return thing.threads.contains { "\($0.id):\($0.lastReplyID)" == id }
+        case "requested":
+            return thing.requestedReviewers.contains { id.hasPrefix($0.lowercased() + ":") }
+        default:
+            return false
+        }
+    }
+
     // MARK: - Workflows
 
-    /// The repo and branch each workflow rule watches; branches nil is the repo's default.
+    /// Repos an owner's wildcard (`owner/*`, Anyone's at) stands for in a workflow rule, at most.
+    static let reposPerOwner = 10
+
+    /// Owners (lowercased) whose repos workflow rules ask for with a wildcard: `ownerRepos` of `workflowTargets`.
+    static func workflowOwners(categories: [InboxCategory], groups: [InboxGroup]) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for category in categories {
+            for rule in category.rules where rule.scope.isWorkflow {
+                for ref in rule.scope.in?.include ?? [] {
+                    var owners: [String] = []
+                    switch ref {
+                    case .owner(let owner): owners = [owner]
+                    case .group(let id):
+                        owners = (groups.first { $0.id == id && $0.kind == .repos }?.members ?? []).filter { $0.hasSuffix("/*") }
+                            .map { String($0.dropLast(2)) }
+                    default: break
+                    }
+                    for owner in owners where !owner.isEmpty && seen.insert(owner.lowercased()).inserted { out.append(owner.lowercased()) }
+                }
+            }
+        }
+        return out
+    }
+
+    /// The names a workflow rule's `on` or `named` gives, without blanks: nil (the default branch, every workflow) when
+    /// none is left, which is what an empty slot says.
+    static func given(_ names: [String]?) -> [String]? {
+        let kept = (names ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return kept.isEmpty ? nil : kept
+    }
+
+    /// The repo and branch each workflow rule watches; branches nil is the repo's default. An owner's wildcard is the repos
+    /// `ownerRepos` has for it (by owner, lowercased).
     static func workflowTargets(categories: [InboxCategory], groups: [InboxGroup], owned: Set<String>,
-                                contributed: Set<String>) -> [(repo: String, branch: String?)] {
+                                contributed: Set<String>, ownerRepos: [String: [String]] = [:]) -> [(repo: String, branch: String?)] {
         var out: [(repo: String, branch: String?)] = []
         var seen = Set<String>()
+        func members(_ id: UUID) -> [String] { groups.first { $0.id == id && $0.kind == .repos }?.members ?? [] }
+        func ownerOf(_ wildcard: String) -> String { String(wildcard.dropLast(2)).lowercased() }
         for category in categories {
             for rule in category.rules where rule.scope.isWorkflow {
                 var repos: [String] = []
                 for ref in rule.scope.in?.include ?? [] {
                     switch ref {
                     case .repo(let name): repos.append(name)
-                    case .group(let id): repos += (groups.first { $0.id == id && $0.kind == .repos }?.members ?? []).filter { !$0.hasSuffix("/*") }
+                    case .group(let id):
+                        for member in members(id) {
+                            if member.hasSuffix("/*") { repos += ownerRepos[ownerOf(member)] ?? [] } else { repos.append(member) }
+                        }
                     case .owned: repos += owned.sorted()
                     case .contributed: repos += contributed.sorted()
-                    case .owner, .involved: break
+                    case .owner(let owner): repos += ownerRepos[owner.lowercased()] ?? []
+                    case .involved: break
                     }
                 }
-                let excluded = Set((rule.scope.in?.except ?? []).compactMap { ref -> String? in
-                    if case .repo(let name) = ref { return name.lowercased() }
-                    return nil
-                })
-                for repo in repos where repo.contains("/") && !excluded.contains(repo.lowercased()) {
-                    for branch in (rule.scope.on.map { $0.map { Optional($0) } } ?? [String?.none]) where seen.insert("\(repo.lowercased())@\(branch ?? "")").inserted {
+                var excluded = Set<String>(), excludedOwners = Set<String>()
+                for ref in rule.scope.in?.except ?? [] {
+                    switch ref {
+                    case .repo(let name): excluded.insert(name.lowercased())
+                    case .owner(let owner): excludedOwners.insert(owner.lowercased())
+                    case .group(let id):
+                        for member in members(id) {
+                            if member.hasSuffix("/*") { excludedOwners.insert(ownerOf(member)) } else { excluded.insert(member.lowercased()) }
+                        }
+                    default: break
+                    }
+                }
+                let branches = given(rule.scope.on).map { $0.map { Optional($0) } } ?? [String?.none]
+                for repo in repos where repo.contains("/") && !excluded.contains(repo.lowercased())
+                    && !excludedOwners.contains(String(repo.lowercased().prefix { $0 != "/" })) {
+                    for branch in branches where seen.insert("\(repo.lowercased())@\(branch ?? "")").inserted {
                         out.append((repo, branch))
                     }
                 }
@@ -503,6 +655,30 @@ enum InboxSync {
         }
         return Array(out.prefix(maxWorkflows))
     }
+
+    /// The repos of each owner (aliased `o0`, `o1`…), most recently pushed first, archived ones left out.
+    fileprivate static func ownerReposRequest(_ owners: [String]) -> String {
+        let body = owners.enumerated().map { i, owner in
+            "o\(i): repositoryOwner(login: \"\(escape(owner))\") { repositories(first: \(reposPerOwner), isArchived: false, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { nameWithOwner } } }"
+        }
+        return "query { \(body.joined(separator: "\n")) }"
+    }
+}
+
+/// What the inbox's refreshes keep between them this session (InboxSync.swift): all of it about the account signed in.
+struct InboxSyncState {
+    /// When looking your teams up last failed: asked again after `InboxSync.teamsRetry`, not a day.
+    var teamsFailedAt: Date?
+    /// Where the next refresh's window of searches starts (`InboxSync.searchPlan`).
+    var searchCursor = 0
+    /// By thing, the searches that found it: one not found this time stays while a search that found it hasn't run since.
+    var foundBy: [String: Set<String>] = [:]
+    /// The searches run since launch: until all have, a thing no search is known to have found (kept from the last
+    /// session) stays.
+    var ranSinceLaunch: Set<String> = []
+    /// The repos of owners workflow rules name with a wildcard (by owner, lowercased), and when they were asked.
+    var ownerRepos: [String: [String]] = [:]
+    var ownerReposAt: [String: Date] = [:]
 }
 
 // MARK: - Repos that moved
@@ -596,8 +772,9 @@ extension Store {
 // MARK: - The Store's refresh
 
 extension Store {
-    /// Refreshes the inbox's things from GitHub, then notifies what is new. Failing leaves the things as they were.
-    func syncInbox() async {
+    /// Refreshes the inbox's things from GitHub, then notifies what is new. Failing leaves the things as they were. `manual`
+    /// is a refresh asked for by hand: it searches even when the points looked spent.
+    func syncInbox(manual: Bool = false) async {
         guard let me = me?.login else { return }
         // In the background: the refresh never waits on it.
         if !repoNamesChecked, !repoNamesChecking {
@@ -610,18 +787,28 @@ extension Store {
         let needsRepos = categories.contains { $0.rules.contains { rule in
             (rule.scope.in?.include ?? []).contains { $0 == .owned || $0 == .contributed }
         } }
-        let needsTeams = categories.contains { $0.rules.contains { $0.scope.to?.include.contains(.myTeams) == true } }
-        if needsTeams, teamsResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true { await resolveTeams(me: me) }
+        let needsTeams = InboxSync.needsTeams(categories: categories, jevReads: jevReadsInboxNow)
+        if needsTeams, InboxSync.teamsDue(resolvedAt: teamsResolvedAt, failedAt: inboxSyncState.teamsFailedAt) {
+            // With no teams known, rules naming My teams would search nothing and empty: the refresh says so and waits.
+            if let failure = await resolveTeams(me: me), myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
+                inboxError = "Your teams couldn't be looked up: " + failure
+                return
+            }
+        } else if inboxSyncState.teamsFailedAt != nil, myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
+            return
+        }
         if needsRepos, reposResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true {
             // A failure leaves what was known; with nothing known, the refresh waits: it would read as "nothing there".
             do { try await resolveRepos(me: me) } catch {
                 if ownedRepos.isEmpty && contributedRepos.isEmpty { inboxError = error.localizedDescription; return }
             }
         }
-        let searches = InboxSync.searches(categories: categories, groups: groups, me: me, contributed: contributedRepos,
-                                          myTeams: myTeams)
+        let plan = InboxSync.searchPlan(categories: categories, groups: groups, me: me, contributed: contributedRepos,
+                                        myTeams: myTeams, cursor: inboxSyncState.searchCursor)
+        let searches = plan.searches
+        await resolveOwnerRepos(InboxSync.workflowOwners(categories: categories, groups: groups))
         let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
-                                                contributed: contributedRepos)
+                                                contributed: contributedRepos, ownerRepos: inboxSyncState.ownerRepos)
         guard !searches.isEmpty || !targets.isEmpty else {
             if !things.isEmpty { things = [:] }
             inboxError = nil
@@ -629,13 +816,19 @@ extension Store {
             return
         }
         // Out of GraphQL points: wait for the reset rather than fail every poll.
-        if !searches.isEmpty, let left = gh.graphqlRemaining, left < 100 { return }
+        if !searches.isEmpty, InboxSync.waitsForPoints(remaining: gh.graphqlRemaining, resetsAt: gh.graphqlResetsAt, manual: manual) {
+            return
+        }
         gh.reserveETags(forRepositories: targets.count)
 
         var found: [String: Thing] = [:]
         var searchFailure: String?
+        var fetched = Fetched()
         if !searches.isEmpty {
-            do { for thing in try await fetchThings(searches) { found[thing.id] = thing } } catch {
+            do {
+                fetched = try await fetchThings(searches)
+                for thing in fetched.things { found[thing.id] = InboxSync.keepingRequestTimes(thing, from: things[thing.id]) }
+            } catch {
                 searchFailure = error.localizedDescription
             }
         }
@@ -662,40 +855,85 @@ extension Store {
                 if let t = queue.next() { add(t) }
             }
         }
-        inboxError = searchFailure ?? workflowFailure
+        inboxError = searchFailure ?? fetched.error ?? workflowFailure
         // A search that failed can't say what is gone: the things stay as they were.
         guard searchFailure == nil else { return }
+        inboxSyncState.searchCursor = plan.next
         var next = found
+        // Nor can an answer GitHub gave in part: what it left out stays, and so does a thing it gave without some of its
+        // parts (its comments, its threads), which would otherwise lose facts and announce them again when they come back.
+        if fetched.error != nil {
+            for (id, old) in things where old.kind != .workflow && (next[id] == nil || fetched.partial.contains(id)) {
+                next[id] = old
+            }
+        }
+        // Past the cap the searches take turns: what those not run this time found stays until they run.
+        next.merge(keepingUnvisited(fetched, ran: searches, all: plan.all)) { a, _ in a }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
             next.merge(kept) { a, _ in a }
         }
         applyThings(next)
+        await readInbox()
         announceInbox()
     }
 
-    /// Searches, a page at a time for those with more, until the caps.
-    func fetchThings(_ searches: [String]) async throws -> [Thing] {
+    /// What searches brought: the things, those GitHub gave only in part (an error inside them), and the first error it
+    /// said, if any.
+    struct Fetched {
+        var things: [Thing] = []
+        var partial: Set<String> = []
+        var error: String?
+        /// By thing, the searches that returned it.
+        var foundBy: [String: Set<String>] = [:]
+    }
+
+    /// Searches, a page at a time for those with more, until the caps: what a round asks for is shared out of the things
+    /// left before it is asked, so a refresh never takes in more than `maxThings`. An answer with no data at all throws;
+    /// one with data and errors (a node GitHub couldn't give, a part of one) is taken for what it has, and says so.
+    func fetchThings(_ searches: [String]) async throws -> Fetched {
         var found: [String: Thing] = [:]
+        var partial = Set<String>()
+        var error: String?
+        var foundBy: [String: Set<String>] = [:]
         var cursors: [Int: String?] = Dictionary(uniqueKeysWithValues: searches.indices.map { ($0, String?.none) })
         var pages = 0
         while !cursors.isEmpty, pages < InboxSync.maxPages, found.count < InboxSync.maxThings {
             pages += 1
             var next: [Int: String?] = [:]
-            let active = cursors.keys.sorted()
+            let left = InboxSync.maxThings - found.count
+            // More searches than things left: the first of them, one each.
+            let active = Array(cursors.keys.sorted().prefix(left))
+            let first = InboxSync.pageSizes(searches: active.count, budget: left)
             for start in stride(from: 0, to: active.count, by: InboxSync.searchesPerRequest) {
                 let batch = active[start..<min(start + InboxSync.searchesPerRequest, active.count)]
-                let json = try await gh.graphql(InboxSync.request(batch.map { ("s\($0)", searches[$0], cursors[$0] ?? nil) }))
-                let data = json["data"] as? [String: Any]
-                if data == nil {
-                    let message = ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"
-                    throw GitHubError(message: message)
+                let json = try await gh.graphql(InboxSync.request(batch.map { ("s\($0)", searches[$0], cursors[$0] ?? nil) }, first: first))
+                let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+                guard let data = json["data"] as? [String: Any] else {
+                    throw GitHubError(message: (errors.first?["message"] as? String) ?? "GitHub gave no answer")
+                }
+                if let first = errors.first { error = error ?? (first["message"] as? String) ?? "GitHub gave part of an answer" }
+                // `["s0", "nodes", 3, "comments", …]`: the fourth thing of search 0 came without some of its parts.
+                var broken = Set<[String]>()
+                for e in errors {
+                    guard let path = e["path"] as? [Any], path.count > 3, let alias = path[0] as? String,
+                          let index = path[2] as? Int else { continue }
+                    broken.insert([alias, String(index)])
                 }
                 for i in batch {
-                    guard let result = data?["s\(i)"] as? [String: Any] else { continue }
-                    for node in (result["nodes"] as? [[String: Any]]) ?? [] {
-                        if let thing = InboxSync.thing(node) { found[thing.id] = thing }
+                    guard let result = data["s\(i)"] as? [String: Any] else { continue }
+                    // A node GitHub couldn't give is null: the others are still things.
+                    for (n, value) in ((result["nodes"] as? [Any]) ?? []).enumerated() {
+                        guard let node = value as? [String: Any], let thing = InboxSync.thing(node) else { continue }
+                        foundBy[thing.id, default: []].insert(searches[i])
+                        // Given whole by another search, it is whole.
+                        if broken.contains(["s\(i)", String(n)]) {
+                            if found[thing.id] == nil { partial.insert(thing.id); found[thing.id] = thing }
+                        } else {
+                            partial.remove(thing.id)
+                            found[thing.id] = thing
+                        }
                     }
                     let info = result["pageInfo"] as? [String: Any]
                     if info?["hasNextPage"] as? Bool == true, let end = info?["endCursor"] as? String { next[i] = end }
@@ -703,7 +941,31 @@ extension Store {
             }
             cursors = next
         }
-        return Array(found.values)
+        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy)
+    }
+
+    /// Notes which searches found what, and gives back the things this refresh didn't find that a search it didn't run
+    /// may still find: one that found it before, or, for a thing kept from before launch, any not yet run since.
+    func keepingUnvisited(_ fetched: Fetched, ran: [String], all: Set<String>) -> [String: Thing] {
+        var state = inboxSyncState
+        let ran = Set(ran)
+        state.ranSinceLaunch = state.ranSinceLaunch.union(ran).intersection(all)
+        var kept: [String: Thing] = [:]
+        var foundBy: [String: Set<String>] = [:]
+        for (id, thing) in things where thing.kind != .workflow && fetched.foundBy[id] == nil {
+            if let before = state.foundBy[id] {
+                let maybe = before.intersection(all).subtracting(ran)
+                if !maybe.isEmpty { kept[id] = thing; foundBy[id] = maybe }
+            } else if !all.isSubset(of: state.ranSinceLaunch) {
+                kept[id] = thing
+            }
+        }
+        for (id, by) in fetched.foundBy {
+            foundBy[id] = (state.foundBy[id] ?? []).intersection(all).subtracting(ran).union(by)
+        }
+        state.foundBy = foundBy
+        inboxSyncState = state
+        return kept
     }
 
     private func workflowThings(_ repo: String, _ requested: String?) async throws -> [Thing] {
@@ -719,21 +981,42 @@ extension Store {
         return InboxSync.workflowThings(repo: repo, branch: branch, status: status)
     }
 
-    /// Replaces the things in one assignment, and forgets marks of things gone for a month.
+    /// Replaces the things in one assignment, keeping what Jev said of them, and forgets marks of things gone for a month.
     func applyThings(_ next: [String: Thing], now: Date = Date()) {
+        var next = next
+        let me = inboxContext.me
+        for id in next.keys { InboxJev.carry(things[id]?.signals, into: &next[id]!, me: me) }
         if next != things { things = next }
-        for id in next.keys { goneSince[id] = nil }
-        var forget: [String] = []
-        for id in marks.keys where next[id] == nil {
-            let since = goneSince[id] ?? now
-            goneSince[id] = since
-            if now.timeIntervalSince(since) > Double(InboxSync.marksDays) * 86400 { forget.append(id) }
+        // When each thing went missing is kept in its marks (and so across restarts).
+        var kept = marks
+        for (id, m) in marks {
+            if next[id] != nil {
+                if m.goneSince != nil { kept[id]?.goneSince = nil }
+            } else if let since = m.goneSince {
+                if now.timeIntervalSince(since) > Double(InboxSync.marksDays) * 86400 { kept[id] = nil }
+            } else {
+                kept[id]?.goneSince = now
+            }
         }
-        if !forget.isEmpty {
-            var kept = marks
-            for id in forget { kept[id] = nil; goneSince[id] = nil }
-            marks = kept
-        }
+        if kept != marks { marks = kept }
+    }
+
+    /// Signed in as someone else: the last account's repos, teams and what was asked about them go, and are asked again.
+    func forgetAccountCaches() {
+        ownedRepos = []
+        contributedRepos = []
+        myTeams = []
+        reposResolvedAt = nil
+        teamsResolvedAt = nil
+        missingRepos = []
+        repoAnswers = [:]
+        inboxSyncState = InboxSyncState()
+    }
+
+    /// Whether `me` is still who is signed in (or no one is known yet): an answer about someone else is dropped.
+    private func stillSignedIn(as me: String) -> Bool {
+        let current = self.me?.login ?? login
+        return current.isEmpty || current.caseInsensitiveCompare(me) == .orderedSame
     }
 
     /// The repos you own and those you merged a PR in. Kept for a day.
@@ -745,6 +1028,7 @@ extension Store {
         func names(_ nodes: Any?, _ path: (([String: Any]) -> String?)) -> Set<String> {
             Set(((nodes as? [[String: Any]]) ?? []).compactMap(path))
         }
+        guard stillSignedIn(as: me) else { return }
         let viewer = data["viewer"] as? [String: Any]
         let owned = names((viewer?["repositories"] as? [String: Any])?["nodes"]) { $0["nameWithOwner"] as? String }
         // A merged or an open PR of yours makes it a repo you contribute to.
@@ -758,26 +1042,57 @@ extension Store {
         reposResolvedAt = Date()
     }
 
-    /// The teams you're in. A failure (no read:org, offline) leaves what was known; asked again in a day.
-    func resolveTeams(me: String) async {
-        teamsResolvedAt = Date()
-        guard let json = try? await gh.graphql(InboxSync.teamsRequest(me: me)),
+    /// The repos of owners workflow rules name with a wildcard, asked once a day per owner. A failure leaves what was known
+    /// (and is asked again with the next refresh); an owner GitHub doesn't know has none.
+    func resolveOwnerRepos(_ owners: [String], now: Date = Date()) async {
+        let due = owners.filter { owner in inboxSyncState.ownerReposAt[owner].map { now.timeIntervalSince($0) > 86400 } ?? true }
+        guard !due.isEmpty, let json = try? await gh.graphql(InboxSync.ownerReposRequest(due)),
               let data = json["data"] as? [String: Any] else { return }
+        for (i, owner) in due.enumerated() {
+            let repos = ((data["o\(i)"] as? [String: Any])?["repositories"] as? [String: Any])?["nodes"] as? [Any] ?? []
+            inboxSyncState.ownerRepos[owner] = repos.compactMap { ($0 as? [String: Any])?["nameWithOwner"] as? String }
+            inboxSyncState.ownerReposAt[owner] = now
+        }
+    }
+
+    /// The teams you're in, asked again in a day. A failure (offline, GitHub's trouble) leaves what was known and is asked
+    /// again sooner (`InboxSync.teamsRetry`); without read:org GitHub answers with none, which is an answer. What went wrong,
+    /// if it did.
+    @discardableResult
+    func resolveTeams(me: String) async -> String? {
+        let json: [String: Any]
+        do { json = try await gh.graphql(InboxSync.teamsRequest(me: me)) } catch {
+            inboxSyncState.teamsFailedAt = Date()
+            return error.localizedDescription
+        }
+        guard let data = json["data"] as? [String: Any] else {
+            inboxSyncState.teamsFailedAt = Date()
+            return ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"
+        }
+        guard stillSignedIn(as: me) else { return nil }
+        teamsResolvedAt = Date()
+        inboxSyncState.teamsFailedAt = nil
         let teams = InboxSync.teams(data)
         if teams != myTeams { myTeams = teams }
+        return nil
     }
 
     // MARK: Notifications
 
     /// For each open entry, the facts not seen before: one notification per entry, once per fact. A category's first
-    /// evaluation (and any with rules it hasn't seen) is a baseline: what is there is noted, not announced. A fact that
-    /// goes away is forgotten, so it announces again if it comes back.
+    /// evaluation (and any with rules it hasn't seen) is a baseline: what is there is noted, not announced. A state that
+    /// goes away (checks failing, a label) is forgotten, so it announces again if it comes back; an event (a comment, a
+    /// review) is kept while the thing still has it, so a rule that stops matching for a while doesn't announce it twice.
     func announceInbox() {
         defer { scheduleActions() }
         let all = entries
         var updated = marks
         var baselines = categoryBaselines
         var posts: [(category: InboxCategory, entry: InboxEntry, fresh: [Fact])] = []
+        let context = inboxContext
+        // Jev reads at each refresh: a banner for a message it hasn't read yet waits for it, a refresh or two at most.
+        let jevReads = jevReadsInboxNow && jevGate.isOpen(for: typesafeKey ?? "")
+        var waits: [String: Int] = [:]
         let byThing = Dictionary(all.map { ($0.thing.id, $0) }, uniquingKeysWith: { a, _ in a })
         for category in categories {
             let ruleIDs = Set(category.rules.map(\.id))
@@ -785,29 +1100,48 @@ extension Store {
             let silent = baseline || category.hidden || !category.notifies
             for entry in all where entry.categoryID == category.id {
                 var m = updated[entry.id] ?? EntryMarks()
-                let fresh = entry.facts.filter { !m.notified.contains($0.key) }
+                var fresh = entry.facts.filter { !m.notified.contains($0.key) }
+                if jevReads, !silent, !entry.isDone {
+                    fresh = fresh.filter { fact in
+                        let key = entry.thing.id + "|" + fact.key
+                        let waited = inboxBannerWaits[key] ?? 0
+                        guard waited < InboxJev.bannerWaits, !InboxJev.isQuiet(fact, entry.thing, context: context),
+                              InboxJev.awaitsReading(fact, entry.thing, context: context) else { return true }
+                        waits[key] = waited + 1
+                        return false
+                    }
+                }
                 guard !fresh.isEmpty else { continue }
                 m.notified.formUnion(fresh.map(\.key))
                 updated[entry.id] = m
-                if !silent, !entry.isDone { posts.append((category, entry, fresh)) }
+                // Noise is noted, never announced.
+                let loud = fresh.filter { !InboxJev.isQuiet($0, entry.thing, context: context) }
+                if !silent, !entry.isDone, !loud.isEmpty { posts.append((category, entry, loud)) }
             }
             if baseline { baselines[category.id] = ruleIDs }
         }
-        // Facts that are gone: forgotten, for a thing that is still fetched.
-        for id in things.keys {
+        // Facts that are gone: forgotten, for a thing that is still fetched (events only once the thing no longer has them).
+        for (id, thing) in things {
             guard var m = updated[id], !m.notified.isEmpty || !m.acked.isEmpty else { continue }
             let current = Set(byThing[id]?.facts.map(\.key) ?? [])
-            let notified = m.notified.intersection(current), acked = m.acked.intersection(current)
+            let kept = { (key: String) in current.contains(key) || InboxSync.isEvent(key, of: thing) }
+            let notified = m.notified.filter(kept), acked = m.acked.filter(kept)
             if notified != m.notified || acked != m.acked {
                 m.notified = notified
                 m.acked = acked
                 updated[id] = m
             }
         }
+        inboxBannerWaits = waits
         // A deleted category's baseline goes with it.
         baselines = baselines.filter { id, _ in categories.contains { $0.id == id } }
         if baselines != categoryBaselines { categoryBaselines = baselines }
         if updated != marks { marks = updated }
+        // Away, each post goes by Jev's rating as its own banner would (RouterAttention.swift), before any batch is made:
+        // the rest is counted for when you're back, and a batch is only of what may interrupt you.
+        if settings.notifications, !isSnoozed {
+            posts = posts.filter { routerAttention.admitInbox(InboxEngine.importance(things[$0.entry.thing.id] ?? $0.entry.thing, context: context)) }
+        }
         guard !posts.isEmpty else { return }
         if posts.count > 4 {
             let names = Set(posts.map(\.category.title)).sorted()

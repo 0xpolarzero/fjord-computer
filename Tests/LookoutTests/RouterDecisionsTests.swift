@@ -101,6 +101,17 @@ import Testing
         #expect(Store().recentDecisions().isEmpty)
     }
 
+    @Test func aDoneTurnWaitsInWorkingWhileItsSessionStillHasWorkRunning() {
+        let now = Date()
+        let done = RouterCard(id: "s#t1", sessionID: "s", kind: .done, title: "T", folder: nil, text: "x", createdAt: now)
+        let question = RouterCard(id: "s#w1", sessionID: "s", kind: .question, title: "T", folder: nil, text: "x", createdAt: now)
+        var row = AgentRow(session: ClaudeSession(id: "s", title: "T", lastActivity: now), entry: AgentEntry(id: "s"), label: "T")
+        row.tasks = [ClaudeTask(id: "a1", kind: .agent, title: "Explore", since: now)]
+        #expect(RouterPage.make(cards: [done, question], working: [row]).needs.map(\.id) == ["s#w1"])
+        row.tasks = []
+        #expect(Set(RouterPage.make(cards: [done, question], working: [row]).needs.map(\.id)) == ["s#t1", "s#w1"])
+    }
+
     // MARK: History
 
     @Test func theHistoryInterleavesDecisionsAndAddressedCardsByTime() {

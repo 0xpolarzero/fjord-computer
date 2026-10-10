@@ -228,7 +228,13 @@ struct SettingsView: View {
             router
             if store.router.enabled {
                 SettingsDivider()
+                autoContinue
+                SettingsDivider()
                 mutedFolders
+                SettingsDivider()
+                sessionModels
+                SettingsDivider()
+                inboxJev
                 SettingsDivider()
                 sessionIcons
             }
@@ -293,6 +299,36 @@ struct SettingsView: View {
     private var claudeCodeStatus: (String, Color) {
         if let found = store.routerStatus.claudeCode { return ("Claude Code \(found.version), from the Claude app", Theme.tertiary) }
         return ("Claude Code not found: it comes with the Claude desktop app", Theme.amber)
+    }
+
+    /// When you name no model or effort, a session the Router starts runs on your defaults or on Jev's pick (`SessionScope`).
+    private var sessionModels: some View {
+        let levels = SessionScope.table.map { "\($0.level): \($0.model), \($0.effort)" }.joined(separator: "; ")
+        return SettingsRow("Model for sessions the Router starts",
+                           info: ("Model for sessions the Router starts", "When you don't name a model or effort (\"with opus, high effort\"), a session the Router or an inbox action starts runs on your Claude Code defaults, or Jev rates how big its task is and picks: \(levels). Needs a TypeSafe API key. The Router's history says what was picked.")) {
+            SettingsSegmented(label: "Model for sessions the Router starts",
+                              options: [("Your default", false), ("Let Jev pick", true)],
+                              selection: Binding(get: { store.jevPicksSessionModels }, set: { store.settings.jevPicksSessionModels = $0 }))
+        }
+    }
+
+    /// Whether Jev reads the inbox's new comments and rates its review requests (InboxJev.swift), which sends them to TypeSafe.
+    private var inboxJev: some View {
+        SettingsRow("Let Jev read new comments",
+                    info: ("Let Jev read new comments", "With a TypeSafe API key, each refresh sends the inbox's new comments, reviews and thread replies (not yours, from the last two weeks), and the review requests and assignments waiting on you, to TypeSafe (api.typesafe.ai). What goes: the comment's text and its author, the one just before it, the PR or issue's title, number and repo, its author, labels, size and checks, and your part in it; and, when a session's turn ends waiting, the titles, numbers and checks of the PRs and workflows of its repo, for what it waits on. Jev says whether a comment asks you something or is noise, and how important a request is, for the rules that ask (a comment asks me, noise or a person, rated at least). Off, nothing of the inbox is sent and those rules see nothing Jev said: noise is bots only.")) {
+            SettingsSwitch("Let Jev read new comments",
+                           isOn: Binding(get: { store.jevReadsInbox }, set: { store.settings.jevReadsInbox = $0 }))
+        }
+    }
+
+    /// Whether a session whose turn ended waiting on something Lookout sees finish is told so without asking (each waiting
+    /// row can say otherwise for its session).
+    private var autoContinue: some View {
+        SettingsRow("Continue waiting sessions automatically",
+                    info: ("Continue waiting sessions automatically", "When a session's turn ends waiting on something Lookout can see finish (CI on a PR or workflow in your inbox, another session's turn), the Router shows it ready to continue and Tell it sends it a short message such as “The CI on owner/repo#12 finished: passing.” With this on, that message goes on its own, and is logged in the Router's history. Each waiting session's row can turn it on or off for that session. Needs a TypeSafe key: Jev reads how each turn ended.")) {
+            SettingsSwitch("Continue waiting sessions automatically",
+                           isOn: Binding(get: { store.router.autoContinue }, set: { store.setAutoContinueDefault($0) }))
+        }
     }
 
     @ViewBuilder private var sessionIcons: some View {

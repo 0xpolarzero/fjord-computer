@@ -5,7 +5,7 @@ import SwiftUI
 // groups seeded here. Each is the hub page's width, tall enough to show the whole page.
 
 enum CategoriesShot: String, CaseIterable {
-    case page, editor, actions, impossible, groups, autocomplete, single, switched, ci, draft, kinds
+    case page, editor, actions, impossible, groups, autocomplete, single, switched, ci, draft, kinds, jev
 
     var name: String { "right-categories-\(rawValue)" }
 
@@ -22,6 +22,7 @@ enum CategoriesShot: String, CaseIterable {
         case .ci: 520
         case .draft: 620
         case .kinds: 520
+        case .jev: 560
         }
     }
 }
@@ -50,7 +51,8 @@ enum CategoriesDemo {
             if let actions = names[store.categories[i].name] { store.categories[i].actions = ActionList(actions) }
         }
         var ledger = ActionLedger()
-        _ = InboxActions.plan(entries: store.entries, categories: store.categories, ledger: &ledger, me: store.me?.login ?? "demo")
+        _ = InboxActions.plan(entries: store.entries, categories: store.categories, groups: store.groups, ledger: &ledger,
+                              me: store.me?.login ?? "demo")
         let now = Date()
         func record(_ category: String, _ n: Int, _ action: UUID, _ state: ActionRun.State, _ detail: String, ago: TimeInterval,
                     url: URL? = nil, session: String? = nil) {
@@ -188,6 +190,13 @@ enum CategoriesDemo {
             store.categories.insert(InboxCategory(id: switched, name: "My repos", symbol: "folder", color: .blue, rules: [
                 Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.owned, .owner("superradcompany")])),
                      conditions: [.newComment(by: Pick(include: [.maintainers]))], createdAt: .distantPast),
+            ]), at: 0)
+            preview.editing = .existing(switched)
+        case .jev:
+            // What Jev reads: a comment that asks you, people rather than noise, and review requests it rates high.
+            store.categories.insert(InboxCategory(id: switched, name: "Asks me", symbol: "exclamationmark.bubble", color: .clay, rules: [
+                Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])), match: .any,
+                     conditions: [.asksMe, .noise(false), .importance(.high)]),
             ]), at: 0)
             preview.editing = .existing(switched)
         case .switched:

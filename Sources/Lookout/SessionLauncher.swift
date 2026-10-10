@@ -59,6 +59,8 @@ final class SessionLauncher {
     var effects: Effects
     /// How long the new session's plugin has to say it runs.
     var pluginWait: TimeInterval = SessionStart.wait
+    /// Jev's questions about a session to start (tests answer for him); else TypeSafe with your key.
+    var asker: JevAsker?
 
     init(store: Store, effects: Effects? = nil) {
         self.store = store
@@ -165,7 +167,8 @@ extension SessionLauncher.Effects {
 // MARK: - An inbox action starting a session
 
 /// "Ask the Router" without a model: the repo's local clone (Jev picks among several), a session started there with the action's
-/// prompt, tagged with where it came from, and the run logged in the Router's history.
+/// prompt (on the action's model and effort, else Jev's pick by the task's size when you let him), tagged with where it came
+/// from, and the run logged in the Router's history.
 enum ActionSessions {
     /// Jev's pick (options, hints, state, instructions); tests answer for it.
     typealias Chooser = ([String], [String: String], [String: String], String) async throws -> JevClient.Choice
@@ -183,12 +186,19 @@ enum ActionSessions {
         }
         guard store.router.enabled, store.agents.enabled else { throw fail("the Router is off") }
         guard !clones.isEmpty else { throw fail("no local clone of \(request.repo)") }
-        let folder = await pick(clones, for: request, store: store, chooser: chooser)
+        let sized = request.model == nil && request.effort == nil && store.jevPicksSessionModels
+        let ask = store.jevAsker(.actions, base: launcher.asker ?? chooser.map(JevClient.asker(choosing:)))
+        let (folder, scope) = await pick(clones, for: request, store: store, ask: ask, sized: sized)
         let project = store.folderName(folder)
-        store.updateDecision(id) { $0.decision.target = project }
+        let picked = scope.flatMap(SessionScope.settings)
+        store.updateDecision(id) {
+            $0.decision.target = project
+            if picked != nil { $0.decision.settingsBy = SessionScope.by }
+        }
         do {
             let (session, _, applied) = try await launcher.start(folder: folder, title: request.title, firstMessage: request.message,
-                                                                 model: request.model, effort: request.effort)
+                                                                 model: picked?.model ?? request.model,
+                                                                 effort: picked?.effort ?? request.effort)
             store.noteOrigin(SessionOrigin(category: request.category, thing: request.title, actionID: request.action.uuidString,
                                            runID: request.run.uuidString), for: session)
             store.updateDecision(id) {
@@ -205,29 +215,43 @@ enum ActionSessions {
         }
     }
 
-    /// The only clone; else Jev's pick among them; else the one with the most recent Claude session (else the first, the
-    /// shortest path, which is a checkout before its worktrees).
+    /// The clone: the only one; else Jev's pick among them; else the one with the most recent Claude session (else the
+    /// first, the shortest path, which is a checkout before its worktrees). With `sized`, the task's size too, in the same
+    /// call (nil when Jev can't say).
     @MainActor
-    static func pick(_ clones: [String], for request: ActionSessionRequest, store: Store, chooser: Chooser?) async -> String {
-        guard clones.count > 1 else { return clones[0] }
-        let key = store.typesafeKey ?? ""
-        let choose = chooser ?? (key.isEmpty ? nil : { options, hints, state, instructions in
-            try await JevClient(key: key).choose(options, hints: hints, for: state, instructions: instructions)
-        })
-        if let choose {
-            // Plain keys for Jev (paths have characters it may not take), mapped back after.
-            let keys = clones.indices.map { "o\($0)" }
+    static func pick(_ clones: [String], for request: ActionSessionRequest, store: Store, ask: JevAsker?,
+                     sized: Bool) async -> (folder: String, scope: Double?) {
+        // Plain keys for Jev (paths have characters it may not take), mapped back after.
+        let keys = clones.indices.map { "o\($0)" }
+        var questions: [String: JevClient.Question] = [:]
+        if clones.count > 1 {
             let hints = Dictionary(uniqueKeysWithValues: zip(keys, clones.map { folder in
                 "\(store.folderName(folder)) at \(folder)" + (recent(folder, store: store).map { ", last used \(shortAgo($0))" } ?? "")
             }))
-            if let pick = try? await choose(keys, hints, ["item": request.summary, "action": request.category],
-                                            "Which local clone of the repository should a Claude Code session work in for this item? Prefer the main checkout unless the item is about a branch that another checkout has."),
-               let i = keys.firstIndex(of: pick.choice) {
-                return clones[i]
-            }
+            questions["clone"] = .choice(keys, hints: hints, instructions: "Which local clone of the repository should a Claude Code session work in for this item? Prefer the main checkout unless the item is about a branch that another checkout has.")
         }
+        if sized { questions["scope"] = SessionScope.question }
+        var answers: [String: JevClient.Answer] = [:]
+        if let ask, !questions.isEmpty {
+            // What GitHub wrote is read as data: the item fenced, the task's own GitHub block bounded and framed again.
+            answers = (try? await ask(questions, ["item": UntrustedFence.github.warned(UntrustedText.clean(request.summary, limit: 300)),
+                                                  "action": request.category, "task": InboxActions.forJev(request.message)])) ?? [:]
+        }
+        let scope = answers["scope"]?.score(sure: SessionScope.sure)
+        if clones.count == 1 { return (clones[0], scope) }
+        if let pick = answers["clone"]?.choice, clearLead(pick), let i = keys.firstIndex(of: pick.choice) { return (clones[i], scope) }
         let dated = clones.compactMap { folder in recent(folder, store: store).map { (folder, $0) } }
-        return dated.max { $0.1 < $1.1 }?.0 ?? clones[0]
+        return (dated.max { $0.1 < $1.1 }?.0 ?? clones[0], scope)
+    }
+
+    /// Jev's clone is taken only when he clearly prefers it: at least `cloneSure` likely, and `cloneLead` ahead of the next.
+    static let cloneSure = 0.5
+    static let cloneLead = 0.2
+
+    static func clearLead(_ pick: JevClient.Choice) -> Bool {
+        let p = pick.probabilities[pick.choice] ?? 0
+        let next = pick.probabilities.filter { $0.key != pick.choice }.values.max() ?? 0
+        return p >= cloneSure && p - next >= cloneLead
     }
 
     /// When a Claude session in `folder` last did anything.

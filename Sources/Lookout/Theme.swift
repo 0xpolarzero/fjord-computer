@@ -4,30 +4,30 @@ import SwiftUI
 enum Theme {
     // Claude's own palette (CDS, dark mode), read from the Claude app: Lookout is part of it.
     /// The bar and its panels: black.
-    static let bg = Color.black
+    static let bg = Brand.map(Color.black)
     /// Tooltip bubbles and popovers: CDS surface-3.
-    static let popover = Color(red: 0x20 / 255, green: 0x20 / 255, blue: 0x1F / 255)
-    static let raised = Color.white.opacity(0.05)
-    static let hover = Color.white.opacity(0.075)
-    static let stroke = Color.white.opacity(0.10)
+    static let popover = Brand.map(Color(red: 0x20 / 255, green: 0x20 / 255, blue: 0x1F / 255))
+    static let raised = CDS.alpha(0.05)
+    static let hover = CDS.alpha(0.075)
+    static let stroke = CDS.alpha(0.10)
     /// CDS gray-50.
-    static let text = Color(red: 0xF0 / 255, green: 0xEF / 255, blue: 0xEC / 255)
+    static let text = Brand.map(Color(red: 0xF0 / 255, green: 0xEF / 255, blue: 0xEC / 255))
     /// CDS gray-200.
-    static let secondary = Color(red: 0xC3 / 255, green: 0xC2 / 255, blue: 0xB7 / 255)
+    static let secondary = Brand.map(Color(red: 0xC3 / 255, green: 0xC2 / 255, blue: 0xB7 / 255))
     /// CDS gray-400.
-    static let tertiary = Color(red: 0x89 / 255, green: 0x87 / 255, blue: 0x81 / 255)
+    static let tertiary = Brand.map(Color(red: 0x89 / 255, green: 0x87 / 255, blue: 0x81 / 255))
     /// Claude's sidebar dot for done and unread (blue-400).
-    static let accent = Color(red: 0x39 / 255, green: 0x87 / 255, blue: 0xE5 / 255)
+    static let accent = Brand.map(Color(red: 0x39 / 255, green: 0x87 / 255, blue: 0xE5 / 255))
     /// Needs you: Claude's warning (yellow-200).
-    static let amber = Color(red: 0xFA / 255, green: 0xB2 / 255, blue: 0x19 / 255)
-    static let green = Color(red: 0x55 / 255, green: 0xBF / 255, blue: 0x50 / 255)
-    static let red = Color(red: 0xEC / 255, green: 0x7E / 255, blue: 0x7E / 255)
-    static let purple = Color(red: 0xA0 / 255, green: 0x96 / 255, blue: 0xEB / 255)
+    static let amber = Brand.map(Color(red: 0xFA / 255, green: 0xB2 / 255, blue: 0x19 / 255))
+    static let green = Brand.map(Color(red: 0x55 / 255, green: 0xBF / 255, blue: 0x50 / 255))
+    static let red = Brand.map(Color(red: 0xEC / 255, green: 0x7E / 255, blue: 0x7E / 255))
+    static let purple = Brand.map(Color(red: 0xA0 / 255, green: 0x96 / 255, blue: 0xEB / 255))
     /// Claude's clay, for anything about Claude sessions.
-    static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
+    static let claude = Brand.map(Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255))
     /// The Router, as Claude's Code tab: sidebar (surface-1) and content (surface-2).
-    static let sidebar = Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x15 / 255)
-    static let panel = Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x19 / 255)
+    static let sidebar = Brand.map(Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x15 / 255))
+    static let panel = Brand.map(Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x19 / 255))
     /// Project colours for Claude sessions: as far apart as possible, and nowhere near the status colours (amber
     /// needs you, blue unread, clay working) or CI's red. In assignment order, so the first projects differ most.
     static let projectColors: [Color] = [
@@ -98,7 +98,7 @@ private struct IconButtonLabel: View {
         // Claude's 16pt glyph (wght 533) as an SF Symbol; secondary ink, white on hover (`.df-chrome-btn`).
         Image(systemName: symbol)
             .font(.system(size: CDS.GhostIcon.glyph(size), weight: .medium))
-            .foregroundStyle(active || hover ? (tint == Theme.secondary ? Color.white : tint) : tint)
+            .foregroundStyle(active || hover ? (tint == Theme.secondary ? Brand.ink : tint) : tint)
             .frame(width: size, height: size)
     }
 }

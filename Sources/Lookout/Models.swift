@@ -76,6 +76,12 @@ struct AppSettings: Codable {
     var skippedVersion: String?
     /// Keep the pill at the middle of its edge: dragging only picks the edge (default off).
     var centerPill: Bool?
+    /// Sessions the Router starts without a model or effort named: Jev picks them by the task's size (default on), or your
+    /// Claude Code defaults.
+    var jevPicksSessionModels: Bool?
+    /// Jev reads new comments and rates review requests in the inbox (default on, with a TypeSafe key); off, nothing of the
+    /// inbox goes to TypeSafe and what Jev said counts for nothing.
+    var jevReadsInbox: Bool?
 }
 
 struct PersistedState: Codable {
@@ -84,6 +90,8 @@ struct PersistedState: Codable {
     var router: RouterState?
     var categories: [InboxCategory]? = nil
     var groups: [InboxGroup]? = nil
+    /// The bar's sections; nil (a file from before them) is GitHub's alone.
+    var categorySections: [CategorySection]? = nil
     var things: [String: Thing]? = nil
     var marks: [String: EntryMarks]? = nil
     /// Per category, the rules (by id) whose matches were already noted: a category's first look, or a changed rule set,
@@ -97,7 +105,8 @@ struct PersistedState: Codable {
     var login: String? = nil
 
     init(settings: AppSettings, agents: AgentsState? = nil, router: RouterState? = nil, categories: [InboxCategory]? = nil,
-         groups: [InboxGroup]? = nil, things: [String: Thing]? = nil, marks: [String: EntryMarks]? = nil,
+         groups: [InboxGroup]? = nil, categorySections: [CategorySection]? = nil, things: [String: Thing]? = nil,
+         marks: [String: EntryMarks]? = nil,
          categoryBaselines: [UUID: Set<UUID>]? = nil, ownedRepos: Set<String>? = nil, contributedRepos: Set<String>? = nil,
          reposResolvedAt: Date? = nil, myTeams: Set<String>? = nil, login: String? = nil) {
         self.settings = settings
@@ -105,6 +114,7 @@ struct PersistedState: Codable {
         self.router = router
         self.categories = categories
         self.groups = groups
+        self.categorySections = categorySections
         self.things = things
         self.marks = marks
         self.categoryBaselines = categoryBaselines
@@ -115,22 +125,54 @@ struct PersistedState: Codable {
         self.login = login
     }
 
+    /// The parts the file had that this build could not read (a damaged file, or one from a build whose parts this one
+    /// doesn't know): they are lost when the state is next saved, so the file is kept aside first (see `Store.load`).
+    var dropped: [String] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case settings, agents, router, categories, groups, categorySections, things, marks, categoryBaselines, ownedRepos,
+             contributedRepos, reposResolvedAt, myTeams, login
+    }
+
     /// Tolerant: a file from before the categories (repos, items, ci) loses that data and loads the rest; a part that no
-    /// longer decodes is lost alone.
+    /// longer decodes is lost alone (and named in `dropped`).
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        settings = (try? c.decodeIfPresent(AppSettings.self, forKey: .settings)) ?? AppSettings()
-        agents = try? c.decodeIfPresent(AgentsState.self, forKey: .agents)
-        router = try? c.decodeIfPresent(RouterState.self, forKey: .router)
-        categories = try? c.decodeIfPresent([InboxCategory].self, forKey: .categories)
-        groups = try? c.decodeIfPresent([InboxGroup].self, forKey: .groups)
-        things = try? c.decodeIfPresent([String: Thing].self, forKey: .things)
-        marks = try? c.decodeIfPresent([String: EntryMarks].self, forKey: .marks)
-        categoryBaselines = try? c.decodeIfPresent([UUID: Set<UUID>].self, forKey: .categoryBaselines)
-        ownedRepos = try? c.decodeIfPresent(Set<String>.self, forKey: .ownedRepos)
-        contributedRepos = try? c.decodeIfPresent(Set<String>.self, forKey: .contributedRepos)
-        reposResolvedAt = try? c.decodeIfPresent(Date.self, forKey: .reposResolvedAt)
-        myTeams = try? c.decodeIfPresent(Set<String>.self, forKey: .myTeams)
-        login = try? c.decodeIfPresent(String.self, forKey: .login)
+        var dropped: [String] = []
+        func part<T: Decodable>(_ key: CodingKeys) -> T? {
+            do { return try c.decodeIfPresent(T.self, forKey: key) } catch {
+                dropped.append(key.stringValue)
+                return nil
+            }
+        }
+        // Element by element: one this build can't read is lost alone, not the whole list (and the file is kept aside).
+        func each<T: Decodable>(_ key: CodingKeys) -> [T]? {
+            guard let all: [Lossy<T>] = part(key) else { return nil }
+            let read = all.compactMap(\.value)
+            if read.count < all.count { dropped.append("\(all.count - read.count) of \(key.stringValue)") }
+            // None read at all: as if there were none (the default categories, GitHub's section).
+            return read.isEmpty && !all.isEmpty ? nil : read
+        }
+        func eachByKey<T: Decodable>(_ key: CodingKeys) -> [String: T]? {
+            guard let all: [String: Lossy<T>] = part(key) else { return nil }
+            let read = all.compactMapValues(\.value)
+            if read.count < all.count { dropped.append("\(all.count - read.count) of \(key.stringValue)") }
+            return read
+        }
+        settings = part(.settings) ?? AppSettings()
+        agents = part(.agents)
+        router = part(.router)
+        categories = each(.categories)
+        groups = each(.groups)
+        categorySections = each(.categorySections)
+        things = eachByKey(.things)
+        marks = eachByKey(.marks)
+        categoryBaselines = part(.categoryBaselines)
+        ownedRepos = part(.ownedRepos)
+        contributedRepos = part(.contributedRepos)
+        reposResolvedAt = part(.reposResolvedAt)
+        myTeams = part(.myTeams)
+        login = part(.login)
+        self.dropped = dropped
     }
 }

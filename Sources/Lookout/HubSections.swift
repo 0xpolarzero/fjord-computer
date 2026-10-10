@@ -19,9 +19,21 @@ extension LookoutHub {
         InboxCell(vertical: !edge.isHorizontal) { openApp(firstDestination) }
     }
 
-    /// One cell per category shown, in order: its symbol, and on its corner what is unread. Hovering one peeks its list.
-    @ViewBuilder var categoryCells: some View {
-        ForEach(store.shownCategories) { category in
+    /// A section's icon at the top of its well: a click folds its categories into it (their counts added up on it) or
+    /// unfolds them. Hovering it peeks its first category with something new.
+    func sectionCell(_ section: CategorySection, _ part: BarSection) -> some View {
+        SectionCell(section: section, badge: store.sectionBadge(part), vertical: !edge.isHorizontal) {
+            withAnimation(Theme.Motion.hover) { store.toggleCollapsed(section.id) }
+        }
+        .onHover { over in
+            guard over, let first = part.categories.first(where: { store.badge($0) > 0 }) ?? part.categories.first else { return }
+            hub.tab = .category(first.id)
+        }
+    }
+
+    /// One cell per category given, in order: its symbol, and on its corner what is unread. Hovering one peeks its list.
+    @ViewBuilder func categoryCells(_ categories: [InboxCategory]) -> some View {
+        ForEach(categories) { category in
             CategoryCell(category: category, badge: store.badge(category), vertical: !edge.isHorizontal) {
                 openApp(.category(category.id))
             }
@@ -319,6 +331,10 @@ extension LookoutHub {
             return SyncState(color: Theme.amber, text: "Inbox didn't sync", title: "GitHub didn't answer the inbox's search",
                              detail: error + "\n" + refresh)
         }
+        if let error = store.inboxReadError {
+            return SyncState(color: Theme.amber, text: "Jev can't read", title: "Jev couldn't read the inbox's new comments",
+                             detail: error + "\nAsks me, noise and importance wait for him\n" + refresh)
+        }
         if store.isSyncing {
             return SyncState(color: Theme.tertiary, text: "Checking…", title: "Checking GitHub",
                              detail: "Pull requests, issues and workflows", spinning: true)
@@ -413,7 +429,7 @@ struct CategoriesMenu: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: CDS.GhostIcon.glyph(IconButton.Size.header), weight: .medium))
-                .foregroundStyle(hover ? Color.white : Theme.secondary)
+                .foregroundStyle(hover ? Brand.ink : Theme.secondary)
                 .frame(width: IconButton.Size.header, height: IconButton.Size.header)
                 .background(Theme.Radius.shape(CDS.GhostIcon.radius(IconButton.Size.header)).fill(hover ? Theme.Fill.hover : .clear))
         }

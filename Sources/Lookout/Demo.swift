@@ -11,8 +11,8 @@ enum Demo {
         case busy, botsOnly, allClear, snoozed, error, empty, agents
         // Inbox and sync causes.
         case signedOut, inboxFailed, rateLimited, contributionsEmpty, botChatterEmpty, doneEmpty, firstSync, syncFault
-        // An inbox longer than any list shows; a category hidden.
-        case inboxMany, hiddenCategory
+        // An inbox longer than any list shows; a category hidden; Jev's own category on top.
+        case inboxMany, hiddenCategory, jev, sections
         // CI.
         case noCI, allPassing, manyCI, ciRunning
         // The update tile.
@@ -79,6 +79,20 @@ enum Demo {
         case .doneEmpty:
             agents(store, now)
             store.marks = [:]
+        case .jev:
+            agents(store, now)
+            // What asks you, and the review requests Jev rates high, before the rest.
+            store.categories.insert(InboxCategory(id: UUID(uuidString: "00000000-0000-0000-0000-000000000009")!, name: "Asks me",
+                symbol: "exclamationmark.bubble", color: .clay,
+                rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])), match: .any,
+                             conditions: [.asksMe, .importance(.high)], createdAt: now.addingTimeInterval(-60 * 86400))]), at: 0)
+        case .sections:
+            // Two sections: GitHub's, and CI (its failures) in a section of its own, folded.
+            agents(store, now)
+            let builds = store.createSection(name: "Builds")
+            for c in store.categories where c.isCI { store.moveCategory(c.id, toSection: builds.id) }
+            // Folded: its icon alone, CI's failures on it.
+            store.toggleCollapsed(builds.id)
         case .hiddenCategory:
             // Bot chatter hidden: collecting, with no icon in the bar and no tab.
             agents(store, now)
@@ -262,6 +276,56 @@ enum Demo {
             progress: [running.id: "sending"])
     }
 
+    /// What Jev's triage makes of finished turns, on top of the Router's demo: a turn asking your OK, one asking two
+    /// questions, chips on the finished ones, and sessions waiting on CI and on another session (one of them ready to go on).
+    static func routerTriage(_ store: Store, now: Date = Date()) {
+        let added = [
+            (session("local_demo-release", "Release 2.4 to the App Store", "lookout", minutes: 3,
+                     detail: "The build and the release notes are ready."), "shippingbox"),
+            (session("local_demo-api", "Rate limiter for the public API", "microsandbox", minutes: 8,
+                     detail: "The limiter works; two choices are left to you."), "gauge.with.needle"),
+            (session("local_demo-docs", "Docs site redesign", "lcu", minutes: 14, detail: "The new layout is in place."), "doc.richtext"),
+            (session("local_demo-login", "Fix the login redirect", "lookout", minutes: 6,
+                     detail: "Pushed the fix; waiting for CI on the PR."), "arrow.uturn.right"),
+            (session("local_demo-schema", "Schema migration", "microsandbox", minutes: 11,
+                     detail: "Waiting for the migration session to finish."), "cylinder.split.1x2"),
+            (session("local_demo-bump", "Bump the SDK", "lcu", minutes: 20, detail: "Opened the PR; CI is running."), "arrow.up.circle"),
+        ]
+        for (session, icon) in added {
+            store.claudeSessions[session.id] = session
+            store.agents.entries.append(AgentEntry(id: session.id, seen: session.activity, focusedAt: session.lastFocused, icon: icon))
+        }
+        func card(_ session: ClaudeSession, _ triage: RouterTriage, minutes: Double) -> RouterCard {
+            var c = RouterCard(id: "\(session.id)#t\(session.completedTurns)", sessionID: session.id,
+                               kind: RouterTriage.kind(blocked: false, triage: triage), title: session.title, folder: session.folder,
+                               text: session.summary?.detail ?? "", createdAt: now.addingTimeInterval(-minutes * 60))
+            c.triage = triage
+            return c
+        }
+        let s = { (id: String) in store.claudeSessions[id]! }
+        var ready = RouterTriage(state: .waiting, urgency: 1, work: .pr, waitingOn: .ci,
+                                 watch: .init(target: .ci(thing: "pr:me/lookout#212"), label: "CI on me/lookout#212", ref: "me/lookout#212"))
+        ready.ready = .init(result: "passing", at: now.addingTimeInterval(-40))
+        store.router.cards += [
+            card(s("local_demo-release"), RouterTriage(state: .approval, questions: ["OK to publish 2.4 to the App Store and push the `v2.4.0` tag?"],
+                                                       urgency: 4, work: .committed), minutes: 3),
+            card(s("local_demo-api"), RouterTriage(state: .asks, questions: ["Should the limit be **per API key** or per IP?",
+                                                                              "Is 100 requests a minute the right default?"],
+                                                   urgency: 3, work: .uncommitted), minutes: 8),
+            card(s("local_demo-docs"), RouterTriage(state: .done, urgency: 0, unverified: true, work: .committed), minutes: 14),
+            card(s("local_demo-login"), ready, minutes: 6),
+            card(s("local_demo-schema"), RouterTriage(state: .waiting, urgency: 1, work: .none, waitingOn: .session,
+                                                      watch: .init(target: .session(id: "local_demo-lookout", turns: 4),
+                                                                   label: "session “Agent completion notifications”")), minutes: 11),
+            card(s("local_demo-bump"), RouterTriage(state: .waiting, urgency: 1, work: .pr, waitingOn: .ci), minutes: 20),
+        ]
+        store.router.autoContinueSessions["local_demo-schema"] = true
+        // The finished CI turn opened a PR, which its chip says.
+        if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-ci" && $0.isOpen }) {
+            store.router.cards[i].triage = RouterTriage(state: .done, urgency: 0, work: .pr)
+        }
+    }
+
     /// The Router changing Lookout itself: a record for each change (one taken back).
     private static func lookoutChanges(_ store: Store, _ now: Date) -> [LookoutChange] {
         let look = InboxCategory(
@@ -435,6 +499,29 @@ enum Demo {
         things.append(workflow("ziglang/zig", "CI", branch: "master", state: .pending, title: "std.Io: add vectored reads to File",
                                minutes: 4))
         things.append(workflow("amontlabs/lcu", "Release", state: .passing, title: "Release 0.4.2", minutes: 1440))
+
+        // What Jev made of them: the comments that ask you something, the bots' noise, and how much each review asked of
+        // you matters.
+        let context = InboxContext(me: me.login)
+        func jev(_ id: String, asks: [String] = [], noise: [String] = [], importance: Importance? = nil) {
+            guard let i = things.firstIndex(where: { $0.id == id }) else { return }
+            var signals = ThingSignals(viewer: InboxEngine.viewer(me.login))
+            for m in InboxEngine.messages(things[i]) where m.author.login != me.login {
+                signals.messages[m.id] = MessageSignal(asksMe: m.author.isBot ? nil : asks.contains(m.id), noise: noise.contains(m.id))
+            }
+            if let importance, let stamp = InboxEngine.importanceStamp(things[i], context: context) {
+                signals.importance = ImportanceSignal(level: importance, stamp: stamp)
+            }
+            things[i].signals = signals
+        }
+        jev("pr:0xpolarzero/lookout#15", asks: ["c15-2", "t15-1-r"])
+        jev("pr:apple/swift-format#1042", asks: ["c1042-1"])
+        jev("pr:ziglang/zig#21877")
+        jev("pr:apple/swift-format#1051", importance: .urgent)
+        jev("pr:ziglang/zig#21840", importance: .high)
+        jev("pr:superradcompany/microsandbox#412", importance: .low)
+        jev("pr:0xpolarzero/lookout#14", noise: ["c14-1"], importance: .normal)
+        jev("pr:apple/swift-format#1047", noise: ["c1047-2"])
 
         store.things = Dictionary(uniqueKeysWithValues: things.map { ($0.id, $0) })
         store.marks = [:]

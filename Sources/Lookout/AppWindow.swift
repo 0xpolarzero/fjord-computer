@@ -8,10 +8,21 @@ import SwiftUI
 /// Lookout is a regular app (Dock icon, ⌘-Tab, menu bar).
 @MainActor
 enum AppPolicy {
+    /// The policy the app wants now. A test run keeps it to itself: applied, every test that opens the window would put
+    /// its test helper in the Dock and take the focus, and with test runs side by side the Dock fills with them.
+    private(set) static var current: NSApplication.ActivationPolicy = .accessory
+
     /// Regular while `windowOpen`, else accessory (the bar only).
     static func update(windowOpen: Bool) {
-        let policy: NSApplication.ActivationPolicy = windowOpen ? .regular : .accessory
-        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
+        current = windowOpen ? .regular : .accessory
+        guard !UnderTest.isRunning else { return }
+        if NSApp.activationPolicy() != current { NSApp.setActivationPolicy(current) }
+    }
+
+    /// Lookout to the front, unless this is a test run (which must not take the focus from whoever is at the Mac).
+    static func activate() {
+        guard !UnderTest.isRunning else { return }
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
@@ -130,7 +141,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let arriving = phase == .opening
         let opening = !arriving && (reversing || (!window.isVisible && !AppTransition.isMiniaturized(window)))
             && AppTransition.enabled
-        if !window.isVisible && !reversing && !arriving { moveToBarScreen(window) }
+        if !window.isVisible && !reversing && !arriving {
+            if UnderTest.isRunning { window.setFrameOrigin(UnderTest.away) } else { moveToBarScreen(window) }
+        }
         // The bar as it is now, before whoever called us hides it.
         let morph = opening && !reversing && !AppTransition.reduceMotion ? bar() : nil
         if opening {
@@ -179,7 +192,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             window.contentViewController = content
         }
         AppPolicy.update(windowOpen: true)
-        NSApp.activate(ignoringOtherApps: true)
+        AppPolicy.activate()
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -475,9 +488,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: NSSize(width: 1180, height: 760)),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: true)
+        let window = AwayWindow(contentRect: NSRect(origin: .zero, size: NSSize(width: 1180, height: 760)),
+                                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                backing: .buffered, defer: true)
         Self.style(window)
         window.delegate = self
         if !window.setFrameUsingName(Self.autosave) { window.center() }
@@ -490,7 +503,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         window.title = "Lookout"
         window.isReleasedWhenClosed = false
         window.minSize = minSize
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = Brand.appearance
         window.backgroundColor = NSColor(CDS.Surface.s1)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -603,7 +616,7 @@ struct AppRootView: View {
         }
         .frame(minWidth: 640, minHeight: 600)
         .foregroundStyle(Theme.text)
-        .environment(\.colorScheme, .dark)
+        .modifier(Brand.Scheme())
         .tipSpace()
         .ignoresSafeArea(.container, edges: .top)
         .background(CDS.Surface.s1)
@@ -675,7 +688,7 @@ struct AppIconButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-                .foregroundStyle(!enabled ? CDS.Text.disabled : hovered ? Color.white : CDS.Text.secondary)
+                .foregroundStyle(!enabled ? CDS.Text.disabled : hovered ? Brand.ink : CDS.Text.secondary)
                 .frame(width: CDS.TitleBar.button, height: CDS.TitleBar.button)
                 .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
                     .fill(hovered && enabled ? CDS.Fill.ghostHover : .clear))

@@ -204,6 +204,7 @@ struct EntryRow: View {
                             .font(Theme.Typography.body)
                             .foregroundStyle(unread || open ? CDS.Text.primary : CDS.Text.secondary)
                             .lineLimit(1)
+                        if let level = mark { ImportanceMark(level: level) }
                         Spacer(minLength: 0)
                         // The actions take the timestamp's place; the title stops short of them.
                         Text(shortAgo(thing.updatedAt)).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(CDS.Text.muted)
@@ -228,7 +229,8 @@ struct EntryRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(thing.kind == .workflow ? "\(thing.title), \(thing.repo)" : "\(thing.title), \(thing.repo) #\(thing.number ?? 0)")
-        .accessibilityValue(([unread ? "Unread" : ""] + chips.map(\.label)).filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityValue(([unread ? "Unread" : "", mark.map(ImportanceMark.words) ?? ""] + chips.map(\.label))
+            .filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHint("Opens it on GitHub")
         .overlay(alignment: .topTrailing) {
             // Centred on the title line (5pt row padding + half its 16pt line = 13; the controls are 24 tall), 3 from the end.
@@ -241,6 +243,9 @@ struct EntryRow: View {
         }
         .motion(Theme.Motion.hover, value: open)
     }
+
+    /// Jev's rating, when it is high or urgent.
+    private var mark: Importance? { entry.importance.flatMap { $0 >= .high ? $0 : nil } }
 
     /// The facts as chips, each wording once (a thread each says "2 unresolved" twice), and, for a failing workflow, the
     /// jobs that failed.
@@ -361,6 +366,21 @@ struct EntryMenu: View {
             else { Button("Mark as unread") { store.markUnread(entry) } }
             Button("Done") { store.finish(entry) }
         }
+    }
+}
+
+/// Jev's rating of a row it rates high (one exclamation mark) or urgent (two), after the title.
+struct ImportanceMark: View {
+    let level: Importance
+
+    static func words(_ level: Importance) -> String { "Jev rates this \(level.rawValue)" }
+
+    var body: some View {
+        Image(systemName: level == .urgent ? "exclamationmark.2" : "exclamationmark")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(level == .urgent ? CDS.Text.danger : CDS.Text.warning)
+            .accessibilityLabel(Self.words(level))
+            .tip(Self.words(level))
     }
 }
 
@@ -493,7 +513,8 @@ struct ScrollRequest: Equatable {
 
 extension Store {
     /// The categories shown in the bar and as tabs: all but the hidden ones.
-    var shownCategories: [InboxCategory] { categories.filter { !$0.hidden } }
+    /// In the bar's order: section by section (CategorySections.swift).
+    var shownCategories: [InboxCategory] { barSections.flatMap(\.categories) }
 
     /// The tab the inbox peek shows: the one picked while it is still there, else the first category shown, else Done.
     func hubTab(_ hub: HubState) -> InboxTab {
@@ -549,6 +570,8 @@ extension Store {
             m.acked = before.acked
             m.seen = before.seen
             m.doneAt = before.doneAt
+            m.doneIn = before.doneIn
+            m.doneFacts = before.doneFacts
             marks[entry.id] = m
             return true
         }
@@ -565,11 +588,17 @@ extension Store {
         categories[i].hidden = hidden
     }
 
-    /// Drags `id` to where `target` is among the categories.
+    /// Drags `id` to where `target` is among the categories, into its section (CategorySections.swift).
     func moveCategory(_ id: UUID, onto target: UUID) {
         guard id != target, let from = categories.firstIndex(where: { $0.id == id }),
               let to = categories.firstIndex(where: { $0.id == target }) else { return }
-        moveCategory(from: IndexSet(integer: from), to: from < to ? to + 1 : to)
+        var list = categories
+        let section = sectionID(of: list[to])
+        var moving = list.remove(at: from)
+        if section != nil { moving.section = section }
+        // Down: after the target (now one place up); up: before it. Either way, its place.
+        list.insert(moving, at: to)
+        categories = treeOrdered(list)
     }
 
     /// One place up (-1) or down (+1) among `among` (every category by default; the bar's tabs pass the shown ones).
@@ -669,8 +698,7 @@ private struct CategoryCellLabel: View {
             .contentShape(Rectangle())
             .onHover { hover = $0 }
             .motion(Theme.Motion.hover, value: hover)
-            .tip(badge == 0 ? category.title : "\(category.title) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
-                 badge == 0 ? (category.isCI ? "Nothing failing" : "Nothing new") : "Opens it in the inbox")
+            // No tooltip: hovering it peeks its list, which says more.
     }
 }
 

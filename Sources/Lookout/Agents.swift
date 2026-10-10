@@ -474,7 +474,9 @@ extension Store {
     /// Picks icons for the sessions that want one (see `iconTarget`), one request at a time.
     func pickIcons() {
         guard agents.enabled, agents.iconsEnabled, iconTask == nil, Date() >= iconsPausedUntil,
-              let key = typesafeKey, !key.isEmpty, let next = iconTarget() else { return }
+              typesafeKey?.isEmpty == false, let next = iconTarget(),
+              // Taken now, with the key and switch as they are: changed while the transcript is read, nothing is asked.
+              let choose = jevChooser(.icons, base: iconChooser) else { return }
         let session = next.session
         let cliID = session.cliID
         let reader = activityReader
@@ -504,9 +506,6 @@ extension Store {
             guard !open.isEmpty else { self.iconTask = nil; return }
             var state = ["session title": session.title, "project": session.folderName]
             if let first { state["first message"] = first }
-            let choose = self.iconChooser ?? { options, hints, state, instructions in
-                try await JevClient(key: key).choose(options, hints: hints, for: state, instructions: instructions)
-            }
             do {
                 // Two questions (Jev takes at most 255 options): what kind of icon, then which one.
                 let kinds = try await choose(open.map(\.category.key),
@@ -528,9 +527,11 @@ extension Store {
     /// A rejected key waits for a new one, and says so where it happens: the Settings line that shows it may not be open.
     /// Anything else retries in a while.
     func iconPickFailed(_ error: Error) {
-        iconError = error.localizedDescription
         iconTask = nil
-        let rejected = (error as? JevClient.Failure)?.message.contains("API key") == true
+        // Stopped, or the key or switch changed meanwhile: nothing failed.
+        if error as? JevClient.Failure == .cancelled { return pickIcons() }
+        iconError = error.localizedDescription
+        let rejected = error as? JevClient.Failure == .unauthorized
         iconsPausedUntil = rejected ? .distantFuture : Date().addingTimeInterval(600)
         if rejected, let said = iconError { announce(said, false) }
         scheduleClaudeTick()
@@ -570,14 +571,20 @@ extension Store {
         }
         typesafeKeyCache = trimmed
         hasTypesafeKey = !trimmed.isEmpty
+        jevGate.keyChanged()
+        // What is under way with the old key stops (the icon's pick starts again with the new one once it has).
+        iconTask?.cancel()
+        routerTriager.cancelAll()
         iconError = nil
         iconsPausedUntil = .distantPast
         pickIcons()
+        typesafeKeyArrived()
         return true
     }
 
     func setIconsEnabled(_ on: Bool) {
         agents.iconsEnabled = on
+        if !on { iconTask?.cancel() }
         iconsPausedUntil = .distantPast
         pickIcons()
     }
