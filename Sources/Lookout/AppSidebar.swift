@@ -245,8 +245,8 @@ private struct CountText: View {
     }
 }
 
-/// `SidebarRowButton` with something at its end: the same 26pt row (radius 6, a 24pt leading slot shifted 4, a 4 gap, 13pt
-/// text; white 7.5% on hover, 15% and primary text when picked).
+/// A 26pt row (radius 6, a 24pt leading slot shifted 4, a 4 gap, 13pt text; white 7.5% on hover, 15% and primary text when
+/// picked) with something at its end.
 struct AppSidebarRow<Leading: View, Trailing: View>: View {
     let title: String
     let on: Bool

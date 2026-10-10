@@ -13,7 +13,7 @@ enum Lifecycle {
 
     static func line(_ store: Store) -> String {
         let rows = store.allAgentRows
-        // The ones that blink: working and not waiting on you (the sidebar's `BlinkingDot`).
+        // The ones that blink: working and not waiting on you (the dot's `BlinkingDot`).
         let working = rows.filter { $0.group == .working }.count
         let showing = NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
         return "lifecycle: sessions=\(rows.count) working=\(working) "

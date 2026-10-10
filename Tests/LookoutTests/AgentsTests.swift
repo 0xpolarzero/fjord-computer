@@ -34,15 +34,6 @@ import Testing
 
     private func entry(_ s: Store, _ id: String) -> AgentEntry? { s.agents.entries.first { $0.id == id } }
 
-    @Test func searchShowsTheSavedLabelOfAHiddenSession() {
-        let s = store([session("a"), session("b")])
-        // Labels are no longer set, but state saved by an older version may still carry one.
-        s.agents.entries[0].label = "🔥"
-        holdOnlyForAnIcon(s, "a")
-        #expect(s.allAgentRows.map(\.id) == ["b"])
-        #expect(s.searchSessions("session").first { $0.id == "a" }?.label == "🔥")
-    }
-
     /// Icons on and a key saved, so an icon can be asked for; the store has not read the key, so none is.
     private func keySaved(_ s: Store) {
         s.agents.iconsEnabled = true
@@ -63,7 +54,6 @@ import Testing
     @Test func askingForAnIconOfAnOldSessionFoundThroughSearchPicksIt() {
         let s = store([session("a"), session("old", minutesAgo: 3 * 24 * 60)])
         #expect(entry(s, "old") == nil)
-        #expect(s.searchSessions("session old").map(\.id) == ["old"])
         keySaved(s)
         s.repickIcon("old")  // the key is not read yet, so nothing is asked for yet
         #expect(s.iconTarget()?.id == "old")
@@ -115,7 +105,6 @@ import Testing
         s.repickIcon("old")
         await finishIcons(s)
         #expect(entry(s, "old")?.icon != nil)
-        #expect(s.searchSessions("session old").first?.icon != nil)
         #expect(s.allAgentRows.map(\.id) == ["a"])
     }
 
@@ -257,7 +246,6 @@ import Testing
         let rows = s.allAgentRows
         let a = try #require(rows.first { $0.id == "a" }), b = try #require(rows.first { $0.id == "b" })
         #expect(a.projectName == "customer-a/app" && b.projectName == "customer-b/app")
-        #expect(s.searchSessions("customer-b").map(\.id) == ["b"])
         // The name follows the folders: with the other project gone, the folder's own name is enough again.
         s.claudeSessions["a"] = nil
         #expect(s.folderName("/customer-b/app") == "app")
@@ -304,23 +292,6 @@ import Testing
             Announce.say(s.iconError ?? "")
             #expect(said.count == 2 && said[1] == s.iconError)
         }
-    }
-
-    @Test func searchFindsAnySessionTitlePrefixFirst() {
-        var other = session("other", minutesAgo: 1, folder: "/code/sandbox")
-        other.title = "Storage directory"
-        var mine = session("mine", minutesAgo: 50)
-        mine.title = "Sandbox on Linux"
-        let s = store([other, mine])
-        #expect(s.searchSessions("sand").map(\.id) == ["mine", "other"])  // title prefix first
-        #expect(s.searchSessions("sto dir").map(\.id) == ["other"])
-        #expect(s.searchSessions("").isEmpty)
-    }
-
-    @Test func aSearchListsEverySessionThatMatchesNotTheFirstEight() {
-        let s = store((0..<12).map { session("n\($0)", minutesAgo: Double($0 + 1)) })
-        #expect(s.searchSessions("Session").count == 12)
-        #expect(s.searchSessions("Session n11").map(\.id) == ["n11"])
     }
 
     @Test func oldStateFilesStillLoad() throws {

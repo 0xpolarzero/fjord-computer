@@ -52,30 +52,24 @@ import UserNotifications
         #expect(keys.key(key(kVK_Escape), responder: nil) && closed)
     }
 
-    @Test func theArrowsWalkTheCardsInTheOrderTheSidebarShowsThem() {
+    @Test func theArrowsWalkTheCardsInTheOrderThePageShowsThem() {
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
         // What needs you, then the finished turns, then Earlier: not the newest first, which puts a finished turn second.
         let (needs, done, earlier) = model.sections(store)
-        let sidebar = (needs + done + earlier).map(\.id)
+        let listed = (needs + done + earlier).map(\.id)
         #expect(!needs.isEmpty && !done.isEmpty && !earlier.isEmpty)
-        #expect(sidebar != store.routerCards.map(\.id))
+        #expect(listed != store.routerCards.map(\.id))
         var walked: [String] = []
-        for _ in sidebar {
+        for _ in listed {
             #expect(keys.key(key(kVK_DownArrow), responder: nil))
             walked += model.selection.map { [$0] } ?? []
         }
-        #expect(walked == sidebar)
+        #expect(walked == listed)
         // At the bottom it stays there; ↑ walks back the same way.
-        #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == sidebar.last)
-        #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == sidebar[sidebar.count - 2])
-        // A search walks only what it leaves listed, in the same order.
-        model.search = needs[0].title
-        let found = model.cards(store).map(\.id)
-        model.selection = nil
-        #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == found.first)
-        #expect(found.allSatisfy(sidebar.contains) && found == sidebar.filter(found.contains))
+        #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == listed.last)
+        #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed[listed.count - 2])
     }
 
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
@@ -351,8 +345,8 @@ import UserNotifications
         store.router.cards.removeAll { $0.id == listed[1] }
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil))
         #expect(model.replyTo == listed[2])
-        // Nothing listed at all (the search finds none): Return only focuses the composer.
-        model.search = "no card says this"
+        // Nothing listed at all: Return only focuses the composer.
+        store.router.cards.removeAll()
         #expect(model.cards(store).isEmpty)
         model.replyTo = nil
         let request = model.focusRequest
@@ -557,16 +551,6 @@ import UserNotifications
         #expect(try await !says(.ok, state))
     }
 
-    @Test func theWindowListsWhatIsWorking() async throws {
-        let store = demo(.router)
-        let tree = try await AccessibilityTree.render(RouterCodeView(store: store, model: RouterModel(), checksClaudeCode: false))
-        // A row per working session in the sidebar's Working section, the one that left things running included, each a
-        // button that opens it (a finished turn's card can bear the same title elsewhere in the sidebar).
-        let rows = tree.all.filter { $0.identifier == RouterSidebar.workingRowID }
-        #expect(rows.allSatisfy { $0.role == "AXButton" }, "\(rows)")
-        #expect(rows.map(\.label).sorted() == ["Agent completion notifications", "CI failure diagnosis"], "\(tree.all.map(\.label))")
-    }
-
     @Test func theBarNamesTheRouterAtRestAndPeeking() async throws {
         for edge in [DockEdge.right, .top] {
             for peeking in [false, true] {
@@ -648,7 +632,7 @@ import UserNotifications
         let cardLines = page.history.compactMap { entry -> RouterCard? in if case .card(let c) = entry { c } else { nil } }
         #expect(!cardLines.isEmpty && cardLines.allSatisfy { !$0.isOpen })
         #expect(page.history.count == store.router.decisions.count + store.router.overviews.count + store.router.cards.filter { !$0.isOpen }.count)
-        // The sidebar's order is the page's: the keys walk Needs you the way it is shown.
+        // The keys' order is the page's: the keys walk Needs you the way it is shown.
         let (needs, done, _) = RouterModel().sections(store)
         #expect(page.needs.map(\.id) == (needs + done).map(\.id))
     }
@@ -726,15 +710,5 @@ import UserNotifications
         let model = RouterModel()
         model.select(other, store: store)
         #expect(model.expandedNeed == other)
-    }
-
-    @Test func theSidebarsSessionsSectionLeavesOutWhatIsAlreadyListed() {
-        let store = demo()
-        let model = RouterModel()
-        model.search = "update"
-        let (needs, done, earlier) = model.sections(store)
-        let shown = Set((needs + done + earlier).map(\.sessionID))
-        #expect(!shown.isEmpty)
-        #expect(store.searchSessions("update").contains { shown.contains($0.id) }, "the demo's match is a listed card too")
     }
 }

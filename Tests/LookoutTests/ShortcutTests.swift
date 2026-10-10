@@ -164,19 +164,19 @@ import Testing
         let keepDefault = ShortcutAction.togglePanel.defaultShortcut
         let moved = Shortcut(keyCode: UInt16(kVK_ANSI_G), modifiers: [.control, .command])
         store.setShortcut(moved, for: .togglePanel)
-        // Search the Router's sessions takes the key the window's shortcut used to have: nothing holds it, so the recorder allows it.
-        #expect(store.shortcutConflict(keepDefault, for: .sessionSwitcher) == nil)
-        store.setShortcut(keepDefault, for: .sessionSwitcher)
+        // Open the Router takes the key the window's shortcut used to have: nothing holds it, so the recorder allows it.
+        #expect(store.shortcutConflict(keepDefault, for: .router) == nil)
+        store.setShortcut(keepDefault, for: .router)
         let refusal = store.resetShortcut(for: .togglePanel)
-        #expect(refusal == .usedBy(.sessionSwitcher))
+        #expect(refusal == .usedBy(.router))
         #expect(store.shortcut(.togglePanel) == moved)
-        #expect(store.shortcut(.sessionSwitcher) == keepDefault)
-        #expect(keys[.togglePanel] == moved && keys[.sessionSwitcher] == keepDefault)
+        #expect(store.shortcut(.router) == keepDefault)
+        #expect(keys[.togglePanel] == moved && keys[.router] == keepDefault)
         // Once the other action lets go of it, the reset goes through.
-        store.setShortcut(nil, for: .sessionSwitcher)
+        store.setShortcut(nil, for: .router)
         #expect(store.resetShortcut(for: .togglePanel) == nil)
         #expect(store.shortcut(.togglePanel) == keepDefault)
-        #expect(keys[.togglePanel] == keepDefault && keys[.sessionSwitcher] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        #expect(keys[.togglePanel] == keepDefault && keys[.router] == ShortcutAction.router.defaultShortcut)
         withExtendedLifetime(globals) {}
     }
 
@@ -192,25 +192,25 @@ import Testing
         #expect(store.restoreDefaultShortcuts() == nil)
         #expect(!store.hasCustomShortcuts)
         for action in ShortcutAction.allCases { #expect(store.shortcut(action) == action.defaultShortcut) }
-        #expect(Set(registered) == [.togglePanel, .sessionSwitcher, .router])
+        #expect(Set(registered) == [.togglePanel, .router])
     }
 
     @MainActor @Test func restoreDefaultsAfterSwappingTheGlobalKeysRegistersBothDefaults() {
         let store = Store()
         let keys = SystemKeys()
         let globals = connected(store, keys)
-        let keep = ShortcutAction.togglePanel.defaultShortcut, sessions = ShortcutAction.sessionSwitcher.defaultShortcut
+        let keep = ShortcutAction.togglePanel.defaultShortcut, sessions = ShortcutAction.router.defaultShortcut
         // Swapped the way the recorder allows it: through a key neither holds.
         store.setShortcut(Shortcut(keyCode: UInt16(kVK_ANSI_G), modifiers: [.control, .command]), for: .togglePanel)
-        store.setShortcut(keep, for: .sessionSwitcher)
+        store.setShortcut(keep, for: .router)
         store.setShortcut(sessions, for: .togglePanel)
-        #expect(keys[.togglePanel] == sessions && keys[.sessionSwitcher] == keep)
+        #expect(keys[.togglePanel] == sessions && keys[.router] == keep)
         // Each reset alone is refused, the other action holding its default.
-        #expect(store.resetShortcut(for: .togglePanel) == .usedBy(.sessionSwitcher))
-        #expect(store.resetShortcut(for: .sessionSwitcher) == .usedBy(.togglePanel))
+        #expect(store.resetShortcut(for: .togglePanel) == .usedBy(.router))
+        #expect(store.resetShortcut(for: .router) == .usedBy(.togglePanel))
         #expect(store.restoreDefaultShortcuts() == nil)
-        #expect(keys[.togglePanel] == keep && keys[.sessionSwitcher] == sessions)
-        #expect(store.shortcut(.togglePanel) == keep && store.shortcut(.sessionSwitcher) == sessions)
+        #expect(keys[.togglePanel] == keep && keys[.router] == sessions)
+        #expect(store.shortcut(.togglePanel) == keep && store.shortcut(.router) == sessions)
         #expect(store.refusedShortcuts.isEmpty)
         withExtendedLifetime(globals) {}
     }
@@ -230,12 +230,12 @@ import Testing
         #expect(refusal == .defaultUnavailable(keep))
         // What worked still does, and so does what was cleared: stored, registered, shown.
         #expect(store.settings.shortcuts == before && store.shortcut(.togglePanel) == moved && store.shortcut(.discard).isUnassigned)
-        #expect(keys[.togglePanel] == moved && keys[.sessionSwitcher] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        #expect(keys[.togglePanel] == moved && keys[.router] == ShortcutAction.router.defaultShortcut)
         #expect(store.refusedShortcuts.isEmpty)
         // Once the other app lets go, the restore goes through.
         keys.taken = []
         #expect(store.restoreDefaultShortcuts() == nil && !store.hasCustomShortcuts)
-        #expect(keys[.togglePanel] == keep && keys[.sessionSwitcher] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        #expect(keys[.togglePanel] == keep && keys[.router] == ShortcutAction.router.defaultShortcut)
         withExtendedLifetime(globals) {}
     }
 
@@ -245,7 +245,7 @@ import Testing
         store.persists = false
         let held = Shortcut(keyCode: UInt16(kVK_ANSI_G), modifiers: [.control, .command])
         store.setShortcut(held, for: .togglePanel)
-        keys.taken = [held, ShortcutAction.sessionSwitcher.defaultShortcut]
+        keys.taken = [held, ShortcutAction.router.defaultShortcut]
         store.router.enabled = false
         await Announced.exclusively {
             var said: [String] = []
@@ -255,17 +255,17 @@ import Testing
             #expect(store.isShortcutHeldByAnotherApp(.togglePanel))
             #expect(said.count == 1)
             // The switcher is not registered while the Router is off, so there is nothing to refuse yet.
-            #expect(!store.isShortcutHeldByAnotherApp(.sessionSwitcher))
+            #expect(!store.isShortcutHeldByAnotherApp(.router))
             store.agents.enabled = true
             store.router.enabled = true
-            globals.register(.sessionSwitcher)
-            #expect(store.isShortcutHeldByAnotherApp(.sessionSwitcher))
+            globals.register(.router)
+            #expect(store.isShortcutHeldByAnotherApp(.router))
             // Another key that works clears it, as does the other app letting go.
             keys.taken = []
             #expect(store.setShortcut(Shortcut(keyCode: UInt16(kVK_ANSI_J), modifiers: [.control, .command]), for: .togglePanel) == nil)
             #expect(!store.isShortcutHeldByAnotherApp(.togglePanel))
-            globals.register(.sessionSwitcher)
-            #expect(!store.isShortcutHeldByAnotherApp(.sessionSwitcher))
+            globals.register(.router)
+            #expect(!store.isShortcutHeldByAnotherApp(.router))
             // A refusal of a key just chosen leaves the old one stored and working: nothing to say.
             keys.taken = [held]
             #expect(store.setShortcut(held, for: .togglePanel) != nil)
@@ -312,7 +312,7 @@ import Testing
         let a = Shortcut(keyCode: UInt16(kVK_ANSI_G), modifiers: [.control, .command])
         let b = Shortcut(keyCode: UInt16(kVK_ANSI_J), modifiers: [.control, .command])
         store.setShortcut(a, for: .togglePanel)
-        keys.taken = [a, b, ShortcutAction.sessionSwitcher.defaultShortcut]
+        keys.taken = [a, b, ShortcutAction.router.defaultShortcut]
         let globals = GlobalShortcuts(store: store, hotKeys: HotKeys(backend: keys)) { _ in }
         globals.start()
         #expect(store.isShortcutHeldByAnotherApp(.togglePanel))
@@ -333,7 +333,7 @@ import Testing
         let globals = connected(store, keys)
         store.setShortcut(.unassigned, for: .togglePanel)
         #expect(keys[.togglePanel] == nil)
-        #expect(keys[.sessionSwitcher] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        #expect(keys[.router] == ShortcutAction.router.defaultShortcut)
         store.setShortcut(nil, for: .togglePanel)
         #expect(keys[.togglePanel] == ShortcutAction.togglePanel.defaultShortcut)
         withExtendedLifetime(globals) {}
@@ -344,16 +344,16 @@ import Testing
         let store = Store()
         let keys = SystemKeys()
         let globals = connected(store, keys)
-        #expect(keys[.sessionSwitcher] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        #expect(keys[.router] == ShortcutAction.router.defaultShortcut)
         #expect(keys[.router] == ShortcutAction.router.defaultShortcut)
         store.router.enabled = false
-        await waitUntil { keys[.sessionSwitcher] == nil && keys[.router] == nil }
-        #expect(keys[.sessionSwitcher] == nil && keys[.router] == nil)
+        await waitUntil { keys[.router] == nil && keys[.router] == nil }
+        #expect(keys[.router] == nil && keys[.router] == nil)
         // The window's key isn't the Router's: it stays.
         #expect(keys[.togglePanel] == ShortcutAction.togglePanel.defaultShortcut)
         store.router.enabled = true
-        await waitUntil { keys[.sessionSwitcher] != nil && keys[.router] != nil }
-        #expect(keys[.sessionSwitcher] == ShortcutAction.sessionSwitcher.defaultShortcut)
+        await waitUntil { keys[.router] != nil && keys[.router] != nil }
+        #expect(keys[.router] == ShortcutAction.router.defaultShortcut)
         #expect(keys[.router] == ShortcutAction.router.defaultShortcut)
         withExtendedLifetime(globals) {}
     }

@@ -76,13 +76,10 @@ import Testing
         await waitUntil { !window.isOpen }
     }
 
-    @Test func theRoutersSearchAndACardOpenOnTheRouter() async throws {
+    @Test func aCardOpensOnTheRouter() async throws {
         let (window, store) = controller()
         window.show(.settings)
         away(window)
-        window.show(search: true)
-        #expect(window.navigator.selection == .router && window.routerModel.searchWanted)
-        window.show(.done)
         let card = try #require(store.openRouterCards.first)
         window.show(card: card.id)
         #expect(window.navigator.selection == .router && window.routerModel.selection == card.id)

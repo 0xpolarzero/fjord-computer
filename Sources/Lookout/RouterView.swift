@@ -245,9 +245,6 @@ struct RouterCardLine: View {
 final class RouterModel {
     /// The card the keys act on.
     var selection: String?
-    /// What the sidebar's search holds, and whether the keyboard is asked for it (what the sessions shortcut does).
-    var search = ""
-    var searchWanted = false
     var draft = "" {
         didSet { if draft != oldValue { mentionChanged() } }
     }
@@ -301,23 +298,19 @@ final class RouterModel {
     /// The cards listed at the last reconcile, in order: where a picked card that left the list was.
     @ObservationIgnored private var listed: [String] = []
 
-    /// The cards the sidebar lists, in its sections, as the search leaves them: what needs you (questions, plans, stuck
-    /// turns), then the finished turns, both open; then the latest addressed ones (Earlier). The sidebar draws these, and the
-    /// keys walk the same cards in the same order (the Working section between Done and Earlier is sessions, not cards).
+    /// The cards the keys walk, in the order the page shows them: what needs you (questions, plans, stuck turns), then the
+    /// finished turns, both open; then the latest addressed ones (Earlier).
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
-        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        let found = q.isEmpty ? store.routerCards
-            : store.routerCards.filter { $0.title.lowercased().contains(q) || $0.text.lowercased().contains(q) }
-        let open = found.filter(\.isOpen)
+        let open = store.routerCards.filter(\.isOpen)
         // `routerCards` has each part newest first.
-        let earlier = found.filter { !$0.isOpen }.prefix(Self.earlierLimit)
+        let earlier = store.routerCards.filter { !$0.isOpen }.prefix(Self.earlierLimit)
         return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, Array(earlier))
     }
 
-    /// How many addressed cards Earlier lists.
+    /// How many addressed cards the keys walk after the open ones.
     static let earlierLimit = 8
 
-    /// Every card the sidebar lists, top to bottom: what the keys walk.
+    /// Every card the keys walk, top to bottom.
     func cards(_ store: Store) -> [RouterCard] {
         let s = sections(store)
         return s.needs + s.done + s.earlier

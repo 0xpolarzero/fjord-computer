@@ -1,7 +1,7 @@
 import SwiftUI
 
-// The Router's window as a sibling of Claude's Code tab: a sidebar of what needs you (Claude's status dots), and the picked
-// Router's page in the middle (its history, what works on its own, what needs you; see RouterPage.swift) over the composer. Built on `RouterModel` and the
+// The Router's window as a sibling of Claude's Code tab: the Router's page (its history, what works on its own, what needs
+// you; see RouterPage.swift) over the composer, in the app window's detail area. Built on `RouterModel` and the
 // form and plan logic of RouterView.swift; only the presentation is Claude's.
 
 struct RouterCodeView: View {
@@ -12,29 +12,16 @@ struct RouterCodeView: View {
     /// Inside the app window the detail area sets the size (and the window's top is the window's job); alone it has its own.
     var embedded = false
 
-    static let sidebarWidth: CGFloat = CDS.Sidebar.width
     static let column: CGFloat = 768
 
     var body: some View {
-        HStack(spacing: 0) {
-            // §1.6: the sidebar #111 with a 0.5pt white-10% right edge, the page #151515.
-            RouterSidebar(store: store, model: model)
-                .frame(width: Self.sidebarWidth)
-                .frame(maxHeight: .infinity)
-                .background(CDS.Surface.sidebar)
-                .overlay(alignment: .trailing) {
-                    Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge)
-                }
-            RouterMain(store: store, model: model)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(CDS.Surface.s1)
-        }
+        RouterMain(store: store, model: model)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(CDS.Surface.s1)
         .frame(minWidth: embedded ? 0 : 760, minHeight: embedded ? 0 : 520)
         .foregroundStyle(Theme.text)
         .environment(\.colorScheme, .dark)
         .tipSpace()
-        // The sidebar runs up under the window's buttons, as in the Code tab.
-        .ignoresSafeArea(.container, edges: .top)
         .task { if checksClaudeCode { await model.checkClaudeCode(store) } }
         // Picking a card points the composer at it: what you type next is a reply to that session.
         .onChange(of: model.selection) { _, id in model.replyTo = id }

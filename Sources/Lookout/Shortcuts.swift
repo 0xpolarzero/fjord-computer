@@ -127,7 +127,7 @@ struct ModifierTap {
 }
 
 enum ShortcutAction: String, CaseIterable, Identifiable {
-    case togglePanel, sessionSwitcher, router, openItem, toggleRead, discard, markAllRead, refresh
+    case togglePanel, router, openItem, toggleRead, discard, markAllRead, refresh
 
     var id: String { rawValue }
 
@@ -139,16 +139,15 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .discard: "Done / back to inbox"
         case .markAllRead: "Mark all seen"
         case .refresh: "Refresh now"
-        case .sessionSwitcher: "Search the Router's sessions"
         case .router: "Open the Router"
         }
     }
 
     /// Works from any app (registered system-wide) rather than only while the panel has focus.
-    var isGlobal: Bool { self == .togglePanel || self == .sessionSwitcher || self == .router }
+    var isGlobal: Bool { self == .togglePanel || self == .router }
 
     /// Only meaningful with the Router on (see `Store.routerOn`).
-    var isRouter: Bool { self == .sessionSwitcher || self == .router }
+    var isRouter: Bool { self == .router }
 
     var defaultShortcut: Shortcut {
         switch self {
@@ -158,7 +157,6 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .discard: Shortcut(keyCode: UInt16(kVK_Delete))
         case .markAllRead: Shortcut(keyCode: UInt16(kVK_Space), modifiers: [.option])
         case .refresh: Shortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.command])
-        case .sessionSwitcher: Shortcut(keyCode: UInt16(kVK_ANSI_S), modifiers: [.control, .option])
         case .router: Shortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .option])
         }
     }
@@ -266,7 +264,7 @@ final class GlobalShortcuts {
         routerOn = on
         // Turning the Router on is what registers its keys, and nothing on screen says one did not take: the recorder only
         // does in Settings.
-        for action in [ShortcutAction.router, .sessionSwitcher] where !register(action) && on { announceRefusal(action) }
+        if !register(.router) && on { announceRefusal(.router) }
     }
 
     /// Releases the system-wide keys while a shortcut is recorded, and takes them back after. A key another app claimed

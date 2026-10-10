@@ -278,29 +278,6 @@ extension Store {
         agents.folderColors[folder] = index
     }
 
-    /// Every session matching all the words (title or folder), best first: title starts with the query, then the most
-    /// recent. For the Router's search.
-    func searchSessions(_ query: String) -> [AgentRow] {
-        let words = query.lowercased().split(separator: " ").map(String.init)
-        guard !words.isEmpty else { return [] }
-        let labels = cache.labels
-        // 3: title starts with it, 2: the title has every word, 1: only with the folder's name.
-        func score(_ s: ClaudeSession) -> Int {
-            let title = s.title.lowercased()
-            if words.allSatisfy({ title.contains($0) }) { return title.hasPrefix(words[0]) ? 3 : 2 }
-            let both = title + " " + folderName(s.folderKey).lowercased()
-            return words.allSatisfy { both.contains($0) } ? 1 : 0
-        }
-        return claudeSessions.values
-            .map { ($0, score($0)) }
-            .filter { $0.1 > 0 }
-            .sorted { a, b in
-                if a.1 != b.1 { return a.1 > b.1 }
-                return a.0.lastActivity > b.0.lastActivity
-            }
-            .map { row($0.0, label: labels[$0.0.id]) }
-    }
-
     var allAgentRows: [AgentRow] { cache.all }
 
     /// Every folder a name can be asked for: the ones sessions are in and the ones muted.

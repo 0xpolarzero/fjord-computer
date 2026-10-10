@@ -17,6 +17,52 @@ extension ClaudeDot.Kind {
     }
 }
 
+/// Claude's session status dot (§1.7), 6pt in a 14pt box: awaiting #fab219 (a question or a plan), ready #2a78d6 (a
+/// finished turn), running #898781 blinking (a working session), idle a 1pt hollow ring at 50% (addressed). Claude has no
+/// "stuck" state; Lookout's stuck card keeps a red 6pt dot (`CDS.Text.danger`).
+struct ClaudeDot: View {
+    enum Kind {
+        case needsYou, done, stuck, working, quiet
+
+        init(_ card: RouterCard) {
+            guard card.isOpen else { self = .quiet; return }
+            switch card.kind {
+            case .question, .plan: self = .needsYou
+            case .stuck: self = .stuck
+            case .done: self = .done
+            }
+        }
+    }
+
+    let kind: Kind
+
+    var body: some View {
+        ZStack {
+            switch kind {
+            case .needsYou: Circle().fill(CDS.Fill.warning).frame(width: 6, height: 6)
+            case .done: Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6)
+            case .stuck: Circle().fill(CDS.Text.danger).frame(width: 6, height: 6)
+            case .quiet: Circle().strokeBorder(CDS.Text.muted, lineWidth: 1).frame(width: 6, height: 6).opacity(0.5)
+            case .working: BlinkingDot()
+            }
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityHidden(true)
+    }
+}
+
+/// `dframe-dot-blink`: 1.2s ease-in-out, opacity .3 → 1 → .3, forever.
+private struct BlinkingDot: View {
+    @State private var lit = false
+    var body: some View {
+        Circle().fill(CDS.Text.muted).frame(width: 6, height: 6)
+            .opacity(lit ? 1 : 0.3)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { lit = true }
+            }
+    }
+}
+
 /// A session's face in the Router's lists: the icon Jev picked (else its letters, or an emoji) on a neutral square, in the
 /// project's colour, with Claude's status dot on its corner when `dot` is on. Without a session behind it, nothing.
 struct SessionGlyph: View {

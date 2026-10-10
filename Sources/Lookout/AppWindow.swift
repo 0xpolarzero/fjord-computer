@@ -78,14 +78,13 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     var isKey: Bool { window?.isKeyWindow == true }
 
     /// Shows the window in front, on `destination` when one is given (else where it was left). `card`: a Router card to pick
-    /// (it opens on the Router); `search`: the Router's sidebar search has the keyboard, to find any session.
-    func show(_ destination: AppDestination? = nil, card: String? = nil, search: Bool = false) {
+    /// (it opens on the Router).
+    func show(_ destination: AppDestination? = nil, card: String? = nil) {
         Self.active = self
         settle()
         var destination = destination
-        if card != nil || search { destination = .router }
+        if card != nil { destination = .router }
         if let card { routerModel.select(card, store: store) }
-        if search { routerModel.searchWanted = true }
         if let destination { navigator.go(destination.resolved(shown: shownIDs, routerOn: store.routerOn)) }
         let window = self.window ?? makeWindow()
         self.window = window

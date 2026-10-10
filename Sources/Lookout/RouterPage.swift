@@ -35,7 +35,7 @@ struct RouterPage: Equatable {
     }
 
     /// Open cards: what blocks a session first (questions, plans, stuck turns), then the finished turns; newest first in each
-    /// part, as the sidebar lists them (the arrow keys walk the same order).
+    /// part, as the page shows them (the arrow keys walk the same order).
     var needs: [RouterCard] = []
     /// Messages waiting for you to say where they go (nothing is sent until you do), above the cards.
     var asks: [RouterAskBack] = []

@@ -426,7 +426,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let globals = GlobalShortcuts(store: store, hotKeys: hotKeys) { [weak self] action in
             switch action {
             case .togglePanel: self?.toggleWindow()
-            case .sessionSwitcher: if self?.store.routerOn == true { self?.showWindow(.router, search: true) }
             case .router: if self?.store.routerOn == true { self?.showWindow(.router) }
             default: break
             }
@@ -437,9 +436,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains(Lifecycle.flag) { Lifecycle.start(store) }
     }
 
-    /// Opens the app window on `destination` (the bar leaves the edge), on a Router card, or on the Router's search.
-    private func showWindow(_ destination: AppDestination?, card: String? = nil, search: Bool = false) {
-        appWindow?.show(destination, card: card, search: search)
+    /// Opens the app window on `destination` (the bar leaves the edge), or on a Router card.
+    private func showWindow(_ destination: AppDestination?, card: String? = nil) {
+        appWindow?.show(destination, card: card)
         hub?.setWindowOpen(true)
     }
 
