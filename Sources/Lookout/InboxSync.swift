@@ -217,8 +217,8 @@ enum InboxSync {
       \(person)
       labels(first: 10) { nodes { name } }
       assignees(first: 5) { nodes { login } }
-      reviewRequests(first: 5) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
-      requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 5) { nodes { ... on ReviewRequestedEvent {
+      reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
+      requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 50) { nodes { ... on ReviewRequestedEvent {
         createdAt requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } } }
       comments(last: 10) { nodes { ...C } }
       latestOpinionatedReviews(first: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
@@ -487,6 +487,21 @@ enum InboxSync {
         return now < resetsAt
     }
 
+    /// A fetched thing with the times its requests were made kept from before, for those still pending whose event is past
+    /// the ones fetched: a request's time is its identity (its facts' keys, what Jev rated), and must not move.
+    static func keepingRequestTimes(_ thing: Thing, from old: Thing?) -> Thing {
+        guard let old, thing.kind == .pr else { return thing }
+        var thing = thing
+        let known = Set(thing.reviewRequests.map { $0.reviewer.lowercased() })
+        for who in thing.requestedReviewers where !known.contains(who.lowercased())
+            && old.requestedReviewers.contains(where: { $0.caseInsensitiveCompare(who) == .orderedSame }) {
+            if let before = old.reviewRequests.first(where: { $0.reviewer.caseInsensitiveCompare(who) == .orderedSame }) {
+                thing.reviewRequests.append(ThingReviewRequest(reviewer: who, at: before.at))
+            }
+        }
+        return thing
+    }
+
     /// Whether a fact's key is an event the thing still has (a comment, a review, a commit, a thread's reply, a pending
     /// request by when it was made), rather than a state that comes and goes (checks, a label, a score, conflicts).
     static func isEvent(_ key: String, of thing: Thing) -> Bool {
@@ -679,7 +694,7 @@ extension Store {
         if !searches.isEmpty {
             do {
                 fetched = try await fetchThings(searches)
-                for thing in fetched.things { found[thing.id] = thing }
+                for thing in fetched.things { found[thing.id] = InboxSync.keepingRequestTimes(thing, from: things[thing.id]) }
             } catch {
                 searchFailure = error.localizedDescription
             }

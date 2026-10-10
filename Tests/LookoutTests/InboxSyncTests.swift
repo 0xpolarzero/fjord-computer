@@ -513,6 +513,25 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(at["gone"] == nil && t.reviewRequests.count == 2)
     }
 
+    @Test func everyPendingRequestIsAskedForAndOneStillPendingKeepsWhenItWasMade() throws {
+        #expect(InboxSync.fragments.contains("reviewRequests(first: 100)"))
+        let old = try #require(InboxSync.thing(node()))
+        // Later requests pushed bob's event out of the ones fetched: he is still asked, since the same time.
+        let later = (0..<50).map { ["createdAt": "2026-10-05T10:00:00Z", "requestedReviewer": ["login": "r\($0)"]] as [String: Any] }
+        let fetched = try #require(InboxSync.thing(node(["requestEvents": ["nodes": later]])))
+        #expect(fetched.reviewRequests.isEmpty)
+        let kept = InboxSync.keepingRequestTimes(fetched, from: old)
+        #expect(kept.reviewRequests.first { $0.reviewer == "bob" }?.at == iso("2026-10-04T10:00:00Z"))
+        // An event fetched is the truth: asked again later is a new request.
+        let again = try #require(InboxSync.thing(node(["requestEvents": ["nodes": [
+            ["createdAt": "2026-10-09T10:00:00Z", "requestedReviewer": ["login": "bob"]]]]])))
+        #expect(InboxSync.keepingRequestTimes(again, from: old).reviewRequests.first { $0.reviewer == "bob" }?.at == iso("2026-10-09T10:00:00Z"))
+        // No longer pending before: nothing to keep.
+        var gone = old
+        gone.requestedReviewers = []
+        #expect(InboxSync.keepingRequestTimes(fetched, from: gone).reviewRequests.isEmpty)
+    }
+
     @Test func behindBaseAndTheHeadCommitAreRead() throws {
         let t = try #require(InboxSync.thing(node()))
         #expect(t.behindBase && t.headSha == "abc")
