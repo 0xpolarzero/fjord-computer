@@ -100,6 +100,9 @@ struct Scope: Hashable {
 
 extension Scope: Codable {
     private enum CodingKeys: String, CodingKey { case kinds, kind, by, to, toRoles, `in`, on, named }
+    /// Set (to anything) in an encoder's userInfo: the legacy `kind` is written too (the saved state; not the rules'
+    /// fingerprint, which must not change for it, nor what the Router reads and writes).
+    static let withLegacyKind = CodingUserInfoKey(rawValue: "lookout.scope.withLegacyKind")!
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -116,7 +119,11 @@ extension Scope: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         // In the kinds' order, so the same rule is always the same JSON.
-        try c.encode(ThingKind.allCases.filter(kinds.contains), forKey: .kinds)
+        let ordered = ThingKind.allCases.filter(kinds.contains)
+        try c.encode(ordered, forKey: .kinds)
+        // In the saved state, the first of them as `kind` too, as builds from before `kinds` read it: going back to one keeps
+        // the categories (it reads one kind of each rule) rather than losing every one for a rule it can't read.
+        if encoder.userInfo[Self.withLegacyKind] != nil { try c.encodeIfPresent(ordered.first, forKey: .kind) }
         try c.encodeIfPresent(by, forKey: .by)
         try c.encodeIfPresent(to, forKey: .to)
         try c.encode(ToRole.allCases.filter(toRoles.contains), forKey: .toRoles)

@@ -678,6 +678,7 @@ final class Store {
         let write: @Sendable () -> String? = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
+            enc.userInfo[Scope.withLegacyKind] = true
             do {
                 try enc.encode(box.state).write(to: url, options: .atomic)
                 return nil

@@ -62,6 +62,19 @@ import Testing
         #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
     }
 
+    @Test func theSavedRulesSayTheirFirstKindForBuildsFromBeforeKinds() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let store = Store()
+        store.stateFile = file
+        store.categories = [InboxCategory(name: "Both", symbol: "tray", color: .blue, rules: [Rule(scope: Scope(kinds: [.issue, .pr]))])]
+        store.flushSave()
+        let saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let scope = ((saved["categories"] as? [[String: Any]])?.first?["rules"] as? [[String: Any]])?.first?["scope"] as? [String: Any]
+        #expect(scope?["kind"] as? String == "pr" && scope?["kinds"] as? [String] == ["pr", "issue"])
+    }
+
     @Test func aWriteThatFailedIsNotCountedAsSavedAndQuittingTriesAgain() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
