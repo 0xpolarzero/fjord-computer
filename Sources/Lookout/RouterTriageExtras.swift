@@ -14,6 +14,7 @@ extension Store {
     func triageExtras(_ session: ClaudeSession, message: String) async -> [TriageExtra] {
         var extras: [TriageExtra] = []
         if let circles = await circlesExtra(session, message: message) { extras.append(circles) }
+        if let depends = await dependsExtra(session, message: message) { extras.append(depends) }
         return extras
     }
 }
