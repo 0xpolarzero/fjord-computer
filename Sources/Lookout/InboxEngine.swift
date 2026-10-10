@@ -22,6 +22,7 @@ enum InboxEngine {
         var entries: [InboxEntry] = []
         for thing in things {
             let m = marks[thing.id]
+            let doneIn = m?.doneAt == nil ? nil : m?.doneIn
             for category in categories {
                 var union: [Fact] = []
                 var keys = Set<String>()
@@ -29,9 +30,25 @@ enum InboxEngine {
                     guard let matched = facts(rule, thing, marks: m, resolved: resolved) else { continue }
                     for fact in matched where keys.insert(fact.key).inserted { union.append(fact) }
                 }
-                if union.isEmpty { continue }
                 let acked = m?.acked ?? []
                 let seen = m?.seen ?? []
+                // Done here and nothing new since: it stays Done here with what it was Done with, as long as the rules
+                // still take it when Done's cutoff is left aside (an edited rule, or a thing that changed, lets it go).
+                if category.id == doneIn, keys.isSubset(of: acked), let kept = m?.doneFacts, !kept.isEmpty {
+                    var routing = m
+                    routing?.doneAt = nil
+                    let stays = category.rules.contains {
+                        !off.contains($0.id) && facts($0, thing, marks: routing, resolved: resolved) != nil
+                    }
+                    if stays {
+                        var all = Set(kept.map(\.key))
+                        let shown = kept + union.filter { all.insert($0.key).inserted }
+                        entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: shown, isDone: true,
+                                                  isUnread: !all.isSubset(of: seen), importance: importance(thing, resolved)))
+                        break
+                    }
+                }
+                if union.isEmpty { continue }
                 entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: union,
                                           isDone: keys.isSubset(of: acked), isUnread: !keys.isSubset(of: seen),
                                           importance: importance(thing, resolved)))

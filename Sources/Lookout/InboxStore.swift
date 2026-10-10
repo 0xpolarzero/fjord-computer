@@ -57,6 +57,8 @@ extension Store {
         m.acked.formUnion(entry.facts.map(\.key))
         m.seen.formUnion(entry.facts.map(\.key))
         m.doneAt = Date()
+        m.doneIn = entry.categoryID
+        m.doneFacts = entry.facts
         marks[entry.id] = m
     }
 
@@ -77,6 +79,8 @@ extension Store {
         var m = marks[entry.id] ?? EntryMarks()
         m.acked.subtract(entry.facts.map(\.key))
         m.doneAt = nil
+        m.doneIn = nil
+        m.doneFacts = nil
         marks[entry.id] = m
     }
 

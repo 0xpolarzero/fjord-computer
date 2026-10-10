@@ -561,6 +561,8 @@ extension Store {
             m.acked = before.acked
             m.seen = before.seen
             m.doneAt = before.doneAt
+            m.doneIn = before.doneIn
+            m.doneFacts = before.doneFacts
             marks[entry.id] = m
             return true
         }

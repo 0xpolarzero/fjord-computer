@@ -523,6 +523,10 @@ struct EntryMarks: Codable, Hashable {
     /// Fact keys already notified.
     var notified: Set<String> = []
     var doneAt: Date?
+    /// The category it was Done in, and its facts then: it stays Done there while it still belongs there, even once what
+    /// counts after Done leaves the category's rules nothing new to match (so it doesn't fall into a later category).
+    var doneIn: UUID?
+    var doneFacts: [Fact]?
 }
 
 /// Resolves what slots name that the engine can't know alone.
