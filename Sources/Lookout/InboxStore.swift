@@ -18,7 +18,7 @@ enum InboxStore {
 
 extension Store {
     var inboxContext: InboxContext {
-        InboxContext(me: me?.login ?? "", groups: groups, contributedRepos: contributedRepos,
+        InboxContext(me: me?.login ?? login, groups: groups, contributedRepos: contributedRepos,
                       myTeams: myTeams)
     }
 

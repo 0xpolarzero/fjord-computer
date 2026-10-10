@@ -93,11 +93,13 @@ struct PersistedState: Codable {
     var contributedRepos: Set<String>? = nil
     var reposResolvedAt: Date? = nil
     var myTeams: Set<String>? = nil
+    /// The GitHub login last signed in.
+    var login: String? = nil
 
     init(settings: AppSettings, agents: AgentsState? = nil, router: RouterState? = nil, categories: [InboxCategory]? = nil,
          groups: [InboxGroup]? = nil, things: [String: Thing]? = nil, marks: [String: EntryMarks]? = nil,
          categoryBaselines: [UUID: Set<UUID>]? = nil, ownedRepos: Set<String>? = nil, contributedRepos: Set<String>? = nil,
-         reposResolvedAt: Date? = nil, myTeams: Set<String>? = nil) {
+         reposResolvedAt: Date? = nil, myTeams: Set<String>? = nil, login: String? = nil) {
         self.settings = settings
         self.agents = agents
         self.router = router
@@ -110,6 +112,7 @@ struct PersistedState: Codable {
         self.contributedRepos = contributedRepos
         self.reposResolvedAt = reposResolvedAt
         self.myTeams = myTeams
+        self.login = login
     }
 
     /// Tolerant: a file from before the categories (repos, items, ci) loses that data and loads the rest; a part that no
@@ -128,5 +131,6 @@ struct PersistedState: Codable {
         contributedRepos = try? c.decodeIfPresent(Set<String>.self, forKey: .contributedRepos)
         reposResolvedAt = try? c.decodeIfPresent(Date.self, forKey: .reposResolvedAt)
         myTeams = try? c.decodeIfPresent(Set<String>.self, forKey: .myTeams)
+        login = try? c.decodeIfPresent(String.self, forKey: .login)
     }
 }

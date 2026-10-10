@@ -166,7 +166,14 @@ final class Store {
     var iconError: String?
     var claudeLink: ClaudeLink = .off
 
-    var me: GHUser?
+    var me: GHUser? {
+        didSet { if let name = me?.login, name != login { login = name } }
+    }
+    /// Who `me` was last time, kept so the inbox's "me" rules (by me, to me, Repos I own) match at launch, before GitHub
+    /// answers who the token is; a sign-in as someone else replaces it.
+    private(set) var login = "" {
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
+    }
     var tokenSource: TokenSource?
     var authError: String?
     /// The first look at the account got no answer from GitHub (no network yet, a VPN down): nothing is known of the token, so
@@ -582,6 +589,7 @@ final class Store {
         contributedRepos = state.contributedRepos ?? []
         myTeams = state.myTeams ?? []
         reposResolvedAt = state.reposResolvedAt
+        login = state.login ?? ""
         savedRevision = persistedRevision
         loadActions()
     }
@@ -619,7 +627,7 @@ final class Store {
                                                        groups: groups, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
                                                        contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
-                                                       myTeams: myTeams))
+                                                       myTeams: myTeams, login: login.isEmpty ? nil : login))
         let write: @Sendable () -> Void = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601

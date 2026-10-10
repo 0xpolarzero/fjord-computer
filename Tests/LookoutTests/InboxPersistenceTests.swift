@@ -62,6 +62,27 @@ import Testing
         #expect(store.categories.map(\.name) == ["CI", "My repos"])
     }
 
+    @Test func theRulesAboutYouMatchAtLaunchBeforeGitHubSaysWhoYouAre() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let mine = InboxCategory(name: "My repos", symbol: "folder", color: .blue,
+                                 rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.owned])))])
+        let first = Store()
+        first.stateFile = file
+        first.categories = [mine]
+        first.things = ["pr:me/old#1": InboxFixture.pr(1, repo: "me/old")]
+        first.me = GHUser(login: "me", avatarUrl: nil, type: nil)
+        first.save()
+        first.flushSave()
+
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.me == nil)
+        #expect(second.entries(in: mine.id).map(\.id) == ["pr:me/old#1"])
+    }
+
     @Test func aPartThatNoLongerDecodesIsLostAlone() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
