@@ -279,6 +279,19 @@ private struct RouterHistory: View {
                     }
                     // Lines arrive, leave and change without moving; only a line opened or closed by its click animates.
                     .transaction { if !$0.historyToggle { $0.animation = nil } }
+                    // macOS 14 has no scroll phases to read: the scroll view itself says when you scroll up, so the lines you
+                    // read stay drawn as new ones arrive.
+                    .background {
+                        if #available(macOS 15, *) { EmptyView() } else {
+                            HistoryScrollWatch(pinned: pinned) { step in
+                                switch step {
+                                case .stay: break
+                                case .pin(let on): if pinned != on { pinned = on }
+                                case .stick: pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
+                                }
+                            }
+                        }
+                    }
                     .frame(maxWidth: CDS.Transcript.measure, alignment: .leading)
                     .padding(.horizontal, gutter)
                     .frame(maxWidth: .infinity)

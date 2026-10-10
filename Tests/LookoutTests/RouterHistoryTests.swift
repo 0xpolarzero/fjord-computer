@@ -28,6 +28,34 @@ import Testing
         #expect(HistoryPin.next(pinned: false, scrolling: true, .init(content: 1000, visibleBottom: 990)) == .pin(true))
     }
 
+    /// macOS 14's history: its scroll view says when you scroll, so scrolling up unpins it (and the lines drawn stay).
+    @Test func onMacOS14AScrollUpUnpinsTheHistoryAndLayoutDoesNot() {
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 200, height: 300))
+        let document = Flipped(frame: NSRect(x: 0, y: 0, width: 200, height: 1000))
+        scrollView.borderType = .noBorder
+        scrollView.documentView = document
+        var seen: [(HistoryPin.Geometry, Bool)] = []
+        let observer = HistoryScrollObserver(scrollView) { seen.append(($0, $1)) }
+        defer { withExtendedLifetime(observer) {} }
+        // At the bottom, then scrolled up by you.
+        document.scroll(NSPoint(x: 0, y: 700))
+        document.scroll(NSPoint(x: 0, y: 200))
+        #expect(seen.count == 2)
+        #expect(seen.last.map { $0.1 && $0.0 == HistoryPin.Geometry(content: 1000, visibleBottom: 500) } == true)
+        #expect(seen.last.map { HistoryPin.next(pinned: true, scrolling: $0.1, $0.0) } == .pin(false))
+        // Back to the bottom: pinned again.
+        document.scroll(NSPoint(x: 0, y: 700))
+        #expect(seen.last.map { HistoryPin.next(pinned: false, scrolling: $0.1, $0.0) } == .pin(true))
+        // A line arrives while pinned (the content grows, what shows moves): layout, not a scroll; back to the bottom.
+        let before = seen.count
+        document.setFrameSize(NSSize(width: 200, height: 1100))
+        document.scroll(NSPoint(x: 0, y: 750))
+        let layout = seen.dropFirst(before).first
+        #expect(layout.map { !$0.1 } == true)
+        #expect(layout.map { HistoryPin.next(pinned: true, scrolling: $0.1, $0.0) } == .stick)
+    }
+
     @Test func linesShownEarlierStayWhenTheOldestGoPastWhatIsKept() {
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         let all = (0..<300).map { i in
