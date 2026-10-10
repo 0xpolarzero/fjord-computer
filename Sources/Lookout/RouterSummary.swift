@@ -13,15 +13,20 @@ struct RouterSummary: Codable, Equatable, Identifiable {
     var sessionID: String?
     /// The session's title when it was made, for the history (the session may be gone by the time you read it).
     var title: String?
+    /// How far what it was made from reaches: when its context was read, before the call that wrote it (`at` is when that
+    /// ended). The next summary reads what came after this, so nothing that happened during the call is missed. Nil in older
+    /// files, where `at` stands in.
+    var covers: Date?
 
     static let maxKept = 200
 
-    init(id: UUID = UUID(), at: Date, text: String, sessionID: String? = nil, title: String? = nil) {
+    init(id: UUID = UUID(), at: Date, text: String, sessionID: String? = nil, title: String? = nil, covers: Date? = nil) {
         self.id = id
         self.at = at
         self.text = text
         self.sessionID = sessionID
         self.title = title
+        self.covers = covers
     }
 }
 
@@ -128,7 +133,7 @@ enum RouterSummaryContext {
     /// What the one Haiku call reads: the session, its previous summary, its latest steps, and what happened to it since.
     static func build(_ subject: Subject, previous: RouterSummary?, steps: [Claude.TranscriptStep], cards: [RouterCard],
                       decisions: [RouterDecision], now: Date) -> String {
-        let since = previous?.at ?? now.addingTimeInterval(-firstWindow)
+        let since = previous.map { $0.covers ?? $0.at } ?? now.addingTimeInterval(-firstWindow)
         var out: [String] = []
         out.append("Now: \(clock(now)).")
         out.append("The session: \(subject.title) (project \(subject.name)).")
@@ -339,7 +344,9 @@ extension Store {
 
     private func generate(_ id: String, store: Store) async {
         guard let row = store.sessionRow(id) else { errors[id] = "Couldn't summarize: the session is gone"; return }
-        let subject = store.summarySubject(row)
+        // What the summary reads is as of now; the call takes a while, and what happens meanwhile is the next one's.
+        let covers = Date()
+        let subject = store.summarySubject(row, now: covers)
         do {
             let text: String
             if store.routerIsPretend && runner == nil {
@@ -353,12 +360,12 @@ extension Store {
                 }.value
                 let context = RouterSummaryContext.build(subject, previous: store.router.summaries.last { $0.sessionID == id },
                                                          steps: steps, cards: store.router.cards, decisions: store.router.decisions,
-                                                         now: Date())
+                                                         now: covers)
                 let answer = try await (runner ?? Self.haiku(store: store))(context)
                 guard let cleaned = RouterSummaryContext.clean(answer) else { throw RouterTools.Failure("Haiku's answer was empty") }
                 text = cleaned
             }
-            store.addSummary(RouterSummary(at: Date(), text: text, sessionID: id, title: row.session.title))
+            store.addSummary(RouterSummary(at: Date(), text: text, sessionID: id, title: row.session.title, covers: covers))
         } catch {
             errors[id] = "Couldn't summarize: " + RouterDecision.clip(error.localizedDescription, 80)
         }

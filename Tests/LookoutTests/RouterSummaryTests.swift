@@ -229,6 +229,35 @@ import Testing
         #expect(summarizer.errors[row.id] != nil && summarizer.busy.isEmpty)
     }
 
+    @MainActor @Test func whatHappensWhileASummaryIsMadeIsInTheNextOne() async throws {
+        let store = working(1)
+        let row = try #require(store.routerWorkingRows.first)
+        let summarizer = RouterSummarizer()
+        // While Haiku writes the first summary, the session stops on a question.
+        summarizer.runner = { _ in
+            try? await Task.sleep(for: .milliseconds(30))
+            await MainActor.run {
+                store.router.cards.append(RouterCard(id: row.id + "#late", sessionID: row.id, kind: .question, title: "Late",
+                                                     folder: nil, text: "Asked during the call", createdAt: Date()))
+            }
+            try? await Task.sleep(for: .milliseconds(30))
+            return "First."
+        }
+        summarizer.request(row.id, store: store)
+        await summarizer.idle()
+        let first = try #require(store.router.summaries.last)
+        #expect(first.covers.map { $0 < first.at } == true)
+        final class Seen: @unchecked Sendable { var context = "" }
+        let seen = Seen()
+        summarizer.runner = { context in seen.context = context; return "Second." }
+        summarizer.request(row.id, store: store)
+        await summarizer.idle()
+        #expect(seen.context.contains("Asked during the call"))
+        // Older files have no cutoff: the time it was made stands in.
+        let old = try JSONDecoder().decode(RouterSummary.self, from: Data(#"{"id":"\#(UUID())","at":0,"text":"Old."}"#.utf8))
+        #expect(old.covers == nil)
+    }
+
     @MainActor @Test func theHeadersButtonSummarizesEverySessionAFewAtATime() async {
         let store = working(5)
         let ids = store.routerWorkingRows.map(\.id)
