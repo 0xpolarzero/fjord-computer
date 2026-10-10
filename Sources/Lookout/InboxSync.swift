@@ -253,7 +253,7 @@ enum InboxSync {
             }
             """
         }
-        return "query { rateLimit { cost remaining } \(body.joined(separator: "\n")) }\n" + fragments
+        return "query { rateLimit { cost remaining resetAt } \(body.joined(separator: "\n")) }\n" + fragments
     }
 
     /// The repos you own and have merged or open PRs in.
@@ -480,6 +480,13 @@ enum InboxSync {
         "workflow:\(repo):\(workflow)@\(branch)"
     }
 
+    /// Searches wait while GitHub's GraphQL points are nearly spent, until they come back at the reset. A refresh by hand
+    /// tries anyway, and so does one that doesn't know when they come back: its answer says how many there are now.
+    static func waitsForPoints(remaining: Int?, resetsAt: Date?, manual: Bool, now: Date = Date()) -> Bool {
+        guard let remaining, remaining < 100, !manual, let resetsAt else { return false }
+        return now < resetsAt
+    }
+
     // MARK: - Workflows
 
     /// The repo and branch each workflow rule watches; branches nil is the repo's default.
@@ -605,8 +612,9 @@ extension Store {
 // MARK: - The Store's refresh
 
 extension Store {
-    /// Refreshes the inbox's things from GitHub, then notifies what is new. Failing leaves the things as they were.
-    func syncInbox() async {
+    /// Refreshes the inbox's things from GitHub, then notifies what is new. Failing leaves the things as they were. `manual`
+    /// is a refresh asked for by hand: it searches even when the points looked spent.
+    func syncInbox(manual: Bool = false) async {
         guard let me = me?.login else { return }
         // In the background: the refresh never waits on it.
         if !repoNamesChecked, !repoNamesChecking {
@@ -638,7 +646,9 @@ extension Store {
             return
         }
         // Out of GraphQL points: wait for the reset rather than fail every poll.
-        if !searches.isEmpty, let left = gh.graphqlRemaining, left < 100 { return }
+        if !searches.isEmpty, InboxSync.waitsForPoints(remaining: gh.graphqlRemaining, resetsAt: gh.graphqlResetsAt, manual: manual) {
+            return
+        }
         gh.reserveETags(forRepositories: targets.count)
 
         var found: [String: Thing] = [:]

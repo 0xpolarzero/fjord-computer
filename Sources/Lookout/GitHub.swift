@@ -115,6 +115,7 @@ final class GitHubClient: @unchecked Sendable {
                 coreRemaining = nil
                 coreResetsAt = nil
                 gqlRemaining = nil
+                gqlResetsAt = nil
                 etags = [:]
             }
         }
@@ -131,11 +132,14 @@ final class GitHubClient: @unchecked Sendable {
     /// Remaining calls in the core (REST) and GraphQL buckets.
     var rateRemaining: Int? { lock.withLock { coreRemaining } }
     var graphqlRemaining: Int? { lock.withLock { gqlRemaining } }
+    /// When the GraphQL bucket refills.
+    var graphqlResetsAt: Date? { lock.withLock { gqlResetsAt } }
     /// When the core bucket refills.
     var rateResetsAt: Date? { lock.withLock { coreResetsAt } }
     private var coreResetsAt: Date?
     private var coreRemaining: Int?
     private var gqlRemaining: Int?
+    private var gqlResetsAt: Date?
     /// What an answer GitHub gave is remembered by: its ETag, its body and, once decoded, the value (a 304 returns that
     /// value without parsing the body again).
     private struct Remembered {
@@ -285,6 +289,15 @@ final class GitHubClient: @unchecked Sendable {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw GitHubError(message: "Bad GraphQL response")
         }
+        // A query that asks for its `rateLimit` says when the points come back, whatever the headers said.
+        if let limit = (json["data"] as? [String: Any])?["rateLimit"] as? [String: Any], let left = limit["remaining"] as? Int {
+            let reset = (limit["resetAt"] as? String).flatMap { try? Date.ISO8601FormatStyle().parse($0) }
+            lock.withLock {
+                guard generation == sent else { return }
+                gqlRemaining = left
+                if let reset { gqlResetsAt = reset }
+            }
+        }
         return json
     }
 
@@ -301,15 +314,20 @@ final class GitHubClient: @unchecked Sendable {
 
     private func trackRate(_ http: HTTPURLResponse, sent: Int) {
         guard let r = http.value(forHTTPHeaderField: "x-ratelimit-remaining").flatMap(Int.init) else { return }
+        let reset = http.value(forHTTPHeaderField: "x-ratelimit-reset").flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
         switch http.value(forHTTPHeaderField: "x-ratelimit-resource") {
         case "core":
-            let reset = http.value(forHTTPHeaderField: "x-ratelimit-reset").flatMap(TimeInterval.init).map { Date(timeIntervalSince1970: $0) }
             lock.withLock {
                 guard generation == sent else { return }
                 coreRemaining = r
                 coreResetsAt = reset
             }
-        case "graphql": lock.withLock { if generation == sent { gqlRemaining = r } }
+        case "graphql":
+            lock.withLock {
+                guard generation == sent else { return }
+                gqlRemaining = r
+                gqlResetsAt = reset
+            }
         default: break
         }
     }

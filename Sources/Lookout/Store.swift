@@ -899,7 +899,7 @@ final class Store {
         }
         guard me != nil else { return }
         defer { if gh.tokenRejected { dropRejectedToken() } }
-        await syncInbox()
+        await syncInbox(manual: asked)
     }
 
     /// Asks GitHub for the CI of a repo's default branch (found once, then remembered), and the commit's headline.

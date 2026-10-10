@@ -208,6 +208,9 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         var queries: [String] = []
         var posted: [String] = []
         var score = 3
+        /// The GraphQL points the answers say are left, and when they come back.
+        var remaining = 4000
+        var resetAt = "2030-01-01T00:00:00Z"
     }
 
     nonisolated static func body(_ request: URLRequest) -> String {
@@ -233,7 +236,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             let text = Self.body(request)
             log.queries.append(text)
             let pr = node(["body": "<!-- greptile_confidence_score:\(log.score) -->"])
-            let reply: [String: Any] = ["data": ["rateLimit": ["cost": 3, "remaining": 4000],
+            let reply: [String: Any] = ["data": ["rateLimit": ["cost": 3, "remaining": log.remaining, "resetAt": log.resetAt],
                                                   "s0": ["pageInfo": ["hasNextPage": false], "nodes": [pr]]]]
             return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
         }
@@ -301,6 +304,29 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         await s.syncInbox()
         #expect(log.posted.isEmpty)
         #expect(s.marks["pr:o/r#12"]?.notified == ["greptile:2"])
+    }
+
+    @Test func spentPointsWaitForTheirResetAndARefreshByHandTriesAnyway() async {
+        let log = Log()
+        let (s, _) = store(log)
+        log.remaining = 50
+        await s.syncInbox()
+        #expect(s.gh.graphqlRemaining == 50 && s.gh.graphqlResetsAt == iso("2030-01-01T00:00:00Z"))
+        await s.syncInbox()
+        #expect(log.queries.count == 1)
+        // By hand: asked anyway, and the answer says the points come back an hour ago.
+        log.resetAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600))
+        await s.syncInbox(manual: true)
+        #expect(log.queries.count == 2)
+        // Past the reset, polls search again even though the last answer still said 50.
+        await s.syncInbox()
+        #expect(log.queries.count == 3)
+        let now = Date()
+        #expect(InboxSync.waitsForPoints(remaining: 50, resetsAt: now.addingTimeInterval(60), manual: false, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 50, resetsAt: now.addingTimeInterval(60), manual: true, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 50, resetsAt: now.addingTimeInterval(-1), manual: false, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 50, resetsAt: nil, manual: false, now: now))
+        #expect(!InboxSync.waitsForPoints(remaining: 500, resetsAt: now.addingTimeInterval(60), manual: false, now: now))
     }
 
     @Test func marksOfThingsGoneForAMonthAreForgotten() {
