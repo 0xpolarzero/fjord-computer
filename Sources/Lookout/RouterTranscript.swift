@@ -239,7 +239,8 @@ extension View {
 }
 
 private struct TopFade: ViewModifier {
-    @State private var offset: CGFloat = 0
+    /// How far the strip has faded in, 0 to 1: past the first 32 of scroll it stays 1, so scrolling further sets nothing.
+    @State private var shown: CGFloat = 0
 
     func body(content: Content) -> some View {
         let s = CDS.Surface.s1
@@ -251,8 +252,10 @@ private struct TopFade: ViewModifier {
             .allowsHitTesting(false)
         if #available(macOS 15, *) {
             content
-                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { offset = $1 }
-                .overlay(alignment: .top) { strip.opacity(min(1, max(0, offset / CDS.Transcript.fade))) }
+                .onScrollGeometryChange(for: CGFloat.self) {
+                    min(1, max(0, (($0.contentOffset.y + $0.contentInsets.top) / CDS.Transcript.fade * 16).rounded() / 16))
+                } action: { shown = $1 }
+                .overlay(alignment: .top) { strip.opacity(shown) }
         } else {
             content.overlay(alignment: .top) { strip }
         }
