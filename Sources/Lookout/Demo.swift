@@ -11,8 +11,8 @@ enum Demo {
         case busy, botsOnly, allClear, snoozed, error, empty, agents
         // Inbox and sync causes.
         case signedOut, inboxFailed, rateLimited, contributionsEmpty, botChatterEmpty, doneEmpty, firstSync, syncFault
-        // An inbox longer than any list shows; a category hidden.
-        case inboxMany, hiddenCategory
+        // An inbox longer than any list shows; a category hidden; Jev's own category on top.
+        case inboxMany, hiddenCategory, jev
         // CI.
         case noCI, allPassing, manyCI, ciRunning
         // The update tile.
@@ -79,6 +79,13 @@ enum Demo {
         case .doneEmpty:
             agents(store, now)
             store.marks = [:]
+        case .jev:
+            agents(store, now)
+            // What asks you, and the review requests Jev rates high, before the rest.
+            store.categories.insert(InboxCategory(id: UUID(uuidString: "00000000-0000-0000-0000-000000000009")!, name: "Asks me",
+                symbol: "exclamationmark.bubble", color: .clay,
+                rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])), match: .any,
+                             conditions: [.asksMe, .importance(.high)], createdAt: now.addingTimeInterval(-60 * 86400))]), at: 0)
         case .hiddenCategory:
             // Bot chatter hidden: collecting, with no icon in the bar and no tab.
             agents(store, now)
@@ -435,6 +442,29 @@ enum Demo {
         things.append(workflow("ziglang/zig", "CI", branch: "master", state: .pending, title: "std.Io: add vectored reads to File",
                                minutes: 4))
         things.append(workflow("amontlabs/lcu", "Release", state: .passing, title: "Release 0.4.2", minutes: 1440))
+
+        // What Jev made of them: the comments that ask you something, the bots' noise, and how much each review asked of
+        // you matters.
+        let context = InboxContext(me: me.login)
+        func jev(_ id: String, asks: [String] = [], noise: [String] = [], importance: Importance? = nil) {
+            guard let i = things.firstIndex(where: { $0.id == id }) else { return }
+            var signals = ThingSignals()
+            for m in InboxEngine.messages(things[i]) where m.author.login != me.login {
+                signals.messages[m.id] = MessageSignal(asksMe: m.author.isBot ? nil : asks.contains(m.id), noise: noise.contains(m.id))
+            }
+            if let importance, let stamp = InboxEngine.importanceStamp(things[i], context: context) {
+                signals.importance = ImportanceSignal(level: importance, stamp: stamp)
+            }
+            things[i].signals = signals
+        }
+        jev("pr:0xpolarzero/lookout#15", asks: ["c15-2", "t15-1-r"])
+        jev("pr:apple/swift-format#1042", asks: ["c1042-1"])
+        jev("pr:ziglang/zig#21877")
+        jev("pr:apple/swift-format#1051", importance: .urgent)
+        jev("pr:ziglang/zig#21840", importance: .high)
+        jev("pr:superradcompany/microsandbox#412", importance: .low)
+        jev("pr:0xpolarzero/lookout#14", noise: ["c14-1"], importance: .normal)
+        jev("pr:apple/swift-format#1047", noise: ["c1047-2"])
 
         store.things = Dictionary(uniqueKeysWithValues: things.map { ($0.id, $0) })
         store.marks = [:]

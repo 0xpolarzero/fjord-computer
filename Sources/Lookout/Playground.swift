@@ -340,6 +340,8 @@ enum PlaygroundShots {
         Shot.edges("rest-hidden-category", on: .rightAndTop) { $0.scenario = .hiddenCategory },
         Shot.edges("peek-hidden-category", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .hiddenCategory },
         Shot.edges("peek-inbox-many", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .inboxMany },
+        // Jev's category: comments that ask you, review requests it rates high or urgent.
+        Shot.edges("peek-jev", on: [.right]) { $0.section = .inbox; $0.scenario = .jev; $0.tab = "Asks me" },
     ].flatMap { $0 }
 
     /// A scenario on the right and top at rest and/or with its peek.
