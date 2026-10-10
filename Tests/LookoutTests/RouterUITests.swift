@@ -47,7 +47,7 @@ import UserNotifications
         #expect(model.selection == open[1])
         #expect(keys.key(key(kVK_Space, " "), responder: nil))
         #expect(store.router.cards.first { $0.id == open[1] }?.addressedBy == .you)
-        // The addressed card goes down to Earlier: the next open one is picked.
+        // The addressed card goes up to the history: the next open one is picked.
         #expect(model.selection == open[2])
         #expect(keys.key(key(kVK_Escape), responder: nil) && closed)
     }
@@ -57,20 +57,32 @@ import UserNotifications
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
         reopenTransfer(store)
-        // What needs you, then the finished turns, then Earlier: not the newest first, which puts a finished turn second.
+        // Two addressed cards in the history, the one addressed now below the older one.
+        store.setCardAddressed(store.openRouterCards.first { $0.kind == .stuck }!.id, true)
+        // Down the page: the history's addressed cards as it draws them (oldest first, above), then what needs you, then the
+        // finished turns. Not the newest first, which puts a finished turn second and walks the history upwards.
         let (needs, done, earlier) = model.sections(store)
-        let listed = (needs + done + earlier).map(\.id)
-        #expect(!needs.isEmpty && !done.isEmpty && !earlier.isEmpty)
-        #expect(listed != store.routerCards.map(\.id))
+        let listed = (earlier + needs + done).map(\.id)
+        #expect(!needs.isEmpty && !done.isEmpty && earlier.count > 1)
+        #expect(earlier.map(\.id) == store.routerHistory.compactMap { if case .card(let c) = $0 { c.id } else { nil } })
+        #expect(earlier.map(\.addressedAt!) == earlier.map(\.addressedAt!).sorted())
+        #expect(model.cards(store).map(\.id) == listed)
+        // None picked, ↓ starts at the top of Needs you and goes down the screen.
         var walked: [String] = []
-        for _ in listed {
+        for _ in needs + done {
             #expect(keys.key(key(kVK_DownArrow), responder: nil))
             walked += model.selection.map { [$0] } ?? []
         }
-        #expect(walked == listed)
-        // At the bottom it stays there; ↑ walks back the same way.
+        #expect(walked == (needs + done).map(\.id))
+        // At the bottom it stays there; ↑ walks back up the same way, into the history up to its oldest card.
         #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == listed.last)
-        #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed[listed.count - 2])
+        walked = []
+        for _ in 1..<listed.count {
+            #expect(keys.key(key(kVK_UpArrow), responder: nil))
+            walked += model.selection.map { [$0] } ?? []
+        }
+        #expect(walked == listed.dropLast().reversed())
+        #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed.first)
     }
 
     /// The demo's finished turn whose session is idle, open again: its only open one is from a session still running things.

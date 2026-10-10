@@ -311,23 +311,24 @@ final class RouterModel {
     /// The cards listed at the last reconcile, in order: where a picked card that left the list was.
     @ObservationIgnored private var listed: [String] = []
 
-    /// The cards the keys walk, in the order the page shows them: what needs you (see `RouterPage.ranked`), then the
-    /// finished turns, both open; then the latest addressed ones (Earlier). Sessions waiting are with the working ones.
+    /// The cards the keys walk, in the order the page shows them top to bottom: the addressed ones as the history above
+    /// draws them (oldest first, the older ones it hasn't drawn yet before them); then what needs you (see
+    /// `RouterPage.ranked`) and the finished turns, both open. Sessions waiting are with the working ones.
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
         // Only what the page shows: a finished turn whose session still runs things isn't there yet.
         let open = store.routerShownCards.filter { $0.isOpen && $0.kind != .waiting }.sorted(by: RouterPage.ranked)
-        // `routerCards` has the addressed ones newest first.
-        let earlier = store.routerCards.filter { !$0.isOpen }.prefix(Self.earlierLimit)
-        return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, Array(earlier))
+        let byID = Dictionary(store.router.cards.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let earlier = store.routerHistory.compactMap { entry -> RouterCard? in
+            guard case .card(let card) = entry, let now = byID[card.id], !now.isOpen else { return nil }
+            return now
+        }
+        return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, earlier)
     }
-
-    /// How many addressed cards the keys walk after the open ones.
-    static let earlierLimit = 8
 
     /// Every card the keys walk, top to bottom.
     func cards(_ store: Store) -> [RouterCard] {
         let s = sections(store)
-        return s.needs + s.done + s.earlier
+        return s.earlier + s.needs + s.done
     }
 
     /// Whether a message can go to the Router now: it is on (with the sessions extension) and Claude Code is there.
@@ -424,16 +425,21 @@ final class RouterModel {
         select(id, store: store)
     }
 
-    /// ↑↓: the next card up or down, the first (or last) when none is picked.
+    /// ↑↓: the next card up or down the page. None picked, ↓ picks the first open card (the history is above it) and ↑ the
+    /// last card.
     func move(down: Bool, store: Store) {
         reconcile(store: store)
-        let ids = cards(store).map(\.id)
-        guard !ids.isEmpty else { return }
-        let i = ids.firstIndex(of: selection ?? "") ?? (down ? -1 : ids.count)
+        let shown = cards(store)
+        guard !shown.isEmpty else { return }
+        let ids = shown.map(\.id)
+        guard let i = ids.firstIndex(of: selection ?? "") else {
+            select(down ? (shown.first(where: \.isOpen) ?? shown[0]).id : ids[ids.count - 1], store: store)
+            return
+        }
         select(ids[min(max(i + (down ? 1 : -1), 0), ids.count - 1)], store: store)
     }
 
-    /// Space: addressed, or open again. An addressed card goes down to Earlier, so the next open card is picked (or the one
+    /// Space: addressed, or open again. An addressed card goes up to the history, so the next open card is picked (or the one
     /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card.
     func toggleAddressed(store: Store) {
         reconcile(store: store)
@@ -464,7 +470,7 @@ final class RouterModel {
         live.reset()
     }
 
-    /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes down to Earlier),
+    /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes up to the history),
     /// then the card is picked as it now is, so the pick stays on it.
     func open(_ id: String, store: Store) {
         store.openCard(id)
