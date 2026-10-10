@@ -68,7 +68,7 @@ enum LookoutTools {
              fields: [.init("category", .named("Category"), "The category."), .init("at", .int, "Position, 0 is first. Left out: last.", fallback: .absent)]),
         Tool(name: "update_category", doc: "Changes a category. Give its `id` and the fields that change (name, symbol, color, rules, notifies, hidden, actions); fields left out keep their value, and `rules` or `actions`, when given, replace the whole list (keep each rule's `id` from get_category so its history stays). The same JSON and the same refusals as create_category.\(changeNote)",
              fields: [.init("category", .named("Category"), "The category's `id` and what changes.")]),
-        Tool(name: "delete_category", doc: "Deletes a category: its things go to the next category that matches. The CI category can't be deleted (hide it with update_category).\(changeNote)", fields: [categoryRef]),
+        Tool(name: "delete_category", doc: "Deletes a category, the CI category too (hiding it with update_category keeps it, out of the bar): its things go to the next category that matches.\(changeNote)", fields: [categoryRef]),
         Tool(name: "reorder_categories", doc: "Sets the order of the categories, which is their priority. Name every category, in the new order.\(changeNote)",
              fields: [.init("order", .list(.string("id or name")), "Every category's id or name, first to last.")]),
         Tool(name: "list_groups", doc: "Lists the groups (named lists of people or repos usable as one value in any rule) with their members and the categories that use them.", fields: [], reads: true),

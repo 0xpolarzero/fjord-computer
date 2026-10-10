@@ -320,6 +320,9 @@ import Testing
         #expect(await call(t, "update_category", ["category": ["id": ci.id.uuidString, "isCI": false]]).ok == false)
         let delete = await call(t, "delete_category", ["category": ci.id.uuidString])
         #expect(delete.ok && s.categories.isEmpty)
+        // And the tool says so.
+        let doc = try #require(LookoutTools.tools.first { $0.name == "delete_category" }?.doc)
+        #expect(doc.contains("the CI category too") && !doc.contains("can't be deleted"))
     }
 
     @Test func revertingPutsBackOnlyThatCategory() async throws {
