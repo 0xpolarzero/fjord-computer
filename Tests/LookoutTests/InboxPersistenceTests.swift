@@ -38,7 +38,7 @@ import Testing
         #expect(second.reposResolvedAt == resolved)
         #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
         // The editor's preview has the repos a rule names without waiting for a refresh.
-        #expect(second.inboxContext.ownedRepos == ["me/own"] && second.inboxContext.contributedRepos == ["o/c"])
+        #expect(second.inboxContext.contributedRepos == ["o/c"])
     }
 
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {

@@ -472,7 +472,6 @@ struct EntryMarks: Codable, Hashable {
 struct InboxContext {
     var me: String
     var groups: [InboxGroup] = []
-    var ownedRepos: Set<String> = []
     var contributedRepos: Set<String> = []
     /// `org/team` of every team you're in.
     var myTeams: Set<String> = []

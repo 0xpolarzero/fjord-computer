@@ -186,14 +186,12 @@ enum InboxEngine {
         var now: Date
         var groupPeople: [UUID: Set<String>] = [:]
         var groupRepos: [UUID: (exact: Set<String>, owners: Set<String>)] = [:]
-        var owned: Set<String>
         var contributed: Set<String>
         var myTeams: Set<String>
 
         init(_ context: InboxContext) {
             me = InboxEngine.normalize(context.me)
             now = context.now
-            owned = Set(context.ownedRepos.map { $0.lowercased() })
             contributed = Set(context.contributedRepos.map { $0.lowercased() })
             myTeams = Set(context.myTeams.map { $0.lowercased() })
             for group in context.groups {
@@ -251,7 +249,7 @@ enum InboxEngine {
         case .group(let id):
             guard let g = r.groupRepos[id] else { return false }
             return g.exact.contains(repo) || g.owners.contains(String(repo.prefix { $0 != "/" }))
-        case .owned: return r.owned.contains(repo)
+        case .owned: return !r.me.isEmpty && repo.hasPrefix(r.me + "/")
         case .contributed: return r.contributed.contains(repo)
         case .involved: return thing.kind != .workflow && involved(thing, r)
         }

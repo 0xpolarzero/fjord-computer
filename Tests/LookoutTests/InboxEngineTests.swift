@@ -95,6 +95,10 @@ import Testing
         #expect(matches(.group(group.id), pr(repo: "d/x")))
         #expect(!matches(.group(group.id), pr(repo: "d/y")))
         #expect(matches(.involved, pr(repo: "z/z", by: me)))
+        // Owned goes by the owner, not a list of repos: a repo far past the most recent hundred still counts.
+        #expect(matches(.owned, pr(repo: "Me/ancient-repo")))
+        #expect(!matches(.owned, pr(repo: "mentor/x")))
+        #expect(!matches(.owned, pr(repo: "z/me")))
         var other = pr(repo: "z/z", by: stranger)
         #expect(!matches(.involved, other))
         other.comments = [comment("c", me)]
