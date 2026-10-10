@@ -32,6 +32,17 @@ struct RouterState: Codable, Equatable {
     /// What started a session the Router made for an inbox action, by session (its cards say so).
     var origins: [String: SessionOrigin] = [:]
 
+    /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
+    /// when you leave it, if the wait is still on.
+    var heldWaits: [String: HeldWait] = [:]
+
+    struct HeldWait: Codable, Equatable {
+        var ms: Int64
+        var toolUseID: String?
+        var kind: RouterCard.Kind
+        var text: String
+    }
+
     struct PendingTurn: Codable, Equatable {
         /// The turn's number (`completedTurns`).
         var turns: Int
@@ -73,7 +84,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, overviews, seen, waits, waitTools, formSeen, pendingTurns, origins
+        case enabled, enabledAt, cards, changes, chat, decisions, overviews, seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits
     }
 
     func encode(to encoder: Encoder) throws {
@@ -90,6 +101,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(formSeen, forKey: .formSeen)
         try c.encode(pendingTurns, forKey: .pendingTurns)
         try c.encode(origins, forKey: .origins)
+        try c.encode(heldWaits, forKey: .heldWaits)
     }
 
     init(from decoder: Decoder) throws {
@@ -108,6 +120,7 @@ struct RouterState: Codable, Equatable {
         formSeen = (try? c.decodeIfPresent([String: Int64].self, forKey: .formSeen)) ?? [:]
         pendingTurns = (try? c.decodeIfPresent([String: PendingTurn].self, forKey: .pendingTurns)) ?? [:]
         origins = (try? c.decodeIfPresent([String: SessionOrigin].self, forKey: .origins)) ?? [:]
+        heldWaits = (try? c.decodeIfPresent([String: HeldWait].self, forKey: .heldWaits)) ?? [:]
     }
 }
 
@@ -390,9 +403,23 @@ enum RouterFeed {
                     state.pendingTurns[id] = muted.contains(session.folderKey) ? nil
                         : RouterState.PendingTurn(turns: session.completedTurns, message: stamp.message, held: id == viewing)
                 }
+                if let current, current.ms != previous, id == viewing, !muted.contains(session.folderKey) {
+                    state.heldWaits[id] = RouterState.HeldWait(ms: current.ms, toolUseID: current.toolUseID, kind: current.kind, text: current.text)
+                }
                 if let current, current.ms != previous, !quiet {
                     add(&state, RouterCard(id: "\(id)#w\(current.ms)", sessionID: id, kind: current.kind, title: session.title,
                                            folder: session.folder, text: current.text, createdAt: now, toolUseID: current.toolUseID), now)
+                }
+            }
+
+            // A wait held while you looked: carded when you leave, if it is still on; dropped once it is over.
+            if let held = state.heldWaits[id] {
+                if ongoing != held.ms || muted.contains(session.folderKey) {
+                    state.heldWaits[id] = nil
+                } else if id != viewing {
+                    state.heldWaits[id] = nil
+                    add(&state, RouterCard(id: "\(id)#w\(held.ms)", sessionID: id, kind: held.kind, title: session.title,
+                                           folder: session.folder, text: held.text, createdAt: now, toolUseID: held.toolUseID), now)
                 }
             }
 
@@ -459,6 +486,7 @@ enum RouterFeed {
         state.waitTools = state.waitTools.filter { live[$0.key] != nil }
         state.formSeen = state.formSeen.filter { live[$0.key] != nil }
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
+        state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
         prune(&state)
     }
 

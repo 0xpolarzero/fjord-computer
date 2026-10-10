@@ -179,11 +179,28 @@ import Testing
         #expect(state.cards.map(\.id) == ["local_a#t2"])
     }
 
-    @Test func aWaitSeenWhileWatchingIsNotCardedOnceYouLookAway() {
+    @Test func aWaitSeenWhileWatchingIsCardedOnceYouLookAwayIfStillOn() {
         var state = seen([session(running: true)])
         update(&state, [session(running: true)], activity: ["local_a": question(1)], viewing: "local_a", now: 1)
-        update(&state, [session(running: true)], activity: ["local_a": question(1)], now: 2)
+        update(&state, [session(running: true)], activity: ["local_a": question(1)], viewing: "local_a", now: 2)
         #expect(state.cards.isEmpty)
+        update(&state, [session(running: true)], activity: ["local_a": question(1)], now: 3)
+        #expect(state.cards.map(\.kind) == [.question])
+    }
+
+    @Test func aWaitAnsweredWhileWatchingMakesNoCard() {
+        var state = seen([session(running: true)])
+        update(&state, [session(running: true)], activity: ["local_a": question(1)], viewing: "local_a", now: 1)
+        update(&state, [session(turns: 2, running: true)], activity: [:], viewing: "local_a", now: 2)
+        update(&state, [session(turns: 2, running: true)], activity: [:], now: 3)
+        #expect(state.cards.isEmpty)
+        #expect(state.heldWaits.isEmpty)
+    }
+
+    @Test func aWaitWhenNotWatchingIsCardedAtOnce() {
+        var state = seen([session(running: true)])
+        update(&state, [session(running: true)], activity: ["local_a": question(1)], now: 1)
+        #expect(state.cards.map(\.kind) == [.question])
     }
 
     @Test func mutedProjectsMakeNoCards() {
