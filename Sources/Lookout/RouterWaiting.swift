@@ -74,7 +74,9 @@ extension Store {
     /// git remotes, owner and name: another owner's repo of the same name is not it). Each under a plain key for Jev.
     /// What finished after the waiting turn ended (`session.lastActivity`) still counts, though it was over by the time
     /// the options were read: a session whose latest turn ended since is watched from the turn before it (so it is done
-    /// already), and CI whose checks changed since is offered done.
+    /// already), and CI whose checks changed since is offered done. A session at work is watched for the turn it is on,
+    /// done once it stops: its count of finished turns may already include that turn (it is counted before its summary
+    /// is written, while it still shows running), so it is watched from the turn before that count, never for a turn more.
     func waitOptions(for session: ClaudeSession) async -> [RouterTriage.WaitOption] {
         let since = session.lastActivity
         let repos = await gitRepos(of: session.folder)
@@ -83,10 +85,11 @@ extension Store {
             .prefix(10)
         var options = others.enumerated().map { i, other in
             let finishedSince = !other.running && other.completedTurns > 0 && other.lastActivity > since
+            let from = other.completedTurns - (finishedSince || other.running ? 1 : 0)
             return RouterTriage.WaitOption(key: "s\(i)",
                                            hint: "The Claude session “\(other.title)” in \(other.folderName)"
                                                + (other.running ? ", working now" : finishedSince ? ", finished a turn since" : ""),
-                                           watch: .init(target: .session(id: other.id, turns: other.completedTurns - (finishedSince ? 1 : 0)),
+                                           watch: .init(target: .session(id: other.id, turns: from),
                                                         label: "session “\(RouterDecision.clip(other.title, 50))”"))
         }
         let ci = things.values.filter { thing in

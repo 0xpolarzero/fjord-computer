@@ -104,6 +104,24 @@ import Testing
         #expect(RouterWaits.message(s.router.cards[0].triage!) == "The session you were waiting on finished: it finished its turn.")
     }
 
+    @Test func aSessionAtWorkIsDoneOnceItStopsWhateverItsCountShowedWhenItWasPicked() async {
+        // b's turn ended and was counted (6) before its summary came, while it still shows running: picked then, it is
+        // done when it stops, not one turn later.
+        let (s, _) = store(watch: ciWatch)
+        s.claudeSessions["b"]?.completedTurns = 6
+        let watch = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!.watch
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == nil)
+        s.claudeSessions["b"]?.running = false
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == "it finished its turn")
+        // Picked mid-turn (5 counted, the 6th under way): done when that turn ends.
+        s.claudeSessions["b"] = ClaudeSession(id: "b", title: "Migration", folder: "/code/db", completedTurns: 5, lastActivity: Date(), running: true)
+        let mid = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!.watch
+        s.claudeSessions["b"]?.completedTurns = 6
+        #expect(RouterWaits.result(mid, sessions: s.claudeSessions, things: s.things) == nil)
+        s.claudeSessions["b"]?.running = false
+        #expect(RouterWaits.result(mid, sessions: s.claudeSessions, things: s.things) != nil)
+    }
+
     @Test func tellItSendsOnceLogsItAndAddressesTheCard() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
         s.resolveWaits()
@@ -219,7 +237,8 @@ import Testing
         let (s, _) = store(watch: ciWatch, things: [ci(.pending), other, namesake, { var t = ci(.passing); t.id = "pr:o/app#3"; return t }()])
         let options = await s.waitOptions(for: s.claudeSessions["a"]!)
         #expect(options.map(\.key) == ["s0", "c0"])
-        #expect(options[0].watch.target == .session(id: "b", turns: 5) && options[1].watch.target == .ci(thing: "pr:o/app#1"))
+        // b is at work: watched for the turn it is on.
+        #expect(options[0].watch.target == .session(id: "b", turns: 4) && options[1].watch.target == .ci(thing: "pr:o/app#1"))
         // A folder that isn't a clone (no remotes): no CI to offer.
         s.routerTriager.repos["/code/app"] = []
         #expect(await s.waitOptions(for: s.claudeSessions["a"]!).map(\.key) == ["s0"])

@@ -53,12 +53,26 @@ import Testing
         #expect(asked.keys.count == 1 && asked.keys[0].contains("buildsOn"))
         let c = s.router.cards[0]
         #expect(c.kind == .waiting && c.triage?.waitingOn == .session)
-        #expect(c.triage?.watch?.target == .session(id: "b", turns: 7))
+        #expect(c.triage?.watch?.target == .session(id: "b", turns: 6))
         // The migration finishes its turn: the API session can continue.
         s.claudeSessions["b"]?.completedTurns = 8
         s.claudeSessions["b"]?.running = false
         s.resolveWaits()
         #expect(s.router.cards[0].triage?.ready != nil && ready == ["a#t2"])
+    }
+
+    @Test func aSessionWhoseTurnWasCountedBeforeItsSummaryIsWaitedOnForThatTurn() async {
+        // The migration's turn ended (8 counted) but it still shows running, its summary not written yet, as the link forms.
+        let (s, _) = store(message: "The API side is ready; once the schema migration lands I'll wire the endpoints.", pick: "s0", p: 0.9)
+        s.claudeSessions["b"]?.completedTurns = 8
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(s.router.cards[0].kind == .waiting && s.router.cards[0].triage?.ready == nil)
+        // Its summary comes, it stops: the API session is ready, though no other turn was counted.
+        s.claudeSessions["b"]?.running = false
+        s.claudeSessions["b"]?.summary = .init(blocked: false, detail: "Migrated")
+        s.resolveWaits()
+        #expect(s.router.cards[0].triage?.ready?.result == "it finished its turn")
     }
 
     @Test func unsureOrAskingOrNamingNoOneLeavesTheTurnAsItWas() async {
