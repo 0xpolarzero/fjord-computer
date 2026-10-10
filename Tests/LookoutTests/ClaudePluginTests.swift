@@ -704,7 +704,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
             let deadline = Date().addingTimeInterval(60)
             while Date() < deadline {
                 if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
-                    if let answer { try? Data((answer + "\n").utf8).write(to: folder.appendingPathComponent("\(nonce).ack")) }
+                    if let answer { try? Data((answer + "\n").utf8).write(to: folder.appendingPathComponent("\(nonce).ack"), options: .atomic) }
                     return text
                 }
                 try? await Task.sleep(nanoseconds: 10_000_000)

@@ -901,7 +901,9 @@ struct RelayInbox: Sendable {
         func withdraw() { try? fm.removeItem(at: message); try? fm.removeItem(at: ack) }
         func answer() -> String? {
             guard let data = try? Data(contentsOf: ack), let text = String(data: data, encoding: .utf8) else { return nil }
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // An empty file is an answer still being written (it is created, then filled): not an answer yet.
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
         }
         func outcome(_ reply: String) throws -> String {
             withdraw()
