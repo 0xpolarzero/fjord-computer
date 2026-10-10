@@ -9,29 +9,33 @@ struct InboxListView: View {
     let tab: InboxTab
     /// The rows' picked state (a row under the pointer), kept here: the window has no hub.
     @State private var hub: HubState
+    @State private var search: InboxSearch
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     static let column: CGFloat = 880
     /// Room the header leaves at its start (the window's buttons, when the sidebar is away).
     let leadingInset: CGFloat
 
-    init(store: Store, tab: InboxTab, hub: HubState? = nil, leadingInset: CGFloat = 0) {
+    init(store: Store, tab: InboxTab, hub: HubState? = nil, search: InboxSearch? = nil, leadingInset: CGFloat = 0) {
         self.store = store
         self.leadingInset = leadingInset
         self.tab = tab
         _hub = State(initialValue: hub ?? HubState())
+        _search = State(initialValue: search ?? InboxSearch())
     }
 
-    private var entries: [InboxEntry] { store.entries(in: tab) }
-    private var unread: Int { tab == .done ? 0 : entries.filter(\.isUnread).count }
+    private var entries: [InboxEntry] { store.inboxRows(tab, search: search.query) }
+    private var searching: Bool { search.isSearching }
+    private var unread: Int { tab == .done && !searching ? 0 : entries.filter(\.isUnread).count }
 
     var body: some View {
         let entries = entries
         AppPage(title: title, subtitle: subtitle, leadingInset: leadingInset) {
+            InboxSearchField(search: search)
             if unread > 0 {
                 IconButton(symbol: "checkmark.circle", help: "Mark all as seen", detail: store.shortcut(.markAllRead).display,
                            size: IconButton.Size.header) {
-                    withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { store.markAllSeen(tab) }
+                    withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { entries.filter(\.isUnread).forEach(store.markSeen) }
                 }
             }
         } content: {
@@ -56,6 +60,8 @@ struct InboxListView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { undoLine }
         .motion(Theme.Motion.fade, value: store.inboxRevision)
+        // A new search picks its first result, so ↩ opens it straight away.
+        .onChange(of: search.query) { hub.selection = searching ? entries.first.map { "i:" + $0.id } : nil }
     }
 
     private func scroll(_ proxy: ScrollViewProxy, to request: ScrollRequest?) {
@@ -64,14 +70,16 @@ struct InboxListView: View {
     }
 
     private var title: String {
+        if searching { return "Search" }
         switch tab {
-        case .done: "Done"
-        case .category: store.category(tab)?.title ?? "Inbox"
+        case .done: return "Done"
+        case .category: return store.category(tab)?.title ?? "Inbox"
         }
     }
 
     private var subtitle: String {
         let all = entries
+        if searching { return all.isEmpty ? "" : "\(all.count) found" }
         if all.isEmpty { return "" }
         if tab == .done { return "\(all.count) moved to Done" }
         if store.category(tab)?.isCI == true { return "\(all.count) failing" }
@@ -79,7 +87,9 @@ struct InboxListView: View {
     }
 
     private var empty: some View {
-        let text: String = if tab == .done {
+        let text: String = if searching {
+            "Nothing found"
+        } else if tab == .done {
             "Nothing here yet"
         } else if store.category(tab)?.isCI == true {
             "Everything is passing"
@@ -166,6 +176,7 @@ struct AppContent: View {
     let navigator: AppNavigator
     let routerModel: RouterModel
     let hub: HubState
+    var search = InboxSearch()
     var checksClaudeCode = true
     /// Room the window's buttons take at the start when the sidebar is away.
     var leadingInset: CGFloat = 0
@@ -173,8 +184,8 @@ struct AppContent: View {
     var body: some View {
         Group {
             switch navigator.selection {
-            case .category(let id): InboxListView(store: store, tab: .category(id), hub: hub, leadingInset: leadingInset).id(id)
-            case .done: InboxListView(store: store, tab: .done, hub: hub, leadingInset: leadingInset).id("done")
+            case .category(let id): InboxListView(store: store, tab: .category(id), hub: hub, search: search, leadingInset: leadingInset).id(id)
+            case .done: InboxListView(store: store, tab: .done, hub: hub, search: search, leadingInset: leadingInset).id("done")
             case .router:
                 RouterCodeView(store: store, model: routerModel, checksClaudeCode: checksClaudeCode)
             case .settings:

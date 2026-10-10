@@ -129,6 +129,8 @@ final class HubController {
     private let window: PillPanel
     private let host: NSHostingView<HubRoot>
     private var screen: NSScreen
+    /// The screen the bar is docked on.
+    var dockedScreen: NSScreen { screen }
     private var monitors: [Any] = []
     private var hoverTask: Task<Void, Never>?
     /// The hover state a scheduled task is about to apply, so repeated events don't reschedule it.

@@ -162,7 +162,7 @@ enum AccessibilityTree {
         Demo.populate(store, .router)
         let model = RouterModel()
         model.selection = store.openRouterCards.first { $0.kind == .question }?.id
-        let tree = try await AccessibilityTree.render(RouterView(store: store, model: model))
+        let tree = try await AccessibilityTree.render(RouterCodeView(store: store, model: model))
         let controls = tree.all.filter { AXNode.controls.contains($0.role) }
         #expect(controls.count > 5, "\(tree.all.map(\.role))")
         let unnamed = controls.filter { $0.label.isEmpty }.map(\.role)

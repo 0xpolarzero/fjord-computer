@@ -387,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.hub = hub
         // The window is the bar's other mode: while it is open the bar is away, and closing it puts the bar back.
         window.onClose = { [weak hub] in hub?.setWindowOpen(false) }
+        window.barScreen = { [weak hub] in hub?.dockedScreen }
         hub.openApp = { [weak self] in self?.showWindow($0) }
         hub.pickRouterCard = { [weak window, weak store] id in if let store { window?.routerModel.select(id, store: store) } }
         // Banners for new cards that need you; a demo posts none.
