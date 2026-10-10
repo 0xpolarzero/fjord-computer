@@ -236,6 +236,25 @@ import Testing
         #expect(s.routingExamples().contains("“add a changelog entry” → session “Update the docs” in docs"))
     }
 
+    @Test func sendingTheSameWordsAgainKeepsTheirCorrectionAsAnExample() async {
+        let (s, _, _) = setup()
+        let d = RouterDispatcher(store: s)
+        s.router.decisions.append(RouterDecision(at: Date().addingTimeInterval(-60), trigger: .you("ship it"),
+                                                 outcome: .corrected(from: "session “A” in x", to: "session “B” in y")))
+        // An earlier send of the same words still waiting on an ask hides nothing either.
+        s.router.decisions.append(RouterDecision(at: Date().addingTimeInterval(-30), trigger: .you("Ship it")))
+        var examples: [String] = []
+        d.asker = { _, state in
+            examples.append(state["how the user routed messages before (follow these)"] ?? "")
+            return ["route": .choice(.init(choice: "o0", confidence: 0.2, probabilities: ["o0": 0.4]))]
+        }
+        let id = d.submit("ship it")
+        await waitUntil { !examples.isEmpty }
+        #expect(examples.first?.contains("“ship it” → session “B” in y, not session “A” in x") == true)
+        #expect(s.routingExamples(excluding: id).contains("not session “A”"))
+        d.stopAll()
+    }
+
     // MARK: Deterministic
 
     @Test func anArmedReplyIsPreparedSentAndNeverClassified() async {

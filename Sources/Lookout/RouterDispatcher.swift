@@ -678,7 +678,7 @@ extension RouterDispatcher.Effects {
                 // Plain keys for Jev (card ids and paths have characters it may not take), mapped back after.
                 let keys = targets.indices.map { "o\($0)" }
                 let hints = Dictionary(uniqueKeysWithValues: zip(keys, targets.map(\.hint)))
-                let state = RouterDispatcher.routingState(message: message, history: history, examples: store.routingExamples())
+                let state = RouterDispatcher.routingState(message: message, history: history, examples: store.routingExamples(excluding: tools.decision))
                 var questions: [String: JevClient.Question] = [
                     "route": .choice(keys, hints: hints, instructions: "Which of the user's Claude Code sessions, open cards or projects is this message for? Or is it a request to change Lookout itself, a question about the current state, or several things at once? Follow how the user routed and corrected before. Pick unclear unless the message makes it clear."),
                     "rewording": RouterDispatcher.rewordingQuestion,

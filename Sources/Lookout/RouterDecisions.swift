@@ -230,16 +230,20 @@ extension Store {
 
     /// How you routed messages before, for Jev, oldest first, one short line each: your corrections (an ask answered with
     /// something else than his suggestion), then a few targets you went with (his pick shown while you typed, his suggestion
-    /// on an ask, a target you pinned). At most `limit` lines, the newest; at most a third of them confirmations.
-    func routingExamples(limit: Int = 8, now: Date = Date()) -> String {
+    /// on an ask, a target you pinned). At most `limit` lines, the newest; at most a third of them confirmations. The same
+    /// words count once, by their newest example: an entry that is neither (a run under way, an ask waiting) hides nothing.
+    /// `excluding`: the entry of the run asking.
+    func routingExamples(limit: Int = 8, now: Date = Date(), excluding: UUID? = nil) -> String {
         var corrections: [(Date, String)] = [], confirmed: [(Date, String)] = []
         var seen = Set<String>()
-        for entry in router.decisions.reversed() where corrections.count + confirmed.count < limit {
-            guard case .you(let text) = entry.trigger, seen.insert(text.lowercased()).inserted else { continue }
+        for entry in router.decisions.reversed() where corrections.count + confirmed.count < limit && entry.id != excluding {
+            guard case .you(let text) = entry.trigger else { continue }
             let said = "“\(RouterDecision.clip(text, 60))”"
             if case .corrected(let from, let to) = entry.outcome {
+                guard seen.insert(text.lowercased()).inserted else { continue }
                 corrections.append((entry.at, "\(said) → \(RouterDecision.clip(to, 60)), not \(RouterDecision.clip(from, 60))"))
-            } else if entry.decision.confirmed == true, let target = entry.decision.target, confirmed.count < max(1, limit / 3) {
+            } else if entry.decision.confirmed == true, let target = entry.decision.target {
+                guard seen.insert(text.lowercased()).inserted, confirmed.count < max(1, limit / 3) else { continue }
                 confirmed.append((entry.at, "\(said) → \(RouterDecision.clip(target, 60))"))
             }
         }
