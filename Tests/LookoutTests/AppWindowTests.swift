@@ -298,9 +298,10 @@ import Testing
         var turns: [@MainActor () -> Void] = []
     }
 
-    /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on.
-    private func morphing(_ body: (AppWindowController, Ticks) -> Void) {
-        let saved = (AppTransition.enabled, AppTransition.nextFrame, AppTransition.nextTurn)
+    /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on. A window under
+    /// test never has the keyboard (the test runner is not the active app): `AppTransition.isKey` may say otherwise.
+    private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
+        let saved = (AppTransition.enabled, AppTransition.nextFrame, AppTransition.nextTurn, AppTransition.isKey)
         let ticks = Ticks()
         AppTransition.enabled = true
         AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
@@ -309,6 +310,7 @@ import Testing
             AppTransition.enabled = saved.0
             AppTransition.nextFrame = saved.1
             AppTransition.nextTurn = saved.2
+            AppTransition.isKey = saved.3
         }
         _ = NSApplication.shared
         let store = Store()
@@ -316,7 +318,7 @@ import Testing
         Demo.populate(store, .router)
         let window = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
         window.bar = { BarMorph(frame: NSRect(x: 1400, y: 300, width: 46, height: 300)) }
-        body(window, ticks)
+        try body(window, ticks)
         window.run?.end()
         window.close()
     }
@@ -397,6 +399,35 @@ import Testing
             #expect(window.isVisible && closing.overlay.isVisible && ticks.blocks.count == 1)
             ticks.blocks.removeFirst()()
             #expect(!window.isVisible && closing.startPose?.container == 1 && closing.startPose?.window == 1)
+        }
+    }
+
+    /// Opened, then closed with the keyboard (the picture it closes on is kept), and its close under way.
+    private func openAndStartClosing(_ controller: AppWindowController, _ ticks: Ticks, on place: AppDestination) {
+        AppTransition.isKey = { _ in true }
+        controller.show(place)
+        ticks.turns.forEach { $0() }
+        ticks.turns = []
+        controller.run?.complete()
+        ticks.blocks.removeFirst()()
+        ticks.blocks.removeFirst()()
+        controller.close()
+        ticks.blocks.removeFirst()()
+    }
+
+    /// A close turned round by a banner's click on another card of the same place shows that card, not the picture of the
+    /// one it closed on.
+    @Test func aCloseTurnedRoundOnAnotherCardRefreshesThePicture() throws {
+        try morphing { controller, ticks in
+            let cards = controller.store.openRouterCards
+            try #require(cards.count >= 2)
+            controller.routerModel.select(cards[0].id, store: controller.store)
+            openAndStartClosing(controller, ticks, on: .router)
+            guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
+            controller.show(card: cards[1].id)
+            #expect(controller.phase == .opening && controller.run === run && controller.navigator.selection == .router)
+            ticks.turns.forEach { $0() }
+            #expect(run.image != nil && run.image !== shown)
         }
     }
 

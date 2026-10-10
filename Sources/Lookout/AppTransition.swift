@@ -57,6 +57,9 @@ enum AppTransition {
         DispatchQueue.main.async { MainActor.assumeIsolated { block() } }
     }
 
+    /// Whether `window` has the keyboard (its buttons in colour). Replaceable, so a test can have a key window.
+    static var isKey: (NSWindow) -> Bool = { $0.isKeyWindow }
+
     /// The window's own corner radius (macOS 26's are larger than before), so nothing changes when the real window takes over.
     static func cornerRadius(of window: NSWindow) -> CGFloat {
         guard let frame = window.contentView?.superview else { return fallbackRadius }
@@ -82,7 +85,7 @@ enum AppTransition {
     /// is nothing to draw.
     static func makeRun(for window: NSWindow, bar: BarMorph?) -> Run? {
         guard let image = snapshot(of: window), let screen = window.screen ?? NSScreen.main else { return nil }
-        return Run(window: window, image: image, imageIsKey: window.isKeyWindow, screen: screen, bar: bar,
+        return Run(window: window, image: image, imageIsKey: isKey(window), screen: screen, bar: bar,
                    radius: cornerRadius(of: window))
     }
 
@@ -244,7 +247,7 @@ enum AppTransition {
         func refresh(_ window: NSWindow, crossFade: Bool = false) {
             guard let image = AppTransition.snapshot(of: window) else { return }
             self.image = image
-            imageIsKey = window.isKeyWindow
+            imageIsKey = AppTransition.isKey(window)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             windowLayer.removeAnimation(forKey: kCATransition)

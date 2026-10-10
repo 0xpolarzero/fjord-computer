@@ -116,11 +116,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // One on its way in with its window still to come gets it then.
             if pending == nil { bringIn(window) }
             // On its way in to another place now: the overlay shows that one.
-            if arriving, navigator.selection != shown {
-                owed = (generation, crossFade: true)
-                payPicture(generation)
-            }
+            if arriving, navigator.selection != shown { contentChanged() }
         }
+        // A card picked on the way in (a close turned round included): the place may be the same, what it shows is not.
+        if card != nil, reversing || arriving { contentChanged() }
         watchKeys()
         watchFront()
         reportFront()
@@ -201,7 +200,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// little after it is asked to: the picture waits for it, rather than being taken twice).
     private func payPicture(_ mine: Int) {
         guard let owed, owed.generation == mine, generation == mine, pending == nil, let window, let run else { return }
-        guard window.isKeyWindow else {
+        guard AppTransition.isKey(window) else {
             guard keyWatch == nil else { return }
             keyWatch = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window,
                                                               queue: .main) { [weak self] _ in
@@ -215,6 +214,16 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         self.owed = nil
         stopKeyWatch()
         run.refresh(window, crossFade: owed.crossFade)
+    }
+
+    /// What an opening's window shows changed after its overlay's picture was taken (another place, a card, a row or a
+    /// section asked for): a fresh one fades in over it, a turn later (once the change has been drawn), at the latest as
+    /// the real window takes over.
+    private func contentChanged() {
+        guard phase == .opening, run != nil else { return }
+        let mine = generation
+        owed = (mine, crossFade: true)
+        AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
     }
 
     private func stopKeyWatch() {
@@ -361,6 +370,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     func showUpdates() {
         show(.settings)
         hub.showUpdates()
+        contentChanged()
     }
 
     /// An inbox entry picked and scrolled to, on its category (Done if it was done since): where a banner's click lands.
@@ -368,6 +378,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         show(entry.isDone ? .done : .category(entry.categoryID))
         hub.selection = "i:" + entry.id
         hub.requestScroll("i:" + entry.id)
+        contentChanged()
     }
 
     /// The Go menu's destinations with their titles, in the sidebar's order.
