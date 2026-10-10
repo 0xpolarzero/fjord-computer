@@ -41,8 +41,13 @@ final class Store {
     /// What the categories' actions have done and what was already there when they began (InboxActions.swift); kept in its
     /// own file next to the state.
     var actionLedger = ActionLedger() {
-        didSet { saveActions() }
+        didSet {
+            saveActions()
+            if !pendingActionSessions.isEmpty { linkPendingActionSessions() }
+        }
     }
+    /// Sessions the Router started for an action message whose run wasn't recorded yet: linked when it is.
+    @ObservationIgnored var pendingActionSessions: [UUID: String] = [:]
     /// Does what actions do; nil is the real one (and nothing at all in the playground and tests).
     @ObservationIgnored var actionPerformer: ActionPerformer?
     @ObservationIgnored var actionsBusy = false

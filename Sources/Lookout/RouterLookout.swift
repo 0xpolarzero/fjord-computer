@@ -565,25 +565,22 @@ private extension Array {
 
 extension Store {
     /// The session an inbox action's message ended up in (a new one, or one it was passed to): the action's row links to it.
-    /// The run of that message is recorded when the action returns, which may be just after the Router has acted: asked again
-    /// for a moment.
-    func noteActionSession(_ session: String, forMessage message: UUID, attempts: Int = 5) {
+    /// The run of that message is recorded when the action returns, which may be after the Router has acted: then it waits
+    /// for that run.
+    func noteActionSession(_ session: String, forMessage message: UUID) {
+        pendingActionSessions[message] = session
+        linkPendingActionSessions()
+    }
+
+    /// Links each session the Router reported to the runs of its message; one not recorded yet waits for its run.
+    func linkPendingActionSessions() {
         var ledger = actionLedger
-        var found = false
-        for (key, run) in ledger.runs where run.message == message {
-            found = true
-            guard run.sessionID == nil else { continue }
-            var run = run
-            run.sessionID = session
-            ledger.runs[key] = run
+        for (message, session) in pendingActionSessions {
+            let keys = ledger.runs.filter { $0.value.message == message }.map(\.key)
+            guard !keys.isEmpty else { continue }
+            pendingActionSessions[message] = nil
+            for key in keys where ledger.runs[key]?.sessionID == nil { ledger.runs[key]?.sessionID = session }
         }
-        if found {
-            if ledger != actionLedger { actionLedger = ledger }
-        } else if attempts > 0 {
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(500))
-                self?.noteActionSession(session, forMessage: message, attempts: attempts - 1)
-            }
-        }
+        if ledger != actionLedger { actionLedger = ledger }
     }
 }

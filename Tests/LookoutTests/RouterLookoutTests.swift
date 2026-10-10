@@ -646,11 +646,10 @@ import Testing
         // One already linked keeps its session.
         s.noteActionSession("local_other", forMessage: message)
         #expect(s.actionLedger.runs["k"]?.sessionID == "local_new")
-        // A run recorded a moment after the Router acted is found when asked again.
+        // A run recorded after the Router acted is linked when it is recorded.
         let late = UUID()
-        s.noteActionSession("local_late", forMessage: late, attempts: 5)
+        s.noteActionSession("local_late", forMessage: late)
         s.actionLedger.runs["late"] = ActionRun(category: UUID(), thing: "t", action: UUID(), trigger: "enter", state: .done, at: Date(), message: late)
-        await waitUntil(within: 10) { s.actionLedger.runs["late"]?.sessionID != nil }
         #expect(s.actionLedger.runs["late"]?.sessionID == "local_late")
     }
 
