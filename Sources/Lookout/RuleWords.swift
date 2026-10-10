@@ -27,13 +27,13 @@ struct RuleWords {
 
     /// The rule's lines: its sentence (`PRs by me in Repos I own`), then `when any of:` and one line for each condition.
     func lines(_ rule: Rule) -> [[RulePiece]] {
-        var sentence: [RulePiece] = [.chip(rule.scope.kind.label)]
         let scope = rule.scope
-        if scope.kind != .workflow {
+        var sentence: [RulePiece] = [.chip(scope.kinds.label)]
+        if !scope.isWorkflow {
             sentence += slot("by", scope.by, person)
             if let to = scope.to {
-                let roles = RuleEditing.roles(scope.kind).filter { scope.toRoles.contains($0) }
-                let all = roles.count == RuleEditing.roles(scope.kind).count
+                let roles = RuleEditing.roles(scope.kinds).filter { scope.toRoles.contains($0) }
+                let all = roles.count == RuleEditing.roles(scope.kinds).count
                 sentence += slot(all ? "to" : "to (" + roles.map(RuleEditing.roleTitle).joined(separator: ", ") + ")", to, person)
             }
         }

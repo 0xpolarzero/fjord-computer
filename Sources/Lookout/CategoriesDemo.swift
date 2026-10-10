@@ -85,7 +85,7 @@ enum CategoriesDemo {
         store.groups = [contributing, core]
         store.categories = [
             InboxCategory(id: mine, name: "Mine", symbol: "person", color: .blue, rules: [
-                Rule(scope: Scope(kind: .pr, by: Pick(include: [me]), in: Pick(include: [.group(contributing.id)])), match: .any, conditions: [
+                Rule(scope: Scope(kinds: [.pr], by: Pick(include: [me]), in: Pick(include: [.group(contributing.id)])), match: .any, conditions: [
                     .lastComment(by: Pick(include: [.maintainers, greptile])),
                     .unresolvedThreads(startedBy: Pick(include: [.maintainers, greptile]), lastReplyBy: Pick(except: [me])),
                     .changesRequested(by: Pick(include: [.maintainers])),
@@ -95,12 +95,12 @@ enum CategoriesDemo {
                 ]),
             ]),
             InboxCategory(id: reviews, name: "Review requests", symbol: "eye", color: .violet, rules: [
-                Rule(scope: Scope(kind: .pr, to: Pick(include: [me]), toRoles: [.reviewRequested], in: Pick(include: [.involved])),
+                Rule(scope: Scope(kinds: [.pr], to: Pick(include: [me]), toRoles: [.reviewRequested], in: Pick(include: [.involved])),
                      match: .all, conditions: [.status([.open]), .checks([.passing, .pending])]),
-                Rule(scope: Scope(kind: .issue, to: Pick(include: [me]), toRoles: [.assigned]), conditions: []),
+                Rule(scope: Scope(kinds: [.issue], to: Pick(include: [me]), toRoles: [.assigned]), conditions: []),
             ]),
             InboxCategory(name: "Dependabot", symbol: "shippingbox", color: .gray, rules: [
-                Rule(scope: Scope(kind: .pr, by: Pick(include: [.bots]), in: Pick(include: [.contributed])), conditions: []),
+                Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.bots]), in: Pick(include: [.contributed])), conditions: []),
             ], notifies: false, hidden: true),
         ] + InboxStore.defaultCategories
         store.categories[0].actions = ActionList([
@@ -134,7 +134,7 @@ enum CategoriesDemo {
     static func seedImpossible(_ store: Store) {
         let me = PersonRef.me
         store.categories.insert(InboxCategory(id: owed, name: "Owed reviews", symbol: "text.magnifyingglass", color: .amber, rules: [
-            Rule(scope: Scope(kind: .pr, by: Pick(include: [me]), to: Pick(include: [me]), toRoles: [.reviewRequested],
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [me]), to: Pick(include: [me]), toRoles: [.reviewRequested],
                               in: Pick(include: [.group(UUID())])),
                  match: .all, conditions: [
                     .approved(by: Pick(include: [me])),
@@ -166,25 +166,25 @@ enum CategoriesDemo {
         case .autocomplete: break
         case .single:
             store.categories.insert(InboxCategory(id: single, name: "Low Greptile", symbol: "eye", color: .green, rules: [
-                Rule(scope: Scope(kind: .pr, by: Pick(include: [me])), conditions: [.greptileBelow(4)]),
+                Rule(scope: Scope(kinds: [.pr], by: Pick(include: [me])), conditions: [.greptileBelow(4)]),
             ]), at: 0)
             preview.editing = .existing(single)
         case .ci:
             // A Workflows rule with two repos in its required `in`.
             store.categories.insert(InboxCategory(id: switched, name: "Builds", symbol: "hammer", color: .red, rules: [
-                Rule(scope: Scope(kind: .workflow, in: Pick(include: [.repo("superradcompany/microsandbox"), .repo("libkrun/libkrun")])),
+                Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("superradcompany/microsandbox"), .repo("libkrun/libkrun")])),
                      conditions: [.workflow([.failing])]),
             ]), at: 0)
             preview.editing = .existing(switched)
         case .switched:
             // A PR rule turned into a Workflows one: what could not come along is said under it.
-            let before = Rule(scope: Scope(kind: .pr, by: Pick(include: [me]), in: Pick(include: [.repo("superradcompany/microsandbox")])),
+            let before = Rule(scope: Scope(kinds: [.pr], by: Pick(include: [me]), in: Pick(include: [.repo("superradcompany/microsandbox")])),
                               conditions: [.greptileBelow(4), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
                                            .lastComment(by: Pick(include: [.maintainers]))])
-            let result = RuleEditing.switchKind(before, to: .workflow)
+            let result = RuleEditing.switchKinds(before, to: [.workflow])
             store.categories.insert(InboxCategory(id: switched, name: "Builds", symbol: "hammer", color: .red, rules: [result.rule]), at: 0)
             preview.editing = .existing(switched)
-            preview.notice = RuleEditing.droppedNotice(result.dropped, for: .workflow)
+            preview.notice = RuleEditing.droppedNotice(result.dropped, for: [.workflow])
         }
         let size = CGSize(width: width, height: shot.height)
         let data = EditorData(store: store)

@@ -6,7 +6,7 @@ enum InboxEngine {
     struct Problem: Hashable {
         /// Index into `rule.conditions`, or nil for a scope slot.
         var condition: Int?
-        /// "by", "to", "in", "on", "named" for scope slots.
+        /// "kind", "by", "to", "in", "on", "named" for scope slots.
         var slot: String?
         var reason: String
     }
@@ -51,14 +51,17 @@ enum InboxEngine {
     static func problems(_ rule: Rule) -> [Problem] {
         var out: [Problem] = []
         let scope = rule.scope
-        let kind = scope.kind
+        let kinds = scope.kinds
         func flag(_ slot: String, _ reason: String) { out.append(Problem(condition: nil, slot: slot, reason: reason)) }
+
+        if kinds.isEmpty { flag("kind", "Pick PRs, issues or workflows") }
+        if scope.isWorkflow, kinds.count > 1 { flag("kind", "Workflows are a rule of their own: they don't mix with PRs or issues") }
 
         if let p = scope.by, overlap(p) { flag("by", Self.bothReason) }
         if let p = scope.by, hasTeam(p) { flag("by", "Teams don't author anything") }
         if let p = scope.to, overlap(p) { flag("to", Self.bothReason) }
         if let p = scope.in, overlap(p) { flag("in", Self.bothReason) }
-        if kind == .workflow {
+        if scope.isWorkflow {
             if scope.in == nil { flag("in", "Workflows need a repository") }
             if scope.by != nil { flag("by", "Workflows have no author") }
             if scope.to != nil { flag("to", "Workflows aren't assigned to anyone") }
@@ -70,18 +73,24 @@ enum InboxEngine {
         if let to = scope.to {
             if scope.toRoles.isEmpty { flag("to", "Pick at least one of assigned, review requested, mentioned") }
             if hasTeam(to) {
-                if kind == .issue { flag("to", "Issues aren't assigned to teams") }
+                if !kinds.contains(.pr) { flag("to", "Issues aren't assigned to teams") }
                 else if !scope.toRoles.contains(.reviewRequested) { flag("to", "Teams only come with review requested") }
             }
-            if kind == .pr, scope.toRoles == [.reviewRequested], onlyMe(scope.by), onlyMe(to) {
+            // Review requests are a PR's alone: issues need another way to be for someone.
+            if kinds.contains(.issue), scope.toRoles == [.reviewRequested] {
+                flag("to", "Issues are never review requested: add assigned or mentioned, or leave issues out")
+            }
+            if kinds.contains(.pr), scope.toRoles == [.reviewRequested], onlyMe(scope.by), onlyMe(to) {
                 flag("to", "You can't be asked to review your own PR")
             }
         }
 
         for (i, condition) in rule.conditions.enumerated() {
             func add(_ reason: String) { out.append(Problem(condition: i, slot: nil, reason: reason)) }
-            if !offered(condition).contains(kind) {
-                add("\(kind.label) don't have this")
+            // Every chosen kind must have it: a condition that only some can meet would quietly leave the others out.
+            let lacking = kinds.subtracting(offered(condition))
+            if !lacking.isEmpty {
+                add("\(lacking.label) don't have this")
                 continue
             }
             switch condition {
@@ -89,7 +98,7 @@ enum InboxEngine {
                  .mentions(let p, let since):
                 if overlap(p) { add(bothReason) }
                 if hasTeam(p) { add("Teams don't write comments") }
-                if since == .myLastReview, kind == .issue { add("Issues have no reviews") }
+                if since == .myLastReview, kinds.contains(.issue) { add("Issues have no reviews") }
             case .lastComment(let p):
                 if overlap(p) { add(bothReason) }
             case .approved(let p), .changesRequested(let p):
@@ -106,7 +115,7 @@ enum InboxEngine {
                 if s.isEmpty { add("Pick at least one state") }
             case .status(let s):
                 if s.isEmpty { add("Pick at least one status") }
-                else if kind == .issue, s.isDisjoint(with: [.open, .closed]) { add("Issues are only open or closed") }
+                else if !kinds.contains(.pr), s.isDisjoint(with: [.open, .closed]) { add("Issues are only open or closed") }
             case .greptileBelow(let n):
                 if n <= 1 { add("Greptile scores start at 1") }
             case .hasConflicts, .behindBase, .noActivity:
@@ -140,8 +149,15 @@ enum InboxEngine {
         return out
     }
 
-    /// Conditions offered for a kind, in menu order.
-    static func conditions(for kind: ThingKind) -> [Condition] {
+    /// Conditions offered for a rule about `kinds`, in menu order: those every one of them has, with values that fit them all
+    /// (the narrowest kind's list: an issue's `status` closed, not a PR's draft).
+    static func conditions(for kinds: Set<ThingKind>) -> [Condition] {
+        let lists = ThingKind.allCases.filter(kinds.contains).map(conditions(for:))
+        guard let narrowest = lists.min(by: { $0.count < $1.count }) else { return [] }
+        return narrowest.filter { offered($0).isSuperset(of: kinds) }
+    }
+
+    private static func conditions(for kind: ThingKind) -> [Condition] {
         switch kind {
         case .pr:
             [.newComment(by: Pick()), .newReview(by: Pick()), .newCommits(by: Pick()),
@@ -279,7 +295,7 @@ enum InboxEngine {
     }
 
     private static func facts(_ rule: Rule, _ thing: Thing, marks: EntryMarks?, resolved r: Resolved) -> [Fact]? {
-        guard rule.scope.kind == thing.kind, inScope(rule.scope, thing, r) else { return nil }
+        guard rule.scope.kinds.contains(thing.kind), inScope(rule.scope, thing, r) else { return nil }
         // Merged and closed things only match through a status condition asking for them.
         let gated = thing.kind != .workflow && (thing.status == .merged || thing.status == .closed)
         let conditions = rule.conditions

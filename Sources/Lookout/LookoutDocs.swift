@@ -6,10 +6,11 @@ import Foundation
 enum LookoutDocs {
     /// Worked examples of a category as the Router writes it (left-out fields are filled in).
     static let examples: [(title: String, json: String)] = [
-        ("Review requests", #"{"name":"Review requests","symbol":"eye","color":"amber","rules":[{"scope":{"kind":"pr","to":{"include":[{"me":{}}]},"toRoles":["reviewRequested"]}}]}"#),
-        ("My PRs when they need me: someone else commented, checks failing, or open threads", #"{"name":"Mine","symbol":"star","color":"blue","rules":[{"scope":{"kind":"pr","by":{"include":[{"me":{}}]}},"match":"any","conditions":[{"newComment":{"by":{"except":[{"me":{}}]}}},{"checks":{"_0":["failing"]}},{"unresolvedThreads":{}}]}]}"#),
-        ("Bots' PRs in repos I own, without notifications", #"{"name":"Bot chatter","symbol":"cpu","color":"gray","notifies":false,"rules":[{"scope":{"kind":"pr","by":{"include":[{"bots":{}}]},"in":{"include":[{"owned":{}}]}}}]}"#),
-        ("Failing workflows on main of two repos", #"{"name":"CI on main","symbol":"xmark.seal","color":"red","rules":[{"scope":{"kind":"workflow","in":{"include":[{"repo":{"_0":"acme/api"}},{"repo":{"_0":"acme/web"}}]},"on":["main"]},"conditions":[{"workflow":{"_0":["failing"]}}]}]}"#),
+        ("Review requests", #"{"name":"Review requests","symbol":"eye","color":"amber","rules":[{"scope":{"kinds":["pr"],"to":{"include":[{"me":{}}]},"toRoles":["reviewRequested"]}}]}"#),
+        ("My PRs when they need me: someone else commented, checks failing, or open threads", #"{"name":"Mine","symbol":"star","color":"blue","rules":[{"scope":{"kinds":["pr"],"by":{"include":[{"me":{}}]}},"match":"any","conditions":[{"newComment":{"by":{"except":[{"me":{}}]}}},{"checks":{"_0":["failing"]}},{"unresolvedThreads":{}}]}]}"#),
+        ("Bots' PRs in repos I own, without notifications", #"{"name":"Bot chatter","symbol":"cpu","color":"gray","notifies":false,"rules":[{"scope":{"kinds":["pr"],"by":{"include":[{"bots":{}}]},"in":{"include":[{"owned":{}}]}}}]}"#),
+        ("PRs and issues in repos I own and the acme org", #"{"name":"My repos","symbol":"folder","color":"blue","rules":[{"scope":{"kinds":["pr","issue"],"in":{"include":[{"owned":{}},{"owner":{"_0":"acme"}}]}}}]}"#),
+        ("Failing workflows on main of two repos", #"{"name":"CI on main","symbol":"xmark.seal","color":"red","rules":[{"scope":{"kinds":["workflow"],"in":{"include":[{"repo":{"_0":"acme/api"}},{"repo":{"_0":"acme/web"}}]},"on":["main"]},"conditions":[{"workflow":{"_0":["failing"]}}]}]}"#),
     ]
 
     /// The grammar of rules, in a few lines, from the shapes.
@@ -17,7 +18,7 @@ enum LookoutDocs {
         var lines: [String] = [
             "A category is {id?, name, symbol (SF Symbol), color, rules, notifies, hidden, actions}. A thing (PR, issue or workflow) is in the FIRST category, top to bottom, that one of its rules matches; things no rule matches aren't in the inbox. A rule is {scope, match (any|all), conditions}: the scope says which things, the conditions when they need you (none: every open thing in scope). Left-out fields are filled in: the list says which are required.",
             "",
-            "Scope {kind: pr|issue|workflow, by?, to?, toRoles?, in?, on?, named?}. `by`/`to` take PEOPLE, `in` takes REPOS. Workflows need `in`, may have `on` (branches) and `named`, and have no by/to. PRs and issues have by/to/in only. `to` reads the roles in `toRoles` (assigned, reviewRequested, mentioned; issues have no reviewRequested); leave `toRoles` out to cover all of them, and only give it to narrow `to` when asked. A rule with no `to` matches anyone: \"PRs and issues in my repos\" is just `in`, no `to` and no `toRoles`.",
+            "Scope {kinds: [pr, issue] | [pr] | [issue] | [workflow], by?, to?, toRoles?, in?, on?, named?}. One rule covers PRs and issues together (`kinds: [\"pr\",\"issue\"]`) when they share the rest; workflows are always a rule of their own. `by`/`to` take PEOPLE, `in` takes REPOS. Workflows need `in`, may have `on` (branches) and `named`, and have no by/to. PRs and issues have by/to/in only. `to` reads the roles in `toRoles` (assigned, reviewRequested, mentioned; reviewRequested is PRs' alone); leave `toRoles` out to cover all of them, and only give it to narrow `to` when asked. A rule with no `to` matches anyone: \"PRs and issues in my repos\" is one rule, `kinds: [\"pr\",\"issue\"]` and `in`, no `to` and no `toRoles`. Conditions must be ones every kind of the rule has.",
             "People and Repos are {\"include\":[…],\"except\":[…]} (empty include: anyone/anywhere). Where a rule names someone or somewhere, the value is one of:",
             "PERSON:",
         ]
@@ -30,11 +31,13 @@ enum LookoutDocs {
         variants("Repo")
         lines.append("CONDITION (an object with one key). Each takes {…} as shown; `since` (activity ones) defaults to done:")
         variants("Condition")
-        lines.append("Offered by kind: " + ThingKind.allCases.map { kind in
-            "\(kind.rawValue): " + RuleEditing.offered(kind).map(RuleEditing.tag).joined(separator: ", ")
+        let offered: [Set<ThingKind>] = [[.pr], [.issue], [.pr, .issue], [.workflow]]
+        lines.append("Offered by kinds: " + offered.map { kinds in
+            ThingKind.allCases.filter(kinds.contains).map(\.rawValue).joined(separator: "+") + ": "
+                + RuleEditing.offered(kinds).map(RuleEditing.tag).joined(separator: ", ")
         }.joined(separator: "; ") + ".")
         lines += [
-            "Impossible rules are refused with the reason, as the editor shows it: a value both included and excepted; a condition the kind doesn't have; contradicting states under `all` (draft and merged, failing and passing); `by me` with approved by me, changes requested by me or `to me` for review requested; teams anywhere but a PR's `to` with reviewRequested; a workflow with no repo; an empty state list; a group of the wrong kind or that doesn't exist; a repo that doesn't exist.",
+            "Impossible rules are refused with the reason, as the editor shows it: a value both included and excepted; a condition one of the kinds doesn't have; workflows mixed with PRs or issues; contradicting states under `all` (draft and merged, failing and passing); `by me` with approved by me, changes requested by me or `to me` for review requested; teams anywhere but a PR's `to` with reviewRequested; a workflow with no repo; an empty state list; a group of the wrong kind or that doesn't exist; a repo that doesn't exist.",
             "",
             "Examples:",
         ]

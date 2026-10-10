@@ -138,10 +138,10 @@ enum Shapes {
                   "Workflows: the latest run is."),
         ]),
         "Scope": .object([
-            .init("kind", .choice(ThingKind.allCases.map(\.rawValue)), "`pr`, `issue` or `workflow`."),
+            .init("kinds", .choices(ThingKind.allCases.map(\.rawValue)), "What the rule is about, at least one: `pr` and `issue` together or alone, or `workflow` alone."),
             .init("by", people(), "PRs and issues: the author.", fallback: .absent),
             .init("to", people(), "PRs and issues: who it is for (see toRoles).", fallback: .absent),
-            .init("toRoles", .choices(ToRole.allCases.map(\.rawValue)), "Only with `to`: which ways it is for them. Leave it out for all (assigned, reviewRequested, mentioned; issues have no reviewRequested), and never narrow it unless asked. Without `to`, it means nothing.",
+            .init("toRoles", .choices(ToRole.allCases.map(\.rawValue)), "Only with `to`: which ways it is for them. Leave it out for all (assigned, reviewRequested, mentioned; reviewRequested is PRs' alone), and never narrow it unless asked. Without `to`, it means nothing.",
                   fallback: .value(ToRole.allCases.map(\.rawValue))),
             .init("in", repos(), "Which repos. Required for workflows.", fallback: .absent),
             .init("on", .list(.string("branch")), "Workflows: branches (the repo's default branch when left out).", fallback: .absent),

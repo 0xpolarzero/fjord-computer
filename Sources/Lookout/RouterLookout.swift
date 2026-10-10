@@ -289,6 +289,16 @@ extension RouterTools {
     func saveCategory(_ store: Store, _ args: [String: Any], creating: Bool) throws -> String {
         let tool = creating ? "create_category" : "update_category"
         guard var given = args["category"] as? [String: Any] else { throw Failure("`category` must be an object") }
+        // A rule was once about one `kind`: said that way, it is the set of that one.
+        if var rules = given["rules"] as? [[String: Any]] {
+            for i in rules.indices {
+                guard var scope = rules[i]["scope"] as? [String: Any], let kind = scope["kind"], scope["kinds"] == nil else { continue }
+                scope["kinds"] = [kind]
+                scope["kind"] = nil
+                rules[i]["scope"] = scope
+            }
+            given["rules"] = rules
+        }
         var old: InboxCategory?
         if !creating {
             guard let id = given["id"] as? String, UUID(uuidString: id) != nil else { throw Failure("`category.id` is needed: the id from list_categories") }
@@ -315,11 +325,11 @@ extension RouterTools {
         if let at = args["at"] { input["at"] = at }
         let checkedInput = try checked(tool, input)
         guard var json = checkedInput["category"] as? [String: Any] else { throw Failure("`category` must be an object") }
-        // An issue has no review requests: a rule that didn't say which roles `to` covers doesn't get that one.
+        // Only PRs have review requests: a rule without them that didn't say which roles `to` covers doesn't get that one.
         if var rules = json["rules"] as? [[String: Any]] {
             for i in rules.indices {
-                guard var scope = rules[i]["scope"] as? [String: Any], scope["kind"] as? String == ThingKind.issue.rawValue,
-                      var roles = scope["toRoles"] as? [String] else { continue }
+                guard var scope = rules[i]["scope"] as? [String: Any], let kinds = scope["kinds"] as? [String],
+                      !kinds.contains(ThingKind.pr.rawValue), var roles = scope["toRoles"] as? [String] else { continue }
                 let said = ((given["rules"] as? [[String: Any]])?[safe: i]?["scope"] as? [String: Any])?["toRoles"] != nil
                 if !said || scope["to"] == nil { roles.removeAll { $0 == ToRole.reviewRequested.rawValue }; scope["toRoles"] = roles; rules[i]["scope"] = scope }
             }

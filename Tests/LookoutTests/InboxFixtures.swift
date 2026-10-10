@@ -8,7 +8,7 @@ enum InboxFixture {
 
     static func category() -> InboxCategory {
         InboxCategory(name: "Mine", symbol: "star", color: .blue,
-                      rules: [Rule(scope: Scope(kind: .pr), conditions: [.greptileBelow(5)], createdAt: .distantPast)])
+                      rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.greptileBelow(5)], createdAt: .distantPast)])
     }
 
     static func pr(_ n: Int, repo: String = "a/one", title: String = "t", by: Person = author, greptile: Int? = 3,
@@ -23,7 +23,7 @@ enum InboxFixture {
     /// A category that asks GitHub for a repo's PRs, so a refresh has something to fetch.
     @MainActor static func watch(_ store: Store, _ repo: String = "a/one") {
         store.categories = [InboxCategory(name: "PRs", symbol: "star", color: .blue,
-                                          rules: [Rule(scope: Scope(kind: .pr, in: Pick(include: [.repo(repo)])))])]
+                                          rules: [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo(repo)])))])]
     }
 
     /// A store (saving nothing) whose one category holds `things`.

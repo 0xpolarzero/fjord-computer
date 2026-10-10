@@ -20,6 +20,15 @@ enum ThingKind: String, Codable, CaseIterable, Hashable {
     }
 }
 
+extension Set where Element == ThingKind {
+    /// In the kinds' order: "PRs", "PRs and issues".
+    var label: String {
+        let words = ThingKind.allCases.filter(contains).enumerated().map { $0 == 0 ? $1.label : $1.label.lowercased() }
+        guard let last = words.last else { return "Nothing" }
+        return words.count == 1 ? last : words.dropLast().joined(separator: ", ") + " and " + last
+    }
+}
+
 /// Someone a slot names.
 enum PersonRef: Codable, Hashable {
     case me
@@ -60,8 +69,10 @@ enum ToRole: String, Codable, CaseIterable, Hashable {
 }
 
 /// Which things a rule is about. A nil slot was not added: it means any and isn't shown.
-struct Scope: Codable, Hashable {
-    var kind: ThingKind
+struct Scope: Hashable {
+    /// At least one. PRs and issues share a rule; workflows are a rule of their own: they have no author and no `to`, need
+    /// repos, and have branches and names nothing else has, so a rule mixing them would have no slots that fit it all.
+    var kinds: Set<ThingKind>
     var by: Pick<PersonRef>?
     var to: Pick<PersonRef>?
     var toRoles: Set<ToRole> = Set(ToRole.allCases)
@@ -71,6 +82,50 @@ struct Scope: Codable, Hashable {
     var on: [String]?
     /// Workflows: names; nil is every workflow.
     var named: [String]?
+
+    init(kinds: Set<ThingKind>, by: Pick<PersonRef>? = nil, to: Pick<PersonRef>? = nil, toRoles: Set<ToRole> = Set(ToRole.allCases),
+         in repos: Pick<RepoRef>? = nil, on: [String]? = nil, named: [String]? = nil) {
+        self.kinds = kinds
+        self.by = by
+        self.to = to
+        self.toRoles = toRoles
+        self.in = repos
+        self.on = on
+        self.named = named
+    }
+
+    init(kind: ThingKind) { self.init(kinds: [kind]) }
+
+    /// A workflow rule: repos, branches and names rather than people.
+    var isWorkflow: Bool { kinds.contains(.workflow) }
+}
+
+extension Scope: Codable {
+    private enum CodingKeys: String, CodingKey { case kinds, kind, by, to, toRoles, `in`, on, named }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Rules saved before a rule could be about more than one kind have `kind`, one value.
+        kinds = try c.decodeIfPresent(Set<ThingKind>.self, forKey: .kinds) ?? [c.decode(ThingKind.self, forKey: .kind)]
+        by = try c.decodeIfPresent(Pick<PersonRef>.self, forKey: .by)
+        to = try c.decodeIfPresent(Pick<PersonRef>.self, forKey: .to)
+        toRoles = try c.decodeIfPresent(Set<ToRole>.self, forKey: .toRoles) ?? Set(ToRole.allCases)
+        self.in = try c.decodeIfPresent(Pick<RepoRef>.self, forKey: .in)
+        on = try c.decodeIfPresent([String].self, forKey: .on)
+        named = try c.decodeIfPresent([String].self, forKey: .named)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        // In the kinds' order, so the same rule is always the same JSON.
+        try c.encode(ThingKind.allCases.filter(kinds.contains), forKey: .kinds)
+        try c.encodeIfPresent(by, forKey: .by)
+        try c.encodeIfPresent(to, forKey: .to)
+        try c.encode(ToRole.allCases.filter(toRoles.contains), forKey: .toRoles)
+        try c.encodeIfPresent(self.in, forKey: .in)
+        try c.encodeIfPresent(on, forKey: .on)
+        try c.encodeIfPresent(named, forKey: .named)
+    }
 }
 
 enum CheckState: String, Codable, CaseIterable, Hashable {

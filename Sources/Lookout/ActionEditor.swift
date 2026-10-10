@@ -11,7 +11,7 @@ struct ActionsEditor: View {
     let rules: [Rule]
     let categoryName: String
 
-    private var kinds: Set<ThingKind> { Set(rules.map(\.scope.kind)) }
+    private var kinds: Set<ThingKind> { Set(rules.flatMap(\.scope.kinds)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

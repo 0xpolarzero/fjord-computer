@@ -15,7 +15,7 @@ struct RuleEditor: View {
     var onRemove: (() -> Void)?
     @State private var notice: String?
     @State private var matches: Int?
-    @State private var previewedKind: ThingKind?
+    @State private var previewedKinds: Set<ThingKind>?
 
     init(rule: Binding<Rule>, store: Store, isCI: Bool = false, notice: String? = nil, onRemove: (() -> Void)? = nil) {
         _rule = rule
@@ -26,7 +26,7 @@ struct RuleEditor: View {
     }
 
     private var data: EditorData { EditorData(store: store) }
-    private var kind: ThingKind { rule.scope.kind }
+    private var kinds: Set<ThingKind> { rule.scope.kinds }
     private var problems: [InboxEngine.Problem] { RuleEditing.problems(rule, groups: store.groups, isCI: isCI, missing: store.missingRepos) }
 
     var body: some View {
@@ -45,11 +45,11 @@ struct RuleEditor: View {
         .padding(.horizontal, 12).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
-        // Whenever the rule changes (its kind too), debounced; a different kind is counted at once.
+        // Whenever the rule changes (its kinds too), debounced; different kinds are counted at once.
         .task(id: rule) {
-            if previewedKind == rule.scope.kind { try? await Task.sleep(for: .milliseconds(300)) }
+            if previewedKinds == rule.scope.kinds { try? await Task.sleep(for: .milliseconds(300)) }
             guard !Task.isCancelled else { return }
-            previewedKind = rule.scope.kind
+            previewedKinds = rule.scope.kinds
             matches = store.preview(rule).count
         }
     }
@@ -58,33 +58,36 @@ struct RuleEditor: View {
 
     private func tone(_ slot: String) -> ChipTone { problems.contains { $0.slot == slot } ? .danger : .neutral }
 
+    /// PRs and issues tick together; workflows stand alone (`RuleEditing.toggling`).
     @ViewBuilder private var kindChip: some View {
         if isCI {
-            Text(kind.label).modifier(ChipLook())
+            Text(kinds.label).modifier(ChipLook())
         } else {
-            MenuChip(title: kind.label, label: "Kind of thing") {
+            MenuChip(title: kinds.label, tone: tone("kind"), label: "Kinds of thing") {
                 ForEach(ThingKind.allCases, id: \.self) { k in
-                    Toggle(k.label, isOn: Binding(get: { kind == k }, set: { _ in change(to: k) }))
+                    Toggle(k.label, isOn: Binding(get: { kinds.contains(k) },
+                                                  set: { change(to: RuleEditing.toggling(k, on: $0, in: kinds)) }))
                 }
             }
+            .tip("Kinds of thing", "PRs and issues can share a rule; workflows take a rule of their own")
         }
     }
 
-    private func change(to k: ThingKind) {
-        let result = RuleEditing.switchKind(rule, to: k)
+    private func change(to next: Set<ThingKind>) {
+        let result = RuleEditing.switchKinds(rule, to: next)
+        guard result.rule != rule else { return }
         rule = result.rule
         matches = store.preview(result.rule).count
-        previewedKind = k
-        notice = RuleEditing.droppedNotice(result.dropped, for: k)
+        previewedKinds = next
+        notice = RuleEditing.droppedNotice(result.dropped, for: next)
     }
 
     @ViewBuilder private var scopeSlots: some View {
-        switch kind {
-        case .pr, .issue:
+        if !rule.scope.isWorkflow {
             peopleScope("by", $rule.scope.by)
             toScope
             repoScope(required: false)
-        case .workflow:
+        } else {
             repoScope(required: true)
             stringScope("on", placeholder: "branch", $rule.scope.on,
                         pool: data.values({ [$0.branch].compactMap { $0 } }, in: data.namedRepos(rule.scope.in)))
@@ -106,13 +109,13 @@ struct RuleEditor: View {
     /// where it can never match.
     @ViewBuilder private var toScope: some View {
         if rule.scope.to != nil {
-            let roles = RuleEditing.roles(kind)
+            let roles = RuleEditing.roles(kinds)
             let picked = roles.filter { rule.scope.toRoles.contains($0) }
             let byMe = rule.scope.by?.include == [.me] && rule.scope.by?.except.isEmpty == true
             let toMe = rule.scope.to?.include == [.me]
             let offered = roles.filter { !($0 == .reviewRequested && byMe && toMe) }
             PeopleSlot(pick: Binding(get: { rule.scope.to ?? Pick() }, set: { rule.scope.to = $0 }), store: store,
-                       tone: tone("to"), hidden: byMe ? [.me] : [], teams: kind == .pr)
+                       tone: tone("to"), hidden: byMe ? [.me] : [], teams: kinds.contains(.pr))
                 .slotWord(SlotWord(
                     name: "to",
                     text: picked.count == roles.count ? "to" : "to (" + picked.map(RuleEditing.roleTitle).joined(separator: ", ") + ")",
@@ -128,7 +131,7 @@ struct RuleEditor: View {
 
     @ViewBuilder private func repoScope(required: Bool) -> some View {
         if required || rule.scope.in != nil {
-            let slot = RepoSlot(pick: Binding(get: { rule.scope.in ?? Pick() }, set: { rule.scope.in = $0 }), store: store, kind: kind, onMoved: { notice = $0 },
+            let slot = RepoSlot(pick: Binding(get: { rule.scope.in ?? Pick() }, set: { rule.scope.in = $0 }), store: store, involved: !rule.scope.isWorkflow, onMoved: { notice = $0 },
                                 placeholder: required ? (isCI ? "all watched repos" : "choose repos") : "anywhere", tone: tone("in"))
             // Required: the word still opens the picker, but there is nothing to remove.
             slot.slotWord(SlotWord(name: "in", text: "in", tone: tone("in"), remove: required ? nil : { rule.scope.in = nil }))
@@ -165,12 +168,11 @@ struct RuleEditor: View {
 
     private var unsetSlots: [(title: String, menu: String, add: () -> Void)] {
         var out: [(String, String, () -> Void)] = []
-        switch kind {
-        case .pr, .issue:
+        if !rule.scope.isWorkflow {
             if rule.scope.by == nil { out.append(("by", "by someone", { rule.scope.by = Pick() })) }
             if rule.scope.to == nil { out.append(("to", "to someone", { rule.scope.to = Pick() })) }
             if rule.scope.in == nil { out.append(("in", "in some repos", { rule.scope.in = Pick() })) }
-        case .workflow:
+        } else {
             if rule.scope.on == nil { out.append(("on", "on a branch", { rule.scope.on = [] })) }
             if rule.scope.named == nil { out.append(("named", "named…", { rule.scope.named = [] })) }
         }
@@ -202,7 +204,7 @@ struct RuleEditor: View {
                     ForEach(Array(rule.conditions.enumerated()), id: \.offset) { i, _ in
                         ConditionRow(condition: Binding(get: { rule.conditions.indices.contains(i) ? rule.conditions[i] : .hasConflicts },
                                                         set: { if rule.conditions.indices.contains(i) { rule.conditions[i] = $0 } }),
-                                     store: store, kind: kind, repos: data.namedRepos(rule.scope.in), byOnlyMe: byMe,
+                                     store: store, kinds: kinds, repos: data.namedRepos(rule.scope.in), byOnlyMe: byMe,
                                      siblings: rule.conditions, index: i, match: rule.match,
                                      problem: problems.first { $0.condition == i }?.reason) {
                             if rule.conditions.indices.contains(i) { rule.conditions.remove(at: i) }
@@ -218,7 +220,7 @@ struct RuleEditor: View {
 
     private var addConditionMenu: some View {
         Menu {
-            let offered = RuleEditing.offered(kind)
+            let offered = RuleEditing.offered(kinds)
             ForEach(RuleEditing.groupOrder.filter { g in offered.contains { RuleEditing.group($0) == g } }, id: \.self) { g in
                 Section(g) {
                     ForEach(offered.filter { RuleEditing.group($0) == g }, id: \.self) { c in
@@ -290,7 +292,7 @@ struct RuleEditor: View {
 struct ConditionRow: View {
     @Binding var condition: Condition
     let store: Store
-    let kind: ThingKind
+    let kinds: Set<ThingKind>
     let repos: [String]
     /// `by me` in the rule: nobody approves or reviews their own PR, so `me` is not offered.
     var byOnlyMe = false
@@ -369,7 +371,7 @@ struct ConditionRow: View {
                     label: "Workflow states") { condition = .workflow($0) }
         case .status(let states):
             SetMenu(items: narrowed([(.draft, "draft"), (.open, "ready"), (.merged, "merged"), (.closed, "closed")]
-                .filter { kind != .issue || [.open, .closed].contains($0.0) }, states, RuleEditing.statusSet),
+                .filter { kinds.contains(.pr) || [.open, .closed].contains($0.0) }, states, RuleEditing.statusSet),
                     selection: states, tone: tone, label: "Status") { condition = .status($0) }
         case .labeled(let pick):
             StringSlot(pick: Binding(get: { pick }, set: { condition = .labeled($0) }), store: store, placeholder: "choose labels",
@@ -392,7 +394,7 @@ struct ConditionRow: View {
     /// dashed "since" adds the others.
     @ViewBuilder private var sinceChip: some View {
         if let since = condition.since {
-            let options = RuleEditing.sinces(kind)
+            let options = RuleEditing.sinces(kinds)
             if since == .done {
                 Menu {
                     ForEach(options.filter { $0 != .done }, id: \.self) { option in

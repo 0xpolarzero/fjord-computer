@@ -149,7 +149,7 @@ final class FakePerformer: ActionPerformer {
         action.trigger = trigger
         let performer = FakePerformer()
         let category = InboxCategory(name: "Talk", symbol: "star", color: .blue,
-                                     rules: [Rule(scope: Scope(kind: .pr), conditions: [.lastComment(by: Pick())], createdAt: .distantPast)],
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.lastComment(by: Pick())], createdAt: .distantPast)],
                                      actions: ActionList([action]))
         let store = InboxFixture.store([conversation([commented("c1", by: "alice")])], category: category)
         store.actionPerformer = performer
@@ -257,7 +257,7 @@ final class FakePerformer: ActionPerformer {
     @Test func rulesMatchOthersUnlessEverythingIsByMe() {
         let me = Pick<PersonRef>(include: [.me])
         func rule(by: Pick<PersonRef>?, _ conditions: [Condition] = []) -> Rule {
-            Rule(scope: Scope(kind: .pr, by: by), conditions: conditions)
+            Rule(scope: Scope(kinds: [.pr], by: by), conditions: conditions)
         }
         #expect(!InboxActions.rulesMatchOthers([rule(by: me, [.checks([.failing])]), rule(by: me, [.newComment(by: me)])]))
         #expect(InboxActions.rulesMatchOthers([rule(by: nil)]))
@@ -328,7 +328,7 @@ final class FakePerformer: ActionPerformer {
                              url: URL(string: "https://github.com/o/r/actions")!, createdAt: Date(), updatedAt: Date())
         workflow.checks = .failing
         let category = InboxCategory(name: "CI", symbol: "x", color: .red,
-                                     rules: [Rule(scope: Scope(kind: .workflow, in: Pick()), conditions: [.workflow([.failing])], createdAt: .distantPast)],
+                                     rules: [Rule(scope: Scope(kinds: [.workflow], in: Pick()), conditions: [.workflow([.failing])], createdAt: .distantPast)],
                                      actions: ActionList([.make(.comment("x")), .make(.rerun)]))
         let store = InboxFixture.store([], category: category)
         store.actionPerformer = performer

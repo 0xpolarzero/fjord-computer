@@ -4,10 +4,10 @@ import Testing
 
 @Suite struct RuleEditingTests {
     @Test func switchingToWorkflowsKeepsReposAndSaysWhatWasDropped() {
-        let rule = Rule(scope: Scope(kind: .pr, by: Pick(include: [.me]), in: Pick(include: [.repo("a/b"), .involved])),
+        let rule = Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me]), in: Pick(include: [.repo("a/b"), .involved])),
                         conditions: [.checks([.failing]), .greptileBelow(4)])
-        let (out, dropped) = RuleEditing.switchKind(rule, to: .workflow)
-        #expect(out.scope.kind == .workflow)
+        let (out, dropped) = RuleEditing.switchKinds(rule, to: [.workflow])
+        #expect(out.scope.kinds == [.workflow])
         #expect(out.scope.by == nil)
         #expect(out.scope.in?.include == [.repo("a/b")])
         #expect(out.conditions == [.workflow([.failing])])
@@ -15,11 +15,37 @@ import Testing
     }
 
     @Test func switchingToIssuesDropsReviewRequested() {
-        let rule = Rule(scope: Scope(kind: .pr, to: Pick(include: [.me])), conditions: [.approved(by: Pick()), .labeled(Pick())])
-        let (out, dropped) = RuleEditing.switchKind(rule, to: .issue)
+        let rule = Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.me])), conditions: [.approved(by: Pick()), .labeled(Pick())])
+        let (out, dropped) = RuleEditing.switchKinds(rule, to: [.issue])
         #expect(!out.scope.toRoles.contains(.reviewRequested))
         #expect(out.conditions == [.labeled(Pick())])
         #expect(!dropped.isEmpty)
+    }
+
+    @Test func prsAndIssuesTickTogetherAndWorkflowsAlone() {
+        #expect(RuleEditing.toggling(.issue, on: true, in: [.pr]) == [.pr, .issue])
+        #expect(RuleEditing.toggling(.pr, on: false, in: [.pr, .issue]) == [.issue])
+        // The last one stays.
+        #expect(RuleEditing.toggling(.issue, on: false, in: [.issue]) == [.issue])
+        #expect(RuleEditing.toggling(.workflow, on: true, in: [.pr, .issue]) == [.workflow])
+        #expect(RuleEditing.toggling(.pr, on: true, in: [.workflow]) == [.pr])
+        #expect(Set<ThingKind>([.issue, .pr]).label == "PRs and issues" && Set<ThingKind>([.issue]).label == "Issues")
+    }
+
+    @Test func addingIssuesKeepsWhatBothHaveAndSaysTheRest() {
+        let rule = Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.me]), toRoles: [.assigned, .reviewRequested]),
+                        conditions: [.checks([.failing]), .newComment(by: Pick(), since: .myLastReview), .status([.draft, .closed])])
+        let (out, dropped) = RuleEditing.switchKinds(rule, to: [.pr, .issue])
+        #expect(out.scope.kinds == [.pr, .issue])
+        // Review requested still reaches the PRs.
+        #expect(out.scope.toRoles == [.assigned, .reviewRequested])
+        #expect(out.conditions == [.newComment(by: Pick(), since: .done), .status([.draft, .closed])])
+        #expect(dropped == ["check states", "since my last review"])
+        #expect(InboxEngine.problems(out).isEmpty)
+        // Issues alone: no draft, and no review requested.
+        let issues = RuleEditing.switchKinds(out, to: [.issue])
+        #expect(issues.rule.conditions.last == .status([.closed]) && issues.rule.scope.toRoles == [.assigned])
+        #expect(issues.dropped == ["draft and merged", "review requested"])
     }
 
     @Test @MainActor func aRepoTypedInAPickerIsARepoOrAWholeOwner() {
@@ -32,8 +58,8 @@ import Testing
     }
 
     @Test func sameKindChangesNothing() {
-        let rule = Rule(scope: Scope(kind: .pr))
-        let (out, dropped) = RuleEditing.switchKind(rule, to: .pr)
+        let rule = Rule(scope: Scope(kinds: [.pr]))
+        let (out, dropped) = RuleEditing.switchKinds(rule, to: [.pr])
         #expect(out == rule)
         #expect(dropped.isEmpty)
     }
@@ -95,7 +121,7 @@ private final class RepoCalls: @unchecked Sendable {
     }
 
     @Test func aMissingRepoBlocksSavingAndShowsTheReason() {
-        let rule = Rule(scope: Scope(kind: .pr, in: Pick(include: [.repo("A/Gone")])), conditions: [])
+        let rule = Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("A/Gone")])), conditions: [])
         let found = RuleEditing.problems(rule, groups: [], isCI: false, missing: ["a/gone"])
         #expect(found.map(\.slot) == ["in"])
         #expect(RuleEditing.problems(rule, groups: [], isCI: false).isEmpty)
@@ -105,7 +131,7 @@ private final class RepoCalls: @unchecked Sendable {
         let calls = RepoCalls()
         let s = store(calls)
         var category = InboxCategory(name: "C", symbol: "star", color: .blue, notifies: false)
-        category.rules = [Rule(scope: Scope(kind: .pr, in: Pick(include: [.repo("containers/libkrun"), .owned], except: [.repo("a/ok")])),
+        category.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("containers/libkrun"), .owned], except: [.repo("a/ok")])),
                                conditions: [])]
         s.categories = [category]
         s.groups = [InboxGroup(name: "G", kind: .repos, members: ["containers/libkrun", "libkrun/libkrun", "o/*"])]
@@ -126,12 +152,12 @@ private final class RepoCalls: @unchecked Sendable {
         // Changing who keeps the since; the other way round too.
         #expect(c.with(since: .myLastComment).with(people: Pick(include: [.me])) == .newComment(by: Pick(include: [.me]), since: .myLastComment))
         #expect(c.with(people: Pick(include: [.me])).since == .done)
-        #expect(RuleEditing.sinces(.pr).contains(.myLastReview) && !RuleEditing.sinces(.issue).contains(.myLastReview))
+        #expect(RuleEditing.sinces([.pr]).contains(.myLastReview) && !RuleEditing.sinces([.issue]).contains(.myLastReview))
     }
 
     @Test func behindBaseIsOfferedForPRsOnlyAndSurvivesSwitchingToIssuesNever() {
-        #expect(RuleEditing.offered(.pr).contains(.behindBase) && !RuleEditing.offered(.issue).contains(.behindBase))
-        let result = RuleEditing.switchKind(Rule(scope: Scope(kind: .pr), conditions: [.behindBase, .newComment(by: Pick(), since: .myLastComment)]), to: .issue)
+        #expect(RuleEditing.offered([.pr]).contains(.behindBase) && !RuleEditing.offered([.issue]).contains(.behindBase))
+        let result = RuleEditing.switchKinds(Rule(scope: Scope(kinds: [.pr]), conditions: [.behindBase, .newComment(by: Pick(), since: .myLastComment)]), to: [.issue])
         #expect(result.rule.conditions == [.newComment(by: Pick(), since: .myLastComment)] && result.dropped.count == 1)
     }
 

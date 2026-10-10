@@ -17,11 +17,11 @@ enum LookoutValidate {
             out.append("`symbol` “\(c.symbol)” isn't an SF Symbol. Some that are: " + CategoryIcon.all.prefix(14).joined(separator: ", "))
         }
         if c.isCI != (old?.isCI ?? false) { out.append("`isCI` can't be changed: the CI category is the default one, and it is the only one") }
-        let kinds = Set(c.rules.map(\.scope.kind))
+        let kinds = Set(c.rules.flatMap(\.scope.kinds))
         for (i, rule) in c.rules.enumerated() {
             let label = "rules[\(i)] (\(RuleWords(store: store).summary(rule)))"
             if c.isCI {
-                if rule.scope.kind != .workflow { out.append("\(label): the CI category only has workflow rules") }
+                if rule.scope.kinds != [.workflow] { out.append("\(label): the CI category only has workflow rules") }
                 if rule.conditions != [.workflow([.failing])] {
                     out.append("\(label): the CI category only takes repos (its condition is always `workflow` failing)")
                 }
@@ -74,8 +74,8 @@ enum LookoutValidate {
                 }
             }
         }
-        if rule.scope.kind == .issue, rule.scope.to != nil, rule.scope.toRoles.contains(.reviewRequested) {
-            out.append("\(label): “to”: Issues have no review requests; toRoles is assigned and/or mentioned")
+        if !rule.scope.kinds.contains(.pr), rule.scope.to != nil, rule.scope.toRoles.contains(.reviewRequested) {
+            out.append("\(label): “to”: Only PRs have review requests; toRoles is assigned and/or mentioned")
         }
         for (i, condition) in rule.conditions.enumerated() {
             let what = "conditions[\(i)]"

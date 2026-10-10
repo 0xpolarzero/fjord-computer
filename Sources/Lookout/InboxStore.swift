@@ -10,7 +10,7 @@ enum InboxStore {
     /// Done is always there and isn't a category; CI is the one default.
     static let defaultCategories: [InboxCategory] = [
         InboxCategory(name: "CI", symbol: "xmark.seal", color: .red,
-                      rules: [Rule(scope: Scope(kind: .workflow, in: Pick()), conditions: [.workflow([.failing])])],
+                      rules: [Rule(scope: Scope(kinds: [.workflow], in: Pick()), conditions: [.workflow([.failing])])],
                       isCI: true),
     ]
 }

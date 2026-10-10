@@ -137,56 +137,64 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     }
 
     @Test func scopesBecomeQualifiers() {
-        let q = searches([rule(Scope(kind: .pr, by: Pick(include: [.me]), in: Pick(include: [.repo("o/r"), .owner("org")])))])
+        let q = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.me]), in: Pick(include: [.repo("o/r"), .owner("org")])))])
         #expect(q.count == 1)
         #expect(["is:pr", "repo:o/r", "user:org", "author:me", "is:open"].allSatisfy { q[0].contains($0) })
     }
 
     @Test func toRolesMakeOneQueryEach() {
-        let q = searches([rule(Scope(kind: .pr, to: Pick(include: [.me]), toRoles: [.assigned, .reviewRequested]))])
+        let q = searches([rule(Scope(kinds: [.pr], to: Pick(include: [.me]), toRoles: [.assigned, .reviewRequested]))])
         #expect(q.count == 2)
         #expect(q.contains { $0.contains("assignee:me") } && q.contains { $0.contains("review-requested:me") })
         // An issue has no review requests.
-        let issues = searches([rule(Scope(kind: .issue, to: Pick(include: [.me]), toRoles: [.reviewRequested, .mentioned]))])
+        let issues = searches([rule(Scope(kinds: [.issue], to: Pick(include: [.me]), toRoles: [.reviewRequested, .mentioned]))])
         #expect(issues.count == 1 && issues[0].contains("mentions:me") && issues[0].contains("is:issue"))
     }
 
     @Test func involvedUsesInvolvesAndWhatSearchCantSayIsOverFetched() {
-        let q = searches([rule(Scope(kind: .pr, by: Pick(include: [.maintainers]), in: Pick(include: [.involved])))])
+        let q = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.maintainers]), in: Pick(include: [.involved])))])
         #expect(q.count == 1 && q[0].contains("involves:me") && !q[0].contains("author:"))
         // Nothing narrowing at all is what involves you, not every PR on GitHub.
-        #expect(searches([rule(Scope(kind: .pr))]) == q)
+        #expect(searches([rule(Scope(kinds: [.pr]))]) == q)
     }
 
     @Test func groupsOwnedAndContributedExpand() {
         let people = InboxGroup(name: "Team", kind: .people, members: ["alice", "greptile-apps[bot]"])
         let repos = InboxGroup(name: "Mine", kind: .repos, members: ["a/b", "c/*"])
-        let q = searches([rule(Scope(kind: .pr, by: Pick(include: [.group(people.id)]),
+        let q = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.group(people.id)]),
                                      in: Pick(include: [.group(repos.id), .owned, .contributed])))], groups: [people, repos])
         #expect(q.count == 2)
         #expect(["repo:a/b", "user:c", "user:me", "repo:o/c"].allSatisfy { q[0].contains($0) })
         #expect(q[0].contains("author:alice") && q[1].contains("author:app/greptile-apps"))
     }
 
+    @Test func prsAndIssuesShareTheQueriesTheyCan() {
+        // The same query finds both without is:pr or is:issue; review requests are a PR's alone.
+        let q = searches([rule(Scope(kinds: [.pr, .issue], to: Pick(include: [.me]), toRoles: [.assigned, .reviewRequested],
+                                     in: Pick(include: [.owned])))])
+        #expect(q == ["archived:false user:me assignee:me sort:updated-desc is:open",
+                      "is:pr archived:false user:me review-requested:me sort:updated-desc is:open"])
+    }
+
     @Test func everyRuleGetsSearchesPastTheCap() {
         // A hundred named repos make a rule of many queries; the rule after it still gets its turn.
         let many = Pick<RepoRef>(include: (0..<100).map { .repo("owner/repository-\($0)") })
         let q = searches([InboxCategory(name: "x", symbol: "star", color: .blue, rules: [
-            Rule(scope: Scope(kind: .pr, in: many)), Rule(scope: Scope(kind: .issue, in: Pick(include: [.owned, .owner("org")]))),
+            Rule(scope: Scope(kinds: [.pr], in: many)), Rule(scope: Scope(kinds: [.issue], in: Pick(include: [.owned, .owner("org")]))),
         ])])
         #expect(q.count == InboxSync.maxSearches)
         #expect(q.filter { $0.contains("is:issue") } == ["is:issue archived:false user:me user:org sort:updated-desc is:open"])
     }
 
     @Test func closedThingsAreOnlyFetchedWhenAskedForAndRecent() {
-        let plain = searches([rule(Scope(kind: .pr, by: Pick(include: [.me])))])
+        let plain = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.me])))])
         #expect(plain.count == 1)
-        let merged = searches([rule(Scope(kind: .pr, by: Pick(include: [.me])), [.status([.merged])])])
+        let merged = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.me])), [.status([.merged])])])
         #expect(merged.count == 2 && merged[1].contains("is:closed updated:>=2026-"))
     }
 
     @Test func workflowsAreRepoTargets() {
-        let c = rule(Scope(kind: .workflow, in: Pick(include: [.repo("o/r"), .owned], except: [.repo("me/own")]), on: ["main", "dev"]))
+        let c = rule(Scope(kinds: [.workflow], in: Pick(include: [.repo("o/r"), .owned], except: [.repo("me/own")]), on: ["main", "dev"]))
         let t = InboxSync.workflowTargets(categories: [c], groups: [], owned: ["me/own"], contributed: [])
         #expect(t.map { "\($0.repo)@\($0.branch ?? "")" } == ["o/r@main", "o/r@dev"])
         let none = InboxSync.workflowTargets(categories: InboxStore.defaultCategories, groups: [], owned: [], contributed: [])
@@ -230,7 +238,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
         }
         var category = InboxCategory(name: "Mine", symbol: "star", color: .blue, notifies: notifies)
-        category.rules = [Rule(scope: Scope(kind: .pr, by: Pick(include: [.me])), conditions: [.greptileBelow(5)])]
+        category.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])), conditions: [.greptileBelow(5)])]
         s.categories = [category]
         s.notifier.onPost = { log.posted.append($0.identifier) }
         return (s, category.id)
@@ -256,7 +264,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         await s.syncInbox()
         log.score = 2
         // The rule changes at the same time as the fact: what is there under the new rule is noted, not announced.
-        s.categories[0].rules = [Rule(scope: Scope(kind: .pr, by: Pick(include: [.me])), conditions: [.greptileBelow(4)])]
+        s.categories[0].rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])), conditions: [.greptileBelow(4)])]
         await s.syncInbox()
         #expect(log.posted.isEmpty && s.categoryBaselines[category] == Set(s.categories[0].rules.map(\.id)))
         s.categories = []
@@ -343,7 +351,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             }
         }
         var ci = InboxStore.defaultCategories[0]
-        ci.rules = [Rule(scope: Scope(kind: .workflow, in: Pick(include: [.repo("a/x")])), conditions: [.workflow([.failing])],
+        ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/x")])), conditions: [.workflow([.failing])],
                          createdAt: .distantPast)]
         s.categories = [ci]
         s.notifier.onPost = { posted($0.identifier) }
@@ -411,16 +419,16 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     }
 
     @Test func teamsInToBecomeTeamReviewRequestedQueries() {
-        let mixed = searches([rule(Scope(kind: .pr, to: Pick(include: [.me, .team("@acme/core")]), toRoles: [.reviewRequested]))])
+        let mixed = searches([rule(Scope(kinds: [.pr], to: Pick(include: [.me, .team("@acme/core")]), toRoles: [.reviewRequested]))])
         #expect(mixed.count == 2)
         #expect(mixed.contains { $0.contains("review-requested:me") } && mixed.contains { $0.contains("team-review-requested:acme/core") })
-        let mine = InboxSync.searches(categories: [rule(Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))],
+        let mine = InboxSync.searches(categories: [rule(Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))],
                                       groups: [], me: "me", contributed: [], myTeams: ["a/x", "a/y"])
         #expect(mine.count == 2 && mine.allSatisfy { $0.contains("team-review-requested:a/") })
         // Not resolved yet (or in none): nothing to search, rather than every PR on GitHub.
-        #expect(searches([rule(Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))]).isEmpty)
+        #expect(searches([rule(Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))]).isEmpty)
         // Teams only count for review requests.
-        #expect(searches([rule(Scope(kind: .pr, to: Pick(include: [.team("a/x")]), toRoles: [.assigned]))]).isEmpty)
+        #expect(searches([rule(Scope(kinds: [.pr], to: Pick(include: [.team("a/x")]), toRoles: [.assigned]))]).isEmpty)
     }
 
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {

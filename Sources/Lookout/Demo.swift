@@ -260,7 +260,7 @@ enum Demo {
     private static func lookoutChanges(_ store: Store, _ now: Date) -> [LookoutChange] {
         let look = InboxCategory(
             name: "Needs a look", symbol: "eye", color: .aqua,
-            rules: [Rule(scope: Scope(kind: .pr, by: Pick(include: [.maintainers], except: [.bots]), in: Pick(include: [.contributed])),
+            rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.maintainers], except: [.bots]), in: Pick(include: [.contributed])),
                          match: .any,
                          conditions: [.checks([.failing]), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
                                       .newReview(by: Pick(include: [.maintainers]), since: .myLastReview)],
@@ -307,7 +307,7 @@ enum Demo {
         // a review that decides, conflicts.
         let contributions = InboxCategory(
             id: id(1), name: "Contributions", symbol: "hammer", color: .violet,
-            rules: [Rule(scope: Scope(kind: .pr, by: Pick(include: [.me]), in: Pick(include: [.contributed])),
+            rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me]), in: Pick(include: [.contributed])),
                          match: .any,
                          conditions: [.greptileBelow(5), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
                                       .lastComment(by: Pick(except: [.me])), .changesRequested(by: Pick()), .approved(by: Pick()),
@@ -315,15 +315,15 @@ enum Demo {
                          createdAt: longAgo)])
         let reviews = InboxCategory(
             id: id(2), name: "Reviews for you", symbol: "eye.circle", color: .amber,
-            rules: [Rule(scope: Scope(kind: .pr, to: Pick(include: [.me]), toRoles: [.reviewRequested]), createdAt: longAgo)])
+            rules: [Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.me]), toRoles: [.reviewRequested]), createdAt: longAgo)])
         let bots = InboxCategory(
             id: id(3), name: "Bot chatter", symbol: "cpu", color: .gray,
-            rules: [Rule(scope: Scope(kind: .pr, in: Pick(include: [.involved])), match: .any,
+            rules: [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.involved])), match: .any,
                          conditions: [.newComment(by: Pick(include: [.bots]))], createdAt: longAgo)],
             notifies: false)
         var ci = InboxStore.defaultCategories[0]
         ci.id = id(4)
-        ci.rules = [Rule(scope: Scope(kind: .workflow, in: Pick(include: ciRepos.map { .repo($0) })), conditions: [.workflow([.failing])],
+        ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: ciRepos.map { .repo($0) })), conditions: [.workflow([.failing])],
                          createdAt: longAgo)]
         return [contributions, reviews, bots, ci]
     }
@@ -583,11 +583,11 @@ enum Check {
             let scope = Pick<RepoRef>(include: [.repo(repo)])
             store.categories = [
                 InboxCategory(name: "PRs", symbol: "arrow.triangle.pull", color: .violet,
-                              rules: [Rule(scope: Scope(kind: .pr, in: scope), createdAt: .distantPast)]),
+                              rules: [Rule(scope: Scope(kinds: [.pr], in: scope), createdAt: .distantPast)]),
                 InboxCategory(name: "Issues", symbol: "smallcircle.filled.circle", color: .green,
-                              rules: [Rule(scope: Scope(kind: .issue, in: scope), createdAt: .distantPast)]),
+                              rules: [Rule(scope: Scope(kinds: [.issue], in: scope), createdAt: .distantPast)]),
                 InboxCategory(name: "CI", symbol: "xmark.seal", color: .red,
-                              rules: [Rule(scope: Scope(kind: .workflow, in: scope), conditions: [.workflow([.failing, .pending, .passing])],
+                              rules: [Rule(scope: Scope(kinds: [.workflow], in: scope), conditions: [.workflow([.failing, .pending, .passing])],
                                            createdAt: .distantPast)]),
             ]
             await store.pollAll()

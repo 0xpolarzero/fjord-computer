@@ -34,7 +34,7 @@ enum InboxSync {
         let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-Double(closedDays) * 86400)).prefix(10)
         var perRule: [[String]] = []
         for category in categories {
-            for rule in category.rules where rule.scope.kind != .workflow {
+            for rule in category.rules where !rule.scope.isWorkflow {
                 let queries = searches(for: rule, groups: groups, me: me, contributed: contributed, myTeams: myTeams)
                 perRule.append(queries.flatMap { query in
                     [query + " is:open"] + (asksForClosed(rule) ? [query + " is:closed updated:>=\(since)"] : [])
@@ -116,11 +116,29 @@ enum InboxSync {
         return (include, pick.include.contains(.involved), Array(except.prefix(8)))
     }
 
-    /// Queries (without state) for one PR or issue rule.
+    /// Queries (without state) for one rule about PRs, issues or both. A query PRs and issues share is one search without
+    /// `is:pr`/`is:issue`, which finds both; what only one has (review requests) says which.
     static func searches(for rule: Rule, groups: [InboxGroup], me: String, contributed: Set<String>,
                          myTeams: Set<String> = []) -> [String] {
+        let each = [ThingKind.pr, .issue].filter(rule.scope.kinds.contains).map { kind in
+            (kind, searches(for: rule, kind: kind, groups: groups, me: me, contributed: contributed, myTeams: myTeams))
+        }
+        var out: [String] = []
+        for (kind, queries) in each {
+            for query in queries {
+                let shared = each.count > 1 && each.allSatisfy { $0.1.contains(query) }
+                out.append(shared ? query : (kind == .pr ? "is:pr " : "is:issue ") + query)
+            }
+        }
+        var seen = Set<String>()
+        return out.filter { seen.insert($0).inserted }
+    }
+
+    /// The queries for the rule's things of one kind, without the kind.
+    private static func searches(for rule: Rule, kind: ThingKind, groups: [InboxGroup], me: String, contributed: Set<String>,
+                                 myTeams: Set<String>) -> [String] {
         let scope = rule.scope
-        let base = (scope.kind == .pr ? "is:pr" : "is:issue") + " archived:false"
+        let base = "archived:false"
         let by = logins(scope.by, groups: groups, me: me)
         let exclude = (scope.by?.except ?? []).compactMap { ref -> String? in
             if case .user(let login) = ref { return "-author:" + author(login.hasPrefix("@") ? String(login.dropFirst()) : login) }
@@ -129,9 +147,9 @@ enum InboxSync {
         }
         // `to`: one query per role and person (a search can't say "or" between different qualifiers).
         var roles = scope.toRoles
-        if scope.kind == .issue { roles.remove(.reviewRequested) }
+        if kind == .issue { roles.remove(.reviewRequested) }
         let to = roles.isEmpty ? nil : logins(scope.to, groups: groups, me: me)
-        let teams = scope.kind == .pr && roles.contains(.reviewRequested) ? teams(scope.to, myTeams: myTeams) : []
+        let teams = kind == .pr && roles.contains(.reviewRequested) ? teams(scope.to, myTeams: myTeams) : []
         // Only teams asked for, and none known yet (not resolved, or you're in none): nothing to search for.
         if let include = scope.to?.include, !roles.isEmpty, teams.isEmpty,
            !include.isEmpty, include.allSatisfy({ if case .team = $0 { true } else { $0 == .myTeams } }) {
@@ -461,7 +479,7 @@ enum InboxSync {
         var out: [(repo: String, branch: String?)] = []
         var seen = Set<String>()
         for category in categories {
-            for rule in category.rules where rule.scope.kind == .workflow {
+            for rule in category.rules where rule.scope.isWorkflow {
                 var repos: [String] = []
                 for ref in rule.scope.in?.include ?? [] {
                     switch ref {
@@ -821,7 +839,7 @@ enum InboxCheck {
             let bots = PersonRef.user("greptile-apps[bot]")
             let both = Pick<PersonRef>(include: [.maintainers, bots])
             let mine = Pick<PersonRef>(include: [.me])
-            let scope = Scope(kind: .pr, by: mine, in: repos)
+            let scope = Scope(kinds: [.pr], by: mine, in: repos)
             let past = Date.distantPast
             store.categories = [
                 InboxCategory(name: "Contributions", symbol: "arrow.triangle.pull", color: .violet, rules: [
@@ -835,17 +853,17 @@ enum InboxCheck {
                 ]),
                 InboxCategory(name: "All mine", symbol: "list.bullet", color: .blue, rules: [Rule(scope: scope, createdAt: past)]),
                 InboxCategory(name: "CI", symbol: "xmark.seal", color: .red, rules: [
-                    Rule(scope: Scope(kind: .workflow, in: Pick(include: [.repo("amontlabs/lcu"), .repo("0xpolarzero/lookout")])),
+                    Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("amontlabs/lcu"), .repo("0xpolarzero/lookout")])),
                          conditions: [.workflow([.failing])], createdAt: past),
                 ]),
                 InboxCategory(name: "Probe", symbol: "magnifyingglass", color: .gray, rules: [
-                    Rule(scope: Scope(kind: .pr, in: Pick(include: [.involved])), conditions: [
+                    Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.involved])), conditions: [
                         .lastComment(by: Pick()), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
                         .changesRequested(by: Pick()), .approved(by: Pick()), .greptileBelow(6),
                     ], createdAt: past),
                 ]),
                 InboxCategory(name: "Reviews for you", symbol: "eye", color: .green, rules: [
-                    Rule(scope: Scope(kind: .pr, to: mine, toRoles: [.reviewRequested], in: Pick(include: [.involved])), createdAt: past),
+                    Rule(scope: Scope(kinds: [.pr], to: mine, toRoles: [.reviewRequested], in: Pick(include: [.involved])), createdAt: past),
                 ]),
             ]
             let before = store.gh.graphqlRemaining

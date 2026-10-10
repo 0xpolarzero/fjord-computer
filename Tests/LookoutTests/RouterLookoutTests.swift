@@ -37,7 +37,7 @@ import Testing
         return c
     }
 
-    private let prByMe: [String: Any] = ["scope": ["kind": "pr", "by": ["include": [["me": [String: Any]()]]]]]
+    private let prByMe: [String: Any] = ["scope": ["kinds": ["pr"], "by": ["include": [["me": [String: Any]()]]]]]
 
     private var changes: (Store) -> [LookoutChange] { { $0.router.changes } }
 
@@ -143,12 +143,12 @@ import Testing
             #expect(try LookoutJSON.decode(CategoryAction.self, from: n).kind == action.kind)
         }
         // A whole category the model makes is a category the shape takes.
-        let offered = Set(RuleEditing.offered(.pr).map(RuleEditing.tag))
+        let offered = Set(RuleEditing.offered([.pr]).map(RuleEditing.tag))
         let prConditions = conditions.filter { offered.contains(RuleEditing.tag($0)) }
         var all = InboxCategory(name: "All", symbol: "star", color: .blue)
-        all.rules = [Rule(scope: Scope(kind: .pr, by: Pick(include: [.me]), to: Pick(include: [.team("o/t")]), toRoles: [.reviewRequested],
+        all.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me]), to: Pick(include: [.team("o/t")]), toRoles: [.reviewRequested],
                                        in: Pick(include: [.involved])), match: .all, conditions: prConditions),
-                     Rule(scope: Scope(kind: .workflow, in: Pick(include: [.repo("a/b")]), on: ["main"], named: ["ci"]), conditions: [.workflow([.failing])])]
+                     Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/b")]), on: ["main"], named: ["ci"]), conditions: [.workflow([.failing])])]
         all.actions = ActionList(actions)
         let n = try Shapes.normalize(LookoutJSON.object(all), as: .named("Category"))
         #expect(try LookoutJSON.decode(InboxCategory.self, from: n).rules.count == 2)
@@ -171,9 +171,9 @@ import Testing
         }
         fails(["name": "x", "symbol": "eye", "color": "pink"], .named("Category"), "color")
         fails(["name": "x", "symbol": "eye", "color": "red", "colour": "red"], .named("Category"), "colour")
-        fails(["name": "x", "symbol": "eye", "color": "red", "rules": [["scope": ["kind": "pr"], "conditions": [["chekcs": [String: Any]()]]]]],
+        fails(["name": "x", "symbol": "eye", "color": "red", "rules": [["scope": ["kinds": ["pr"]], "conditions": [["chekcs": [String: Any]()]]]]],
               .named("Category"), "rules[0].conditions[0]")
-        fails(["name": "x", "symbol": "eye", "color": "red", "rules": [["scope": ["kind": "pr", "by": ["include": [["me": "yes"]]]]]]],
+        fails(["name": "x", "symbol": "eye", "color": "red", "rules": [["scope": ["kinds": ["pr"], "by": ["include": [["me": "yes"]]]]]]],
               .named("Category"), "takes no value")
         fails(["symbol": "eye", "color": "red"], .named("Category"), "name: is missing")
     }
@@ -223,47 +223,65 @@ import Testing
         }
         let me: [String: Any] = ["me": [String: Any]()]
         // A value both included and excepted.
-        await refused(s, category("A", rules: [rule(["kind": "pr", "by": ["include": [me], "except": [me]]])]),
+        await refused(s, category("A", rules: [rule(["kinds": ["pr"], "by": ["include": [me], "except": [me]]])]),
                       ["“by”", "both included and excepted"])
         // A condition the kind doesn't have.
-        await refused(s, category("B", rules: [rule(["kind": "issue"], [["greptileBelow": ["_0": 3]]])]), ["conditions[0]", "Issues don't have this"])
+        await refused(s, category("B", rules: [rule(["kinds": ["issue"]], [["greptileBelow": ["_0": 3]]])]), ["conditions[0]", "Issues don't have this"])
         // Contradicting states under all-of.
-        await refused(s, category("C", rules: [rule(["kind": "pr"], [["status": ["_0": ["draft"]]], ["status": ["_0": ["merged"]]]], match: "all")]),
+        await refused(s, category("C", rules: [rule(["kinds": ["pr"]], [["status": ["_0": ["draft"]]], ["status": ["_0": ["merged"]]]], match: "all")]),
                       ["Contradicts the other status"])
         // Nobody reviews their own PR.
-        await refused(s, category("D", rules: [rule(["kind": "pr", "by": ["include": [me]]], [["approved": ["by": ["include": [me]]]]])]),
+        await refused(s, category("D", rules: [rule(["kinds": ["pr"], "by": ["include": [me]]], [["approved": ["by": ["include": [me]]]]])]),
                       ["GitHub doesn't let you review your own PR"])
         // A workflow with no repo; a PR with a branch.
-        await refused(s, category("E", rules: [rule(["kind": "workflow"], [["workflow": ["_0": ["failing"]]]])]), ["Workflows need a repository"])
-        await refused(s, category("F", rules: [rule(["kind": "pr", "on": ["main"]])]), ["Only workflows have branches"])
+        await refused(s, category("E", rules: [rule(["kinds": ["workflow"]], [["workflow": ["_0": ["failing"]]]])]), ["Workflows need a repository"])
+        await refused(s, category("F", rules: [rule(["kinds": ["pr"], "on": ["main"]])]), ["Only workflows have branches"])
         // A team outside `to`; an empty state list; an unknown group.
-        await refused(s, category("G", rules: [rule(["kind": "pr", "by": ["include": [["team": ["_0": "o/t"]]]]])]), ["Teams don't author anything"])
-        await refused(s, category("H", rules: [rule(["kind": "pr"], [["checks": ["_0": [String]()]]])]), ["Pick at least one state"])
-        await refused(s, category("I", rules: [rule(["kind": "pr", "by": ["include": [["group": ["_0": UUID().uuidString]]]]])]), ["This group no longer exists"])
+        await refused(s, category("G", rules: [rule(["kinds": ["pr"], "by": ["include": [["team": ["_0": "o/t"]]]]])]), ["Teams don't author anything"])
+        await refused(s, category("H", rules: [rule(["kinds": ["pr"]], [["checks": ["_0": [String]()]]])]), ["Pick at least one state"])
+        await refused(s, category("I", rules: [rule(["kinds": ["pr"], "by": ["include": [["group": ["_0": UUID().uuidString]]]]])]), ["This group no longer exists"])
         // Not an SF Symbol, a name taken, no name; an unknown field or colour.
         await refused(s, category("J", extra: ["symbol": "not.a.symbol"]), ["isn't an SF Symbol"])
         await refused(s, category("ci"), ["called “ci” already"])
         await refused(s, category("  "), ["`name` is empty"])
         await refused(s, category("K", extra: ["color": "pink"]), ["color", "one of"])
         // Several reasons together.
-        await refused(s, category("L", rules: [rule(["kind": "issue", "on": ["main"]], [["greptileBelow": ["_0": 3]], ["checks": ["_0": [String]()]]])]),
+        await refused(s, category("L", rules: [rule(["kinds": ["issue"], "on": ["main"]], [["greptileBelow": ["_0": 3]], ["checks": ["_0": [String]()]]])]),
                       ["Only workflows have branches", "conditions[0]", "conditions[1]"])
         // CI can't be made, and an action that applies to nothing is refused.
         await refused(s, category("M", extra: ["isCI": true]), ["`isCI`"])
-        await refused(s, category("N", rules: [rule(["kind": "issue"])], extra: ["actions": [["kind": ["rerun": [String: Any]()]]]]),
+        await refused(s, category("N", rules: [rule(["kinds": ["issue"]])], extra: ["actions": [["kind": ["rerun": [String: Any]()]]]]),
                       ["Re-run failed checks", "None of this category's rules"])
+    }
+
+    @Test func oneRuleTakesPRsAndIssuesAndTheOldSingleKindStillReads() async throws {
+        let s = store()
+        let to: [String: Any] = ["include": [["me": [String: Any]()]]]
+        let made = await call(tools(s), "create_category", ["category": category("Mine", rules: [
+            ["scope": ["kinds": ["issue", "pr"], "to": to]],
+            // The form rules once had: one `kind`, and no roles said, so an issue gets no review requested.
+            ["scope": ["kind": "issue", "to": to]],
+        ])])
+        #expect(made.ok, "\(made.text)")
+        let rules = try #require(s.categories.first { $0.name == "Mine" }).rules
+        #expect(rules.map(\.scope.kinds) == [[.pr, .issue], [.issue]])
+        #expect(rules[0].scope.toRoles == Set(ToRole.allCases) && rules[1].scope.toRoles == [.assigned, .mentioned])
+        await refused(s, category("Mixed", rules: [["scope": ["kinds": ["pr", "workflow"], "in": ["include": [[String: Any]]()]]]]),
+                      ["Workflows are a rule of their own"])
+        await refused(s, category("Both", rules: [["scope": ["kinds": ["pr", "issue"]], "conditions": [["hasConflicts": [String: Any]()]]]]),
+                      ["Issues don't have this"])
     }
 
     @Test func aGroupOfTheWrongKindOrATeamOutsideToIsRefused() async {
         let s = store()
         let peopleGroup = InboxGroup(name: "Crew", kind: .people, members: ["a"])
         s.groups = [peopleGroup]
-        await refused(s, category("A", rules: [["scope": ["kind": "pr", "in": ["include": [["group": ["_0": peopleGroup.id.uuidString]]]]]]]),
+        await refused(s, category("A", rules: [["scope": ["kinds": ["pr"], "in": ["include": [["group": ["_0": peopleGroup.id.uuidString]]]]]]]),
                       ["people group"])
-        await refused(s, category("B", rules: [["scope": ["kind": "pr"], "conditions": [["lastComment": ["by": ["include": [["myTeams": [String: Any]()]]]]]]]]),
+        await refused(s, category("B", rules: [["scope": ["kinds": ["pr"]], "conditions": [["lastComment": ["by": ["include": [["myTeams": [String: Any]()]]]]]]]]),
                       ["Teams only go in `to`"])
-        await refused(s, category("C", rules: [["scope": ["kind": "issue", "to": ["include": [["me": [String: Any]()]]], "toRoles": ["reviewRequested"]]]]),
-                      ["Issues have no review requests"])
+        await refused(s, category("C", rules: [["scope": ["kinds": ["issue"], "to": ["include": [["me": [String: Any]()]]], "toRoles": ["reviewRequested"]]]]),
+                      ["Only PRs have review requests"])
     }
 
     @Test func updatingKeepsWhatIsLeftOutAndEachRulesHistory() async throws {
@@ -275,7 +293,7 @@ import Testing
         s.categories[1].rules[0].createdAt = old
         t.beginTurn("update")
         let out = await call(t, "update_category", ["category": ["id": original.id.uuidString, "color": "green",
-                                                                 "rules": [["id": original.rules[0].id.uuidString, "scope": ["kind": "pr"]]]]])
+                                                                 "rules": [["id": original.rules[0].id.uuidString, "scope": ["kinds": ["pr"]]]]]])
         #expect(out.ok, "\(out.text)")
         let now = try #require(s.categories.last)
         #expect(now.color == .green && now.name == "Mine" && !now.notifies && now.symbol == "eye")
@@ -297,7 +315,7 @@ import Testing
         let t = tools(s)
         let rename = await call(t, "update_category", ["category": ["id": ci.id.uuidString, "hidden": true, "name": "Pipelines"]])
         #expect(rename.ok && s.categories[0].hidden && s.categories[0].name == "Pipelines" && s.categories[0].isCI)
-        let bad = await call(t, "update_category", ["category": ["id": ci.id.uuidString, "rules": [["scope": ["kind": "pr"]]]]])
+        let bad = await call(t, "update_category", ["category": ["id": ci.id.uuidString, "rules": [["scope": ["kinds": ["pr"]]]]]])
         #expect(!bad.ok && bad.text.contains("CI category only has workflow rules"))
         #expect(await call(t, "update_category", ["category": ["id": ci.id.uuidString, "isCI": false]]).ok == false)
         let delete = await call(t, "delete_category", ["category": ci.id.uuidString])
@@ -365,7 +383,7 @@ import Testing
         t.decision = run.id
         let first = await call(t, "create_category", ["category": category("My repos", rules: [prByMe])])
         let made = try #require(s.categories.last)
-        let second = await update(t, made, ["rules": [["scope": ["kind": "pr"]]]])
+        let second = await update(t, made, ["rules": [["scope": ["kinds": ["pr"]]]]])
         #expect(second["changeId"] as? String == first.json["changeId"] as? String, "the same record")
         #expect(changes(s).count == 1)
         let record = try #require(changes(s).first)
@@ -494,7 +512,7 @@ import Testing
         #expect(await call(t, "create_group", ["group": ["name": "Repos", "kind": "repos", "members": ["nope"]]]).text.contains("isn't a repo"))
         #expect(await call(t, "create_group", ["group": ["name": "People", "kind": "people", "members": ["a/b"]]]).ok == false)
         // Used by a rule: its kind can't change and it can't be deleted.
-        let rule: [String: Any] = ["scope": ["kind": "pr", "by": ["include": [["group": ["_0": group.id.uuidString]]]]]]
+        let rule: [String: Any] = ["scope": ["kinds": ["pr"], "by": ["include": [["group": ["_0": group.id.uuidString]]]]]]
         #expect(await call(t, "create_category", ["category": category("Crew PRs", rules: [rule])]).ok)
         let kind = await call(t, "update_group", ["group": ["id": group.id.uuidString, "kind": "repos"]])
         #expect(!kind.ok && kind.text.contains("Crew PRs"))
@@ -597,7 +615,7 @@ import Testing
 
         // Shadowed by a category above it: said, with the one that comes after.
         s.categories.insert(InboxCategory(name: "Alice", symbol: "person", color: .green,
-                                          rules: [Rule(scope: Scope(kind: .pr, by: Pick(include: [.user("alice")])))]), at: 0)
+                                          rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("alice")])))]), at: 0)
         let shadowed = await call(t, "explain_entry", ["entry": "flaky"])
         #expect((shadowed.json["matched"] as? [String: Any])?["category"] as? String == "Alice")
         #expect((shadowed.json["alsoMatchesButComesAfter"] as? [[String: Any]])?.first?["category"] as? String == "Mine")
@@ -695,7 +713,7 @@ import Testing
     @Test func aCardPreviewReadsLikeTheEditorsSentence() async throws {
         let s = store()
         s.groups = [InboxGroup(name: "Crew", kind: .people, members: ["a"])]
-        let rule = Rule(scope: Scope(kind: .pr, by: Pick(include: [.me, .group(s.groups[0].id)], except: [.bots]), to: Pick(include: [.myTeams]),
+        let rule = Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me, .group(s.groups[0].id)], except: [.bots]), to: Pick(include: [.myTeams]),
                                      toRoles: [.reviewRequested], in: Pick(include: [.owned])),
                         match: .all, conditions: [.newComment(by: Pick(include: [.maintainers]), since: .myLastReview), .checks([.failing]),
                                                   .noActivity(days: 5), .status([.open])])
@@ -714,7 +732,7 @@ import Testing
         var changed = base
         changed.name = "Other"
         changed.color = .red
-        changed.rules.append(Rule(scope: Scope(kind: .issue)))
+        changed.rules.append(Rule(scope: Scope(kinds: [.issue])))
         #expect(LookoutChange.diff(base, changed) == ["Name: Mine → Other", "Color: blue → red", "Rules: 1 added"])
     }
 

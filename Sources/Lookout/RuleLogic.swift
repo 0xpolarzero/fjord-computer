@@ -8,26 +8,14 @@ import SwiftUI
 enum RuleEditing {
     static let groupOrder = ["Activity", "Conversation", "Review", "Checks", "Status", "Signals"]
 
-    /// What the editor offers for a kind: the engine's list, in its order. (Until the engine lists any, the spec's.)
-    static func offered(_ kind: ThingKind) -> [Condition] {
-        let engine = InboxEngine.conditions(for: kind)
-        return engine.isEmpty ? spec(kind) : engine
-    }
+    /// What the editor offers for a rule about `kinds`: what every one of them has, in the engine's order.
+    static func offered(_ kinds: Set<ThingKind>) -> [Condition] { InboxEngine.conditions(for: kinds) }
 
-    private static func spec(_ kind: ThingKind) -> [Condition] {
-        switch kind {
-        case .pr:
-            [.newComment(by: Pick()), .newReview(by: Pick()), .newCommits(by: Pick()), .mentions(Pick(include: [.me])),
-             .lastComment(by: Pick()), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
-             .approved(by: Pick()), .changesRequested(by: Pick()),
-             .checks([.failing]), .hasConflicts, .behindBase,
-             .status([.draft]), .labeled(Pick()), .noActivity(days: 7), .greptileBelow(4)]
-        case .issue:
-            [.newComment(by: Pick()), .mentions(Pick(include: [.me])), .lastComment(by: Pick()),
-             .status([.closed]), .labeled(Pick()), .noActivity(days: 7)]
-        case .workflow:
-            [.workflow([.failing])]
-        }
+    /// The kinds after ticking or unticking one in the kind chip. PRs and issues go together; workflows only alone, so
+    /// ticking them (or, from them, another kind) starts over with the one ticked. The last one can't be unticked.
+    static func toggling(_ kind: ThingKind, on: Bool, in kinds: Set<ThingKind>) -> Set<ThingKind> {
+        guard on else { return kinds.count > 1 ? kinds.subtracting([kind]) : kinds }
+        return kind == .workflow || kinds.contains(.workflow) ? [kind] : kinds.union([kind])
     }
 
     /// Identity of a condition's kind, whatever its values.
@@ -108,8 +96,8 @@ enum RuleEditing {
         }
     }
 
-    /// What `switchKind` dropped, as a sentence: "Dropped for Workflows: Greptile score, unresolved threads, and the by slot."
-    static func droppedNotice(_ dropped: [String], for kind: ThingKind) -> String? {
+    /// What `switchKinds` dropped, as a sentence: "Dropped for Workflows: Greptile score, unresolved threads, and the by slot."
+    static func droppedNotice(_ dropped: [String], for kinds: Set<ThingKind>) -> String? {
         guard !dropped.isEmpty else { return nil }
         let slots: Set<String> = ["by", "to", "on", "named", "in"]
         var items = dropped.map { slots.contains($0) ? "the \($0) slot" : $0 }
@@ -117,12 +105,12 @@ enum RuleEditing {
             items[0] = c.uppercased() + first.dropFirst()
         }
         let list = items.count > 1 ? items.dropLast().joined(separator: ", ") + ", and " + items[items.count - 1] : items[0]
-        return "Dropped for \(kind.label): \(list)"
+        return "Dropped for \(kinds.label): \(list)"
     }
 
-    /// What `since` offers for a kind: issues have no reviews.
-    static func sinces(_ kind: ThingKind) -> [Since] {
-        kind == .issue ? [.done, .myLastComment] : Since.allCases
+    /// What `since` offers for a rule about `kinds`: issues have no reviews.
+    static func sinces(_ kinds: Set<ThingKind>) -> [Since] {
+        kinds.contains(.issue) ? [.done, .myLastComment] : Since.allCases
     }
 
     static func sinceTitle(_ since: Since) -> String {
@@ -133,9 +121,9 @@ enum RuleEditing {
         }
     }
 
-    /// The roles "to" can mean for a kind.
-    static func roles(_ kind: ThingKind) -> [ToRole] {
-        kind == .issue ? [.assigned, .mentioned] : ToRole.allCases
+    /// The roles "to" can mean for a rule about `kinds`: review requested only with PRs among them (it never reaches an issue).
+    static func roles(_ kinds: Set<ThingKind>) -> [ToRole] {
+        kinds.contains(.pr) ? ToRole.allCases : [.assigned, .mentioned]
     }
 
     static func roleTitle(_ role: ToRole) -> String {
@@ -146,18 +134,29 @@ enum RuleEditing {
         }
     }
 
-    /// The same rule under another kind, with what could not come along said in words.
-    static func switchKind(_ rule: Rule, to kind: ThingKind) -> (rule: Rule, dropped: [String]) {
-        guard kind != rule.scope.kind else { return (rule, []) }
+    /// The same rule about other kinds, with what could not come along said in words.
+    static func switchKinds(_ rule: Rule, to kinds: Set<ThingKind>) -> (rule: Rule, dropped: [String]) {
+        guard kinds != rule.scope.kinds, !kinds.isEmpty else { return (rule, []) }
         var out = rule
         var dropped: [String] = []
-        out.scope.kind = kind
-        let supported = Set(offered(kind).map(tag))
-        var kept = rule.conditions.filter { supported.contains(tag($0)) }
-        let lost = rule.conditions.filter { !supported.contains(tag($0)) }
-        if !lost.isEmpty { dropped += lost.map(name) }
-        switch kind {
-        case .workflow:
+        out.scope.kinds = kinds
+        let supported = Set(offered(kinds).map(tag))
+        var kept: [Condition] = []
+        for condition in rule.conditions {
+            guard supported.contains(tag(condition)) else { dropped.append(name(condition)); continue }
+            // What a condition says that one of the new kinds can't have goes, the condition stays.
+            if let since = condition.since, !sinces(kinds).contains(since) {
+                dropped.append("since " + sinceTitle(since))
+                kept.append(condition.with(since: .done))
+            } else if case .status(let s) = condition, !kinds.contains(.pr), !s.isSubset(of: [.open, .closed]) {
+                let left = s.intersection([.open, .closed])
+                dropped.append(left.isEmpty ? name(condition) : "draft and merged")
+                if !left.isEmpty { kept.append(.status(left)) }
+            } else {
+                kept.append(condition)
+            }
+        }
+        if out.scope.isWorkflow {
             if rule.scope.by != nil { dropped.append("by") }
             if rule.scope.to != nil { dropped.append("to") }
             out.scope.by = nil
@@ -167,14 +166,14 @@ enum RuleEditing {
                 dropped.append("anywhere you're involved")
             }
             if kept.isEmpty { kept = [.workflow([.failing])] }
-        case .pr, .issue:
+        } else {
             if rule.scope.on != nil { dropped.append("on") }
             if rule.scope.named != nil { dropped.append("named") }
             out.scope.on = nil
             out.scope.named = nil
-            if kind == .issue, rule.scope.toRoles.contains(.reviewRequested) {
+            if !kinds.contains(.pr), rule.scope.toRoles.contains(.reviewRequested) {
                 out.scope.toRoles.remove(.reviewRequested)
-                if out.scope.toRoles.isEmpty { out.scope.toRoles = Set(roles(.issue)) }
+                if out.scope.toRoles.isEmpty { out.scope.toRoles = Set(roles(kinds)) }
                 if rule.scope.to != nil { dropped.append("review requested") }
             }
         }
@@ -217,7 +216,7 @@ enum RuleEditing {
            (pick.include + pick.except).contains(where: { if case .repo(let n) = $0 { missing.contains(n.lowercased()) } else { false } }) {
             found.append(.init(condition: nil, slot: "in", reason: Self.noSuchRepo))
         }
-        if rule.scope.kind == .workflow, !isCI, rule.scope.in?.include.isEmpty ?? true {
+        if rule.scope.isWorkflow, !isCI, rule.scope.in?.include.isEmpty ?? true {
             found.append(.init(condition: nil, slot: "in", reason: "Workflows need at least one repo"))
         }
         for (i, c) in rule.conditions.enumerated() {
@@ -377,9 +376,9 @@ struct EditorData {
 
     /// A rule in one line, for the category's row.
     func summary(_ rule: Rule) -> String {
-        var parts = [rule.scope.kind.label]
+        var parts = [rule.scope.kinds.label]
         func add(_ word: String, _ text: String) { if !text.isEmpty { parts.append("\(word) \(text)") } }
-        if rule.scope.kind != .workflow {
+        if !rule.scope.isWorkflow {
             add("by", pickTitle(rule.scope.by, personTitle))
             add("to", pickTitle(rule.scope.to, personTitle))
         }
@@ -479,10 +478,11 @@ struct EditorData {
         }
     }
 
-    func repoOptions(_ query: String, _ pick: Pick<RepoRef>, kind: ThingKind) -> [SlotOption<RepoRef>] {
+    /// `involved`: PRs and issues can be anywhere you're involved; workflows can't.
+    func repoOptions(_ query: String, _ pick: Pick<RepoRef>, involved: Bool) -> [SlotOption<RepoRef>] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         var all: [RepoRef] = [.owned, .contributed]
-        if kind != .workflow { all.append(.involved) }
+        if involved { all.append(.involved) }
         all += store.groups.filter { $0.kind == .repos }.map { RepoRef.group($0.id) }
         let names = repoNames()
         var owners: [String] = []
@@ -597,7 +597,8 @@ struct PeopleSlot: View {
 struct RepoSlot: View {
     @Binding var pick: Pick<RepoRef>
     let store: Store
-    var kind: ThingKind = .pr
+    /// Offers "anywhere you're involved" (not for workflows).
+    var involved = true
     /// Told when a repo typed in turned out to have moved ("a moved to b").
     var onMoved: (String) -> Void = { _ in }
     var placeholder = "anywhere"
@@ -610,7 +611,7 @@ struct RepoSlot: View {
         SlotField(pick: $pick, placeholder: placeholder, tone: tone,
                   title: data.repoTitle, symbol: data.repoSymbol,
                   isBroken: { data.isBroken($0) || store.isMissing($0) },
-                  options: { q, p in data.repoOptions(q, p, kind: kind) },
+                  options: { q, p in data.repoOptions(q, p, involved: involved) },
                   parse: data.parseRepo,
                   groupable: plain.count,
                   saveGroup: plain.count >= 2 ? { name in
