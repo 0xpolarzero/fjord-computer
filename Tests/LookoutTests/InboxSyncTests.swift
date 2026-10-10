@@ -712,6 +712,31 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.inboxSyncState.teamsFailedAt == nil && s.teamsResolvedAt != nil)
     }
 
+    @Test @MainActor func anotherAccountStartsWithoutTheLastOnesReposAndTeams() async throws {
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.ownedRepos = ["me/own"]
+        s.contributedRepos = ["o/merged"]
+        s.myTeams = ["acme/core"]
+        s.reposResolvedAt = Date()
+        s.teamsResolvedAt = Date()
+        s.inboxSyncState.ownerRepos = ["acme": ["acme/x"]]
+        // The same account, however written: kept.
+        s.me = GHUser(login: "Me", avatarUrl: nil, type: "User")
+        #expect(s.contributedRepos == ["o/merged"] && s.myTeams == ["acme/core"])
+        s.me = GHUser(login: "someone", avatarUrl: nil, type: "User")
+        #expect(s.ownedRepos.isEmpty && s.contributedRepos.isEmpty && s.myTeams.isEmpty)
+        #expect(s.reposResolvedAt == nil && s.teamsResolvedAt == nil && s.inboxSyncState.ownerRepos.isEmpty)
+        // An answer asked for the last account, landing now, isn't taken.
+        s.gh.session = StubbedGitHub.session { _ in
+            let data = ["viewer": ["organizations": ["nodes": [["teams": ["nodes": [["combinedSlug": "acme/core"]]]]]]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        await s.resolveTeams(me: "me")
+        #expect(s.myTeams.isEmpty && s.teamsResolvedAt == nil)
+    }
+
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {
         let s = Store()
         s.persists = false

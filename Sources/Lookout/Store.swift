@@ -174,7 +174,12 @@ final class Store {
     var claudeLink: ClaudeLink = .off
 
     var me: GHUser? {
-        didSet { if let name = me?.login, name != login { login = name } }
+        didSet {
+            guard let name = me?.login, name != login else { return }
+            // Someone else: what was known of the last account (its repos, its teams) isn't theirs.
+            if !login.isEmpty, name.caseInsensitiveCompare(login) != .orderedSame { forgetAccountCaches() }
+            login = name
+        }
     }
     /// Who `me` was last time, kept so the inbox's "me" rules (by me, to me, Repos I own) match at launch, before GitHub
     /// answers who the token is; a sign-in as someone else replaces it.

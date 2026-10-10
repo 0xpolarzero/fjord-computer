@@ -1001,6 +1001,24 @@ extension Store {
         }
     }
 
+    /// Signed in as someone else: the last account's repos, teams and what was asked about them go, and are asked again.
+    func forgetAccountCaches() {
+        ownedRepos = []
+        contributedRepos = []
+        myTeams = []
+        reposResolvedAt = nil
+        teamsResolvedAt = nil
+        missingRepos = []
+        repoAnswers = [:]
+        inboxSyncState = InboxSyncState()
+    }
+
+    /// Whether `me` is still who is signed in (or no one is known yet): an answer about someone else is dropped.
+    private func stillSignedIn(as me: String) -> Bool {
+        let current = self.me?.login ?? login
+        return current.isEmpty || current.caseInsensitiveCompare(me) == .orderedSame
+    }
+
     /// The repos you own and those you merged a PR in. Kept for a day.
     func resolveRepos(me: String) async throws {
         let json = try await gh.graphql(InboxSync.reposRequest(me: me))
@@ -1010,6 +1028,7 @@ extension Store {
         func names(_ nodes: Any?, _ path: (([String: Any]) -> String?)) -> Set<String> {
             Set(((nodes as? [[String: Any]]) ?? []).compactMap(path))
         }
+        guard stillSignedIn(as: me) else { return }
         let viewer = data["viewer"] as? [String: Any]
         let owned = names((viewer?["repositories"] as? [String: Any])?["nodes"]) { $0["nameWithOwner"] as? String }
         // A merged or an open PR of yours makes it a repo you contribute to.
@@ -1050,6 +1069,7 @@ extension Store {
             inboxSyncState.teamsFailedAt = Date()
             return ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"
         }
+        guard stillSignedIn(as: me) else { return nil }
         teamsResolvedAt = Date()
         inboxSyncState.teamsFailedAt = nil
         let teams = InboxSync.teams(data)
