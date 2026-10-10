@@ -4,8 +4,9 @@ import SwiftUI
 /// Where you write to the Router, drawn as the Claude Code tab's composer (docs/design/spec/composer-overlays.md): the
 /// context strip over the card (the card the message replies to, with its ×; Backspace at the start takes it off) and the
 /// card (Return sends, ⇧Return starts a new line, see `RouterKeys`). Typing @ suggests projects over the caret (↑↓, Return
-/// or Tab picks, Esc dismisses); a pick is a pill in the text where the @ was (see `MentionField`). Stop while the Router
-/// works.
+/// or Tab picks, Esc dismisses); a pick is a pill in the text where the @ was (see `MentionField`). Once typing pauses, Jev's
+/// pick of where the message goes is a ghost chip in the strip, its card or row marked on the page: a click fixes it, Esc
+/// waves it off (see `RouterLiveTarget`). Stop while the Router works.
 struct RouterComposer: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -31,7 +32,7 @@ struct RouterComposer: View {
         let suggestions = model.suggestions(store)
         VStack(alignment: .leading, spacing: 0) {
             // Who your words go to, as the Code tab's strip over its composer: the card's session, the projects you tagged.
-            if model.replyTo != nil {
+            if model.replyTo != nil || model.live.pinned != nil || model.live.prediction != nil {
                 strip.padding(.bottom, C.dockGap)
             }
             card(on: on, working: working)
@@ -50,13 +51,26 @@ struct RouterComposer: View {
                 .zIndex(1)
         }
         .motion(Theme.Motion.fade, value: suggestions.map(\.folder))
+        .motion(Theme.Motion.fade, value: model.live.prediction?.target)
+        // Jev's pick follows the draft and what fixes its target; the page marks its card or row while it shows.
+        .onChange(of: model.draft) { model.predictTarget(store: store) }
+        .onChange(of: model.tokens) { model.predictTarget(store: store) }
+        .onChange(of: model.replyTo) { model.predictTarget(store: store) }
+        .onChange(of: model.live.pinned) { model.predictTarget(store: store) }
+        .onChange(of: model.live.prediction?.mark) { old, new in model.markPrediction(from: old, to: new) }
+        .onChange(of: model.highlighted) { _, now in
+            if now == nil, let mark = model.live.prediction?.mark { model.highlighted = mark }
+        }
         .onAppear { if on { requestFocus() } }
         .onChange(of: model.focusRequest) { requestFocus() }
         .onChange(of: focused) { _, now in
             model.composerFocused = now
             if now { DispatchQueue.main.async { typePendingKeys() } }
         }
-        .onDisappear { model.composerFocused = false }
+        .onDisappear {
+            model.composerFocused = false
+            model.markPrediction(from: model.live.prediction?.mark, to: nil)
+        }
         // The @ suggestions follow the caret, wherever it is in the text.
         .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { note in
             // Only the composer's own editor, while it edits: in its window, where its field is (not another window's, nor a
@@ -89,6 +103,13 @@ struct RouterComposer: View {
             if let id = model.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
                 ComposerChip(symbol: "arrow.right", text: card.title, tint: card.kind.color,
                              removeLabel: "Stop replying to \(card.title)") { model.replyTo = nil }
+            }
+            if model.live.pinned != nil, let title = model.live.pinnedTitle {
+                ComposerChip(symbol: "arrow.right", text: title, tint: CDS.Text.accent,
+                             removeLabel: "Let the Router decide where this goes") { model.live.reset() }
+            }
+            if let prediction = model.live.prediction {
+                PredictionChip(prediction: prediction) { model.pinPrediction(store: store) }
             }
         }
         .padding(CDS.Density.compact.pad.md)
@@ -236,6 +257,35 @@ struct ComposerChip: View {
             .shadow(color: CDS.fieldShadow, radius: 1, y: 1))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(text)
+    }
+}
+
+/// Jev's pick while you type: a ghost of the reply chip (dashed, no fill, no ×), muted; a click fixes it as the target.
+private struct PredictionChip: View {
+    let prediction: RouterLiveTarget.Prediction
+    let pin: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+        Button(action: pin) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.right").font(.system(size: 10, weight: .medium)).foregroundStyle(CDS.Text.muted)
+                    .accessibilityHidden(true)
+                Text(prediction.title).font(CDS.mono(13)).foregroundStyle(hovering ? CDS.Text.secondary : CDS.Text.muted)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            .padding(.horizontal, CDS.Density.compact.pad.md)
+            .frame(height: CDS.Density.compact.control)
+            .background(shape.fill(hovering ? CDS.Fill.ghostHover : .clear))
+            .overlay(shape.strokeBorder(CDS.border, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .tip("Jev thinks this goes to \(prediction.detail)", "Click to fix it, Esc to clear")
+        .accessibilityLabel("Jev thinks this goes to \(prediction.detail)")
+        .accessibilityHint("Fixes it as where the message goes")
     }
 }
 

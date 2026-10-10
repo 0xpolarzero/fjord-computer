@@ -41,16 +41,16 @@ extension Store {
 
     /// Your message to the Router, with the card it replies to and the projects you tagged; in a demo, a canned reply
     /// instead of a real process.
-    func sendToRouter(_ text: String, replyTo: String? = nil, projects: [String] = [], now: Date = Date()) {
+    func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if routerIsPretend {
             var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
-                                       links: .init(cards: replyTo.map { [$0] } ?? []))
+                                       links: .init(cards: context.replyTo.map { [$0] } ?? []))
             entry.reply = "In a demo the Router only says what it would do."
             logDecision(entry)
         } else {
-            routerDispatcher.submit(text, context: RouterContext(replyTo: replyTo, projects: projects))
+            routerDispatcher.submit(text, context: context)
         }
     }
 
@@ -258,6 +258,8 @@ final class RouterModel {
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
     var replyTo: String?
+    /// Jev's pick for the draft while you type, and the target you fixed from it (see RouterJev.swift).
+    let live = RouterLiveTarget()
     /// The pills in the draft (their projects' folders), one for each `MentionText.mark` in it, in order.
     var tokens: [String] = []
     /// Projects tagged with @ (their folders), in the order they stand in the draft: the Router looks there, and starts a
@@ -437,18 +439,17 @@ final class RouterModel {
         if card.isOpen { select(next, store: store) }
     }
 
-    /// Sends the draft with its reply and its @pills (written as "@name" where they stand, their projects going with it);
-    /// the composer keeps the focus for the next one.
+    /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the
+    /// target you pinned; the composer keeps the focus for the next one.
     func send(store: Store) {
-        let text = MentionText.plain(draft, tokens: tokens, name: store.folderName)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = plainDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
-        let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
-        store.sendToRouter(text, replyTo: reply, projects: projects)
+        store.sendToRouter(text, context: context(store))
         caret = nil
         tokens = []
         draft = ""
         replyTo = nil
+        live.reset()
     }
 
     /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes down to Earlier),
@@ -481,9 +482,10 @@ final class RouterModel {
 
     // MARK: Chips and @
 
-    /// Backspace at the start of the composer: the reply chip goes.
+    /// Backspace at the start of the composer: the pinned target's chip goes, then the reply chip.
     @discardableResult
     func removeLastChip() -> Bool {
+        if live.pinned != nil { live.reset(); return true }
         if replyTo != nil { replyTo = nil; return true }
         return false
     }

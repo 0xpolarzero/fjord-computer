@@ -7,17 +7,24 @@ import Observation
 // log, and the line on the page shows how far it is. When Jev isn't sure, nothing is sent: an ask-back card puts the question
 // to you, and your pick is logged (as a correction when it isn't what Jev suggested).
 
-/// What a message of yours comes with besides its text: the card you're replying to (its session is the target) and the
-/// projects you tagged (routing is narrowed to them, and a new session starts there).
+/// What a message of yours comes with besides its text: the card you're replying to (its session is the target), the
+/// projects you tagged (routing is narrowed to them, and a new session starts there), and what you made of Jev's pick while
+/// you typed: the target you fixed by clicking it, or the one you waved off.
 struct RouterContext: Equatable {
     /// A card id.
     var replyTo: String?
     /// Folder paths.
     var projects: [String]
+    /// A dispatcher target (`session:<id>`, `new:<folder>`, an intent) you pinned.
+    var target: String?
+    /// A target you dismissed: the message never goes there without asking you.
+    var notTo: String?
 
-    init(replyTo: String? = nil, projects: [String] = []) {
+    init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil) {
         self.replyTo = replyTo
         self.projects = projects
+        self.target = target
+        self.notTo = notTo
     }
 }
 
@@ -42,6 +49,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's top target (what a different pick corrects).
     var suggestion: String?
     var at: Date
+    /// What Jev made of it besides the target (the size of its task, whether it needs rewording), for the pick to use.
+    var jev: RouterDispatcher.Classification? = nil
 }
 
 // MARK: - Dispatcher
@@ -53,6 +62,16 @@ struct RouterAskBack: Identifiable, Equatable {
         var p: Double
     }
 
+    /// Jev's answers to a routing call: the targets, and the questions asked with them in the same call.
+    struct Ranking: Equatable {
+        var scored: [Scored]
+        /// How likely the words need rewording before a session reads them (addressing, indirect speech, parts for others,
+        /// @router asides); nil when not asked.
+        var rewording: Double? = nil
+        /// The task's size on `SessionScope`'s levels, for a session started from it; nil when not asked.
+        var scope: Double? = nil
+    }
+
     /// What Jev (or the words alone) made of a message.
     struct Classification: Equatable {
         /// Best first.
@@ -61,14 +80,35 @@ struct RouterAskBack: Identifiable, Equatable {
         var sure: Bool
         /// Jev answered (else the words alone were matched against titles).
         var assisted: Bool
+        var rewording: Double? = nil
+        var scope: Double? = nil
+        /// Asked while you typed (the composer showed it when sure), not again when sent.
+        var live = false
 
         var top: Scored? { ranked.first }
+
+        init(ranked: [Scored], sure: Bool, assisted: Bool, rewording: Double? = nil, scope: Double? = nil) {
+            self.ranked = ranked
+            self.sure = sure
+            self.assisted = assisted
+            self.rewording = rewording
+            self.scope = scope
+        }
+
+        /// Jev's answer, best first, sure by `RouterTools.decision`.
+        @MainActor init(_ ranking: Ranking) {
+            let ranked = ranking.scored.sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
+            self.init(ranked: ranked, sure: RouterTools.decision(ranked.map { (target: $0.target, p: $0.p) }) == "send",
+                      assisted: true, rewording: ranking.rewording, scope: ranking.scope)
+        }
     }
 
     /// Where a message goes without asking Jev, or that it needs him.
     enum Plan: Equatable {
         case reply(session: String, card: String?)
         case start(folder: String)
+        /// A target you pinned.
+        case route(String)
         case classify
     }
 
@@ -90,8 +130,8 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Everything a run does outside Lookout's own state, so a test stands in for each. The defaults are the real ones.
     struct Effects {
-        /// Jev's probabilities over the targets (`RouterDispatcher.Scored`), or why not.
-        var rank: @MainActor (RouterTools, _ message: String, _ projects: [String], _ history: String) async throws -> [Scored]
+        /// Jev's probabilities over the targets, with the other questions of the same call, or why not.
+        var rank: @MainActor (RouterTools, _ message: String, _ projects: [String], _ history: String) async throws -> Ranking
         /// Haiku's minimal edit of the message for a session, and its signature.
         var prepare: @MainActor (RouterTools, _ session: String) async throws -> Delivery
         /// A new session in a project (folder) with the prepared first message.
@@ -120,6 +160,11 @@ struct RouterAskBack: Identifiable, Equatable {
     @ObservationIgnored var onFinish: ((UUID) -> Void)?
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var runTools: [UUID: RouterTools] = [:]
+    /// Jev's questions (tests answer for him); else `RouterTools.chooser` for the routing alone, else TypeSafe with your key.
+    @ObservationIgnored var asker: JevAsker?
+    /// Jev's routing of drafts asked while you typed, by their words and projects, for a while: sending one asks nothing again.
+    @ObservationIgnored private var liveCache: [String: (at: Date, found: Classification)] = [:]
+    static let liveFor: TimeInterval = 120
 
     init(store: Store) {
         self.store = store
@@ -132,6 +177,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var text: String
         var context: RouterContext
         var tools: RouterTools
+        /// What Jev made of it, once asked.
+        var jev: Classification? = nil
     }
 
     /// A demo or a shot: an ask waiting for you and runs shown under way, with nothing behind them.
@@ -155,7 +202,8 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         var seen = Set<String>()
         let projects = context.projects.filter { seen.insert($0).inserted }
-        let context = RouterContext(replyTo: context.replyTo, projects: projects)
+        var context = context
+        context.projects = projects
         let id = store.logDecision(RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
                                                   links: .init(cards: context.replyTo.map { [$0] } ?? [])))
         launch(Job(id: id, text: text, context: context, tools: makeTools(id, text)), stage: "starting") { [self] job in
@@ -175,7 +223,10 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.decision.target = chosen
             if corrected { $0.outcome = .corrected(from: ask.suggestion.map { describe($0, store: store) } ?? "no clear target", to: chosen) }
         }
-        launch(Job(id: id, text: ask.message, context: ask.context, tools: makeTools(id, ask.message)), stage: "starting") { [self] job in
+        // A pick that is Jev's own suggestion confirms it: an example for the next ones.
+        if !corrected { store.updateDecision(id) { $0.decision.confirmed = true } }
+        launch(Job(id: id, text: ask.message, context: ask.context, tools: makeTools(id, ask.message), jev: ask.jev),
+               stage: "starting") { [self] job in
             try await route(job, to: target)
         }
     }
@@ -254,17 +305,25 @@ struct RouterAskBack: Identifiable, Equatable {
         switch Self.plan(text: job.text, context: job.context, store: store) {
         case .reply(let session, let card): try await reply(job, session: session, card: card)
         case .start(let folder): try await start(job, folder: folder)
+        case .route(let target):
+            store.updateDecision(job.id) {
+                $0.decision.target = describe(target, store: store)
+                $0.decision.label = Self.label(target)
+                $0.decision.confirmed = true
+            }
+            try await route(job, to: target)
         case .classify: try await classifyAndAct(job)
         }
     }
 
-    /// Where a message goes without asking Jev. A reply armed on a card fixes the session. A single typed `@project` fixes a
-    /// new session there when the message asks for one, or when the project has nothing else to be for (no open card, no
-    /// session). Anything else is for Jev.
+    /// Where a message goes without asking Jev. A reply armed on a card fixes the session, and so does a target you pinned. A
+    /// single typed `@project` fixes a new session there when the message asks for one, or when the project has nothing else
+    /// to be for (no open card, no session). Anything else is for Jev.
     static func plan(text: String, context: RouterContext, store: Store) -> Plan {
         if let id = context.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
             return .reply(session: card.sessionID, card: id)
         }
+        if let target = context.target { return .route(target) }
         if context.projects.count == 1, let folder = context.projects.first {
             if wantsNewSession(text) { return .start(folder: folder) }
             let other = store.openRouterCards.contains { ($0.folder ?? "") == folder }
@@ -319,6 +378,11 @@ struct RouterAskBack: Identifiable, Equatable {
             return
         }
         stage(job, "preparing")
+        // Words Jev is sure need no rewording go as written: no Haiku run.
+        if job.tools.rephrase == nil, let s = store.claudeSessions[session],
+           Self.goesVerbatim(job.text, rewording: job.jev?.rewording, title: s.title, project: store.folderName(s.folderKey)) {
+            job.tools.rephrase = { message, _, _ in Prepared(text: message, original: message, rephrased: false) }
+        }
         let delivery = try await effects.prepare(job.tools, session)
         stage(job, "sending")
         // The cards open now, as they are: one that changes while this goes isn't addressed by it.
@@ -336,12 +400,18 @@ struct RouterAskBack: Identifiable, Equatable {
     private func start(_ job: Job, folder: String) async throws {
         guard let store else { return }
         stage(job, "starting a session")
-        // "…with opus, high effort": set in the session by its plugin before the first message.
-        let settings = SessionSettings.parse(job.text)
         // The title and the first message come from the task, never from the request to start the session.
         let task = SessionStart.task(from: job.text, projects: [store.folderName(folder), (folder as NSString).lastPathComponent])
-        let delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
         let project = store.folderName(folder)
+        // "…with opus, high effort": set in the session by its plugin before the first message; else Jev's pick by the size
+        // of the task, when you let him.
+        var settings = SessionSettings.parse(job.text)
+        if settings == nil, store.jevPicksSessionModels, !task.isEmpty,
+           let scope = await scope(of: task, project: project, job: job), let picked = SessionScope.settings(scope) {
+            settings = picked
+            store.updateDecision(job.id) { $0.decision.settingsBy = SessionScope.by }
+        }
+        let delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
         if delivery.text.isEmpty {
             // Nothing to send: the settings travel with the first message, so they can't be applied.
             note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
@@ -396,16 +466,78 @@ struct RouterAskBack: Identifiable, Equatable {
         stage(job, "classifying")
         let narrowed = job.context.projects
         let history = store.recentDecisions(10, excluding: job.id)
-        let found = await classify(job, projects: narrowed, history: history)
+        var found = await classify(job, projects: narrowed, history: history)
         try Task.checkCancellation()
+        // Where you waved Jev's pick off isn't gone to without asking you.
+        if let notTo = job.context.notTo, found.top?.target == notTo { found.sure = false }
         store.updateDecision(job.id) {
             $0.decision.label = found.top.map { Self.label($0.target) }
             $0.decision.confidence = found.top?.p
             $0.decision.target = found.top.map { describe($0.target, store: store) }
+            // Sent with Jev's pick shown over the composer: you went with it.
+            if found.live, found.sure { $0.decision.confirmed = true }
         }
+        var job = job
+        job.jev = found
         if found.sure, let top = found.top { return try await route(job, to: top.target) }
         askBack(job, found)
     }
+
+    /// Jev's routing of a draft while you type: the same call a send makes, kept by its words and projects for
+    /// `liveFor` so that sending them asks nothing again. Nil when he can't be asked.
+    func predict(_ text: String, projects: [String]) async -> Classification? {
+        guard let store, store.routerOn else { return nil }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = Self.liveKey(text, projects)
+        if let hit = live(key) { return hit }
+        let tools = RouterTools(store: store)
+        configure?(tools)
+        guard let ranking = try? await effects.rank(tools, text, projects, store.recentDecisions(10)), !Task.isCancelled else { return nil }
+        var found = Classification(ranking)
+        found.live = true
+        liveCache = liveCache.filter { Date().timeIntervalSince($0.value.at) < Self.liveFor }
+        liveCache[key] = (Date(), found)
+        return found
+    }
+
+    static func liveKey(_ text: String, _ projects: [String]) -> String {
+        ([text.trimmingCharacters(in: .whitespacesAndNewlines)] + projects).joined(separator: "\u{1}")
+    }
+
+    private func live(_ key: String) -> Classification? {
+        guard let hit = liveCache[key], Date().timeIntervalSince(hit.at) < Self.liveFor else { return nil }
+        return hit.found
+    }
+
+    /// Jev's questions: the stand-in, else the routing chooser of a run's tools, else TypeSafe with your key.
+    private func jev(_ tools: RouterTools?) -> JevAsker? {
+        if let asker { return asker }
+        if let chooser = tools?.chooser { return JevClient.asker(choosing: chooser) }
+        return store.flatMap(JevClient.asker)
+    }
+
+    /// The size of a new session's task: from the routing call when there was one, else a call of its own.
+    private func scope(of task: String, project: String, job: Job) async -> Double? {
+        if let scope = job.jev?.scope { return scope }
+        guard let ask = jev(job.tools) else { return nil }
+        return try? await ask(["scope": SessionScope.question], ["task": task, "project": project])["scope"]?.score
+    }
+
+    /// Whether your words go to a session as written, with no Haiku run: Jev is sure they need no rewording, and nothing in
+    /// them could be addressing (no @router, not the session's title or project).
+    static func goesVerbatim(_ text: String, rewording: Double?, title: String, project: String) -> Bool {
+        guard let rewording, rewording <= 0.1, !RouterTools.hasRouterMarker(text) else { return false }
+        let lower = text.lowercased()
+        return [title, project].allSatisfy { name in
+            let name = name.lowercased().trimmingCharacters(in: .whitespaces)
+            return name.count < 3 || !lower.contains(name)
+        }
+    }
+
+    /// Asked with every routing call (input-only billing: one call either way).
+    static let rewordingQuestion = JevClient.Question.noul(instructions: """
+        Does this message need rewording before the session it goes to reads it? Yes when it addresses the session or a         router ("tell lookout to…", "ask it whether…", "@lookout …", "for the api session: …"), speaks about the session         indirectly, holds parts meant for different sessions, or has asides for the router. No when it is plainly words         for the session, as they should be read.
+        """, yes: "It needs rewording", no: "It can be delivered exactly as written")
 
     /// The label a target stands for: reply (a card or session), start (a project), change_lookout, question, compound.
     static func label(_ target: String) -> String {
@@ -417,11 +549,9 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's pick among the targets and the intents; the words alone when he can't be asked.
     private func classify(_ job: Job, projects: [String], history: String) async -> Classification {
         guard let store else { return Classification(ranked: [], sure: false, assisted: false) }
+        if let hit = live(Self.liveKey(job.text, projects)) { return hit }
         do {
-            let ranked = try await effects.rank(job.tools, job.text, projects, history)
-                .sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
-            let sure = RouterTools.decision(ranked.map { (target: $0.target, p: $0.p) }) == "send"
-            return Classification(ranked: ranked, sure: sure, assisted: true)
+            return Classification(try await effects.rank(job.tools, job.text, projects, history))
         } catch {
             let targets = job.tools.targets(store, projects: projects.isEmpty ? nil : Set(projects))
             let (ranked, named) = RouterTools.unassisted(job.text, targets)
@@ -442,7 +572,7 @@ struct RouterAskBack: Identifiable, Equatable {
             options.append(option)
         }
         let ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
-                                suggestion: found.top?.target, at: Date())
+                                suggestion: found.top?.target, at: Date(), jev: found)
         askBacks.append(ask)
         store.updateDecision(job.id) {
             $0.add(.asked(options.map(\.title)))
@@ -536,11 +666,7 @@ extension RouterDispatcher.Effects {
         return Self(
             rank: { [weak dispatcher] tools, message, projects, history in
                 guard let dispatcher, let store = dispatcher.storeForEffects else { throw RouterTools.Failure("Lookout isn't ready") }
-                let key = store.typesafeKey ?? ""
-                let choose = tools.chooser ?? (key.isEmpty ? nil : { options, hints, state, instructions in
-                    try await JevClient(key: key).choose(options, hints: hints, for: state, instructions: instructions)
-                })
-                guard let choose else { throw RouterTools.Failure("no TypeSafe key is set") }
+                guard let ask = dispatcher.jevForEffects(tools) else { throw RouterTools.Failure("no TypeSafe key is set") }
                 var targets = tools.targets(store, projects: projects.isEmpty ? nil : Set(projects))
                 let unclear = targets.removeLast()
                 targets += [
@@ -552,13 +678,17 @@ extension RouterDispatcher.Effects {
                 // Plain keys for Jev (card ids and paths have characters it may not take), mapped back after.
                 let keys = targets.indices.map { "o\($0)" }
                 let hints = Dictionary(uniqueKeysWithValues: zip(keys, targets.map(\.hint)))
-                var state = ["user message": message]
-                if !history.isEmpty { state["the last decisions (corrections are the user's own)"] = history }
-                let pick = try await choose(keys, hints, state,
-                    "Which of the user's Claude Code sessions, open cards or projects is this message for? Or is it a request to change Lookout itself, a question about the current state, or several things at once? Follow what the user corrected before. Pick unclear unless the message makes it clear.")
-                return pick.probabilities.compactMap { key, p -> RouterDispatcher.Scored? in
+                let state = RouterDispatcher.routingState(message: message, history: history, examples: store.routingExamples())
+                var questions: [String: JevClient.Question] = [
+                    "route": .choice(keys, hints: hints, instructions: "Which of the user's Claude Code sessions, open cards or projects is this message for? Or is it a request to change Lookout itself, a question about the current state, or several things at once? Follow how the user routed and corrected before. Pick unclear unless the message makes it clear."),
+                    "rewording": RouterDispatcher.rewordingQuestion,
+                ]
+                if store.jevPicksSessionModels { questions["scope"] = SessionScope.question }
+                let answers = try await ask(questions, state)
+                guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
+                return RouterDispatcher.Ranking(scored: pick.probabilities.compactMap { key, p -> RouterDispatcher.Scored? in
                     keys.firstIndex(of: key).map { RouterDispatcher.Scored(target: targets[$0].target, p: p) }
-                }
+                }, rewording: answers["rewording"]?.yes, scope: answers["scope"]?.score)
             },
             prepare: { [weak dispatcher] tools, session in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
@@ -607,4 +737,13 @@ extension RouterDispatcher.Effects {
 
 extension RouterDispatcher {
     fileprivate var storeForEffects: Store? { store }
+    fileprivate func jevForEffects(_ tools: RouterTools) -> JevAsker? { jev(tools) }
+
+    /// What Jev reads to route a message: the message, the last decisions, and how you routed messages before.
+    static func routingState(message: String, history: String, examples: String) -> [String: String] {
+        var state = ["user message": message]
+        if !history.isEmpty { state["the last decisions (corrections are the user's own)"] = history }
+        if !examples.isEmpty { state["how the user routed messages before (follow these)"] = examples }
+        return state
+    }
 }

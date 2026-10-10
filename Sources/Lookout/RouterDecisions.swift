@@ -21,6 +21,11 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         var intent: String?
         var label: String?
         var confidence: Double?
+        /// You went with the target: Jev's pick shown while you typed (sent as it was, or clicked), his suggestion picked on
+        /// an ask, or a target you pinned. An example for the next routings, as corrections are.
+        var confirmed: Bool?
+        /// Who picked a new session's model and effort when you named none ("Jev").
+        var settingsBy: String?
         init(target: String? = nil, intent: String? = nil, label: String? = nil, confidence: Double? = nil) {
             self.target = target
             self.intent = intent
@@ -106,8 +111,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         done.map { item in
             switch item {
             case .sent(let to, let text, _): "sent to \(to): \(Self.clip(text, 80))"
-            case .started(_, let project, let model, let effort):
-                "started a session in \(project)" + ([model, effort].compactMap { $0 }.isEmpty ? "" : " (\([model, effort].compactMap { $0 }.joined(separator: ", ")))")
+            case .started(_, let project, let model, let effort): "started a session in \(project)" + settingsWords(model, effort)
             case .changed(let id): "changed Lookout (\(id.uuidString.prefix(8)))"
             case .answered(let card): "answered \(card)"
             case .asked(let options): "asked which: " + options.joined(separator: " / ")
@@ -128,7 +132,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         let more = done.count > 1 ? " +\(done.count - 1)" : ""
         switch first {
         case .sent(let to, _, _): return "sent to \(to)" + more
-        case .started(_, let project, _, _): return "started in \(project)" + more
+        case .started(_, let project, let model, let effort): return "started in \(project)" + settingsWords(model, effort) + more
         case .changed: return "changed Lookout" + more
         case .answered: return "answered" + more
         case .asked: return "asked you" + more
@@ -150,6 +154,13 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .failed: return "exclamationmark.triangle"
         case nil: return "text.bubble"
         }
+    }
+
+    /// " (haiku, low · picked by Jev)", " (opus, high)", or nothing.
+    private func settingsWords(_ model: String?, _ effort: String?) -> String {
+        let set = [model, effort].compactMap { $0 }
+        guard !set.isEmpty else { return "" }
+        return " (" + set.joined(separator: ", ") + (decision.settingsBy.map { " · picked by \($0)" } ?? "") + ")"
     }
 
     static func clip(_ text: String, _ n: Int) -> String {
@@ -215,6 +226,24 @@ extension Store {
     /// `excluding`: the entry of the run asking (it is the newest, and not yet history).
     func recentDecisions(_ count: Int = 10, now: Date = Date(), excluding: UUID? = nil) -> String {
         router.decisions.filter { $0.id != excluding }.suffix(count).map { $0.contextLine(now: now) }.joined(separator: "\n")
+    }
+
+    /// How you routed messages before, for Jev, oldest first, one short line each: your corrections (an ask answered with
+    /// something else than his suggestion), then a few targets you went with (his pick shown while you typed, his suggestion
+    /// on an ask, a target you pinned). At most `limit` lines, the newest; at most a third of them confirmations.
+    func routingExamples(limit: Int = 8, now: Date = Date()) -> String {
+        var corrections: [(Date, String)] = [], confirmed: [(Date, String)] = []
+        var seen = Set<String>()
+        for entry in router.decisions.reversed() where corrections.count + confirmed.count < limit {
+            guard case .you(let text) = entry.trigger, seen.insert(text.lowercased()).inserted else { continue }
+            let said = "“\(RouterDecision.clip(text, 60))”"
+            if case .corrected(let from, let to) = entry.outcome {
+                corrections.append((entry.at, "\(said) → \(RouterDecision.clip(to, 60)), not \(RouterDecision.clip(from, 60))"))
+            } else if entry.decision.confirmed == true, let target = entry.decision.target, confirmed.count < max(1, limit / 3) {
+                confirmed.append((entry.at, "\(said) → \(RouterDecision.clip(target, 60))"))
+            }
+        }
+        return (corrections + confirmed).sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n")
     }
 
     /// A change made in Lookout: part of the run under way, else an entry of its own.

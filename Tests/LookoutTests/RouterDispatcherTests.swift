@@ -9,9 +9,13 @@ import Testing
     /// What the stand-ins saw and answer.
     @MainActor final class Fakes {
         var ranked: [RouterDispatcher.Scored] = []
+        var rewording: Double?
+        var scope: Double?
         var rankError: Error?
         var ranks = 0
         var prepared: [String] = []
+        /// Per prepare: whether the words went as written (no Haiku run).
+        var verbatim: [Bool] = []
         var sent: [RouterDispatcher.Delivery] = []
         var started: [(folder: String, title: String)] = []
         var startSettings: [SessionSettings?] = []
@@ -36,10 +40,11 @@ import Testing
                 rank: { [unowned self] _, _, _, _ in
                     ranks += 1
                     if let rankError { throw rankError }
-                    return ranked
+                    return RouterDispatcher.Ranking(scored: ranked, rewording: rewording, scope: scope)
                 },
-                prepare: { [unowned self] _, session in
+                prepare: { [unowned self] tools, session in
                     prepared.append(session)
+                    verbatim.append(tools.rephrase != nil)
                     if holdOn.contains(session) { await withCheckedContinuation { hold[session] = $0 } }
                     return RouterDispatcher.Delivery(to: "peer-\(session)", text: "⟦signed⟧\nbody-\(session)", body: "body-\(session)",
                                                      original: "orig", rephrased: true, session: session, newSessionIn: nil)
@@ -95,6 +100,141 @@ import Testing
     }
 
     private func decision(_ s: Store, _ id: UUID?) -> RouterDecision? { s.router.decisions.first { $0.id == id } }
+
+    // MARK: Jev while you type
+
+    @Test func aDraftJevRoutedWhileTypingIsSentWithoutAskingAgainUnlessItChanged() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
+        let found = await d.predict("add a changelog entry for this", projects: [])
+        #expect(found?.sure == true && found?.top?.target == "session:local_b" && f.ranks == 1)
+        _ = await d.predict("add a changelog entry for this", projects: [])
+        #expect(f.ranks == 1, "the same draft is asked once")
+        let a = d.submit("add a changelog entry for this")
+        await finish(d, f, a)
+        #expect(f.ranks == 1 && f.prepared == ["local_b"], "sent where it was shown, with no second call")
+        #expect(decision(s, a)?.decision.confirmed == true, "going with the live pick is an example for later")
+        let b = d.submit("add a changelog entry for this, and a date")
+        await finish(d, f, b)
+        #expect(f.ranks == 2 && decision(s, b)?.decision.confirmed == nil, "changed words are asked about again")
+    }
+
+    @Test func aPinnedTargetGoesWithoutJevAndAWavedOffOneIsNeverSentToUnasked() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let a = d.submit("add a changelog entry", context: RouterContext(target: "session:local_b"))
+        await finish(d, f, a)
+        #expect(f.ranks == 0 && f.prepared == ["local_b"])
+        #expect(decision(s, a)?.decision.confirmed == true && decision(s, a)?.decision.label == "reply")
+        let b = d.submit("add a changelog entry", context: RouterContext(notTo: "session:local_b"))
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_b"] && d.askBacks.map(\.id) == [b!], "asked, not sent")
+    }
+
+    @Test func wordsJevFindsPlainGoAsWrittenWithoutAHaikuRun() async {
+        let (_, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
+        f.rewording = 0.03
+        await finish(d, f, d.submit("add a changelog entry"))
+        f.rewording = 0.6
+        await finish(d, f, d.submit("ask it to add a changelog entry"))
+        #expect(f.verbatim == [true, false])
+        // Never when the words could be addressing, whatever Jev says.
+        #expect(!RouterDispatcher.goesVerbatim("tell docs to add an entry", rewording: 0, title: "Update the docs", project: "docs"))
+        #expect(!RouterDispatcher.goesVerbatim("add an entry (@router no rush)", rewording: 0, title: "Update", project: "x"))
+        #expect(!RouterDispatcher.goesVerbatim("add an entry", rewording: nil, title: "Update", project: "x"))
+        #expect(RouterDispatcher.goesVerbatim("add an entry", rewording: 0.05, title: "Update the docs", project: "docs"))
+    }
+
+    // MARK: Jev's model and effort
+
+    @Test func aStartWithNoSettingsNamedTakesJevsPickByTheTasksSizeAndSaysSo() async {
+        let (s, d, f) = setup()
+        var asked: [[String: String]] = []
+        d.asker = { questions, state in
+            asked.append(state)
+            #expect(questions.keys.sorted() == ["scope"])
+            return ["scope": .score(0.2, confidence: 0.9)]
+        }
+        f.ack = "ok model=haiku effort=low"
+        let a = d.submit("start a new session to fix the typo in the readme", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.startSettings == [SessionSettings(model: "haiku", effort: "low")])
+        #expect(asked.first?["task"]?.contains("typo") == true && asked.first?["project"] == "lookout")
+        #expect(decision(s, a)?.doneLines == ["started a session in lookout (haiku, low · picked by Jev)"])
+        #expect(decision(s, a)?.summary == "started in lookout (haiku, low · picked by Jev)")
+
+        // Named settings win, and "Your default" asks nothing.
+        await finish(d, f, d.submit("start a new session to refactor the store with opus", context: RouterContext(projects: ["/code/lookout"])))
+        s.settings.jevPicksSessionModels = false
+        await finish(d, f, d.submit("start a new session to refactor the store", context: RouterContext(projects: ["/code/lookout"])))
+        #expect(asked.count == 1)
+        #expect(f.startSettings.dropFirst() == [SessionSettings(model: "opus", effort: nil), nil])
+    }
+
+    @Test func aStartJevRoutedTakesTheSizeFromTheSameCall() async {
+        let (s, d, f) = setup()
+        var calls = 0
+        d.asker = { _, _ in calls += 1; return [:] }
+        f.ranked = [.init(target: "new:/code/lookout", p: 0.9), .init(target: "unclear", p: 0.1)]
+        f.scope = 3.2
+        let a = d.submit("rework how the router stores its decisions")
+        await finish(d, f, a)
+        #expect(calls == 0 && f.startSettings == [SessionSettings(model: "opus", effort: "high")])
+        #expect(decision(s, a)?.decision.settingsBy == "Jev")
+    }
+
+    @Test func theTableMapsEachLevelAndRoundsBetweenThem() {
+        #expect(SessionScope.settings(0) == SessionSettings(model: "haiku", effort: "low"))
+        #expect(SessionScope.settings(1.4) == SessionSettings(model: "sonnet", effort: "low"))
+        #expect(SessionScope.settings(2) == SessionSettings(model: "sonnet", effort: "medium"))
+        #expect(SessionScope.settings(3.6) == SessionSettings(model: "opus", effort: "max"))
+        #expect(SessionScope.settings(9) == SessionSettings(model: "opus", effort: "max"))
+        #expect(SessionScope.settings(.nan) == nil)
+    }
+
+    // MARK: Learning from what you did
+
+    @Test func routingStateHoldsYourCorrectionsAndConfirmedPicksBounded() async {
+        let (s, _, _) = setup()
+        let d = RouterDispatcher(store: s)
+        let start = Date().addingTimeInterval(-3600)
+        for i in 0..<20 {
+            var e = RouterDecision(at: start.addingTimeInterval(Double(i)), trigger: .you("message \(i)"), outcome: .corrected(from: "session “A” in x", to: "session “B” in y"))
+            if i % 2 == 0 { e.outcome = .done; e.decision.target = "session “C” in z"; e.decision.confirmed = true }
+            s.router.decisions.append(e)
+        }
+        s.router.decisions.append(RouterDecision(trigger: .you(String(repeating: "long ", count: 80)), outcome: .corrected(from: "a", to: "b")))
+        var state: [String: String] = [:]
+        var questions: [String] = []
+        d.asker = { q, st in
+            state = st
+            questions = q.keys.sorted()
+            return ["route": .choice(.init(choice: "o0", confidence: 0.9, probabilities: ["o0": 1]))]
+        }
+        _ = await d.predict("where does this go then", projects: [])
+        let lines = state["how the user routed messages before (follow these)"]?.split(separator: "\n") ?? []
+        #expect(lines.count == 8)
+        #expect(lines.filter { $0.contains("→ session “C”") }.count == 2, "a few confirmations, the rest corrections")
+        #expect(lines.last?.hasPrefix("“long") == true && lines.allSatisfy { $0.count < 200 })
+        #expect(lines.contains { $0.contains("“message 19” → session “B” in y, not session “A” in x") })
+        #expect(questions == ["rewording", "route", "scope"], "one call asks all three")
+        s.settings.jevPicksSessionModels = false
+        _ = await d.predict("where does this go now", projects: [])
+        #expect(questions == ["rewording", "route"])
+    }
+
+    @Test func anAskAnsweredWithJevsSuggestionConfirmsIt() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.5), .init(target: "session:local_a", p: 0.4)]
+        let a = d.submit("add a changelog entry")!
+        await finish(d, f, a)
+        f.finished = []
+        d.pick(a, target: "session:local_b")
+        await finish(d, f, a)
+        #expect(decision(s, a)?.decision.confirmed == true)
+        #expect(s.routingExamples().contains("“add a changelog entry” → session “Update the docs” in docs"))
+    }
 
     // MARK: Deterministic
 

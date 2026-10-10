@@ -217,6 +217,8 @@ struct SettingsView: View {
                 SettingsDivider()
                 mutedFolders
                 SettingsDivider()
+                sessionModels
+                SettingsDivider()
                 sessionIcons
             }
         }
@@ -280,6 +282,17 @@ struct SettingsView: View {
     private var claudeCodeStatus: (String, Color) {
         if let found = store.routerStatus.claudeCode { return ("Claude Code \(found.version), from the Claude app", Theme.tertiary) }
         return ("Claude Code not found: it comes with the Claude desktop app", Theme.amber)
+    }
+
+    /// When you name no model or effort, a session the Router starts runs on your defaults or on Jev's pick (`SessionScope`).
+    private var sessionModels: some View {
+        let levels = SessionScope.table.map { "\($0.level): \($0.model), \($0.effort)" }.joined(separator: "; ")
+        return SettingsRow("Model for sessions the Router starts",
+                           info: ("Model for sessions the Router starts", "When you don't name a model or effort (\"with opus, high effort\"), a session the Router or an inbox action starts runs on your Claude Code defaults, or Jev rates how big its task is and picks: \(levels). Needs a TypeSafe API key. The Router's history says what was picked.")) {
+            SettingsSegmented(label: "Model for sessions the Router starts",
+                              options: [("Your default", false), ("Let Jev pick", true)],
+                              selection: Binding(get: { store.jevPicksSessionModels }, set: { store.settings.jevPicksSessionModels = $0 }))
+        }
     }
 
     @ViewBuilder private var sessionIcons: some View {

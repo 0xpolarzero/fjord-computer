@@ -136,6 +136,33 @@ private final class LauncherLog {
         #expect(hints.values.contains { $0.contains("/code/r/.worktrees/x") })
     }
 
+    @Test func withNoModelNamedTheCloneAndJevsPickOfModelAreOneCallAndTheHistorySaysSo() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        log.ack = "ok model=opus effort=max"
+        let launcher = launcher(store, log)
+        var calls: [(questions: [String], state: [String: String])] = []
+        launcher.asker = { questions, state in
+            calls.append((questions.keys.sorted(), state))
+            return ["clone": .choice(.init(choice: "o1", confidence: 0.9, probabilities: ["o0": 0.1, "o1": 0.9])),
+                    "scope": .score(3.8, confidence: 0.8)]
+        }
+        _ = try await ActionSessions.start(Self.request(message: "Redesign the pool's eviction"), store: store,
+                                           clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
+        #expect(calls.map(\.questions) == [["clone", "scope"]])
+        #expect(calls.first?.state["task"] == "Redesign the pool's eviction")
+        #expect(log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"])
+        #expect(log.signedSettings == [SessionSettings(model: "opus", effort: "max")])
+        #expect(store.router.decisions.last?.doneLines == ["started a session in x (opus, max · picked by Jev)"])
+
+        // The action's own settings, or "Your default": Jev isn't asked about them.
+        _ = try await ActionSessions.start(Self.request(model: "haiku"), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
+        store.settings.jevPicksSessionModels = false
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
+        #expect(calls.count == 1)
+        #expect(log.signedSettings.dropFirst() == [SessionSettings(model: "haiku", effort: nil), nil])
+    }
+
     @Test func withoutAnAnswerFromJevTheMostRecentSessionsFolderWinsElseTheFirst() async throws {
         let store = ready()
         let log = LauncherLog()
