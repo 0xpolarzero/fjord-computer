@@ -461,6 +461,8 @@ protocol ActionPerformer: AnyObject {
     /// Leaves `message` in the Router's chat as coming from `source` (a category) and hands it to the Router, started if it
     /// isn't running; the message's id. Throws when the Router is off.
     func askRouter(_ message: String, source: String) async throws -> UUID
+    /// The same, saying which action of which thing asked (for the Router's decision log).
+    func askRouter(_ message: String, source: String, thing: String, action: UUID) async throws -> UUID
     /// Posts a comment; its page when GitHub says.
     func comment(repo: String, number: Int, body: String) async throws -> URL?
     /// The failed runs that re-running would take, for a PR's head commit or a workflow thing.
@@ -469,6 +471,12 @@ protocol ActionPerformer: AnyObject {
     func rerun(repo: String, run: FailedRun) async throws -> Int
     /// The local clones of a repo among the known project folders.
     func clones(of repo: String) -> [String]
+}
+
+extension ActionPerformer {
+    func askRouter(_ message: String, source: String, thing: String, action: UUID) async throws -> UUID {
+        try await askRouter(message, source: source)
+    }
 }
 
 struct ActionFailure: LocalizedError {
@@ -489,7 +497,8 @@ extension InboxActions {
             case .askRouter(let text):
                 let message = routerMessage(text, category: job.category.name, thing: thing, facts: job.facts,
                                             folders: performer.clones(of: thing.repo))
-                run.message = try await performer.askRouter(message, source: job.category.name)
+                run.message = try await performer.askRouter(message, source: job.category.name, thing: reference(thing),
+                                                             action: job.action.id)
                 run.detail = "asked the Router"
             case .comment(let text):
                 guard let number = thing.number, thing.kind != .workflow else { throw ActionFailure("only PRs and issues take comments") }
@@ -725,7 +734,14 @@ final class StoreActionPerformer: ActionPerformer {
     func clones(of repo: String) -> [String] { LocalClones.findAll(repo, in: store.knownFolders) }
 
     func askRouter(_ message: String, source: String) async throws -> UUID {
-        guard let id = store.routerAgent.sendAutomated(message, source: source) else { throw ActionFailure("the Router is off") }
+        try await askRouter(message, source: source, thing: "", action: UUID())
+    }
+
+    func askRouter(_ message: String, source: String, thing: String, action: UUID) async throws -> UUID {
+        let trigger = RouterDecision.Trigger.action(category: source, thing: thing, actionID: action.uuidString, runID: nil)
+        guard let id = store.routerAgent.sendAutomated(message, source: source, trigger: trigger) else {
+            throw ActionFailure("the Router is off")
+        }
         return id
     }
 

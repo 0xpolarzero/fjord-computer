@@ -287,6 +287,7 @@ extension Store {
         change.revertedAt = now
         change.revertNote = edited ? "Reverted (later edits to it were undone too)" : "Reverted"
         router.chat[message].change = change
+        noteReverted(change.id)
         return change
     }
 

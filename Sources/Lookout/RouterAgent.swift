@@ -192,16 +192,18 @@ struct RouterContext: Equatable {
         didSet { if queuedCount != pending.count { queuedCount = pending.count } }
     }
     /// The message whose turn is under way (written, its `result` not in yet).
-    @ObservationIgnored private var inFlight: Outgoing?
+    @ObservationIgnored var inFlight: Outgoing?
     /// A message of yours on its way: its line is ready once its header is (a reply names the session's peer, read off the
     /// main thread).
-    private struct Outgoing {
+    struct Outgoing {
         var id = UUID()
         /// Your words, without the header: what `prepare` hands to Haiku while this turn runs.
         var text: String
         var line: Data?
         /// An inbox action's message (its id in the chat): nothing it says changes Lookout itself.
         var ref: UUID?
+        /// Its entry in the decision log.
+        var decision: UUID?
     }
     @ObservationIgnored private var started = false
     @ObservationIgnored private var resuming = false
@@ -293,6 +295,60 @@ struct RouterContext: Equatable {
         if message != store.router.chat[i] { store.router.chat[i] = message }
     }
 
+    // MARK: Decision log
+
+    private static func shortReason(_ text: String) -> String {
+        text.split(separator: "\n").first.map { RouterDecision.clip(String($0), 120) } ?? "failed"
+    }
+
+    /// Adds what was done to the entry of the run under way (none for a session's own message).
+    private func note(_ item: RouterDecision.Done, session: String? = nil, card: String? = nil) {
+        guard let store, let id = inFlight?.decision else { return }
+        store.updateDecision(id) { $0.add(item, session: session, card: card) }
+    }
+
+    /// The run is over: its entry is done unless something else settled it.
+    private func finishDecision() {
+        guard let store else { return }
+        if let id = inFlight?.decision {
+            store.updateDecision(id) { if $0.outcome == .pending { $0.outcome = .done } }
+        }
+        store.activeDecision = nil
+    }
+
+    /// What a receipt says was done, in the entry. Returns the entry's id and what to resolve once the session is known.
+    private func logReceipt(_ name: String, _ input: [String: String],
+                            _ receipt: (text: String, session: String?, original: String?)) -> UUID? {
+        guard let id = inFlight?.decision else { return nil }
+        switch Self.shortName(name) {
+        case "SendMessage":
+            let to = input["to"] ?? "a session"
+            let body = receipt.text.range(of: ": ").map { String(receipt.text[$0.upperBound...]) } ?? receipt.text
+            if receipt.text.hasPrefix("→ new session in ") {
+                let project = receipt.text.dropFirst("→ new session in ".count).prefix { $0 != ":" }
+                note(.started(session: nil, project: String(project), model: nil, effort: nil))
+            } else {
+                note(.sent(to: to, text: body, original: receipt.original))
+            }
+        case "answer_form", "mark":
+            note(.answered(card: receipt.text.replacingOccurrences(of: "→ ", with: "")), session: receipt.session, card: input["card"])
+        default:
+            break
+        }
+        return id
+    }
+
+    /// The session a sent message or a start turned out to be.
+    private func resolveDecision(_ id: UUID, session: String) {
+        store?.updateDecision(id) { d in
+            if !d.links.sessions.contains(session) { d.links.sessions.append(session) }
+            if let i = d.done.lastIndex(where: { if case .started(nil, _, _, _) = $0 { true } else { false } }),
+               case .started(_, let project, let model, let effort) = d.done[i] {
+                d.done[i] = .started(session: session, project: project, model: model, effort: effort)
+            }
+        }
+    }
+
     // MARK: Actions
 
     /// Adds your message to the chat and hands it to the process (started if it isn't running). Nothing while the Router
@@ -305,7 +361,9 @@ struct RouterContext: Equatable {
         var seen = Set<String>()
         let projects = context.projects.filter { seen.insert($0).inserted }
         append(.you, text, replyTo: context.replyTo, projects: projects.isEmpty ? nil : projects)
-        let item = Outgoing(text: text)
+        var item = Outgoing(text: text)
+        item.decision = store.logDecision(RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
+                                                         links: .init(cards: context.replyTo.map { [$0] } ?? [])))
         pending.append(item)
         let tagged = projects.map { (name: store.folderName($0), path: $0) }
         guard let id = context.replyTo else {
@@ -330,11 +388,17 @@ struct RouterContext: Equatable {
     /// A category's action asking the Router: `text` ("⚡ Category: …") goes in as the Router's input and shows in the chat as
     /// coming from `source`, not from you. The process is started if it isn't running. Nil while the Router is off.
     @discardableResult
-    func sendAutomated(_ text: String, source: String) -> UUID? {
+    func sendAutomated(_ text: String, source: String, trigger: RouterDecision.Trigger? = nil) -> UUID? {
         guard let store, store.router.enabled, store.agents.enabled else { return nil }
         guard let id = append(.automated, text, source: source) else { return nil }
         var item = Outgoing(text: text)
         item.ref = id
+        // The entry shares the message's id: the action's chip scrolls to it.
+        var cause = trigger ?? .action(category: source, thing: "", actionID: "", runID: nil)
+        if case .action(let category, let thing, let action, nil) = cause {
+            cause = .action(category: category, thing: thing, actionID: action, runID: id.uuidString)
+        }
+        item.decision = store.logDecision(RouterDecision(id: id, trigger: cause, decision: .init(intent: "action")))
         pending.append(item)
         // The Router reads the message's id on a last line, to hand to start_session as `ref`.
         ready(item.id, text + "\n[ref: \(id.uuidString)]")
@@ -383,6 +447,7 @@ struct RouterContext: Equatable {
         guard inFlight == nil, !peerTurn, let next = pending.first, let line = next.line else { return }
         pending.removeFirst()
         inFlight = next
+        store.activeDecision = next.decision
         tools.beginTurn(next.text, automatedRef: next.ref)
         write(line, to: stdin)
         setPhase(.working)
@@ -391,6 +456,9 @@ struct RouterContext: Equatable {
     /// Drops what's waiting, saying how much in the chat.
     private func dropPending(_ why: String) {
         let n = pending.count
+        for item in pending {
+            if let id = item.decision { store?.updateDecision(id) { $0.add(.failed(why)); $0.outcome = .done } }
+        }
         pending = []
         if n > 0 { append(.receipt, "\(why) \(n) queued message\(n == 1 ? "" : "s")") }
     }
@@ -714,7 +782,9 @@ struct RouterContext: Equatable {
                     let first = reason.split(separator: "\n").first.map(String.init) ?? "failed"
                     if refused != nil { _ = approval(call) }
                     append(.error, "\(Self.shortName(call.name)): \(first)")
+                    note(.failed("\(Self.shortName(call.name)): \(first)"))
                 } else if let receipt = receipt(call.name, call.input, prepared: approval(call)) {
+                    let logged = logReceipt(call.name, call.input, receipt)
                     let line = append(.receipt, receipt.text, session: receipt.session, original: receipt.original)
                     if call.name == "SendMessage", let line, let to = call.input["to"] {
                         // The session it went to, by Claude Code's own registry; cards only when that's certain.
@@ -727,6 +797,7 @@ struct RouterContext: Equatable {
                         resolvePeer(to) { [weak self] session in
                             guard let self, let session, self.current(gen), let store = self.store else { return }
                             self.patch(line) { $0.sessionID = session }
+                            if let logged { self.resolveDecision(logged, session: session) }
                             if let action { store.noteActionSession(session, forMessage: action) }
                             var state = store.router
                             RouterFeed.address(&state, session, .router, Date()) {
@@ -761,7 +832,9 @@ struct RouterContext: Equatable {
                     append(.receipt, "Stopped")
                 } else if isError {
                     append(.error, text.isEmpty ? "The turn failed" : text)
+                    note(.failed(text.isEmpty ? "The turn failed" : Self.shortReason(text)))
                 }
+                finishDecision()
                 // The turn is over, whoever started it: its unused preparations go, and the next message can go.
                 tools.endTurn()
                 if peerTurn { peerTurn = false } else { inFlight = nil }
@@ -794,6 +867,7 @@ struct RouterContext: Equatable {
                 // Stopped before it answered: nothing is sent again.
                 interrupting = false
                 append(.receipt, "Stopped")
+                finishDecision()
                 setPhase(.idle)
                 return
             }
@@ -805,6 +879,8 @@ struct RouterContext: Equatable {
         }
         interrupting = false
         peerTurn = false
+        note(.failed("The Router's process ended"))
+        finishDecision()
         inFlight = nil
         let detail = stderrTail.last.map { ": \($0)" } ?? ""
         let reason = status == 0 ? "The Router's process ended" : "The Router's process stopped (exit \(status))\(detail)"

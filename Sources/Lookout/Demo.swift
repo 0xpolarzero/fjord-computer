@@ -219,6 +219,34 @@ enum Demo {
             RouterMessage(role: .error, text: "SendMessage to Game recommendations: not delivered (the session isn't open in Claude)",
                           date: now.addingTimeInterval(-10), sessionID: "local_demo-games"),
         ] + lookoutChanges(store, now)
+        // The decision log behind the same story: what you said and what the Router did with it.
+        func entry(_ minutes: Double, _ trigger: RouterDecision.Trigger, _ intent: String, _ done: [RouterDecision.Done],
+                   outcome: RouterDecision.Outcome = .done) -> RouterDecision {
+            var d = RouterDecision(at: now.addingTimeInterval(-minutes * 60), trigger: trigger, decision: .init(intent: intent), outcome: outcome)
+            for item in done {
+                switch item {
+                case .changed: d.add(item)
+                case .sent: d.add(item, session: "local_demo-transfer")
+                default: d.add(item)
+                }
+            }
+            return d
+        }
+        let changes = state.chat.compactMap(\.change)
+        state.decisions = [
+            entry(3.3, .you("transfer: remove the old remote"), "reply",
+                  [.sent(to: "Repository ownership transfer setup", text: "Remove the old remote.", original: "transfer: remove the old remote")]),
+            entry(0.5, .you("start a session to bump the version"), "start", [.failed("Cancelled")]),
+            entry(0.3, .action(category: "Contributions", thing: "ziglang/zig#1", actionID: "demo", runID: nil), "action",
+                  [.started(session: nil, project: "zig", model: nil, effort: nil)]),
+            entry(9, .you("add a category for my contributions that need a look, and snooze banners for an hour"), "change",
+                  changes.prefix(2).map { .changed($0.id) }),
+            entry(3, .you("mark the bot chatter done, and mute reviews for you"), "change",
+                  changes.dropFirst(2).map { .changed($0.id) }, outcome: .done),
+        ]
+        if let last = state.decisions.indices.last, changes.last?.isReverted == true {
+            state.decisions[last].outcome = .reverted
+        }
         store.router = state
     }
 

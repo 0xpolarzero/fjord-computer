@@ -64,6 +64,7 @@ extension Store {
                 guard let self else { return false }
                 return self.routerOn && self.router.cards.first(where: { $0.id == card })?.isOpen == true
             }
+            logCardAction("Answered the form", card: card)
             return .success(())
         } catch {
             return .failure(error)
@@ -80,6 +81,7 @@ extension Store {
                 guard let self else { return false }
                 return self.routerOn && self.router.cards.first(where: { $0.id == card })?.isOpen == true
             }
+            logCardAction(decision.approve ? "Approved the plan" : "Sent the plan back", card: card)
             return .success(())
         } catch {
             return .failure(error)
@@ -392,6 +394,7 @@ final class RouterModel {
         let open = cards(store).filter(\.isOpen).map(\.id)
         let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
         store.setCardAddressed(id, true)
+        store.logCardAction("Marked handled", card: id)
         Announce.say("Addressed")
         if selection == id { selection = next }
     }
@@ -428,6 +431,7 @@ final class RouterModel {
         let open = shown.filter(\.isOpen).map(\.id)
         let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
         store.setCardAddressed(id, card.isOpen)
+        if card.isOpen { store.logCardAction("Marked handled", card: id) }
         Announce.say(card.isOpen ? "Addressed" : "Open again")
         if card.isOpen { select(next, store: store) }
     }

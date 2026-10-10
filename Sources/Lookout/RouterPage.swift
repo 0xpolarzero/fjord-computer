@@ -13,9 +13,12 @@ struct RouterPage: Equatable {
         case message(RouterMessage)
         /// An addressed card, at the time it was addressed.
         case card(RouterCard)
+        /// A run of the Router, from the decision log.
+        case decision(RouterDecision)
 
         var id: String {
             switch self {
+            case .decision(let d): d.id.uuidString
             case .message(let m): m.id.uuidString
             case .card(let c): c.id
             }
@@ -25,6 +28,7 @@ struct RouterPage: Equatable {
             switch self {
             case .message(let m): m.date
             case .card(let c): c.addressedAt ?? c.createdAt
+            case .decision(let d): d.at
             }
         }
     }
@@ -43,12 +47,13 @@ struct RouterPage: Equatable {
         return needs.first?.id
     }
 
-    static func make(cards: [RouterCard], chat: [RouterMessage], working: [AgentRow]) -> RouterPage {
+    static func make(cards: [RouterCard], chat: [RouterMessage], working: [AgentRow],
+                     decisions: [RouterDecision] = []) -> RouterPage {
         let open = cards.filter(\.isOpen).sorted(by: newestFirst)
         var page = RouterPage()
         page.needs = open.filter { $0.kind != .done } + open.filter { $0.kind == .done }
         page.working = working
-        let entries = chat.map(Entry.message) + cards.filter { !$0.isOpen }.map(Entry.card)
+        let entries = chat.map(Entry.message) + decisions.map(Entry.decision) + cards.filter { !$0.isOpen }.map(Entry.card)
         page.history = entries.enumerated().sorted { a, b in
             a.element.date != b.element.date ? a.element.date < b.element.date : a.offset < b.offset
         }.map(\.element)
@@ -62,7 +67,12 @@ struct RouterPage: Equatable {
 
 extension Store {
     /// The Router's page on what is stored and what runs now.
-    var routerPage: RouterPage { .make(cards: router.cards, chat: router.chat, working: routerWorkingRows) }
+    var routerPage: RouterPage {
+        // The decision log stands for what you said, what the Router did and what it changed; the chat keeps what it doesn't
+        // carry yet (the Router's own words, notices, sessions' messages).
+        let kept = router.chat.filter { [.router, .error, .peer].contains($0.role) }
+        return .make(cards: router.cards, chat: kept, working: routerWorkingRows, decisions: router.decisions)
+    }
 }
 
 // MARK: - Page
@@ -179,6 +189,8 @@ private struct RouterHistory: View {
                 .opacity(0.82)
         case .card(let card):
             HistoryCardLine(store: store, model: model, card: card)
+        case .decision(let decision):
+            HistoryDecisionLine(store: store, model: model, decision: decision)
         }
     }
 
@@ -186,9 +198,9 @@ private struct RouterHistory: View {
     static func gap(_ entry: RouterPage.Entry, _ previous: RouterPage.Entry) -> CGFloat {
         switch (entry, previous) {
         case (.message(let m), .message(let p)): CodeMessage.gap(before: m, after: p.role, first: false)
-        case (.message(let m), .card): m.role == .you ? 28 : 12
-        case (.card, .message(let p)): p.role == .you ? 20 : 12
-        case (.card, .card): 2
+        case (.message, _): 12
+        case (_, .message): 12
+        default: 2
         }
     }
 }
@@ -278,6 +290,90 @@ private struct HistoryCardLine: View {
     private func toggle() {
         withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) {
             if open { model.expanded.remove(card.id) } else { model.expanded.insert(card.id) }
+        }
+    }
+}
+
+/// A run in the history: one line (icon, what set it off, what was done, when), opening to show the trigger, what was done and
+/// its links (the session, the change with its Revert).
+private struct HistoryDecisionLine: View {
+    let store: Store
+    @Bindable var model: RouterModel
+    let decision: RouterDecision
+    @State private var hovered = false
+    @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var key: String { decision.id.uuidString }
+    private var open: Bool { model.expanded.contains(key) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { toggle() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: decision.symbol).font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
+                    Text(RouterDecision.clip(decision.triggerText, 90))
+                        .cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
+                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    Text("· \(decision.summary)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    StatusCaret(hot: hovered, open: open)
+                    Spacer(minLength: 8)
+                    Text(shortAgo(decision.at)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                }
+                .padding(.horizontal, CDS.Transcript.statusPad)
+                .frame(height: CDS.Transcript.statusRow)
+                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                    .fill(hovered ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+                .overlay {
+                    RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                        .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .onHover { hovered = $0 }
+            .accessibilityLabel(decision.triggerText)
+            .accessibilityValue("\(decision.summary), \(open ? "expanded" : "collapsed")")
+
+            if open { details.transition(.opacity) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity)
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CDSProse(text: decision.triggerText, color: CDS.Text.secondary, inset: false)
+            ForEach(Array(decision.doneLines.enumerated()), id: \.offset) { _, line in
+                Text(line).cdsText((12, 16), .regular, CDS.Text.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(decision.links.changes, id: \.self) { id in
+                if let change = store.router.chat.first(where: { $0.change?.id == id })?.change {
+                    ChangeCard(change: change, store: store)
+                }
+            }
+            let sessions = decision.links.sessions.filter { store.claudeSessions[$0] != nil }
+            if !sessions.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(sessions, id: \.self) { id in
+                        ClaudeButton("Open \(store.claudeSessions[id]?.title ?? "session")", variant: .ghost, size: .sm,
+                                     icon: "arrow.up.right.square") { store.openAgent(id) }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).fill(CDS.Fill.field))
+        .overlay { RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
+        .padding(.top, 6).padding(.bottom, 4)
+    }
+
+    private func toggle() {
+        withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) {
+            if open { model.expanded.remove(key) } else { model.expanded.insert(key) }
         }
     }
 }

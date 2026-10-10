@@ -225,6 +225,8 @@ final class Store {
     @ObservationIgnored var claudeIsFrontmost: () -> Bool = { Claude.isFrontmost }
     /// The Router was just switched on: its open cards are settled against how things are now at the next feed.
     @ObservationIgnored var routerReconcilePending = false
+    /// The decision whose run is under way (your message's turn): receipts and changes join it.
+    @ObservationIgnored var activeDecision: UUID?
     /// The forms folder has been read since the Router was switched on: until then no form is known to be gone.
     @ObservationIgnored var routerFormsLoaded = false
     /// The sessions whose background work the last read looked at (see `ClaudeSnapshot.taskInventory`); nil until a read

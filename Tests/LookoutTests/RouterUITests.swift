@@ -647,7 +647,8 @@ import UserNotifications
         #expect(page.history.map(\.date) == page.history.map(\.date).sorted())
         let cardLines = page.history.compactMap { entry -> RouterCard? in if case .card(let c) = entry { c } else { nil } }
         #expect(!cardLines.isEmpty && cardLines.allSatisfy { !$0.isOpen })
-        #expect(page.history.count == store.router.chat.count + store.router.cards.filter { !$0.isOpen }.count)
+        let shown = store.router.chat.filter { [.router, .error, .peer].contains($0.role) }.count
+        #expect(page.history.count == shown + store.router.decisions.count + store.router.cards.filter { !$0.isOpen }.count)
         // The sidebar's order is the page's: the keys walk Needs you the way it is shown.
         let (needs, done, _) = RouterModel().sections(store)
         #expect(page.needs.map(\.id) == (needs + done).map(\.id))
@@ -662,7 +663,9 @@ import UserNotifications
         let after = store.routerPage
         #expect(!after.needs.contains { $0.id == card.id })
         #expect(after.history.contains { $0.id == card.id })
-        #expect(after.history.count == before.history.count + 1)
+        // The card, and the decision it logged.
+        #expect(after.history.count == before.history.count + 2)
+        #expect(store.router.decisions.last?.trigger == .you("Marked handled"))
         // Its line sits at the time it was addressed, after the older entries.
         #expect(after.history.last { $0.id == card.id }?.date == store.router.cards.first { $0.id == card.id }?.addressedAt)
         model.reopen(card.id, store: store)
