@@ -255,7 +255,6 @@ struct SettingsView: View {
                     let plugin = Self.pluginLine(store.routerPluginStatus, error: store.routerPluginError)
                     SettingsStatusLine(text: plugin.0, color: plugin.1)
                     SettingsStatusLine(text: claudeCodeStatus.0, color: claudeCodeStatus.1)
-                    SettingsStatusLine(text: store.hasTypesafeKey ? "Routing helped by Jev" : "Routing without Jev: add a TypeSafe key under Icons", color: Theme.tertiary)
                 }
             }
         }
