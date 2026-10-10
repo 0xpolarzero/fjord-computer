@@ -131,9 +131,10 @@ enum CIState: String, Codable {
 
     var color: Color {
         switch self {
-        case .success: Theme.green
-        case .failure: Theme.red
-        case .pending: Theme.amber
+        // Claude's: git-added green, danger red, clay while running (the island design's CI colours).
+        case .success: CDS.Git.added
+        case .failure: CDS.Text.danger
+        case .pending: CDS.clay
         case .none: Theme.tertiary
         }
     }

@@ -518,7 +518,8 @@ struct LookoutHub: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in if !hub.expanded, barSize != size { barSize = size } }
         .onHover { overBar = $0; hoverChanged() }
         .background(shape.fill(Theme.bg))
-        .overlay(shape.strokeBorder(Theme.stroke))
+        // Claude's panel ring (`shadow-panel`'s inset white 10%) against the desktop.
+        .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
         .clipShape(shape)
         // The hovered section's panel, outside the bar's clip; the bar's own size doesn't change.
         .overlay(alignment: peekAlignment) { peekPanel }
@@ -527,9 +528,12 @@ struct LookoutHub: View {
         // across the bar, which is opaque above it.
         .background(alignment: peekAlignment) { peekShadow }
         .background {
+            // Claude's `shadow-panel` (its two drops) once open; at rest, only its near one, so the bar sits light.
+            let open = expanded || peeking != nil
             shape.fill(Theme.bg)
-                .shadow(color: .black.opacity(expanded ? 0.42 : peeking != nil ? 0.42 : 0.22),
-                        radius: expanded || peeking != nil ? 20 : 6, y: expanded || peeking != nil ? 7 : 2)
+                .shadow(color: open ? CDS.PanelShadow.far.color : .clear, radius: CDS.PanelShadow.far.radius,
+                        y: CDS.PanelShadow.far.y)
+                .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
         }
         .motion(Theme.Motion.fade, value: peeking != nil)
         .fixedSize()
@@ -580,8 +584,8 @@ struct LookoutHub: View {
 
     /// Over a group's sessions: its name and count (none when searching: the matches are one list).
     func groupLabel(_ section: AgentSection, twoLines: Bool) -> some View {
-        Eyebrow(section.group.title, count: section.rows.count)
-            .padding(.leading, twoLines ? 10 : 8)
+        IslandGroupLabel(title: section.group.title, count: section.rows.count)
+            .padding(.leading, twoLines ? CDS.Sidebar.labelInset : 8)
     }
 
     /// Sessions that need a look get their detail under the title beside the bar, and the room for it.
@@ -590,7 +594,7 @@ struct LookoutHub: View {
     }
     static let tallSlot: CGFloat = Theme.Metrics.row + 14
     /// The line above a group beside the bar (the first group's sits under the asterisk).
-    static let groupLine: CGFloat = 14
+    static let groupLine: CGFloat = 16
 
     // MARK: Vertical (left / right edges)
 
@@ -811,7 +815,7 @@ struct LookoutHub: View {
 
     /// Between groups on the bar, a short line; over the first, nothing.
     func groupMark(first: Bool) -> some View {
-        Capsule().fill(first ? .clear : Theme.Fill.selected).frame(width: 14, height: 1.5).frame(height: Self.groupLine)
+        Rectangle().fill(first ? .clear : CDS.border).frame(width: 12, height: 1).frame(height: Self.groupLine)
     }
 
     /// Heights the two lists may scroll within: what's left once the fixed parts are laid out, inbox first.
@@ -835,7 +839,7 @@ struct LookoutHub: View {
 
     /// Across the whole view when expanded; a short rule centred in the bar at rest.
     var sectionDivider: some View {
-        Hairline()
+        IslandRule()
             .frame(width: showsDetail ? Self.cell + Self.detail : Self.cell - 24)
             .frame(width: rowWidth)
             .padding(.vertical, 4)
@@ -916,7 +920,7 @@ struct LookoutHub: View {
                     } else {
                         // (At rest: the tiles.)
                         ForEach(Array(agentSections.enumerated()), id: \.element.group) { i, section in
-                            if i > 0 { Capsule().fill(Theme.Fill.selected).frame(width: 1.5, height: 14) }
+                            if i > 0 { Rectangle().fill(CDS.border).frame(width: 1, height: 12) }
                             ForEach(section.rows) { tile($0, size: 26) }
                         }
                     }
@@ -943,7 +947,8 @@ struct LookoutHub: View {
                 // The rate limit shows here whatever's focused (the sync status itself is in the controls' panel).
                 RateNotice(store: store, fill: false).lineLimit(1).padding(.trailing, Self.inset)
                 stripDivider
-                HStack(spacing: 2) {
+                // Claude's chrome buttons: 24 squares, 4 apart.
+                HStack(spacing: 4) {
                     pinButton
                     reposButton
                     settingsCell
@@ -977,7 +982,7 @@ struct LookoutHub: View {
     }
 
     var stripDivider: some View {
-        Hairline(axis: .vertical).frame(height: 22)
+        IslandRule(axis: .vertical).frame(height: 16)
     }
 
     @ViewBuilder var horizontalBody: some View {
@@ -996,7 +1001,7 @@ struct LookoutHub: View {
                                 VStack(alignment: .leading, spacing: 0) {
                                     inboxColumn
                                     Spacer(minLength: 0)
-                                    Hairline(inset: 12)
+                                    IslandRule(inset: 12)
                                     ciColumn
                                 }
                                 .frame(width: Self.githubWidth, alignment: .topLeading)
@@ -1032,13 +1037,13 @@ struct LookoutHub: View {
                                     : .opacity.combined(with: .offset(y: edge == .top ? -8 : 8)))
                 }
             }
-            .overlay(alignment: edge == .top ? .top : .bottom) { Hairline() }
+            .overlay(alignment: edge == .top ? .top : .bottom) { IslandRule() }
             .transition(.hubReveal)
         }
     }
 
     var columnDivider: some View {
-        Hairline(axis: .vertical, inset: 12)
+        IslandRule(axis: .vertical, inset: 12)
     }
 
     /// The inbox's list along the top and bottom: what's left once CI's lines are under it.
@@ -1105,7 +1110,7 @@ struct LookoutHub: View {
             // the new session row.
             Spacer(minLength: 0)
             if !store.routerOn {
-                Hairline(inset: Self.inset + 10).padding(.bottom, Theme.Space.xs)
+                IslandRule(inset: Self.inset + 10).padding(.bottom, Theme.Space.xs)
                 NewSessionRow(store: store, style: .twoLines)
                     .padding(.horizontal, Self.inset)
                     .padding(.bottom, Self.newSessionBlock - Theme.Space.xs - 44)
@@ -1148,7 +1153,8 @@ struct LookoutHub: View {
     @ViewBuilder func agentGroupList(_ sections: [AgentSection]) -> some View {
         ForEach(sections) { section in
             if !searching {
-                groupLabel(section, twoLines: true).padding(.top, 6).padding(.bottom, 2)
+                // Claude's group label: 12 above (less the rows' own air), 4 below.
+                groupLabel(section, twoLines: true).padding(.top, 8).padding(.bottom, 4)
             }
             ForEach(section.rows) { r in
                 twoLineRow(r).modifier(ReorderIf(enabled: section.group == .pinned && !searching, row: r, store: store))
@@ -1158,7 +1164,7 @@ struct LookoutHub: View {
 
     /// A line between one project's sessions and the next's.
     var groupDivider: some View {
-        Hairline(inset: 10).padding(.vertical, Theme.Space.xs)
+        IslandRule(inset: 10).padding(.vertical, Theme.Space.xs)
     }
 
     // MARK: Focus
@@ -1365,5 +1371,104 @@ struct RateNotice: View {
         RateLimitWarning(store: store)
             .font(Theme.Typography.meta)
             .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
+    }
+}
+
+// MARK: Island pieces (Claude's frame: dots, dividers, group labels)
+
+/// Claude's sidebar status dot (spec §1.7): 6pt; needs you amber, done blue, working muted and blinking, quiet a hollow
+/// ring. CI's states use the same dot: failing danger, running clay, passing git green.
+struct IslandDot: View {
+    enum Kind: Equatable {
+        case awaiting, ready, running, idle
+        case custom(Color)
+
+        static func ci(_ state: CIState) -> Kind {
+            switch state {
+            case .failure: .custom(CDS.Text.danger)
+            case .pending: .custom(CDS.clay)
+            case .success: .custom(CDS.Git.added)
+            case .none: .idle
+            }
+        }
+    }
+
+    let kind: Kind
+    @Environment(\.accessibilityReduceMotion) private var reduce
+    @State private var low = false
+
+    var body: some View {
+        Group {
+            switch kind {
+            case .awaiting: Circle().fill(CDS.Dot.awaiting)
+            case .ready: Circle().fill(CDS.Dot.ready)
+            case .custom(let color): Circle().fill(color)
+            case .idle:
+                Circle().strokeBorder(CDS.Dot.running, lineWidth: CDS.Dot.ringWidth).opacity(CDS.Dot.ringOpacity)
+            case .running:
+                Circle().fill(CDS.Dot.running)
+                    .opacity(reduce ? CDS.Dot.still : low ? CDS.Dot.blinkLow : 1)
+                    .onAppear { blink() }
+                    .onChange(of: reduce) { blink() }
+            }
+        }
+        .frame(width: CDS.Dot.size, height: CDS.Dot.size)
+        .accessibilityHidden(true)
+    }
+
+    /// `dframe-dot-blink`: .3 → 1 → .3, ease-in-out, 1.2 s a cycle.
+    private func blink() {
+        guard !reduce else { low = false; return }
+        low = false
+        withAnimation(.easeInOut(duration: CDS.Dot.blink / 2).repeatForever(autoreverses: true)) { low = true }
+    }
+}
+
+/// Claude's divider: `--cds-border` (white 10%) at 0.5pt. `inset` trims both ends.
+struct IslandRule: View {
+    var axis: Axis = .horizontal
+    var inset: CGFloat = 0
+
+    var body: some View {
+        Rectangle()
+            .fill(CDS.border)
+            .frame(width: axis == .vertical ? CDS.hairline : nil, height: axis == .horizontal ? CDS.hairline : nil)
+            .padding(axis == .horizontal ? .horizontal : .vertical, inset)
+    }
+}
+
+/// Claude's sidebar group label (spec §2.6): 12/16 in muted, as written (no capitals), then its count in the neutral xs
+/// Badge (§2.5).
+struct IslandGroupLabel: View {
+    let title: String
+    var count: Int?
+
+    var body: some View {
+        HStack(spacing: CDS.Sidebar.rowGap) {
+            Text(title)
+                .font(CDS.sans(CDS.Sidebar.groupFont))
+                .foregroundStyle(CDS.Text.muted)
+                .lineLimit(1)
+            if let count { IslandCountPill(count: count) }
+        }
+        .frame(minHeight: 16)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The CDS Badge, neutral, xs: a count beside a label.
+struct IslandCountPill: View {
+    let count: Int
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    var body: some View {
+        Text("\(count)")
+            .font(CDS.sans(CDS.Badge.font, .medium))
+            .monospacedDigit()
+            .foregroundStyle(CDS.Badge.ink)
+            .padding(.horizontal, CDS.Badge.padX)
+            .frame(minWidth: CDS.Badge.height, minHeight: CDS.Badge.height)
+            .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(CDS.Badge.fill))
+            .contentTransition(reduce ? .opacity : .numericText(value: Double(count)))
     }
 }

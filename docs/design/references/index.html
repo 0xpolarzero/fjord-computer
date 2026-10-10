@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lookout — references</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #0c0c0b; color: #e9e7e2; font: 15px/1.6 -apple-system, "SF Pro Text", system-ui; -webkit-font-smoothing: antialiased; }
+  main { max-width: 1180px; margin: 0 auto; padding: 72px 32px 120px; }
+  h1 { font: 400 40px/1.15 "New York", ui-serif, Georgia; letter-spacing: -0.01em; }
+  .lede { color: #9c9993; max-width: 640px; margin-top: 14px; }
+  h2 { font-size: 13px; font-weight: 600; color: #8a877f; letter-spacing: .06em; text-transform: uppercase; margin: 88px 0 24px; }
+  .ref { display: grid; grid-template-columns: 1.55fr 1fr; gap: 40px; align-items: start; margin-bottom: 72px; }
+  .ref img { width: 100%; border-radius: 10px; display: block; background: #161614; box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 20px 60px rgba(0,0,0,.4); }
+  .ref h3 { font: 400 26px/1.2 "New York", ui-serif, Georgia; }
+  .ref .what { color: #8a877f; font-size: 13px; margin-top: 4px; }
+  .ref p { color: #c4c1ba; margin-top: 14px; }
+  .ref ul { margin: 14px 0 0; padding-left: 18px; color: #c4c1ba; }
+  .ref li { margin: 4px 0; }
+  .take { margin-top: 16px; padding: 12px 14px; border-radius: 8px; background: #151513; color: #e9e7e2; font-size: 14px; }
+  .take b { color: #f5b544; font-weight: 600; }
+  a { color: #e9e7e2; text-underline-offset: 3px; text-decoration-color: rgba(255,255,255,.3); }
+  .axes { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .axis { display: grid; grid-template-columns: 220px 1fr 220px; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .axis .l { text-align: right; color: #c4c1ba; }
+  .axis .r { color: #c4c1ba; }
+  .axis .bar { height: 2px; background: linear-gradient(90deg, rgba(255,255,255,.25), rgba(255,255,255,.06), rgba(255,255,255,.25)); position: relative; }
+  .axis .bar i { position: absolute; top: -5px; width: 12px; height: 12px; border-radius: 50%; background: #f5b544; box-shadow: 0 0 12px rgba(245,181,68,.5); }
+  .axis small { display: block; color: #6e6b66; font-size: 12px; }
+  .note { color: #8a877f; font-size: 13px; margin-top: 18px; }
+  .words { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .words span { padding: 6px 12px; border-radius: 999px; background: #151513; color: #c4c1ba; font-size: 14px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); }
+</style>
+</head>
+<body>
+<main>
+  <h1>What “polished” could mean for Lookout</h1>
+  <p class="lede">Real product images from teams known for craft, with what each one does that we could take. Mark the ones that feel right, then place yourself on the axes at the bottom.</p>
+
+  <h2>The island</h2>
+  <div class="ref">
+    <a href="https://tryalcove.com/"><img src="alcove.jpg" alt="Alcove"></a>
+    <div>
+      <h3>Alcove</h3>
+      <div class="what">Dynamic Island for the Mac · <a href="https://tryalcove.com/">tryalcove.com</a>: the demo on the page is interactive, try it</div>
+      <p>The closest to Apple's own island: black glass that grows out of the notch, one thing at a time, and motion that does most of the work.</p>
+      <div class="take"><b>Take:</b> the island shows one thing, big and calm, never a list crammed into black.</div>
+    </div>
+  </div>
+  <div class="ref">
+    <img src="https://images.ctfassets.net/spoqsaf9291f/7t9TzEqVMWWGDDV16opOa5/61eb8f1d0acfc631ef1fbe55b363c026/menu-bar.png" alt="Notion Calendar menu bar">
+    <div>
+      <h3>Notion Calendar, in the menu bar</h3>
+      <div class="what">Menu bar companion · <a href="https://www.notion.com/product/calendar">notion.com/product/calendar</a></div>
+      <p>A tiny surface that answers one question (what's next?) and one action (join). Light type, generous line height, no borders.</p>
+      <div class="take"><b>Take:</b> the glance answers one question: what needs me, right now?</div>
+    </div>
+  </div>
+
+  <h2>Calm, airy windows</h2>
+  <div class="ref">
+    <img src="https://static.culturedcode.com/things/videos/2017-05-18-website-videos/2-today-mac.png" alt="Things Today">
+    <div>
+      <h3>Things 3</h3>
+      <div class="what">Apple Design Award · <a href="https://culturedcode.com/things/">culturedcode.com/things</a></div>
+      <p>The benchmark for “appeasing”. Almost no lines; structure comes from whitespace. One accent blue. Rows breathe. Every icon is drawn for the app.</p>
+      <div class="take"><b>Take:</b> remove dividers and labels; let spacing do it. One colour per screen.</div>
+    </div>
+  </div>
+  <div class="ref">
+    <img src="https://static.culturedcode.com/things/videos/2017-05-18-website-videos/7-quickfind-mac.png" alt="Things Quick Find">
+    <div>
+      <h3>Things 3, Quick Find</h3>
+      <div class="what">The search panel</div>
+      <p>A floating panel with soft depth, large comfortable rows, and results grouped by plain words, not caps or tags.</p>
+      <div class="take"><b>Take:</b> soft shadows and big hit areas over hairlines and chips.</div>
+    </div>
+  </div>
+  <div class="ref">
+    <img src="https://amie.so/_next/static/media/hero.f8205e72.png" alt="Amie">
+    <div>
+      <h3>Amie</h3>
+      <div class="what">Calendar and notes · <a href="https://amie.so/">amie.so</a></div>
+      <p>Playful but disciplined: rounded, soft colour fills, friendly type. Shows how warmth can coexist with polish.</p>
+      <div class="take"><b>Take:</b> if you want warmth, soft tinted fills beat glowing dots.</div>
+    </div>
+  </div>
+
+  <h2>Dense and precise</h2>
+  <div class="ref">
+    <img src="https://www.conductor.build/conductor-app-hero-dark.webp?dpl=dpl_6KDS58rgR5kJLLTV92yD99gkmDNi" alt="Conductor">
+    <div>
+      <h3>Conductor</h3>
+      <div class="what">A team of coding agents · <a href="https://www.conductor.build/">conductor.build</a></div>
+      <p>The same job as the Router (many agents, one place), done as a quiet dark workspace: sidebar of agents, a chat, a changes panel.</p>
+      <div class="take"><b>Take:</b> the closest real product to what the Router is. Note how little colour it needs.</div>
+    </div>
+  </div>
+  <div class="ref">
+    <a href="https://linear.app"><img src="https://static.culturedcode.com/things/videos/2017-05-18-website-videos/12-multiplewindows-mac-3.png" alt="" style="display:none"></a>
+    <div style="grid-column: 1 / -1">
+      <h3>Linear and Raycast</h3>
+      <div class="what"><a href="https://linear.app">linear.app</a> (scroll to the product: it's live HTML, not an image) · <a href="https://www.raycast.com/">raycast.com</a></div>
+      <p>Already measured in the last round. Their polish is in restraint: 12–13pt type, three greys, one accent, structure “felt not seen”.</p>
+    </div>
+  </div>
+
+  <h2>Where round 4 stands</h2>
+  <div class="ref">
+    <img src="v4-router.png" alt="Round 4">
+    <div>
+      <h3>Why it still feels like too much</h3>
+      <p>Each idea is fine alone; together they compete. One screen uses eight devices at once:</p>
+      <ul>
+        <li>glowing lamps</li><li>mono caps labels</li><li>bordered mono tags</li><li>serif and sans and mono</li>
+        <li>keycap cards</li><li>key hints on every button</li><li>a log rail</li><li>a bordered command line</li>
+      </ul>
+      <div class="take"><b>Polish is fewer devices, each done perfectly.</b> The polished references above use two or three per screen.</div>
+    </div>
+  </div>
+
+  <h2>Place yourself</h2>
+  <div class="axes">
+    <div class="axis"><div class="l">Airy, room to breathe<small>Things, Notion Calendar</small></div><div class="bar"><i style="left:30%"></i></div><div class="r">Dense, everything visible<small>Linear, Raycast</small></div></div>
+    <div class="axis"><div class="l">Light, paper<small>Things, Amie</small></div><div class="bar"><i style="left:70%"></i></div><div class="r">Dark, graphite<small>Conductor, Linear</small></div></div>
+    <div class="axis"><div class="l">Flat, lines<small>Linear</small></div><div class="bar"><i style="left:65%"></i></div><div class="r">Soft depth, shadows<small>Things Quick Find, Alcove</small></div></div>
+    <div class="axis"><div class="l">One accent, monochrome<small>Things, Conductor</small></div><div class="bar"><i style="left:25%"></i></div><div class="r">Expressive colour<small>Amie</small></div></div>
+    <div class="axis"><div class="l">One typeface<small>everyone above</small></div><div class="bar"><i style="left:35%"></i></div><div class="r">Several voices<small>round 4</small></div></div>
+    <div class="axis"><div class="l">Square, crisp<small>Linear</small></div><div class="bar"><i style="left:40%"></i></div><div class="r">Round, soft<small>Alcove, Amie</small></div></div>
+  </div>
+  <p class="note">The dots are my guess at what you've said so far. Tell me where you'd move them.</p>
+
+  <h2>Words that might be what you mean</h2>
+  <div class="words">
+    <span>calm</span><span>quiet hierarchy</span><span>structure by space, not lines</span><span>one thing at a time</span>
+    <span>soft depth</span><span>restraint</span><span>native, like Apple made it</span><span>tactile</span><span>effortless to scan</span><span>expensive-looking</span>
+  </div>
+</main>
+</body>
+</html>

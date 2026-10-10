@@ -4,79 +4,81 @@ import SwiftUI
 // Session and inbox views shared by the hub: tiles, rows, actions, label editor, update button, and the
 // menus / status lines the hub ports next (claude link, rate limit, session and inbox context menus).
 
-/// A session's tile: its two letters (or emoji, or icon). Its state is a badge in the corner: amber "?" when it needs
-/// you, blue check when it's done and unread, a pulsing dot while it works (or left something running), a pin when
-/// it's pinned and quiet. Only the first two fill the tile with colour.
+/// A session's tile on the bar, as Claude would draw it: a neutral compact square (radius 6, white 10%) holding its two
+/// letters (or emoji, or icon), and Claude's 6pt status dot as a badge in the corner: amber when it needs you, blue when it's
+/// done and unread, grey and blinking while it works (or left something running). Picked: white 15% and a white 20% ring.
 struct AgentTile: View {
     let row: AgentRow
-    var size: CGFloat = 26
+    var size: CGFloat = CDS.Tile.size
     var selected = false
 
     var body: some View {
-        let shape = Tile.shape(size)
-        let busy = (row.session.running && !row.waitsForYou) || !row.tasks.isEmpty
-        let group = row.group
-        AgentTileFace(row: row, size: size)
+        let scale = size / CDS.Tile.size
+        let shape = RoundedRectangle(cornerRadius: CDS.Tile.radius * scale, style: .continuous)
+        let kind = ClaudeDot.Kind(row)
+        AgentTileFace(row: row, size: size, selected: selected)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(row.session.title)
             .spokenValue(of: row)
             .overlay {
-                if selected { shape.strokeBorder(Color.white.opacity(0.85), lineWidth: 1.5).padding(-3) }
+                if selected {
+                    RoundedRectangle(cornerRadius: CDS.Tile.radius * scale + 2, style: .continuous)
+                        .strokeBorder(CDS.Tile.ring, lineWidth: 1.5).padding(-2.5)
+                }
             }
             .overlay(alignment: .topTrailing) {
-                let d = max(10, size * 0.46)
-                Group {
-                    if group == .needsYou || group == .done, let tint = row.tint {
-                        Image(systemName: group == .needsYou ? "questionmark" : "checkmark")
-                            .font(.system(size: d * 0.58, weight: .heavy))
-                            .foregroundStyle(Theme.onTint)
-                            .frame(width: d, height: d)
-                            .background(Circle().fill(tint))
-                            .background(Circle().fill(Theme.bg).padding(-1.5))
-                    } else if busy {
-                        PulseBlock(color: Theme.text, diameter: d * 0.62, from: 0.95, to: 0.25, duration: 1.1)
-                            .background(Circle().fill(Theme.bg).padding(-1.5))
-                    }
-                }
-                .offset(x: d * 0.32, y: -d * 0.32)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if group == .pinned && !busy {
-                    let d = max(9, size * 0.4)
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: d * 0.62, weight: .semibold))
-                        .foregroundStyle(Theme.tertiary)
+                if kind != .quiet {
+                    let d = CDS.Tile.dot + 2 * CDS.Tile.dotGap
+                    ClaudeDot(kind: kind)
                         .frame(width: d, height: d)
-                        .background(Circle().fill(Theme.bg))
-                        .offset(x: d * 0.3, y: d * 0.3)
+                        .background(Circle().fill(Color.black).frame(width: d, height: d))
+                        .offset(x: d * 0.3, y: -d * 0.3)
                 }
             }
+            .contentShape(shape)
     }
 }
 
-/// The tile itself: its face on its colour.
+/// The tile itself: its face on the neutral fill.
 private struct AgentTileFace: View {
     let row: AgentRow
     var size: CGFloat
+    var selected = false
 
     var body: some View {
-        let shape = Tile.shape(size)
+        let scale = size / CDS.Tile.size
+        let shape = RoundedRectangle(cornerRadius: CDS.Tile.radius * scale, style: .continuous)
         let emoji = row.label.unicodeScalars.first.map { $0.properties.isEmoji && $0.value > 0xFF } ?? false
+        // What wants a look reads brighter; the rest sits back, as Claude's secondary text does.
+        let lit = selected || row.group == .needsYou || row.group == .done
         Group {
             if let icon = row.icon {
                 Image(systemName: icon)
-                    .font(.system(size: size * 0.46, weight: .semibold))
+                    .font(.system(size: CDS.Sidebar.symbol * scale, weight: .medium))
                     .symbolRenderingMode(.monochrome)
             } else {
                 Text(row.label)
-                    .font(.system(size: emoji ? size * 0.55 : size * 0.4, weight: .bold, design: .rounded))
+                    .font(emoji ? .system(size: size * 0.5) : CDS.sans(CDS.Tile.letters * scale, .medium))
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
             }
         }
-            .foregroundStyle(row.tint == nil ? Theme.text.opacity(0.88) : Theme.onTint)
+            .foregroundStyle(lit ? CDS.Text.primary : CDS.Text.secondary)
             .frame(width: size, height: size)
-            .background(shape.fill(row.tint ?? Theme.Fill.tile))
+            .background(shape.fill(selected ? CDS.Tile.fillSelected : CDS.Tile.fill))
+    }
+}
+
+extension ClaudeDot.Kind {
+    /// A session's dot, as Claude's list draws it: needs you, done and unread, working (or left something running), else
+    /// the quiet hollow ring.
+    init(_ row: AgentRow) {
+        switch row.group {
+        case .needsYou: self = .needsYou
+        case .done: self = .done
+        case .working: self = .working
+        case .pinned, .idle: self = .quiet
+        }
     }
 }
 
@@ -86,7 +88,7 @@ struct WorkingText: View {
 
     var body: some View {
         Ticking { now in
-            Text(row.workingText(now: now)).foregroundStyle(row.waitsForYou ? Theme.amber : Theme.secondary)
+            Text(row.workingText(now: now)).foregroundStyle(row.waitsForYou ? CDS.Text.warning : CDS.Text.muted)
         }
     }
 }
@@ -115,11 +117,11 @@ struct ProjectLabel: View {
     let color: Color?
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             if let color {
                 Circle().fill(color).frame(width: 6, height: 6)
             } else {
-                Image(systemName: "text.bubble").font(.system(size: 9))
+                Image(systemName: "text.bubble").font(.system(size: 9, weight: .medium))
             }
             Text(name)
         }
@@ -134,23 +136,23 @@ struct TaskLines: View {
         Ticking { now in
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(tasks) { task in
-                    HStack(spacing: 6) {
+                    HStack(spacing: 4) {
                         Image(systemName: task.kind == .agent ? "asterisk" : "terminal")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Theme.claude)
+                            .foregroundStyle(CDS.clay)
                             .frame(width: 12)
-                        Text(task.title).foregroundStyle(Theme.secondary).lineLimit(1)
+                        Text(task.title).foregroundStyle(CDS.Text.secondary).lineLimit(1)
                         Spacer(minLength: 6)
                         Text(status(task, now: now))
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(Theme.claude)
+                            .font(CDS.sans(CDS.RowControl.detail.0).monospacedDigit())
+                            .foregroundStyle(CDS.Text.muted)
                             .lineLimit(1)
                             .layoutPriority(1)
                     }
                 }
             }
         }
-        .font(.system(size: 11))
+        .font(CDS.sans(CDS.RowControl.detail.0))
     }
 
     private func status(_ task: ClaudeTask, now: Date) -> String {
@@ -173,11 +175,11 @@ struct Reorderable: ViewModifier {
             content
                 .draggable("agent:" + row.id) {
                     Text(row.session.title)
-                        .font(Theme.Typography.heading)
-                        .padding(.horizontal, 10)
-                        .frame(height: Theme.Metrics.chip)
-                        .background(Capsule().fill(Theme.bg))
-                        .foregroundStyle(Theme.text)
+                        .font(CDS.sans(CDS.Sidebar.rowFont))
+                        .padding(.horizontal, 8)
+                        .frame(height: CDS.Sidebar.rowHeight)
+                        .background(RoundedRectangle(cornerRadius: CDS.Sidebar.radius, style: .continuous).fill(CDS.Surface.s3))
+                        .foregroundStyle(CDS.Text.primary)
                 }
                 .dropDestination(for: String.self) { ids, _ in
                     guard let id = ids.first, id.hasPrefix("agent:") else { return false }
@@ -188,40 +190,77 @@ struct Reorderable: ViewModifier {
     }
 }
 
-/// Hover/selection actions, the same in the panel and the pill's drawer.
+/// Hover/selection actions, the same in the panel and the pill's drawer: Claude's row controls (§2.7), 24pt ghost
+/// squares 2 apart, secondary glyphs that turn primary on a white 7.5% fill.
 struct AgentActions: View {
     let row: AgentRow
     let store: Store
-    var size: CGFloat = 24
+    /// Kept for the callers; Claude's controls are always 24.
+    var size: CGFloat = CDS.RowControl.size
     /// The row already shows Keep and Remove: only read/unread and open here.
     var keepsInline = false
 
     var body: some View {
-        RowActions {
+        HStack(spacing: CDS.RowControl.gap) {
             if !keepsInline {
-                IconButton(symbol: row.entry.kept ? "pin.slash" : "pin", help: row.entry.kept ? "Unpin" : "Pin",
-                           detail: (row.entry.kept ? "Leaves the list an hour after it goes quiet" : "Stays on the bar") + " · \(store.shortcut(.keepSession).display)", size: size) {
+                RowControl(symbol: row.entry.kept ? "pin.slash" : "pin", help: row.entry.kept ? "Unpin" : "Pin",
+                           detail: (row.entry.kept ? "Leaves the list an hour after it goes quiet" : "Stays on the bar") + " · \(store.shortcut(.keepSession).display)") {
                     store.togglePin(row.id)
                 }
             }
             if row.unread {
-                IconButton(symbol: "checkmark", help: "Mark as read", detail: store.shortcut(.toggleRead).display, size: size) {
+                RowControl(symbol: "checkmark", help: "Mark as read", detail: store.shortcut(.toggleRead).display) {
                     store.toggleAgentRead(row.id)
                 }
             } else {
-                IconButton(symbol: "circle.fill", help: "Mark as unread", detail: store.shortcut(.toggleRead).display, size: size) {
+                RowControl(symbol: "circle.fill", help: "Mark as unread", detail: store.shortcut(.toggleRead).display, small: true) {
                     store.toggleAgentRead(row.id)
                 }
             }
             if !keepsInline {
-                IconButton(symbol: "xmark", help: "Hide", detail: "Until its next activity · \(store.shortcut(.removeSession).display)", size: size) {
+                RowControl(symbol: "xmark", help: "Hide", detail: "Until its next activity · \(store.shortcut(.removeSession).display)") {
                     store.dismissAgent(row.id)
                 }
             }
-            IconButton(symbol: "arrow.up.right", help: "Open in Claude", detail: store.shortcut(.openItem).display, size: size) {
+            RowControl(symbol: "arrow.up.right", help: "Open in Claude", detail: store.shortcut(.openItem).display) {
                 store.openAgent(row.id)
             }
         }
+    }
+}
+
+/// One of Claude's row controls (`df-row-control`): 24 × 24, radius 6, a 13pt glyph (Claude's 16pt icon) in secondary, primary
+/// on hover over white 7.5%.
+private struct RowControl: View {
+    let symbol: String
+    let help: String
+    var detail: String? = nil
+    /// A glyph that is a dot, drawn smaller (Claude's unread mark).
+    var small = false
+    let action: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button(action: action) { RowControlFace(symbol: symbol, small: small) }
+            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Sidebar.radius, style: .continuous),
+                                              rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
+            .focused($focused)
+            .accessibilityLabel(help)
+            .accessibilityHint(detail.flatMap { $0.isEmpty ? nil : $0 } ?? "")
+            .tip(help, detail, focused: focused)
+    }
+}
+
+private struct RowControlFace: View {
+    let symbol: String
+    let small: Bool
+    @Environment(\.hoverFillHovering) private var hover
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: small ? 7 : CDS.Sidebar.symbol, weight: .medium))
+            .foregroundStyle(hover ? CDS.Text.primary : CDS.Text.secondary)
+            .frame(width: CDS.RowControl.size, height: CDS.RowControl.size)
     }
 }
 
@@ -234,40 +273,46 @@ struct LabelEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        // Claude's compact popover content: 13/19 body, a 12/15 muted hint, a 24pt field and xs buttons, 12 around.
         VStack(alignment: .leading, spacing: 8) {
-            Text("Label for \(row.session.title)").font(Theme.Typography.heading).lineLimit(1)
-            Text("Two letters or an emoji; empty goes back to the \(row.entry.icon != nil ? "icon" : "letters")")
-                .font(Theme.Typography.caption).foregroundStyle(Theme.tertiary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Label for \(row.session.title)").cdsText(CDS.Density.compact.body, .medium).lineLimit(1)
+                Text("Two letters or an emoji; empty goes back to the \(row.entry.icon != nil ? "icon" : "letters")")
+                    .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 6) {
                 TextField(row.label, text: $text)
                     .accessibilityLabel("Label for \(row.session.title)")
                     .focused($focused)
-                    .fieldStyle()
-                    .frame(width: 90)
+                    .textFieldStyle(.plain)
+                    .font(CDS.sans(CDS.Sidebar.rowFont))
+                    .foregroundStyle(CDS.Text.primary)
+                    .padding(.horizontal, 8)
+                    .frame(width: 90, height: CDS.Density.compact.control)
+                    .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous).fill(CDS.Fill.field))
+                    .overlay(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                        .strokeBorder(focused ? CDS.borderStrong : CDS.border, lineWidth: 1))
                     .onSubmit(save)
-                IconButton(symbol: "face.smiling", help: "Emoji") {
+                RowControl(symbol: "face.smiling", help: "Emoji") {
                     focused = true
                     NSApp.orderFrontCharacterPalette(nil)
                 }
-                Button("Save", action: save).controlSize(.small)
+                Button("Save", action: save).buttonStyle(CompactButtonStyle())
             }
             if row.entry.label != nil {
                 Button(row.entry.icon != nil ? "Use the picked icon" : "Use letters from the title") {
                     store.setAgentLabel(row.id, nil)
                     dismiss()
                 }
-                .buttonStyle(.plain)
-                .font(Theme.Typography.meta)
-                .foregroundStyle(Theme.accent)
+                .buttonStyle(TextLinkStyle())
             }
             if store.canPickIcons && row.entry.label == nil {
                 Button(row.entry.icon == nil ? "Pick an icon" : "Pick another icon") {
                     store.repickIcon(row.id)
                     dismiss()
                 }
-                .buttonStyle(.plain)
-                .font(Theme.Typography.meta)
-                .foregroundStyle(Theme.accent)
+                .buttonStyle(TextLinkStyle())
             }
         }
         .padding(12)
@@ -284,6 +329,51 @@ struct LabelEditor: View {
     }
 }
 
+/// CDS Button, secondary, compact xs (forms-buttons.md §4): 24 tall, 8 across, radius 6, white 10% (14% on hover), 13pt
+/// primary text; the paint squishes to .975 while pressed.
+private struct CompactButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration) }
+
+    private struct Face: View {
+        let configuration: Configuration
+        @State private var hovered = false
+
+        var body: some View {
+            configuration.label
+                .font(CDS.sans(CDS.Sidebar.rowFont))
+                .foregroundStyle(CDS.Text.primary)
+                .padding(.horizontal, CDS.Density.compact.pad.md)
+                .frame(height: CDS.Density.compact.control)
+                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                    .fill(hovered ? CDS.Fill.secondaryHover : CDS.Fill.secondary)
+                    .shadow(color: CDS.fieldShadow, radius: 1, y: 1)
+                    .scaleEffect(configuration.isPressed ? 0.975 : 1))
+                .contentShape(Rectangle())
+                .onHover { hovered = $0 }
+                .animation(.easeOut(duration: 0.06), value: configuration.isPressed)
+        }
+    }
+}
+
+/// CDS TextLink (forms-buttons.md §5.8): accent #6da7ec, underlined 3 below at 40%, full on hover; footnote size here.
+private struct TextLinkStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Face(configuration: configuration) }
+
+    private struct Face: View {
+        let configuration: Configuration
+        @State private var hovered = false
+
+        var body: some View {
+            configuration.label
+                .font(CDS.sans(CDS.Density.compact.footnote.0))
+                .foregroundStyle(CDS.Text.accent)
+                .underline(true, color: CDS.Text.accent.opacity(hovered ? 1 : 0.4))
+                .contentShape(Rectangle())
+                .onHover { hovered = $0 }
+        }
+    }
+}
+
 /// A new release, fetched in the background: an icon that says what it is on hover; click to restart into it
 /// (or to download it, with a ring for progress, if that didn't happen on its own). Right-click for the release
 /// notes or to skip that version; `UpdateMenu` beside it offers the same from the keyboard.
@@ -295,7 +385,9 @@ struct UpdateButton: View {
     var body: some View {
         let version = updater.release?.version ?? ""
         Button { updater.advance() } label: { UpdateLabel(updater: updater, horizontal: horizontal, version: version) }
-        .buttonStyle(HoverFillButtonStyle(shape: Capsule(), hover: Theme.Fill.hover))
+        // Claude's ghost chrome button: radius 6, white 7.5% on hover.
+        .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Sidebar.radius, style: .continuous),
+                                          rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
         .accessibilityLabel(Self.label(updater, version: version))
         .accessibilityHint(tooltip(version).0)
         .focused($focused)
@@ -346,9 +438,9 @@ struct UpdateMenu: View {
     var body: some View {
         Menu { UpdateActions(updater: updater) } label: {
             Image(systemName: "ellipsis")
-                .font(Theme.Typography.glyph(11, .bold))
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 22, height: 22)
+                .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
+                .foregroundStyle(CDS.Text.secondary)
+                .frame(width: CDS.RowControl.size, height: CDS.RowControl.size)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -371,26 +463,26 @@ private struct UpdateLabel: View {
             ZStack {
                 if updater.phase == .downloading {
                     let fraction = updater.fraction
-                    Circle().stroke(Theme.Fill.selected, lineWidth: 2).padding(3)
+                    Circle().stroke(CDS.Fill.secondary, lineWidth: 2).padding(4)
                     Circle().trim(from: 0, to: max(0.03, fraction))
-                        .stroke(Theme.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .stroke(CDS.Fill.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .padding(3)
+                        .padding(4)
                         .animation(.linear(duration: 0.2), value: fraction)
                 }
                 if updater.phase == .installing {
                     ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: symbol)
-                        .font(Theme.Typography.glyph(12, .bold))
+                        .font(.system(size: CDS.Sidebar.symbol, weight: .semibold))
                         .foregroundStyle(tint)
                 }
             }
             .frame(width: 28, height: 28)
             if horizontal && hover {
                 Text(UpdateButton.label(updater, version: version))
-                    .font(Theme.Typography.heading)
-                    .foregroundStyle(Theme.text)
+                    .font(CDS.sans(CDS.Sidebar.rowFont))
+                    .foregroundStyle(CDS.Text.primary)
                     .padding(.trailing, 8)
             }
         }
@@ -407,10 +499,10 @@ private struct UpdateLabel: View {
 
     private var tint: Color {
         switch updater.phase {
-        case .ready: Theme.green
-        case .failed: Theme.red
-        case .downloading: Theme.secondary
-        default: Theme.accent
+        case .ready: CDS.Git.added
+        case .failed: CDS.Text.danger
+        case .downloading: CDS.Text.secondary
+        default: CDS.Text.accent
         }
     }
 }
@@ -435,30 +527,41 @@ struct DrawerRow: View {
     /// One-line rows: what it asks, did or is doing, under the title (the hover panel's sessions that need a look).
     var secondLine = false
 
+    typealias M = CDS.Sidebar
+
+    /// Where a row's title starts: Claude's row padding, the hub rail's shift, the 24pt leading slot and the gap (one-line
+    /// rows); on two-line rows 10, the slot and 9 (what `SessionBlock` lines its details up with).
+    static let titleInset: CGFloat = M.rowPadding + M.railShift + M.leadingSlot + M.rowGap
+    static let twoLineTitleInset: CGFloat = 10 + M.leadingSlot + 9
+
     var body: some View {
         let selected = ui.drawerSelection == row.id
-        // The hub's one-line rows get the shared row look; the two-line and drawer rows pad and fill by hand.
-        let hubRow = inHub && !twoLines
-        let content = HStack(spacing: 9) {
-            if twoLines { AgentTile(row: row, size: 24) }
-            VStack(alignment: .leading, spacing: 2) {
+        // Claude's session row (§2.7): the status dot in a 24pt leading slot, 13pt text in secondary (primary when
+        // picked), the meta in muted 12 at the end; radius 6, white 7.5% under the pointer.
+        let content = HStack(spacing: twoLines ? 9 : M.rowGap) {
+            ClaudeDot(kind: ClaudeDot.Kind(row))
+                .frame(width: M.leadingSlot, height: twoLines ? 18 : M.leadingSlot)
+                .frame(maxHeight: twoLines ? .infinity : nil, alignment: .top)
+            VStack(alignment: .leading, spacing: 0) {
                 Text(title)
-                    .font(row.unread ? Theme.Typography.bodyStrong : Theme.Typography.body)
-                    .foregroundStyle(row.unread || row.session.running ? Theme.text : Theme.text.opacity(0.72))
+                    .font(CDS.sans(M.rowFont))
+                    .foregroundStyle(selected && !plain ? CDS.Text.primary : CDS.Text.secondary)
                     .lineLimit(1)
+                    .frame(minHeight: twoLines ? nil : M.rowHeight - 4)
                 if twoLines {
                     HStack(spacing: 4) {
                         if showsKept {
-                            Text(row.projectName).foregroundStyle(Theme.tertiary)
-                            Text("·").foregroundStyle(Theme.tertiary)
+                            Text(row.projectName).foregroundStyle(CDS.Text.muted)
+                            Text("·").foregroundStyle(CDS.Text.muted)
                             status
-                            if !row.entry.kept { Text("· not pinned").foregroundStyle(Theme.tertiary) }
+                            if !row.entry.kept { Text("· not pinned").foregroundStyle(CDS.Text.muted) }
                         } else {
                             meta
                         }
                     }
-                    .font(Theme.Typography.caption)
+                    .font(CDS.sans(CDS.RowControl.detail.0))
                     .lineLimit(1)
+                    .padding(.top, 1)
                 } else if secondLine {
                     DetailLine(row: row)
                 }
@@ -467,30 +570,29 @@ struct DrawerRow: View {
             Spacer(minLength: 6)
 
             if selected && !plain {
-                AgentActions(row: row, store: store, size: 22)
+                AgentActions(row: row, store: store)
             } else if !twoLines {
                 // In a hub block the actions are laid over this spot instead: the status steps aside without the
                 // row changing size.
                 Group { if showsKept { status } else { meta } }
-                    .font(Theme.Typography.caption.monospacedDigit()).lineLimit(1).truncationMode(.middle)
+                    .font(CDS.sans(CDS.RowControl.detail.0).monospacedDigit()).lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: busy ? 170 : 110, alignment: .trailing)
                     .fixedSize(horizontal: busy, vertical: false)
                     .layoutPriority(busy ? 2 : 0)
                     .opacity(selected && plain ? 0 : 1)
+                    .padding(.trailing, 6)
             }
         }
-        Group {
-            if hubRow {
-                content.rowHighlight(selected && !plain)
-            } else {
-                content
-                    .padding(.leading, 10)
-                    .padding(.trailing, selected ? 3 : 10)
-                    .frame(height: twoLines ? 44 : nil)
-                    .frame(maxHeight: twoLines ? 44 : .infinity)
-                    .background(Theme.Radius.shape(Theme.Radius.md).fill(selected && !plain ? Theme.Fill.hover : Theme.Fill.rest))
-            }
-        }
+        let shape = RoundedRectangle(cornerRadius: M.radius, style: .continuous)
+        content
+            .padding(.leading, twoLines ? 10 : M.rowPadding + M.railShift)
+            .padding(.trailing, selected && !plain ? CDS.RowControl.inset : M.rowPadding)
+            .padding(.vertical, twoLines ? 6 : (secondLine ? 4 : 1))
+            .frame(minHeight: twoLines ? 44 : M.rowHeight)
+            .frame(maxHeight: twoLines ? 44 : (inHub && !plain ? .infinity : nil))
+            .background(shape.fill(selected && !plain ? CDS.Fill.ghostHover : Color.clear))
+            .contentShape(shape)
+            .motion(Theme.Motion.hover, value: selected)
         .contentShape(Rectangle())
         .onTapGesture { store.openAgent(row.id) }
         .opensOnFirstClick()
@@ -503,6 +605,15 @@ struct DrawerRow: View {
         .accessibilityAction { store.openAgent(row.id) }
     }
 
+    /// The status in words keeps a colour only where Claude's dots have one: amber waiting, blue done and unread.
+    private var statusColor: Color {
+        switch row.group {
+        case .needsYou: CDS.Text.warning
+        case .done: CDS.Text.accent
+        default: CDS.Text.muted
+        }
+    }
+
     /// Working, or done with something still running: the status says more than the end of the title.
     private var busy: Bool { row.session.running || !row.tasks.isEmpty }
 
@@ -513,7 +624,7 @@ struct DrawerRow: View {
         for word in (highlight ?? "").lowercased().split(separator: " ") {
             var from = lower.startIndex
             while let range = lower.range(of: word, range: from..<lower.endIndex) {
-                if let r = Range(NSRange(range, in: lower), in: text) { text[r].foregroundColor = Theme.amber }
+                if let r = Range(NSRange(range, in: lower), in: text) { text[r].foregroundColor = CDS.Fill.warning }
                 from = range.upperBound
             }
         }
@@ -528,11 +639,11 @@ struct DrawerRow: View {
                 // Its age moves with the same clock as the one VoiceOver is told.
                 Ticking(coarse: true) { now in
                     let text = row.statusText(now: now)
-                    Text(text).foregroundStyle(row.statusColor)
+                    Text(text).foregroundStyle(statusColor)
                 }
                 if let tasks = row.tasksText {
-                    Text("·").foregroundStyle(Theme.tertiary)
-                    Text(tasks).foregroundStyle(Theme.claude)
+                    Text("·").foregroundStyle(CDS.Text.muted)
+                    Text(tasks).foregroundStyle(CDS.Text.muted)
                 }
             }
         }
@@ -559,7 +670,7 @@ extension DrawerRow {
             }
             if let tasks = row.tasksText { Text("· \(tasks)") }
         }
-        .foregroundStyle(Theme.tertiary)
+        .foregroundStyle(CDS.Text.muted)
     }
 }
 
@@ -570,16 +681,17 @@ struct DetailLine: View {
     var body: some View {
         Group {
             if row.session.running {
-                Text(row.activity?.text ?? "Working").foregroundStyle(Theme.secondary)
+                Text(row.activity?.text ?? "Working").foregroundStyle(CDS.Text.muted)
             } else if !row.summaryText.characters.isEmpty {
-                Text(row.summaryText).foregroundStyle(Theme.secondary)
+                Text(row.summaryText).foregroundStyle(CDS.Text.muted)
             } else if !row.tasks.isEmpty {
                 RunningLine(tasks: row.tasks)
             } else {
                 Text(" ")
             }
         }
-        .font(Theme.Typography.meta)
+        // A second line as Claude's: footnote 12/15, muted.
+        .font(CDS.sans(CDS.RowControl.detail.0))
         .lineLimit(1)
         .truncationMode(.tail)
     }
@@ -608,7 +720,8 @@ struct NewSessionRow: View {
         let folders = store.agentFolders
         HStack(spacing: 5) {
             Button { store.startScratchSession() } label: { NewSessionLabel(style: style) }
-                .buttonStyle(HoverFillButtonStyle())
+                .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Sidebar.radius, style: .continuous),
+                                                  rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
                 .focused($scratchFocused)
                 .tip("New session", "Scratch chat, no folder · or pick a project", focused: scratchFocused)
 
@@ -638,7 +751,7 @@ struct NewSessionRow: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .foregroundStyle(Theme.tertiary)
+        .foregroundStyle(CDS.Text.muted)
         .frame(width: 20, height: 22)
         .focused($menuFocused)
         .tip("New session in…", "Every project, by name", focused: menuFocused)
@@ -667,41 +780,33 @@ struct NewSessionRow: View {
     }
 }
 
-/// The new-session row's button face: a "+" (except beside a bar cell) and the label, brighter on hover.
+/// The new-session row's button face: Claude's New row (§2.4), its 18pt #2c2c2a circle with a bold + in the 24pt leading
+/// slot (muted 25% and primary on hover), then 13pt secondary text, primary on hover.
 private struct NewSessionLabel: View {
     let style: NewSessionRow.Style
     @Environment(\.hoverFillHovering) private var hover
+    typealias M = CDS.Sidebar
 
     var body: some View {
-        HStack(spacing: 9) {
-            if style != .detail { plus }
-            Text("New session").font(Theme.Typography.body).foregroundStyle(hover ? Theme.text : Theme.secondary)
+        HStack(spacing: style == .twoLines ? 9 : M.rowGap) {
+            Image(systemName: "plus")
+                .font(.system(size: M.newGlyph, weight: .bold))
+                .foregroundStyle(hover ? CDS.Text.primary : CDS.Text.secondary)
+                .frame(width: M.newCircle, height: M.newCircle)
+                .background(Circle().fill(hover ? CDS.Text.muted.opacity(0.25) : M.newCircleFill))
+                .frame(width: M.leadingSlot, height: M.leadingSlot)
+            Text("New session").font(CDS.sans(M.rowFont)).foregroundStyle(hover ? CDS.Text.primary : CDS.Text.secondary)
             Spacer(minLength: 4)
         }
-        .padding(.leading, leading)
+        .padding(.leading, style == .twoLines ? 10 : M.rowPadding + M.railShift)
+        .frame(minHeight: M.rowHeight)
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
     }
-
-    private var leading: CGFloat {
-        switch style {
-        case .drawer: 6
-        case .detail: 8
-        case .twoLines: 10
-        }
-    }
-
-    @ViewBuilder private var plus: some View {
-        let size: CGFloat = style == .twoLines ? 24 : 18
-        Image(systemName: "plus")
-            .font(Theme.Typography.glyph(style == .twoLines ? 11 : 10, .bold))
-            .foregroundStyle(hover ? Theme.text : Theme.secondary)
-            .frame(width: size, height: size)
-            .background(Tile.shape(size).fill(hover ? Theme.Fill.selected : Theme.Fill.field))
-    }
 }
 
-/// A listed project in the new-session row: its colour, its initials, its name on hover.
+/// A listed project in the new-session row: its initials on a neutral 20pt square (Claude's xs control: radius 5, white
+/// 10%, 14% on hover), its colour as a 6pt dot in the corner, its name on hover.
 private struct ProjectTile: View {
     let folder: String
     let name: String
@@ -712,8 +817,9 @@ private struct ProjectTile: View {
 
     var body: some View {
         Button(action: action) { ProjectTileFace(initials: initials, color: color) }
-            // The face does its own hover look (a ring), so the style adds no fill.
-            .buttonStyle(HoverFillButtonStyle(shape: Theme.Radius.shape(Theme.Radius.xs), hover: .clear, pressed: .clear))
+            // The face does its own hover look, so the style adds no fill.
+            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: 5, style: .continuous), rest: .clear,
+                                              hover: .clear, pressed: .clear))
             .accessibilityLabel("New session in \(name)")
             .focused($focused)
             .tip("New session in \(name)", folder.replacingOccurrences(of: NSHomeDirectory(), with: "~"), focused: focused)
@@ -726,14 +832,19 @@ private struct ProjectTileFace: View {
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
-        let shape = Theme.Radius.shape(Theme.Radius.xs + 1)
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
         Text(initials)
-            .font(.system(size: 9.5, weight: .bold, design: .rounded))
-            .foregroundStyle(color == nil ? Theme.text.opacity(0.88) : Theme.onTint)
+            .font(CDS.sans(10, .medium))
+            .foregroundStyle(hover ? CDS.Text.primary : CDS.Text.secondary)
             .frame(width: 22, height: 22)
-            .background(shape.fill(color ?? Theme.Fill.tile))
-            .opacity(hover ? 1 : 0.8)
-            .overlay { if hover { shape.strokeBorder(Color.white.opacity(0.7), lineWidth: 1.5).padding(-2.5) } }
+            .background(shape.fill(hover ? CDS.Fill.secondaryHover : CDS.Fill.secondary))
+            .overlay(alignment: .topTrailing) {
+                if let color {
+                    Circle().fill(color).frame(width: 5, height: 5)
+                        .background(Circle().fill(Color.black).frame(width: 8, height: 8))
+                        .offset(x: 2, y: -2)
+                }
+            }
             .contentShape(shape)
             .motion(Theme.Motion.hover, value: hover)
     }

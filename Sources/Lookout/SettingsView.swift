@@ -1,6 +1,9 @@
 import SwiftUI
 import ApplicationServices
 
+/// Settings, drawn as Claude's own Settings pages are (docs/design/spec/settings.md): titled sections 40 apart, rows of a
+/// label, a muted description and a control on the trailing edge, split by faint lines and never boxed; lists in a nest
+/// card. Straight on the island's black.
 struct SettingsView: View {
     @Bindable var store: Store
     let hub: HubState
@@ -22,7 +25,7 @@ struct SettingsView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Space.lg) {
+                VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
                     account
                     notifications
                     bots
@@ -31,7 +34,10 @@ struct SettingsView: View {
                     updates.id(Self.updatesID)
                     general
                 }
-                .padding(Theme.Space.lg)
+                // The spec's `px-xl pt-2 pb-lg`, kept in the island's narrower panel; 8 more on top, under the hub's header.
+                .padding(.horizontal, CDS.Settings.pagePadX)
+                .padding(.top, CDS.Settings.pageTop + 8)
+                .padding(.bottom, CDS.Settings.pageBottom)
             }
             .scrollIndicators(.never)
             // Check for Updates asked for its section: the page was just opened, or was open and scrolled elsewhere.
@@ -47,39 +53,48 @@ struct SettingsView: View {
         else { proxy.scrollTo(id, anchor: .top) }
     }
 
+    private var footnote: (CGFloat, CGFloat) { CDS.Density.comfortable.footnote }
+
     // MARK: Sections
 
     private var account: some View {
-        section("GitHub") {
-            HStack(spacing: 10) {
-                Avatar(url: store.me?.avatarUrl, size: 30)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(store.me.map { "@\($0.login)" } ?? "Not connected").font(Theme.Typography.title)
-                    Text(store.unreachable ? "Couldn't reach GitHub" : store.tokenSource.map { "Token from \($0.rawValue)" } ?? (store.authError ?? ""))
-                        .font(Theme.Typography.meta)
-                        .foregroundStyle(store.unreachable ? Theme.amber : store.authError == nil ? Theme.tertiary : Theme.red)
-                        .lineLimit(2)
-                }
-                Spacer()
-                if store.authError != nil {
-                    ActionButton("Retry") { store.refreshNow() }
-                }
-                if store.tokenSource == .keychain {
-                    ActionButton("Use gh CLI") { store.setToken(nil) }
+        SettingsSection("GitHub") {
+            // The row's `leading` slot: the avatar, 12 before the text.
+            HStack(spacing: 12) {
+                Avatar(url: store.me?.avatarUrl, size: 32)
+                SettingsRow(store.me.map { "@\($0.login)" } ?? "Not connected",
+                            description: store.unreachable ? "Couldn't reach GitHub"
+                                : store.tokenSource.map { "Token from \($0.rawValue)" } ?? (store.authError ?? ""),
+                            descriptionColor: store.unreachable ? CDS.Text.warning
+                                : store.authError == nil ? CDS.Text.muted : CDS.Text.danger) {
+                    HStack(spacing: 8) {
+                        if store.authError != nil {
+                            ActionButton("Retry") { store.refreshNow() }
+                        }
+                        if store.tokenSource == .keychain {
+                            ActionButton("Use gh CLI") { store.setToken(nil) }
+                        }
+                    }
                 }
             }
-            HStack(spacing: 6) {
-                SecureField("Paste a personal access token (optional)", text: $token).fieldStyle()
-                    .accessibilityLabel("GitHub personal access token")
-                    .onSubmit(saveToken)
-                ActionButton("Save", height: Theme.Metrics.field, action: saveToken)
-                    .disabled(token.isEmpty)
-            }
-            // A refusal keeps the field and what was typed; it is said where it shows.
-            if let tokenError {
-                Text(tokenError).font(Theme.Typography.meta).foregroundStyle(Theme.red).fixedSize(horizontal: false, vertical: true)
-            }
-            hint("Uses `gh auth token` by default. A pasted token is kept in the Keychain and needs `repo` scope for private repos.")
+            SettingsDivider()
+            // The field goes under the row (its `below`): beside the text it would leave the island no room.
+            SettingsRow("Personal access token",
+                        description: "Uses `gh auth token` by default. A pasted token is kept in the Keychain and needs `repo` scope for private repos.",
+                        below: AnyView(VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                SettingsTextField(placeholder: "Paste a personal access token (optional)", text: $token, secure: true,
+                                                  invalid: tokenError != nil, accessibilityLabel: "GitHub personal access token",
+                                                  onSubmit: saveToken)
+                                ActionButton("Save", height: CDS.Settings.field, action: saveToken)
+                                    .disabled(token.isEmpty)
+                            }
+                            // A refusal keeps the field and what was typed; it is said where it shows.
+                            if let tokenError {
+                                Text(tokenError).cdsText(CDS.Density.comfortable.body, .regular, CDS.Text.danger)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }))
         }
     }
 
@@ -113,14 +128,13 @@ struct SettingsView: View {
 
     private var notifications: some View {
         let blocked = store.settings.notifications && notificationsBlocked
-        return section("Notifications") {
-            toggle("Desktop notifications", isOn: $store.settings.notifications)
+        return SettingsSection("Notifications") {
+            SettingsRow("Desktop notifications") {
+                SettingsSwitch("Desktop notifications", isOn: $store.settings.notifications)
+            }
             if blocked {
-                HStack(spacing: 8) {
-                    Text("macOS is blocking Lookout's notifications. Allow them in System Settings › Notifications.")
-                        .font(Theme.Typography.caption).foregroundStyle(Theme.amber)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
+                SettingsRow(nil, description: "macOS is blocking Lookout's notifications. Allow them in System Settings › Notifications.",
+                            descriptionColor: CDS.Text.warning) {
                     ActionButton("Open Settings") {
                         let id = Bundle.main.bundleIdentifier.map { "?id=\($0)" } ?? ""
                         if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension\(id)") {
@@ -129,28 +143,29 @@ struct SettingsView: View {
                     }
                 }
             }
-            toggle("Review requests from any repo", isOn: $store.settings.reviewRequests)
-            HStack {
-                Text("Snooze").font(Theme.Typography.body)
-                Spacer()
+            SettingsDivider()
+            SettingsRow("Review requests from any repo") {
+                SettingsSwitch("Review requests from any repo", isOn: $store.settings.reviewRequests)
+            }
+            SettingsDivider()
+            SettingsRow("Snooze", description: "Snoozing silences banners; the inbox keeps filling up.") {
                 if store.isSnoozed, let until = store.settings.snoozeUntil {
-                    Text("Until \(until.formatted(date: .omitted, time: .shortened))")
-                        .font(Theme.Typography.control).foregroundStyle(Theme.purple)
-                    ActionButton("Resume") { store.snooze(for: nil) }
+                    HStack(spacing: 12) {
+                        Text("Until \(until.formatted(date: .omitted, time: .shortened))")
+                            .cdsText(footnote, .regular, CDS.Text.secondary)
+                        ActionButton("Resume") { store.snooze(for: nil) }
+                    }
                 } else {
-                    Menu("Off") {
+                    SettingsSelect(value: "Off") {
                         Button("30 minutes") { store.snooze(for: 1800) }
                         Button("1 hour") { store.snooze(for: 3600) }
                         Button("3 hours") { store.snooze(for: 3 * 3600) }
                         Button("Until tomorrow 9:00") { store.snoozeUntilTomorrow() }
                     }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
                     .accessibilityLabel("Snooze")
                     .accessibilityValue("Off")
                 }
             }
-            hint("Snoozing silences banners; the inbox keeps filling up.")
         }
         // What the system says is read when Settings opens and when the app comes back from System Settings, where it changes.
         .task { notificationsBlocked = await Notifier.isBlocked() }
@@ -164,50 +179,57 @@ struct SettingsView: View {
     }
 
     private var bots: some View {
-        section("Bots") {
-            toggle("Treat GitHub Apps (…[bot]) as bots", isOn: $store.settings.treatAppsAsBots)
-            HStack(spacing: 6) {
-                TextField("Add a handle, e.g. vercel", text: $botInput)
-                    .fieldStyle()
-                    .accessibilityLabel("Bot handle")
-                    .onSubmit(addBot)
-                ActionButton("Add", height: Theme.Metrics.field, action: addBot).disabled(botInput.isEmpty)
+        SettingsSection("Bots", description: "Bot comments still arrive, but silently and in their own Bots tab.") {
+            SettingsRow("Treat GitHub Apps (…[bot]) as bots") {
+                SettingsSwitch("Treat GitHub Apps (…[bot]) as bots", isOn: $store.settings.treatAppsAsBots)
             }
-            if !store.settings.botHandles.isEmpty {
-                FlowLayout(spacing: 6) {
-                    ForEach(store.settings.botHandles, id: \.self) { handle in
-                        RemovableTag(text: "@\(handle)", removeLabel: "Remove @\(handle)") { store.removeBot(handle) }
-                    }
-                }
-            }
-            hint("Bot comments still arrive, but silently and in their own Bots tab.")
+            SettingsDivider()
+            // A list (settings.md §4): its header row, the items in a nest card (or a line when there are none), then the
+            // field that adds one, under it: a handle has to be typed, so the add control can't be a lone button.
+            SettingsRow("Bot handles", description: "Accounts that post like a bot without being a GitHub App.",
+                        below: AnyView(VStack(alignment: .leading, spacing: CDS.Settings.rowPad) {
+                            if store.settings.botHandles.isEmpty {
+                                Text("No bot handles yet.").cdsText(footnote, .regular, CDS.Text.secondary)
+                            } else {
+                                SettingsNest {
+                                    ForEach(store.settings.botHandles, id: \.self) { handle in
+                                        SettingsRow("@\(handle)") {
+                                            Button("Remove") { store.removeBot(handle) }
+                                                .buttonStyle(SettingsButtonStyle(size: .sm))
+                                                .accessibilityLabel("Remove @\(handle)")
+                                        }
+                                    }
+                                }
+                            }
+                            HStack(spacing: 8) {
+                                SettingsTextField(placeholder: "Add a handle, e.g. vercel", text: $botInput,
+                                                  accessibilityLabel: "Bot handle", onSubmit: addBot)
+                                ActionButton("Add", height: CDS.Settings.field, action: addBot).disabled(botInput.isEmpty)
+                            }
+                        }))
         }
     }
 
     private var shortcuts: some View {
-        section("Shortcuts") {
-            ForEach(ShortcutAction.allCases.filter { (!$0.isAgents || store.agents.enabled) && (!$0.isRouter || store.routerOn) }) { action in
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(action.title).font(Theme.Typography.body)
-                        if action.isGlobal {
-                            Text("Works from any app").font(Theme.Typography.caption).foregroundStyle(Theme.tertiary)
-                            if (store.shortcut(action).isModifierTap || store.shortcut(action).mouseButton != nil) && !accessibilityTrusted {
+        SettingsSection("Shortcuts",
+                        description: "Click a shortcut, then press the new keys (Esc cancels, Delete clears). App-wide ones also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on.") {
+            let actions = ShortcutAction.allCases.filter { (!$0.isAgents || store.agents.enabled) && (!$0.isRouter || store.routerOn) }
+            ForEach(actions) { action in
+                if action != actions.first { SettingsDivider() }
+                let needsAccess = action.isGlobal && !accessibilityTrusted
+                    && (store.shortcut(action).isModifierTap || store.shortcut(action).mouseButton != nil)
+                SettingsRow(action.title,
+                            description: action.isGlobal ? "Works from any app" : nil,
+                            below: needsAccess ? AnyView(
                                 Text("Needs Accessibility access (System Settings › Privacy & Security)")
-                                    .font(Theme.Typography.caption).foregroundStyle(Theme.amber)
-                            }
-                        }
-                    }
-                    Spacer()
+                                    .cdsText(footnote, .regular, CDS.Text.warning)
+                                    .fixedSize(horizontal: false, vertical: true)) : nil) {
                     ShortcutRecorder(action: action, store: store)
                 }
             }
-            HStack(spacing: Theme.Space.md) {
-                Spacer()
-                if let restoreError {
-                    Text(restoreError).font(Theme.Typography.caption).foregroundStyle(Theme.amber)
-                        .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
-                }
+            SettingsDivider()
+            SettingsRow("All shortcuts", description: restoreError ?? "Back to the keys Lookout comes with",
+                        descriptionColor: restoreError == nil ? CDS.Text.muted : CDS.Text.warning) {
                 ActionButton("Restore defaults") {
                     // Beside the button, and said at each attempt, a repeated one too.
                     restoreError = store.restoreDefaultShortcuts()?.message
@@ -216,7 +238,6 @@ struct SettingsView: View {
                 .disabled(!store.hasCustomShortcuts)
             }
             .onChange(of: store.hasCustomShortcuts) { restoreError = nil }
-            hint("Click a shortcut, then press the new keys (Esc cancels, Delete clears). App-wide ones also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on.")
         }
         // Granted in System Settings, which Lookout comes back from.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -225,85 +246,61 @@ struct SettingsView: View {
     }
 
     private var extensions: some View {
-        section("Extensions") {
+        SettingsSection("Extensions") {
             let installed = Claude.isInstalled
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "asterisk").font(Theme.Typography.glyph(10, .bold)).foregroundStyle(Theme.claude)
-                        Text("Claude sessions").font(Theme.Typography.body)
-                    }
-                    Text("Extension for the Claude desktop app")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.tertiary)
-                }
-                Spacer()
-                Toggle("Claude sessions", isOn: Binding(get: { store.agents.enabled }, set: { store.setAgentsEnabled($0) }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
+            SettingsRow("Claude sessions",
+                        description: !installed && !store.agents.enabled ? "Needs the Claude desktop app, with Claude Code sessions."
+                            : store.agents.enabled
+                            ? "Your Claude Code sessions on the bar: what is working, done or waiting. Sessions with new activity "
+                                + "arrive as pending; keep the ones you use. Lookout never writes to the app's files."
+                            : "Your Claude Code sessions on the bar, to see which are working, done or waiting, and jump between them.",
+                        adornment: AnyView(Image(systemName: "asterisk").font(.system(size: 11, weight: .bold)).foregroundStyle(CDS.clay))) {
+                SettingsSwitch("Claude sessions", isOn: Binding(get: { store.agents.enabled }, set: { store.setAgentsEnabled($0) }))
                     .disabled(!installed && !store.agents.enabled)
             }
-            if !installed && !store.agents.enabled {
-                hint("Needs the Claude desktop app, with Claude Code sessions.")
-            } else if store.agents.enabled {
+            if store.agents.enabled {
+                SettingsDivider()
                 mutedFolders
-                Hairline()
+                SettingsDivider()
                 sessionIcons
-                Hairline()
-                hint("Your Claude Code sessions on the bar: what is working, done or waiting. "
-                     + "Sessions with new activity arrive as pending; keep the ones you use. Lookout never writes to the app's files.")
-                Hairline()
+                SettingsDivider()
                 router
-            } else {
-                hint("Your Claude Code sessions on the bar, to see which are working, done or waiting, and jump between them.")
             }
         }
     }
 
     /// The Router: its switch, then what it needs and how each part is doing (the hook, Claude Code, routing).
     @ViewBuilder private var router: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.branch").font(Theme.Typography.glyph(10, .bold)).foregroundStyle(Theme.secondary)
-                    Text("Router").font(Theme.Typography.body)
-                }
-                Text("One chat above your sessions: what needs you, and your answers passed on")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.tertiary)
-            }
-            Spacer()
-            Toggle("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setRouterEnabled($0) }))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+        SettingsRow("Router", description: "One chat above your sessions: what needs you, and your answers passed on",
+                    adornment: AnyView(Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CDS.Text.secondary))) {
+            SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setRouterEnabled($0) }))
         }
         .id(Self.routerID)
         // Off, but taking the hook or the plugin out failed: that stays in sight, with a way to try again.
         if !store.router.enabled, let error = store.routerRemovalError {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Couldn't take the Router out of Claude Code: \(error)")
-                    .font(Theme.Typography.meta).foregroundStyle(Theme.red).fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+            SettingsRow(nil, description: "Couldn't take the Router out of Claude Code: \(error)", descriptionColor: CDS.Text.danger) {
                 ActionButton("Try again") { store.retryRouterRemoval() }
             }
             .onAppear { Announce.say("Couldn't take the Router out of Claude Code") }
         }
         if store.router.enabled {
-            toggle("Router only", detail: "Hide the session tiles; the Router stands in for them",
-                   isOn: Binding(get: { store.router.routerOnly }, set: { store.setRouterOnly($0) }))
-            VStack(alignment: .leading, spacing: 4) {
-                routerLine(hookStatus.0, color: hookStatus.1)
-                let plugin = Self.pluginLine(store.routerPluginStatus, error: store.routerPluginError)
-                routerLine(plugin.0, color: plugin.1)
-                routerLine(claudeCodeStatus.0, color: claudeCodeStatus.1)
-                routerLine(store.hasTypesafeKey ? "Routing helped by Jev, with your TypeSafe key"
-                           : "Routing without help: a TypeSafe key (under Icons) lets Jev pick the session", color: Theme.tertiary)
+            SettingsRail {
+                SettingsRow("Router only", description: "Hide the session tiles; the Router stands in for them") {
+                    SettingsSwitch("Router only", isOn: Binding(get: { store.router.routerOnly }, set: { store.setRouterOnly($0) }))
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    SettingsStatusLine(text: hookStatus.0, color: hookStatus.1)
+                    let plugin = Self.pluginLine(store.routerPluginStatus, error: store.routerPluginError)
+                    SettingsStatusLine(text: plugin.0, color: plugin.1)
+                    SettingsStatusLine(text: claudeCodeStatus.0, color: claudeCodeStatus.1)
+                    SettingsStatusLine(text: store.hasTypesafeKey ? "Routing helped by Jev, with your TypeSafe key"
+                                       : "Routing without help: a TypeSafe key (under Icons) lets Jev pick the session", color: Theme.tertiary)
+                }
+                SettingsNote("Lookout adds a hook to Claude Code's settings (`~/.claude/settings.json`) so a session's questions can be answered "
+                             + "here, and a Claude Code plugin so your messages reach sessions as yours; turning the Router off takes both out. The Router is a Claude Code session Lookout runs: it only messages your "
+                             + "sessions, answers their forms and starts new ones when you ask. \(store.shortcut(.router).display) opens it.")
             }
-            hint("Lookout adds a hook to Claude Code's settings (`~/.claude/settings.json`) so a session's questions can be answered "
-                 + "here, and a Claude Code plugin so your messages reach sessions as yours; turning the Router off takes both out. The Router is a Claude Code session Lookout runs: it only messages your "
-                 + "sessions, answers their forms and starts new ones when you ask. \(store.shortcut(.router).display) opens it.")
         }
     }
 
@@ -335,94 +332,90 @@ struct SettingsView: View {
         return ("Claude Code not found: it comes with the Claude desktop app", Theme.amber)
     }
 
-    private func routerLine(_ text: String, color: Color) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Circle().fill(color).frame(width: 6, height: 6).accessibilityHidden(true)
-            Text(text).font(Theme.Typography.meta).foregroundStyle(color == Theme.tertiary ? Theme.tertiary : color)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     @ViewBuilder private var sessionIcons: some View {
-        toggle("Icons picked for you", detail: "By Jev, from TypeSafe",
-               isOn: Binding(get: { store.agents.iconsEnabled }, set: { store.setIconsEnabled($0) }))
+        SettingsRow("Icons picked for you", description: "By Jev, from TypeSafe") {
+            SettingsSwitch("Icons picked for you", isOn: Binding(get: { store.agents.iconsEnabled }, set: { store.setIconsEnabled($0) }))
+        }
         if store.agents.iconsEnabled {
-            if store.hasTypesafeKey {
-                HStack {
-                    Label("TypeSafe API key saved in the Keychain", systemImage: "key.fill")
-                        .font(Theme.Typography.meta)
-                        .foregroundStyle(Theme.secondary)
-                    Spacer()
-                    ActionButton("Remove") { store.setTypesafeKey(nil) }
+            SettingsRail {
+                if store.hasTypesafeKey {
+                    SettingsRow("TypeSafe API key", description: "Saved in the Keychain") {
+                        ActionButton("Remove") { store.setTypesafeKey(nil) }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        SettingsTextField(placeholder: "Paste a TypeSafe API key", text: $typesafeKey, secure: true,
+                                          accessibilityLabel: "TypeSafe API key", onSubmit: saveTypesafeKey)
+                        ActionButton("Save", height: CDS.Settings.field, action: saveTypesafeKey)
+                            .disabled(typesafeKey.isEmpty)
+                    }
                 }
-            } else {
-                HStack(spacing: 6) {
-                    SecureField("Paste a TypeSafe API key", text: $typesafeKey).fieldStyle()
-                        .accessibilityLabel("TypeSafe API key")
-                        .onSubmit(saveTypesafeKey)
-                    ActionButton("Save", height: Theme.Metrics.field, action: saveTypesafeKey)
-                        .disabled(typesafeKey.isEmpty)
+                if let error = store.iconError {
+                    SettingsNote(error, color: CDS.Text.warning)
+                        .onChange(of: error, initial: true) { _, now in Announce.say(now) }
                 }
+                SettingsNote("Each session in your list gets an icon instead of letters. Its title, project name and first message go to "
+                             + "TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), "
+                             + "then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, "
+                             + "about $0.0002 a session. Keys come from console.typesafe.ai.")
             }
-            if let error = store.iconError {
-                Text(error).font(Theme.Typography.meta).foregroundStyle(Theme.amber)
-                    .onChange(of: error, initial: true) { _, now in Announce.say(now) }
-            }
-            hint("Each session in your list gets an icon instead of letters. Its title, project name and first message go to "
-                 + "TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), "
-                 + "then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, "
-                 + "about $0.0002 a session. Keys come from console.typesafe.ai.")
         }
     }
 
+    /// A list (settings.md §4): the header row with its add control, the folders in a nest card, or a line when none are.
     @ViewBuilder private var mutedFolders: some View {
         let muted = store.agents.mutedFolders
         let unmuted = store.knownFolders.filter { !muted.contains($0) }
         let name = { (folder: String) in folder.isEmpty ? "Scratch chats" : store.folderName(folder) }
-        HStack {
-            Text("Muted folders").font(Theme.Typography.body)
-            Spacer()
-            Menu(muted.isEmpty ? "None" : plural(muted.count, "folder")) {
+        SettingsRow("Muted folders", description: "Their sessions stay off the bar.",
+                    below: AnyView(Group {
+                        if muted.isEmpty {
+                            Text("No muted folders.").cdsText(footnote, .regular, CDS.Text.secondary)
+                        } else {
+                            SettingsNest {
+                                ForEach(muted, id: \.self) { folder in
+                                    SettingsRow(name(folder), description: folder.isEmpty ? "Chats not tied to a folder" : folder) {
+                                        Button("Unmute") { store.setFolderMuted(folder, false) }
+                                            .buttonStyle(SettingsButtonStyle(size: .sm))
+                                            .accessibilityLabel("Unmute \(name(folder))")
+                                    }
+                                }
+                            }
+                        }
+                    })) {
+            Menu {
                 ForEach(unmuted, id: \.self) { folder in
                     Button(name(folder)) { store.setFolderMuted(folder, true) }
                 }
+            } label: {
+                Text("Mute a folder")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(SettingsButtonStyle(size: .sm))
+            .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("Muted folders")
             .accessibilityValue(muted.isEmpty ? "None" : plural(muted.count, "folder"))
             .disabled(unmuted.isEmpty)
         }
-        if !muted.isEmpty {
-            FlowLayout(spacing: 6) {
-                ForEach(muted, id: \.self) { folder in
-                    RemovableTag(text: name(folder), removeLabel: "Unmute \(name(folder))",
-                                 tip: folder.isEmpty ? "Chats not tied to a folder" : folder) {
-                        store.setFolderMuted(folder, false)
-                    }
-                }
-            }
-        }
     }
 
     private var updates: some View {
         let updater = store.updater
-        return section("Updates") {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Lookout \(updater.current)").font(Theme.Typography.body)
-                    Ticking(coarse: true) { now in
-                        Text(updateStatus(now)).font(Theme.Typography.meta).foregroundStyle(updateStatusColor)
-                    }
+        return SettingsSection("Updates") {
+            Ticking(coarse: true) { now in
+                SettingsRow("Lookout \(updater.current)", description: updateStatus(now), descriptionColor: updateStatusColor) {
+                    if updater.isRelease { updateButton }
                 }
-                Spacer()
-                if updater.isRelease { updateButton }
             }
             if updater.isRelease {
-                toggle("Check for updates automatically", isOn: Binding(
-                    get: { store.settings.checkUpdates ?? true },
-                    set: { store.settings.checkUpdates = $0 }
-                ))
+                SettingsDivider()
+                SettingsRow("Check for updates automatically") {
+                    SettingsSwitch("Check for updates automatically", isOn: Binding(
+                        get: { store.settings.checkUpdates ?? true },
+                        set: { store.settings.checkUpdates = $0 }
+                    ))
+                }
             }
         }
     }
@@ -464,42 +457,40 @@ struct SettingsView: View {
 
     private var updateStatusColor: Color {
         switch store.updater.phase {
-        case .failed: Theme.red
-        case .available, .ready: Theme.green
-        default: store.updater.checkError == nil ? Theme.tertiary : Theme.red
+        case .failed: CDS.Text.danger
+        case .available, .ready: CDS.Text.accent
+        default: store.updater.checkError == nil ? CDS.Text.muted : CDS.Text.danger
         }
     }
 
     private var general: some View {
-        section("General") {
-            HStack {
-                Text("Check every").font(Theme.Typography.body)
-                Spacer()
-                Picker("Check every", selection: $store.settings.pollInterval) {
-                    Text("30s").tag(30.0)
-                    Text("1m").tag(60.0)
-                    Text("2m").tag(120.0)
-                    Text("5m").tag(300.0)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 170)
-                .onChange(of: store.settings.pollInterval) { store.restartPolling() }
+        SettingsSection("General") {
+            SettingsRow("Check every") {
+                SettingsSegmented(label: "Check every",
+                                  options: [("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)],
+                                  selection: $store.settings.pollInterval)
+                    .onChange(of: store.settings.pollInterval) { store.restartPolling() }
             }
-            toggle("Launch at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { _, on in
-                    launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
-                }
-            if let launchError { Text(launchError).font(Theme.Typography.meta).foregroundStyle(Theme.red) }
-            toggle("Keep the bar centered on its edge", isOn: Binding(
-                get: { store.settings.centerPill ?? false },
-                set: { store.settings.centerPill = $0 }
-            ))
-            HStack {
-                hint(store.settings.centerPill == true
-                     ? "Drag the bar to any screen edge; it stays at the middle."
-                     : "Drag the bar to any screen edge.")
-                Spacer()
+            SettingsDivider()
+            SettingsRow("Launch at login", description: launchError, descriptionColor: CDS.Text.danger) {
+                SettingsSwitch("Launch at login", isOn: $launchAtLogin)
+            }
+            .onChange(of: launchAtLogin) { _, on in
+                launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
+            }
+            SettingsDivider()
+            SettingsRow("Keep the bar centered on its edge",
+                        description: store.settings.centerPill == true
+                            ? "Drag the bar to any screen edge; it stays at the middle."
+                            : "Drag the bar to any screen edge.") {
+                SettingsSwitch("Keep the bar centered on its edge", isOn: Binding(
+                    get: { store.settings.centerPill ?? false },
+                    set: { store.settings.centerPill = $0 }
+                ))
+            }
+            SettingsDivider()
+            // Destructive actions are a secondary button on their row (settings.md §3.5), never red.
+            SettingsRow("Quit Lookout", description: "Stops checking GitHub and takes the bar away until it's opened again.") {
                 ActionButton("Quit Lookout") { NSApp.terminate(nil) }
             }
         }
@@ -511,78 +502,446 @@ struct SettingsView: View {
         store.addBot(botInput)
         botInput = ""
     }
-
-    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.lg) {
-            Eyebrow(title)
-                .accessibilityAddTraits(.isHeader)
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .card()
-    }
-
-    /// Label on the left, switch on the trailing edge: the same in every section.
-    private func toggle(_ label: String, detail: String? = nil, isOn: Binding<Bool>) -> some View {
-        HStack(alignment: detail == nil ? .center : .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(Theme.Typography.body)
-                if let detail { Text(detail).font(Theme.Typography.caption).foregroundStyle(Theme.tertiary) }
-            }
-            Spacer(minLength: 8)
-            Toggle(label, isOn: isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-        }
-    }
-
-    private func hint(_ text: String) -> some View {
-        Text(.init(text))
-            .font(Theme.Typography.meta)
-            .foregroundStyle(Theme.tertiary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
 }
 
-/// A capsule with a label and a small remove button.
-private struct RemovableTag: View {
-    let text: String
-    let removeLabel: String
-    var tip: String? = nil
-    let remove: () -> Void
-    @FocusState private var removeFocused: Bool
+// MARK: - Claude's settings primitives (settings.md §2–§3, comfortable)
+
+private let comfy = CDS.Density.comfortable
+
+/// A section (§2.1): its title 15/20 at 540, an optional footnote description and a trailing action, 16 above its rows.
+/// Rows sit straight on the page, split by `SettingsDivider`s, never boxed.
+struct SettingsSection<Content: View, Action: View>: View {
+    let title: String
+    var description: String?
+    @ViewBuilder var action: () -> Action
+    @ViewBuilder var content: () -> Content
+
+    init(_ title: String, description: String? = nil, @ViewBuilder action: @escaping () -> Action,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.description = description
+        self.action = action
+        self.content = content
+    }
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(text)
-            Button(action: remove) {
-                Image(systemName: "xmark").font(Theme.Typography.glyph(8, .bold)).frame(width: 14, height: 14)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: CDS.Settings.rowGap) {
+                VStack(alignment: .leading, spacing: CDS.Settings.labelGap) {
+                    Text(title).cdsText(comfy.heading, .semibold)
+                        .accessibilityAddTraits(.isHeader)
+                    if let description {
+                        Text(.init(description)).cdsText(comfy.footnote, .regular, CDS.Text.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                action()
             }
-            .buttonStyle(HoverFillButtonStyle(shape: Circle()))
-            .foregroundStyle(Theme.tertiary)
-            .accessibilityLabel(removeLabel)
-            .focused($removeFocused)
-            .tip(removeLabel, focused: removeFocused)
+            .padding(.bottom, CDS.Settings.headerGap)
+            VStack(alignment: .leading, spacing: 0) { content() }
         }
-        .font(Theme.Typography.control)
-        .padding(.leading, 9)
-        .padding(.trailing, 5)
-        .frame(height: 24)
-        .background(Capsule().fill(Theme.Fill.hover))
-        .modifier(OptionalTip(title: tip))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-private struct OptionalTip: ViewModifier {
-    let title: String?
+extension SettingsSection where Action == EmptyView {
+    init(_ title: String, description: String? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.init(title, description: description, action: { EmptyView() }, content: content)
+    }
+}
+
+/// The 1pt white-5% line between a group's rows (`.settings-group-dividers`).
+struct SettingsDivider: View {
+    var body: some View {
+        Rectangle().fill(CDS.Settings.divider).frame(height: 1).accessibilityHidden(true)
+    }
+}
+
+private struct SettingsRowPaddingKey: EnvironmentKey { static let defaultValue = CDS.Settings.rowPad }
+
+extension EnvironmentValues {
+    /// A row's vertical padding: 12, or 0 on a rail (`[&>[role=group]]:!py-0`).
+    var settingsRowPadding: CGFloat {
+        get { self[SettingsRowPaddingKey.self] }
+        set { self[SettingsRowPaddingKey.self] = newValue }
+    }
+}
+
+/// A setting row (§2.2): label 14/20 primary, description 14/20 muted 4 below, the control 28 to the right, 12 above and
+/// below. `below` is extra UI under the row (12 under its main line). No hover fill: only the controls react.
+struct SettingsRow<Control: View>: View {
+    var label: String?
+    var description: String?
+    var descriptionColor: Color = CDS.Text.muted
+    /// A small mark before the label (the label adornment's `gap-1.5`).
+    var adornment: AnyView?
+    var below: AnyView?
+    @ViewBuilder var control: () -> Control
+    @Environment(\.settingsRowPadding) private var pad
+
+    init(_ label: String?, description: String? = nil, descriptionColor: Color = CDS.Text.muted, adornment: AnyView? = nil,
+         below: AnyView? = nil, @ViewBuilder control: @escaping () -> Control) {
+        self.label = label
+        self.description = description
+        self.descriptionColor = descriptionColor
+        self.adornment = adornment
+        self.below = below
+        self.control = control
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CDS.Settings.rowPad) {
+            HStack(alignment: .center, spacing: CDS.Settings.rowGap) {
+                VStack(alignment: .leading, spacing: CDS.Settings.labelGap) {
+                    if let label {
+                        HStack(spacing: 6) {
+                            if let adornment { adornment }
+                            Text(label).cdsText(comfy.body)
+                        }
+                    }
+                    if let description {
+                        Text(.init(description)).cdsText(comfy.body, .regular, descriptionColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                control().fixedSize()
+            }
+            if let below { below }
+        }
+        .padding(.vertical, pad)
+    }
+}
+
+extension SettingsRow where Control == EmptyView {
+    init(_ label: String?, description: String? = nil, descriptionColor: Color = CDS.Text.muted, below: AnyView? = nil) {
+        self.init(label, description: description, descriptionColor: descriptionColor, below: below) { EmptyView() }
+    }
+}
+
+/// A line in a group that isn't a row (a status, a help sentence): footnote, 12 above and below.
+struct SettingsNote: View {
+    let text: String
+    var color: Color = CDS.Text.muted
+    @Environment(\.settingsRowPadding) private var pad
+
+    init(_ text: String, color: Color = CDS.Text.muted) {
+        self.text = text
+        self.color = color
+    }
+
+    var body: some View {
+        Text(.init(text)).cdsText(comfy.footnote, .regular, color)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, pad)
+    }
+}
+
+/// The nest card (§2.4, `padding:"sm"`): the one boxed container, for a list's items. Radius 12, no fill, a 1pt white-10%
+/// ring, 12 × 8 inside; the rows in it keep their 12 and have no lines between them.
+struct SettingsNest<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) { content() }
+            .padding(.horizontal, CDS.Settings.nestPadX)
+            .padding(.vertical, CDS.Settings.nestPadY)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(RoundedRectangle(cornerRadius: CDS.Settings.nestRadius, style: .continuous)
+                .strokeBorder(CDS.border, lineWidth: 1))
+    }
+}
+
+/// The rail (§2.5): options that hang off the switch above them, behind a 1pt white-20% line, 16 apart, rows unpadded.
+struct SettingsRail<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CDS.Settings.railGap) { content() }
+            .environment(\.settingsRowPadding, 0)
+            .padding(.leading, CDS.Settings.railPad)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) { Rectangle().fill(CDS.Settings.railLine).frame(width: 1).accessibilityHidden(true) }
+            .padding(.bottom, CDS.Settings.railGap)
+    }
+}
+
+/// The text input's box (§3.1): 32 tall, radius 8, 12 in, white 5% with a 1pt white-10% ring (20% on hover); focused, a
+/// 1pt dark gap, a 1pt accent ring outside and its glow; invalid, a red ring (and the red focus).
+struct CDSFieldChrome: ViewModifier {
+    var focused: Bool
+    var invalid = false
+    var leadingPad: CGFloat = CDS.Settings.fieldPad
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
+
     func body(content: Content) -> some View {
-        if let title { content.tip(title) } else { content }
+        let shape = RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius, style: .continuous)
+        let ring = invalid ? CDS.Fill.danger : hovering && !focused && enabled ? CDS.Settings.fieldRingHover : CDS.Settings.fieldRing
+        content
+            .textFieldStyle(.plain)
+            .font(CDS.sans(comfy.body.0))
+            .foregroundStyle(CDS.Text.primary)
+            .tint(CDS.Fill.accent)
+            .padding(.leading, leadingPad)
+            .padding(.trailing, CDS.Settings.fieldPad)
+            .frame(height: CDS.Settings.field)
+            .background(shape.fill(CDS.Fill.field))
+            .overlay(shape.strokeBorder(focused ? CDS.Settings.focusGap : ring, lineWidth: 1))
+            .overlay {
+                if focused {
+                    RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius + 1, style: .continuous)
+                        .strokeBorder(invalid ? CDS.Fill.danger : CDS.Fill.accent, lineWidth: 1)
+                        .padding(-1)
+                        .shadow(color: invalid ? CDS.Settings.focusGlowDanger : CDS.Settings.focusGlow, radius: 3)
+                        .allowsHitTesting(false)
+                }
+            }
+            .opacity(enabled ? 1 : 0.4)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.06), value: hovering)
+            .animation(.easeOut(duration: 0.06), value: focused)
     }
 }
 
-/// A small bordered text button: reads as a button at rest, brightens on hover, fades only when disabled.
-/// `height` matches the field it sits beside (`Theme.Metrics.field`) or a row's controls (`Theme.Metrics.chip`).
+extension View {
+    func cdsField(focused: Bool, invalid: Bool = false, leadingPad: CGFloat = CDS.Settings.fieldPad) -> some View {
+        modifier(CDSFieldChrome(focused: focused, invalid: invalid, leadingPad: leadingPad))
+    }
+}
+
+extension View {
+    /// A placeholder in Claude's muted ink, drawn under the field's text while it's empty (a `prompt`'s colour is ignored).
+    func cdsPlaceholder(_ text: String, shown: Bool) -> some View {
+        overlay(alignment: .leading) {
+            if shown {
+                Text(text).font(CDS.sans(14)).foregroundStyle(CDS.Text.muted).lineLimit(1)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// A text input with its own focus (§3.1), secure or not.
+struct SettingsTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    var secure = false
+    var invalid = false
+    let accessibilityLabel: String
+    var onSubmit: () -> Void = {}
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            if secure {
+                SecureField("", text: $text)
+            } else {
+                TextField("", text: $text)
+            }
+        }
+        .cdsPlaceholder(placeholder, shown: text.isEmpty)
+        .focused($focused)
+        .cdsField(focused: focused, invalid: invalid)
+        .accessibilityLabel(accessibilityLabel)
+        .onSubmit(onSubmit)
+    }
+}
+
+/// The switch (§3.3): 36 × 20, a 16pt white knob that travels 16 in 120 ms with an overshoot. Off white 10% (20% on hover),
+/// on accent (lighter on hover); disabled at 40%. It reads as the system switch it stands for.
+struct CDSSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View { CDSSwitch(configuration: configuration) }
+}
+
+private struct CDSSwitch: View {
+    let configuration: ToggleStyleConfiguration
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    var body: some View {
+        let on = configuration.isOn
+        let hot = hovering && enabled
+        let size = CDS.Settings.switchSize
+        let travel = size.width - CDS.Settings.knob - 4
+        Capsule()
+            .fill(on ? (hot ? CDS.Fill.accentHover : CDS.Fill.accent) : (hot ? CDS.Settings.switchTrackHover : CDS.Settings.switchTrack))
+            .frame(width: size.width, height: size.height)
+            .overlay {
+                Circle().fill(.white)
+                    .frame(width: CDS.Settings.knob, height: CDS.Settings.knob)
+                    .shadow(color: .black.opacity(0.24), radius: 2, y: 1)
+                    .offset(x: on ? travel / 2 : -travel / 2)
+            }
+            .animation(reduce ? nil : .timingCurve(0.34, 1.3, 0.64, 1, duration: 0.12), value: on)
+            .animation(.easeOut(duration: 0.06), value: hot)
+            .opacity(enabled ? 1 : 0.4)
+            .contentShape(Capsule())
+            .onTapGesture { if enabled { configuration.isOn.toggle() } }
+            .onHover { hovering = $0 }
+            .accessibilityRepresentation {
+                Toggle(isOn: configuration.$isOn) { configuration.label }
+            }
+    }
+}
+
+/// A row's switch, labelled by the row.
+struct SettingsSwitch: View {
+    let label: String
+    @Binding var isOn: Bool
+
+    init(_ label: String, isOn: Binding<Bool>) {
+        self.label = label
+        _isOn = isOn
+    }
+
+    var body: some View {
+        Toggle(label, isOn: $isOn).labelsHidden().toggleStyle(CDSSwitchStyle())
+    }
+}
+
+/// The contained segmented control (§3.4): a 32 white-5% track with 1pt padding; the picked item on a white-10% thumb
+/// (radius 7, its 1pt white-10% ring) that slides; items 12 in, 14/20, muted until picked or hovered.
+struct SettingsSegmented<Value: Hashable>: View {
+    let label: String
+    let options: [(title: String, value: Value)]
+    @Binding var selection: Value
+    @State private var hovered: Value?
+    @Namespace private var thumb
+    @Environment(\.accessibilityReduceMotion) private var reduce
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options.indices, id: \.self) { i in
+                let option = options[i]
+                let picked = option.value == selection
+                Button { selection = option.value } label: {
+                    Text(option.title)
+                        .cdsText(comfy.body, .regular, picked || hovered == option.value ? CDS.Text.primary : CDS.Text.muted)
+                        .padding(.horizontal, CDS.Settings.segmentPad)
+                        .frame(maxHeight: .infinity)
+                        .background {
+                            if picked {
+                                RoundedRectangle(cornerRadius: CDS.Settings.segmentThumbRadius, style: .continuous)
+                                    .fill(CDS.Fill.secondary)
+                                    .overlay(RoundedRectangle(cornerRadius: CDS.Settings.segmentThumbRadius, style: .continuous)
+                                        .strokeBorder(CDS.border, lineWidth: 1))
+                                    .shadow(color: CDS.fieldShadow, radius: 1, y: 1)
+                                    .matchedGeometryEffect(id: "thumb", in: thumb)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hovered = $0 ? option.value : (hovered == option.value ? nil : hovered) }
+                .accessibilityLabel(option.title)
+                .accessibilityAddTraits(picked ? .isSelected : [])
+            }
+        }
+        .animation(reduce ? nil : .timingCurve(0.165, 0.84, 0.44, 1, duration: 0.2), value: selection)
+        .padding(1)
+        .frame(height: CDS.Settings.field)
+        .background(RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius, style: .continuous).fill(CDS.Fill.field))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(label)
+    }
+}
+
+/// The select trigger (§3.2, outline): 32 tall, radius 8, 8 in, white 5% with a 10% ring (20% on hover), the value 14/20
+/// and a 16 caret in muted (secondary on hover). Its menu is the system's: a native menu can't be drawn as CDS's popup.
+struct SettingsSelect<Items: View>: View {
+    let value: String
+    var placeholder = false
+    var width: CGFloat = CDS.Settings.selectWidth
+    @ViewBuilder var items: () -> Items
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius, style: .continuous)
+        Menu { items() } label: {
+            HStack(spacing: 6) {
+                Text(value).cdsText(comfy.body, .regular, placeholder ? CDS.Text.muted : CDS.Text.primary).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(hovering ? CDS.Text.secondary : CDS.Text.muted)
+                    .padding(.trailing, 2)
+            }
+            .padding(.horizontal, 8)
+            .frame(width: width, height: CDS.Settings.field)
+            .background(shape.fill(CDS.Fill.field))
+            .overlay(shape.strokeBorder(hovering && enabled ? CDS.Settings.fieldRingHover : CDS.Settings.fieldRing, lineWidth: 1))
+            .contentShape(shape)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .opacity(enabled ? 1 : 0.4)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// CDS Button (forms-buttons.md §4), secondary or ghost, in the sizes settings rows use: base 32 (12 in, radius 8), sm 28
+/// (10, 7), xxs 20 (6, 5, 12/17 text). Its fill alone squishes to 0.975 on press; disabled at 40%.
+struct SettingsButtonStyle: ButtonStyle {
+    enum Variant { case secondary, ghost }
+    enum Size {
+        case xxs, sm, base
+        var height: CGFloat { switch self { case .xxs: 20; case .sm: 28; case .base: 32 } }
+        var padding: CGFloat { switch self { case .xxs: 6; case .sm: 10; case .base: 12 } }
+        var radius: CGFloat { switch self { case .xxs: 5; case .sm: 7; case .base: 8 } }
+        var text: (CGFloat, CGFloat) { self == .xxs ? (12, 17) : (14, 20) }
+    }
+
+    var variant: Variant = .secondary
+    var size: Size = .sm
+    var iconOnly = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration, style: self)
+    }
+
+    private struct Styled: View {
+        let configuration: Configuration
+        let style: SettingsButtonStyle
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            let pressed = configuration.isPressed && enabled
+            let hot = hovering && enabled
+            let size = style.size
+            let shape = RoundedRectangle(cornerRadius: size.radius, style: .continuous)
+            let fill: Color = switch style.variant {
+            case .secondary: hot || pressed ? CDS.Fill.secondaryHover : CDS.Fill.secondary
+            case .ghost: hot || pressed ? CDS.Fill.ghostHover : .clear
+            }
+            configuration.label
+                .font(CDS.sans(size.text.0))
+                .foregroundStyle(CDS.Text.primary)
+                .lineLimit(1)
+                .padding(.horizontal, style.iconOnly ? 0 : size.padding)
+                .frame(width: style.iconOnly ? size.height : nil, height: size.height)
+                .background {
+                    shape.fill(fill)
+                        .shadow(color: style.variant == .secondary ? CDS.fieldShadow : .clear, radius: 1, y: 1)
+                        .scaleEffect(pressed ? 0.975 : 1)
+                        .animation(pressed ? .easeOut(duration: 0.06) : .spring(duration: 0.45, bounce: 0.35), value: pressed)
+                }
+                .animation(.easeOut(duration: 0.06), value: hot)
+                .contentShape(shape)
+                .opacity(enabled ? 1 : 0.4)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// A row's secondary button (§3.5): sm (28) on rows, base (32) beside a field. Destructive actions are secondary too.
 struct ActionButton: View {
     let title: String
     var height: CGFloat = Theme.Metrics.chip
@@ -595,15 +954,24 @@ struct ActionButton: View {
     }
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(Theme.Typography.control)
-                .foregroundStyle(Theme.text)
-                .padding(.horizontal, 12)
-                .frame(height: height)
-                .overlay(Theme.Radius.shape(Theme.Radius.md).strokeBorder(Theme.stroke))
+        Button(action: action) { Text(title) }
+            .buttonStyle(SettingsButtonStyle(size: height >= CDS.Settings.field ? .base : .sm))
+    }
+}
+
+/// A status line with its dot: footnote, the dot in the state's colour, the words in Claude's ink for it.
+struct SettingsStatusLine: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        let ink = color == Theme.red ? CDS.Text.danger : color == Theme.amber ? CDS.Text.warning : CDS.Text.secondary
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle().fill(color == Theme.tertiary ? CDS.Text.muted : color).frame(width: 6, height: 6)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 2.5 }
+                .accessibilityHidden(true)
+            Text(text).cdsText(comfy.footnote, .regular, ink).fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(HoverFillButtonStyle(rest: Theme.Fill.field, hover: Theme.Fill.selected, pressed: Theme.Fill.pressed))
     }
 }
 

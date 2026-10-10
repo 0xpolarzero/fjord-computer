@@ -23,7 +23,7 @@ final class RouterWindowController: NSObject, NSWindowDelegate {
     private var previousApp: NSRunningApplication?
 
     static let autosave = "LookoutRouter"
-    static let minSize = NSSize(width: 680, height: 480)
+    static let minSize = NSSize(width: 760, height: 520)
 
     init(store: Store) {
         self.store = store
@@ -39,7 +39,7 @@ final class RouterWindowController: NSObject, NSWindowDelegate {
         let window = self.window ?? makeWindow()
         self.window = window
         if window.contentView == nil || !window.isVisible {
-            window.contentView = NSHostingView(rootView: RouterView(store: store, model: model) { [weak self] in self?.close() })
+            window.contentView = NSHostingView(rootView: RouterCodeView(store: store, model: model) { [weak self] in self?.close() })
         }
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
@@ -52,14 +52,17 @@ final class RouterWindowController: NSObject, NSWindowDelegate {
     func close() { window?.performClose(nil) }
 
     private func makeWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: NSSize(width: 920, height: 620)),
-                              styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: true)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: NSSize(width: 1100, height: 720)),
+                              styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
+                              backing: .buffered, defer: true)
         window.title = "Router"
         window.isReleasedWhenClosed = false
         window.minSize = Self.minSize
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(Theme.bg)
+        // As the Code tab: no title bar of its own, the sidebar runs up under the window's buttons.
+        window.backgroundColor = NSColor(CDS.Surface.s1)
         window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.delegate = self
         window.collectionBehavior.insert(.fullScreenAuxiliary)
         if !window.setFrameUsingName(Self.autosave) { window.center() }

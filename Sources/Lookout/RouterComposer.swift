@@ -1,51 +1,53 @@
 import AppKit
 import SwiftUI
 
-/// Where you write to the Router: Return sends, ⇧Return starts a new line (see `RouterKeys`). Over the field, the chips
-/// that go with the message: the card it replies to and the projects tagged with @ (each with its ×; Backspace at the start
-/// takes the last off). Typing @ suggests projects (↑↓, Return or Tab picks, Esc dismisses). Stop while the Router works; a
-/// menu to start the conversation over.
+/// Where you write to the Router, drawn as the Claude Code tab's composer (docs/design/spec/composer-overlays.md): the
+/// context strip over the card (who the message goes to: the card it replies to and the projects tagged with @, each with
+/// its ×; Backspace at the start takes the last off), the card (Return sends, ⇧Return starts a new line, see `RouterKeys`),
+/// and the chin under it (a + menu to start over, the @ hint, "Router" where Claude names the model). Typing @ suggests
+/// projects over the caret (↑↓, Return or Tab picks, Esc dismisses). Stop while the Router works.
 struct RouterComposer: View {
     let store: Store
     @Bindable var model: RouterModel
     let agent: RouterAgent
     @FocusState private var focused: Bool
-    /// The suggestions' height, to hang them over the field.
+    /// The suggestions' height, to hang them over the caret.
     @State private var listHeight: CGFloat = 0
     /// Where the field is in its window: tells its text view from every other one.
     @State private var anchor = FieldAnchor()
+    /// The @ word's first character in the card (x from its leading edge, y of its line's top from its top), once known.
+    @State private var mentionAt: CGPoint?
+    @State private var windowHeight: CGFloat = 0
+    @State private var hovering = false
+    @State private var overButton = false
     @Environment(\.colorSchemeContrast) private var contrast
+
+    private typealias C = CDS.Composer
 
     var body: some View {
         let working = agent.phase == .working || agent.phase == .starting
         let on = model.canSend(store)
         let suggestions = model.suggestions(store)
-        VStack(alignment: .leading, spacing: 6) {
-            if model.replyTo != nil || !model.projects.isEmpty { chips }
-            HStack(alignment: .bottom, spacing: 6) {
-                menu
-                field(on: on)
-                    // Over the field, so it never pushes the chat about.
-                    .overlay(alignment: .topLeading) {
-                        if !suggestions.isEmpty {
-                            MentionList(suggestions: suggestions, index: model.mentionIndex) { model.pickMention($0) }
-                                .fixedSize()
-                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
-                                .offset(y: -listHeight - 6)
-                                .transition(.opacity)
-                        }
-                    }
-                    .zIndex(1)
-                if working {
-                    IconButton(symbol: "stop.fill", help: "Stop", detail: "Interrupts the Router's turn", size: Theme.Metrics.field) {
-                        agent.stop()
-                    }
-                } else {
-                    IconButton(symbol: "arrow.up", help: "Send", detail: "Return · ⇧Return for a new line", size: Theme.Metrics.field,
-                               tint: Theme.accent) { model.send(store: store) }
-                        .disabled(!on || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            // Who your words go to, as the Code tab's strip over its composer: the card's session, the projects you tagged.
+            if model.replyTo != nil || !model.projects.isEmpty {
+                strip.padding(.bottom, C.dockGap)
             }
+            card(on: on, working: working)
+                // Over the card, so it never pushes the chat about.
+                .overlay(alignment: .topLeading) {
+                    if !suggestions.isEmpty {
+                        let at = mentionAt ?? CGPoint(x: 0, y: C.pad + (C.row - 20) / 2)
+                        MentionList(suggestions: suggestions, index: model.mentionIndex,
+                                    hover: { model.mentionIndex = $0 }) { model.pickMention($0) }
+                            .fixedSize()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+                            .offset(x: max(0, at.x), y: at.y - C.mentionOffset - listHeight)
+                            .transition(.opacity)
+                    }
+                }
+                .zIndex(1)
+            chin
         }
         .motion(Theme.Motion.fade, value: suggestions.map(\.folder))
         .onAppear { if on { requestFocus() } }
@@ -63,6 +65,7 @@ struct RouterComposer: View {
             guard let editor = note.object as? NSTextView, anchor.owns(editor), editor.window?.firstResponder === editor
             else { return }
             model.followCaret(editor)
+            mentionAt = mentionPoint(editor)
         }
         .onChange(of: model.caretRequest) { _, request in
             guard let request else { return }
@@ -73,60 +76,146 @@ struct RouterComposer: View {
                 let at = min(request, (editor.string as NSString).length)
                 editor.setSelectedRange(NSRange(location: at, length: 0))
                 model.followCaret(editor)
+                mentionAt = mentionPoint(editor)
             }
         }
     }
 
+    // MARK: Strip
+
     /// The reply first, then the projects, each removable.
-    private var chips: some View {
-        FlowLayout(spacing: 5) {
+    private var strip: some View {
+        FlowLayout(spacing: C.stripGap) {
             if let id = model.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
-                ComposerChip(symbol: "arrowshape.turn.up.left.fill", text: "Replying to \(card.title)", tint: card.kind.color,
+                ComposerChip(symbol: "arrow.right", text: card.title, tint: card.kind.color,
                              removeLabel: "Stop replying to \(card.title)") { model.replyTo = nil }
             }
             ForEach(model.projects, id: \.self) { folder in
                 let name = store.folderName(folder)
-                ComposerChip(symbol: nil, text: "@" + name, tint: store.projectColor(folder) ?? Theme.secondary,
+                ComposerChip(symbol: nil, text: "@" + name, tint: store.projectColor(folder) ?? CDS.Text.muted,
                              removeLabel: "Remove project \(name)") { model.projects.removeAll { $0 == folder } }
             }
         }
-        .padding(.leading, 34)
+        .padding(CDS.Density.compact.pad.md)
+        .frame(maxWidth: .infinity, minHeight: C.stripHeight, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: C.stripRadius, style: .continuous).fill(CDS.alpha(0.05)))
+    }
+
+    // MARK: Card
+
+    private func card(on: Bool, working: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: C.radius, style: .continuous)
+        let hot = focused || (hovering && !overButton)
+        let ring = contrast == .increased ? CDS.Text.primary.opacity(0.5) : hot ? C.ringHot : C.ring
+        return ZStack(alignment: .bottomTrailing) {
+            field(on: on)
+                .padding(.leading, C.pad + C.textInset)
+                // The actions' `pl-1.5` and their 28 pt cell.
+                .padding(.trailing, C.pad + 6 + C.row)
+                .padding(.vertical, C.pad + (C.row - 20) / 2)
+                .frame(maxWidth: .infinity, minHeight: C.minHeight, alignment: .topLeading)
+            action(on: on, working: working)
+                .onHover { overButton = $0 }
+                .padding(C.pad)
+        }
+        .background(shape.fill(CDS.Surface.s3))
+        .background(AnchorView(anchor: anchor) { windowHeight = $0 })
+        .overlay(shape.strokeBorder(ring, lineWidth: 1))
+        .shadow(color: focused ? C.dropFocus : C.drop, radius: 10, y: 4)
+        .contentShape(shape)
+        .onHover { hovering = $0 }
+        .onTapGesture { if on { focused = true } }
+        .animation(.easeOut(duration: 0.2), value: hot)
+    }
+
+    private func field(on: Bool) -> some View {
+        // `min(24rem, 40svh)` less the card's padding, in 20 pt lines.
+        let limit = min(C.maxHeight, windowHeight > 0 ? windowHeight * C.maxHeightShare : C.maxHeight)
+        let lines = max(1, Int((limit - 2 * C.pad - (C.row - 20)) / 20))
+        let placeholder = model.replyTo == nil ? "Tell the Router what to pass on, or ask" : "Reply, or tell the Router"
+        // AppKit paints a field's own prompt in its placeholder colour, not Claude's muted ink: ours is drawn behind it.
+        return TextField("", text: $model.draft, axis: .vertical)
+        .textFieldStyle(.plain)
+        .cdsText(CDS.Density.compact.prose)
+        .lineLimit(1...lines)
+        .frame(minHeight: 20)
+        .background(alignment: .topLeading) {
+            if model.draft.isEmpty {
+                Text(placeholder).cdsText(CDS.Density.compact.prose, .regular, CDS.Text.muted)
+                    .lineLimit(1).truncationMode(.tail)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+        .focused($focused)
+        .focusEffectDisabled()
+        .accessibilityLabel("Message the Router")
+        .accessibilityHint("Return sends, Shift Return starts a new line, @ tags a project")
+        .disabled(!on)
+    }
+
+    /// Claude's ghost icon button: send (ArrowReturn) or, while the Router works, stop (StopCircle).
+    @ViewBuilder private func action(on: Bool, working: Bool) -> some View {
+        if working {
+            GhostIcon(symbol: "stop.circle", label: "Stop") { agent.stop() }
+                .accessibilityHint("Interrupts the Router's turn")
+                .tip("Stop", "Interrupts the Router's turn")
+        } else {
+            let empty = !on || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            GhostIcon(symbol: "arrow.turn.down.left", label: "Send") { model.send(store: store) }
+                .disabled(empty)
+                .tip("Send", "Return · ⇧Return for a new line")
+        }
+    }
+
+    // MARK: Chin
+
+    /// Claude's chin: `mt-1.5`, an xs row of 12 pt items, secondary on the left, the model-like label primary on the right.
+    private var chin: some View {
+        HStack(spacing: 0) {
+            menu
+            Text("@ a project")
+                .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
+                .padding(.horizontal, 6)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text("Router")
+                .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.primary)
+                .padding(.horizontal, 6)
+                .lineLimit(1)
+        }
+        // `--cmp-chin-start` / `--cmp-chin-end` less the controls' own touch inset.
+        .padding(.leading, 3)
+        .padding(.trailing, 4)
+        .frame(height: C.chinRow)
+        .padding(.top, C.dockGap)
     }
 
     private var menu: some View {
-        Menu {
+        ChinPlus {
             Button("New Conversation") {
                 if store.routerIsPretend { store.router.chat = [] } else { agent.newConversation() }
             }
             .disabled(store.router.chat.isEmpty && store.router.claudeSessionID == nil)
-        } label: {
-            Image(systemName: "ellipsis.circle").font(Theme.Typography.glyph(14))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .frame(height: Theme.Metrics.field)
         .accessibilityLabel("Router menu")
         .tip("More", "New conversation")
     }
 
-    private func field(on: Bool) -> some View {
-        TextField(model.replyTo == nil ? "Message the Router · @ for a project" : "Your reply", text: $model.draft, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(Theme.Typography.body)
-            .lineLimit(1...6)
-            .focused($focused)
-            .focusEffectDisabled()
-            .accessibilityLabel("Message the Router")
-            .accessibilityHint("Return sends, Shift Return starts a new line, @ tags a project")
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .frame(minHeight: Theme.Metrics.field)
-            .background(Theme.Radius.shape(Theme.Radius.md).fill(Theme.Fill.field))
-            .overlay(Theme.Radius.shape(Theme.Radius.md)
-                .strokeBorder(focused ? Theme.accent.opacity(0.6) : contrast == .increased ? Theme.text.opacity(0.5) : Theme.stroke))
-            .background(AnchorView(anchor: anchor))
-            .disabled(!on)
+    // MARK: Caret
+
+    /// Where the @ word before the caret starts, in the card: x of its "@", y of its line's top.
+    private func mentionPoint(_ editor: NSTextView) -> CGPoint? {
+        guard let view = anchor.view, let window = editor.window else { return nil }
+        let text = editor.string as NSString
+        let caret = editor.selectedRange().location
+        guard caret != NSNotFound, caret <= text.length else { return nil }
+        let at = text.range(of: "@", options: .backwards, range: NSRange(location: 0, length: caret))
+        let range = at.location == NSNotFound ? NSRange(location: caret, length: 0) : NSRange(location: at.location, length: 1)
+        let screen = editor.firstRect(forCharacterRange: range, actualRange: nil)
+        guard screen != .zero else { return nil }
+        let local = view.convert(window.convertPoint(fromScreen: CGPoint(x: screen.minX, y: screen.maxY)), from: nil)
+        let top = view.isFlipped ? local.y : view.bounds.height - local.y
+        return CGPoint(x: local.x, y: top)
     }
 
     private func requestFocus() {
@@ -147,7 +236,52 @@ struct RouterComposer: View {
     }
 }
 
-/// A chip over the composer: what goes with the message, and an × to take it off.
+/// CDS's ghost icon-only Button in the composer's 28 pt row: transparent, white 7.5% on hover, radius 6, a 16 pt glyph in
+/// the primary ink; 40% when disabled.
+private struct GhostIcon: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(CDS.Text.primary)
+                .frame(width: CDS.Composer.row, height: CDS.Composer.row)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous),
+                                          rest: .clear, hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostSelected,
+                                          pressed: CDS.Fill.ghostSelected))
+        .accessibilityLabel(label)
+    }
+}
+
+/// The chin's + : a ghost icon button (24 pt, radius 6) whose glyph is secondary and turns primary on hover, opening a menu.
+private struct ChinPlus<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        Menu(content: content) {
+            Image(systemName: "plus")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(hovering ? CDS.Text.primary : CDS.Text.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(width: 24, height: 24)
+        .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+            .fill(hovering ? CDS.Fill.ghostHover : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+}
+
+/// A chip in the strip over the composer, as the Code tab's diff chip (24 pt, radius 6, white 10%, `shadow-field`): what
+/// goes with the message, in the strip's mono 13 muted, and a ghost × to take it off.
 struct ComposerChip: View {
     let symbol: String?
     let text: String
@@ -156,57 +290,85 @@ struct ComposerChip: View {
     let remove: () -> Void
 
     var body: some View {
-        HStack(spacing: 5) {
-            if let symbol { Image(systemName: symbol).font(Theme.Typography.glyph(9)).foregroundStyle(tint).accessibilityHidden(true) }
-            Text(text).font(Theme.Typography.control).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
-            Button(action: remove) {
-                Image(systemName: "xmark").font(Theme.Typography.glyph(8, .bold)).frame(width: 14, height: 14)
+        HStack(spacing: 4) {
+            if let symbol {
+                Image(systemName: symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).accessibilityHidden(true)
             }
-            .buttonStyle(HoverFillButtonStyle(shape: Circle()))
-            .foregroundStyle(Theme.tertiary)
-            .accessibilityLabel(removeLabel)
+            Text(text).font(CDS.mono(13)).foregroundStyle(CDS.Text.muted).lineLimit(1).truncationMode(.tail)
+            ChipClose(label: removeLabel, action: remove)
         }
-        .padding(.leading, symbol == nil ? 9 : 8)
-        .padding(.trailing, 4)
-        .frame(height: 24)
-        .background(Capsule().fill(tint.opacity(0.14)))
-        .overlay(Capsule().strokeBorder(tint.opacity(0.35)))
+        .padding(.leading, CDS.Density.compact.pad.md)
+        .padding(.trailing, 3)
+        .frame(height: CDS.Density.compact.control)
+        .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous).fill(CDS.Fill.secondary)
+            .shadow(color: CDS.fieldShadow, radius: 1, y: 1))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(text)
     }
 }
 
-/// The @ suggestions: the projects the word matches, the one ↑↓ picked lit.
+/// The chip's ×: ghost, muted, primary and white 7.5% on hover.
+private struct ChipClose: View {
+    let label: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark").font(.system(size: 9, weight: .medium))
+                .foregroundStyle(hovering ? CDS.Text.primary : CDS.Text.muted)
+                .frame(width: CDS.Density.compact.controlNested, height: CDS.Density.compact.controlNested)
+                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(hovering ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(label)
+    }
+}
+
+/// The @ suggestions as Claude's MentionDropdown: the projects the word matches, the one ↑↓ (or the pointer) picked lit.
 struct MentionList: View {
     let suggestions: [(folder: String, name: String)]
     let index: Int
+    var hover: ((Int) -> Void)? = nil
     let pick: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        let d = CDS.Density.compact
+        let shape = RoundedRectangle(cornerRadius: d.panelRadius, style: .continuous)
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(suggestions.enumerated()), id: \.element.folder) { i, project in
                 Button { pick(project.folder) } label: {
-                    HStack(spacing: 8) {
-                        Text("@" + project.name).font(Theme.Typography.body).foregroundStyle(Theme.text)
-                        Spacer(minLength: 8)
-                        Text(Self.shortPath(project.folder)).font(Theme.Typography.caption).foregroundStyle(Theme.tertiary)
-                            .lineLimit(1).truncationMode(.head)
+                    HStack(spacing: d.gap.xs) {
+                        Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(CDS.Text.secondary)
+                            .frame(width: d.icon, height: d.icon)
+                        HStack(alignment: .firstTextBaseline, spacing: d.gap.xs) {
+                            Text("@" + project.name).font(CDS.sans(d.body.0)).foregroundStyle(CDS.Text.primary)
+                                .lineLimit(1).layoutPriority(1)
+                            Text(Self.shortPath(project.folder)).font(CDS.sans(d.caption.0)).foregroundStyle(CDS.Text.muted)
+                                .lineLimit(1).truncationMode(.head)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .background(Theme.Radius.shape(Theme.Radius.sm).fill(i == index ? Theme.Fill.selected : Theme.Fill.rest))
+                    .padding(.horizontal, d.pad.md)
+                    .frame(height: d.control)
+                    .background(RoundedRectangle(cornerRadius: d.radius, style: .continuous)
+                        .fill(i == index ? CDS.Fill.ghostHover : .clear))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { if $0 { hover?(i) } }
                 .accessibilityLabel("Project \(project.name)")
                 .accessibilityAddTraits(i == index ? .isSelected : [])
             }
         }
-        .padding(4)
-        .frame(width: 300)
-        .background(Theme.Radius.shape(Theme.Radius.md).fill(Theme.popover))
-        .overlay(Theme.Radius.shape(Theme.Radius.md).strokeBorder(Theme.stroke))
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+        .padding(d.pad.xs)
+        .frame(width: CDS.Composer.mentionWidth)
+        .background(shape.fill(CDS.Surface.s3))
+        .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
+        .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
+        .shadow(color: CDS.PanelShadow.far.color, radius: CDS.PanelShadow.far.radius, y: CDS.PanelShadow.far.y)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Projects")
     }
@@ -219,7 +381,8 @@ struct MentionList: View {
 }
 
 /// The composer field's place on screen, kept by an empty AppKit view behind it: a text view is the composer's when it is in
-/// the same window and inside the field (SwiftUI doesn't hand out the field's own text view).
+/// the same window and inside the field (SwiftUI doesn't hand out the field's own text view). It also tells its window's
+/// height, for the field's `min(24rem, 40svh)`.
 final class FieldAnchor {
     weak var view: NSView?
 
@@ -233,12 +396,42 @@ final class FieldAnchor {
 
 private struct AnchorView: NSViewRepresentable {
     let anchor: FieldAnchor
+    var windowHeight: (CGFloat) -> Void = { _ in }
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+    func makeNSView(context: Context) -> WindowWatcher {
+        let view = WindowWatcher()
+        view.report = windowHeight
         anchor.view = view
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) { anchor.view = view }
+    func updateNSView(_ view: WindowWatcher, context: Context) {
+        anchor.view = view
+        view.report = windowHeight
+    }
+
+    final class WindowWatcher: NSView {
+        var report: (CGFloat) -> Void = { _ in }
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            guard let window else { return }
+            send(window)
+            observer = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window,
+                                                              queue: .main) { [weak self] note in
+                guard let window = note.object as? NSWindow else { return }
+                MainActor.assumeIsolated { self?.send(window) }
+            }
+        }
+
+        private func send(_ window: NSWindow) {
+            let height = window.contentLayoutRect.height
+            DispatchQueue.main.async { [report] in report(height) }
+        }
+
+        deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+    }
 }

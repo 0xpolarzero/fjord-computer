@@ -23,6 +23,11 @@ extension View {
 enum CappedScrollSpace {
     static let name = "capped-content"
 
+    /// CDS `scroll-fade-y`: 28pt, alpha 1 → .85 → .70 → .50 → .30 → .15 → .05 at 0 / 13 / 25 / 40 / 55 / 70 / 85%.
+    static let fade: CGFloat = 28
+    static let fadeStops: [Gradient.Stop] = [(1, 0), (0.85, 0.13), (0.70, 0.25), (0.50, 0.40), (0.30, 0.55), (0.15, 0.70),
+                                             (0.05, 0.85), (0.05, 1)].map { Gradient.Stop(color: .black.opacity($0.0), location: $0.1) }
+
     /// The tallest height up to `cap` that ends on a row's bottom edge, when the cap falls inside a measured row (a
     /// row ends past it). A lazy list only measures the rows it has laid out: with none ending past the cap, the cut
     /// is somewhere unmeasured, and the cap itself stands.
@@ -119,12 +124,14 @@ struct CappedScroll<Content: View>: View {
             .scrollIndicators(.never)
             .scrollDisabled(!cut)
             .frame(height: max(shown, 1))
-            // Cut short: the last visible row fades out, so it reads as "more below" rather than clipped.
+            // Cut short: the last visible row fades out, so it reads as "more below" rather than clipped: Claude's
+            // `scroll-fade-y` bottom edge (28pt, its eased alpha stops).
             .mask {
                 VStack(spacing: 0) {
                     Color.black
-                    LinearGradient(colors: [.black, .black.opacity(cut ? 0.15 : 1)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 14)
+                    LinearGradient(stops: cut ? CappedScrollSpace.fadeStops : [.init(color: .black, location: 0)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: CappedScrollSpace.fade)
                 }
             }
             .onChange(of: hub?.keyboardSelection) { _, request in
@@ -151,8 +158,10 @@ extension CappedScroll {
     }
 }
 
-/// An inbox item on two short lines; its actions show on hover or when picked with the keys. Done, Addressed and
-/// Resolved items carry a small state tag and read in the quieter text tokens (never a dimmed row: contrast stays).
+/// An inbox item on two short lines, as Claude's two-line rows (search-tabs-avatars.md §5.1): 13/16 title over a 12/16
+/// muted meta line, 2 apart, 5 above and below; Claude's Avatar (sm, 20) in a 24 slot, the unread dot cut into its corner
+/// as the palette's status dot (§1.5); its actions (Claude's 24pt row controls) show on hover or when picked with the
+/// keys. Done, Addressed and Resolved items carry a Badge and read in the quieter text tokens (never a dimmed row).
 struct CompactItemRow: View {
     let item: InboxItem
     let store: Store
@@ -166,42 +175,34 @@ struct CompactItemRow: View {
     private var open: Bool { hover || selected }
     private var unread: Bool { item.state == .unread }
 
+    static let avatar: CGFloat = 20
+    static let line: CGFloat = 16
+
     var body: some View {
         Button { store.open(item) } label: {
-            HStack(alignment: .top, spacing: 9) {
-                Circle().fill(unread ? (low ? Theme.secondary : Theme.amber) : .clear)
-                    .frame(width: 6, height: 6)
-                    .padding(.top, 8)
-                ZStack(alignment: .bottomTrailing) {
-                    Avatar(url: item.avatar, size: 22, name: item.author)
-                    Image(systemName: item.kind.symbol)
-                        .font(Theme.Typography.glyph(6, .bold))
-                        .foregroundStyle(Theme.onTint)
-                        .frame(width: 11, height: 11)
-                        .background(Circle().fill(item.kind.color))
-                        .overlay(Circle().strokeBorder(Theme.bg, lineWidth: 1.5))
-                        .offset(x: 3, y: 3)
-                }
-                .padding(.top, 1)
+            HStack(alignment: .center, spacing: CDS.Sidebar.rowGap) {
+                avatar.frame(width: CDS.Sidebar.leadingSlot)
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .center, spacing: 6) {
                         Text(item.title)
-                            .font(unread ? Theme.Typography.bodyStrong : Theme.Typography.body)
-                            .foregroundStyle(unread || open ? Theme.text : Theme.secondary)
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(unread || open ? CDS.Text.primary : CDS.Text.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         // The actions take the timestamp's place; the title stops short of them.
-                        Text(shortAgo(item.createdAt)).font(Theme.Typography.caption.monospacedDigit()).foregroundStyle(Theme.tertiary)
+                        Text(shortAgo(item.createdAt)).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(CDS.Text.muted)
                             .opacity(open ? 0 : 1)
                             .frame(width: open ? actionsWidth - 6 : nil, alignment: .trailing)
                     }
+                    .frame(height: Self.line)
                     HStack(spacing: 6) {
                         Text("\(item.repo.split(separator: "/").last ?? "")#\(item.number) · \(item.kind.label) · @\(item.author)")
                             .font(Theme.Typography.meta)
-                            .foregroundStyle(Theme.tertiary)
+                            .foregroundStyle(CDS.Text.muted)
                             .lineLimit(1)
                         if !item.state.isOpen { StateTag(state: item.state) }
                     }
+                    .frame(height: Self.line)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -212,8 +213,8 @@ struct CompactItemRow: View {
         .accessibilityValue(unread ? "Unread" : item.state.isOpen ? "" : StateTag.label(item.state))
         .accessibilityHint("Opens it on GitHub")
         .overlay(alignment: .topTrailing) {
-            // Centred on the title line (6pt row padding + half its 15pt line = 13.5; the capsule is 26 tall).
-            if open { actions.padding(.top, 1).padding(.trailing, 4).transition(.opacity) }
+            // Centred on the title line (5pt row padding + half its 16pt line = 13; the controls are 24 tall), 3 from the end.
+            if open { actions.padding(.top, 1).padding(.trailing, CDS.RowControl.inset).transition(.opacity) }
         }
         .contextMenu { InboxItemMenu(item: item, store: store, low: store.isLowPriority(item)) }
         .onHover {
@@ -226,8 +227,36 @@ struct CompactItemRow: View {
         .motion(Theme.Motion.hover, value: open)
     }
 
-    /// Room the action capsule takes over the title line: its buttons, its 2pt insets, and its 4pt from the edge.
-    private var actionsWidth: CGFloat { CGFloat(item.state.isOpen ? 3 : 2) * IconButton.Size.row + 4 + 4 }
+    /// The author's avatar; unread, Claude's 6pt status dot at its top-right corner, cut out of it (2pt clear around):
+    /// awaiting yellow for what needs you, muted for the bots'.
+    private var avatar: some View {
+        let size = Self.avatar
+        let r = CDS.Dot.size / 2
+        let centre = CGPoint(x: size - r + 1, y: r - 1)
+        return Avatar(url: item.avatar, size: size, name: item.author)
+            .mask {
+                Rectangle()
+                    .overlay {
+                        if unread {
+                            Circle().frame(width: 2 * (r + 2), height: 2 * (r + 2)).position(centre).blendMode(.destinationOut)
+                        }
+                    }
+                    .compositingGroup()
+            }
+            .overlay {
+                if unread {
+                    Circle().fill(low ? CDS.Text.muted : CDS.Dot.awaiting)
+                        .frame(width: CDS.Dot.size, height: CDS.Dot.size).position(centre)
+                }
+            }
+            .frame(width: size, height: size)
+    }
+
+    /// Room the controls take over the title line: 24pt buttons 2 apart, 3 from the end, and 4 before them.
+    private var actionsWidth: CGFloat {
+        let n = CGFloat(item.state.isOpen ? 3 : 2)
+        return n * IconButton.Size.row + (n - 1) * CDS.RowControl.gap + CDS.RowControl.inset + 4
+    }
 
     private var actions: some View {
         let size = IconButton.Size.row
@@ -248,7 +277,8 @@ struct CompactItemRow: View {
     }
 }
 
-/// What became of an inbox item that's no longer open: Done, Addressed (you replied) or Resolved.
+/// What became of an inbox item that's no longer open, as Claude's Badge (xs, 16 tall, radius 4, 10pt at 460): Done
+/// (neutral), Addressed (you replied; success) or Resolved (violet).
 struct StateTag: View {
     let state: ItemState
 
@@ -261,32 +291,32 @@ struct StateTag: View {
     }
 
     var body: some View {
-        let (symbol, color): (String, Color) = switch state {
+        let (symbol, tint): (String, Color?) = switch state {
         case .addressed: ("arrowshape.turn.up.left.fill", Theme.green)
         case .resolved: ("checkmark.circle.fill", Theme.purple)
-        default: ("checkmark", Theme.secondary)
+        default: ("checkmark", nil)
         }
-        Label(Self.label(state), systemImage: symbol)
-            .font(Theme.Typography.caption.weight(.semibold))
-            .foregroundStyle(color)
-            .labelStyle(.titleAndIcon)
-            .padding(.horizontal, 6)
-            .frame(height: 16)
-            .background(Capsule().fill(color.opacity(0.14)))
-            .fixedSize()
+        let (fill, ink) = CountBadge.colors(tint)
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 8, weight: .bold))
+            Text(Self.label(state)).font(CDS.sans(CDS.Badge.font, .medium))
+        }
+        .foregroundStyle(ink)
+        .padding(.horizontal, CDS.Badge.padX)
+        .frame(height: CDS.Badge.height)
+        .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(fill))
+        .fixedSize()
     }
 }
 
-/// A row's actions on hover, the same for inbox items and sessions: icon buttons in a capsule laid over the row's
-/// right end (so showing them never changes the row's size).
+/// A row's controls on hover, the same for inbox items and sessions: Claude's row controls (sidebar §2.7), 24pt ghost
+/// buttons 2 apart, laid over the row's right end (so showing them never changes the row's size). No box of their own:
+/// the row's text stops short of them.
 struct RowActions<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(spacing: 0) { content }
-            .padding(2)
-            .background(Capsule().fill(Theme.raised))
-            .overlay(Capsule().strokeBorder(Theme.stroke))
+        HStack(spacing: CDS.RowControl.gap) { content }
     }
 }
 
@@ -466,27 +496,29 @@ private struct InboxCellLabel: View {
             .foregroundStyle(lit ? Theme.onTint : hover ? Theme.text : Theme.secondary)
             .frame(width: 28, height: 28)
             // Hover brightens the tile (or the tray), no box around it.
-            .background(Tile.shape(28).fill(lit ? Theme.amber : hover ? Theme.Fill.hover : Theme.Fill.rest))
+            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous)
+                .fill(lit ? CDS.Fill.warning : hover ? Theme.Fill.hover : Theme.Fill.rest))
             .brightness(lit && hover ? 0.06 : 0)
             .motion(.snappy, value: lit)
     }
 
     private var badge: AnyView? {
         guard showsCount else { return nil }
-        // The tile is already amber: the count beside it stays quiet.
-        if needsYou > 0 { return AnyView(count(needsYou, fill: Theme.Fill.selected, text: Theme.text)) }
-        if bots > 0 { return AnyView(count(bots, fill: Theme.Fill.hover, text: Theme.secondary)) }
+        // Claude's Badge: the warning variant for what needs you, the neutral one for the bots'.
+        if needsYou > 0 { return AnyView(count(needsYou, tint: Theme.amber)) }
+        if bots > 0 { return AnyView(count(bots, tint: nil)) }
         return nil
     }
 
-    private func count(_ n: Int, fill: Color, text: Color) -> some View {
-        Text(n > 99 ? "99+" : "\(n)")
-            .font(Theme.Typography.glyph(10.5, .bold).monospacedDigit())
+    private func count(_ n: Int, tint: Color?) -> some View {
+        let (fill, ink) = CountBadge.colors(tint)
+        return Text(n > 99 ? "99+" : "\(n)")
+            .font(Theme.Typography.badge)
             .contentTransition(.numericText(value: Double(n)))
-            .foregroundStyle(text)
-            .padding(.horizontal, 5)
-            .frame(minWidth: 18, minHeight: 15)
-            .background(Capsule().fill(fill))
+            .foregroundStyle(ink)
+            .padding(.horizontal, CDS.Badge.padX)
+            .frame(minWidth: CDS.Badge.height, minHeight: CDS.Badge.height)
+            .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(fill))
             .transition(.scaleFade(0.6, reduce: reduce))
     }
     @Environment(\.accessibilityReduceMotion) private var reduce
@@ -494,6 +526,7 @@ private struct InboxCellLabel: View {
 
 /// A repo in CI's lines: its name (and which checks fail), opening its latest run.
 struct RepoChip: View {
+    static let height: CGFloat = 20
     let repo: RepoConfig
     let status: CIStatus?
     let state: CIState
@@ -504,17 +537,20 @@ struct RepoChip: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 // The name keeps its room; the failing checks give way to it, and both stop at the chip's width.
-                Text(repo.name).font(Theme.Typography.control).foregroundStyle(Theme.text)
-                    .lineLimit(1).layoutPriority(1)
+                // Whole: a proposal a fraction short of its width (Anthropic Sans measures fractionally) mustn't cut it.
+                Text(repo.name).font(CDS.sans(12)).foregroundStyle(CDS.Text.primary)
+                    .lineLimit(1).fixedSize().layoutPriority(1)
                 if state == .failure, let failing = status?.failing, !failing.isEmpty {
-                    Text(Self.failingSummary(failing)).font(Theme.Typography.caption).foregroundStyle(Theme.red)
+                    Text(Self.failingSummary(failing)).font(CDS.sans(12)).foregroundStyle(CDS.Text.danger)
                         .lineLimit(1).truncationMode(.tail)
                 }
             }
-            .padding(.horizontal, 8)
-            .frame(height: 22)
+            .padding(.horizontal, 6)
+            .frame(height: Self.height)
         }
-        .buttonStyle(HoverFillButtonStyle(shape: Capsule(), rest: Theme.Fill.hover, hover: Theme.Fill.selected))
+        // Claude's secondary Button, compact xs: 20 tall, radius 5, 6 padding, 12pt; white 10%, 14% on hover.
+        .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: 5, style: .continuous), rest: CDS.Fill.secondary,
+                                          hover: CDS.Fill.secondaryHover, pressed: CDS.Fill.secondaryHover))
         .accessibilityLabel("\(repo.name), \(state == .none ? "no runs" : state.label)"
                             + (state == .failure ? ((status?.failing).map { ": " + $0.joined(separator: ", ") } ?? "") : ""))
         .accessibilityHint("Opens its latest checks")
@@ -548,7 +584,8 @@ struct NewSessionTile: View {
 
     var body: some View {
         Button(action: action) { NewSessionTileLabel(size: size) }
-            .buttonStyle(HoverFillButtonStyle(shape: Tile.shape(size), rest: Theme.Fill.field, hover: Theme.Fill.tile))
+            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous),
+                                              rest: Theme.Fill.field, hover: Theme.Fill.tile))
             .accessibilityLabel("New session")
             .accessibilityHint("Scratch chat, or pick a project")
             .focused($focused)
@@ -562,8 +599,8 @@ private struct NewSessionTileLabel: View {
 
     var body: some View {
         Image(systemName: "plus")
-            .font(Theme.Typography.glyph(size * 0.42, .bold))
-            .foregroundStyle(hover ? Theme.text : Theme.secondary)
+            .font(.system(size: CDS.Sidebar.newGlyph + 2, weight: .semibold))
+            .foregroundStyle(hover ? CDS.Text.primary : CDS.Text.secondary)
             .frame(width: size, height: size)
     }
 }
@@ -631,14 +668,14 @@ struct SessionBlock: View {
                       showsKept: !hub.query.isEmpty, inHub: !twoLines, plain: true)
                 // The card below is the one button; its inner row's own (a second, unnamed-or-duplicate button) is hidden.
                 .accessibilityHidden(true)
-            // Under the title: past the tile on two-line rows (10 + 24 + 9), else at the title's 8.
+            // Under the title, at the title's own inset (two-line rows past the tile).
             Group { if twoLines { cardDetail } else { details } }
-                .padding(.leading, twoLines ? 43 : 8)
+                .padding(.leading, twoLines ? DrawerRow.twoLineTitleInset : DrawerRow.titleInset)
                 .padding(.trailing, 8)
                 .padding(.top, twoLines ? -8 : -3)
                 .padding(.bottom, twoLines ? 4 : 7)
         }
-        .background(Theme.Radius.shape(Theme.Radius.md).fill(selected ? Theme.Fill.field : Theme.Fill.rest))
+        .background(Theme.Radius.shape(Theme.Radius.md).fill(selected ? Theme.Fill.hover : Theme.Fill.rest))
         // The same actions as an inbox item's, over the title line's right end, centred on it.
         .overlay(alignment: .topTrailing) {
             if selected {
@@ -755,17 +792,20 @@ private struct RouterCellLabel: View {
             .font(Theme.Typography.glyph(14))
             .foregroundStyle(hover ? Theme.text : Theme.secondary)
             .frame(width: 28, height: 28)
-            .background(Tile.shape(28).fill(hover ? Theme.Fill.hover : Theme.Fill.rest))
+            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous)
+                .fill(hover ? Theme.Fill.hover : Theme.Fill.rest))
             .overlay(alignment: .topTrailing) {
+                // Claude's corner count (the pending-invite badge): 16 tall, round, caption at 460, a 2pt ring of the
+                // island's black; awaiting yellow while one needs you, accent blue for finished turns.
                 if open > 0 {
                     Text(open > 99 ? "99+" : "\(open)")
                         .font(Theme.Typography.badge)
-                        .foregroundStyle(Theme.onTint)
+                        .foregroundStyle(needsYou > 0 ? CDS.Text.onPrimary : Color.white)
                         .contentTransition(reduce ? .opacity : .numericText(value: Double(open)))
                         .padding(.horizontal, 4)
-                        .frame(minWidth: 15, minHeight: 15)
-                        .background(Capsule().fill(needsYou > 0 ? Theme.amber : Theme.accent))
-                        .background(Capsule().fill(Theme.bg).padding(-1.5))
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(Capsule().fill(needsYou > 0 ? CDS.Fill.warning : CDS.Fill.accent))
+                        .background(Capsule().fill(Theme.bg).padding(-2))
                         .offset(x: 6, y: -5)
                         .transition(.scaleFade(0.6, reduce: reduce))
                 }

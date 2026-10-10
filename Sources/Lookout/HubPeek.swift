@@ -94,7 +94,7 @@ extension LookoutHub {
                 }
                 .frame(height: edge.isHorizontal ? nil : place?.length, alignment: .top)
                 .background(shape.fill(Theme.bg))
-                .overlay(shape.strokeBorder(Theme.stroke))
+                .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
                 .clipShape(shape)
                 // No seam where it meets the bar: the two outlines there are painted over, so bar and panel read
                 // as one shape.
@@ -138,7 +138,12 @@ extension LookoutHub {
             let o = peekOffset(section, place)
             Color.clear
                 .frame(width: panelWidth(section), height: edge.isHorizontal ? size.height : place.length)
-                .background { panelShape(place).fill(Theme.bg).shadow(color: .black.opacity(0.42), radius: 20, y: 7) }
+                // Claude's `shadow-panel` drops.
+                .background {
+                    panelShape(place).fill(Theme.bg)
+                        .shadow(color: CDS.PanelShadow.far.color, radius: CDS.PanelShadow.far.radius, y: CDS.PanelShadow.far.y)
+                        .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
+                }
                 .offset(x: o.width, y: o.height)
                 .transition(peekTransition)
         }
@@ -189,7 +194,7 @@ extension LookoutHub {
     /// A panel against the bar: square where it meets the bar, rounded elsewhere, and rounded on the bar's side too
     /// where it runs on past the bar's end.
     func panelShape(_ place: Placement?) -> UnevenRoundedRectangle {
-        let r: CGFloat = Theme.Radius.lg + 2
+        let r = Self.panelRadius
         let past: CGFloat = place?.pastEnd == true ? r : 0
         return switch edge {
         case .right: UnevenRoundedRectangle(topLeadingRadius: r, bottomLeadingRadius: r, bottomTrailingRadius: past, style: .continuous)
@@ -199,7 +204,9 @@ extension LookoutHub {
         }
     }
 
-    /// A panel's padding, all round; rows pad their own 8 inside it, so text starts 16pt from the panel's edge.
+    /// A panel's free corners: the hub's shell round, larger than Claude's 10pt popovers as it is part of the island.
+    static let panelRadius: CGFloat = 16
+    /// A panel's padding, all round, as Claude's sidebar body (8 at the sides); rows pad their own inside it.
     static let peekPad: CGFloat = Theme.Space.md
     /// A section header's height, the same as a CI or agents cell in the bar, so the lines under it line up.
     static let peekLine: CGFloat = Theme.Metrics.line
@@ -207,18 +214,22 @@ extension LookoutHub {
     /// A panel's width: the controls' is a small menu; along the top and bottom, CI's is its column's.
     func panelWidth(_ section: HubSection) -> CGFloat {
         switch section {
-        case .controls: 250
+        case .controls: Self.controlsWidth
         case .ci: edge.isHorizontal ? Self.ciWidth : Self.detail
         default: Self.detail
         }
     }
+
+    /// The controls' panel: a Claude menu's width (128–320).
+    static let controlsWidth: CGFloat = 232
 
     @ViewBuilder func peekContent(_ section: HubSection) -> some View {
         Group {
             if section == .controls { peekControls }
             else if edge.isHorizontal { peekColumn(section) } else { peekRows(section) }
         }
-        .padding(Self.peekPad)
+        // The controls are a menu: Claude's `p-1` around its rows (and 2 more, for the panel's larger round).
+        .padding(section == .controls ? CDS.Menu.pad + 2 : Self.peekPad)
         .frame(width: panelWidth(section))
     }
 
@@ -292,7 +303,10 @@ extension LookoutHub {
     /// The controls: how syncing is going, then keep open, repositories and settings, each with its key.
     var peekControls: some View {
         VStack(alignment: .leading, spacing: 0) {
-            syncStatus.padding(.horizontal, 8).frame(height: Self.peekLine, alignment: .leading)
+            // As a Claude menu's group label: `px-2 py-1`, footnote, muted.
+            syncStatus
+                .padding(.horizontal, CDS.Menu.itemPadX)
+                .frame(maxWidth: .infinity, minHeight: CDS.Menu.labelHeight, alignment: .leading)
             MenuRow(symbol: "pin", title: "Keep open", key: store.shortcut(.togglePanel).display) { hub.pinned = true }
             MenuRow(symbol: "square.stack.3d.up", title: "Repositories", key: nil) { hub.go(.repos) }
             MenuRow(symbol: "gearshape", title: "Settings", key: "⌘,") { hub.go(.settings) }
@@ -343,14 +357,17 @@ extension LookoutHub {
     }
 }
 
-/// The gear at the end of the bar, without a tooltip: hovering it opens the controls.
+/// The gear at the end of the bar, without a tooltip: hovering it opens the controls. Claude's ghost icon button, compact:
+/// a 24 square, radius 6, secondary glyph going white on a white-7.5% hover (15% while its page is open).
 struct ControlsGear: View {
     let active: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) { ControlsGearLabel(active: active) }
-            .buttonStyle(HoverFillButtonStyle(shape: Circle(), hover: Theme.Fill.hover, active: Theme.Fill.selected, isActive: active))
+            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous),
+                                              rest: .clear, hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostSelected,
+                                              pressed: CDS.Fill.ghostSelected, isActive: active))
             .accessibilityLabel("Controls")
             .accessibilityHint("Settings, repositories and keeping the hub open")
     }
@@ -361,14 +378,15 @@ private struct ControlsGearLabel: View {
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
-        Image(systemName: "gearshape.fill")
-            .font(Theme.Typography.glyph(13))
-            .foregroundStyle(hover || active ? Theme.text : Theme.tertiary)
-            .frame(width: IconButton.Size.bar, height: IconButton.Size.bar)
+        Image(systemName: "gearshape")
+            .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
+            .foregroundStyle(hover || active ? Color.white : CDS.Text.secondary)
+            .frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control)
     }
 }
 
-/// A line of the controls' panel: icon, title, and the key that does the same, like a menu item.
+/// A line of the controls' panel, as a Claude menu item (composer-overlays.md §8): 24 tall, 8 at the sides, 6 between a
+/// 16pt glyph and its 13pt title, radius 6, white 7.5% under the pointer; the key that does the same as its trailing hint.
 struct MenuRow: View {
     let symbol: String
     let title: String
@@ -377,21 +395,24 @@ struct MenuRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 9) {
+            HStack(spacing: CDS.Menu.itemGap) {
                 Image(systemName: symbol)
-                    .font(Theme.Typography.glyph(12))
-                    .foregroundStyle(Theme.secondary)
-                    .frame(width: 18)
+                    .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
+                    .foregroundStyle(CDS.Text.secondary)
+                    .frame(width: CDS.Density.compact.icon)
                     .accessibilityHidden(true)
-                Text(title).font(Theme.Typography.body).foregroundStyle(Theme.text)
-                Spacer(minLength: 8)
-                if let key { KeyCap(key) }
+                Text(title).font(CDS.sans(CDS.Density.compact.body.0)).foregroundStyle(CDS.Text.primary)
+                Spacer(minLength: CDS.Menu.hintGap)
+                if let key {
+                    Text(key).font(CDS.sans(CDS.Density.compact.footnote.0)).foregroundStyle(CDS.Text.muted)
+                }
             }
-            .padding(.horizontal, Theme.Space.md)
-            .frame(height: Theme.Metrics.line)
+            .padding(.horizontal, CDS.Menu.itemPadX)
+            .frame(height: CDS.Menu.item)
             .contentShape(Rectangle())
         }
-        .buttonStyle(HoverFillButtonStyle(shape: Theme.Radius.shape(Theme.Radius.sm + 1)))
+        .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Menu.itemRadius, style: .continuous),
+                                          rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
         .accessibilityLabel(title)
     }
 }

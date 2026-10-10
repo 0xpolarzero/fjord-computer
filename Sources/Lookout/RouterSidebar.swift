@@ -1,0 +1,283 @@
+import SwiftUI
+
+// MARK: - Sidebar
+
+/// Claude's Code-tab sidebar, compact density with the hub rail (docs/design/spec/global-sidebar-titlebar.md §2): the 46pt
+/// title row under the window's buttons, the search field, the New row and a nav row (the Router itself), then the cards by
+/// what they need, each with Claude's status dot.
+struct RouterSidebar: View {
+    let store: Store
+    @Bindable var model: RouterModel
+    @State private var query = ""
+
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        let open = filtered(store.openRouterCards)
+        let needs = open.filter { $0.kind != .done }
+        let done = open.filter { $0.kind == .done }
+        let working = store.allAgentRows.filter { $0.group == .working }
+        let earlier = filtered(store.router.cards.filter { !$0.isOpen }).sorted { $0.createdMs > $1.createdMs }.prefix(8)
+        var sections: [(String, [AnyView])] = []
+        if !needs.isEmpty { sections.append(("Needs you", needs.map { cardRow($0) })) }
+        if !done.isEmpty { sections.append(("Done", done.map { cardRow($0) })) }
+        if !working.isEmpty {
+            sections.append(("Working", working.map { row in
+                AnyView(SidebarRow(dot: .working, title: row.session.title, on: false) { store.openAgent(row.id) })
+            }))
+        }
+        if !earlier.isEmpty { sections.append(("Earlier", earlier.map { cardRow($0) })) }
+
+        return VStack(alignment: .leading, spacing: 0) {
+            // The title row (§2.2): room for the window's buttons. Lookout has no sidebar toggle, back/forward or
+            // Chat|Code switch, so it is only the drag area.
+            Color.clear.frame(height: M.titleRow)
+            VStack(alignment: .leading, spacing: 0) {
+                search
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // §2.4: the New row, then the nav rows (here the Router's own chat).
+                        NewRow(title: "New session") {
+                            model.select(nil, store: store)
+                            model.draft = "Start a session in @"
+                            model.reply()
+                        }
+                        .padding(.bottom, M.navGap)
+                        NavRow(symbol: "bubble.left", title: "Router", on: model.selection == nil) {
+                            model.select(nil, store: store)
+                        }
+                        .padding(.bottom, M.navGap)
+                        // `[data-testid=nav-pin-rows] > .h-3`.
+                        Color.clear.frame(height: 12)
+                        ForEach(sections.indices, id: \.self) { i in
+                            if i > 0 { Color.clear.frame(height: M.sectionGap) }
+                            section(sections[i].0, sections[i].1)
+                        }
+                        if sections.isEmpty && query.isEmpty {
+                            Text("Nothing needs you").cdsText(CDS.Density.compact.body, .regular, CDS.Text.muted)
+                                .padding(.leading, M.labelInset).padding(.top, M.groupTop)
+                        }
+                    }
+                    .padding(.bottom, 12)
+                }
+                .scrollIndicators(.never)
+            }
+            .padding(.top, 4)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 6)
+        }
+        .font(CDS.sans(M.rowFont))
+    }
+
+    private func filtered(_ cards: [RouterCard]) -> [RouterCard] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return cards }
+        return cards.filter { $0.title.lowercased().contains(q) || $0.text.lowercased().contains(q) }
+    }
+
+    /// §2.3: a 26pt field, white 5% with a 1pt white 10% inset ring, the magnifying glass in a 24pt slot, muted text.
+    private var search: some View { SearchField(query: $query) }
+
+    private func cardRow(_ card: RouterCard) -> AnyView {
+        AnyView(SidebarRow(dot: ClaudeDot.Kind(card), title: card.title, on: model.selection == card.id) {
+            model.select(card.id, store: store)
+        })
+    }
+
+    /// §2.6: a group label, 12/16 muted, 12 above and 4 below, its text inset 10; then the rows at a 27.5 pitch.
+    private func section(_ title: String, _ rows: [AnyView]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title).cdsText((M.groupFont, 16), .regular, CDS.Text.muted)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: M.labelMinHeight - M.groupTop - 4, alignment: .leading)
+                .padding(.leading, M.labelInset)
+                .padding(.top, M.groupTop).padding(.bottom, 4)
+                .accessibilityAddTraits(.isHeader)
+            ForEach(rows.indices, id: \.self) { rows[$0].padding(.bottom, M.sessionGap) }
+        }
+    }
+}
+
+private struct SearchField: View {
+    @Binding var query: String
+    @State private var hovered = false
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        HStack(spacing: M.rowGap) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: M.symbol, weight: .medium))
+                .foregroundStyle(CDS.Text.muted)
+                .frame(width: M.leadingSlot, height: M.leadingSlot)
+                .padding(.leading, M.railShift / 2)
+            // The label is muted (§2.3); what you type is primary.
+            TextField("Search", text: $query, prompt: Text(""))
+                .textFieldStyle(.plain)
+                .font(CDS.sans(M.rowFont))
+                .foregroundStyle(CDS.Text.primary)
+                .background(alignment: .leading) {
+                    if query.isEmpty {
+                        Text("Search").font(CDS.sans(M.rowFont)).foregroundStyle(CDS.Text.muted)
+                            .allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
+        }
+        .padding(.horizontal, M.rowPadding)
+        .frame(height: M.rowHeight)
+        .background(RoundedRectangle(cornerRadius: M.radius, style: .continuous)
+            .fill(hovered ? CDS.Fill.secondaryHover : CDS.Fill.field)
+            .shadow(color: .black.opacity(0.05), radius: 1, y: 1))
+        .overlay(RoundedRectangle(cornerRadius: M.radius, style: .continuous)
+            .strokeBorder(hovered ? Color.clear : CDS.border, lineWidth: 1))
+        .onHover { hovered = $0 }
+        .animation(.easeOut(duration: 0.06), value: hovered)
+        .padding(.horizontal, M.railShift / 2)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+    }
+}
+
+/// Claude's row primitive (§2.5, §2.7): 26 tall, radius 6, 2 padding, a 24pt leading slot shifted 4 by the hub rail, a 4 gap,
+/// 13pt text at wght 360 in secondary; white 7.5% on hover, 15% and primary text when picked. An overflowing title fades out
+/// over its last 24pt instead of an ellipsis.
+struct SidebarRowButton<Leading: View>: View {
+    let title: String
+    var titleColor: Color = CDS.Text.secondary
+    let on: Bool
+    let action: () -> Void
+    @ViewBuilder let leading: (_ hovered: Bool) -> Leading
+    @State private var hovered = false
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: M.rowGap) {
+                leading(hovered)
+                    .frame(width: M.leadingSlot, height: M.leadingSlot)
+                    .padding(.leading, M.railShift)
+                Text(title)
+                    .font(CDS.sans(M.rowFont))
+                    .foregroundStyle(on ? CDS.Text.primary : titleColor)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
+                    .mask(HStack(spacing: 0) {
+                        Rectangle()
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 24)
+                    })
+            }
+            .padding(.horizontal, M.rowPadding)
+            .frame(height: M.rowHeight)
+            .background(RoundedRectangle(cornerRadius: M.radius, style: .continuous)
+                .fill(on ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// §2.4: the New row, its 18pt #2c2c2a circle holding a 13pt + at weight 700 (secondary, primary on hover; the circle turns
+/// muted 25% on hover).
+private struct NewRow: View {
+    let title: String
+    let action: () -> Void
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        SidebarRowButton(title: title, on: false, action: action) { hovered in
+            Image(systemName: "plus")
+                .font(.system(size: M.newGlyph, weight: .bold))
+                .foregroundStyle(hovered ? CDS.Text.primary : CDS.Text.secondary)
+                .frame(width: M.newCircle, height: M.newCircle)
+                .background(Circle().fill(hovered ? CDS.Text.muted.opacity(0.25) : CDS.Sidebar.newCircleFill))
+        }
+    }
+}
+
+/// §2.5: a nav row, its 16pt icon in secondary (primary when picked).
+private struct NavRow: View {
+    let symbol: String
+    let title: String
+    let on: Bool
+    let action: () -> Void
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        SidebarRowButton(title: title, on: on, action: action) { _ in
+            Image(systemName: symbol)
+                .font(.system(size: M.symbol, weight: .medium))
+                .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
+        }
+    }
+}
+
+/// A session row (§2.7): Claude's status dot in the leading slot.
+struct SidebarRow: View {
+    let dot: ClaudeDot.Kind
+    let title: String
+    let on: Bool
+    let action: () -> Void
+
+    var body: some View {
+        SidebarRowButton(title: title, on: on, action: action) { _ in ClaudeDot(kind: dot) }
+    }
+}
+
+/// Claude's session status dot (§1.7), 6pt in a 14pt box: awaiting #fab219 (a question or a plan), ready #2a78d6 (a
+/// finished turn), running #898781 blinking (a working session), idle a 1pt hollow ring at 50% (addressed). Claude has no
+/// "stuck" state; Lookout's stuck card keeps a red 6pt dot (`CDS.Text.danger`).
+struct ClaudeDot: View {
+    enum Kind {
+        case needsYou, done, stuck, working, quiet
+
+        init(_ card: RouterCard) {
+            guard card.isOpen else { self = .quiet; return }
+            switch card.kind {
+            case .question, .plan: self = .needsYou
+            case .stuck: self = .stuck
+            case .done: self = .done
+            }
+        }
+    }
+
+    let kind: Kind
+
+    var body: some View {
+        ZStack {
+            switch kind {
+            case .needsYou: Circle().fill(CDS.Fill.warning).frame(width: 6, height: 6)
+            case .done: Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6)
+            case .stuck: Circle().fill(CDS.Text.danger).frame(width: 6, height: 6)
+            case .quiet: Circle().strokeBorder(CDS.Text.muted, lineWidth: 1).frame(width: 6, height: 6).opacity(0.5)
+            case .working: BlinkingDot()
+            }
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityHidden(true)
+    }
+}
+
+/// `dframe-dot-blink`: 1.2s ease-in-out, opacity .3 → 1 → .3, forever.
+private struct BlinkingDot: View {
+    @State private var lit = false
+    var body: some View {
+        Circle().fill(CDS.Text.muted).frame(width: 6, height: 6)
+            .opacity(lit ? 1 : 0.3)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { lit = true }
+            }
+    }
+}
+
+/// Claude's "···" while it works, in clay.
+struct WorkingDots: View {
+    var body: some View {
+        HStack(spacing: 1.5) {
+            ForEach(0..<3) { i in Circle().fill(Theme.claude.opacity(1 - Double(i) * 0.3)).frame(width: 2.5, height: 2.5) }
+        }
+    }
+}

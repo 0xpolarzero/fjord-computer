@@ -294,9 +294,9 @@ import UserNotifications
     @Test(.hostsWindows) func aMountedComposerFollowsTheCaret() async throws {
         let store = demo()
         let model = RouterModel()
-        let hosting = NSHostingView(rootView: RouterView(store: store, model: model, checksClaudeCode: false)
-            .frame(width: 920, height: 640))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 920, height: 640), styleMask: .titled, backing: .buffered,
+        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
+            .frame(width: 1100, height: 720))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .titled, backing: .buffered,
                               defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = hosting
@@ -305,7 +305,11 @@ import UserNotifications
         defer { window.close() }
         // Other tests' windows may hold the keyboard: the composer's own field is given it here, once it is drawn.
         func fields(_ view: NSView) -> [NSTextField] { (view as? NSTextField).map { [$0] } ?? [] + view.subviews.flatMap(fields) }
-        func findComposer() -> NSTextField? { fields(hosting).first { $0.placeholderString?.hasPrefix("Message the Router") == true } }
+        // The editable field lowest in the window (the sidebar's search is at the top): the composer draws its placeholder
+        // itself (macOS ignores a placeholder's colour), so it can't be found by that.
+        func findComposer() -> NSTextField? {
+            fields(hosting).filter(\.isEditable).min { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }
+        }
         await waitUntil { findComposer() != nil }
         // The composer asks for the keyboard as it appears, two main-queue hops later, and focusing a field selects all of
         // it: that is done with before the test types and moves the caret, so it can't land in the middle.

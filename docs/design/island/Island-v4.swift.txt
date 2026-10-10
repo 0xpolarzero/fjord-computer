@@ -1,0 +1,884 @@
+// Lookout, v4: "Night watch". The island for glancing, the Router as a real window.
+// Colour is only ever a signal (lamps); controls are paper on graphite. Three voices in type: the sessions speak in
+// New York (serif), the interface in SF Pro, the machine (projects, times, counts, keys) in SF Mono.
+//   swiftc -O -parse-as-library Island.swift -o /tmp/island && /tmp/island shots
+import AppKit
+import SwiftUI
+
+// MARK: - Palette
+
+enum P {
+    // Graphite, warm.
+    static let shell = Color.black
+    static let base = hex(0x0D0D0C)
+    static let panel = hex(0x131312)
+    static let raised = hex(0x1A1A18)
+    static let raised2 = hex(0x222220)
+    static let rule = Color(red: 1, green: 0.98, blue: 0.94).opacity(0.075)
+    static let ruleStrong = Color(red: 1, green: 0.98, blue: 0.94).opacity(0.13)
+    // Ink.
+    static let paper = hex(0xEDEBE6)
+    static let pencil = hex(0xA3A09A)
+    static let graphite = hex(0x6E6B66)
+    static let faint = hex(0x4A4845)
+    // Signals.
+    static let beacon = hex(0xF5B544)   // needs you
+    static let ember = hex(0xE0855A)    // working (Claude's clay)
+    static let moon = hex(0xA9B6FF)     // done
+    static let flare = hex(0xFF6B5E)    // stuck, failing
+    static let moss = hex(0x7CC793)     // passing
+    static func hex(_ v: UInt32) -> Color {
+        Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
+    }
+}
+
+// MARK: - Type: three voices
+
+enum TY {
+    static let ui = Font.system(size: 13)
+    static let uiM = Font.system(size: 13, weight: .medium)
+    static let uiS = Font.system(size: 12)
+    static let uiSM = Font.system(size: 12, weight: .medium)
+    static let voice = Font.system(size: 14, design: .serif)
+    static let voiceS = Font.system(size: 13, design: .serif)
+    static let voiceL = Font.system(size: 24, design: .serif)
+    static let voiceXL = Font.system(size: 20, design: .serif)
+    static let mono = Font.system(size: 11, design: .monospaced)
+    static let monoM = Font.system(size: 11, weight: .medium, design: .monospaced)
+    static let caps = Font.system(size: 10, weight: .semibold, design: .monospaced)
+}
+
+extension Text {
+    func s(_ f: Font, _ c: Color) -> Text { font(f).foregroundColor(c) }
+}
+
+// MARK: - Components
+
+/// A lit lamp: the only colour on screen. Soft glow, so it reads on black like a signal light.
+struct Lamp: View {
+    let c: Color
+    var size: CGFloat = 7
+    var dim = false
+    var body: some View {
+        ZStack {
+            if !dim { Circle().fill(c.opacity(0.28)).frame(width: size * 2.6, height: size * 2.6).blur(radius: size * 0.7) }
+            Circle().fill(dim ? P.faint : c).frame(width: size, height: size)
+            if !dim { Circle().fill(.white.opacity(0.35)).frame(width: size * 0.35, height: size * 0.35).offset(x: -size * 0.15, y: -size * 0.15) }
+        }
+        .frame(width: size * 2, height: size * 2)
+    }
+}
+
+/// A project, as an instrument label.
+struct Tag: View {
+    let s: String
+    var body: some View {
+        Text(s.uppercased()).font(TY.caps).tracking(0.6).foregroundColor(P.pencil)
+            .padding(.horizontal, 5).frame(height: 16)
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(P.ruleStrong, lineWidth: 1))
+    }
+}
+
+struct Caps: View {
+    let s: String; var c: Color = P.graphite
+    var body: some View { Text(s.uppercased()).font(TY.caps).tracking(0.9).foregroundColor(c) }
+}
+
+struct Key: View {
+    let k: String
+    var body: some View {
+        Text(k).font(k.count == 1 && k.first!.isLetter ? TY.monoM : Font.system(size: 11, weight: .medium)).foregroundColor(P.graphite)
+            .padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
+            .background(RoundedRectangle(cornerRadius: 3).fill(P.raised2))
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(P.rule, lineWidth: 1).offset(y: 0.5))
+    }
+}
+
+struct Button1: View {
+    let s: String; var key: String? = nil; var primary = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(s).font(TY.uiSM).foregroundColor(primary ? P.base : P.paper)
+            if let key { Text(key).font(Font.system(size: 11, weight: .medium)).foregroundColor(primary ? P.base.opacity(0.55) : P.graphite) }
+        }
+        .padding(.horizontal, 10).frame(height: 28)
+        .background(RoundedRectangle(cornerRadius: 5).fill(primary ? P.paper : P.raised2))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(primary ? .clear : P.rule, lineWidth: 1))
+    }
+}
+
+/// The composer: a command line with its target spelled out.
+struct Command: View {
+    var to: String
+    var placeholder = "Reply"
+    var draft: String? = nil
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("→").font(TY.monoM).foregroundColor(P.beacon)
+            Text(to).font(TY.monoM).foregroundColor(P.pencil).lineLimit(1).fixedSize()
+            Rectangle().fill(P.rule).frame(width: 1, height: 16)
+            if let draft {
+                (Text(draft).foregroundColor(P.paper) + Text("▍").foregroundColor(P.beacon)).font(TY.ui)
+            } else {
+                Text(placeholder).s(TY.ui, P.graphite)
+            }
+            Spacer()
+            Key(k: "@"); Key(k: "↵")
+        }
+        .padding(.horizontal, 12).frame(height: 42)
+        .background(RoundedRectangle(cornerRadius: 6).fill(P.base))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(P.ruleStrong, lineWidth: 1))
+    }
+}
+
+/// A line in a card's log, on the rail.
+struct LogLine<Body: View>: View {
+    let c: Color; var dim = false; var last = false
+    @ViewBuilder var content: Body
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 0) {
+                Lamp(c: c, size: 6, dim: dim).frame(width: 14, height: 14)
+                if !last { Rectangle().fill(P.rule).frame(width: 1).frame(maxHeight: .infinity) }
+            }
+            .frame(width: 14)
+            content.padding(.bottom, last ? 0 : 16).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Content (the app's own demo data)
+
+enum Kind { case ask, plan, stuck, done, working, quiet
+    var color: Color {
+        switch self { case .ask, .plan: P.beacon; case .stuck: P.flare; case .done: P.moon; case .working: P.ember; case .quiet: P.faint }
+    }
+    var word: String {
+        switch self { case .ask: "Question"; case .plan: "Plan"; case .stuck: "Stuck"; case .done: "Done"; case .working: "Working"; case .quiet: "" }
+    }
+}
+
+struct Card: Identifiable {
+    let id: String; let kind: Kind; let title: String; let project: String; let ago: String; let text: String
+    var note: String? = nil
+}
+
+let cards: [Card] = [
+    .init(id: "lcu", kind: .ask, title: "LCU update notifications", project: "lcu", ago: "2m",
+          text: "Should updates install silently, or ask first each time?"),
+    .init(id: "linux", kind: .plan, title: "LCU JavaScript sandbox on Linux", project: "microsandbox", ago: "9m",
+          text: "Run the JavaScript sandbox in a Firecracker microVM on Linux."),
+    .init(id: "calc", kind: .stuck, title: "Calculator display reading", project: "lcu-research", ago: "6m",
+          text: "Can't reach the staging database: the VPN is down."),
+    .init(id: "ci", kind: .done, title: "CI failure diagnosis", project: "microsandbox", ago: "4m",
+          text: "Fixed the flaky sandbox test; CI is green on the branch."),
+]
+let earlier: [Card] = [
+    .init(id: "transfer", kind: .quiet, title: "Repository ownership transfer setup", project: "microsandbox", ago: "12m",
+          text: "Transfer is done; both remotes point at the new org.", note: "Passed on by the Router"),
+    .init(id: "games", kind: .quiet, title: "Game recommendations", project: "—", ago: "30m",
+          text: "Single-player immersion or online squads?", note: "Answered"),
+]
+
+// MARK: - The island (squarer: 10 outside, 5 inside)
+
+enum Notch { static let w: CGFloat = 188; static let h: CGFloat = 32 }
+
+struct IslandShape: Shape {
+    var r: CGFloat; var flare: CGFloat = 5
+    func path(in b: CGRect) -> Path {
+        let w = b.width, h = b.height, f = flare, R = min(r, h / 2)
+        var p = Path()
+        p.move(to: .zero)
+        p.addQuadCurve(to: CGPoint(x: f, y: f), control: CGPoint(x: f, y: 0))
+        p.addLine(to: CGPoint(x: f, y: h - R))
+        p.addArc(tangent1End: CGPoint(x: f, y: h), tangent2End: CGPoint(x: f + R, y: h), radius: R)
+        p.addLine(to: CGPoint(x: w - f - R, y: h))
+        p.addArc(tangent1End: CGPoint(x: w - f, y: h), tangent2End: CGPoint(x: w - f, y: h - R), radius: R)
+        p.addLine(to: CGPoint(x: w - f, y: f))
+        p.addQuadCurve(to: CGPoint(x: w, y: 0), control: CGPoint(x: w - f, y: 0))
+        p.closeSubpath(); return p
+    }
+}
+
+/// Beside the camera, the same in every state: lamps and counts in mono.
+struct Ears: View {
+    var body: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 4) { Lamp(c: P.beacon, size: 6); Text("3").s(TY.monoM, P.paper) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Color.clear.frame(width: Notch.w)
+            HStack(spacing: 4) { Text("2").s(TY.monoM, P.pencil); Lamp(c: P.ember, size: 6) }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.horizontal, 8).frame(height: Notch.h)
+    }
+}
+
+struct Island<Inner: View>: View {
+    var width: CGFloat
+    @ViewBuilder var inner: Inner
+    var body: some View {
+        VStack(spacing: 0) {
+            Ears()
+            inner
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .background(RoundedRectangle(cornerRadius: 5).fill(P.panel))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(P.rule, lineWidth: 1))
+                .padding(.horizontal, 5).padding(.bottom, 5)
+        }
+        .frame(width: width).padding(.horizontal, 5)
+        .background(IslandShape(r: 10).fill(P.shell))
+        .shadow(color: .black.opacity(0.3), radius: 22, y: 10)
+    }
+}
+
+/// A row in the island: lamp, title, then mono on the right.
+struct IRow: View {
+    let c: Card; var on = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Lamp(c: c.kind.color, size: 6, dim: c.kind == .quiet)
+            Text(c.title).s(TY.uiM, P.paper).lineLimit(1)
+            Spacer(minLength: 10)
+            Text(c.project).s(TY.mono, P.graphite)
+            Text(c.ago).s(TY.mono, P.graphite).frame(width: 26, alignment: .trailing)
+        }
+        .padding(.horizontal, 8).frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 4).fill(on ? P.raised : .clear))
+    }
+}
+
+// MARK: - Desktop
+
+struct Desk<Content: View>: View {
+    var h: CGFloat
+    @ViewBuilder var content: Content
+    var body: some View {
+        ZStack(alignment: .top) {
+            if let img = NSImage(contentsOfFile: "/tmp/island-proto/wall.png") {
+                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+                    .frame(width: 1512, height: 982, alignment: .top).frame(height: h, alignment: .top).clipped()
+            }
+            HStack(spacing: 20) {
+                Image(systemName: "apple.logo").font(.system(size: 14))
+                Text("Claude").font(.system(size: 13, weight: .bold))
+                ForEach(["File", "Edit", "View", "Window", "Help"], id: \.self) { Text($0).font(.system(size: 13)) }
+                Spacer()
+                Image(systemName: "wifi").font(.system(size: 13))
+                Image(systemName: "battery.75percent").font(.system(size: 15))
+                Text("Thu 9 Oct  14:32").font(.system(size: 13))
+            }
+            .foregroundColor(.white.opacity(0.9)).padding(.horizontal, 18).frame(height: Notch.h)
+            .overlay { IslandShape(r: 8, flare: 0).fill(.black).frame(width: Notch.w, height: Notch.h) }
+            content
+        }
+        .frame(width: 1512, height: h, alignment: .top).clipped()
+    }
+}
+
+// MARK: - Island states
+
+struct Rest: View {
+    var body: some View {
+        Desk(h: 140) { Ears().frame(width: Notch.w + 84).background(IslandShape(r: 8).fill(P.shell)) }
+    }
+}
+
+struct Arrives: View {
+    var body: some View {
+        Desk(h: 300) {
+            Island(width: 420) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Caps(s: "Question", c: P.beacon)
+                        Text("LCU update notifications").s(TY.uiS, P.pencil)
+                        Spacer()
+                        Text("now").s(TY.mono, P.graphite)
+                    }
+                    Text("Should updates install silently, or ask first each time?").s(TY.voice, P.paper)
+                    HStack(spacing: 6) {
+                        chip("1", "Install silently"); chip("2", "Ask first")
+                        Spacer()
+                        Text("Reply").s(TY.uiS, P.graphite); Key(k: "↵")
+                    }
+                }
+                .padding(12)
+            }
+        }
+    }
+    func chip(_ n: String, _ s: String) -> some View {
+        HStack(spacing: 7) { Text(n).s(TY.monoM, P.graphite); Text(s).s(TY.uiSM, P.paper) }
+            .padding(.horizontal, 9).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 4).fill(P.raised2))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(P.rule, lineWidth: 1))
+    }
+}
+
+struct Glance: View {
+    var body: some View {
+        Desk(h: 330) {
+            Island(width: 420) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(cards) { IRow(c: $0, on: $0.id == "lcu") }
+                    Rectangle().fill(P.rule).frame(height: 1).padding(.vertical, 5).padding(.horizontal, 8)
+                    working("Agent completion notifications", "Running swift test", "20s")
+                    working("CI failure diagnosis", "3 still running", "")
+                }
+                .padding(5)
+            }
+        }
+    }
+    func working(_ t: String, _ what: String, _ time: String) -> some View {
+        HStack(spacing: 8) {
+            Lamp(c: P.ember, size: 6)
+            Text(t).s(TY.ui, P.pencil).lineLimit(1)
+            Spacer(minLength: 8)
+            Text(what).s(TY.mono, P.graphite).lineLimit(1)
+            Text(time).s(TY.mono, P.graphite).frame(width: 26, alignment: .trailing)
+        }
+        .padding(.horizontal, 8).frame(height: 28)
+    }
+}
+
+/// Kept open (⌃⌥L): the GitHub side, in the island too. The hovered item opens in place, its comment in the author's voice.
+struct Hub: View {
+    let rows: [(String, String, String, String, String)] = [
+        ("andrewrk", "std.Io: add vectored reads to File", "zig#21877", "Review comment", "3m"),
+        ("allevato", "Respect trailing comma config in collection literals", "swift-format#1042", "PR comment", "18m"),
+        ("mattt", "Pill overlaps the Dock when it's on the right", "lookout#12", "New issue", "42m"),
+        ("ahoppen", "Add --lines option to format a range", "swift-format#1051", "Review requested", "1h"),
+        ("kylef", "Add GitHub Enterprise host setting", "lookout#15", "New pull request", "1h"),
+    ]
+    var body: some View {
+        Desk(h: 620) {
+            Island(width: 480) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 14) {
+                        tab("Needs you", "5", true); tab("Bots", "2", false); tab("Done", nil, false)
+                        Spacer()
+                        Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundColor(P.graphite)
+                    }
+                    .padding(.horizontal, 12).frame(height: 36)
+                    Rectangle().fill(P.rule).frame(height: 1)
+                    VStack(spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { i, r in
+                            if i == 0 { open(r) } else { row(r) }
+                        }
+                    }
+                    .padding(5)
+                    Rectangle().fill(P.rule).frame(height: 1)
+                    HStack(spacing: 14) {
+                        Caps(s: "Main")
+                        ci(P.flare, "swift-format", "2 failing"); ci(P.ember, "zig", "running"); ci(P.moss, "lookout", nil); ci(P.moss, "lcu", nil)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).frame(height: 36)
+                }
+            }
+        }
+    }
+    func tab(_ s: String, _ n: String?, _ on: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text(s).s(TY.uiSM, on ? P.paper : P.graphite)
+            if let n { Text(n).s(TY.mono, on ? P.beacon : P.graphite) }
+        }
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) { if on { Rectangle().fill(P.paper).frame(height: 1.5).offset(y: 0) } }
+    }
+    func avatar(_ u: String) -> some View {
+        ZStack { if let i = NSImage(contentsOfFile: "/tmp/island-proto/avatars/\(u).png") { Image(nsImage: i).resizable() } }
+            .frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+    func row(_ r: (String, String, String, String, String)) -> some View {
+        HStack(spacing: 9) {
+            avatar(r.0)
+            Text(r.1).s(TY.uiM, P.paper).lineLimit(1)
+            Spacer(minLength: 10)
+            Text(r.2).s(TY.mono, P.graphite)
+            Text(r.4).s(TY.mono, P.graphite).frame(width: 24, alignment: .trailing)
+        }
+        .padding(.horizontal, 8).frame(height: 32)
+    }
+    func open(_ r: (String, String, String, String, String)) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            row(r)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text(r.0).s(TY.uiSM, P.pencil)
+                    Text("· \(r.3.lowercased()) on").s(TY.uiS, P.graphite)
+                    Text("lib/std/Io/File.zig").s(TY.mono, P.pencil)
+                }
+                Text("“This should take the buffer by slice instead, otherwise we copy twice on the hot path.”")
+                    .s(TY.voice, P.paper).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Button1(s: "Open", key: "↵", primary: true); Button1(s: "Mark read", key: "Space"); Button1(s: "Done", key: "⌫")
+                }
+                .padding(.top, 2)
+            }
+            .padding(.leading, 35).padding(.trailing, 8).padding(.bottom, 10)
+        }
+        .background(RoundedRectangle(cornerRadius: 4).fill(P.raised))
+    }
+    func ci(_ c: Color, _ s: String, _ d: String?) -> some View {
+        HStack(spacing: 4) {
+            Lamp(c: c, size: 6)
+            Text(s).s(TY.uiS, P.pencil)
+            if let d { Text(d).s(TY.mono, c) }
+        }
+    }
+}
+
+// MARK: - The Router window
+
+enum Focus { case question, plan, done, chat }
+
+struct RouterWindow: View {
+    var focus: Focus
+    var body: some View {
+        VStack(spacing: 0) {
+            titlebar
+            HStack(spacing: 0) {
+                list.frame(width: 330)
+                Rectangle().fill(P.rule).frame(width: 1)
+                detail
+            }
+        }
+        .frame(width: 1120, height: 720)
+        .background(P.base)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(P.ruleStrong, lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 40, y: 20)
+    }
+
+    var titlebar: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 8) {
+                Circle().fill(P.hex(0xFF5F57)).frame(width: 12, height: 12)
+                Circle().fill(P.hex(0xFEBC2E)).frame(width: 12, height: 12)
+                Circle().fill(P.hex(0x28C840)).frame(width: 12, height: 12)
+            }
+            Text("Router").s(Font.system(size: 13, weight: .semibold), P.paper).padding(.leading, 6)
+            HStack(spacing: 12) {
+                HStack(spacing: 2) { Lamp(c: P.beacon, size: 6); Text("3 need you").s(TY.mono, P.pencil) }
+                HStack(spacing: 2) { Lamp(c: P.ember, size: 6); Text("2 working").s(TY.mono, P.pencil) }
+            }
+            Spacer()
+            HStack(spacing: 6) { Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)); Text("Search").font(TY.uiS); Key(k: "⌘K") }
+                .foregroundColor(P.graphite).padding(.horizontal, 8).frame(width: 200, height: 26, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 5).fill(P.panel))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(P.rule, lineWidth: 1))
+            Button1(s: "New session", key: "⌘N")
+        }
+        .padding(.horizontal, 14).frame(height: 46)
+        .overlay(alignment: .bottom) { Rectangle().fill(P.rule).frame(height: 1) }
+    }
+
+    // List: the Router's own thread pinned, then cards by what they need.
+    var list: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            routerRow
+            section("Needs you", "3")
+            ForEach(cards.filter { $0.kind != .done }) { LRow(c: $0, on: selected($0)) }
+            section("Done", "1")
+            ForEach(cards.filter { $0.kind == .done }) { LRow(c: $0, on: selected($0)) }
+            section("Earlier", nil)
+            ForEach(earlier) { LRow(c: $0, on: false) }
+            Spacer()
+        }
+        .padding(6)
+    }
+
+    func selected(_ c: Card) -> Bool {
+        switch focus { case .question: c.id == "lcu"; case .plan: c.id == "linux"; case .done: c.id == "ci"; case .chat: false }
+    }
+
+    var routerRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 12, weight: .semibold))
+                .foregroundColor(P.paper).frame(width: 22, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5).fill(P.raised2))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack { Text("Router").s(TY.uiM, P.paper); Spacer(); Text("1m").s(TY.mono, P.graphite) }
+                Text("Removed old-origin; only the new org's remote is left.").s(TY.voiceS, P.pencil).lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 5).fill(focus == .chat ? P.raised : .clear))
+    }
+
+    func section(_ s: String, _ n: String?) -> some View {
+        HStack(spacing: 6) { Caps(s: s); if let n { Text(n).s(TY.mono, P.faint) } }
+            .padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 6)
+    }
+
+    @ViewBuilder var detail: some View {
+        switch focus {
+        case .question: QuestionDetail()
+        case .plan: PlanDetail()
+        case .done: DoneDetail()
+        case .chat: ChatDetail()
+        }
+    }
+}
+
+struct LRow: View {
+    let c: Card; var on: Bool
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Lamp(c: c.kind.color, size: 7, dim: c.kind == .quiet).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(c.title).s(TY.uiM, c.kind == .quiet ? P.pencil : P.paper).lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(c.ago).s(TY.mono, P.graphite)
+                }
+                if let note = c.note {
+                    Text(note).s(TY.uiS, P.graphite).lineLimit(1)
+                } else {
+                    Text(c.text).s(TY.voiceS, P.pencil).lineLimit(1)
+                }
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 5).fill(on ? P.raised : .clear))
+        .overlay(alignment: .leading) { if on { Rectangle().fill(c.kind.color).frame(width: 2, height: 18).offset(x: -6) } }
+    }
+}
+
+/// The header every card shares: what kind, which session, where; the two ways out on the right.
+struct CardHead: View {
+    let c: Card
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 2) { Lamp(c: c.kind.color, size: 7); Caps(s: c.kind.word, c: c.kind.color) }
+            Text(c.title).s(TY.uiM, P.paper)
+            Tag(s: c.project)
+            Text(c.ago + " ago").s(TY.mono, P.graphite)
+            Spacer()
+            Button1(s: "Open in Claude", key: "O")
+            Button1(s: "Mark addressed", key: "E")
+        }
+        .padding(.horizontal, 28).frame(height: 56)
+        .overlay(alignment: .bottom) { Rectangle().fill(P.rule).frame(height: 1) }
+    }
+}
+
+struct Detail<Body: View>: View {
+    let c: Card; var to: String; var placeholder = "Reply"; var draft: String? = nil
+    @ViewBuilder var content: Body
+    var body: some View {
+        VStack(spacing: 0) {
+            CardHead(c: c)
+            VStack(alignment: .leading, spacing: 0) { content }
+                .padding(.horizontal, 40).padding(.top, 28)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            Command(to: to, placeholder: placeholder, draft: draft).padding(.horizontal, 28).padding(.bottom, 22)
+        }
+        .background(P.panel)
+    }
+}
+
+struct QuestionDetail: View {
+    var body: some View {
+        Detail(c: cards[0], to: "LCU update notifications", placeholder: "Answer in your own words, or pick above") {
+            Caps(s: "Updates · 1 of 1")
+            Text("Should updates install silently, or ask first each time?").s(TY.voiceL, P.paper)
+                .padding(.top, 10).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Keycap(n: "1", label: "Install silently", detail: "Download and install in the background")
+                Keycap(n: "2", label: "Ask first", detail: "Show a prompt before each update", on: true)
+            }
+            .padding(.top, 22)
+            HStack(spacing: 10) {
+                Text("3").s(TY.monoM, P.graphite)
+                Text("Something else…").s(TY.ui, P.graphite)
+                Spacer()
+            }
+            .padding(.horizontal, 14).frame(height: 40)
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(P.rule, style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+            .padding(.top, 10)
+            HStack(spacing: 8) { Button1(s: "Send answer", key: "⌘↵", primary: true); Text("Goes to the session as your reply").s(TY.uiS, P.graphite) }
+                .padding(.top, 18)
+
+            Caps(s: "Log").padding(.top, 34).padding(.bottom, 12)
+            LogLine(c: P.ember) {
+                HStack(spacing: 6) { Text("Started on").s(TY.uiS, P.graphite); Text("“make updates safer”").s(TY.voiceS, P.pencil); Text("14m").s(TY.mono, P.faint) }
+            }
+            LogLine(c: P.beacon, last: true) {
+                HStack(spacing: 6) { Text("Stopped to ask you").s(TY.uiS, P.pencil); Text("2m").s(TY.mono, P.faint) }
+            }
+        }
+    }
+}
+
+struct Keycap: View {
+    let n: String; let label: String; let detail: String; var on = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(n).s(TY.monoM, on ? P.base : P.graphite)
+                    .frame(width: 18, height: 18)
+                    .background(RoundedRectangle(cornerRadius: 3).fill(on ? P.paper : P.raised2))
+                Spacer()
+                if on { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundColor(P.paper) }
+            }
+            Text(label).s(Font.system(size: 14, weight: .medium), P.paper).padding(.top, 4)
+            Text(detail).s(TY.uiS, P.pencil)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6).fill(on ? P.raised2 : P.raised))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(on ? P.paper.opacity(0.7) : P.rule, lineWidth: 1))
+        .overlay(alignment: .bottom) { RoundedRectangle(cornerRadius: 6).fill(.black.opacity(0.25)).frame(height: 2).offset(y: 3).padding(.horizontal, 2) }
+    }
+}
+
+struct PlanDetail: View {
+    var body: some View {
+        Detail(c: cards[1], to: "LCU JavaScript sandbox on Linux", draft: "approve, but keep the macOS path untouched") {
+            Caps(s: "Plan · 4 steps · 2 files")
+            Text("Run the JavaScript sandbox in a Firecracker microVM on Linux").s(TY.voiceL, P.paper)
+                .padding(.top, 10).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 0) {
+                step(1, "Boot a minimal microVM from the sandbox image", "cold start ≈ 120 ms")
+                step(2, "Mount the workspace read-only over virtio-fs", nil)
+                step(3, "Bridge stdio and the LCU JS calls over vsock", nil)
+                step(4, "Leave macOS on Virtualization.framework, as today", nil, last: true)
+            }
+            .padding(.top, 20)
+            HStack(spacing: 8) {
+                Tag(s: "sandbox/linux.rs"); Tag(s: "vm/firecracker.rs")
+            }
+            .padding(.top, 14)
+            HStack(spacing: 8) {
+                Button1(s: "Approve", key: "⌘↵", primary: true)
+                Button1(s: "Keep planning")
+                Text("Your note below goes with it").s(TY.uiS, P.graphite)
+            }
+            .padding(.top, 20)
+        }
+    }
+    func step(_ n: Int, _ s: String, _ note: String?, last: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text(String(format: "%02d", n)).s(TY.monoM, P.graphite)
+            Text(s).s(TY.voice, P.paper)
+            if let note { Text(note).s(TY.mono, P.graphite) }
+            Spacer()
+        }
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(P.rule).frame(height: 1) } }
+    }
+}
+
+struct DoneDetail: View {
+    var body: some View {
+        Detail(c: cards[3], to: "CI failure diagnosis") {
+            Caps(s: "Turn finished · 4m ago")
+            (Text("Fixed the flaky sandbox test; ") + Text("CI is green").foregroundColor(P.moss) + Text(" on the branch."))
+                .font(TY.voiceL).foregroundColor(P.paper).padding(.top, 10)
+            Caps(s: "Still running · 3").padding(.top, 30).padding(.bottom, 4)
+            VStack(spacing: 0) {
+                task("person.2", "Review the sandbox changes", "Reading sandbox.rs", "3m")
+                task("person.2", "Check the other CI jobs", "Thinking", "1m")
+                task("terminal", "Run the full test suite", "swift test", "6m", last: true)
+            }
+            Text("The session counts as working until these finish, then comes back here if you haven't read it.")
+                .s(TY.uiS, P.graphite).padding(.top, 16)
+        }
+    }
+    func task(_ icon: String, _ t: String, _ what: String, _ time: String, last: Bool = false) -> some View {
+        HStack(spacing: 12) {
+            Lamp(c: P.ember, size: 6)
+            Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundColor(P.graphite).frame(width: 16)
+            Text(t).s(TY.ui, P.paper)
+            Spacer()
+            Text(what).s(TY.mono, P.pencil)
+            Text(time).s(TY.mono, P.graphite).frame(width: 28, alignment: .trailing)
+        }
+        .frame(height: 38)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(P.rule).frame(height: 1) } }
+    }
+}
+
+struct ChatDetail: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("Router").s(TY.uiM, P.paper)
+                Text("Tell it what to pass on, to whom. It never acts on its own.").s(TY.uiS, P.graphite)
+                Spacer()
+            }
+            .padding(.horizontal, 28).frame(height: 56)
+            .overlay(alignment: .bottom) { Rectangle().fill(P.rule).frame(height: 1) }
+
+            VStack(alignment: .leading, spacing: 18) {
+                you("what needs me?", "5m")
+                router
+                you("transfer: remove the old remote", "3m")
+                LogLine(c: P.moon, last: true) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) { Text("Sent to").s(TY.uiS, P.graphite); Text("Repository ownership transfer setup").s(TY.uiSM, P.pencil); Text("3m").s(TY.mono, P.faint) }
+                        Text("“Remove the old remote.”").s(TY.voiceS, P.pencil)
+                    }
+                }
+                peer
+                you("start a session in @lookout to bump the version", "30s")
+                HStack(spacing: 8) {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundColor(P.flare)
+                    Text("Not delivered to Game recommendations: the session isn't open in Claude.").s(TY.uiS, P.flare.opacity(0.9))
+                    Text("Open it").s(TY.uiSM, P.paper).underline()
+                }
+            }
+            .padding(.horizontal, 40).padding(.vertical, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+
+            Command(to: "Router", placeholder: "Ask, or tell it what to pass on · @ to tag a project").padding(.horizontal, 28).padding(.bottom, 22)
+        }
+        .background(P.panel)
+    }
+    func you(_ s: String, _ t: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("you").s(TY.monoM, P.beacon).frame(width: 30, alignment: .leading)
+            Text(s).s(TY.ui, P.paper)
+            Spacer()
+            Text(t).s(TY.mono, P.faint)
+        }
+    }
+    var router: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Color.clear.frame(width: 30, height: 1)
+            (Text("3 need you: ") + Text("LCU update notifications").italic() + Text(" asks how updates install; the Linux sandbox has a plan to approve; ")
+             + Text("Calculator display reading").italic() + Text(" is stuck on the VPN. Done: CI failure diagnosis."))
+                .font(TY.voice).foregroundColor(P.paper).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    var peer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 2) { Lamp(c: P.moon, size: 6); Text("Repository ownership transfer setup").s(TY.uiSM, P.pencil); Text(" replied · 1m").s(TY.mono, P.faint) }
+            Text("Removed old-origin; only the new org's remote is left. Branch protection on main still requires one review and passing checks. Two open PRs still target the old fork; I left them alone.")
+                .s(TY.voice, P.paper).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 6).fill(P.raised))
+        .overlay(alignment: .leading) { Rectangle().fill(P.moon.opacity(0.6)).frame(width: 2).padding(.vertical, 1) }
+        .padding(.leading, 40)
+    }
+}
+
+struct WindowShot: View {
+    var focus: Focus
+    var body: some View {
+        Desk(h: 900) {
+            Ears().frame(width: Notch.w + 84).background(IslandShape(r: 8).fill(P.shell))
+            RouterWindow(focus: focus).padding(.top, 110)
+        }
+    }
+}
+
+// MARK: - Identity sheet
+
+struct Sheet: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 36) {
+            VStack(alignment: .leading, spacing: 6) {
+                Caps(s: "Lookout · Night watch")
+                Text("Colour is a signal, never decoration.").s(Font.system(size: 30, design: .serif), P.paper)
+            }
+            HStack(alignment: .top, spacing: 28) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Caps(s: "Signals")
+                    sig(P.beacon, "Beacon", "needs you", "F5B544")
+                    sig(P.ember, "Ember", "working", "E0855A")
+                    sig(P.moon, "Moonlight", "done, unread", "A9B6FF")
+                    sig(P.flare, "Flare", "stuck, failing", "FF6B5E")
+                    sig(P.moss, "Moss", "passing", "7CC793")
+                }
+                .frame(width: 260, alignment: .leading)
+                VStack(alignment: .leading, spacing: 12) {
+                    Caps(s: "Graphite and ink")
+                    HStack(spacing: 6) {
+                        ForEach([(P.shell, "000000"), (P.base, "0D0D0C"), (P.panel, "131312"), (P.raised, "1A1A18"), (P.raised2, "222220")], id: \.1) { c, h in
+                            VStack(alignment: .leading, spacing: 6) {
+                                RoundedRectangle(cornerRadius: 4).fill(c).frame(width: 56, height: 40)
+                                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(P.rule, lineWidth: 1))
+                                Text(h).s(TY.mono, P.graphite)
+                            }
+                        }
+                    }
+                    HStack(spacing: 14) {
+                        ForEach([(P.paper, "Paper"), (P.pencil, "Pencil"), (P.graphite, "Graphite"), (P.faint, "Faint")], id: \.1) { c, n in
+                            Text(n).s(TY.uiM, c)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                Caps(s: "Three voices")
+                HStack(alignment: .firstTextBaseline, spacing: 18) {
+                    Text("The sessions").s(TY.uiS, P.graphite).frame(width: 110, alignment: .leading)
+                    Text("Should updates install silently, or ask first?").s(TY.voiceL, P.paper)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 18) {
+                    Text("The interface").s(TY.uiS, P.graphite).frame(width: 110, alignment: .leading)
+                    Text("LCU update notifications · Mark addressed").s(Font.system(size: 15, weight: .medium), P.paper)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 18) {
+                    Text("The machine").s(TY.uiS, P.graphite).frame(width: 110, alignment: .leading)
+                    HStack(spacing: 10) { Tag(s: "microsandbox"); Text("2m  ·  zig#21877  ·  ⌘↵").s(Font.system(size: 13, design: .monospaced), P.pencil) }
+                }
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                Caps(s: "Components")
+                HStack(spacing: 10) { Button1(s: "Send answer", key: "⌘↵", primary: true); Button1(s: "Keep planning"); Key(k: "E"); Tag(s: "lcu") }
+                HStack(spacing: 10) {
+                    Keycap(n: "1", label: "Install silently", detail: "In the background").frame(width: 200)
+                    Keycap(n: "2", label: "Ask first", detail: "A prompt each time", on: true).frame(width: 200)
+                }
+                Command(to: "LCU update notifications", draft: "ask first, and remember my choice").frame(width: 560)
+            }
+        }
+        .padding(48)
+        .frame(width: 1000, alignment: .leading)
+        .background(P.base)
+    }
+    func sig(_ c: Color, _ n: String, _ m: String, _ h: String) -> some View {
+        HStack(spacing: 10) {
+            Lamp(c: c, size: 9)
+            Text(n).s(TY.uiM, P.paper).frame(width: 80, alignment: .leading)
+            Text(m).s(TY.uiS, P.pencil).frame(width: 90, alignment: .leading)
+            Text(h).s(TY.mono, P.graphite)
+        }
+    }
+}
+
+// MARK: - Render
+
+@main
+struct Render {
+    @MainActor static func main() {
+        let dir = CommandLine.arguments.dropFirst().first ?? "shots"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        func mid(_ w: CGFloat, _ h: CGFloat) -> CGRect { CGRect(x: (1512 - w) / 2, y: 0, width: w, height: h) }
+        save(Sheet(), "0-identity", dir, nil)
+        save(Rest(), "1-island-rest", dir, mid(720, 110))
+        save(Arrives(), "2-island-question", dir, mid(720, 220))
+        save(Glance(), "3-island-hover", dir, mid(720, 320))
+        save(Hub(), "4-island-kept-open", dir, mid(760, 520))
+        save(WindowShot(focus: .question), "5-router-question", dir, mid(1240, 880))
+        save(WindowShot(focus: .plan), "6-router-plan", dir, mid(1240, 880))
+        save(WindowShot(focus: .done), "7-router-done", dir, mid(1240, 880))
+        save(WindowShot(focus: .chat), "8-router-chat", dir, mid(1240, 880))
+    }
+
+    @MainActor static func save<V: View>(_ v: V, _ name: String, _ dir: String, _ crop: CGRect?) {
+        let r = ImageRenderer(content: v.environment(\.colorScheme, .dark))
+        r.scale = 2
+        guard var cg = r.cgImage else { print("failed \(name)"); return }
+        if let crop, let c = cg.cropping(to: CGRect(x: crop.minX * 2, y: crop.minY * 2, width: crop.width * 2, height: crop.height * 2)) { cg = c }
+        try? NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
+        print("\(dir)/\(name).png")
+    }
+}

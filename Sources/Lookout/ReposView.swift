@@ -15,83 +15,88 @@ struct ReposView: View {
         return Array(store.suggestions.filter { $0.lowercased().contains(q) }.prefix(5))
     }
 
+    /// Claude's list pattern (settings.md §4): a titled section, the field that adds one, then the watched repos as rows
+    /// in a nest card, or a line when there are none. Straight on the island's black.
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.md) {
+            SettingsSection("Repositories",
+                            description: "Watch your own repos or any public one you contribute to. You'll only hear about the events you pick.") {
                 addField
-                if !store.repos.isEmpty { legend }
-                ForEach(store.repos) { repo in
-                    RepoCard(repo: repo, store: store)
-                }
                 if store.repos.isEmpty {
-                    Text("Watch your own repos or any public one you contribute to. You'll only hear about the events you pick.")
-                        .font(Theme.Typography.control)
-                        .foregroundStyle(Theme.tertiary)
-                        .padding(.horizontal, Theme.Space.xs)
-                        .padding(.top, Theme.Space.xs)
+                    Text("No repositories yet.")
+                        .cdsText(CDS.Density.comfortable.footnote, .regular, CDS.Text.secondary)
+                        .padding(.vertical, CDS.Settings.rowPad)
+                } else {
+                    legend
+                    SettingsNest {
+                        ForEach(store.repos) { repo in
+                            RepoCard(repo: repo, store: store)
+                        }
+                    }
                 }
             }
-            .padding(Theme.Space.lg)
+            .padding(.horizontal, CDS.Settings.pagePadX)
+            .padding(.top, CDS.Settings.pageTop + 8)
+            .padding(.bottom, CDS.Settings.pageBottom)
         }
         .scrollIndicators(.never)
         .task { await store.loadSuggestions() }
     }
 
-    /// Column header over the toggles of every card, in the same order and spacing as the badges.
+    /// Column header over the toggles of every row, in the same order and spacing as the badges: the list's header row.
     private var legend: some View {
         HStack(spacing: 10) {
-            Eyebrow("Watching", count: store.repos.count)
-            Spacer(minLength: Theme.Space.sm)
+            Text(plural(store.repos.count, "repo") + " watched").cdsText(CDS.Density.comfortable.body)
+            Spacer(minLength: 8)
             RepoToggleColumns.legend
-            Color.clear.frame(width: 20, height: 1)
+            Color.clear.frame(width: RepoCard.menuWidth, height: 1)
         }
-        .foregroundStyle(Theme.tertiary)
-        .padding(.leading, Theme.Space.lg)
-        .padding(.trailing, Theme.Space.sm)
-        .padding(.top, 2)
+        .padding(.horizontal, CDS.Settings.nestPadX)
+        .padding(.top, CDS.Settings.rowPad + 4)
+        .padding(.bottom, CDS.Settings.rowPad)
         .accessibilityHidden(true)
     }
 
     private var addField: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            HStack(spacing: Theme.Space.sm) {
-                HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary).font(Theme.Typography.control)
-                    TextField("owner/repo or GitHub URL", text: $input)
-                        .textFieldStyle(.plain)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundStyle(CDS.Text.muted)
+                    TextField("", text: $input)
+                        .cdsPlaceholder("owner/repo or GitHub URL", shown: input.isEmpty)
                         .accessibilityLabel("Repository to add")
                         .focused($fieldFocused)
                         .onSubmit { add(input) }
                     if adding { ProgressView().controlSize(.mini) }
                 }
-                .fieldStyle()
-                Button { add(input) } label: {
-                    Image(systemName: "plus")
-                        .font(Theme.Typography.glyph(13, .bold))
-                        .foregroundStyle(Theme.onTint)
-                        .frame(width: Theme.Metrics.field, height: Theme.Metrics.field)
-                }
-                .buttonStyle(HoverFillButtonStyle(rest: Theme.amber, hover: Theme.amber.opacity(0.85), pressed: Theme.amber.opacity(0.7)))
-                .disabled(input.isEmpty || adding)
-                .accessibilityLabel("Watch repository")
-                .tip("Watch repository", "Add the repo typed on the left")
+                // The leading slot: 8 between the icon and the text (§3.1 "with slots").
+                .cdsField(focused: fieldFocused, invalid: error != nil)
+                Button { add(input) } label: { Text("Watch") }
+                    .buttonStyle(SettingsButtonStyle(size: .base))
+                    .disabled(input.isEmpty || adding)
+                    .accessibilityLabel("Watch repository")
+                    .tip("Watch repository", "Add the repo typed on the left")
             }
             if let error {
-                Text(error).font(Theme.Typography.meta).foregroundStyle(Theme.red).padding(.horizontal, Theme.Space.xs)
+                Text(error).cdsText(CDS.Density.comfortable.body, .regular, CDS.Text.danger)
             }
             if (fieldFocused || overList) && !matches.isEmpty {
+                // The select popup's surface (settings.md §3.2): radius 12, #20201f, `shadow-panel`, 4 in.
                 VStack(spacing: 0) {
                     ForEach(matches, id: \.self) { name in
                         SuggestionRow(name: name) { add(name) }
                     }
                 }
-                .padding(Theme.Space.xs)
-                .background(Theme.Radius.shape(Theme.Radius.lg).fill(Theme.raised))
-                .overlay(Theme.Radius.shape(Theme.Radius.lg).strokeBorder(Theme.stroke))
+                .padding(4)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(CDS.Surface.s3)
+                    .shadow(color: CDS.PanelShadow.far.color, radius: CDS.PanelShadow.far.radius, y: CDS.PanelShadow.far.y)
+                    .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
+                .padding(.top, 2)
                 .onHover { overList = $0 }
             }
         }
-        .padding(.bottom, Theme.Space.xs)
+        .padding(.bottom, 4)
     }
 
     private func add(_ name: String) {
@@ -130,38 +135,43 @@ private struct SuggestionRow: View {
         Button(action: action) {
             SuggestionLabel(name: name)
         }
-        .buttonStyle(HoverFillButtonStyle(shape: Theme.Radius.shape(Theme.Radius.sm)))
+        .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: 8, style: .continuous), rest: .clear,
+                                          hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
         .accessibilityLabel("Watch \(name)")
     }
 }
 
+/// A select item (settings.md §3.2): at least 32 tall, 12 in, gap 8, 14/20; the owner muted, the name primary.
 private struct SuggestionLabel: View {
     let name: String
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
-            HStack(spacing: Theme.Space.md) {
-                Image(systemName: "book.closed").font(Theme.Typography.meta).foregroundStyle(Theme.tertiary)
-                Text(name.split(separator: "/").first.map { "\($0)/" } ?? "").foregroundStyle(Theme.tertiary)
-                    + Text(name.split(separator: "/").last.map(String.init) ?? "").foregroundStyle(Theme.text)
-                Spacer()
-                if hover { Image(systemName: "plus").font(Theme.Typography.glyph(11)).foregroundStyle(Theme.secondary) }
-            }
-            .font(Theme.Typography.body)
-            .padding(.horizontal, Theme.Space.md)
-            .frame(height: 28)
+        HStack(spacing: 8) {
+            Image(systemName: "book.closed").font(.system(size: 12)).foregroundStyle(CDS.Text.muted)
+            Text(name.split(separator: "/").first.map { "\($0)/" } ?? "").foregroundColor(CDS.Text.muted)
+                + Text(name.split(separator: "/").last.map(String.init) ?? "").foregroundColor(CDS.Text.primary)
+            Spacer()
+            if hover { Image(systemName: "plus").font(.system(size: 11, weight: .medium)).foregroundStyle(CDS.Text.secondary) }
+        }
+        .font(CDS.sans(14))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .frame(minHeight: 32)
+        .contentShape(Rectangle())
     }
 }
 
 /// Shared geometry so the legend lines up with the badges.
 private enum RepoToggleColumns {
     static let spacing: CGFloat = 3
+    static let badge: CGFloat = 24
     static var kinds: [EventKind] { EventKind.repoToggles.filter { $0 != .ciMain } }
 
-    /// Group captions with a bracket underneath, spanning the badge columns they describe:
+    /// Group captions with a line underneath, spanning the badge columns they describe:
     /// issues (opened, comments), pull requests (opened, comments, review comments), all-comments ("All") and CI.
     static var legend: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: spacing) {
             group("Issues", columns: 2)
             group("Pull requests", columns: 3)
             Color.clear.frame(width: 5, height: 1)
@@ -170,39 +180,46 @@ private enum RepoToggleColumns {
         }
     }
 
+    /// Caption 12 is too wide for three 24pt columns ("Pull requests"): the xs badge's 11 at 460 instead.
     private static func group(_ text: String, columns: Int) -> some View {
-        let width = CGFloat(columns) * 24 + CGFloat(columns - 1) * spacing
-        return VStack(spacing: 2) {
-            Text(text).font(Theme.Typography.glyph(9, .medium)).lineLimit(1).fixedSize()
-            Hairline()
+        let width = CGFloat(columns) * badge + CGFloat(columns - 1) * spacing
+        return VStack(spacing: 3) {
+            Text(text).font(CDS.sans(11, .medium)).foregroundStyle(CDS.Text.muted).lineLimit(1).fixedSize()
+            Rectangle().fill(CDS.border).frame(height: 1)
         }
         .frame(width: width)
     }
 }
 
+/// A watched repo: a row in the list's nest card (settings.md §2.2, §4), the name 14/20 over its owner in muted, the event
+/// toggles and a "more" menu as the control. No hover fill (rows don't react, their controls do); dragging one onto
+/// another reorders them, its target outlined in accent.
 struct RepoCard: View {
     let repo: RepoConfig
     let store: Store
     @State private var dropTarget = false
-    @State private var hover = false
     @FocusState private var menuFocused: Bool
     @Environment(\.previewTip) private var previewTip
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The ghost sm icon button's 28 (forms-buttons.md §4.4).
+    static let menuWidth: CGFloat = 28
+
     var body: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(repo.owner).font(Theme.Typography.caption).foregroundStyle(Theme.tertiary)
-                Text(repo.name).font(Theme.Typography.title)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(repo.name).cdsText(CDS.Density.comfortable.body)
+                Text(repo.owner).cdsText(CDS.Density.comfortable.body, .regular, CDS.Text.muted)
             }
             .lineLimit(1)
             .truncationMode(.middle)
             .layoutPriority(1)
-            Spacer(minLength: Theme.Space.sm)
+            // The spec's 28 between text and control, cut to 8: the toggles take most of the island's width.
+            Spacer(minLength: 8)
             if let error = store.repoErrors[repo.fullName] {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(Theme.Typography.meta)
-                    .foregroundStyle(Theme.amber)
+                    .font(.system(size: 12))
+                    .foregroundStyle(CDS.Text.warning)
                     .frame(width: 18, height: 24)
                     .accessibilityLabel("Sync failed: \(error)")
                     .tip("Sync failed", error)
@@ -211,33 +228,31 @@ struct RepoCard: View {
                 ForEach(RepoToggleColumns.kinds) { kind in
                     badge(kind)
                 }
-                Hairline(axis: .vertical).frame(height: 14).padding(.horizontal, 2)
+                Rectangle().fill(CDS.border).frame(width: 1, height: 14).padding(.horizontal, 2)
                 allCommentsBadge
                 ciBadge
             }
             menu
         }
-        .padding(.leading, Theme.Space.lg)
-        .padding(.trailing, Theme.Space.sm)
-        .padding(.vertical, Theme.Space.md)
-        .background(Theme.Radius.shape(Theme.Radius.lg).fill(hover ? Theme.Fill.hover : Theme.raised))
-        .motion(Theme.Motion.hover, value: hover)
+        .padding(.vertical, CDS.Settings.rowPad)
+        .contentShape(Rectangle())
         .overlay(
-            Theme.Radius.shape(Theme.Radius.lg)
-                .strokeBorder(dropTarget ? Theme.accent : Theme.stroke, lineWidth: dropTarget ? 1.5 : 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(CDS.Fill.accent, lineWidth: 1)
+                .padding(.horizontal, -6)
+                .opacity(dropTarget ? 1 : 0)
         )
-        .onHover { hover = $0 }
+        .motion(Theme.Motion.hover, value: dropTarget)
         // Screenshots target one badge as "owner/repo|Tooltip title"; only that card shows it.
         .environment(\.previewTip, previewTip.flatMap { spec in
             spec.hasPrefix(repo.fullName + "|") ? String(spec.dropFirst(repo.fullName.count + 1)) : nil
         })
         .draggable(repo.fullName) {
             Text(repo.fullName)
-                .font(Theme.Typography.heading)
+                .cdsText(CDS.Density.comfortable.body)
                 .padding(.horizontal, 10)
-                .frame(height: Theme.Metrics.chip)
-                .background(Capsule().fill(Theme.bg))
-                .foregroundStyle(Theme.text)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(CDS.Surface.s3))
         }
         .dropDestination(for: String.self) { names, _ in
             guard let name = names.first else { return false }
@@ -293,10 +308,10 @@ struct RepoCard: View {
             Divider()
             Button("Stop watching", role: .destructive) { store.removeRepo(repo) }
         } label: {
-            Image(systemName: "ellipsis").font(Theme.Typography.glyph(11, .bold)).foregroundStyle(Theme.tertiary)
-                .frame(width: 20, height: 24)
+            Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)).foregroundStyle(CDS.Text.secondary)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(SettingsButtonStyle(variant: .ghost, size: .sm, iconOnly: true))
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel("More actions for \(repo.fullName)")
@@ -320,11 +335,12 @@ private struct BadgeButton: View {
 
     var body: some View {
         Button(action: action) { BadgeLabel(symbol: symbol, color: color, on: on) }
+            // Off, a quiet field (white 5%, 7.5% on hover); on, the event's own colour, as before: they are a legend too.
             .buttonStyle(HoverFillButtonStyle(
-                shape: Theme.Radius.shape(Theme.Radius.sm),
-                rest: on ? color.opacity(0.15) : Theme.Fill.rest,
-                hover: on ? color.opacity(0.24) : Theme.Fill.hover,
-                pressed: on ? color.opacity(0.32) : Theme.Fill.selected))
+                shape: RoundedRectangle(cornerRadius: 6, style: .continuous),
+                rest: on ? color.opacity(0.15) : CDS.Fill.field,
+                hover: on ? color.opacity(0.24) : CDS.Fill.ghostHover,
+                pressed: on ? color.opacity(0.32) : CDS.Fill.ghostSelected))
             .accessibilityLabel(label)
             .accessibilityValue(value ?? (on ? "On" : "Off"))
             .focused($focused)
@@ -340,9 +356,9 @@ private struct BadgeLabel: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(Theme.Typography.glyph(10.5))
-            .foregroundStyle(on ? color : Theme.tertiary.opacity(hover ? 1 : 0.7))
-            .frame(width: 24, height: 24)
-            .overlay(Theme.Radius.shape(Theme.Radius.sm).strokeBorder(on ? color.opacity(0.25) : Theme.stroke))
+            .font(.system(size: 10.5))
+            .foregroundStyle(on ? color : hover ? CDS.Text.secondary : CDS.Text.muted)
+            .frame(width: RepoToggleColumns.badge, height: RepoToggleColumns.badge)
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(on ? color.opacity(0.25) : CDS.border))
     }
 }

@@ -8,7 +8,7 @@ extension LookoutHub {
     var page: some View {
         VStack(spacing: 0) {
             pageHeader
-            Hairline()
+            IslandRule()
             Group {
                 if hub.page == .repos { ReposView(store: store) } else { SettingsView(store: store, hub: hub) }
             }
@@ -35,17 +35,50 @@ extension LookoutHub {
         }
         .padding(.leading, Self.inset + 4)
         .padding(.trailing, Self.inset + 2)
-        .frame(height: 42)
+        // Claude's sidebar title row: chrome buttons and the switch on one 40pt line.
+        .frame(height: 40)
     }
 
-    /// "Settings | Repositories", the open one picked.
+    /// "Settings | Repositories", the open one picked: Claude's compact SegmentedControl (a white-5% track, the picked
+    /// segment on a white-10% thumb with its 1pt ring).
     var pageSwitch: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ForEach([HubPage.settings, .repos], id: \.self) { p in
-                Chip(label: p == .settings ? "Settings" : "Repositories", selected: hub.page == p) { hub.go(p) }
+                PageSegment(label: p == .settings ? "Settings" : "Repositories", selected: hub.page == p) { hub.go(p) }
             }
         }
-        .padding(2)
-        .background(Capsule().fill(Theme.Fill.faint))
+        .padding(1)
+        .frame(height: CDS.Segmented.height)
+        .background(RoundedRectangle(cornerRadius: CDS.Segmented.radius, style: .continuous).fill(CDS.Segmented.track))
+    }
+}
+
+/// One segment of the pages' switch: muted, primary on hover and once picked (on the thumb).
+private struct PageSegment: View {
+    let label: String
+    let selected: Bool
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        let thumb = RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous)
+        Button(action: action) {
+            Text(label)
+                .font(CDS.sans(CDS.Density.compact.body.0))
+                .foregroundStyle(selected || hover ? CDS.Text.primary : CDS.Text.muted)
+                .padding(.horizontal, CDS.Segmented.padX)
+                .frame(maxHeight: .infinity)
+                .background {
+                    if selected {
+                        thumb.fill(CDS.Segmented.thumb)
+                            .overlay(thumb.strokeBorder(CDS.border, lineWidth: 1))
+                            .shadow(color: CDS.fieldShadow, radius: 1, y: 1)
+                    }
+                }
+                .contentShape(thumb)
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

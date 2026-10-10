@@ -251,7 +251,7 @@ struct RouterWindowShot {
     var picksPlan = false
     /// The plan sent back from the window with a note.
     var planSentBack = false
-    static let size = CGSize(width: 920, height: 640)
+    static let size = CGSize(width: 1100, height: 720)
 }
 
 /// What a shot has picked, for the row actions to show.
@@ -523,7 +523,7 @@ enum PlaygroundShots {
             model.planDecided[form.id] = .init(approve: false, feedback: "Keep the macOS backend as the default; Linux behind a flag.")
         }
         let size = RouterWindowShot.size
-        let root = RouterView(store: store, model: model, checksClaudeCode: false)
+        let root = RouterCodeView(store: store, model: model, checksClaudeCode: false)
             .shotEnvironment(environment)
             .frame(width: size.width, height: size.height)
         let hosting = NSHostingView(rootView: root)

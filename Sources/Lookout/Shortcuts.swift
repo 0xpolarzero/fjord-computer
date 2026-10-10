@@ -348,34 +348,29 @@ struct ShortcutRecorder: View {
         // What was said at the last attempt, else the key another app holds: it is stored and does nothing.
         let held = store.isShortcutHeldByAnotherApp(action) ? "\(current.display) is used by another app, so it does nothing" : nil
         let shown = error ?? held
-        VStack(alignment: .trailing, spacing: Theme.Space.xs) {
+        VStack(alignment: .trailing, spacing: 8) {
             HStack(spacing: 4) {
                 if customized && !recording {
+                    // A ghost xxs icon button (forms-buttons.md §4.3): 20 square, radius 5, muted until hovered.
                     Button { refuse(store.resetShortcut(for: action)?.message) } label: {
-                        Image(systemName: "arrow.uturn.backward").font(Theme.Typography.glyph(9, .bold)).frame(width: 20, height: 20)
+                        Image(systemName: "arrow.uturn.backward").font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(CDS.Text.muted)
                     }
-                    .buttonStyle(HoverFillButtonStyle(shape: Circle()))
-                    .foregroundStyle(Theme.tertiary)
+                    .buttonStyle(SettingsButtonStyle(variant: .ghost, size: .xxs, iconOnly: true))
                     .accessibilityLabel("Reset \(action.title) to default")
                     .focused($resetFocused)
                     .tip("Reset", "Back to \(action.defaultShortcut.display)", focused: resetFocused)
                 }
                 Button { recording ? stop() : start() } label: {
-                    Text(recording ? "Press keys…" : current.display)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(recording ? Theme.accent : Theme.text)
-                        .padding(.horizontal, Theme.Space.md)
-                        .frame(minWidth: 70, minHeight: 22)
-                        .overlay(Theme.Radius.shape(Theme.Radius.xs).strokeBorder(recording ? Theme.accent : .clear))
+                    RecorderField(shortcut: current, recording: recording)
                 }
-                .buttonStyle(HoverFillButtonStyle(shape: Theme.Radius.shape(Theme.Radius.xs), rest: Theme.Fill.hover,
-                                                  hover: Theme.Fill.selected, isActive: recording))
+                .buttonStyle(.plain)
                 .accessibilityLabel("Change shortcut for \(action.title)")
                 .accessibilityValue(recording ? ["Recording, press the new keys", error].compactMap { $0 }.joined(separator: ". ")
                                         : current.isUnassigned ? "Not set" : [current.display, shown].compactMap { $0 }.joined(separator: ". "))
             }
             if let shown {
-                Text(shown).font(Theme.Typography.caption).foregroundStyle(Theme.amber)
+                Text(shown).cdsText(CDS.Density.comfortable.footnote, .regular, CDS.Text.warning)
                     .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
                     // Wider than the keycap it sits under, so a conflict reads on two lines at most.
                     .frame(maxWidth: 220, alignment: .trailing)
@@ -462,5 +457,75 @@ struct ShortcutRecorder: View {
         window = nil
         recording = false
         store.endRecordingShortcut()
+    }
+}
+
+/// The recorder's face: a field (settings.md §3.1, sm 28 tall, radius 7) holding the shortcut as CDS keycaps
+/// (forms-buttons.md §4.6), one 18pt cap per key; while recording, the field takes the focus ring and reads "Press keys…".
+private struct RecorderField: View {
+    let shortcut: Shortcut
+    let recording: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        Group {
+            if recording {
+                Text("Press keys…").cdsText(CDS.Density.comfortable.body, .regular, CDS.Text.muted)
+            } else if shortcut.isUnassigned {
+                Text("None").cdsText(CDS.Density.comfortable.body, .regular, CDS.Text.muted)
+            } else {
+                Keycaps(caps: shortcut.caps, ink: hovering ? CDS.Text.secondary : CDS.Keycap.ink)
+            }
+        }
+        .padding(.horizontal, 5)
+        .frame(minWidth: 72, minHeight: 28)
+        .background(shape.fill(CDS.Fill.field))
+        .overlay(shape.strokeBorder(recording ? CDS.Settings.focusGap : hovering ? CDS.Settings.fieldRingHover : CDS.Settings.fieldRing,
+                                    lineWidth: 1))
+        .overlay {
+            if recording {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(CDS.Fill.accent, lineWidth: 1).padding(-1)
+                    .shadow(color: CDS.Settings.focusGlow, radius: 3)
+            }
+        }
+        .contentShape(shape)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.06), value: hovering)
+    }
+}
+
+extension Shortcut {
+    /// One keycap per key, modifiers in Claude's order (⌃ ⌥ ⇧ ⌘): a lone modifier tap or a mouse button is one cap.
+    var caps: [String] {
+        if isUnassigned { return [] }
+        if let tap = Self.tapKeys[keyCode] { return [tap.name] }
+        let mods = [(NSEvent.ModifierFlags.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")]
+            .filter { flags.contains($0.0) }.map(\.1)
+        guard mouseButton == nil else { return mods + [String(display.drop { "⌃⌥⇧⌘".contains($0) })] }
+        return mods + [Self.keyName(keyCode)]
+    }
+}
+
+/// CDS Shortcut's keycaps (forms-buttons.md §4.6), with the keys' own names as written (CDSShortcut capitalises them): 18pt
+/// caps 2 apart, caption 12, a 1pt border at 22% of the ink, radius 4; a word gets 3 in either side.
+private struct Keycaps: View {
+    let caps: [String]
+    let ink: Color
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(caps.enumerated()), id: \.offset) { _, cap in
+                Text(cap)
+                    .font(cap.count > 1 ? CDS.sans(12) : .system(size: 12))
+                    .foregroundStyle(ink)
+                    .lineLimit(1)
+                    .padding(.horizontal, cap.count > 1 ? 3 : 0)
+                    .frame(minWidth: CDS.Keycap.size, minHeight: CDS.Keycap.size, maxHeight: CDS.Keycap.size)
+                    .overlay(RoundedRectangle(cornerRadius: CDS.Keycap.radius, style: .continuous)
+                        .strokeBorder(ink.opacity(0.22), lineWidth: 1))
+            }
+        }
+        .accessibilityHidden(true)
     }
 }

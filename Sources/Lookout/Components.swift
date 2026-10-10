@@ -1,18 +1,18 @@
+import AppKit
 import SwiftUI
 
 // The design system's pieces. Tokens live in `Theme` (Theme.swift); shared components live here.
 //
 // TOKENS (Theme.swift)
-//   Colours   bg, raised, hover, stroke, text, secondary (white .64, ~7.97:1 on bg; was .56), tertiary (white .46, ~4.67:1; was .34), accent, amber,
-//             green, red, purple, claude; `Theme.onTint` = text on a tinted (amber/green/...) fill.
-//   Radius    Theme.Radius.xs 5 (keycaps, small chips) / sm 7 (compact tiles, menus) / md 9 (rows, fields, buttons)
-//             / lg 12 (cards, popovers) / panel 18 (the hub itself). All `.continuous`: use `Theme.Radius.shape(_)`.
-//   Fill      Theme.Fill.rest 0 / faint .045 (cards) / field .06 (fields, row highlight) / hover .07 / selected .12 /
-//             pressed .15 / tile .10 (avatars, icon tiles). Disabled buttons show no fill and fade to 40%. Never write `Color.white.opacity(x)` for these.
-//   Font      Theme.Typography.title 13 semibold (page/section titles) / body 12 medium (row text) / meta 11 (secondary
-//             info) / caption 10.5 (tooltip detail, hints) / eyebrow 10 semibold (uppercase headings, with
-//             `.tracking(Theme.Typography.eyebrowTracking)`) / count 11 semibold mono-digit / badge 10 bold mono-digit.
-//             `Theme.Typography.glyph(_ size, weight)` for icons sized off their box.
+//   Colours   Claude's dark palette (CDS): bg black (the island), raised, hover, stroke, text #f0efec, secondary #c3c2b7,
+//             tertiary #898781 (CDS muted), accent, amber, green, red, purple, claude; `Theme.onTint` = text on a tinted fill.
+//   Radius    CDS compact: Theme.Radius.xs 4 (keycaps, badges) / sm 6 (menus, tiles) / md 6 (rows, fields, buttons)
+//             / lg 10 (cards, popovers: `rounded-card`) / panel 14. All `.continuous`: use `Theme.Radius.shape(_)`.
+//   Fill      CDS alpha steps: Theme.Fill.rest 0 / faint .05 / field .05 / hover .075 (ghost hover, highlighted row) /
+//             selected .15 / pressed .15 / tile .10 (avatars, `fill-control`). Disabled fades to 40%.
+//   Font      Anthropic Sans on CDS compact roles, dark weights (360 / 460 / 540): title 14 medium (heading) / body 13
+//             (row text) / meta 12 (labels, second lines: 12/16) / caption 11 / eyebrow 12 (sentence-case labels) /
+//             count 12 medium / badge 10 medium (Badge xs). `Theme.Typography.glyph(_ size, weight)` for SF Symbols.
 //   Space     Theme.Space.xs 4 / sm 6 / md 8 / lg 12 / xl 16.
 //   Metrics   Theme.Metrics.line 30 (header / one-line row), row 36 (session row), bar 46 (bar depth), inset 6 (the
 //             one outer inset), field 32, chip 26.
@@ -25,63 +25,88 @@ import SwiftUI
 // COMPONENTS (this file)
 //   HoverFillButtonStyle   (respects isEnabled) `.buttonStyle(HoverFillButtonStyle(...))`: hover/active/pressed fill, hover animation. Use
 //                          for every button that fills on hover (rows, icon buttons, chips). Any shape.
-//   .rowHighlight(on)      The hub row's 8x6 padding + r9 fill; `on` = hovered or picked. Pair with `.onHover`.
-//   Hairline(axis:inset:)  A 1pt stroke-coloured divider. Never `Rectangle().fill(Theme.stroke)`.
-//   CountBadge(n, tint:)   A count in a capsule (filter chips, section counts). `tint` fills it (text uses onTint).
-//   DotCount(n, color:)    A coloured dot + number, numeric-text transition; grey when 0 (CI counts, status counts).
-//   Eyebrow(title)         Uppercase tracking section title (settings sections, "PENDING", "WATCHING").
+//   .rowHighlight(on)      Claude's compact row: 8x5 padding, radius 6, white 7.5% while `on` (hovered or picked).
+//   Hairline(axis:inset:)  CDS divider: 0.5pt white 10%. Never `Rectangle().fill(Theme.stroke)`.
+//   CountBadge(n, tint:)   CDS Badge xs (16 tall, radius 4, 10pt 460): neutral, or tinted (amber = warning variant).
+//   DotCount(n, color:)    A 6pt status dot + number, numeric-text transition; muted when 0 (CI counts, status counts).
+//   Eyebrow(title)         Claude's sidebar label: sentence case, 12/16 muted (settings sections, "Working").
 //   .tile(size)            Frames a view as a rounded square filled `Fill.tile`, clipped, radius size*0.3.
 //   Tile.shape(size)       The same shape, for your own backgrounds / clipping.
 //   plural(n, "folder")    "1 folder", "2 folders"; third arg for irregulars: plural(2, "repository", "repositories").
 
 extension Theme {
+    /// Claude's (CDS, compact): 6 on controls and rows, 10 on cards (`rounded-card`), 4 on keycaps and badges.
     enum Radius {
-        static let xs: CGFloat = 5
-        static let sm: CGFloat = 7
-        static let md: CGFloat = 9
-        static let lg: CGFloat = 12
-        static let panel: CGFloat = 18
+        static let xs: CGFloat = 4
+        static let sm: CGFloat = 6
+        static let md: CGFloat = 6
+        static let lg: CGFloat = 10
+        static let panel: CGFloat = 14
 
         static func shape(_ radius: CGFloat) -> RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
     }
 
-    /// Translucent white fills, one per state, so hover looks the same everywhere.
+    /// Translucent white fills, one per state, so hover looks the same everywhere: Claude's alpha steps (dark mode).
     enum Fill {
         static let rest = Color.clear
-        static let faint = Color.white.opacity(0.045)
-        static let field = Color.white.opacity(0.06)
-        static let hover = Color.white.opacity(0.07)
+        static let faint = Color.white.opacity(0.05)
+        static let field = Color.white.opacity(0.05)
+        static let hover = Color.white.opacity(0.075)
         static let tile = Color.white.opacity(0.10)
-        static let selected = Color.white.opacity(0.12)
+        static let selected = Color.white.opacity(0.15)
         static let pressed = Color.white.opacity(0.15)
     }
 
+    /// Claude's type: Anthropic Sans (read from the Claude app, see `ClaudeFonts`) on the CDS compact scale, at Claude's
+    /// dark weights; the system font when it isn't there.
     enum Typography {
-        /// Page and field titles (was 13 semibold).
-        static let title = SwiftUI.Font.system(size: 13, weight: .semibold)
-        /// Section header titles (was 12 semibold).
-        static let heading = SwiftUI.Font.system(size: 12, weight: .semibold)
-        /// Chips, buttons and settings labels (was 12 medium).
-        static let control = SwiftUI.Font.system(size: 12, weight: .medium)
-        /// Row text (was 12.5): regular for read, `bodyStrong` for unread; `bodyMedium` in between.
-        static let body = SwiftUI.Font.system(size: 12.5)
-        static let bodyMedium = SwiftUI.Font.system(size: 12.5, weight: .medium)
-        static let bodyStrong = SwiftUI.Font.system(size: 12.5, weight: .semibold)
-        /// Secondary info (was 11, 11.5).
-        static let meta = SwiftUI.Font.system(size: 11)
-        /// Tooltip detail, hints (was 10.5).
-        static let caption = SwiftUI.Font.system(size: 10.5)
-        /// Uppercase headings (was 9.5 bold in "PENDING", 10.5 semibold in settings).
-        static let eyebrow = SwiftUI.Font.system(size: 10, weight: .semibold)
-        static let eyebrowTracking: CGFloat = 0.6
-        /// Numbers beside dots (was 11 semibold).
-        static let count = SwiftUI.Font.system(size: 11, weight: .semibold).monospacedDigit()
-        /// Numbers in capsules (was 10 bold).
-        static let badge = SwiftUI.Font.system(size: 10, weight: .bold).monospacedDigit()
+        /// Page and field titles: CDS heading 14, medium.
+        static let title = ui(14, .medium)
+        /// Section header titles: Claude's sidebar labels, 12.
+        static let heading = ui(12)
+        /// Chips, buttons and settings labels: CDS body 13 (tabs set their own 460).
+        static let control = ui(13)
+        /// Row text, CDS body 13 (wght 360): `bodyMedium` 460, `bodyStrong` 540.
+        static let body = ui(13)
+        static let bodyMedium = ui(13, .medium)
+        static let bodyStrong = ui(13, .semibold)
+        /// What Claude and the sessions say: CDS prose.
+        static let prose = ui(14)
+        /// Secondary info and second lines: `text-xs` 12/16 (sidebar labels, row descriptions).
+        static let meta = ui(12)
+        /// Hints: CDS caption, compact.
+        static let caption = ui(11)
+        /// Small section labels ("Pinned", "Needs you"): sentence case, 12, muted, as Claude's sidebar.
+        static let eyebrow = ui(12)
+        static let eyebrowTracking: CGFloat = 0
+        /// Numbers beside dots.
+        static let count = ui(12, .medium).monospacedDigit()
+        /// Numbers in badges: Badge xs, 10 at 460.
+        static let badge = ui(10, .medium).monospacedDigit()
 
         /// An icon or initials sized off the box that holds it.
         static func glyph(_ size: CGFloat, _ weight: SwiftUI.Font.Weight = .semibold) -> SwiftUI.Font {
             .system(size: size, weight: weight)
+        }
+
+        /// Anthropic Sans at a size and weight (`CDS.sans`), or the system font. Claude's dark weights on the variable
+        /// font's axis: regular 360, medium 460, semibold 540, bold 560.
+        static func ui(_ size: CGFloat, _ weight: SwiftUI.Font.Weight = .regular) -> SwiftUI.Font {
+            CDS.sans(size, cds(weight))
+        }
+
+        /// The same, for AppKit measuring.
+        static func nsUI(_ size: CGFloat, _ weight: SwiftUI.Font.Weight = .regular) -> NSFont {
+            CDS.nsSans(size, cds(weight))
+        }
+
+        private static func cds(_ weight: SwiftUI.Font.Weight) -> CDS.Weight {
+            switch weight {
+            case .medium: .medium
+            case .semibold: .semibold
+            case .bold, .heavy, .black: .bold
+            default: .regular
+            }
         }
     }
 
@@ -147,12 +172,13 @@ extension View {
         modifier(MotionModifier(animation: animation, value: value))
     }
 
-    /// The hub row's look: 8x6 padding inside an r9 fill, shown while `on` (hovered or picked).
+    /// Claude's compact row (sidebar §2.7, two-line rows §5.1): 8 × 5 padding, radius 6, white 7.5% while `on` (hovered
+    /// or picked: as in Claude's palette, hovering moves the pick, one fill for both).
     func rowHighlight(_ on: Bool) -> some View {
         self
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Theme.Radius.shape(Theme.Radius.md).fill(on ? Theme.Fill.field : Theme.Fill.rest))
+            .padding(.vertical, 5)
+            .background(Theme.Radius.shape(Theme.Radius.md).fill(on ? Theme.Fill.hover : Theme.Fill.rest))
             .contentShape(Theme.Radius.shape(Theme.Radius.md))
             .motion(Theme.Motion.hover, value: on)
     }
@@ -218,7 +244,7 @@ extension EnvironmentValues {
     }
 }
 
-/// A 1pt divider in the stroke colour. `inset` trims both ends.
+/// Claude's divider: 0.5pt, white 10% (`--cds-border`). `inset` trims both ends.
 struct Hairline: View {
     var axis: Axis = .horizontal
     var inset: CGFloat = 0
@@ -226,12 +252,14 @@ struct Hairline: View {
     var body: some View {
         Rectangle()
             .fill(Theme.stroke)
-            .frame(width: axis == .vertical ? 1 : nil, height: axis == .horizontal ? 1 : nil)
+            .frame(width: axis == .vertical ? CDS.hairline : nil, height: axis == .horizontal ? CDS.hairline : nil)
             .padding(axis == .horizontal ? .horizontal : .vertical, inset)
     }
 }
 
-/// A count in a capsule. `tint` fills it (text goes dark); without, a quiet white fill.
+/// A count as Claude's Badge (search-tabs-avatars.md §3), compact xs: 16 tall, 4 padding, radius 4, 10pt at 460, tabular.
+/// Without a tint, the neutral variant (white 5%, secondary); with one, its tinted variant (amber is CDS warning, the
+/// others their colour on a quiet tint of it).
 struct CountBadge: View {
     let count: Int
     var tint: Color? = nil
@@ -243,17 +271,31 @@ struct CountBadge: View {
     }
 
     var body: some View {
+        let (fill, ink) = Self.colors(tint)
         Text("\(count)")
             .font(Theme.Typography.badge)
-            .foregroundStyle(tint == nil ? Theme.secondary : Theme.onTint)
-            .padding(.horizontal, 5)
-            .frame(minWidth: 15, minHeight: 15)
-            .background(Capsule().fill(tint ?? Theme.Fill.tile))
+            .foregroundStyle(ink)
+            .padding(.horizontal, CDS.Badge.padX)
+            .frame(minWidth: CDS.Badge.height, minHeight: CDS.Badge.height)
+            .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(fill))
             .contentTransition(reduce ? .opacity : .numericText(value: Double(count)))
+    }
+
+    /// The Badge variant for a tint: fill and text.
+    static func colors(_ tint: Color?) -> (Color, Color) {
+        switch tint {
+        case nil: (CDS.Badge.fill, CDS.Badge.ink)
+        case Theme.amber?: (CDS.BadgeTint.warningFill, CDS.BadgeTint.warningText)
+        case Theme.accent?: (CDS.BadgeTint.accentFill, CDS.BadgeTint.accentText)
+        case Theme.red?: (CDS.BadgeTint.dangerFill, CDS.BadgeTint.dangerText)
+        case Theme.green?: (CDS.BadgeTint.successFill, CDS.BadgeTint.successText)
+        case Theme.purple?: (CDS.BadgeTint.violetFill, CDS.BadgeTint.violetText)
+        case let tint?: (tint.opacity(0.16), tint)
+        }
     }
 }
 
-/// A dot and a number; both grey out at zero.
+/// Claude's 6pt status dot and a number beside it; both go muted at zero.
 struct DotCount: View {
     let count: Int
     var color: Color
@@ -265,17 +307,18 @@ struct DotCount: View {
     }
 
     var body: some View {
-        HStack(spacing: 5) {
-            Circle().fill(count == 0 ? Theme.tertiary : color).frame(width: 7, height: 7)
+        HStack(spacing: 6) {
+            Circle().fill(count == 0 ? Theme.tertiary.opacity(0.5) : color).frame(width: CDS.Dot.size, height: CDS.Dot.size)
             Text("\(count)")
-                .font(Theme.Typography.count)
-                .foregroundStyle(count == 0 ? Theme.tertiary : Theme.text)
+                .font(Theme.Typography.meta.monospacedDigit())
+                .foregroundStyle(count == 0 ? Theme.tertiary : Theme.secondary)
                 .contentTransition(reduce ? .opacity : .numericText(value: Double(count)))
         }
     }
 }
 
-/// An uppercase section title, optionally with a count after it.
+/// A section label as Claude's sidebar draws it ("Pinned", project groups, global §2.6): sentence case, 12/16, muted;
+/// a count after it, 4 apart, in the same ink.
 struct Eyebrow: View {
     let title: String
     var count: Int? = nil
@@ -286,10 +329,15 @@ struct Eyebrow: View {
     }
 
     var body: some View {
-        Text(count.map { "\(title.uppercased())  \($0)" } ?? title.uppercased())
-            .font(Theme.Typography.eyebrow)
-            .tracking(Theme.Typography.eyebrowTracking)
-            .foregroundStyle(Theme.tertiary)
+        HStack(spacing: 4) {
+            Text(title)
+            if let count { Text("\(count)").monospacedDigit() }
+        }
+        .font(Theme.Typography.eyebrow)
+        .tracking(Theme.Typography.eyebrowTracking)
+        .foregroundStyle(Theme.tertiary)
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
 }
 

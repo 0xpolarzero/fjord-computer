@@ -2,24 +2,32 @@ import AppKit
 import SwiftUI
 
 enum Theme {
-    static let bg = Color(red: 0.078, green: 0.078, blue: 0.086)
-    /// Tooltip bubbles, a step above `bg`.
-    static let popover = Color(white: 0.17)
-    static let raised = Color.white.opacity(0.045)
-    static let hover = Color.white.opacity(0.07)
-    static let stroke = Color.white.opacity(0.085)
-    static let text = Color.white.opacity(0.93)
-    /// ~7.97:1 on `bg`.
-    static let secondary = Color.white.opacity(0.64)
-    /// ~4.67:1 on `bg` (was .34, 3.1:1). Still clearly below `secondary`.
-    static let tertiary = Color.white.opacity(0.46)
-    static let accent = Color(red: 0.40, green: 0.58, blue: 1.0)
-    static let amber = Color(red: 0.99, green: 0.74, blue: 0.27)
-    static let green = Color(red: 0.32, green: 0.82, blue: 0.50)
-    static let red = Color(red: 0.97, green: 0.38, blue: 0.38)
-    static let purple = Color(red: 0.68, green: 0.55, blue: 1.0)
+    // Claude's own palette (CDS, dark mode), read from the Claude app: Lookout is part of it.
+    /// The bar and its panels: black.
+    static let bg = Color.black
+    /// Tooltip bubbles and popovers: CDS surface-3.
+    static let popover = Color(red: 0x20 / 255, green: 0x20 / 255, blue: 0x1F / 255)
+    static let raised = Color.white.opacity(0.05)
+    static let hover = Color.white.opacity(0.075)
+    static let stroke = Color.white.opacity(0.10)
+    /// CDS gray-50.
+    static let text = Color(red: 0xF0 / 255, green: 0xEF / 255, blue: 0xEC / 255)
+    /// CDS gray-200.
+    static let secondary = Color(red: 0xC3 / 255, green: 0xC2 / 255, blue: 0xB7 / 255)
+    /// CDS gray-400.
+    static let tertiary = Color(red: 0x89 / 255, green: 0x87 / 255, blue: 0x81 / 255)
+    /// Claude's sidebar dot for done and unread (blue-400).
+    static let accent = Color(red: 0x39 / 255, green: 0x87 / 255, blue: 0xE5 / 255)
+    /// Needs you: Claude's warning (yellow-200).
+    static let amber = Color(red: 0xFA / 255, green: 0xB2 / 255, blue: 0x19 / 255)
+    static let green = Color(red: 0x55 / 255, green: 0xBF / 255, blue: 0x50 / 255)
+    static let red = Color(red: 0xEC / 255, green: 0x7E / 255, blue: 0x7E / 255)
+    static let purple = Color(red: 0xA0 / 255, green: 0x96 / 255, blue: 0xEB / 255)
     /// Claude's clay, for anything about Claude sessions.
-    static let claude = Color(red: 0.85, green: 0.47, blue: 0.34)
+    static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
+    /// The Router window, as Claude's Code tab: sidebar (surface-1) and content (surface-2).
+    static let sidebar = Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x15 / 255)
+    static let panel = Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x19 / 255)
     /// Project colours for Claude sessions: as far apart as possible, and nowhere near the status colours (amber
     /// needs you, blue unread, clay working) or CI's red. In assignment order, so the first projects differ most.
     static let projectColors: [Color] = [
@@ -63,7 +71,9 @@ struct IconButton: View {
 
     var body: some View {
         let button = Button(action: action) { IconButtonLabel(symbol: symbol, size: size, tint: tint, active: active) }
-            .buttonStyle(HoverFillButtonStyle(shape: Circle(), hover: Theme.Fill.hover, isActive: active))
+            // Claude's ghost icon button: a square at the control's size, radius 6, white 7.5% on hover, 15% when on.
+            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.GhostIcon.radius(size), style: .continuous),
+                                              hover: Theme.Fill.hover, isActive: active))
             .focused($focused)
             .accessibilityLabel(label ?? help)
             .accessibilityHint(detail.flatMap { $0.isEmpty ? nil : $0 } ?? "")
@@ -85,9 +95,10 @@ private struct IconButtonLabel: View {
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
+        // Claude's 16pt glyph (wght 533) as an SF Symbol; secondary ink, white on hover (`.df-chrome-btn`).
         Image(systemName: symbol)
-            .font(.system(size: size * 0.46, weight: .semibold))
-            .foregroundStyle(active || hover ? Theme.text : tint)
+            .font(.system(size: CDS.GhostIcon.glyph(size), weight: .medium))
+            .foregroundStyle(active || hover ? (tint == Theme.secondary ? Color.white : tint) : tint)
             .frame(width: size, height: size)
     }
 }
@@ -95,16 +106,17 @@ private struct IconButtonLabel: View {
 extension IconButton {
     /// The hub's three button sizes: one per kind of place, so the same action looks the same everywhere.
     enum Size {
-        /// The bar and its trailing group (pin, repositories, settings).
+        /// The bar and its trailing group (pin, repositories, settings): CDS `lg` control, 28.
         static let bar: CGFloat = 28
-        /// A section header's actions (mark all read, back).
+        /// A section header's actions (mark all read, back): CDS compact control, 24.
         static let header: CGFloat = 24
-        /// A row's hover actions, in their capsule.
-        static let row: CGFloat = 22
+        /// A row's hover actions: Claude's row controls, 24 (sidebar §2.7).
+        static let row: CGFloat = 24
     }
 }
 
-/// A key as printed on a keycap, e.g. "Esc" or "⌘K": one look everywhere a key is shown.
+/// A key as printed on a keycap, e.g. "Esc" or "⌘K": Claude's Shortcut cap (forms-buttons.md §4.6), one look everywhere a
+/// key is shown. 18 tall (one glyph: 18 square, more: 3 padding), radius 4, no fill, a 1pt line at 22% of the ink #a5a49a.
 struct KeyCap: View {
     let key: String
 
@@ -112,12 +124,12 @@ struct KeyCap: View {
 
     var body: some View {
         Text(key)
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-            .foregroundStyle(Theme.secondary)
-            .padding(.horizontal, 5)
-            .frame(minWidth: 18, minHeight: 16)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.xs, style: .continuous).fill(Theme.Fill.tile))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.xs, style: .continuous).strokeBorder(Theme.stroke))
+            .font(key.count > 1 && key.unicodeScalars.allSatisfy({ $0.isASCII }) ? CDS.sans(11) : .system(size: 11))
+            .foregroundStyle(CDS.Keycap.ink)
+            .padding(.horizontal, key.count > 1 ? 3 : 0)
+            .frame(minWidth: CDS.Keycap.size, minHeight: CDS.Keycap.size, maxHeight: CDS.Keycap.size)
+            .overlay(RoundedRectangle(cornerRadius: CDS.Keycap.radius, style: .continuous)
+                .strokeBorder(CDS.Keycap.ink.opacity(0.22), lineWidth: 1))
     }
 }
 
@@ -133,6 +145,7 @@ struct Avatar: View {
         let sized = Self.sizedURL(url, size: size)
         // A cached image is there on the first frame; otherwise a placeholder, then a quick fade-in.
         let image = loaded.flatMap { $0.url == sized ? $0.image : nil } ?? ImageCache.shared.cached(sized)
+        // Claude's Avatar: a circle, no ring; white 10% (`fill-control`) under initials or the picture.
         ZStack {
             Circle().fill(Theme.Fill.tile)
             if image == nil { placeholder }
@@ -142,7 +155,6 @@ struct Avatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .overlay(Circle().strokeBorder(Theme.stroke))
         .task(id: sized) {
             guard let sized, ImageCache.shared.cached(sized) == nil else { loaded = nil; return }
             loaded = nil
@@ -152,13 +164,13 @@ struct Avatar: View {
         }
     }
 
-    /// Initials of the name, or a person glyph without one.
+    /// Initials of the name (one at xs, two above, as Claude's), at 460 in primary; a person glyph without a name.
     @ViewBuilder private var placeholder: some View {
-        let initials = name.map { $0.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).prefix(2).compactMap(\.first).map(String.init).joined().uppercased() } ?? ""
+        let initials = name.map { $0.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).prefix(CDS.Avatar.initialsCount(size)).compactMap(\.first).map(String.init).joined().uppercased() } ?? ""
         if initials.isEmpty {
             Image(systemName: "person.fill").font(.system(size: size * 0.5)).foregroundStyle(Theme.tertiary)
         } else {
-            Text(initials).font(.system(size: size * 0.4, weight: .semibold, design: .rounded)).foregroundStyle(Theme.secondary)
+            Text(initials).font(CDS.sans(CDS.Avatar.initialsSize(size), .medium)).foregroundStyle(CDS.Text.primary)
         }
     }
 
@@ -170,41 +182,65 @@ struct Avatar: View {
     }
 }
 
+/// CI's state as Claude's status dot (global §1.7): 6pt, flat; running blinks .3 → 1 → .3 over 1.2 s.
 struct CIDot: View {
     let state: CIState
-    var size: CGFloat = 8
+    var size: CGFloat = CDS.Dot.size
 
     var body: some View {
         if state == .pending {
-            // Breathing: a render-server animation, with no glow (a shadow can't animate cheaply).
-            PulseBlock(color: state.color, diameter: size, from: 1, to: 0.35, duration: 0.9)
+            PulseBlock(color: state.color, diameter: size, from: 1, to: CDS.Dot.blinkLow, duration: CDS.Dot.blink / 2)
         } else {
             Circle()
-                .fill(state.color)
+                .fill(state == .none ? state.color.opacity(CDS.Dot.ringOpacity) : state.color)
                 .frame(width: size, height: size)
-                .shadow(color: state == .none ? .clear : state.color.opacity(0.6), radius: 3)
         }
     }
 }
 
+/// A tab, as Claude's Tabs draw one (search-tabs-avatars.md §2, compact base): 24 tall, 8 padding, 13pt at 460; muted,
+/// secondary on hover, primary when picked; hovered or picked, a white 7.5% pill (radius 6, inset 1 at each side). A count
+/// follows as a Badge, 6 after the label: neutral, or `countTint`'s variant (amber: warning).
 struct Chip: View {
     let label: String
     var count: Int? = nil
     var selected = false
+    var countTint: Color? = nil
     let action: () -> Void
 
+    init(label: String, count: Int? = nil, selected: Bool = false, countTint: Color? = nil, action: @escaping () -> Void) {
+        self.label = label
+        self.count = count
+        self.selected = selected
+        self.countTint = countTint
+        self.action = action
+    }
+
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Text(label)
-                if let count, count > 0 { CountBadge(count, tint: selected ? Theme.amber : nil) }
-            }
-            .font(Theme.Typography.control)
-            .foregroundStyle(selected ? Theme.text : Theme.secondary)
-            .padding(.horizontal, 10)
-            .frame(height: Theme.Metrics.chip)
+        Button(action: action) { ChipLabel(label: label, count: count, selected: selected, countTint: countTint) }
+            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
+                                              hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostHover,
+                                              pressed: CDS.Fill.ghostHover, isActive: selected))
+            .padding(.horizontal, CDS.Tabs.pillInset)
+    }
+}
+
+private struct ChipLabel: View {
+    let label: String
+    let count: Int?
+    let selected: Bool
+    let countTint: Color?
+    @Environment(\.hoverFillHovering) private var hover
+
+    var body: some View {
+        HStack(spacing: CDS.Tabs.badgeGap) {
+            Text(label)
+            if let count, count > 0 { CountBadge(count, tint: countTint) }
         }
-        .buttonStyle(HoverFillButtonStyle(shape: Capsule(), hover: Theme.Fill.field, active: Theme.Fill.selected, isActive: selected))
+        .font(CDS.sans(13, .medium))
+        .foregroundStyle(selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted)
+        .padding(.horizontal, CDS.Tabs.pad - CDS.Tabs.pillInset)
+        .frame(height: CDS.Tabs.height)
     }
 }
 
@@ -212,11 +248,12 @@ struct FieldStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .textFieldStyle(.plain)
-            .font(.system(size: 13))
+            .font(CDS.sans(13))
             .padding(.horizontal, 10)
             .frame(height: Theme.Metrics.field)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).fill(Theme.Fill.field))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).strokeBorder(Theme.stroke))
+            // Claude's field: white 5%, a 1pt white-10% inset ring.
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).fill(CDS.Fill.field))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).strokeBorder(CDS.border))
     }
 }
 
@@ -226,8 +263,9 @@ extension View {
     func card() -> some View {
         self
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.lg + 2, style: .continuous).fill(Theme.raised))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg + 2, style: .continuous).strokeBorder(Theme.stroke))
+            // `rounded-card` (10) with Claude's card ring: white 5% under a 1pt white-10% line.
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).fill(Theme.raised))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).strokeBorder(Theme.stroke))
     }
 }
 
@@ -416,27 +454,37 @@ private struct Tip: ViewModifier {
     }
 }
 
+/// Claude's Tooltip (composer-overlays.md §9): surface-3, radius 6, 13/18 primary at 360, 8 × 3 padding (8 × 6 with a
+/// detail, its lines muted, 2 under the title), at least 24 tall, at most 240 wide; 4 above its control (below without room).
 private struct TipBubble: View {
     let request: TipCenter.Request
     let bounds: CGSize
     @State private var size = CGSize.zero
 
     var body: some View {
+        let detail = request.detail.flatMap { $0.isEmpty ? nil : $0 }
         VStack(alignment: .leading, spacing: 2) {
-            Text(request.title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.text)
-            if let detail = request.detail, !detail.isEmpty {
+            Text(request.title)
+                .font(CDS.sans(CDS.Tooltip.text.0))
+                .foregroundStyle(CDS.Text.primary)
+                .frame(maxWidth: Self.inner, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if let detail {
                 Text(detail)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.secondary)
+                    .font(CDS.sans(CDS.Tooltip.text.0))
+                    .foregroundStyle(CDS.Text.muted)
                     .frame(width: Self.width(of: detail), alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
-        .background(Theme.Radius.shape(Theme.Radius.sm).fill(Theme.popover))
-        .overlay(Theme.Radius.shape(Theme.Radius.sm).strokeBorder(Theme.Fill.tile))
-        .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+        .lineSpacing(Self.spacing)
+        .padding(.horizontal, CDS.Tooltip.padX)
+        .padding(.vertical, detail == nil ? CDS.Tooltip.padY : CDS.Tooltip.padYMulti)
+        .frame(minHeight: CDS.Tooltip.minHeight)
+        .background(Theme.Radius.shape(CDS.Tooltip.radius).fill(CDS.Surface.s3))
+        .overlay(Theme.Radius.shape(CDS.Tooltip.radius).strokeBorder(CDS.Tooltip.ring, lineWidth: 1))
+        .shadow(color: CDS.Tooltip.shadowNear, radius: 1, y: 1)
+        .shadow(color: CDS.Tooltip.shadowFar, radius: 4, y: 2)
         .fixedSize()
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
         .offset(placement)
@@ -444,20 +492,30 @@ private struct TipBubble: View {
         .allowsHitTesting(false)
     }
 
+    /// 13/18: the line height less the font's own.
+    private static let spacing: CGFloat = {
+        let font = CDS.nsSans(CDS.Tooltip.text.0)
+        return max(0, CDS.Tooltip.text.1 - (font.ascender - font.descender + font.leading))
+    }()
+
+    /// The widest a line may be inside the 240 box.
+    private static let inner = CDS.Tooltip.maxWidth - 2 * CDS.Tooltip.padX
+
     /// Centered over the anchor, clamped inside the panel; flips below when there's no room above.
     private var placement: CGSize {
         let a = request.anchor
         let margin: CGFloat = 8
+        let gap = CDS.Tooltip.offset
         let x = min(max(a.midX - size.width / 2, margin), max(margin, bounds.width - margin - size.width))
-        let y = a.minY - size.height - 6 >= margin ? a.minY - size.height - 6 : a.maxY + 6
+        let y = a.minY - size.height - gap >= margin ? a.minY - size.height - gap : a.maxY + gap
         return CGSize(width: x, height: y)
     }
 
-    /// Natural width of the widest line, capped so long details wrap instead of stretching the bubble.
+    /// Natural width of the widest line, capped so long details wrap instead of stretching the bubble past 240.
     private static func width(of text: String) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: 10.5)
+        let font = CDS.nsSans(CDS.Tooltip.text.0)
         let widest = text.split(separator: "\n").map { (String($0) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        return min(ceil(widest) + 2, 210)
+        return min(ceil(widest) + 2, inner)
     }
 }
 

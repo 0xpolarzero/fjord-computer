@@ -3,10 +3,11 @@ import SwiftUI
 
 // The hub's sections: what goes in the bar's cells and beside them.
 //
-// One set of measures for every piece, so the sections read as one surface:
-// - section headers are 30pt: title 12 semibold secondary, then a status in its state's colour, trailing actions
-//   as header-size (24) IconButtons;
-// - rows pad their content 8 × 6 inside a 9pt continuous rounded fill (white 0.06 on hover or when picked);
+// One set of measures for every piece, so the sections read as one surface, Claude's compact density on black:
+// - section headers are 30pt: the title as Claude's sidebar label (12/16 muted), then a status in its state's colour,
+//   trailing actions as Claude's 24pt ghost icon buttons;
+// - the inbox's tabs are Claude's Tabs, its counts Claude's Badges;
+// - rows pad their content 8 × 5 inside a radius-6 fill (white 7.5% on hover or when picked);
 //   the layout adds the one outer inset, so nothing here pads itself from the outside;
 // - every control has a tooltip: a verb phrase, then what it does and its shortcut, read from the user's settings.
 
@@ -52,7 +53,8 @@ extension LookoutHub {
     }
 
     var filters: some View {
-        HStack(spacing: 4) {
+        // Claude's Tabs abut: each pill is inset 1 at its sides, so two pills are 2 apart.
+        HStack(spacing: 0) {
             // The tabs never give up their words: the actions after them are what yields when the column is narrow.
             ForEach(InboxFilter.allCases, id: \.self) { f in filterChip(f).fixedSize().layoutPriority(2) }
             Spacer(minLength: 0)
@@ -79,7 +81,8 @@ extension LookoutHub {
         case .bots: "Comments from bots, kept quiet"
         case .done: "What you marked Done · Back to inbox from here"
         }
-        return Chip(label: f.label, count: count, selected: hub.filter == f) {
+        // What needs you counts in Claude's warning Badge; the bots' in the neutral one.
+        return Chip(label: f.label, count: count, selected: hub.filter == f, countTint: f == .needsYou ? Theme.amber : nil) {
             withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { hub.filter = f }
         }
         .tip(f.label, detail)
@@ -94,7 +97,7 @@ extension LookoutHub {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Space.md)
-        .padding(.vertical, Theme.Space.sm)
+        .padding(.vertical, 5)
     }
 
     func itemRow(_ item: InboxItem) -> some View {
@@ -131,7 +134,7 @@ extension LookoutHub {
     func sectionHeader<Trailing: View>(_ title: String, status: [(String, Color)] = [],
                                        @ViewBuilder trailing: () -> Trailing = { EmptyView() }) -> some View {
         HStack(spacing: 8) {
-            Text(title).font(Theme.Typography.heading).foregroundStyle(Theme.secondary).lineLimit(1)
+            Text(title).font(Theme.Typography.heading).foregroundStyle(Theme.tertiary).lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
             ForEach(Array(status.enumerated()), id: \.offset) { _, part in
                 Text(part.0).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(part.1).lineLimit(1)
@@ -203,8 +206,8 @@ extension LookoutHub {
         let failing = ciRepos(listedIn: .failure).count
         let running = ciRepos(listedIn: .pending).count
         let passing = ciRepos(listedIn: .success).count
-        if failing > 0 { return ("\(failing) failing", Theme.red) }
-        if running > 0 { return ("\(running) running", Theme.amber) }
+        if failing > 0 { return ("\(failing) failing", CIState.failure.color) }
+        if running > 0 { return ("\(running) running", CIState.pending.color) }
         // "All" only when every repo shown has passed; some without a run yet make it a count.
         if passing > 0 { return (ciRepos(listedIn: CIState.none).isEmpty ? "all passing" : "\(passing) passing", Theme.tertiary) }
         return store.ciRepos.isEmpty ? nil : ("no runs", Theme.tertiary)
@@ -227,21 +230,21 @@ extension LookoutHub {
         // Repos without a run only get a line when there are some.
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(state == CIState.none ? "No runs" : state.title)
-                .font(Theme.Typography.count)
+                .font(Theme.Typography.meta)
                 .foregroundStyle(repos.isEmpty ? Theme.tertiary : state.color)
                 .frame(width: 52, alignment: .leading)
             if repos.isEmpty {
                 Text("—").font(Theme.Typography.meta).foregroundStyle(Theme.tertiary)
             } else {
                 // A few chips, then "+N": a line never grows with the number of repos (it'd push the hub off the screen).
-                FlowLayout(spacing: 5) {
+                FlowLayout(spacing: 4) {
                     ForEach(repos.prefix(Self.ciChipLimit), id: \.fullName) { repo in
                         RepoChip(repo: repo, status: store.ci[repo.fullName], state: state) { store.openChecks(repo) }
                     }
                     if repos.count > Self.ciChipLimit {
                         let rest = repos.dropFirst(Self.ciChipLimit)
-                        Text("+\(rest.count)").font(Theme.Typography.control).foregroundStyle(Theme.secondary)
-                            .padding(.horizontal, 8).frame(height: 22)
+                        Text("+\(rest.count)").font(Theme.Typography.meta).foregroundStyle(Theme.tertiary)
+                            .padding(.horizontal, 6).frame(height: RepoChip.height)
                             .accessibilityLabel("\(rest.count) more")
                             .tip("\(rest.count) more", rest.map(\.fullName).joined(separator: "\n"))
                     }
@@ -472,7 +475,7 @@ extension LookoutHub {
                     } else if let symbol = s.symbol {
                         Image(systemName: symbol).font(Theme.Typography.glyph(9, .bold)).foregroundStyle(s.color)
                     } else {
-                        Circle().fill(s.color).frame(width: 6, height: 6)
+                        Circle().fill(s.color).frame(width: CDS.Dot.size, height: CDS.Dot.size)
                     }
                 }
                 .frame(width: 10, height: 10)
@@ -549,28 +552,37 @@ struct InboxSearchField: View {
     let count: String
     @FocusState private var focused: Bool
 
+    @State private var hover = false
+
+    /// Claude's sidebar search field (global §2.3), typed into: 26 tall, radius 6, white 5% (14% on hover) inside a 1pt
+    /// white-10% ring; the 16pt search glyph in a 24 slot, 13pt text, muted placeholder and count, the Esc keycap.
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "magnifyingglass").font(Theme.Typography.glyph(12)).foregroundStyle(Theme.accent)
+        HStack(spacing: CDS.Sidebar.rowGap) {
+            Image(systemName: "magnifyingglass").font(.system(size: CDS.Sidebar.symbol, weight: .medium))
+                .foregroundStyle(CDS.Text.muted)
+                .frame(width: CDS.Sidebar.leadingSlot, height: CDS.Sidebar.leadingSlot)
                 .accessibilityHidden(true)
             TextField("Search inbox and sessions", text: $hub.query,
-                      prompt: Text("Search inbox and sessions").foregroundStyle(Theme.tertiary))
+                      prompt: Text("Search inbox and sessions").foregroundStyle(CDS.Text.muted))
                 .textFieldStyle(.plain)
-                .font(Theme.Typography.title.weight(.medium))
-                .foregroundStyle(Theme.text)
+                .font(CDS.sans(CDS.Sidebar.rowFont))
+                .foregroundStyle(CDS.Text.primary)
                 .lineLimit(1)
                 .accessibilityLabel("Search inbox and sessions")
                 .focused($focused)
                 .focusEffectDisabled()
             if !hub.query.isEmpty {
-                Text(count).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(Theme.tertiary).lineLimit(1)
+                Text(count).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(CDS.Text.muted).lineLimit(1)
             }
             KeyCap("Esc")
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 7)
-        .frame(height: Theme.Metrics.line)
-        .background(Theme.Radius.shape(Theme.Radius.md).fill(Theme.Fill.field))
+        .padding(.leading, CDS.Sidebar.rowPadding)
+        .padding(.trailing, 4)
+        .frame(height: CDS.Sidebar.rowHeight)
+        .background(Theme.Radius.shape(CDS.Sidebar.radius).fill(hover && !focused ? CDS.Fill.secondaryHover : CDS.Fill.field))
+        .overlay(Theme.Radius.shape(CDS.Sidebar.radius).strokeBorder(CDS.border, lineWidth: 1))
+        .onHover { hover = $0 }
+        .motion(Theme.Motion.hover, value: hover)
         .onAppear { requestFocus() }
         .onChange(of: hub.focusRequest) { requestFocus() }
         .onChange(of: focused) { _, isFocused in
