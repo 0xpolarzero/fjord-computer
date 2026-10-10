@@ -14,6 +14,8 @@ struct RouterState: Codable, Equatable {
     var chat: [RouterMessage] = []
     /// The decision log, oldest first (see RouterDecisions.swift).
     var decisions: [RouterDecision] = []
+    /// The overviews you asked for, oldest first (see RouterOverview.swift).
+    var overviews: [RouterOverview] = []
     /// The Router's own Claude Code session, to resume it.
     var claudeSessionID: String?
     /// What the feed last saw of each session (see `RouterFeed.Stamp`): a change is an event, the same is not.
@@ -45,6 +47,7 @@ struct RouterState: Codable, Equatable {
         cards = (try? c.decodeIfPresent([RouterCard].self, forKey: .cards)) ?? []
         chat = (try? c.decodeIfPresent([RouterMessage].self, forKey: .chat)) ?? []
         decisions = (try? c.decodeIfPresent([RouterDecision].self, forKey: .decisions)) ?? []
+        overviews = (try? c.decodeIfPresent([RouterOverview].self, forKey: .overviews)) ?? []
         claudeSessionID = try? c.decodeIfPresent(String.self, forKey: .claudeSessionID)
         seen = (try? c.decodeIfPresent([String: String].self, forKey: .seen)) ?? [:]
         waits = (try? c.decodeIfPresent([String: Int64].self, forKey: .waits)) ?? [:]

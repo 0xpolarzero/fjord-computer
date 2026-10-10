@@ -15,9 +15,12 @@ struct RouterPage: Equatable {
         case card(RouterCard)
         /// A run of the Router, from the decision log.
         case decision(RouterDecision)
+        /// An overview you asked for.
+        case overview(RouterOverview)
 
         var id: String {
             switch self {
+            case .overview(let o): "overview-" + o.id.uuidString
             case .decision(let d): d.id.uuidString
             case .message(let m): m.id.uuidString
             case .card(let c): c.id
@@ -29,6 +32,7 @@ struct RouterPage: Equatable {
             case .message(let m): m.date
             case .card(let c): c.addressedAt ?? c.createdAt
             case .decision(let d): d.at
+            case .overview(let o): o.at
             }
         }
     }
@@ -48,12 +52,12 @@ struct RouterPage: Equatable {
     }
 
     static func make(cards: [RouterCard], chat: [RouterMessage], working: [AgentRow],
-                     decisions: [RouterDecision] = []) -> RouterPage {
+                     decisions: [RouterDecision] = [], overviews: [RouterOverview] = []) -> RouterPage {
         let open = cards.filter(\.isOpen).sorted(by: newestFirst)
         var page = RouterPage()
         page.needs = open.filter { $0.kind != .done } + open.filter { $0.kind == .done }
         page.working = working
-        let entries = chat.map(Entry.message) + decisions.map(Entry.decision) + cards.filter { !$0.isOpen }.map(Entry.card)
+        let entries = chat.map(Entry.message) + decisions.map(Entry.decision) + overviews.map(Entry.overview) + cards.filter { !$0.isOpen }.map(Entry.card)
         page.history = entries.enumerated().sorted { a, b in
             a.element.date != b.element.date ? a.element.date < b.element.date : a.offset < b.offset
         }.map(\.element)
@@ -71,7 +75,8 @@ extension Store {
         // The decision log stands for what you said, what the Router did and what it changed; the chat keeps what it doesn't
         // carry yet (the Router's own words, notices, sessions' messages).
         let kept = router.chat.filter { [.router, .error, .peer].contains($0.role) }
-        return .make(cards: router.cards, chat: kept, working: routerWorkingRows, decisions: router.decisions)
+        return .make(cards: router.cards, chat: kept, working: routerWorkingRows, decisions: router.decisions,
+                     overviews: router.overviews)
     }
 }
 
@@ -191,6 +196,8 @@ private struct RouterHistory: View {
             HistoryCardLine(store: store, model: model, card: card)
         case .decision(let decision):
             HistoryDecisionLine(store: store, model: model, decision: decision)
+        case .overview(let overview):
+            HistoryOverviewLine(overview: overview)
         }
     }
 
@@ -294,6 +301,32 @@ private struct HistoryCardLine: View {
     }
 }
 
+/// An overview in the history: one line (icon, the text, when); the whole text on hover.
+private struct HistoryOverviewLine: View {
+    let overview: RouterOverview
+    @State private var hovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "text.alignleft").font(.system(size: 10, weight: .medium))
+                .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
+            Text(overview.text).cdsText(CDS.Transcript.text, .regular, hovered ? CDS.Text.secondary : CDS.Text.muted)
+                .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+            Spacer(minLength: 8)
+            Text(shortAgo(overview.at)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+        }
+        .padding(.horizontal, CDS.Transcript.statusPad)
+        .frame(height: CDS.Transcript.statusRow)
+        .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+            .fill(hovered ? CDS.Fill.ghostHover : .clear))
+        .onHover { hovered = $0 }
+        .help(overview.text)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Overview")
+        .accessibilityValue("\(overview.text), \(AgentRow.spokenAge(Date().timeIntervalSince(overview.at))) ago")
+    }
+}
+
 /// A run in the history: one line (icon, what set it off, what was done, when), opening to show the trigger, what was done and
 /// its links (the session, the change with its Revert).
 private struct HistoryDecisionLine: View {
@@ -393,6 +426,7 @@ private struct RouterZones: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
+    @State private var overviewer = RouterOverviewer()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -419,6 +453,7 @@ private struct RouterZones: View {
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
             .accessibilityLabel("Working, \(page.working.count)")
+            overview
             ZoneScroll(maxHeight: max(88, height * 0.18), reveal: model.revealRequest,
                          ids: Set(page.working.map { RouterModel.workingID($0.id) })) {
                 VStack(spacing: 0) {
@@ -436,13 +471,41 @@ private struct RouterZones: View {
         }
     }
 
+    /// One line over all the working sessions, the Overview button, and the newest overview under them.
+    private var overview: some View {
+        MinuteTicking { now in
+            let items = store.overviewItems(now: now)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    if let line = RouterOverviewLine.text(items) {
+                        Text(line).cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
+                            .help(RouterOverviewLine.tooltip(items))
+                    }
+                    Spacer(minLength: 4)
+                    OverviewButton(overviewer: overviewer) { overviewer.request(store: store) }
+                }
+                if let error = overviewer.error {
+                    Text(error).cdsText((12, 16), .regular, CDS.Fill.warning).lineLimit(2)
+                }
+                if let last = store.router.overviews.last {
+                    (Text(last.at.formatted(date: .omitted, time: .shortened) + " · ").foregroundStyle(CDS.Text.muted)
+                        + Text(last.text).foregroundStyle(CDS.Text.secondary))
+                        .cdsText((12, 16), .regular, CDS.Text.secondary)
+                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Latest overview, \(last.text)")
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
     // MARK: Needs you
 
     @ViewBuilder private var needs: some View {
         let open = page.openNeed(preferred: model.expandedNeed)
         let wide = columnWidth >= 620
         // What an open form may take: the page less the other rows, the working zone and a sliver of history.
-        let working = page.working.isEmpty ? 0 : 24 + CGFloat(page.working.count) * 34 + 12
+        let working = page.working.isEmpty ? 0 : 24 + CGFloat(page.working.count) * 34 + 12 + 40
         let rows = CGFloat(max(0, page.needs.count - 1)) * (wide ? 40 : 58)
         let formCap = max(180, min(400, height - working - 28 - rows - (wide ? 52 : 100) - 24 - 12 - 24))
         if page.needs.isEmpty {
@@ -481,6 +544,33 @@ private struct RouterZones: View {
                 }
             }
         }
+    }
+}
+
+/// "Summarize what's happening": a small icon button, a spinner while it runs.
+private struct OverviewButton: View {
+    let overviewer: RouterOverviewer
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if overviewer.busy { ProgressView().controlSize(.mini).scaleEffect(0.8) }
+                else { Image(systemName: "text.alignleft").font(.system(size: 11, weight: .medium)) }
+            }
+            .foregroundStyle(hovered ? CDS.Text.secondary : CDS.Text.muted)
+            .frame(width: 22, height: 20)
+            .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                .fill(hovered && !overviewer.busy ? CDS.Fill.ghostHover : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(overviewer.busy)
+        .onHover { hovered = $0 }
+        .help("Summarize what's happening")
+        .accessibilityLabel("Overview")
+        .accessibilityHint("Summarize what's happening")
     }
 }
 

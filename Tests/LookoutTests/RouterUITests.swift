@@ -648,7 +648,7 @@ import UserNotifications
         let cardLines = page.history.compactMap { entry -> RouterCard? in if case .card(let c) = entry { c } else { nil } }
         #expect(!cardLines.isEmpty && cardLines.allSatisfy { !$0.isOpen })
         let shown = store.router.chat.filter { [.router, .error, .peer].contains($0.role) }.count
-        #expect(page.history.count == shown + store.router.decisions.count + store.router.cards.filter { !$0.isOpen }.count)
+        #expect(page.history.count == shown + store.router.decisions.count + store.router.overviews.count + store.router.cards.filter { !$0.isOpen }.count)
         // The sidebar's order is the page's: the keys walk Needs you the way it is shown.
         let (needs, done, _) = RouterModel().sections(store)
         #expect(page.needs.map(\.id) == (needs + done).map(\.id))

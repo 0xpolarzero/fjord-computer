@@ -247,6 +247,8 @@ enum Demo {
         if let last = state.decisions.indices.last, changes.last?.isReverted == true {
             state.decisions[last].outcome = .reverted
         }
+        state.overviews = [RouterOverview(at: now.addingTimeInterval(-420),
+                                          text: "Lookout is running its tests and microsandbox is in review; the transfer session finished a while ago and the LCU session is waiting on your answer.")]
         store.router = state
     }
 
