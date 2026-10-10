@@ -25,7 +25,7 @@ enum CardJudge {
     }
 
     private static func fence(_ text: String) -> String {
-        "<session-content untrusted=\"true\">\n\(String(text.prefix(3000)))\n</session-content>"
+        SessionFence.fence(String(text.prefix(3000)))
     }
 
     /// The questions a card asks one by one: a form's (read with its options), else those Jev found in the final message of

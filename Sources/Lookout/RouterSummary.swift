@@ -120,8 +120,7 @@ enum RouterSummaryContext {
     """
 
     private static func fence(_ text: String, _ limit: Int = 240) -> String {
-        let clean = text.replacingOccurrences(of: open, with: "").replacingOccurrences(of: close, with: "")
-        return open + RouterDecision.clip(clean, limit) + close
+        open + RouterDecision.clip(SessionFence.neutralized(text), limit) + close
     }
 
     private static func clock(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
