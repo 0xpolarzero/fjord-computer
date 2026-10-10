@@ -78,6 +78,37 @@ import Testing
         #expect(s.routerAttention.strip == nil)
     }
 
+    @Test func aStuckTurnThatCameAwayIsWeighedAgainOnceJevRatesItAndBanneredOnce() async {
+        let (s, idle, posted) = store()
+        s.router.enabled = true
+        s.routerTriager.rescanned = true
+        s.claudeSessions = ["a": ClaudeSession(id: "a", title: "Deploy", folder: "/code/a", completedTurns: 2, lastActivity: Date(),
+                                               summary: .init(blocked: true, detail: "Can't reach the server"), cliID: "cli-a")]
+        let stuck = RouterCard(id: "a#t2", sessionID: "a", kind: .stuck, title: "Deploy", folder: "/code/a", text: "Can't reach the server",
+                               createdAt: Date())
+        s.router.cards = [stuck]
+        s.onNewRouterCards = { [weak s] in if let s { RouterBanners.post($0, store: s, windowIsKey: false) } }
+        idle.seconds = 900
+        // Untriaged (no key yet): held for when you're back, at the urgency a turn has unrated.
+        s.onNewRouterCards?([stuck])
+        #expect(posted().isEmpty)
+        // Jev rates it blocking now: it comes.
+        s.routerTriager.reader = { _ in "I can't reach the deploy server; the release is blocked until you restore access." }
+        s.routerTriager.earlier = { _ in [] }
+        s.routerTriager.asker = { _, _ in
+            ["state": .choice(.init(choice: "blocked", confidence: 0.9, probabilities: ["blocked": 0.9, "done": 0.1])),
+             "urgency": .score(4, confidence: 0.9)]
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(s.router.cards[0].kind == .stuck && s.router.cards[0].triage?.urgency == 4)
+        #expect(posted() == [RouterBanners.prefix + "a#t2"])
+        // Once: coming again changes nothing.
+        s.onNewRouterCards?([s.router.cards[0]])
+        s.applyTriage(s.router.cards[0].triage!, to: "a#t2")
+        #expect(posted().count == 1)
+    }
+
     @Test func aLockedScreenIsAwayAndNothingCameMeansNoSummary() {
         let (s, _, posted) = store()
         s.routerAttention.locked = true

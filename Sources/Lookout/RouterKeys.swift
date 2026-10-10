@@ -131,6 +131,7 @@ enum RouterBanners {
             let asked = card.triage?.questions ?? []
             store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "\(card.kind.label) · \(project)",
                                 body: asked.isEmpty ? card.text : asked.joined(separator: "\n"), quiet: false)
+            store.routerAttention.posted(card.id)
         }
     }
 

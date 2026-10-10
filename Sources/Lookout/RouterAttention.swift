@@ -59,6 +59,8 @@ struct AwayStrip: Equatable {
     @ObservationIgnored private(set) var awaySince: Date?
     @ObservationIgnored private(set) var heldCards: [String] = []
     @ObservationIgnored private(set) var heldInbox = 0
+    /// The cards a banner was shown for: never a second one.
+    @ObservationIgnored private(set) var delivered: Set<String> = []
     /// What came while you were last away, on the Router until dismissed.
     var strip: AwayStrip?
     /// You're back and something came meanwhile (the summary banner).
@@ -81,12 +83,17 @@ struct AwayStrip: Equatable {
         }
     }
 
-    /// Of the new cards, those to banner now. While you're away every one is kept for the summary when you're back.
+    /// Of the new cards, those to banner now. While you're away every one is kept for the summary when you're back. A card
+    /// may come again (Jev's triage made it more urgent, or answered for one held until he did): it is weighed again, and
+    /// bannered once at most.
     func admit(_ new: [RouterCard]) -> [RouterCard] {
         let away = refresh()
         if away { for card in new where card.kind.isTurn || card.kind.needsYou { hold(card.id) } }
-        return new.filter { Self.bannerNow($0, away: away) }
+        return new.filter { !delivered.contains($0.id) && Self.bannerNow($0, away: away) }
     }
+
+    /// A card's banner was shown.
+    func posted(_ id: String) { delivered.insert(id) }
 
     /// A waiting session ready to continue: a banner now, or, away, in the summary.
     func admitReady(_ card: RouterCard) -> Bool {

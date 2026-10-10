@@ -502,7 +502,9 @@ extension Store {
         }
     }
 
-    /// The triage on its card, which takes the kind it says. A card that now needs you is announced as a new one would be.
+    /// The triage on its card, which takes the kind it says. A card that needs you is announced as a new one would be: one
+    /// that needs you only now, and one that came with no banner (away, at the urgency it had untriaged), weighed again
+    /// now that Jev rated it. Never twice: RouterAttention keeps which had theirs.
     func applyTriage(_ triage: RouterTriage, to id: String) {
         guard let (i, session) = currentTurnCard(id) else { return }
         var state = router
@@ -512,9 +514,11 @@ extension Store {
         state.cards[i].kind = RouterTriage.kind(blocked: blocked, triage: triage)
         guard state != router else { return }
         router = state
+        let card = state.cards[i]
         // Going in circles is said once per streak: not again while its turns keep at it.
-        if state.cards[i].kind.needsYou, !before.kind.needsYou, !RouterCircles.again(state.cards[i], in: state.cards) {
-            onNewRouterCards?([state.cards[i]])
+        if card.kind.needsYou, !before.kind.needsYou || !routerAttention.delivered.contains(id),
+           !RouterCircles.again(card, in: state.cards) {
+            onNewRouterCards?([card])
         }
         resolveWaits()
     }
