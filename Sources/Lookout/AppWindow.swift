@@ -409,7 +409,7 @@ struct AppRootView: View {
         // sidebar's width on the same spring (an implicit animation here would end up fighting the explicit one).
         let railInset = collapsed ? max(0, AppNavButtons.trafficLights - AppSidebar.railWidth) : 0
         HStack(spacing: 0) {
-            AppSidebar(store: store, navigator: navigator, collapsed: collapsed)
+            AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
                 .padding(.top, CDS.Sidebar.titleRow)
                 .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
                 .frame(maxHeight: .infinity)

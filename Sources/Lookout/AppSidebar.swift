@@ -72,6 +72,8 @@ struct RailBadge {
 struct AppSidebar: View {
     let store: Store
     let navigator: AppNavigator
+    /// Asks the categories page to open a category's editor (the row's Edit…).
+    let hub: HubState
     let collapsed: Bool
     typealias M = CDS.Sidebar
     /// The rail: the bar's 28pt tile centred in 52 (the expanded rows' icons sit at the same centre, so they never move).
@@ -102,6 +104,7 @@ struct AppSidebar: View {
                         }
                         .padding(.bottom, rowGap)
                         .accessibilityValue(badge == 0 ? "Nothing new" : category.isCI ? "\(badge) failing" : "\(badge) unread")
+                        .contextMenu { categoryMenu(category) }
                     }
                     AppSidebarRow(title: "Done", on: navigator.selection == .done,
                                   tip: "Done · \(store.doneEntries.count)", action: { navigator.go(.done) }) { on in
@@ -167,6 +170,31 @@ struct AppSidebar: View {
         // Always laid out at its full width: the frame around it narrows, so nothing here reflows or moves.
         .frame(width: AppRootView.sidebarWidth, alignment: .topLeading)
         .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// A category row's menu, in the expanded sidebar and on the rail alike. Edits go through the store as the categories page
+    /// does (its quick toggles mutate `store.categories` too), so its undo history records them when it is open.
+    @ViewBuilder
+    private func categoryMenu(_ category: InboxCategory) -> some View {
+        let shown = store.shownCategories
+        Button("Edit…") {
+            navigator.go(.categories)
+            hub.openCategory(category.id)
+        }
+        Toggle("Notifications", isOn: Binding(
+            get: { store.categories.first { $0.id == category.id }?.notifies ?? false },
+            set: { on in
+                if let i = store.categories.firstIndex(where: { $0.id == category.id }) { store.categories[i].notifies = on }
+            }))
+        Button("Hide") { store.setHidden(category.id, true) }
+        Divider()
+        Button("Mark all seen") { store.markAllSeen(.category(category.id)) }
+            .disabled(store.unreadCount(category.id) == 0)
+        Divider()
+        Button("Move up") { store.moveCategory(category.id, by: -1, among: shown) }
+            .disabled(!store.canMoveCategory(category.id, by: -1, among: shown))
+        Button("Move down") { store.moveCategory(category.id, by: 1, among: shown) }
+            .disabled(!store.canMoveCategory(category.id, by: 1, among: shown))
     }
 
     /// Tiles sit a little further apart than rows (28 against 26).
