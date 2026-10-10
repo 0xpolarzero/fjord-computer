@@ -81,6 +81,29 @@ final class StubProtocol: URLProtocol {
         await #expect(throws: JevClient.Failure.self) { try await client().ask(["q1": .noul(instructions: "?")], about: "x") }
     }
 
+    @Test func aScoreIsReadOnlyWhenItCanOnlyMeanOneLevel() async throws {
+        StubProtocol.status = 200
+        func score(_ answer: String) async throws -> Double? {
+            StubProtocol.response = Data(#"{"answers":{"size":\#(answer)}}"#.utf8)
+            return try await client().ask(["size": .score(levels: ["a", "b", "c"], instructions: "?")], about: "x")["size"]?.score
+        }
+        #expect(try await score(#"{"score":1.5,"legend":{"0":"a","1":"b","2":"c"},"confidence":0.9}"#) == 1.5)
+        #expect(try await score(#"{"score":2.5,"legend":{"1":"a","2":"b","3":"c"}}"#) == 1.5)
+        // Without a legend, only a value no other scale could mean.
+        #expect(try await score(#"{"score":0.4}"#) == 0.4)
+        #expect(try await score(#"{"score":2.6}"#) == 1.6)
+        for bad in [#"{"score":1.5}"#, #"{"score":true,"legend":{"0":"a","1":"b","2":"c"}}"#, #"{"score":999}"#,
+                    #"{"score":-1,"legend":{"0":"a","1":"b","2":"c"}}"#, #"{"score":3,"legend":{"0":"a","1":"b","2":"c"}}"#,
+                    #"{"score":1,"legend":{"0":"a","2":"c"}}"#, #"{"score":1,"legend":{"x":"a","1":"b","2":"c"}}"#,
+                    #"{"score":"1","legend":{"0":"a","1":"b","2":"c"}}"#,
+                    #"{"score":1,"legend":{"0":"a","1":"b","2":"c"},"confidence":1.5}"#,
+                    #"{"score":1,"legend":{"0":"a","1":"b","2":"c"},"confidence":true}"#] {
+            await #expect(throws: JevClient.Failure.self, "\(bad)") { _ = try await score(bad) }
+        }
+        StubProtocol.response = Data(#"{"answers":{"pick":{"choice":"code","probabilities":{"code":1},"confidence":2}}}"#.utf8)
+        await #expect(throws: JevClient.Failure.self) { try await client().choose(["code"], for: [:], instructions: "") }
+    }
+
     @Test func rejectedKeyAndOddAnswersAreErrors() async {
         StubProtocol.status = 401
         StubProtocol.response = Data("{}".utf8)
