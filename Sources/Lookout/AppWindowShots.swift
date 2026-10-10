@@ -66,9 +66,20 @@ enum AppWindowShots {
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let d = store.router.decisions.first(where: { !$0.links.changes.isEmpty }) { model.expanded.insert(d.id.uuidString) }
         }),
-        Shot(name: "router-overview-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
+        Shot(name: "router-summary-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
-            if let overview = store.router.overviews.last { model.expanded.insert(RouterPage.Entry.overview(overview).id) }
+            if let summary = store.router.summaries.last { model.expanded.insert(RouterPage.Entry.summary(summary).id) }
+        }),
+        // Four sessions working, each but the last with its summary under it, the last being summarized.
+        Shot(name: "router-working-summaries", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
+            for id in ["local_demo-transfer", "local_demo-linux"] { store.claudeSessions[id]?.running = true }
+            let rows = store.routerWorkingRows
+            for row in rows.dropLast() where store.router.summaries.allSatisfy({ $0.sessionID != row.id }) {
+                store.addSummary(RouterSummary(at: Date().addingTimeInterval(-60), text: RouterSummarizer.canned(store.summarySubject(row)),
+                                               sessionID: row.id, title: row.session.title))
+            }
+            model.summarizer.runner = { _ in try await Task.sleep(for: .seconds(3600)); return "" }
+            if let last = rows.last { model.summarizer.request(last.id, store: store) }
         }),
         Shot(name: "router-replying-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }

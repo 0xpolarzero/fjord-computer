@@ -14,12 +14,12 @@ struct RouterPage: Equatable {
         case card(RouterCard)
         /// A run of the Router, from the decision log.
         case decision(RouterDecision)
-        /// An overview you asked for.
-        case overview(RouterOverview)
+        /// A summary you asked for.
+        case summary(RouterSummary)
 
         var id: String {
             switch self {
-            case .overview(let o): "overview-" + o.id.uuidString
+            case .summary(let s): "summary-" + s.id.uuidString
             case .decision(let d): d.id.uuidString
             case .card(let c): c.id
             }
@@ -29,7 +29,7 @@ struct RouterPage: Equatable {
             switch self {
             case .card(let c): c.addressedAt ?? c.createdAt
             case .decision(let d): d.at
-            case .overview(let o): o.at
+            case .summary(let s): s.at
             }
         }
     }
@@ -41,9 +41,9 @@ struct RouterPage: Equatable {
     var asks: [RouterAskBack] = []
     /// Sessions working on their own, the longest running first.
     var working: [AgentRow] = []
-    /// The newest overview, shown in the Working card while sessions work; it stays until the next one.
-    var overview: RouterOverview?
-    /// Oldest first: the Router's runs, the overviews and the addressed cards by time.
+    /// Each working session's newest summary, by session: shown under its row until the next one.
+    var summaries: [String: RouterSummary] = [:]
+    /// Oldest first: the Router's runs, the summaries and the addressed cards by time.
     var history: [Entry] = []
 
     /// The card shown in full: the one asked for while it is still waiting, else the newest.
@@ -53,35 +53,40 @@ struct RouterPage: Equatable {
     }
 
     static func make(cards: [RouterCard], working: [AgentRow],
-                     decisions: [RouterDecision] = [], overviews: [RouterOverview] = [], asks: [RouterAskBack] = []) -> RouterPage {
-        make(cards: cards, working: working, asks: asks, history: history(cards: cards, decisions: decisions, overviews: overviews),
-             overviews: overviews)
+                     decisions: [RouterDecision] = [], summaries: [RouterSummary] = [], asks: [RouterAskBack] = []) -> RouterPage {
+        make(cards: cards, working: working, asks: asks, history: history(cards: cards, decisions: decisions, summaries: summaries),
+             summaries: summaries)
     }
 
     /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`).
     static func make(cards: [RouterCard], working: [AgentRow], asks: [RouterAskBack], history: [Entry],
-                     overviews: [RouterOverview] = []) -> RouterPage {
+                     summaries: [RouterSummary] = []) -> RouterPage {
         let open = cards.filter(\.isOpen).sorted(by: newestFirst)
         var page = RouterPage()
         page.needs = open.filter { $0.kind != .done } + open.filter { $0.kind == .done }
         page.working = working
         page.asks = asks
         page.history = history
-        page.overview = workingOverview(overviews, working: working)
+        page.summaries = latest(summaries, working: working)
         return page
     }
 
-    /// What the Working card shows on top: the newest overview (the last of those at the same time), while anything works.
-    static func workingOverview(_ overviews: [RouterOverview], working: [AgentRow]) -> RouterOverview? {
-        guard !working.isEmpty else { return nil }
-        return overviews.enumerated().max { a, b in
-            a.element.at != b.element.at ? a.element.at < b.element.at : a.offset < b.offset
-        }?.element
+    /// Under each working session's row: its newest summary (the last of those at the same time). A session no longer working
+    /// has none shown; the history keeps them all.
+    static func latest(_ summaries: [RouterSummary], working: [AgentRow]) -> [String: RouterSummary] {
+        let ids = Set(working.map(\.id))
+        var out: [String: RouterSummary] = [:]
+        for summary in summaries {
+            guard let id = summary.sessionID, ids.contains(id) else { continue }
+            if let kept = out[id], kept.at > summary.at { continue }
+            out[id] = summary
+        }
+        return out
     }
 
-    /// The history, oldest first (ties keep the runs, then the overviews, then the cards, in their order); one line per id.
-    static func history(cards: [RouterCard], decisions: [RouterDecision], overviews: [RouterOverview]) -> [Entry] {
-        let entries = decisions.map(Entry.decision) + overviews.map(Entry.overview) + cards.filter { !$0.isOpen }.map(Entry.card)
+    /// The history, oldest first (ties keep the runs, then the summaries, then the cards, in their order); one line per id.
+    static func history(cards: [RouterCard], decisions: [RouterDecision], summaries: [RouterSummary]) -> [Entry] {
+        let entries = decisions.map(Entry.decision) + summaries.map(Entry.summary) + cards.filter { !$0.isOpen }.map(Entry.card)
         var seen = Set<String>()
         return entries.enumerated().sorted { a, b in
             a.element.date != b.element.date ? a.element.date < b.element.date : a.offset < b.offset
@@ -97,13 +102,13 @@ extension Store {
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory,
-              overviews: router.overviews)
+              summaries: router.summaries)
     }
 
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],
-              overviews: router.overviews)
+              summaries: router.summaries)
     }
 }
 
@@ -289,8 +294,8 @@ private struct RouterHistory: View {
             HistoryCardLine(card: card, now: now, open: open, marked: marked, store: store, model: model).equatable()
         case .decision(let decision):
             HistoryDecisionLine(decision: decision, now: now, open: open, store: store, model: model).equatable()
-        case .overview(let overview):
-            HistoryOverviewLine(overview: overview, now: now, open: open, model: model).equatable()
+        case .summary(let summary):
+            HistorySummaryLine(summary: summary, now: now, open: open, model: model).equatable()
         }
     }
 }
@@ -404,9 +409,9 @@ private extension Transaction {
     withTransaction(transaction, change)
 }
 
-/// An overview in the history: one line (icon, the text, when), opening to show the whole text.
-private struct HistoryOverviewLine: View, Equatable {
-    let overview: RouterOverview
+/// A summary in the history: one line (icon, its session, the text, when), opening to show the whole text.
+private struct HistorySummaryLine: View, Equatable {
+    let summary: RouterSummary
     let now: Date
     let open: Bool
     let model: RouterModel
@@ -414,21 +419,29 @@ private struct HistoryOverviewLine: View, Equatable {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.overview == b.overview && a.now == b.now && a.open == b.open }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.summary == b.summary && a.now == b.now && a.open == b.open }
 
     var body: some View {
+        let lit = hovered || open
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                toggleHistoryLine(reduceMotion: reduceMotion) { model.toggleExpanded(RouterPage.Entry.overview(overview).id) }
+                toggleHistoryLine(reduceMotion: reduceMotion) { model.toggleExpanded(RouterPage.Entry.summary(summary).id) }
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles").font(.system(size: 10, weight: .medium))
                         .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
-                    Text(overview.text).cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
-                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    if let title = summary.title {
+                        Text(title).cdsText(CDS.Transcript.text, .regular, lit ? CDS.Text.secondary : CDS.Text.muted)
+                            .lineLimit(1).truncationMode(.tail).layoutPriority(2)
+                        Text("· \(summary.text)").cdsText((12, 16), .regular, CDS.Text.muted)
+                            .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    } else {
+                        Text(summary.text).cdsText(CDS.Transcript.text, .regular, lit ? CDS.Text.secondary : CDS.Text.muted)
+                            .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    }
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
-                    Text(shortAgo(overview.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                    Text(shortAgo(summary.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
                 }
                 .padding(.horizontal, CDS.Transcript.statusPad)
                 .frame(height: CDS.Transcript.statusRow)
@@ -443,11 +456,11 @@ private struct HistoryOverviewLine: View, Equatable {
             .buttonStyle(.plain)
             .focused($focused)
             .onHover { hovered = $0 }
-            .accessibilityLabel("Overview")
-            .accessibilityValue("\(overview.text), \(AgentRow.spokenAge(now.timeIntervalSince(overview.at))) ago, \(open ? "expanded" : "collapsed")")
+            .accessibilityLabel(summary.title.map { "Summary of \($0)" } ?? "Overview")
+            .accessibilityValue("\(summary.text), \(AgentRow.spokenAge(now.timeIntervalSince(summary.at))) ago, \(open ? "expanded" : "collapsed")")
 
             if open {
-                CDSProse(text: overview.text, color: CDS.Text.primary, inset: false).historyDetails()
+                CDSProse(text: summary.text, color: CDS.Text.primary, inset: false).historyDetails()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -723,7 +736,6 @@ private struct RouterZones: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
-    @State private var overviewer = RouterOverviewer()
     /// The zones less Needs you's scroll (Working, the headers, the margins): what Needs you's cap leaves room for.
     @State private var total: CGFloat = 0
     @State private var needsShown: CGFloat = 0
@@ -747,7 +759,7 @@ private struct RouterZones: View {
     // MARK: Working
 
     private var working: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 WorkingMark()
                 Text("Working").cdsText((12, 16), .medium, CDS.Text.muted)
@@ -758,17 +770,13 @@ private struct RouterZones: View {
             .accessibilityAddTraits(.isHeader)
             .accessibilityLabel("Working, \(page.working.count)")
             overview
-            // With an overview on top, the card may take a little more before it scrolls.
-            ZoneScroll(maxHeight: max(88, height * (page.overview == nil ? 0.18 : 0.24)), reveal: model.revealRequest,
-                         ids: Set(page.working.map { RouterModel.workingID($0.id) })) {
+            // With summaries under the rows, the card may take a little more before it scrolls.
+            ZoneScroll(maxHeight: max(88, height * (page.summaries.isEmpty ? 0.2 : 0.3)), reveal: model.revealRequest,
+                       ids: Set(page.working.map { RouterModel.workingID($0.id) })) {
                 VStack(spacing: 0) {
-                    if let overview = page.overview {
-                        WorkingOverview(overview: overview)
-                        Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline)
-                    }
                     ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
                         if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
-                        WorkingCard(store: store, model: model, row: row)
+                        WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id])
                             .id(RouterModel.workingID(row.id))
                             .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
                             .transition(.asymmetric(insertion: .opacity, removal: .opacity))
@@ -780,22 +788,20 @@ private struct RouterZones: View {
         }
     }
 
-    /// One line over all the working sessions, and the Overview button (the overview itself is in the card).
+    /// One line over all the working sessions, and the button that summarizes each of them (under its row).
     private var overview: some View {
-        MinuteTicking { now in
+        let summarizer = model.summarizer
+        let ids = Set(page.working.map(\.id))
+        return MinuteTicking { now in
             let items = store.overviewItems(now: now)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    if let line = RouterOverviewLine.text(items) {
-                        Text(line).cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
-                            .help(RouterOverviewLine.tooltip(items))
-                    }
-                    Spacer(minLength: 4)
-                    OverviewButton(overviewer: overviewer) { overviewer.request(store: store) }
+            HStack(spacing: 8) {
+                if let line = RouterOverviewLine.text(items) {
+                    Text(line).cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
+                        .help(RouterOverviewLine.tooltip(items))
                 }
-                if let error = overviewer.error {
-                    Text(error).cdsText((12, 16), .regular, CDS.Fill.warning).lineLimit(2)
-                }
+                Spacer(minLength: 4)
+                SparklesButton(busy: !summarizer.batch.isEmpty, done: ids.isSubset(of: summarizer.busy),
+                               label: "Summarize what's running") { summarizer.requestAll(store: store) }
             }
             .padding(.horizontal, 2)
         }
@@ -856,56 +862,63 @@ private struct RouterZones: View {
     }
 }
 
-/// The newest overview, on top of the Working card: its time and its whole text, wrapped.
-private struct WorkingOverview: View {
-    let overview: RouterOverview
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "sparkles").font(.system(size: 10, weight: .medium)).foregroundStyle(CDS.Text.muted)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(overview.at.formatted(date: .omitted, time: .shortened))
-                    .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
-                Text(overview.text).cdsText((12, 16), .regular, CDS.Text.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Overview at \(overview.at.formatted(date: .omitted, time: .shortened))")
-        .accessibilityValue(overview.text)
-    }
-}
-
-/// Summarize what's running: a sparkles icon button, pulsing while the summary is made.
-private struct OverviewButton: View {
-    let overviewer: RouterOverviewer
+/// A sparkles icon button that makes summaries, pulsing while they are made. `shown` false keeps its room but hides it, until
+/// it has the keyboard or is busy.
+private struct SparklesButton: View {
+    /// Its summaries are being made: it pulses.
+    let busy: Bool
+    /// Nothing more to ask for (each of its summaries is under way): it can't be clicked.
+    var done = false
+    let label: String
+    var shown = true
     let action: () -> Void
     @State private var hovered = false
+    @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var label: String { overviewer.busy ? "Summarizing…" : "Summarize what's running" }
+    private var help: String { busy ? "Summarizing…" : label }
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "sparkles").font(.system(size: 11, weight: .medium))
-                .symbolEffect(.pulse, options: .repeating, isActive: overviewer.busy && !reduceMotion)
-                .foregroundStyle(overviewer.busy ? CDS.Text.secondary : hovered ? CDS.Text.secondary : CDS.Text.muted)
-                .opacity(overviewer.busy && reduceMotion ? 0.6 : 1)
+                .symbolEffect(.pulse, options: .repeating, isActive: busy && !reduceMotion)
+                .foregroundStyle(busy || hovered ? CDS.Text.secondary : CDS.Text.muted)
+                .opacity(busy && reduceMotion ? 0.6 : 1)
                 .frame(width: 22, height: 20)
                 .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(hovered && !overviewer.busy ? CDS.Fill.ghostHover : .clear))
+                    .fill(hovered && !done ? CDS.Fill.ghostHover : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(overviewer.busy)
+        .disabled(done)
+        .focused($focused)
         .onHover { hovered = $0 }
-        .help(label)
-        .accessibilityLabel(label)
+        .opacity(shown || focused || busy ? 1 : 0)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// A session's newest summary, under its row: its whole text, wrapped, and its time.
+private struct WorkingSummary: View {
+    let summary: RouterSummary
+
+    var body: some View {
+        let time = summary.at.formatted(date: .omitted, time: .shortened)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "sparkles").font(.system(size: 9, weight: .medium)).foregroundStyle(CDS.Text.muted)
+                .frame(width: 18)
+            Text(summary.text).cdsText((12, 16), .regular, CDS.Text.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(time).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+        }
+        // The time under the row's duration, past the row's button.
+        .padding(.trailing, 30)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Summary at \(time)")
+        .accessibilityValue(summary.text)
     }
 }
 
@@ -948,49 +961,66 @@ private struct ZoneScroll<Content: View>: View {
 // MARK: - Working card
 
 /// A session working on its own: calm and small, one line. Its icon and title, what it is doing now (shimmering), what it
-/// left running, and for how long; opening it opens the session in Claude.
+/// left running, and for how long; opening it opens the session in Claude. Its sparkles button (on hover) summarizes it, and
+/// its newest summary sits under it.
 private struct WorkingCard: View {
     let store: Store
     @Bindable var model: RouterModel
     let row: AgentRow
+    let summary: RouterSummary?
     @State private var hovered = false
     @Environment(\.cdsColumnWidth) private var columnWidth
 
     var body: some View {
+        let summarizer = model.summarizer
+        let busy = summarizer.busy.contains(row.id)
         let start = Store.workingStart(row)
         let current = row.session.running ? row.activity?.text ?? "Working" : (row.tasksText ?? "Working")
         // The line composed from its task list and narration, when there is one; the raw step otherwise.
         let explained = store.liveExplanation(row)
         let doing = explained ?? current
         let marked = model.highlighted == RouterModel.workingID(row.id)
-        Button { store.openAgent(row.id) } label: {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                SessionGlyph(row: row, size: 18, dot: false)
-                Text(row.session.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
-                ShimmerText(text: doing, role: (12, 16)).truncationMode(.tail).layoutPriority(0)
-                    .help(RouterLive.tooltip(title: row.session.title, activity: row.activity, tasks: row.tasks))
-                Spacer(minLength: 4)
-                if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
-                if let start {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(AgentRow.duration(context.date.timeIntervalSince(start)))
-                            .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                Button { store.openAgent(row.id) } label: {
+                    HStack(spacing: 8) {
+                        SessionGlyph(row: row, size: 18, dot: false)
+                        Text(row.session.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
+                        ShimmerText(text: doing, role: (12, 16)).truncationMode(.tail).layoutPriority(0)
+                            .help(RouterLive.tooltip(title: row.session.title, activity: row.activity, tasks: row.tasks))
+                        Spacer(minLength: 4)
+                        if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
+                        if let start {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(AgentRow.duration(context.date.timeIntervalSince(start)))
+                                    .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                            }
+                            .layoutPriority(1)
+                        }
                     }
-                    .layoutPriority(1)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(row.session.title)
+                .accessibilityValue("working, \(row.projectName), \(doing)\(row.tasks.isEmpty ? "" : ", \(row.tasksText ?? "")")")
+                .accessibilityHint("Opens it in Claude")
+                .accessibilityAction(named: "Summarize") { summarizer.request(row.id, store: store) }
+                SparklesButton(busy: busy, done: busy, label: "Summarize this session", shown: hovered) {
+                    summarizer.request(row.id, store: store)
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear)
-            .contentShape(Rectangle())
+            if let summary { WorkingSummary(summary: summary) }
+            if let error = summarizer.errors[row.id] {
+                Text(error).cdsText((12, 16), .regular, CDS.Fill.warning).lineLimit(2).padding(.leading, 26)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear)
+        .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .contextMenu { SessionMenu(row: row, store: store) }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(row.session.title)
-        .accessibilityValue("working, \(row.projectName), \(doing)\(row.tasks.isEmpty ? "" : ", \(row.tasksText ?? "")")")
-        .accessibilityHint("Opens it in Claude")
     }
 
     /// "2 agents · 1 command" with their names on hover.

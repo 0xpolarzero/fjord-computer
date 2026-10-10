@@ -15,8 +15,9 @@ struct RouterState: Codable, Equatable {
     var changes: [LookoutChange] = []
     /// The decision log, oldest first (see RouterDecisions.swift).
     var decisions: [RouterDecision] = []
-    /// The overviews you asked for, oldest first (see RouterOverview.swift).
-    var overviews: [RouterOverview] = []
+    /// The sessions' summaries you asked for, oldest first (see RouterSummary.swift); kept under the key of the overviews of
+    /// every session that came before them, which read as summaries of none.
+    var summaries: [RouterSummary] = []
     /// What the feed last saw of each session (see `RouterFeed.Stamp`): a change is an event, the same is not.
     var seen: [String: String] = [:]
     /// The question or plan each session is stopped on, by when it began (ms since 1970, exactly as the transcript says):
@@ -88,7 +89,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, overviews, seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted
     }
 
     func encode(to encoder: Encoder) throws {
@@ -98,7 +99,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(cards, forKey: .cards)
         try c.encode(changes, forKey: .changes)
         try c.encode(decisions, forKey: .decisions)
-        try c.encode(overviews, forKey: .overviews)
+        try c.encode(summaries, forKey: .summaries)
         try c.encode(seen, forKey: .seen)
         try c.encode(waits, forKey: .waits)
         try c.encode(waitTools, forKey: .waitTools)
@@ -118,7 +119,7 @@ struct RouterState: Codable, Equatable {
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
         if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
         decisions = (try? c.decodeIfPresent([RouterDecision].self, forKey: .decisions)) ?? []
-        overviews = (try? c.decodeIfPresent([RouterOverview].self, forKey: .overviews)) ?? []
+        summaries = (try? c.decodeIfPresent([RouterSummary].self, forKey: .summaries)) ?? []
         seen = (try? c.decodeIfPresent([String: String].self, forKey: .seen)) ?? [:]
         waits = (try? c.decodeIfPresent([String: Int64].self, forKey: .waits)) ?? [:]
         waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]

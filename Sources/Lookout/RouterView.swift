@@ -243,6 +243,8 @@ struct RouterCardLine: View {
 @Observable
 @MainActor
 final class RouterModel {
+    /// The Working sessions' summaries being made.
+    @ObservationIgnored let summarizer = RouterSummarizer()
     /// The card the keys act on.
     var selection: String?
     var draft = "" {
@@ -368,7 +370,7 @@ final class RouterModel {
     /// Addressed cards and runs opened out in the history.
     var expanded: Set<String> = []
 
-    /// A history line (a run, an overview) opened out, or folded back.
+    /// A history line (a run, a summary) opened out, or folded back.
     func toggleExpanded(_ id: String) {
         if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
     }

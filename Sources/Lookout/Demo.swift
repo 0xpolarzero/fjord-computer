@@ -238,8 +238,14 @@ enum Demo {
         if let last = state.decisions.indices.last, changes.last?.isReverted == true {
             state.decisions[last].outcome = .reverted
         }
-        state.overviews = [RouterOverview(at: now.addingTimeInterval(-420),
-                                          text: "Lookout is running its tests and microsandbox is in review; the transfer session finished a while ago and the LCU session is waiting on your answer.")]
+        state.summaries = [
+            RouterSummary(at: now.addingTimeInterval(-420), text: "Lookout is mid-way through its test suite after wiring the "
+                          + "completion notifications; nothing has failed so far.", sessionID: "local_demo-lookout",
+                          title: "Agent completion notifications"),
+            RouterSummary(at: now.addingTimeInterval(-180), text: "The flaky sandbox test is fixed and CI is green; two "
+                          + "subagents are still reviewing the sandbox changes and the other jobs.", sessionID: "local_demo-ci",
+                          title: "CI failure diagnosis"),
+        ]
         // A message the Router couldn't place: asks where it goes (its run's entry waits for the pick), and one run under way.
         var asking = RouterDecision(at: now.addingTimeInterval(-15), trigger: .you("ship it tomorrow morning"), decision: .init(intent: "message", label: "reply", confidence: 0.48))
         asking.add(.asked(["Fix the flaky sandbox test", "Repository ownership transfer setup"]))

@@ -108,8 +108,8 @@ final class Store {
             if oldValue.cards != router.cards { countCardChanges(from: oldValue.cards) }
             // Worked out again only if what it is made of changed: a session's stamps or an open card changing leave it (and
             // what draws it) alone.
-            if oldValue.decisions != router.decisions || oldValue.overviews != router.overviews || oldValue.cards != router.cards {
-                let next = RouterPage.history(cards: router.cards, decisions: router.decisions, overviews: router.overviews)
+            if oldValue.decisions != router.decisions || oldValue.summaries != router.summaries || oldValue.cards != router.cards {
+                let next = RouterPage.history(cards: router.cards, decisions: router.decisions, summaries: router.summaries)
                 if next != routerHistory { routerHistory = next }
             }
             save()

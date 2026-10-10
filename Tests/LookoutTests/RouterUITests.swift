@@ -627,11 +627,11 @@ import UserNotifications
         // Working: the sessions running on their own, none of them stopped on you.
         #expect(Set(page.working.map(\.id)) == Set(store.routerWorkingRows.map(\.id)))
         #expect(!page.working.isEmpty && page.working.allSatisfy { !$0.waitsForYou })
-        // History: oldest first, addressed cards, runs and overviews together, no open card.
+        // History: oldest first, addressed cards, runs and summaries together, no open card.
         #expect(page.history.map(\.date) == page.history.map(\.date).sorted())
         let cardLines = page.history.compactMap { entry -> RouterCard? in if case .card(let c) = entry { c } else { nil } }
         #expect(!cardLines.isEmpty && cardLines.allSatisfy { !$0.isOpen })
-        #expect(page.history.count == store.router.decisions.count + store.router.overviews.count + store.router.cards.filter { !$0.isOpen }.count)
+        #expect(page.history.count == store.router.decisions.count + store.router.summaries.count + store.router.cards.filter { !$0.isOpen }.count)
         // The keys' order is the page's: the keys walk Needs you the way it is shown.
         let (needs, done, _) = RouterModel().sections(store)
         #expect(page.needs.map(\.id) == (needs + done).map(\.id))
@@ -640,7 +640,7 @@ import UserNotifications
     @Test func theHistoryIsWorkedOutOnlyWhenWhatItIsMadeOfChanges() {
         let store = demo()
         #expect(store.routerHistory == RouterPage.history(cards: store.router.cards, decisions: store.router.decisions,
-                                                         overviews: store.router.overviews))
+                                                         summaries: store.router.summaries))
         #expect(Set(store.routerHistory.map(\.id)).count == store.routerHistory.count)
         var notified = false
         withObservationTracking { _ = store.routerHistory } onChange: { notified = true }
@@ -656,7 +656,7 @@ import UserNotifications
 
     @Test func aDuplicatedIdIsOneLineOfTheHistory() {
         let decision = RouterDecision(at: Date(), trigger: .you("twice"), outcome: .done)
-        let history = RouterPage.history(cards: [], decisions: [decision, decision], overviews: [])
+        let history = RouterPage.history(cards: [], decisions: [decision, decision], summaries: [])
         #expect(history.map(\.id) == [decision.id.uuidString])
     }
 
