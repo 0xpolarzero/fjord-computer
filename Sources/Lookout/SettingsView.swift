@@ -221,6 +221,8 @@ struct SettingsView: View {
                 SettingsDivider()
                 sessionModels
                 SettingsDivider()
+                inboxJev
+                SettingsDivider()
                 sessionIcons
             }
         }
@@ -294,6 +296,15 @@ struct SettingsView: View {
             SettingsSegmented(label: "Model for sessions the Router starts",
                               options: [("Your default", false), ("Let Jev pick", true)],
                               selection: Binding(get: { store.jevPicksSessionModels }, set: { store.settings.jevPicksSessionModels = $0 }))
+        }
+    }
+
+    /// Whether Jev reads the inbox's new comments and rates its review requests (InboxJev.swift), which sends them to TypeSafe.
+    private var inboxJev: some View {
+        SettingsRow("Let Jev read new comments",
+                    info: ("Let Jev read new comments", "With a TypeSafe API key, each refresh sends the inbox's new comments, reviews and thread replies (not yours, from the last two weeks), and the review requests and assignments waiting on you, to TypeSafe (api.typesafe.ai). What goes: the comment's text and its author, the one just before it, the PR or issue's title, number and repo, its author, labels, size and checks, and your part in it. Jev says whether a comment asks you something or is noise, and how important a request is, for the rules that ask (a comment asks me, noise or a person, rated at least). Off, nothing of the inbox is sent and those rules see nothing Jev said: noise is bots only.")) {
+            SettingsSwitch("Let Jev read new comments",
+                           isOn: Binding(get: { store.jevReadsInbox }, set: { store.settings.jevReadsInbox = $0 }))
         }
     }
 

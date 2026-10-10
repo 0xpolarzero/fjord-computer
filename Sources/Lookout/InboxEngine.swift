@@ -190,9 +190,11 @@ enum InboxEngine {
         var groupRepos: [UUID: (exact: Set<String>, owners: Set<String>)] = [:]
         var contributed: Set<String>
         var myTeams: Set<String>
+        var jev: Bool
 
         init(_ context: InboxContext) {
             me = InboxEngine.normalize(context.me)
+            jev = context.jevSignals
             now = context.now
             contributed = Set(context.contributedRepos.map { $0.lowercased() })
             myTeams = Set(context.myTeams.map { $0.lowercased() })
@@ -424,10 +426,10 @@ enum InboxEngine {
             // Answering there is what stops a question asking: only what came after your latest word, and after Done.
             let after = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast)
             return messages(thing).filter { m in
-                m.at > after && !isMe(m.author, r) && signals(thing, r.me)?.messages[m.id]?.asksMe == true
+                m.at > after && !isMe(m.author, r) && signals(thing, r)?.messages[m.id]?.asksMe == true
             }.map { Fact(key: "asks:\($0.id)", label: "Asks you", tint: .attention) }
         case .noise(let wanted):
-            return messages(thing).filter { m in m.at > cutoff && !isMe(m.author, r) && isNoise(m, thing, me: r.me) == wanted }.map {
+            return messages(thing).filter { m in m.at > cutoff && !isMe(m.author, r) && isNoise(m, signals(thing, r)) == wanted }.map {
                 wanted ? Fact(key: "noise:\($0.id)", label: "noise from @\($0.author.login)")
                     : Fact(key: "person:\($0.id)", label: "comment by @\($0.author.login)", tint: .attention)
             }
@@ -476,9 +478,16 @@ enum InboxEngine {
         return signals
     }
 
+    /// What Jev said that counts: nothing when it was for someone else, or Jev's reading is switched off.
+    static func signals(_ thing: Thing, context: InboxContext) -> ThingSignals? {
+        context.jevSignals ? signals(thing, context.me) : nil
+    }
+
+    private static func signals(_ thing: Thing, _ r: Resolved) -> ThingSignals? { r.jev ? signals(thing, r.me) : nil }
+
     /// Noise: what Jev said of it once it read it (nil when it wasn't sure); before that, whether a bot wrote it.
-    static func isNoise(_ m: Message, _ thing: Thing, me: String) -> Bool? {
-        guard let signal = signals(thing, me)?.messages[m.id] else { return m.author.isBot }
+    private static func isNoise(_ m: Message, _ signals: ThingSignals?) -> Bool? {
+        guard let signal = signals?.messages[m.id] else { return m.author.isBot }
         return signal.noise
     }
 
@@ -502,7 +511,7 @@ enum InboxEngine {
 
     /// Jev's rating of what is asked of you now; nil when nothing is, or it wasn't rated (or wasn't sure).
     private static func importance(_ thing: Thing, _ r: Resolved) -> Importance? {
-        guard let signal = signals(thing, r.me)?.importance, let stamp = importanceStamp(thing, r), signal.stamp == stamp else { return nil }
+        guard let signal = signals(thing, r)?.importance, let stamp = importanceStamp(thing, r), signal.stamp == stamp else { return nil }
         return signal.level
     }
 

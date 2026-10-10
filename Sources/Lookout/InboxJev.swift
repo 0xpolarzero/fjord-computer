@@ -127,8 +127,8 @@ enum InboxJev {
     }
 
     /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).
-    static func isQuiet(_ fact: Fact, _ thing: Thing, me: String) -> Bool {
-        let signals = InboxEngine.signals(thing, me)
+    static func isQuiet(_ fact: Fact, _ thing: Thing, context: InboxContext) -> Bool {
+        let signals = InboxEngine.signals(thing, context: context)
         let parts = fact.key.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return false }
         switch parts[0] {
@@ -208,9 +208,13 @@ enum InboxJev {
 }
 
 extension Store {
+    /// Settings' "Let Jev read new comments" (default on).
+    var jevReadsInbox: Bool { settings.jevReadsInbox ?? true }
+
     /// Jev's reading of what is new, in one call: before the refresh announces, so noise is known before it would show a
-    /// banner. Without a key nothing is asked; a failure leaves everything as it was and waits a while.
+    /// banner. Switched off or without a key nothing is asked; a failure leaves everything as it was and waits a while.
     func readInbox() async {
+        guard jevReadsInbox else { return }
         let key = typesafeKey ?? ""
         let ask: InboxJev.Asker? = inboxAsker ?? (key.isEmpty ? nil : { questions, state in
             try await JevClient(key: key).ask(questions, about: state)

@@ -79,6 +79,9 @@ struct AppSettings: Codable {
     /// Sessions the Router starts without a model or effort named: Jev picks them by the task's size (default on), or your
     /// Claude Code defaults.
     var jevPicksSessionModels: Bool?
+    /// Jev reads new comments and rates review requests in the inbox (default on, with a TypeSafe key); off, nothing of the
+    /// inbox goes to TypeSafe and what Jev said counts for nothing.
+    var jevReadsInbox: Bool?
 }
 
 struct PersistedState: Codable {

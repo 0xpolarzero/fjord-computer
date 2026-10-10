@@ -528,4 +528,6 @@ struct InboxContext {
     /// `org/team` of every team you're in.
     var myTeams: Set<String> = []
     var now = Date()
+    /// What Jev said of things counts (Settings' "Let Jev read new comments"); off, it is as if Jev had said nothing.
+    var jevSignals = true
 }

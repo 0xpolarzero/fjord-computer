@@ -249,6 +249,26 @@ import Testing
         #expect(s.things["pr:a/one#1"]?.signals?.messages["c2"] == nil)
     }
 
+    @Test func switchedOffNothingIsSentAndWhatJevSaidCountsForNothing() async {
+        let (s, calls) = store([pr(1, comments: [comment("c1", tok)])], conditions: [.asksMe, .noise(false)])
+        await s.readInbox()
+        #expect(calls.questions.count == 1 && s.entries.first?.facts.map(\.key) == ["asks:c1"])
+        s.settings.jevReadsInbox = false
+        // As if Jev had said nothing: no "asks you", and a person's comment Jev read as noise is a person's again.
+        #expect(s.entries.first?.facts.map(\.key) == ["person:c1"])
+        #expect(!InboxJev.isQuiet(Fact(key: "comment:c1", label: ""), s.things["pr:a/one#1"]!, context: s.inboxContext))
+        var next = s.things
+        next["pr:a/one#1"]?.comments.append(comment("c2", tok, ago: 5))
+        s.applyThings(next)
+        await s.readInbox()
+        #expect(calls.questions.count == 1)
+        // Back on: what was read counts again, and only the new comment is asked about.
+        s.settings.jevReadsInbox = true
+        await s.readInbox()
+        #expect(calls.questions.count == 2 && Set(calls.questions[1].keys) == ["m1_asks", "m1_noise"])
+        #expect(s.entries.first?.facts.map(\.key).contains("asks:c1") == true)
+    }
+
     @Test func aReviewRequestIsRatedOnceForEachRequest() async {
         var t = pr(1, comments: [])
         t.requestedReviewers = ["me"]

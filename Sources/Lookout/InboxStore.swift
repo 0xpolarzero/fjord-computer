@@ -4,6 +4,8 @@ import Foundation
 enum InboxStore {
     struct Memo {
         var revision = -1
+        /// Whether what Jev said counted (a setting, not an inbox change).
+        var jev = true
         var entries: [InboxEntry] = []
     }
 
@@ -21,15 +23,15 @@ enum InboxStore {
 extension Store {
     var inboxContext: InboxContext {
         InboxContext(me: me?.login ?? login, groups: groups, contributedRepos: contributedRepos,
-                      myTeams: myTeams)
+                      myTeams: myTeams, jevSignals: jevReadsInbox)
     }
 
-    /// Every entry, memoized on `inboxRevision`.
+    /// Every entry, memoized on `inboxRevision` and whether Jev's reading counts.
     var entries: [InboxEntry] {
-        if inboxMemo.revision == inboxRevision { return inboxMemo.entries }
-        let result = InboxEngine.evaluate(things: Array(things.values), categories: categories, marks: marks,
-                                          context: inboxContext)
-        inboxMemo = InboxStore.Memo(revision: inboxRevision, entries: result)
+        if inboxMemo.revision == inboxRevision, inboxMemo.jev == jevReadsInbox { return inboxMemo.entries }
+        let context = inboxContext
+        let result = InboxEngine.evaluate(things: Array(things.values), categories: categories, marks: marks, context: context)
+        inboxMemo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals, entries: result)
         return result
     }
 

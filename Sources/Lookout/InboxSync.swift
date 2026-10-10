@@ -785,7 +785,7 @@ extension Store {
         var updated = marks
         var baselines = categoryBaselines
         var posts: [(category: InboxCategory, entry: InboxEntry, fresh: [Fact])] = []
-        let me = inboxContext.me
+        let context = inboxContext
         let byThing = Dictionary(all.map { ($0.thing.id, $0) }, uniquingKeysWith: { a, _ in a })
         for category in categories {
             let ruleIDs = Set(category.rules.map(\.id))
@@ -798,7 +798,7 @@ extension Store {
                 m.notified.formUnion(fresh.map(\.key))
                 updated[entry.id] = m
                 // Noise is noted, never announced.
-                let loud = fresh.filter { !InboxJev.isQuiet($0, entry.thing, me: me) }
+                let loud = fresh.filter { !InboxJev.isQuiet($0, entry.thing, context: context) }
                 if !silent, !entry.isDone, !loud.isEmpty { posts.append((category, entry, loud)) }
             }
             if baseline { baselines[category.id] = ruleIDs }
