@@ -92,6 +92,8 @@ extension Store {
                                            watch: .init(target: .session(id: other.id, turns: from),
                                                         label: "session “\(RouterDecision.clip(other.title, 50))”"))
         }
+        // The inbox's PRs and workflows go to TypeSafe only while you let Jev read the inbox (Settings).
+        guard jevReadsInbox else { return options }
         let ci = things.values.filter { thing in
             (thing.checks == .pending || (thing.checks != nil && thing.updatedAt > since))
                 && (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())

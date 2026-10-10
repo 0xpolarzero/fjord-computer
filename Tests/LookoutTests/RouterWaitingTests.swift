@@ -244,6 +244,27 @@ import Testing
         #expect(await s.waitOptions(for: s.claudeSessions["a"]!).map(\.key) == ["s0"])
     }
 
+    @Test func theInboxsChecksGoToJevOnlyWhileHeMayReadTheInbox() async {
+        var thing = ci(.pending)
+        thing.title = "Secret migration of the billing tables"
+        for reads in [true, false] {
+            let (s, _) = store(watch: ciWatch, things: [thing])
+            s.settings.jevReadsInbox = reads
+            s.router.cards[0].kind = .done
+            s.router.cards[0].triage = nil
+            s.routerTriager.rescanned = true
+            s.routerTriager.reader = { _ in "I pushed the fix; waiting for CI on the PR before I continue." }
+            var sent = ""
+            s.routerTriager.asker = { questions, state in sent = "\(questions) \(state)"; return [:] }
+            s.triageTurns()
+            await s.routerTriager.idle()
+            #expect(!sent.isEmpty)
+            #expect(sent.contains("Secret migration") == reads && sent.contains("o/app#1") == reads, "reads: \(reads)")
+            // The other sessions are still offered.
+            #expect(sent.contains("Migration"))
+        }
+    }
+
     @Test func whatFinishedAfterTheWaitingTurnEndedStillEndsTheWait() async {
         // The waiting turn ended a minute ago; since then, b finished its turn and the CI went green, before the options
         // were read.
