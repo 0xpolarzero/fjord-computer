@@ -381,11 +381,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let start = { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }
             sender.orderOut(nil)
-            self.onClosing?()
             current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
                 guard let self, let sender, self.generation == mine else { return }
                 self.finishClosing(sender, mine)
             }
+            guard self.generation == mine else { return }
+            self.onClosing?()
         }
         if interrupting {
             start()

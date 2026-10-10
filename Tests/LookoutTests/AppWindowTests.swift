@@ -680,6 +680,32 @@ import Testing
         }
     }
 
+    /// The close is committed before restoring the bar; if that callback opens the window again, its opening takes over.
+    @Test func restoringTheBarCanReverseTheCloseAlreadyUnderWay() {
+        morphing { controller, ticks in
+            controller.show(.settings)
+            guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+            ticks.turns.removeFirst()()
+            opened.complete()
+            ticks.blocks.removeFirst()()
+            ticks.blocks.removeFirst()()
+            var restored = false
+            controller.onClosing = {
+                restored = true
+                #expect(controller.run?.startPose != nil && !window.isVisible)
+                controller.show(.settings)
+            }
+            defer { controller.onClosing = nil }
+            controller.close()
+            guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
+            ticks.blocks.removeFirst()()
+            #expect(restored && controller.phase == .opening && controller.run === closing)
+            // The callback's opening is the animation completed now, so the real window takes over.
+            closing.complete()
+            #expect(window.isVisible && window.alphaValue == 1 && controller.isOpen)
+        }
+    }
+
     /// Opened, then closed with the keyboard (the picture it closes on is kept), and its close under way.
     private func openAndStartClosing(_ controller: AppWindowController, _ ticks: Ticks, on place: AppDestination) {
         AppTransition.isKey = { _ in true }
