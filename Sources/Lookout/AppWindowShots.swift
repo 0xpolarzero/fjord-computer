@@ -117,6 +117,16 @@ enum AppWindowShots {
             Demo.routerTriage(store)
             store.setZonesShare(RouterSplit.zonesBig)
         }),
+        // A session going in circles in Needs you, one that builds on another's work ready to continue; then what came while
+        // you were away at the top of Needs you.
+        Shot(name: "router-jev-circles", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { _, store in
+            Demo.routerJevAttention(store, away: false)
+            store.setZonesShare(RouterSplit.zonesBig)
+        }),
+        Shot(name: "router-jev-away", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { _, store in
+            Demo.routerJevAttention(store, away: true)
+            store.setZonesShare(RouterSplit.zonesBig)
+        }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
         Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),
