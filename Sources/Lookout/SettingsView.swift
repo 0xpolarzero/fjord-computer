@@ -259,7 +259,8 @@ struct SettingsView: View {
         return switch status {
         case .installed: ("Lookout's Claude Code plugin: installed: your messages reach sessions as yours. Sessions already "
                           + "open pick it up when restarted (or /reload-plugins).", Theme.green)
-        case .outdated: ("Lookout's Claude Code plugin is from another copy of Lookout: installing it again", Theme.amber)
+        case .outdated: ("Lookout's Claude Code plugin: update needed (Claude Code has an older copy): updating. Sessions already "
+                         + "open pick it up when restarted (or /reload-plugins).", Theme.amber)
         case .notInstalled: ("Lookout's Claude Code plugin isn't installed: messages can't reach sessions", Theme.amber)
         case .noClaudeCode: ("Lookout's Claude Code plugin needs Claude Code, which comes with the Claude desktop app", Theme.amber)
         case nil: ("Lookout's Claude Code plugin will be installed", Theme.tertiary)

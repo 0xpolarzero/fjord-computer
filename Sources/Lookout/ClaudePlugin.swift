@@ -532,7 +532,7 @@ struct ClaudePluginInstaller {
     enum Status: Equatable, Sendable {
         case installed
         case notInstalled
-        /// Installed from another folder, at another version, or disabled.
+        /// Installed from another folder, disabled, or Claude Code's installed copy (its cache) is not the version shipped.
         case outdated
         /// Claude Code (the copy the Claude app bundles) wasn't found.
         case noClaudeCode
@@ -562,9 +562,18 @@ struct ClaudePluginInstaller {
             return .notInstalled
         }
         let from = (entry["readFromFolder"] as? String).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
-        let current = entry["folderVersion"] as? String ?? entry["version"] as? String
+        // `version` is what Claude Code has installed (its cache, what sessions load); `folderVersion` is only what the
+        // marketplace folder holds now, which is always the newest and says nothing about the cache.
+        let current = entry["version"] as? String
         let enabled = entry["enabled"] as? Bool ?? true
-        return from == folder.resolvingSymlinksInPath().path && current == version && enabled ? .installed : .outdated
+        let sameFolder = from.map { $0 == folder.resolvingSymlinksInPath().path } ?? true  // older CLIs don't say
+        return sameFolder && current == version && enabled ? .installed : .outdated
+    }
+
+    /// The version Claude Code has installed (its cache), if the plugin is installed.
+    func installedVersion() async throws -> String? {
+        guard let binary else { return nil }
+        return try await plugins(binary).first(where: { $0["id"] as? String == ClaudePlugin.id })?["version"] as? String
     }
 
     /// Brings Claude Code to this folder at `version`, doing only the steps still needed.
@@ -587,8 +596,13 @@ struct ClaudePluginInstaller {
             try await call(binary, ["plugin", "install", ClaudePlugin.id, "--scope", "user"])
             return
         }
-        if (entry["folderVersion"] as? String ?? entry["version"] as? String) != version {
+        if entry["version"] as? String != version {
+            // `plugin update` re-reads a directory marketplace's folder and refreshes the cache (no `marketplace update` needed).
             try await call(binary, ["plugin", "update", ClaudePlugin.id, "--scope", "user"])
+            let now = try await installedVersion()
+            guard now == version else {
+                throw Failure(message: "Claude Code still has Lookout's plugin at \(now ?? "no version") after updating it to \(version).")
+            }
         }
         if entry["enabled"] as? Bool == false {
             try await call(binary, ["plugin", "enable", ClaudePlugin.id, "--scope", "user"])

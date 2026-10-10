@@ -13,6 +13,8 @@ final class FakeClaudeCLI: @unchecked Sendable {
     /// The version the folder holds, as `plugin list` reads it.
     var folderVersion = ""
     var failing: String?
+    /// Whether `plugin update` refreshes the cache (a CLI that doesn't leaves it stale).
+    var updateRefreshes = true
     /// Commands starting with this wait for `release()`.
     var holding: String?
     private var held: [CheckedContinuation<Void, Never>] = []
@@ -61,7 +63,7 @@ final class FakeClaudeCLI: @unchecked Sendable {
             guard let folder = marketplaces["lookout"] else { return .init(status: 1, out: "", err: "no marketplace") }
             plugins["lookout@lookout"] = (folder, folderVersion, true)
         case ["plugin", "update", "lookout@lookout"]:
-            plugins["lookout@lookout"]?.version = folderVersion
+            if updateRefreshes { plugins["lookout@lookout"]?.version = folderVersion }
         case ["plugin", "enable", "lookout@lookout"]:
             plugins["lookout@lookout"]?.enabled = true
         case ["plugin", "uninstall", "lookout@lookout"]:
@@ -368,16 +370,49 @@ enum PluginFixture {
         let i = installer(dir, cli)
         try await i.install(version: version)
         cli.folderVersion = "1.0.1-rdef"
-        #expect(try await i.status(version: "1.0.1-rdef") == .installed)  // a folder marketplace is read in place
-        cli.plugins["lookout@lookout"]?.version = version
-        cli.folderVersion = version
+        // The folder is ahead of Claude Code's cache: the cache is what sessions load, so it is outdated.
         #expect(try await i.status(version: "1.0.1-rdef") == .outdated)
+        #expect(try await i.installedVersion() == version)
         cli.folderVersion = "1.0.1-rdef"
         cli.plugins["lookout@lookout"]?.enabled = false
         #expect(try await i.status(version: "1.0.1-rdef") == .outdated)
         try await i.install(version: "1.0.1-rdef")
         #expect(Array(cli.changes.suffix(1)) == ["plugin enable lookout@lookout --scope user"])
         #expect(try await i.status(version: "1.0.1-rdef") == .installed)
+    }
+
+    @Test func aStaleCacheIsUpdatedAndVerified() async throws {
+        let dir = TempDir(), cli = FakeClaudeCLI()
+        cli.folderVersion = "0.9.2-rold"
+        let i = installer(dir, cli)
+        try await i.install(version: "0.9.2-rold")
+        cli.folderVersion = "1.0.0-rnew"
+        #expect(try await i.status(version: "1.0.0-rnew") == .outdated)
+        try await i.install(version: "1.0.0-rnew")
+        #expect(Array(cli.changes.suffix(1)) == ["plugin update lookout@lookout --scope user"])
+        #expect(try await i.installedVersion() == "1.0.0-rnew")
+        #expect(try await i.status(version: "1.0.0-rnew") == .installed)
+    }
+
+    @Test func anUpToDateCacheChangesNothing() async throws {
+        let dir = TempDir(), cli = FakeClaudeCLI()
+        cli.folderVersion = version
+        let i = installer(dir, cli)
+        try await i.install(version: version)
+        let before = cli.changes
+        try await i.install(version: version)
+        #expect(cli.changes == before)
+        #expect(try await i.status(version: version) == .installed)
+    }
+
+    @Test func anUpdateThatLeavesTheCacheStaleFails() async throws {
+        let dir = TempDir(), cli = FakeClaudeCLI()
+        cli.folderVersion = version
+        let i = installer(dir, cli)
+        try await i.install(version: version)
+        cli.folderVersion = "1.0.1-rdef"
+        cli.updateRefreshes = false
+        await #expect(throws: ClaudePluginInstaller.Failure.self) { try await i.install(version: "1.0.1-rdef") }
     }
 
     @Test func aMovedFolderIsInstalledAfresh() async throws {
