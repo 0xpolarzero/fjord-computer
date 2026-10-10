@@ -215,6 +215,8 @@ struct SettingsView: View {
             router
             if store.router.enabled {
                 SettingsDivider()
+                autoContinue
+                SettingsDivider()
                 mutedFolders
                 SettingsDivider()
                 sessionModels
@@ -292,6 +294,16 @@ struct SettingsView: View {
             SettingsSegmented(label: "Model for sessions the Router starts",
                               options: [("Your default", false), ("Let Jev pick", true)],
                               selection: Binding(get: { store.jevPicksSessionModels }, set: { store.settings.jevPicksSessionModels = $0 }))
+        }
+    }
+
+    /// Whether a session whose turn ended waiting on something Lookout sees finish is told so without asking (each waiting
+    /// row can say otherwise for its session).
+    private var autoContinue: some View {
+        SettingsRow("Continue waiting sessions automatically",
+                    info: ("Continue waiting sessions automatically", "When a session's turn ends waiting on something Lookout can see finish (CI on a PR or workflow in your inbox, another session's turn), the Router shows it ready to continue and Tell it sends it a short message such as “The CI on owner/repo#12 finished: passing.” With this on, that message goes on its own, and is logged in the Router's history. Each waiting session's row can turn it on or off for that session. Needs a TypeSafe key: Jev reads how each turn ended.")) {
+            SettingsSwitch("Continue waiting sessions automatically",
+                           isOn: Binding(get: { store.router.autoContinue }, set: { store.setAutoContinueDefault($0) }))
         }
     }
 
