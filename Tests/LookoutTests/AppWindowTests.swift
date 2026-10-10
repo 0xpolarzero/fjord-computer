@@ -67,6 +67,24 @@ import Testing
         await waitUntil { closed == 2 }
     }
 
+    /// The window made smaller while closed (opening on a smaller screen fits it to that one) keeps that size when its kept
+    /// content, still at the old size, goes back in.
+    @Test func keptContentTakesTheSizeTheWindowHasNow() async {
+        let (window, _) = controller()
+        var closed = 0
+        window.onClose = { closed += 1 }
+        window.show(.settings)
+        window.window?.setContentSize(NSSize(width: 1300, height: 800))
+        window.close()
+        await waitUntil { closed == 1 }
+        let smaller = NSRect(x: -5000, y: -5000, width: 1050, height: 650)
+        window.window?.setFrame(smaller, display: false)
+        window.show(.settings)
+        #expect(window.window?.frame.size == smaller.size)
+        window.close()
+        await waitUntil { closed == 2 }
+    }
+
     /// Closed, the window lets go of its content, which stands still out of it, and keeps it for the next open: the same
     /// content comes back, as it was left, without being made again.
     @Test func closingKeepsTheContentOutOfTheWindowForTheNextOpen() async throws {

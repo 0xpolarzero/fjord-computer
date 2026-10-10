@@ -130,8 +130,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// with the keyboard. The heavy part of an opening, which waits until its morph is on screen.
     private func bringIn(_ window: NSWindow) {
         if window.contentViewController == nil {
-            // The window takes its content's size: content kept from a close still has the window's, new content is given it.
-            let content = self.content ?? makeContent(size: window.contentRect(forFrameRect: window.frame).size)
+            // The window takes its content's size: kept content is given the window's as it is now (it may have been fitted
+            // to a smaller screen since), new content is made at it.
+            let size = window.contentRect(forFrameRect: window.frame).size
+            let content = self.content ?? makeContent(size: size)
+            if content.view.frame.size != size { content.view.setFrameSize(size) }
             self.content = content
             window.contentViewController = content
         }
