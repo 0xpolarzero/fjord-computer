@@ -22,7 +22,8 @@ struct RouterSidebar: View {
         if !done.isEmpty { sections.append(("Done", done.map { cardRow($0) })) }
         if !working.isEmpty {
             sections.append(("Working", working.map { row in
-                AnyView(SidebarRow(dot: .working, glyph: row, title: row.session.title, on: false) { store.openAgent(row.id) }
+                AnyView(SidebarRow(dot: .working, glyph: row, title: row.session.title, on: false,
+                               action: { pick(row) }, openInClaude: { store.openAgent(row.id) })
                     .contextMenu { SessionMenu(row: row, store: store) }
                     .accessibilityIdentifier(Self.workingRowID))
             }))
@@ -30,7 +31,8 @@ struct RouterSidebar: View {
         if !earlier.isEmpty { sections.append(("Earlier", earlier.map { cardRow($0) })) }
         if !found.isEmpty {
             sections.append(("Sessions", found.map { row in
-                AnyView(SidebarRow(dot: ClaudeDot.Kind(row), glyph: row, title: row.session.title, on: false) { store.openAgent(row.id) }
+                AnyView(SidebarRow(dot: ClaudeDot.Kind(row), glyph: row, title: row.session.title, on: false,
+                               action: { pick(row) }, openInClaude: { store.openAgent(row.id) })
                     .contextMenu { SessionMenu(row: row, store: store) })
             }))
         }
@@ -80,9 +82,18 @@ struct RouterSidebar: View {
 
     private func cardRow(_ card: RouterCard) -> AnyView {
         AnyView(SidebarRow(dot: ClaudeDot.Kind(card), glyph: store.sessionRow(card.sessionID), title: card.title,
-                           on: model.selection == card.id) {
-            model.select(card.id, store: store)
-        })
+                           on: model.selection == card.id, action: {
+            model.reply(to: card.id, store: store)
+        }, openInClaude: { store.openAgent(card.sessionID) }))
+    }
+
+    /// A session row clicked: its newest card is picked and armed for a reply; one with no card opens in Claude.
+    private func pick(_ row: AgentRow) {
+        if let card = store.routerCards.first(where: { $0.sessionID == row.id }) {
+            model.reply(to: card.id, store: store)
+        } else {
+            store.openAgent(row.id)
+        }
     }
 
     /// §2.6: a group label, 12/16 muted, 12 above and 4 below, its text inset 10; then the rows at a 27.5 pitch.
@@ -159,6 +170,8 @@ struct SidebarRowButton<Leading: View>: View {
     var titleColor: Color = CDS.Text.secondary
     let on: Bool
     let action: () -> Void
+    /// A trailing icon button shown on hover ("Open in Claude"), overlaid so the row's layout stays as it is.
+    var openInClaude: (() -> Void)?
     @ViewBuilder let leading: (_ hovered: Bool) -> Leading
     @State private var hovered = false
     typealias M = CDS.Sidebar
@@ -188,9 +201,28 @@ struct SidebarRowButton<Leading: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 }
         .accessibilityLabel(title)
         .accessibilityAddTraits(on ? .isSelected : [])
+        .overlay(alignment: .trailing) {
+            if let openInClaude {
+                Button(action: openInClaude) {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(CDS.Text.secondary)
+                        .frame(width: 22, height: 22)
+                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(CDS.Fill.ghostHover))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 3)
+                .opacity(hovered ? 1 : 0)
+                .allowsHitTesting(hovered)
+                .animation(.easeOut(duration: 0.12), value: hovered)
+                .help("Open in Claude")
+                .accessibilityLabel("Open \(title) in Claude")
+            }
+        }
+        .onHover { hovered = $0 }
     }
 }
 
@@ -219,9 +251,10 @@ struct SidebarRow: View {
     let title: String
     let on: Bool
     let action: () -> Void
+    var openInClaude: (() -> Void)?
 
     var body: some View {
-        SidebarRowButton(title: title, on: on, action: action) { _ in
+        SidebarRowButton(title: title, on: on, action: action, openInClaude: openInClaude) { _ in
             if let glyph {
                 SessionGlyph(row: glyph, size: 18, dot: false)
                     .overlay(alignment: .topTrailing) {
