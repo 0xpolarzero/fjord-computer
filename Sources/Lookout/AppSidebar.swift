@@ -85,7 +85,7 @@ struct AppSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    groupLabel("Inbox")
+                    InboxHeading(on: navigator.selection == .categories, collapsed: collapsed) { navigator.go(.categories) }
                     ForEach(store.shownCategories) { category in
                         let badge = store.badge(category)
                         AppSidebarRow(title: category.title, on: navigator.selection == .category(category.id),
@@ -149,11 +149,6 @@ struct AppSidebar: View {
                     Image(systemName: "gearshape").font(.system(size: M.symbol, weight: .medium))
                         .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
                 }
-                AppSidebarRow(title: "Inbox categories", on: navigator.selection == .categories, tip: "Inbox categories",
-                              action: { navigator.go(.categories) }) { on in
-                    Image(systemName: "tray.2").font(.system(size: M.symbol, weight: .medium))
-                        .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
-                }
             }
             .padding(.top, 6)
             .overlay(alignment: .top) {
@@ -211,17 +206,6 @@ struct AppSidebar: View {
     private static func routerTip(_ c: (needsYou: Int, done: Int)) -> String {
         let parts = [c.needsYou > 0 ? "\(c.needsYou) need you" : nil, c.done > 0 ? "\(c.done) done" : nil].compactMap { $0 }
         return parts.isEmpty ? "Router" : "Router · " + parts.joined(separator: ", ")
-    }
-
-    /// §2.6: a group label, 12/16 muted, its text inset 10.
-    private func groupLabel(_ title: String) -> some View {
-        Text(title).cdsText((M.groupFont, 16), .regular, CDS.Text.muted)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, M.labelInset)
-            .padding(.top, M.groupTop).padding(.bottom, 4)
-            .sidebarText(collapsed)
-            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -346,4 +330,34 @@ private struct SidebarTextModifier: ViewModifier {
 
 private extension View {
     func sidebarText(_ collapsed: Bool) -> some View { modifier(SidebarTextModifier(collapsed: collapsed)) }
+}
+
+/// The sidebar's Inbox label (§2.6, 12/16 muted, its text inset 10), with an edit button at its right on hover that opens the
+/// categories page (shown while that page is open).
+private struct InboxHeading: View {
+    let on: Bool
+    let collapsed: Bool
+    let edit: () -> Void
+    @State private var hovered = false
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("Inbox").cdsText((M.groupFont, 16), .regular, CDS.Text.muted).lineLimit(1)
+            Spacer(minLength: 4)
+            IconButton(symbol: "pencil", help: "Edit categories", label: "Edit inbox categories", size: 20,
+                       tint: on ? CDS.Text.primary : CDS.Text.secondary, action: edit)
+                .opacity(hovered || on ? 1 : 0)
+        }
+        .frame(height: 20)
+        .padding(.leading, M.labelInset)
+        .padding(.trailing, 4)
+        .padding(.top, M.groupTop - 2).padding(.bottom, 2)
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .sidebarText(collapsed)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Inbox")
+        .accessibilityAddTraits(.isHeader)
+    }
 }
