@@ -172,6 +172,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's routing of drafts asked while you typed, by their words and projects, for a while: sending one asks nothing again.
     @ObservationIgnored private var liveCache: [String: (at: Date, found: Classification)] = [:]
     static let liveFor: TimeInterval = 120
+    /// Those still being asked, by the same key: a send of the same words waits for the answer instead of asking again.
+    @ObservationIgnored private var livePending: [String: (id: UUID, task: Task<Classification?, Never>)] = [:]
 
     init(store: Store) {
         self.store = store
@@ -515,14 +517,24 @@ struct RouterAskBack: Identifiable, Equatable {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = Self.liveKey(text, projects)
         if let hit = live(key) { return hit }
+        if let pending = livePending[key] { return await pending.task.value }
         let tools = RouterTools(store: store)
         configure?(tools)
-        guard let ranking = try? await effects.rank(tools, text, projects, store.recentDecisions(10)), !Task.isCancelled else { return nil }
-        var found = Classification(ranking)
-        found.live = true
-        liveCache = liveCache.filter { Date().timeIntervalSince($0.value.at) < Self.liveFor }
-        liveCache[key] = (Date(), found)
-        return found
+        let history = store.recentDecisions(10)
+        // Its own task: a draft that changes, or is sent, doesn't stop it, so the send can take its answer.
+        let id = UUID()
+        let pending = Task { [weak self] () -> Classification? in
+            guard let self else { return nil }
+            defer { if self.livePending[key]?.id == id { self.livePending[key] = nil } }
+            guard let ranking = try? await self.effects.rank(tools, text, projects, history) else { return nil }
+            var found = Classification(ranking)
+            found.live = true
+            self.liveCache = self.liveCache.filter { Date().timeIntervalSince($0.value.at) < Self.liveFor }
+            self.liveCache[key] = (Date(), found)
+            return found
+        }
+        livePending[key] = (id, pending)
+        return await pending.value
     }
 
     static func liveKey(_ text: String, _ projects: [String]) -> String {
@@ -540,7 +552,10 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     /// Your corrections and dismissals change how messages are routed: picks made before them are asked again.
-    func forgetLive() { liveCache = [:] }
+    func forgetLive() {
+        liveCache = [:]
+        livePending = [:]
+    }
 
     /// Whether a target can still be sent to: an open card, a session not archived, a known project, or an intent.
     func eligible(_ target: String, store: Store) -> Bool {
@@ -589,7 +604,13 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's pick among the targets and the intents; the words alone when he can't be asked.
     private func classify(_ job: Job, projects: [String], history: String) async -> Classification {
         guard let store else { return Classification(ranked: [], sure: false, assisted: false) }
-        if let hit = live(Self.liveKey(job.text, projects)) { return hit }
+        let key = Self.liveKey(job.text, projects)
+        if let hit = live(key) { return hit }
+        // Still being asked while you typed: its answer, not a second call. It wasn't shown, so sending it confirms nothing.
+        if let pending = livePending[key], var found = await pending.task.value {
+            found.live = false
+            if found.top.map({ eligible($0.target, store: store) }) ?? true { return found }
+        }
         do {
             return Classification(try await effects.rank(job.tools, job.text, projects, history))
         } catch {
