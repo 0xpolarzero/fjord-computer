@@ -28,6 +28,25 @@ import Testing
         #expect(HistoryPin.next(pinned: false, scrolling: true, .init(content: 1000, visibleBottom: 990)) == .pin(true))
     }
 
+    @Test func linesShownEarlierStayWhenTheOldestGoPastWhatIsKept() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let all = (0..<300).map { i in
+            RouterPage.Entry.decision(RouterDecision(at: start.addingTimeInterval(Double(i) * 60), trigger: .you("message \(i)")))
+        }
+        // At the bottom: the newest page.
+        #expect(HistoryWindow.drawn(all, from: nil, page: 100).first?.id == all[200].id)
+        // Show earlier drew from line 50 on.
+        let boundary = HistoryWindow.Boundary(all[50])
+        #expect(HistoryWindow.drawn(all, from: boundary, page: 100).startIndex == 50)
+        // Retention drops the first 60 lines, the boundary with them: what followed it holds the top, not the newest 100.
+        let kept = Array(all.dropFirst(60))
+        let drawn = HistoryWindow.drawn(kept, from: boundary, page: 100)
+        #expect(drawn.first?.id == all[60].id && drawn.count == 240)
+        // Retention drops only the boundary: the line after it.
+        let without = all.filter { $0.id != all[50].id }
+        #expect(HistoryWindow.drawn(without, from: boundary, page: 100).first?.id == all[51].id)
+    }
+
     /// A store whose history is long (300 runs) and whose Needs you is empty, so the history has the room.
     private func store() -> Store {
         let store = Store()

@@ -238,7 +238,7 @@ private struct RouterHistory: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The oldest line drawn, once you scroll up or ask for earlier ones (so nothing drops off the top while you read); at the
     /// bottom, the newest `page` lines.
-    @State private var oldest: String?
+    @State private var oldest: HistoryWindow.Boundary?
     /// At the bottom: what arrives, and the zones growing under it, keep it there. Scrolled up, the top holds.
     @State private var pinned = true
     /// The content has been laid out: a scroll asked for before that waits for it.
@@ -250,7 +250,7 @@ private struct RouterHistory: View {
 
     var body: some View {
         let all = store.routerHistory
-        let entries = oldest.flatMap { id in all.firstIndex { $0.id == id } }.map { all[$0...] } ?? all.suffix(Self.page)
+        let entries = HistoryWindow.drawn(all, from: oldest, page: Self.page)
         let expanded = model.expanded, picked = model.selection, highlighted = model.highlighted
         // One clock for every age in the history, on the minute.
         MinuteTicking { now in
@@ -260,7 +260,7 @@ private struct RouterHistory: View {
                         if entries.count < all.count {
                             ClaudeButton("Show earlier", variant: .ghost, size: .sm, icon: "arrow.up") {
                                 let first = entries.startIndex
-                                oldest = all[max(0, first - Self.page)].id
+                                oldest = .init(all[max(0, first - Self.page)])
                                 pending = HistoryScroll(id: all[first].id, anchor: .top, animated: false)
                             }
                             .padding(.bottom, 6)
@@ -300,7 +300,7 @@ private struct RouterHistory: View {
                 }
                 // Scrolled up, the lines drawn stay; back at the bottom, only the newest are.
                 .onChange(of: pinned) { _, pinned in
-                    if pinned { oldest = nil } else if oldest == nil { oldest = entries.first?.id }
+                    if pinned { oldest = nil } else if oldest == nil { oldest = entries.first.map(HistoryWindow.Boundary.init) }
                 }
                 // A line opened by its click is on screen: at the bottom it opens upwards and stays whole; scrolled up it opens
                 // downwards, and as little scrolling as shows it whole follows.
@@ -321,7 +321,7 @@ private struct RouterHistory: View {
             // Off the bottom before the lines above are drawn: else their arrival reads as the pinned history falling short
             // of its bottom, and it is stuck back there instead of going to the line.
             pinned = false
-            if i < drawn.startIndex { oldest = id }
+            if i < drawn.startIndex { oldest = .init(all[i]) }
         }
         pending = HistoryScroll(id: id, anchor: anchor, animated: true)
     }
@@ -439,6 +439,29 @@ enum HistoryPin {
         if scrolling { return .pin(bottom) }
         // Pinned means right at the bottom, not merely near it.
         return pinned && geometry.content - geometry.visibleBottom > 0.5 ? .stick : .stay
+    }
+}
+
+/// Which lines of the history are drawn.
+enum HistoryWindow {
+    /// The oldest line drawn, and its time: the line may go (the oldest go past what is kept) while you read.
+    struct Boundary: Equatable {
+        var id: String
+        var date: Date
+
+        init(_ entry: RouterPage.Entry) {
+            id = entry.id
+            date = entry.date
+        }
+    }
+
+    /// From the oldest line drawn on; gone, from the first line left at or after its time (what followed it), so the lines
+    /// being read stay; none set (at the bottom): the newest `page`.
+    static func drawn(_ all: [RouterPage.Entry], from oldest: Boundary?, page: Int) -> ArraySlice<RouterPage.Entry> {
+        guard let oldest else { return all.suffix(page) }
+        if let i = all.firstIndex(where: { $0.id == oldest.id }) { return all[i...] }
+        guard let next = all.firstIndex(where: { $0.date >= oldest.date }) else { return all.suffix(page) }
+        return all[next...]
     }
 }
 
