@@ -213,15 +213,15 @@ struct LookoutHub: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inboxCellsHeight = $0 }
         }
         // Down from the bar's top as far as the well is in from its sides, so the well sits inset all round.
-        .padding(.top, 3)
+        .padding(.top, 5)
         .frame(width: Self.cell)
         .background(alignment: .top) {
             if !store.shownCategories.isEmpty {
                 inboxWell
-                    .fill(CDS.Fill.ghostSelected)
-                    .frame(width: Self.cell - 8, height: inboxMarkHeight + inboxCellsHeight + 2)
+                    .fill(CDS.alpha(0.06))
+                    .frame(width: Self.cell - 12, height: inboxMarkHeight + inboxCellsHeight + 2)
                     .frame(width: Self.cell)
-                    .padding(.top, 4)
+                    .padding(.top, 6)
             }
         }
         .modifier(probe(.inbox))
@@ -238,11 +238,11 @@ struct LookoutHub: View {
         }
     }
 
-    /// The inbox's well, 4pt inside the bar's top: its top corners follow the bar's (concentric where the bar is rounded,
+    /// The inbox's well, 6pt inside the bar's top: its top corners follow the bar's (concentric where the bar is rounded,
     /// the tile's radius where it meets the screen edge), its bottom ones the tile's.
     var inboxWell: UnevenRoundedRectangle {
         let base = CDS.Tile.radius + 4, bar = barOutline.cornerRadii
-        func inner(_ r: CGFloat) -> CGFloat { max(base, r - 4) }
+        func inner(_ r: CGFloat) -> CGFloat { max(base, r - 6) }
         return UnevenRoundedRectangle(topLeadingRadius: inner(bar.topLeading), bottomLeadingRadius: base,
                                       bottomTrailingRadius: base, topTrailingRadius: inner(bar.topTrailing), style: .continuous)
     }
