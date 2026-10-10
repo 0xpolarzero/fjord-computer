@@ -282,10 +282,11 @@ struct RouterAskBack: Identifiable, Equatable {
                        options: .regularExpression) != nil
     }
 
-    /// A short title for a new session from the words: the first few, without the @project.
+    /// A short title for a new session from its task (`SessionStart.task`): the first few words, without the @project.
     static func title(for text: String) -> String {
         let words = text.split(whereSeparator: \.isWhitespace).filter { !$0.hasPrefix("@") }.prefix(6)
         let title = SessionStart.cleanTitle(words.joined(separator: " "))
+            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".,:;-–—")))
         return title.isEmpty ? "New session" : title
     }
 
@@ -337,10 +338,20 @@ struct RouterAskBack: Identifiable, Equatable {
         stage(job, "starting a session")
         // "…with opus, high effort": set in the session by its plugin before the first message.
         let settings = SessionSettings.parse(job.text)
-        let delivery = try await effects.start(job.tools, folder, Self.title(for: job.text), settings)
+        // The title and the first message come from the task, never from the request to start the session.
+        let task = SessionStart.task(from: job.text, projects: [store.folderName(folder), (folder as NSString).lastPathComponent])
+        let delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
+        let project = store.folderName(folder)
+        if delivery.text.isEmpty {
+            // Nothing to send: the settings travel with the first message, so they can't be applied.
+            note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
+            if settings != nil {
+                store.updateDecision(job.id) { $0.add(.failed("model/effort: no first message to set them with")) }
+            }
+            return
+        }
         stage(job, "sending")
         let ack = try await effects.send(job.tools, delivery)
-        let project = store.folderName(folder)
         if let settings {
             let applied = AppliedSettings.from(ack: ack, requested: settings, supported: delivery.settingsSigned)
             store.updateDecision(job.id) { applied.record(session: delivery.session, project: project, in: &$0) }
@@ -560,6 +571,11 @@ extension RouterDispatcher.Effects {
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.startSession(store, project: folder, title: title, ticket: tools.ticket(), settings: settings))
+                // No task left in the words: the session is started with no first message.
+                if let peer = answer["peer"] as? String, (answer["text"] as? String)?.isEmpty == true, tools.prepared[peer] == nil {
+                    return .init(to: peer, text: "", body: "", original: "", rephrased: false, session: answer["session"] as? String,
+                                 newSessionIn: store.folderName(folder), settings: settings, settingsSigned: false)
+                }
                 guard let peer = answer["peer"] as? String, let ready = tools.prepared[peer] else { throw RouterTools.Failure("Not prepared") }
                 return .init(to: peer, text: ready.text, body: ready.body ?? ready.text, original: ready.original,
                              rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn,

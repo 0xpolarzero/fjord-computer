@@ -477,7 +477,7 @@ import Testing
         #expect(await t.tool("start_session", ["project": "lookout", "title": "Bump the version"])?.isError == true)
         #expect(started == 0)
         t.rephrase = { message, title, project in
-            #expect(title == "Bump the version" && project == "lookout" && message == "start a session in lookout to bump the version")
+            #expect(title == "Bump the version" && project == "lookout" && message == "bump the version")
             return Prepared(text: "Bump the version.", original: message, rephrased: true)
         }
         let out = try #require(await t.tool("start_session", ["project": "lookout", "title": "  Bump the\nversion "]))

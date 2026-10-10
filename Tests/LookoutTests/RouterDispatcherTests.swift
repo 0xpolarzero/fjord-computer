@@ -157,6 +157,37 @@ import Testing
         #expect(f.startSettings.last! == nil)
     }
 
+    @Test func theFirstMessageOfANewSessionIsTheTaskAloneAndTheTitleComesFromIt() {
+        let p = ["lookout", "lookout-live"]
+        func task(_ t: String) -> String { SessionStart.task(from: t, projects: p) }
+        #expect(task("@lookout-live start a session with haiku, low effort: reply with exactly the word pong and nothing else")
+                == "reply with exactly the word pong and nothing else")
+        #expect(task("start a new session to add a badge with opus, high effort") == "add a badge")
+        #expect(task("@lookout start a new session in lookout to fix the Tests") == "fix the Tests")
+        #expect(task("New session: fix the flaky test") == "fix the flaky test")
+        #expect(task("open a chat in @lookout using sonnet and add a badge") == "add a badge")
+        #expect(task("@lookout with opus high effort fix the tests") == "fix the tests")
+        #expect(task("@lookout fix the tests with opus, low effort") == "fix the tests")
+        #expect(task("please start a session in the lookout project, with xhigh effort: bump the version") == "bump the version")
+        #expect(task("fix the tests") == "fix the tests")
+        #expect(task("write about opus the band") == "write about opus the band")
+        #expect(task("@router.js is broken, fix it") == "@router.js is broken, fix it")
+        #expect(task("start a session in lookout") == "")
+        #expect(task("@lookout start a new session with opus") == "")
+        #expect(RouterDispatcher.title(for: task("start a session with haiku, low effort: reply with exactly the word pong"))
+                == "reply with exactly the word pong")
+        #expect(RouterDispatcher.title(for: "") == "New session")
+    }
+
+    @Test func aStartPassesTheTitleOfTheTaskNotTheRequest() async {
+        let (_, d, f) = setup()
+        let a = d.submit("@lookout start a session with haiku, low effort: reply with exactly pong and nothing else",
+                         context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.started.last?.title == "reply with exactly pong and nothing")
+        #expect(f.startSettings.last! == SessionSettings(model: "haiku", effort: "low"))
+    }
+
     @Test func aTaggedProjectStartsASessionWhenAskedOrWhenItHasNothingElse() async {
         let (s, d, f) = setup()
         // Asks for one: even though the project has a session.

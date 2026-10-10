@@ -843,7 +843,7 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// Haiku, through the binary `RouterStatus` found (or what a test put in), stopped with the turn.
-    private func rephrased(_ store: Store, _ message: String, title: String, project: String) async throws -> Prepared {
+    private func rephrased(_ store: Store, _ message: String, title: String, project: String, starting: Bool = false) async throws -> Prepared {
         if let rephrase { return try await rephrase(message, title, project) }
         guard let binary = claudePath(), let home = store.routerFiles?.routerHome else {
             throw Failure("Claude Code wasn't found, so the message can't be prepared")
@@ -851,7 +851,7 @@ final class RouterMCPServer: @unchecked Sendable {
         try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         do {
             return try await tracked { handle in
-                try await Rephrase.run(binary: binary, cwd: home, message: message, title: title, project: project,
+                try await Rephrase.run(binary: binary, cwd: home, message: message, title: title, project: project, starting: starting,
                                        timeout: rephraseTimeout, handle: handle)
             }
         } catch is CancellationError {
@@ -1043,16 +1043,21 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     func startSession(_ store: Store, project: String, title: String, ticket: Ticket, settings: SessionSettings? = nil) async throws -> String {
-        let message = try yourMessage()
+        let said = try yourMessage()
         let folder = try Self.folder(project, folders: store.knownFolders.filter { !$0.isEmpty }, name: store.folderName)
         let name = store.folderName(folder)
         let title = SessionStart.cleanTitle(title)
+        // The first message is the task alone, without the request to start the session or its settings.
+        let message = SessionStart.task(from: said, projects: [name, (folder as NSString).lastPathComponent])
+        let noTask = message.isEmpty
         // Nothing to send it without the plugin: said before a session is made.
         guard store.routerPluginStatus == .installed else {
             throw Failure("Lookout's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
         // Prepared first: if Haiku fails (or you stop), or a part for the Router is left in it, no session is made.
-        var ready = try await rephrased(store, message, title: title, project: name)
+        // Haiku still checks it; with words of a start left in it that deterministic strip didn't recognise, it is told so.
+        var ready = noTask ? Prepared(text: "", original: "", rephrased: false)
+            : try await rephrased(store, message, title: title, project: name, starting: RouterDispatcher.wantsNewSession(message))
         try noMarker(ready.text)
         try live(ticket)
         let started: SessionStart.Started
@@ -1063,6 +1068,11 @@ final class RouterMCPServer: @unchecked Sendable {
         }
         try live(ticket)
         // Its plugin comes up with it: waited for (bounded), then the prompt is signed for it.
+        if noTask {
+            // Nothing to say yet: the session waits for your first words.
+            return Self.json(["session": started.sessionID, "peer": started.peer, "text": "", "rephrased": false,
+                              "next": "The session is started with no first message; nothing to send."])
+        }
         try await waitForPlugin(store, cli: started.cliID, ticket: ticket)
         ready = try await signed(store, ready, title: title, cli: started.cliID, ticket: ticket, settings: settings)
         try live(ticket)

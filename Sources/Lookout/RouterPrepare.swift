@@ -361,6 +361,10 @@ enum Rephrase {
     The marker is @router standing alone as a word: never a name or path that contains it (@router.js, \
     src/@router/index.ts, the package scope @router/core, user@router.com); leave those as they are. Remove each part for the router, the marker and its aside (and the parentheses around it), and keep everything \
     else verbatim. If nothing is left, answer {"rephrased": true, "text": ""}.
+    (e) When the input says it STARTS A NEW SESSION: the message is the user's request to start that session, with the task \
+    for it in it. Return only the task, verbatim: without the request to start the session ("start a session", "new chat \
+    in lookout", "open a session to"), without its model or effort settings ("with haiku", "low effort") and without the \
+    addressing. Do not capitalise or reword the task. If no task is left, answer {"rephrased": true, "text": ""}.
     Never add, summarise, translate, fix typos or change the style. Keep code, paths, names and the language as they are.
     Answer with JSON only: {"rephrased": true|false, "text": "…"}. When nothing applies: {"rephrased": false, "text": \
     <the message unchanged>}.
@@ -372,8 +376,9 @@ enum Rephrase {
     }
 
     /// What Haiku reads: the target, then the message.
-    private static func input(message: String, title: String, project: String) -> String {
-        "Target session: \"\(title)\" (project \(project))\n\nMessage:\n\(message)"
+    private static func input(message: String, title: String, project: String, starting: Bool = false) -> String {
+        if starting { return "This message starts a NEW session in project \(project).\n\nMessage:\n\(message)" }
+        return "Target session: \"\(title)\" (project \(project))\n\nMessage:\n\(message)"
     }
 
     /// Haiku's answer, held to the rules Lookout can check: an unchanged message is the original, byte for byte.
@@ -391,10 +396,10 @@ enum Rephrase {
     }
 
     /// One Haiku call with Claude Code's bundled binary.
-    static func run(binary: String, cwd: URL, message: String, title: String, project: String,
+    static func run(binary: String, cwd: URL, message: String, title: String, project: String, starting: Bool = false,
                     timeout: TimeInterval = timeout, handle: OneShot.Handle = OneShot.Handle()) async throws -> Prepared {
         let output = try await OneShot.run(binary, arguments(), cwd: cwd,
-                                           input: Data(input(message: message, title: title, project: project).utf8),
+                                           input: Data(input(message: message, title: title, project: project, starting: starting).utf8),
                                            timeout: timeout, handle: handle)
         return try parse(try OneShot.result(output), original: message)
     }
@@ -415,6 +420,63 @@ enum SessionStart {
     }
 
     static let wait: TimeInterval = 20
+
+    // MARK: The task of a start
+
+    private static let models = "opus|sonnet|haiku|fable"
+    private static let efforts = "low|medium|high|xhigh|max"
+    /// "with opus", "using the sonnet model", "with low effort", "high effort", "effort of max": the settings words.
+    private static let settingClause =
+        #"(?:(?:and\s+)?(?:with|using|use|on)\s+(?:the\s+)?(?:\#(models))(?:\s+model)?|(?:and\s+)?(?:(?:with|at|on)\s+)?(?:\#(efforts))\s+effort|(?:and\s+)?effort\s+(?:of\s+|to\s+|level\s+)?(?:\#(efforts)))\b"#
+    private static let startPhrase =
+        #"^(?:(?:please|pls|hey|can\s+you|could\s+you|i\s+want\s+you\s+to|i'd\s+like\s+you\s+to)[,\s]+)?(?:(?:start|open|create|launch|spin\s+up|kick\s+off|begin)\s+(?:up\s+)?(?:an?\s+|the\s+|one\s+)?(?:new\s+|fresh\s+)?(?:claude\s+)?(?:session|chat|conversation)|(?:in\s+)?(?:an?\s+)?(?:new|fresh)\s+(?:claude\s+)?(?:session|chat|conversation))\b"#
+
+    private static func strip(_ pattern: String, from text: inout String, all: Bool = false) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
+        var changed = false
+        repeat {
+            guard let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let r = Range(m.range, in: text), !r.isEmpty else { return changed }
+            text.removeSubrange(r)
+            changed = true
+        } while all
+        return changed
+    }
+
+    /// What a new session is for, from the words that asked for it: the request to start one ("start a (new) session (in X)",
+    /// "new chat:", "open a session to"), its model and effort settings, and a leading @project (already a pill) are taken
+    /// out; the rest stays verbatim, not capitalised or reworded. Empty when nothing is left ("start a session in lookout").
+    /// `projects`: names the project goes by (a plain word after "in" is dropped only if it is one of them).
+    static func task(from text: String, projects: [String] = []) -> String {
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sep = #"^[\s,:;\-–—]*"#
+        func tidy() { _ = strip(sep, from: &t) }
+        // A leading @project (never @router, which is for the Router).
+        while strip(#"^@(?!router\b)[\w.\-/]+"#, from: &t) { tidy() }
+        let started = strip(startPhrase, from: &t)
+        if started {
+            let names = projects.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+            let named = names.isEmpty ? "" : "|(?:\(names))"
+            var moved = true
+            while moved {
+                tidy()
+                moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?(?:@[\w.\-/]+\#(named))(?:\s+(?:project|repo|repository|folder))?\b"#, from: &t)
+                    || strip("^" + settingClause, from: &t)
+                    || strip(#"^(?:@(?!router\b)[\w.\-/]+)"#, from: &t)
+            }
+            tidy()
+            _ = strip(#"^(?:to|and|then|that)\s+"#, from: &t)
+        }
+        // Settings words anywhere else ("fix the tests with opus, low effort"): the plugin applies them, the session never reads them.
+        if SessionSettings.parse(t) != nil || started {
+            _ = strip(#"[,;]?\s*\b"# + settingClause, from: &t, all: true)
+            if started || SessionSettings.parse(text) != nil { tidy() }
+        }
+        if t != text.trimmingCharacters(in: .whitespacesAndNewlines) {
+            t = t.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+        }
+        return t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
+    }
 
     /// The CLI session: no model call, and the least left in it (the rename, which is also its title). Its permission mode
     /// isn't set here: the app gives an imported session the one in your settings (`permissions.defaultMode`).
