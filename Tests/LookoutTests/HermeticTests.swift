@@ -76,7 +76,7 @@ private final class Reached: @unchecked Sendable {
         try #require(UnderTest.isRunning)
         let reached = await Reached.during {
             let s = Store()
-            s.repos = [RepoConfig(fullName: "a/one")]
+            s.groups = [InboxGroup(name: "Mine", kind: .repos, members: ["a/one"])]
             s.save()
         }
         #expect(reached.count == 1 && reached[0].contains("state.json"))
@@ -90,13 +90,13 @@ private final class Reached: @unchecked Sendable {
         let reached = try await Reached.during {
             let s = Store()
             s.stateFile = file
-            s.repos = [RepoConfig(fullName: "a/one")]
+            s.groups = [InboxGroup(name: "Mine", kind: .repos, members: ["a/one"])]
             s.save()
             s.flushSave()
             let dec = JSONDecoder()
             dec.dateDecodingStrategy = .iso8601
             let saved = try dec.decode(PersistedState.self, from: Data(contentsOf: file))
-            #expect(saved.repos.map(\.fullName) == ["a/one"])
+            #expect(saved.groups?.map(\.members) == [["a/one"]])
         }
         #expect(reached.isEmpty)
     }

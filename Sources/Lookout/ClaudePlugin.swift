@@ -583,6 +583,7 @@ final class RelayKeyFence: @unchecked Sendable {
     }
 
     /// Runs `body` only if no switch came after `generation`; a revocation waits for it to finish.
+    @discardableResult
     func ifCurrent<T>(_ generation: Int, _ body: () throws -> T) rethrows -> T? {
         try lock.withLock { self.generation == generation ? try body() : nil }
     }

@@ -902,10 +902,10 @@ import UserNotifications
         let store = demo()
         var opened: String?
         var other: String?
-        store.notifier.onOpen = { id, _, _ in other = id }
+        store.notifier.onOpen = { id, _ in other = id }
         RouterBanners.attach(store: store, windowIsKey: { false }) { opened = $0 }
-        store.notifier.onOpen?(RouterBanners.prefix + "card#1", nil, false)
-        store.notifier.onOpen?("item", nil, false)
+        store.notifier.onOpen?(RouterBanners.prefix + "card#1", nil)
+        store.notifier.onOpen?("item", nil)
         #expect(opened == "card#1" && other == "item")
     }
 

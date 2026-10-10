@@ -14,10 +14,10 @@ import Testing
     init() {
         store.persists = false
         keys = HubKeys(store: store, ui: UIState(persists: false, edge: .right), hub: hub)
-        store.items = [InboxItem(id: "one", repo: "a/one", kind: .issueComment, number: 1, title: "t", snippet: "", author: "x", avatar: nil,
-                                 authorIsApp: false, url: URL(string: "https://github.com/a/one")!, createdAt: Date(), state: .unread)]
+        store.categories = [InboxFixture.category()]
+        store.things = ["pr:a/one#1": InboxFixture.pr(1)]
         hub.pinned = true
-        hub.selection = "i:one"
+        hub.selection = "i:pr:a/one#1"
     }
 
     @discardableResult
@@ -27,14 +27,18 @@ import Testing
         return keys.key(event)
     }
 
+    private var entry: InboxEntry? { store.entries.first { $0.id == "pr:a/one#1" } }
+
     @Test func aLetterBoundToAnActionActsOnThePickedRowInsteadOfSearching() {
+        #expect(entry?.isUnread == true)
         store.setShortcut(Shortcut(keyCode: UInt16(kVK_ANSI_T)), for: .toggleRead)
         #expect(press(kVK_ANSI_T, [], "t"))
-        #expect(store.items[0].state == .read && hub.query.isEmpty)
+        #expect(entry?.isUnread == false && hub.query.isEmpty)
         // With Shift: a Shift-letter binding is the same.
+        store.marks = [:]
         store.setShortcut(Shortcut(keyCode: UInt16(kVK_ANSI_Y), modifiers: [.shift]), for: .toggleRead)
         #expect(press(kVK_ANSI_Y, [.shift], "Y"))
-        #expect(store.items[0].state == .unread && hub.query.isEmpty)
+        #expect(entry?.isUnread == false && hub.query.isEmpty)
     }
 
     @Test func anUnboundLetterOrOneWithNothingPickedStillSearches() {
@@ -43,22 +47,23 @@ import Testing
         #expect(press(kVK_ANSI_Z, [], "z") && hub.searchOpen && hub.pendingKeys.count == 1)
         // A search that has typed something takes every letter, the bound one too.
         hub.query = "z"
-        #expect(press(kVK_ANSI_T, [], "t") && hub.pendingKeys.count == 2 && store.items[0].state == .unread)
+        #expect(press(kVK_ANSI_T, [], "t") && hub.pendingKeys.count == 2 && entry?.isUnread == true)
         hub.endSearch()
         hub.selection = nil
         #expect(press(kVK_ANSI_T, [], "t") && hub.searchOpen && hub.pendingKeys.count == 1)
     }
 
     @Test func typingWithASectionExpandedStartsTheSearchInTheInbox() {
-        // The inbox header holds the field, and an expanded CI or Sessions section leaves it out.
-        hub.focus = .ci
+        // The inbox header holds the field, and an expanded Sessions section leaves it out.
+        hub.focus = .agents
         #expect(press(kVK_ANSI_Z, [], "z") && hub.searchOpen && hub.focus == nil)
     }
 
     @Test func spaceStillTypesInASearchThatHasStarted() {
         // Space is the default Mark read key: it acts on the picked row until a search has started, then it is a space.
-        #expect(press(kVK_Space, [], " ") && store.items[0].state == .read)
+        #expect(press(kVK_Space, [], " ") && entry?.isUnread == false)
         hub.query = "two"
-        #expect(press(kVK_Space, [], " ") && hub.pendingKeys.last?.characters == " " && store.items[0].state == .read)
+        store.marks = [:]
+        #expect(press(kVK_Space, [], " ") && hub.pendingKeys.last?.characters == " " && entry?.isUnread == true)
     }
 }

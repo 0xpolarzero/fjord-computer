@@ -10,9 +10,9 @@ enum Demo {
     enum Scenario: String, CaseIterable {
         case busy, botsOnly, allClear, snoozed, error, empty, agents
         // Inbox and sync causes.
-        case signedOut, reposFailed, rateLimited, needsYouEmpty, botsEmpty, doneEmpty, firstSync, syncFault
-        // An inbox longer than any list shows.
-        case inboxMany
+        case signedOut, inboxFailed, rateLimited, contributionsEmpty, botChatterEmpty, doneEmpty, firstSync, syncFault
+        // An inbox longer than any list shows; a category hidden.
+        case inboxMany, hiddenCategory
         // CI.
         case noCI, allPassing, manyCI, ciRunning
         // Sessions, replacing the `agents` ones: a handful of each state, and long lists.
@@ -33,52 +33,32 @@ enum Demo {
         store.tokenSource = .ghCLI
         store.lastSync = now.addingTimeInterval(-20)
         store.rateRemaining = 4812
-        store.settings.botHandles = ["vercel", "netlify"]
-        store.repos = [
-            RepoConfig(fullName: "0xpolarzero/lookout", allComments: true),
-            RepoConfig(fullName: "apple/swift-format"),
-            RepoConfig(fullName: "ziglang/zig", events: [.prComment, .reviewComment, .ciMain]),
-            RepoConfig(fullName: "superradcompany/microsandbox", events: [.issueComment, .prComment, .reviewComment]),
-            RepoConfig(fullName: "amontlabs/lcu", allComments: true),
-            RepoConfig(fullName: "e2b-dev/runtime", events: [.issueComment, .prComment]),
-        ]
-        store.ci = [
-            "0xpolarzero/lookout": CIStatus(state: .success, branch: "main", sha: "6f9e3014c2", failing: [], checkedAt: now,
-                                            title: "Compact, draggable repo cards", updatedAt: now.addingTimeInterval(-1500)),
-            "apple/swift-format": CIStatus(state: .failure, branch: "main", sha: "b41c09e7aa", failing: ["Linux / build", "Windows / test"],
-                                           checkedAt: now, title: "Respect trailing comma config (#1042)", updatedAt: now.addingTimeInterval(-2700)),
-            "ziglang/zig": CIStatus(state: .pending, branch: "master", sha: "0d2e9f1b33", failing: [], checkedAt: now,
-                                    title: "std.Io: add vectored reads to File", updatedAt: now.addingTimeInterval(-240)),
-            "amontlabs/lcu": CIStatus(state: .success, branch: "main", sha: "a93b0c2d11", failing: [], checkedAt: now,
-                                      title: "Release 0.4.2", updatedAt: now.addingTimeInterval(-86400)),
-        ]
-        store.items = items(now)
+        inbox(store, now)
 
         switch scenario {
         case .busy:
             break
         case .botsOnly:
             nothingForYou(store)
+            empty(store, category: "Contributions")
+            empty(store, category: "Reviews for you")
             passing(store)
         case .allClear:
-            store.items = store.items.filter { !$0.state.isOpen }
+            for entry in store.entries where !entry.isDone { store.things[entry.id] = nil }
             passing(store)
         case .snoozed:
             store.settings.snoozeUntil = Calendar.current.date(bySettingHour: 18, minute: 30, second: 0, of: now)
                 .map { $0 > now ? $0 : now.addingTimeInterval(3600) }
         case .error:
             store.rateRemaining = 312
-            store.repoErrors["ziglang/zig"] = "Not found (or no access)"
-            store.ci["0xpolarzero/lookout"]?.state = .failure
-            store.ci["0xpolarzero/lookout"]?.failing = ["test (macos-15)"]
-            store.ci["0xpolarzero/lookout"]?.title = "Drag the pill from anywhere"
+            let ci = "workflow:0xpolarzero/lookout:\(ciWorkflowID)@main"
+            store.things[ci]?.checks = .failing
+            store.things[ci]?.failingJobs = ["test (macos-15)"]
+            store.things[ci]?.title = "Drag the pill from anywhere"
         case .agents:
             agents(store, now)
         case .empty:
-            store.repos = []
-            store.ci = [:]
-            store.items = []
-            store.settings.reviewRequests = false
+            store.things = [:]
         case .signedOut:
             agents(store, now)
             store.me = nil
@@ -86,29 +66,33 @@ enum Demo {
             store.lastSync = nil
             store.rateRemaining = nil
             store.authError = "No GitHub token found"
-        case .reposFailed:
+        case .inboxFailed:
             agents(store, now)
-            store.repoErrors = ["ziglang/zig": "Not found (or no access)", "e2b-dev/runtime": "Forbidden"]
+            store.inboxError = "Something went wrong with GitHub's search (HTTP 502)"
         case .rateLimited:
             agents(store, now)
             store.rateRemaining = 0
-        case .needsYouEmpty:
-            // Nothing for you, CI healthy, bot items still unread: all caught up.
+        case .contributionsEmpty:
+            // Nothing on your PRs, CI healthy, the other categories still unread: all caught up here.
             agents(store, now)
             nothingForYou(store)
+            empty(store, category: "Contributions")
             passing(store)
-        case .botsEmpty:
+        case .botChatterEmpty:
             agents(store, now)
-            store.items = store.items.filter { !($0.state.isOpen && store.isLowPriority($0)) }
+            empty(store, category: "Bot chatter")
         case .doneEmpty:
             agents(store, now)
-            store.items = store.items.filter { $0.state.isOpen }
+            store.marks = [:]
+        case .hiddenCategory:
+            // Bot chatter hidden: collecting, with no icon in the bar and no tab.
+            agents(store, now)
+            if let id = store.categories.first(where: { $0.name == "Bot chatter" })?.id { store.setHidden(id, true) }
         case .firstSync:
             agents(store, now)
             store.lastSync = nil
             store.isSyncing = true
-            store.items = []
-            store.ci = [:]
+            store.things = [:]
             store.rateRemaining = nil
         case .syncFault:
             // Several poll intervals old: the sync status reads "Not syncing".
@@ -119,16 +103,22 @@ enum Demo {
             let titles = ["Cache the avatar lookups", "Dark mode for the Settings window", "Snooze until Monday", "Open the right repo on click",
                           "Hide read items after a day", "Keyboard shortcut for Mark all read", "Tab order in the footer", "Menu bar icon option",
                           "Group by repository", "Notifications repeat after wake", "Sort Done by repository", "Search inside snippets"]
-            store.items += titles.enumerated().map { index, title in
-                InboxItem(id: "many-\(index)", repo: "0xpolarzero/lookout", kind: .issueOpened, number: 30 + index, title: title,
-                          snippet: "", author: ["kylef", "mattt", "allevato"][index % 3], avatar: nil, authorIsApp: false,
-                          url: URL(string: "https://github.com/0xpolarzero/lookout/issues/\(30 + index)")!,
-                          createdAt: now.addingTimeInterval(-Double(130 + index * 40) * 60), state: .unread)
+            let me = person("0xpolarzero")
+            for (index, title) in titles.enumerated() {
+                let n = 30 + index
+                let reviewer = person(["kylef", "mattt", "allevato"][index % 3])
+                let thing = Thing(id: "pr:0xpolarzero/lookout#\(n)", kind: .pr, repo: "0xpolarzero/lookout", number: n, title: title,
+                                  url: URL(string: "https://github.com/0xpolarzero/lookout/pull/\(n)")!, author: me,
+                                  createdAt: now.addingTimeInterval(-86400),
+                                  updatedAt: now.addingTimeInterval(-Double(130 + index * 40) * 60),
+                                  comments: [ThingComment(id: "many-\(n)", author: reviewer, at: now.addingTimeInterval(-Double(130 + index * 40) * 60),
+                                                          snippet: "Looks good, one nit.")],
+                                  checks: .passing, greptileScore: 3 + index % 3)
+                store.things[thing.id] = thing
             }
         case .noCI:
             agents(store, now)
-            for i in store.repos.indices { store.repos[i].events.remove(.ciMain) }
-            store.ci = [:]
+            store.things = store.things.filter { $0.value.kind != .workflow }
         case .allPassing:
             agents(store, now)
             passing(store)
@@ -138,7 +128,9 @@ enum Demo {
         case .ciRunning:
             // Nothing failing: what was running stays running.
             agents(store, now)
-            for key in store.ci.keys where store.ci[key]?.state == .failure { store.ci[key]?.state = .success; store.ci[key]?.failing = [] }
+            for key in store.things.keys where store.things[key]?.checks == .failing && store.things[key]?.kind == .workflow {
+                store.things[key]?.checks = .pending
+            }
         case .sessionsWaiting:
             // w2's activity is what an AskUserQuestion call yields: its first question, as the transcript reader reports it.
             sessions(store, now, [
@@ -292,35 +284,199 @@ enum Demo {
         store.router = state
     }
 
-    /// Only the bot items and the finished ones left: nothing is for you.
+    /// Only the bots' things and the finished ones left: nothing is for you.
     private static func nothingForYou(_ store: Store) {
-        store.items = store.items.filter { store.isLowPriority($0) || !$0.state.isOpen }
+        for category in ["Contributions", "Reviews for you"] { empty(store, category: category) }
+    }
+
+    // MARK: Inbox
+
+    /// The demo's categories, in their order: ids fixed, so a shot can name them.
+    private static func categories(ciRepos: [String]) -> [InboxCategory] {
+        func id(_ n: Int) -> UUID { UUID(uuidString: "00000000-0000-0000-0000-00000000000\(n)")! }
+        let longAgo = Date().addingTimeInterval(-60 * 86400)
+        // What needs you on your own PRs: Greptile short of 5, threads still open, someone else having the last word,
+        // a review that decides, conflicts.
+        let contributions = InboxCategory(
+            id: id(1), name: "Contributions", symbol: "hammer", color: .violet,
+            rules: [Rule(scope: Scope(kind: .pr, by: Pick(include: [.me]), in: Pick(include: [.contributed])),
+                         match: .any,
+                         conditions: [.greptileBelow(5), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
+                                      .lastComment(by: Pick(except: [.me])), .changesRequested(by: Pick()), .approved(by: Pick()),
+                                      .hasConflicts],
+                         createdAt: longAgo)])
+        let reviews = InboxCategory(
+            id: id(2), name: "Reviews for you", symbol: "eye.circle", color: .amber,
+            rules: [Rule(scope: Scope(kind: .pr, to: Pick(include: [.me]), toRoles: [.reviewRequested]), createdAt: longAgo)])
+        let bots = InboxCategory(
+            id: id(3), name: "Bot chatter", symbol: "cpu", color: .gray,
+            rules: [Rule(scope: Scope(kind: .pr, in: Pick(include: [.involved])), match: .any,
+                         conditions: [.newComment(by: Pick(include: [.bots]))], createdAt: longAgo)],
+            notifies: false)
+        var ci = InboxStore.defaultCategories[0]
+        ci.id = id(4)
+        ci.rules = [Rule(scope: Scope(kind: .workflow, in: Pick(include: ciRepos.map { .repo($0) })), conditions: [.workflow([.failing])],
+                         createdAt: longAgo)]
+        return [contributions, reviews, bots, ci]
+    }
+
+    /// GitHub's ids for the demo's workflows (a workflow thing is `workflow:<repo>:<id>@<branch>`).
+    private static let ciWorkflowID = 1001
+    private static let workflowIDs = ["CI": ciWorkflowID, "Sandbox tests": 1002, "Release": 1003]
+
+    private static let ciRepoNames = ["0xpolarzero/lookout", "apple/swift-format", "ziglang/zig", "amontlabs/lcu",
+                                      "superradcompany/microsandbox"]
+
+    /// The inbox on the demo data: things fetched from GitHub, in the categories above, some seen, some done.
+    private static func inbox(_ store: Store, _ now: Date) {
+        store.categories = categories(ciRepos: ciRepoNames)
+        store.contributedRepos = ["ziglang/zig", "apple/swift-format", "0xpolarzero/lookout", "amontlabs/lcu"]
+        let me = person("0xpolarzero")
+        var things: [Thing] = []
+
+        func pr(_ repo: String, _ n: Int, _ title: String, by author: Person, minutes: Double, greptile: Int? = nil,
+                checks: CheckState? = .passing, requested: [String] = [], assignees: [String] = [], mentioned: [String] = [],
+                status: ThingStatus = .open, conflicts: Bool = false, comments: [ThingComment] = [], reviews: [ThingReview] = [],
+                threads: [ThingThread] = []) -> Thing {
+            Thing(id: "pr:\(repo)#\(n)", kind: .pr, repo: repo, number: n, title: title,
+                  url: URL(string: "https://github.com/\(repo)/pull/\(n)")!, author: author, status: status,
+                  assignees: assignees, requestedReviewers: requested, mentioned: mentioned,
+                  createdAt: now.addingTimeInterval(-86400 * 3), updatedAt: now.addingTimeInterval(-minutes * 60),
+                  comments: comments, reviews: reviews, threads: threads, checks: checks, hasConflicts: conflicts,
+                  greptileScore: greptile)
+        }
+        func comment(_ key: String, _ author: Person, _ text: String, minutes: Double, mentions: [String] = []) -> ThingComment {
+            ThingComment(id: key, author: author, at: now.addingTimeInterval(-minutes * 60), snippet: text, mentions: mentions)
+        }
+        func thread(_ key: String, by: Person, reply: Person, minutes: Double, path: String, _ text: String,
+                    resolved: Bool = false) -> ThingThread {
+            ThingThread(id: key, isResolved: resolved, startedBy: by, lastReplyBy: reply, lastReplyID: key + "-r",
+                        lastReplyAt: now.addingTimeInterval(-minutes * 60), path: path, snippet: text)
+        }
+
+        // Contributions: your PRs.
+        let toks = person("toksdotdev", assoc: .collaborator)
+        let andrew = person("andrewrk", assoc: .owner)
+        let allevato = person("allevato", assoc: .member)
+        let greptile = person("greptile-apps[bot]", bot: true)
+        things.append(pr("0xpolarzero/lookout", 15, "Add GitHub Enterprise host setting", by: me, minutes: 12, greptile: 4,
+                         comments: [comment("c15-1", greptile, "Confidence 4/5: one path still uses the fixed host.", minutes: 95),
+                                    comment("c15-2", toks, "Can the host be validated before we save it?", minutes: 12)],
+                         threads: [thread("t15-1", by: toks, reply: toks, minutes: 12, path: "Sources/Lookout/GitHub.swift",
+                                          "Can the host be validated before we save it?"),
+                                   thread("t15-2", by: toks, reply: me, minutes: 80, path: "Sources/Lookout/SettingsView.swift",
+                                          "Placeholder text says github.com.")]))
+        things.append(pr("ziglang/zig", 21877, "std.Io: add vectored reads to File", by: me, minutes: 3, greptile: 3, checks: .pending,
+                         comments: [comment("c21877-1", andrew, "This should take the buffer by slice instead.", minutes: 3)],
+                         reviews: [ThingReview(id: "r21877-1", author: andrew, state: .changesRequested,
+                                               at: now.addingTimeInterval(-180))],
+                         threads: [thread("t21877-1", by: andrew, reply: andrew, minutes: 3, path: "lib/std/Io/File.zig",
+                                          "This should take the buffer by slice instead.")]))
+        things.append(pr("apple/swift-format", 1042, "Respect trailing comma config in collection literals", by: me, minutes: 18,
+                         greptile: 5,
+                         comments: [comment("c1042-1", allevato, "Thanks! Could you add a test for the nested array case?", minutes: 18)],
+                         reviews: [ThingReview(id: "r1042-1", author: allevato, state: .approved, at: now.addingTimeInterval(-1100))]))
+        things.append(pr("amontlabs/lcu", 31, "Bump the Swift tools version", by: me, minutes: 240, greptile: 5, checks: .failing,
+                         conflicts: true))
+
+        // Reviews for you: asked of you.
+        let ahoppen = person("ahoppen", assoc: .member)
+        let mlugg = person("mlugg", assoc: .collaborator)
+        let cbrewster = person("cbrewster")
+        things.append(pr("apple/swift-format", 1051, "Add --lines option to format a range", by: ahoppen, minutes: 65,
+                         requested: ["0xpolarzero"]))
+        things.append(pr("ziglang/zig", 21840, "Sema: fix comptime int overflow in @shlExact", by: mlugg, minutes: 1500,
+                         requested: ["0xpolarzero"]))
+        things.append(pr("superradcompany/microsandbox", 412, "Mount host directories read-only", by: cbrewster, minutes: 400,
+                         checks: .pending, requested: ["0xpolarzero"], status: .draft))
+
+        // Bot chatter: PRs of others you're in, where a bot spoke.
+        let kylef = person("kylef")
+        let vercel = person("vercel[bot]", bot: true)
+        let rabbit = person("coderabbitai[bot]", bot: true)
+        let codecov = person("codecov[bot]", bot: true)
+        things.append(pr("0xpolarzero/lookout", 14, "Group notifications by repo", by: kylef, minutes: 6, assignees: ["0xpolarzero"],
+                         comments: [comment("c14-1", vercel, "Deployment ready. Preview: lookout-git-group.vercel.app", minutes: 6)]))
+        things.append(pr("apple/swift-format", 1047, "Fix a crash on an empty file", by: allevato, minutes: 22, mentioned: ["0xpolarzero"],
+                         comments: [comment("c1047-1", rabbit, "Consider extracting this into a helper.", minutes: 22),
+                                    comment("c1047-2", codecov, "Coverage 87.2% (+0.4%) compared to base.", minutes: 25)]))
+        things.append(pr("ziglang/zig", 21901, "Linker: skip empty sections", by: person("squeek502"), minutes: 700,
+                         assignees: ["0xpolarzero"],
+                         comments: [comment("c21901-1", person("github-actions[bot]", bot: true), "Benchmarks are within noise.",
+                                            minutes: 700)]))
+
+        // CI: workflows, the failing ones in the category.
+        func workflow(_ repo: String, _ name: String, branch: String = "main", state: CheckState, title: String, minutes: Double,
+                      jobs: [String] = []) -> Thing {
+            Thing(id: "workflow:\(repo):\(workflowIDs[name] ?? 1000)@\(branch)", kind: .workflow, repo: repo, number: nil, title: title,
+                  url: URL(string: "https://github.com/\(repo)/actions")!, createdAt: now.addingTimeInterval(-minutes * 60),
+                  updatedAt: now.addingTimeInterval(-minutes * 60), checks: state, workflowName: name, branch: branch,
+                  failingJobs: jobs)
+        }
+        things.append(workflow("apple/swift-format", "CI", state: .failing, title: "Respect trailing comma config (#1042)", minutes: 45,
+                               jobs: ["Linux / build", "Windows / test"]))
+        things.append(workflow("superradcompany/microsandbox", "Sandbox tests", state: .failing,
+                               title: "Mount host directories read-only (#412)", minutes: 380, jobs: ["Linux / integration"]))
+        things.append(workflow("0xpolarzero/lookout", "CI", state: .passing, title: "Compact, draggable repo cards", minutes: 25))
+        things.append(workflow("ziglang/zig", "CI", branch: "master", state: .pending, title: "std.Io: add vectored reads to File",
+                               minutes: 4))
+        things.append(workflow("amontlabs/lcu", "Release", state: .passing, title: "Release 0.4.2", minutes: 1440))
+
+        store.things = Dictionary(uniqueKeysWithValues: things.map { ($0.id, $0) })
+        store.marks = [:]
+        // Some seen; some done (they come back when something new happens).
+        for entry in store.entries {
+            switch entry.id {
+            case "pr:ziglang/zig#21877", "pr:apple/swift-format#1047": store.markSeen(entry)
+            case "pr:ziglang/zig#21840", "pr:ziglang/zig#21901": store.markDone(entry)
+            default: break
+            }
+        }
+    }
+
+    private static func person(_ login: String, bot: Bool = false, assoc: Association = .none) -> Person {
+        Person(login: login, isBot: bot, association: assoc,
+               avatar: URL(string: "https://github.com/\(login.replacingOccurrences(of: "[bot]", with: "")).png"))
+    }
+
+    /// Takes the open things of a category away: nothing for you there.
+    private static func empty(_ store: Store, category name: String) {
+        guard let id = store.categories.first(where: { $0.name == name })?.id else { return }
+        let gone = Set(store.entries.filter { $0.categoryID == id && !$0.isDone }.map(\.id))
+        store.things = store.things.filter { !gone.contains($0.key) }
     }
 
     /// Every CI repo green.
     private static func passing(_ store: Store) {
-        for key in store.ci.keys { store.ci[key]?.state = .success; store.ci[key]?.failing = [] }
+        for key in store.things.keys where store.things[key]?.kind == .workflow { store.things[key]?.checks = .passing }
     }
 
-    /// 15 repositories with CI: two failing, two running, eleven passing.
+    /// 15 repositories with CI: nine failing, two running, four passing; more than the list shows.
     private static func manyCI(_ store: Store, _ now: Date) {
         let names = ["0xpolarzero/lookout", "apple/swift-format", "ziglang/zig", "amontlabs/lcu", "e2b-dev/runtime",
                      "superradcompany/microsandbox", "apple/swift-argument-parser", "pointfreeco/swift-composable-architecture",
                      "vapor/vapor", "swiftlang/swift-package-manager", "tuist/tuist", "realm/SwiftLint", "Alamofire/Alamofire",
                      "hummingbird-project/hummingbird", "apple/swift-nio"]
-        store.repos = names.map { RepoConfig(fullName: $0) }
-        let failing: [String: [String]] = ["apple/swift-format": ["Linux / build", "Windows / test"], "vapor/vapor": ["Unit tests (5.10)"]]
+        store.categories = categories(ciRepos: names)
+        let failing: [String: [String]] = [
+            "apple/swift-format": ["Linux / build", "Windows / test"], "vapor/vapor": ["Unit tests (5.10)"],
+            "tuist/tuist": ["Acceptance"], "realm/SwiftLint": ["Plugin tests"], "Alamofire/Alamofire": ["macOS", "tvOS"],
+            "swiftlang/swift-package-manager": ["Build"], "pointfreeco/swift-composable-architecture": ["Library evolution"],
+            "e2b-dev/runtime": ["Integration"], "amontlabs/lcu": ["Desktop"],
+        ]
         let running: Set<String> = ["ziglang/zig", "apple/swift-nio"]
-        store.ci = Dictionary(uniqueKeysWithValues: names.enumerated().map { index, name in
-            let state: CIState = failing[name] != nil ? .failure : running.contains(name) ? .pending : .success
-            return (name, CIStatus(state: state, branch: "main", sha: String(format: "%010x", 0x9a133ca0 + index * 977),
-                                   failing: failing[name] ?? [], checkedAt: now, title: "Commit headline \(index + 1)",
-                                   updatedAt: now.addingTimeInterval(-Double(index + 1) * 2300)))
-        })
+        store.things = store.things.filter { $0.value.kind != .workflow }
+        for (index, name) in names.enumerated() {
+            let state: CheckState = failing[name] != nil ? .failing : running.contains(name) ? .pending : .passing
+            let thing = Thing(id: "workflow:\(name):\(ciWorkflowID)@main", kind: .workflow, repo: name, number: nil, title: "Commit headline \(index + 1)",
+                              url: URL(string: "https://github.com/\(name)/actions")!,
+                              createdAt: now.addingTimeInterval(-Double(index + 1) * 2300),
+                              updatedAt: now.addingTimeInterval(-Double(index + 1) * 2300), checks: state, workflowName: "CI",
+                              branch: "main", failingJobs: failing[name] ?? [])
+            store.things[thing.id] = thing
+        }
     }
 
-    static let hoverID = "demo-hover"
-    static let selectedID = "demo-selected"
     static let blockedAgentID = "local_demo-lcu"
 
     /// A session as the Claude app reports it: a finished turn with a summary, or (`running`) mid-turn.
@@ -450,92 +606,35 @@ enum Demo {
         }
         sessions(store, now, listed)
     }
-
-    private static func items(_ now: Date) -> [InboxItem] {
-        var counter = 0
-        func item(_ kind: EventKind, _ repo: String, _ n: Int, _ title: String, _ author: String, _ snippet: String,
-                  _ minutesAgo: Double, _ state: ItemState = .unread, app: Bool = false, path: String? = nil,
-                  id: String? = nil) -> InboxItem {
-            counter += 1
-            let login = author.replacingOccurrences(of: "[bot]", with: "")
-            return InboxItem(id: id ?? "demo-\(counter)", repo: repo, kind: kind, number: n, title: title, snippet: snippet,
-                             author: author, avatar: URL(string: "https://github.com/\(login).png"), authorIsApp: app,
-                             url: URL(string: "https://github.com/\(repo)/issues/\(n)")!,
-                             createdAt: now.addingTimeInterval(-minutesAgo * 60), state: state, path: path)
-        }
-        return [
-            // Needs you
-            item(.reviewComment, "ziglang/zig", 21877, "std.Io: add vectored reads to File", "andrewrk",
-                 "This should take the buffer by slice instead, otherwise we copy twice on the hot path.", 3,
-                 path: "lib/std/Io/File.zig", id: hoverID),
-            item(.prComment, "apple/swift-format", 1042, "Respect trailing comma config in collection literals", "allevato",
-                 "Thanks! Could you add a test for the nested array case?", 18),
-            item(.issueOpened, "0xpolarzero/lookout", 12, "Pill overlaps the Dock when it's on the right", "mattt",
-                 "With the Dock pinned right, the pill sits under it. Maybe snap to the visible frame?", 42, id: selectedID),
-            item(.reviewRequested, "apple/swift-format", 1051, "Add --lines option to format a range", "ahoppen", "", 65),
-            item(.prOpened, "0xpolarzero/lookout", 15, "Add GitHub Enterprise host setting", "kylef",
-                 "Adds an API base URL field in Settings and threads it through the client.", 95),
-            item(.issueComment, "0xpolarzero/lookout", 9, "Support GitHub Enterprise", "kyle", "+1, we'd use this at work.", 120, .read),
-            // Bots
-            item(.prComment, "0xpolarzero/lookout", 14, "Group notifications by repo", "vercel[bot]",
-                 "Deployment ready. Preview: lookout-git-group.vercel.app", 6, app: true),
-            item(.reviewComment, "apple/swift-format", 1042, "Respect trailing comma config in collection literals",
-                 "coderabbitai[bot]", "Consider extracting this into a helper; the same check appears in three places.", 22,
-                 app: true, path: "Sources/SwiftFormat/Rules/TrailingComma.swift"),
-            item(.prComment, "apple/swift-format", 1042, "Respect trailing comma config in collection literals", "codecov[bot]",
-                 "Coverage 87.2% (+0.4%) compared to base.", 25, .read, app: true),
-            // Done
-            item(.reviewComment, "ziglang/zig", 21877, "std.Io: add vectored reads to File", "squeek502",
-                 "Nit: this is the same as readv on posix.", 300, .resolved, path: "lib/std/Io/File.zig"),
-            item(.issueComment, "0xpolarzero/lookout", 7, "Crash on wake from sleep", "jessesquires",
-                 "Repro'd on 26.1 as well.", 900, .addressed),
-            item(.reviewRequested, "ziglang/zig", 21840, "Sema: fix comptime int overflow in @shlExact", "mlugg", "", 1500, .addressed),
-            item(.issueOpened, "apple/swift-format", 1038, "Question: config file lookup order?", "someone", "How does it pick between…", 2000, .discarded),
-        ]
-    }
 }
 
-/// `--check owner/repo`: headless sync against live GitHub, prints what the inbox would contain.
+/// `--check owner/repo`: headless refresh against live GitHub, prints what the inbox would contain for the repo's PRs, issues
+/// and workflows.
 @MainActor
 enum Check {
     static func run(store: Store, repo: String) {
         store.persists = false
         Task {
             await store.authenticate()
-            if let i = CommandLine.arguments.firstIndex(of: "--thread"), let n = Int(CommandLine.arguments[i + 1]) {
-                let me = store.me?.login.lowercased() ?? ""
-                let info = try? await store.fetchThreads(repo, [n], participation: true, reviewThreads: [n], me: me)
-                let t = info?[n]
-                print("#\(n) title=\(t?.title ?? "nil") author=\(t?.author ?? "nil") myActivity=\(t?.activity ?? []) reviewThreadsWithMe=\(t?.reviewActivity.filter { !$0.value.isEmpty }.count ?? 0)")
-                exit(0)
-            }
             print("auth:", store.me?.login ?? "nil", store.tokenSource?.rawValue ?? "", store.authError ?? "")
-            if let err = await store.addRepo(repo) { print("add error:", err) }
-            if CommandLine.arguments.contains("--all"), let r = store.repos.first {
-                store.toggleAllComments(r)
-                store.repos[0].cursors = [:]
-                store.items = []
-            }
-            if let i = CommandLine.arguments.firstIndex(of: "--days"), let days = Double(CommandLine.arguments[i + 1]) {
-                store.repos[0].addedAt = Date().addingTimeInterval(-(days - 1) * 86400)
-                store.repos[0].cursors = [:]
-                store.items = []
-            }
-            print("allComments:", store.repos.first?.allComments ?? false)
+            let scope = Pick<RepoRef>(include: [.repo(repo)])
+            store.categories = [
+                InboxCategory(name: "PRs", symbol: "arrow.triangle.pull", color: .violet,
+                              rules: [Rule(scope: Scope(kind: .pr, in: scope), createdAt: .distantPast)]),
+                InboxCategory(name: "Issues", symbol: "smallcircle.filled.circle", color: .green,
+                              rules: [Rule(scope: Scope(kind: .issue, in: scope), createdAt: .distantPast)]),
+                InboxCategory(name: "CI", symbol: "xmark.seal", color: .red,
+                              rules: [Rule(scope: Scope(kind: .workflow, in: scope), conditions: [.workflow([.failing, .pending, .passing])],
+                                           createdAt: .distantPast)]),
+            ]
             await store.pollAll()
-            for item in store.items.sorted(by: { $0.createdAt > $1.createdAt }).filter({ $0.kind != .issueOpened && $0.kind != .prOpened }).prefix(25) {
-                print(String(format: "%-15@ %-10@ #%-6d %@ @%@ low=%d  %@", item.kind.rawValue, item.state.rawValue, item.number,
-                             shortAgo(item.createdAt), item.author, store.isLowPriority(item) ? 1 : 0, String(item.title.prefix(50))))
+            for entry in store.entries.sorted(by: { $0.thing.updatedAt > $1.thing.updatedAt }).prefix(25) {
+                let category = store.categories.first { $0.id == entry.categoryID }?.name ?? ""
+                print(String(format: "%-7@ %@ %@  %@  [%@]", category, shortAgo(entry.thing.updatedAt), entry.id,
+                             String(entry.thing.title.prefix(50)), entry.facts.map(\.label).joined(separator: " · ")))
             }
-            let comments = store.items.filter { [.issueComment, .prComment, .reviewComment].contains($0.kind) }
-            print("comments forYou:", comments.filter { $0.forYou == true }.count, "notForYou:", comments.filter { $0.forYou == false }.count,
-                  "unknown:", comments.filter { $0.forYou == nil }.count)
-            print("items:", store.items.count, "by kind:", Dictionary(grouping: store.items, by: \.kind.rawValue).mapValues(\.count))
-            print("ci:", store.ci.mapValues { "\($0.branch) \($0.state.rawValue) failing=\($0.failing)" })
-            print("errors:", store.repoErrors, "cursors:", store.repos.first?.cursors ?? [:])
-            print("rate:", store.gh.rateRemaining ?? -1)
-            await store.pollAll()
-            print("second poll rate:", store.gh.rateRemaining ?? -1, "items:", store.items.count)
+            print("things:", store.things.count, "error:", store.inboxError ?? "none")
+            print("rate:", store.gh.rateRemaining ?? -1, "graphql:", store.gh.graphqlRemaining ?? -1)
             exit(0)
         }
     }

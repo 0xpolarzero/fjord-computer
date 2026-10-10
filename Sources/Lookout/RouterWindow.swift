@@ -206,8 +206,8 @@ enum RouterBanners {
     static func attach(store: Store, windowIsKey: @escaping () -> Bool, open: @escaping (String) -> Void) {
         store.onNewRouterCards = { cards in post(cards, store: store, windowIsKey: windowIsKey()) }
         let previous = store.notifier.onOpen
-        store.notifier.onOpen = { id, url, quiet in
-            if id.hasPrefix(prefix) { open(String(id.dropFirst(prefix.count))) } else { previous?(id, url, quiet) }
+        store.notifier.onOpen = { id, url in
+            if id.hasPrefix(prefix) { open(String(id.dropFirst(prefix.count))) } else { previous?(id, url) }
         }
     }
 

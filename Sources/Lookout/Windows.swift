@@ -45,6 +45,8 @@ class FloatingPanel: NSPanel {
         backgroundColor = .clear
         isOpaque = false
         hasShadow = false
+        // The app's look is dark: its native menus and popovers follow the window's appearance.
+        appearance = NSAppearance(named: .darkAqua)
         hidesOnDeactivate = false
         isMovable = false
         isReleasedWhenClosed = false

@@ -13,8 +13,6 @@ final class UndoStack {
         let id = UUID()
         /// The undo line's text: "Moved to Done".
         let message: String
-        /// The inbox items it would bring back: the store's pruning leaves them alone while it can.
-        let itemIDs: Set<String>
         let at: Date
         /// Whether anything was put back: false once what it concerned is gone.
         let revert: @MainActor () -> Bool
@@ -43,9 +41,9 @@ final class UndoStack {
         return entries.last { $0.id == visibleID }
     }
 
-    func push(_ message: String, itemIDs: Set<String>, now: Date = Date(), revert: @escaping @MainActor () -> Bool) {
+    func push(_ message: String, now: Date = Date(), revert: @escaping @MainActor () -> Bool) {
         entries.removeAll { now.timeIntervalSince($0.at) > Self.validFor }
-        let entry = Entry(message: message, itemIDs: itemIDs, at: now, revert: revert)
+        let entry = Entry(message: message, at: now, revert: revert)
         entries.append(entry)
         if entries.count > Self.depth { entries.removeFirst(entries.count - Self.depth) }
         show(entry)
@@ -64,11 +62,6 @@ final class UndoStack {
             }
         }
         return false
-    }
-
-    /// Whether ⌘Z could still bring this item back.
-    func holds(_ id: String, now: Date = Date()) -> Bool {
-        entries.contains { now.timeIntervalSince($0.at) <= Self.validFor && $0.itemIDs.contains(id) }
     }
 
     /// Hides the line (the action stays undoable with ⌘Z until it expires).
@@ -92,12 +85,4 @@ final class UndoStack {
 extension Store {
     /// ⌘Z and the line's button.
     @discardableResult func undoLast() -> Bool { undoStack.undo() }
-
-    /// Puts an item back as it was before Done, unless something else has happened to it since. False when it has.
-    func undoDone(_ id: String, to state: ItemState) -> Bool {
-        guard let i = items.firstIndex(where: { $0.id == id }), items[i].state == .discarded else { return false }
-        items[i].state = state
-        save()
-        return true
-    }
 }

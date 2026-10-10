@@ -11,31 +11,9 @@ struct GHUser: Codable, Hashable {
     var isApp: Bool { type == "Bot" || login.hasSuffix("[bot]") }
 }
 
+/// A search hit, as far as suggestions need it.
 struct GHIssue: Decodable {
-    struct PRLink: Decodable { let url: URL? }
-    let id: Int
-    let number: Int
-    let title: String
-    let body: String?
-    let user: GHUser?
-    let htmlUrl: URL
-    let createdAt: Date
-    let updatedAt: Date
-    let pullRequest: PRLink?
     let repositoryUrl: URL?
-}
-
-struct GHComment: Decodable {
-    let id: Int
-    let body: String?
-    let user: GHUser?
-    let htmlUrl: URL
-    let createdAt: Date
-    let updatedAt: Date
-    let issueUrl: URL?
-    let pullRequestUrl: URL?
-    let inReplyToId: Int?
-    let path: String?
 }
 
 struct GHRepo: Decodable {
@@ -61,6 +39,8 @@ struct GHWorkflowRuns: Decodable {
         let conclusion: String?
         /// The check suite its jobs' check runs belong to.
         let checkSuiteId: Int?
+        /// The run's page on GitHub.
+        var htmlUrl: URL? = nil
     }
     let workflowRuns: [Run]
 }
@@ -109,6 +89,8 @@ struct GHCommit: Decodable {
 
 struct GitHubError: LocalizedError {
     let message: String
+    /// The HTTP status behind it, when there was one.
+    var status: Int?
     var errorDescription: String? { message }
 }
 
@@ -165,7 +147,7 @@ final class GitHubClient: @unchecked Sendable {
     }
     private var etags: [String: Remembered] = [:]
     private var etagClock = 0
-    /// Most responses remembered; the least recently used go first. A watched repository takes about eight (see `reserveETags`).
+    /// Most responses remembered; the least recently used go first. A workflow's repository takes about eight (see `reserveETags`).
     private var etagLimit = GitHubClient.etagFloor
     private static let etagFloor = 200
     private let lock = NSLock()
@@ -178,8 +160,8 @@ final class GitHubClient: @unchecked Sendable {
     }()
 
     /// Room for every repository's answers at once: a poll visits each in turn, and a cache smaller than that cycle evicts each
-    /// answer just before it is asked for again, so every poll becomes full 200s against the rate limit. Per repository: issues,
-    /// issue comments and review comments, actions runs, check runs and status, and a few spare for the review search.
+    /// answer just before it is asked for again, so every poll becomes full 200s against the rate limit. Per repository: its
+    /// default branch, actions runs, check runs and status, and a few spare.
     func reserveETags(forRepositories count: Int) {
         lock.withLock { etagLimit = max(Self.etagFloor, 8 * count + 40) }
     }
@@ -321,7 +303,7 @@ final class GitHubClient: @unchecked Sendable {
         case 401:
             lock.withLock { if generation == sent { rejected = true } }
             throw GitHubError(message: "GitHub rejected the token")
-        case 404: throw GitHubError(message: "Not found (or no access)")
+        case 404: throw GitHubError(message: "Not found (or no access)", status: 404)
         default: throw GitHubError(message: message ?? "GitHub error \(http.statusCode)")
         }
     }

@@ -35,7 +35,7 @@ enum AccessibilityTree {
         _ = enabled
         let store = Store()
         Demo.populate(store, scenario)
-        // The Repositories page asks GitHub for suggestions: a GitHub of its own, with nothing to suggest.
+        // The categories page asks GitHub for suggestions: a GitHub of its own, with nothing to suggest.
         store.gh.session = StubbedGitHub.session { _ in .init(200, "[]") }
         store.agents.expanded = true
         let hub = HubState()
@@ -115,7 +115,7 @@ enum AccessibilityTree {
 
     @Test func theTreeHasTheControlsItIsMeasuredOn() async throws {
         // A render that came out empty would pass the test below for nothing.
-        let tree = try await AccessibilityTree.render { _, hub in hub.pinned = true }
+        let tree = try await AccessibilityTree.render(configure: { _, hub in hub.pinned = true })
         let buttons = tree.all.filter { $0.role == "AXButton" }
         #expect(buttons.count > 5, "\(buttons.count) buttons in \(tree.all.map(\.role))")
         #expect(buttons.contains { !$0.label.isEmpty })
@@ -128,17 +128,19 @@ enum AccessibilityTree {
             missing += try await unnamed("kept open", edge: edge) { _, hub in hub.pinned = true }
             missing += try await unnamed("searching", edge: edge) { _, hub in hub.pinned = true; hub.query = "zig" }
         }
-        for section in [HubSection.inbox, .ci, .agents, .controls] {
+        for section in [HubSection.inbox, .router, .agents, .controls] {
             missing += try await unnamed("peek \(section)") { _, hub in hub.section = section }
         }
-        for focus in [HubSection.inbox, .ci, .agents] {
+        for focus in [HubSection.inbox, .agents] {
             missing += try await unnamed("\(focus) focused") { _, hub in hub.pinned = true; hub.focus = focus }
         }
-        for tab in [InboxFilter.bots, .done] {
-            missing += try await unnamed("\(tab.label) tab") { _, hub in hub.pinned = true; hub.filter = tab }
+        missing += try await unnamed("Done tab") { _, hub in hub.pinned = true; hub.tab = .done }
+        missing += try await unnamed("CI tab") { store, hub in
+            hub.pinned = true
+            hub.tab = store.categories.first { $0.isCI }.map { .category($0.id) }
         }
         missing += try await unnamed("Settings") { _, hub in hub.go(.settings) }
-        missing += try await unnamed("Repositories") { _, hub in hub.go(.repos) }
+        missing += try await unnamed("Categories") { _, hub in hub.go(.categories) }
         missing += try await unnamed("signed out", scenario: .signedOut) { _, hub in hub.pinned = true }
         missing += try await unnamed("update ready", scenario: .updateReady) { _, hub in hub.pinned = true }
         missing += try await unnamed("many sessions", scenario: .sessionsManyNew) { _, hub in hub.pinned = true; hub.focus = .agents }

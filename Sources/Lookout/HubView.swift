@@ -4,7 +4,14 @@ import SwiftUI
 
 // Lookout as one bar on a screen edge that expands, on hover, into the whole app.
 
-enum HubPage { case main, settings, repos }
+/// `repos` is the inbox's categories page (it was the repositories').
+enum HubPage { case main, settings, categories }
+
+/// A tab of the inbox: a category, or Done at the end.
+enum InboxTab: Hashable {
+    case category(UUID)
+    case done
+}
 
 @Observable
 @MainActor
@@ -26,7 +33,8 @@ final class HubState {
     /// The last row the keyboard (or a click on the inbox) picked: the lists scroll to it. Never set by hovering, so
     /// the pointer moving over a row doesn't move the list.
     var keyboardSelection: ScrollRequest?
-    var filter: InboxFilter = .needsYou {
+    /// The inbox's tab; nil is the first category shown.
+    var tab: InboxTab? {
         didSet { selection = nil; keyboardSelection = nil }
     }
     /// Asks the lists to scroll to a row, even one asked for before (a new request every time).
@@ -34,10 +42,10 @@ final class HubState {
         keyboardSelection = ScrollRequest(id: id, seq: (keyboardSelection?.seq ?? 0) + 1)
     }
     /// The full view on the inbox, on the tab holding what just arrived: no search or earlier tab hides it.
-    func showInbox(_ tab: InboxFilter) {
+    func showInbox(_ tab: InboxTab?) {
         go(.main)
         endSearch()
-        filter = tab
+        self.tab = tab
         focus = .inbox
         pinned = true
     }
@@ -65,7 +73,7 @@ final class HubState {
     var caretAtEnd = false
     /// Which way the last page change went, so pages slide in from the side you're heading to.
     var forward = true
-    /// The page you came from, so going back retraces your steps (Repositories opened from Settings goes back
+    /// The page you came from, so going back retraces your steps (the categories opened from Settings go back
     /// there; opened from the main view, back to it).
     private(set) var previous: HubPage = .main
     /// Whether the view was pinned before a page pinned it: going back to the main view restores that.
@@ -154,7 +162,7 @@ final class HubState {
     /// In the full view, the section given all the room it needs; the others shrink to their header (and counts).
     var focus: HubSection?
 
-    /// Settings and Repositories pin the view, so it stays put while you type or drag; back on the main view,
+    /// Settings and the categories page pin the view, so it stays put while you type or drag; back on the main view,
     /// the pin is what it was before.
     func go(_ next: HubPage) {
         guard next != page else { return }
@@ -173,9 +181,15 @@ final class HubState {
         page = next
     }
 
-    /// One step back (Esc, the back button): to the page you came from, the main view in the end.
+    /// A page's own step back, set while it has one to take (the category editor's, to the list): Esc and the back
+    /// button take it first, and leave the page for good only once it's gone.
+    @ObservationIgnored var stepBack: (() -> Bool)?
+
+    /// One step back (Esc, the back button): a page's own step first, then to the page you came from, the main view
+    /// in the end.
     func back() {
-        go(page == .repos && previous == .settings ? .settings : .main)
+        if let stepBack, stepBack() { return }
+        go(page == .categories && previous == .settings ? .settings : .main)
     }
 }
 
@@ -184,7 +198,7 @@ extension HubPage {
         switch self {
         case .main: 0
         case .settings: 1
-        case .repos: 2
+        case .categories: 2
         }
     }
 }
@@ -273,6 +287,7 @@ final class HubKeys {
         }
         if shortcut == store.shortcut(.refresh) { store.refreshNow(); return true }
         guard hub.expanded, hub.page == .main else { return false }
+        if jumpToCategory(event, flags: flags) { return true }
         // Typing searches: letters and digits start it, Space and ⌫ edit it once it has started. The key is handed to the
         // field to type (not read here), so a dead key or an input method's first key works as it does in any field.
         if event.keyCode == UInt16(kVK_Delete), flags.isEmpty, !hub.query.isEmpty {
@@ -338,9 +353,26 @@ final class HubKeys {
         if targets.indices.contains(next) { select(targets[next]) }
     }
 
+    /// The digit row's keys, by key code (the layout's own digits need a modifier on some, AZERTY's among them).
+    private static let digitKeys = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8,
+                                    kVK_ANSI_9]
+
+    /// ⌃1 to ⌃9: the inbox on the Nth category shown, in the bar's order (Done has no number).
+    fileprivate func jumpToCategory(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
+        guard flags == .control, let n = Self.digitKeys.firstIndex(of: Int(event.keyCode)) else { return false }
+        let shown = store.shownCategories
+        guard shown.indices.contains(n) else { return false }
+        withAnimation(Theme.Motion.fade.resolved(reduce: LookoutHub.reduceNow)) {
+            hub.endSearch()
+            if hub.focus == .agents { hub.focus = nil }
+            hub.tab = .category(shown[n].id)
+        }
+        return true
+    }
+
     private func markAllRead(_ shortcut: Shortcut) -> Bool {
         guard shortcut == store.shortcut(.markAllRead) else { return false }
-        withAnimation(Theme.Motion.fade.resolved(reduce: LookoutHub.reduceNow)) { store.markAllRead(hub.filter) }
+        withAnimation(Theme.Motion.fade.resolved(reduce: LookoutHub.reduceNow)) { store.markAllSeen(store.hubTab(hub)) }
         return true
     }
 
@@ -349,13 +381,13 @@ final class HubKeys {
         // Only a row that is listed now: one a filter, a search or Router only hides is left alone.
         guard let selection = hub.selection, targets.contains(selection) else { return false }
         let id = String(selection.dropFirst(2))
-        if selection.hasPrefix("i:"), let item = store.items.first(where: { $0.id == id }) {
-            if shortcut == store.shortcut(.openItem) { store.open(item) }
-            else if shortcut == store.shortcut(.toggleRead) { item.state == .unread ? store.markRead(item) : store.markUnread(item) }
+        if selection.hasPrefix("i:"), let entry = store.entries.first(where: { $0.id == id }) {
+            if shortcut == store.shortcut(.openItem) { store.open(entry) }
+            else if shortcut == store.shortcut(.toggleRead) { if entry.isUnread { store.markSeen(entry) } }
             else if shortcut == store.shortcut(.discard) {
                 let i = targets.firstIndex(of: selection) ?? 0
                 if targets.indices.contains(i + 1) { select(targets[i + 1]) }
-                withAnimation(Theme.Motion.fade.resolved(reduce: LookoutHub.reduceNow)) { item.state.isOpen ? store.discard(item) : store.restore(item) }
+                withAnimation(Theme.Motion.fade.resolved(reduce: LookoutHub.reduceNow)) { entry.isDone ? store.restore(entry) : store.finish(entry) }
             } else { return false }
             return true
         }
@@ -409,6 +441,7 @@ extension HubKeys {
             hub.go(.settings)
             return true
         }
+        if jumpToCategory(event, flags: flags) { return true }
         guard flags.isEmpty else { return nil }
         switch Int(event.keyCode) {
         case kVK_Escape:
@@ -463,15 +496,13 @@ struct LookoutHub: View {
     /// On the sides, the open column's height without its filler: what it lacks to be as tall as the bar at rest
     /// (whose sessions take a tile each, where open the new ones share a line) is room given to the inbox.
     @State var openContent: CGFloat = 0
+    /// The inbox list's own height as laid out: with the filler, what the open column has left for it.
+    @State var inboxListHeight: CGFloat = 0
     var openFiller: CGFloat {
         // An empty inbox stays one line: no room for nothing.
         guard showsDetail, !edge.isHorizontal, !items.isEmpty, barSize.height > 0, openContent > 0 else { return 0 }
-        return max(0, barSize.height - openContent)
+        return max(0, min(barSize.height, maxLength) - openContent)
     }
-    /// The CI block's measured height: what it takes beyond its usual few lines comes off the inbox's room.
-    @State var ciHeight: CGFloat = 0
-    static let ciUsual: CGFloat = 150
-    var ciExtra: CGFloat { max(0, ciHeight - Self.ciUsual) }
     @State var peekSizes: [HubSection: CGSize] = [:]
     /// The strip's trailing group (controls, update button) as laid out, for the sessions' segment to leave room
     /// for; a first guess until it's measured.
@@ -503,7 +534,7 @@ struct LookoutHub: View {
 
     var edge: DockEdge { ui.edge }
     var expanded: Bool { hub.expanded }
-    /// Settings or Repositories showing: the bar stays as at rest, dimmed, and the page takes the rows' place.
+    /// Settings or the categories showing: the bar stays as at rest, dimmed, and the page takes the rows' place.
     var pageOpen: Bool { expanded && hub.page != .main }
     /// The rows' content beside the bar (and the strip's segments at full width).
     var showsDetail: Bool { expanded && hub.page == .main }
@@ -548,7 +579,7 @@ struct LookoutHub: View {
                 Toggle("Router Only", isOn: Binding(get: { store.router.routerOnly }, set: { store.setRouterOnly($0) }))
             }
             Button("Settings…") { hub.go(.settings) }
-            Button("Repositories…") { hub.go(.repos) }
+            Button("Inbox Categories…") { hub.go(.categories) }
             if store.updater.isRelease {
                 // Settings' update row says what the check finds (up to date, or why it failed); the bar has no room to.
                 Button("Check for Updates") {
@@ -568,11 +599,19 @@ struct LookoutHub: View {
 
     // MARK: Data
 
-    var items: [InboxItem] { store.hubItems(hub) }
+    var items: [InboxEntry] { store.hubEntries(hub) }
     var searching: Bool { !hub.query.isEmpty }
-    /// What the inbox list animates on: its items changing, or the filter or search swapping them.
-    struct ListKey: Equatable { let revision: Int; let filter: InboxFilter; let query: String }
-    var listKey: ListKey { ListKey(revision: store.itemsRevision, filter: hub.filter, query: hub.query) }
+    /// What the inbox list animates on: its entries changing, or the tab or search swapping them.
+    struct ListKey: Equatable { let revision: Int; let tab: InboxTab; let query: String }
+    var listKey: ListKey { ListKey(revision: store.inboxRevision, tab: store.hubTab(hub), query: hub.query) }
+    /// The list's identity: a different tab or a search is a different list (it cross-fades).
+    var listID: String {
+        guard !searching else { return "search" }
+        switch store.hubTab(hub) {
+        case .done: return "done"
+        case .category(let id): return id.uuidString
+        }
+    }
     /// The sessions by group; searching, one untitled group of the matches.
     var agentSections: [AgentSection] {
         if searching {
@@ -683,57 +722,41 @@ struct LookoutHub: View {
     }
 
     @ViewBuilder var mainRows: some View {
-        // Inbox
+        // Inbox: the GitHub mark and the tabs; under them the categories' cells in the bar, the list beside them.
         VStack(alignment: side, spacing: 0) {
             // Top-aligned, so the icon stays where it is at rest whatever the header beside it takes.
-            row(alignment: .top, cell: { inboxIcon.padding(.top, 2).padding(.bottom, 4) },
+            row(alignment: .top, cell: { inboxIcon.padding(.top, 2).padding(.bottom, 2) },
                 detail: { inboxHeader.padding(.top, 6) })
-        }
-        .modifier(probe(.inbox))
-        if showsDetail && !shrunk(.inbox) {
-            Group {
-                row(cell: { EmptyView() }, detail: { undoLine })
-                if items.isEmpty {
-                    row(cell: { EmptyView() }, detail: { emptyInbox })
-                }
-                CappedScroll(cap: caps.inbox, hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
-                    AdaptiveStack(count: items.count, alignment: side, spacing: 1) {
-                        ForEach(items) { item in
-                            row(cell: { EmptyView() }, detail: { itemRow(item) }).capEdge().id("i:" + item.id)
+            ZStack(alignment: Alignment(horizontal: side, vertical: .top)) {
+                if showsDetail && !shrunk(.inbox) {
+                    VStack(alignment: side, spacing: 0) {
+                        row(cell: { EmptyView() }, detail: { undoLine })
+                        if items.isEmpty {
+                            row(cell: { EmptyView() }, detail: { emptyInbox })
                         }
-                    }
-                    .padding(.bottom, 4)
-                    .id(searching ? "search" : hub.filter.rawValue)
-                    .transition(.opacity)
-                    .motion(Theme.Motion.fade, value: listKey)
-                }
-                // Its own width, so a scroller can't widen it and push its rows off the bar's column.
-                .frame(width: Self.cell + Self.detail)
-                if openFiller > 0 { Color.clear.frame(width: Self.cell + Self.detail, height: openFiller) }
-            }
-            .transition(.hubReveal)
-        }
-        sectionDivider
-        // CI: its header, then one line per state, its count in the bar beside the repos in it.
-        VStack(alignment: side, spacing: 0) {
-            if store.ciRepos.isEmpty {
-                row(cell: { ciCell }, detail: { linkRow("No CI shown", action: "Choose repositories") { hub.go(.repos) } })
-            } else {
-                row(cell: { ciCell }, detail: { ciHeader })
-                if !shrunk(.ci) {
-                    ForEach(Self.ciLineOrder, id: \.self) { state in
-                        if state != CIState.none || !ciRepos(listedIn: .none).isEmpty {
-                            row(cell: { ciCount(state) }, detail: { ciLine(state) })
+                        CappedScroll(cap: max(caps.inbox, openFiller + inboxListHeight), hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
+                            AdaptiveStack(count: items.count, alignment: side, spacing: 1) {
+                                ForEach(items) { entry in
+                                    row(cell: { EmptyView() }, detail: { itemRow(entry) }).capEdge().id("i:" + entry.id)
+                                }
+                            }
+                            .padding(.bottom, 4)
+                            .id(listID)
+                            .transition(.opacity)
+                            .motion(Theme.Motion.fade, value: listKey)
                         }
+                        // Its own width, so a scroller can't widen it and push its rows off the bar's column.
+                        .frame(width: Self.cell + Self.detail)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inboxListHeight = $0 }
+                        if openFiller > 0 { Color.clear.frame(width: Self.cell + Self.detail, height: openFiller) }
                     }
                     .transition(.hubReveal)
                 }
+                VStack(spacing: 0) { categoryCells }.frame(width: Self.cell)
             }
+            .frame(width: rowWidth, alignment: Alignment(horizontal: side, vertical: .top))
         }
-        .modifier(probe(.ci))
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if ciHeight != $0 { ciHeight = $0 } }
-        // A search doesn't look in CI.
-        .opacity(searching ? 0.4 : 1)
+        .modifier(probe(.inbox))
         // The Router, just before the sessions it works on: its cell and counts; kept open, what is running too.
         if store.routerOn {
             sectionDivider
@@ -830,7 +853,7 @@ struct LookoutHub: View {
 
     /// No section focused: what's left once the fixed parts are laid out, inbox first.
     var sharedCaps: (inbox: CGFloat, agents: CGFloat) {
-        let free = max(160, maxLength - 360 - ciExtra)
+        let free = max(160, maxLength - 340)
         guard showsSessions else { return (free, 0) }
         // Whole 36pt session rows, so the last one showing is never cut through its tile.
         let agents = max(2, (free * 0.45 / 36).rounded(.down)) * 36
@@ -865,35 +888,21 @@ struct LookoutHub: View {
         Group {
             HStack(spacing: 8) {
                 inboxIcon
-                if wide && !shrunk(.inbox) { inboxHeader.transition(.hubReveal) }
-                if wide && shrunk(.inbox) { Spacer(minLength: 0); focusButton(.inbox) }
+                if wide && !shrunk(.inbox) {
+                    inboxHeader.transition(.hubReveal)
+                } else if wide {
+                    Spacer(minLength: 0)
+                    focusButton(.inbox)
+                } else {
+                    // At rest: the categories' cells beside the mark.
+                    HStack(spacing: 0) { categoryCells }
+                }
             }
             .padding(.leading, Self.inset + 1)
             .padding(.trailing, Self.inset)
             .frame(width: wide ? columnWidth(.inbox) : nil, alignment: .leading)
             .frame(maxHeight: .infinity)
             .modifier(probe(.inbox))
-            stripDivider
-            // CI: its icon, then the same header as the others (title, status, one expand button); its counts at rest.
-            HStack(spacing: 8) {
-                ciCell
-                if wide && shrunk(.ci) {
-                    // Shrunk: the counts fit where the header's words wouldn't.
-                    HStack(spacing: 2) { ForEach(Self.ciOrder, id: \.self) { ciCount($0) } }
-                    Spacer(minLength: 0)
-                    focusButton(.ci)
-                } else if wide {
-                    ciHeader.transition(.hubReveal)
-                } else {
-                    HStack(spacing: 2) { ForEach(Self.ciOrder, id: \.self) { ciCount($0) } }
-                }
-            }
-            .padding(.leading, Self.inset + 1)
-            .padding(.trailing, Self.inset)
-            .frame(width: wide ? columnWidth(.ci) : nil, alignment: .leading)
-            .frame(maxHeight: .infinity)
-            .modifier(probe(.ci))
-            .opacity(searching ? 0.4 : 1)
             if store.routerOn {
                 stripDivider
                 HStack(spacing: 8) {
@@ -997,12 +1006,9 @@ struct LookoutHub: View {
                             focusedBody(focus).frame(minWidth: Self.ciWidth, idealWidth: Self.ciWidth, maxWidth: .infinity, alignment: .topLeading)
                         } else {
                             HStack(alignment: .top, spacing: 0) {
-                                // CI at the bottom (level with the new session row): the room between is the inbox's.
                                 VStack(alignment: .leading, spacing: 0) {
                                     inboxColumn
                                     Spacer(minLength: 0)
-                                    IslandRule(inset: 12)
-                                    ciColumn
                                 }
                                 .frame(width: Self.githubWidth, alignment: .topLeading)
                                 .frame(maxHeight: .infinity, alignment: .top)
@@ -1046,7 +1052,7 @@ struct LookoutHub: View {
         IslandRule(axis: .vertical, inset: 12)
     }
 
-    /// The inbox's list along the top and bottom: what's left once CI's lines are under it.
+    /// The inbox's list along the top and bottom.
     var inboxColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             undoLine.padding(.horizontal, Self.inset - Theme.Space.md)
@@ -1055,40 +1061,17 @@ struct LookoutHub: View {
     }
 
     private var inboxList: some View {
-        CappedScroll(cap: max(160, min(maxLength - Self.cell - 150 - ciExtra, Self.listCap)), hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
+        CappedScroll(cap: max(160, min(maxLength - Self.cell - 60, Self.listCap)), hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
             AdaptiveStack(count: items.count, spacing: 1) {
                 if items.isEmpty { emptyInbox }
                 ForEach(items) { itemRow($0).id("i:" + $0.id) }
             }
             .padding(.horizontal, Self.inset)
             .padding(.vertical, 8)
-            .id(searching ? "search" : hub.filter.rawValue)
+            .id(listID)
             .transition(.opacity)
             .motion(Theme.Motion.fade, value: listKey)
         }
-    }
-
-    var ciColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if store.ciRepos.isEmpty {
-                linkRow("No CI shown", action: "Choose repositories") { hub.go(.repos) }
-            } else {
-                // The states with repos in them, one after the other, wrapping onto more lines only when they
-                // don't fit; the counts, empty states' included, are in the strip above.
-                FlowLayout(spacing: 6) {
-                    ForEach(Self.ciLineOrder, id: \.self) { state in
-                        if !ciRepos(listedIn: state).isEmpty { ciGroup(state).padding(.trailing, 8) }
-                    }
-                }
-                .padding(.horizontal, Theme.Space.md)
-            }
-        }
-        .padding(.horizontal, Self.inset)
-        .padding(.vertical, 6)
-        // At least as tall as the new session row beside it (under the same line), so the two lines meet.
-        .frame(maxWidth: .infinity, minHeight: Self.newSessionBlock, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if ciHeight != $0 { ciHeight = $0 } }
-        .opacity(searching ? 0.4 : 1)
     }
 
     /// The sessions along the top and bottom: one per line, read top to bottom like the inbox beside them.
@@ -1120,30 +1103,7 @@ struct LookoutHub: View {
     }
 
     /// Along the top and bottom, under the line above the new session row: the row (44) and the air around it.
-    /// CI's column, under the same line beside it, is at least this tall.
     static let newSessionBlock: CGFloat = Theme.Space.xs + 44 + 8
-
-    /// One CI state along the top and bottom: its name, coloured, then its repos' chips (a few, then "+N").
-    func ciGroup(_ state: CIState) -> some View {
-        let repos = ciRepos(listedIn: state)
-        return HStack(spacing: 5) {
-            Text(state == CIState.none ? "No runs" : state.title)
-                .font(Theme.Typography.count)
-                .foregroundStyle(state.color)
-                .padding(.trailing, 3)
-            ForEach(repos.prefix(Self.ciChipLimit), id: \.fullName) { repo in
-                RepoChip(repo: repo, status: store.ci[repo.fullName], state: state) { store.openChecks(repo) }
-            }
-            if repos.count > Self.ciChipLimit {
-                let rest = repos.dropFirst(Self.ciChipLimit)
-                Text("+\(rest.count)").font(Theme.Typography.control).foregroundStyle(Theme.secondary)
-                    .padding(.horizontal, 4).frame(height: 22)
-                    .accessibilityLabel("\(rest.count) more")
-                    .tip("\(rest.count) more", rest.map(\.fullName).joined(separator: "\n"))
-            }
-        }
-        .frame(height: 24)
-    }
 
     func twoLineRow(_ r: AgentRow) -> some View {
         sessionBlock(r, twoLines: true).capEdge().id("a:" + r.id)
@@ -1174,12 +1134,11 @@ struct LookoutHub: View {
         showsDetail && hub.focus != nil && hub.focus != section
     }
 
-    /// Along the top and bottom, the strip's segments: the inbox's and CI's together span the GitHub column under
-    /// them; the sessions' (with the controls after it) spans theirs.
+    /// Along the top and bottom, the strip's segments: the inbox's spans the GitHub column under it; the sessions' (with
+    /// the controls after it) spans theirs.
     func columnWidth(_ section: HubSection) -> CGFloat {
         switch section {
-        case .inbox: return Self.inboxSegment
-        case .ci: return Self.githubWidth - Self.inboxSegment - 1
+        case .inbox: return Self.githubWidth
         case .router:
             guard routerHasColumn else { return Self.routerCompact }
             guard !showsSessions else { return Self.routerWidth }
@@ -1215,8 +1174,7 @@ struct LookoutHub: View {
     static let routerWidth: CGFloat = 260
     /// Its segment with no column: the bare cell, padded like the others.
     static let routerCompact: CGFloat = Theme.Metrics.line + 2 * Theme.Metrics.inset + 1
-    /// The inbox's segment of that column (CI's takes the rest), and the narrowest the sessions' column gets.
-    static let inboxSegment: CGFloat = 370
+    /// The narrowest the sessions' column gets.
     static let agentsMin: CGFloat = 260
     /// Along the top and bottom, the lists scroll past this, so the view stays compact.
     static let listCap: CGFloat = 300
@@ -1237,8 +1195,6 @@ struct LookoutHub: View {
                 }
                 .overlay(alignment: .topLeading) { if items.isEmpty { emptyInbox.padding(Self.inset) } }
             }
-        case .ci:
-            ciColumn
         default:
             agentsColumn
         }

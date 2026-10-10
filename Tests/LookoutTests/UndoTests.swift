@@ -5,94 +5,69 @@ import SwiftUI
 import Testing
 @testable import Lookout
 
-/// Done can be taken back: ⌘Z and the line's button, for 30 seconds, through polls and pruning.
+/// Done can be taken back: ⌘Z and the line's button, for 30 seconds.
 @MainActor
 @Suite(.hostsWindows) struct Undo {
-    private func item(_ id: String, state: ItemState = .unread, age: TimeInterval = 60) -> InboxItem {
-        InboxItem(id: id, repo: "a/one", kind: .issueComment, number: 1, title: "t \(id)", snippet: "", author: "x", avatar: nil,
-                  authorIsApp: false, url: URL(string: "https://github.com/a/one")!, createdAt: Date().addingTimeInterval(-age),
-                  state: state)
-    }
-
-    private func store(_ items: [InboxItem]) -> Store {
-        let s = Store()
-        s.persists = false
-        s.repos = [RepoConfig(fullName: "a/one", allComments: true)]
-        s.items = items
+    private func store(_ numbers: [Int]) -> Store {
+        let s = InboxFixture.store(numbers.map { InboxFixture.pr($0) })
         s.undoStack.announce = { _ in }
         return s
     }
 
-    private func state(_ s: Store, _ id: String) -> ItemState? { s.items.first { $0.id == id }?.state }
+    private func entry(_ s: Store, _ n: Int) -> InboxEntry? { s.entries.first { $0.id == "pr:a/one#\(n)" } }
+    private func isDone(_ s: Store, _ n: Int) -> Bool? { entry(s, n)?.isDone }
 
-    @Test func undoPutsBackWhatDoneMovedWithItsReadState() {
-        let s = store([item("1"), item("2", state: .read)])
-        s.discard(s.items[0])
-        s.discard(s.items[1])
-        #expect(state(s, "1") == .discarded && state(s, "2") == .discarded)
+    @Test func undoPutsBackWhatDoneMovedAsItWas() {
+        let s = store([1, 2])
+        // The second was seen before; the first is still unread.
+        s.markSeen(entry(s, 2)!)
+        s.finish(entry(s, 1)!)
+        s.finish(entry(s, 2)!)
+        #expect(isDone(s, 1) == true && isDone(s, 2) == true)
         // Newest first, each as it was: unread stays unread.
-        #expect(s.undoLast() && state(s, "2") == .read && state(s, "1") == .discarded)
-        #expect(s.undoLast() && state(s, "1") == .unread)
+        #expect(s.undoLast() && isDone(s, 2) == false && entry(s, 2)?.isUnread == false && isDone(s, 1) == true)
+        #expect(s.undoLast() && isDone(s, 1) == false && entry(s, 1)?.isUnread == true)
         #expect(!s.undoLast())
     }
 
     @Test func undoLeavesAloneWhatChangedSince() {
-        let s = store([item("1"), item("2")])
-        s.discard(s.items[0])
-        s.restore(s.items[0])  // already back, by hand
-        s.markUnread(s.items[0])
-        #expect(!s.undoLast() && state(s, "1") == .unread)
-        // An entry whose item is gone is skipped for the one before it.
-        s.discard(s.items[1])
-        s.discard(s.items[0])
-        s.removeItems { $0.id == "1" }
-        #expect(s.undoLast() && state(s, "2") == .unread)
+        let s = store([1, 2])
+        s.finish(entry(s, 1)!)
+        s.restore(entry(s, 1)!)  // already back, by hand
+        #expect(!s.undoLast() && isDone(s, 1) == false)
+        // A thing that is gone is skipped for the one before it.
+        s.finish(entry(s, 2)!)
+        s.finish(entry(s, 1)!)
+        s.things["pr:a/one#1"] = nil
+        #expect(s.undoLast() && isDone(s, 2) == false)
     }
 
     @Test func undoOnlyReachesBack30Seconds() {
-        let s = store([item("1")])
-        s.discard(s.items[0])
-        #expect(!s.undoStack.undo(now: Date().addingTimeInterval(UndoStack.validFor + 1)) && state(s, "1") == .discarded)
+        let s = store([1])
+        s.finish(entry(s, 1)!)
+        #expect(!s.undoStack.undo(now: Date().addingTimeInterval(UndoStack.validFor + 1)) && isDone(s, 1) == true)
     }
 
-    @Test func undoSurvivesAPollsPruningOfOldDoneItems() {
-        // Done for a fortnight would be pruned by the next poll; one just moved is held while Undo could bring it back.
-        let s = store([item("old", age: 20 * 86400), item("older", state: .discarded, age: 20 * 86400)])
-        s.discard(s.items[0])
-        s.prune()
-        #expect(state(s, "old") == .discarded && state(s, "older") == nil)
-        #expect(s.undoLast() && state(s, "old") == .unread)
-        // Once the half minute has passed, it is pruned like any other.
-        s.discard(s.items[0])
-        s.prune(now: Date().addingTimeInterval(UndoStack.validFor + 1))
-        #expect(state(s, "old") == nil)
-    }
-
-    @Test func theItemCapLeavesAloneWhatUndoCouldBringBack() {
-        let many = (0..<Store.itemCap + 5).map { item("n\($0)", age: Double($0) + 1) }
-        let s = store(many)
-        // The oldest of them is past the cap, and just moved to Done.
-        let last = s.items.last!
-        s.discard(last)
-        s.prune()
-        #expect(state(s, last.id) == .discarded)
-        #expect(s.items.count == Store.itemCap + 1)
-        #expect(s.undoLast() && state(s, last.id) == .unread)
+    @Test func doneIsNotAskedTwice() {
+        let s = store([1])
+        s.finish(entry(s, 1)!)
+        s.finish(s.doneEntries[0])
+        #expect(s.undoStack.entries.count == 1)
     }
 
     @Test func theLineShowsThenGoesAndTheUndoStaysForCommandZ() async throws {
-        let s = store([item("1")])
+        let s = store([1])
         let gate = Gate()
         s.undoStack.sleep = { _ in await gate.wait() }
-        s.discard(s.items[0])
+        s.finish(entry(s, 1)!)
         #expect(s.undoStack.line?.message == "Moved to Done")
         gate.open()
         try await eventually { s.undoStack.line == nil }
-        #expect(s.undoStack.line == nil && s.undoLast() && state(s, "1") == .unread)
+        #expect(s.undoStack.line == nil && s.undoLast() && isDone(s, 1) == false)
     }
 
     @Test func commandZInTheHubUndoesButAFocusedFieldKeepsIt() {
-        let s = store([item("1")])
+        let s = store([1])
         let hub = HubState()
         hub.pinned = true
         let keys = HubKeys(store: s, ui: UIState(persists: false, edge: .right), hub: hub)
@@ -101,7 +76,7 @@ import Testing
                                       windowNumber: window?.windowNumber ?? 0, context: nil, characters: "z",
                                       charactersIgnoringModifiers: "z", isARepeat: false, keyCode: UInt16(kVK_ANSI_Z))!)
         }
-        s.discard(s.items[0])
+        s.finish(entry(s, 1)!)
         // The search field's ⌘Z is its own undo: its field editor has the keyboard.
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 60), styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -114,15 +89,15 @@ import Testing
         hub.searchFocused = true
         hub.searchOpen = true
         #expect(!press(in: window))
-        #expect(state(s, "1") == .discarded)
+        #expect(isDone(s, 1) == true)
         hub.endSearch()
         window.makeFirstResponder(nil)
-        #expect(press(in: window) && state(s, "1") == .unread)
+        #expect(press(in: window) && isDone(s, 1) == false)
         #expect(!press(in: window))
     }
 
     @Test func theFocusedUndoButtonKeepsSpaceAndReturn() async throws {
-        let s = store([item("1"), item("2")])
+        let s = store([1, 2])
         let ui = UIState(persists: false, edge: .right)
         let hub = HubState()
         hub.pinned = true
@@ -132,8 +107,8 @@ import Testing
                                       context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false,
                                       keyCode: UInt16(code))!)
         }
-        s.discard(s.items[0])
-        keys.select("i:2")
+        s.finish(entry(s, 1)!)
+        keys.select("i:pr:a/one#2")
         // The line as the hub shows it, its Undo button on the Tab ring.
         let host = NSHostingView(rootView: LookoutHub(store: s, ui: ui, hub: hub).undoLine.frame(width: 400))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 60), styleMask: .titled, backing: .buffered, defer: false)
@@ -149,14 +124,14 @@ import Testing
         }
         let undo = try #require(host.first(NSButton.self))
         #expect(window.makeFirstResponder(undo))
-        // Space and Return are the button's: the picked row is not marked read, and the button still activates.
+        // Space and Return are the button's: the picked row is not marked seen, and the button still activates.
         #expect(!press(kVK_Space, " ", in: window) && !press(kVK_Return, "\r", in: window) && !press(kVK_ANSI_KeypadEnter, "\r", in: window))
-        #expect(state(s, "2") == .unread && state(s, "1") == .discarded)
+        #expect(entry(s, 2)?.isUnread == true && isDone(s, 1) == true)
         undo.performClick(nil)
-        #expect(state(s, "1") == .unread)
+        #expect(isDone(s, 1) == false)
         // Off the button they are the hub's again.
         window.makeFirstResponder(nil)
-        #expect(press(kVK_Space, " ", in: window) && state(s, "2") == .read)
+        #expect(press(kVK_Space, " ", in: window) && entry(s, 2)?.isUnread == false)
     }
 }
 

@@ -55,33 +55,13 @@ final class StubAuthGitHub: URLProtocol, @unchecked Sendable {
         return s
     }
 
-    private func serveRepo(_ name: String) {
-        StubAuthGitHub.handler = { req in
-            req.url?.path.lowercased() == "/repos/\(name)".lowercased() ? (200, #"{"full_name":"\#(name)","default_branch":"main"}"#) : (200, "[]")
-        }
-    }
-
-    @Test func aRepoYouOwnStartsWithAllComments() async {
-        let s = store()
-        serveRepo("Me/tool")
-        #expect(await s.addRepo("me/tool") == nil)
-        #expect(s.repos.map(\.allComments) == [true])
-    }
-
-    @Test func someoneElsesRepoStartsWithOnlyCommentsForYou() async {
-        let s = store()
-        serveRepo("other/tool")
-        #expect(await s.addRepo("other/tool") == nil)
-        #expect(s.repos.map(\.allComments) == [false])
-    }
-
     private func revoke() {
         StubAuthGitHub.handler = { _ in (401, #"{"message":"Bad credentials"}"#) }
     }
 
     @Test func aRevokedTokenAndItsIdentityAreDropped() async {
         let s = store()
-        s.repos = [RepoConfig(fullName: "a/one")]
+        InboxFixture.watch(s)
         revoke()
         await s.pollAll()
         #expect(s.me == nil)
@@ -114,7 +94,7 @@ final class StubAuthGitHub: URLProtocol, @unchecked Sendable {
 
     @Test func retryPicksUpTheTokenFromANewLogin() async {
         let s = store()
-        s.repos = [RepoConfig(fullName: "a/one")]
+        InboxFixture.watch(s)
         revoke()
         await s.pollAll()
         StubAuthGitHub.handler = { req in
@@ -153,9 +133,9 @@ final class StubAuthGitHub: URLProtocol, @unchecked Sendable {
 
     @Test func aRejectionOutsideAPollIsDroppedByTheNextRefresh() async {
         let s = store()
-        s.repos = [RepoConfig(fullName: "a/one")]
+        InboxFixture.watch(s)
         revoke()
-        #expect(await s.addRepo("a/two") != nil)
+        await s.loadSuggestions()
         #expect(s.gh.tokenRejected)
         StubAuthGitHub.handler = { req in
             req.value(forHTTPHeaderField: "Authorization") == "Bearer fresh"

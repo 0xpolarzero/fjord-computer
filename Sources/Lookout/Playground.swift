@@ -173,6 +173,8 @@ final class Playground: NSObject, NSWindowDelegate {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                           styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "Lookout playground"
+        // As in the app's panel: the hub's native menus and popovers are dark.
+        window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = NSHostingView(rootView: view)
         window.center()
         window.delegate = self
@@ -203,6 +205,8 @@ final class Playground: NSObject, NSWindowDelegate {
             return false
         default:
             tap.interrupt()
+            // As in the app, the hub's keys are the hub window's: a popover's field keeps its Return and Esc.
+            guard event.window == nil || event.window === window else { return false }
             return keys.key(event)
         }
     }
@@ -256,7 +260,7 @@ struct RouterWindowShot {
 
 /// What a shot has picked, for the row actions to show.
 enum ShotSelection {
-    /// The newest inbox item that needs you.
+    /// The newest entry of the first category with something unread.
     case firstNeedsYou
 }
 
@@ -278,7 +282,8 @@ struct Shot {
     var section: HubSection?
     /// The section filling the view, as when its header is clicked.
     var focus: HubSection?
-    var filter: InboxFilter?
+    /// The inbox's tab, by category name (or "Done").
+    var tab: String?
     var query = ""
     var selection: ShotSelection?
     /// A session row under the pointer.
@@ -291,6 +296,8 @@ struct Shot {
     var settingsSection: String?
     /// The Router's window instead of the playground (the edge only names the shot).
     var routerWindow: RouterWindowShot?
+    /// The category editor's page instead of the playground (see `CategoriesDemo`).
+    var categories: CategoriesShot?
 
     /// The same shot on each of these edges, named `<edge>-<state>`.
     static func edges(_ state: String, on edges: [DockEdge] = .all, _ configure: (inout Shot) -> Void = { _ in }) -> [Shot] {
@@ -313,9 +320,9 @@ struct Shot {
 enum PlaygroundShots {
     /// States of the data, as `(name, scenario)`; each is shown at rest and open.
     private static let causes: [(String, Demo.Scenario)] = [
-        ("signed-out", .signedOut), ("repos-failed", .reposFailed), ("rate-limited", .rateLimited), ("snoozed", .snoozed),
-        ("error", .error), ("needs-you-empty", .needsYouEmpty), ("first-sync", .firstSync), ("sync-fault", .syncFault),
-        ("no-repos", .empty),
+        ("signed-out", .signedOut), ("inbox-failed", .inboxFailed), ("rate-limited", .rateLimited), ("snoozed", .snoozed),
+        ("error", .error), ("contributions-empty", .contributionsEmpty), ("first-sync", .firstSync), ("sync-fault", .syncFault),
+        ("inbox-empty", .empty),
     ]
     private static let ci: [(String, Demo.Scenario)] = [
         ("no-ci", .noCI), ("all-passing", .allPassing), ("many-ci", .manyCI), ("ci-running", .ciRunning),
@@ -334,11 +341,11 @@ enum PlaygroundShots {
         Shot.edges("rest"),
         Shot.edges("open") { $0.pinned = true },
         Shot.edges("settings") { $0.pinned = true; $0.page = .settings },
-        Shot.edges("repos", on: .rightAndTop) { $0.pinned = true; $0.page = .repos },
+        Shot.edges("categories", on: .rightAndTop) { $0.pinned = true; $0.page = .categories },
         Shot.edges("search") { $0.pinned = true; $0.query = "sand" },
         Shot.edges("tip", on: .rightAndTop) { $0.pinned = true; $0.tip = "Settings" },
         Shot.edges("peek-inbox") { $0.section = .inbox },
-        Shot.edges("peek-ci") { $0.section = .ci },
+        Shot.edges("peek-ci") { $0.section = .inbox; $0.tab = "CI" },
         Shot.edges("peek-agents") { $0.section = .agents },
         Shot.edges("peek-controls") { $0.section = .controls },
         // An inbox item and a session picked, their actions showing, to compare them.
@@ -349,23 +356,29 @@ enum PlaygroundShots {
 
     /// Inbox: the tabs, a search with no match, and a list longer than it shows.
     private static let inbox: [Shot] = [
-        Shot.edges("open-bots", on: .rightAndTop) { $0.pinned = true; $0.filter = .bots },
-        Shot.edges("open-done", on: .rightAndTop) { $0.pinned = true; $0.filter = .done },
+        Shot.edges("open-reviews", on: .rightAndTop) { $0.pinned = true; $0.tab = "Reviews for you" },
+        Shot.edges("open-bot-chatter", on: .rightAndTop) { $0.pinned = true; $0.tab = "Bot chatter" },
+        Shot.edges("open-ci", on: .rightAndTop) { $0.pinned = true; $0.tab = "CI" },
+        Shot.edges("open-done", on: .rightAndTop) { $0.pinned = true; $0.tab = "Done" },
         Shot.edges("search-none", on: .rightAndTop) { $0.pinned = true; $0.query = "zzzz" },
-        Shot.edges("open-bots-empty", on: .rightAndTop) { $0.pinned = true; $0.scenario = .botsEmpty; $0.filter = .bots },
-        Shot.edges("open-done-empty", on: .rightAndTop) { $0.pinned = true; $0.scenario = .doneEmpty; $0.filter = .done },
+        Shot.edges("search-fact", on: .rightAndTop) { $0.pinned = true; $0.query = "greptile" },
+        Shot.edges("open-bot-chatter-empty", on: .rightAndTop) { $0.pinned = true; $0.scenario = .botChatterEmpty; $0.tab = "Bot chatter" },
+        Shot.edges("open-done-empty", on: .rightAndTop) { $0.pinned = true; $0.scenario = .doneEmpty; $0.tab = "Done" },
+        // A category hidden: no icon in the bar, no tab.
+        Shot.edges("rest-hidden-category", on: .rightAndTop) { $0.scenario = .hiddenCategory },
+        Shot.edges("open-hidden-category", on: .rightAndTop) { $0.pinned = true; $0.scenario = .hiddenCategory },
         Shot.edges("open-inbox-many", on: .rightAndTop) { $0.pinned = true; $0.scenario = .inboxMany },
     ].flatMap { $0 }
 
     /// A scenario open on the right and top, with its peek and focused section when it has one.
     private static func scenarioShots(_ slug: String, _ scenario: Demo.Scenario, rest: Bool = false, peek: HubSection? = nil,
-                                      focus: Bool = false) -> [Shot] {
+                                      tab: String? = nil, focus: Bool = false) -> [Shot] {
         var shots: [Shot] = []
         if rest { shots += Shot.edges("rest-\(slug)", on: .rightAndTop) { $0.scenario = scenario } }
-        shots += Shot.edges("open-\(slug)", on: .rightAndTop) { $0.pinned = true; $0.scenario = scenario }
+        shots += Shot.edges("open-\(slug)", on: .rightAndTop) { $0.pinned = true; $0.scenario = scenario; $0.tab = tab }
         if let peek {
-            let name = peek == .ci ? "ci" : "agents"
-            shots += Shot.edges("peek-\(name)-\(slug)", on: .rightAndTop) { $0.section = peek; $0.scenario = scenario }
+            let name = tab == nil ? "agents" : "ci"
+            shots += Shot.edges("peek-\(name)-\(slug)", on: .rightAndTop) { $0.section = peek; $0.scenario = scenario; $0.tab = tab }
         }
         if focus {
             shots += Shot.edges("focus-agents-\(slug)", on: .rightAndTop) { $0.pinned = true; $0.focus = .agents; $0.scenario = scenario }
@@ -423,17 +436,18 @@ enum PlaygroundShots {
         var shots = baseline + inbox
         // Causes: why a list is empty or the sync is not healthy.
         for (slug, scenario) in causes { shots += scenarioShots(slug, scenario, rest: true) }
-        for (slug, scenario) in ci { shots += scenarioShots(slug, scenario, peek: .ci) }
+        for (slug, scenario) in ci { shots += scenarioShots(slug, scenario, peek: .inbox, tab: "CI") }
         for (slug, scenario) in sessions { shots += scenarioShots(slug, scenario, peek: .agents, focus: true) }
         for (slug, scenario) in updates { shots += scenarioShots(slug, scenario, rest: true) }
         shots += environmentShots("contrast", .contrast)
         shots += environmentShots("motion", .motion)
         shots += environmentShots("differentiate", .differentiate)
         shots += routerShots
+        shots += CategoriesShot.allCases.map { Shot(name: $0.name, categories: $0) }
         // A 1280x720 screen: the hub must fit its edge without overflowing.
         shots += Shot.edges("open-720", on: .rightAndTop) { $0.pinned = true; $0.size = Shot.hd }
         shots += Shot.edges("open-sessions-12-720", on: .rightAndTop) { $0.pinned = true; $0.scenario = .sessions12; $0.size = Shot.hd }
-        shots += Shot.edges("open-many-ci-720", on: .rightAndTop) { $0.pinned = true; $0.scenario = .manyCI; $0.size = Shot.hd }
+        shots += Shot.edges("open-many-ci-720", on: .rightAndTop) { $0.pinned = true; $0.scenario = .manyCI; $0.tab = "CI"; $0.size = Shot.hd }
         return shots
     }()
 
@@ -475,6 +489,7 @@ enum PlaygroundShots {
         Demo.populate(store, shot.scenario)
         store.agents.expanded = true
         if let router = shot.routerWindow { return openRouterWindow(router, store: store, environment: shot.environment) }
+        if let page = shot.categories { return CategoriesDemo.window(page, store: store) }
         let ui = UIState(persists: false, edge: shot.edge)
         let hub = HubState()
         // Kept open a moment after showing at rest, as in use: the hub measures the bar at rest first.
@@ -484,8 +499,10 @@ enum PlaygroundShots {
         hub.query = shot.query
         hub.focus = shot.focus
         hub.section = shot.section
-        if let filter = shot.filter { hub.filter = filter }
-        if shot.selection == .firstNeedsYou { hub.selection = store.list(.needsYou).first.map { "i:" + $0.id } }
+        if let name = shot.tab {
+            hub.tab = name == "Done" ? .done : store.categories.first { $0.name == name }.map { .category($0.id) }
+        }
+        if shot.selection == .firstNeedsYou { hub.selection = store.entries(in: store.tabNeedingYou).first.map { "i:" + $0.id } }
         ui.drawerSelection = shot.hoveredSession
         let root = PlaygroundView(store: store, ui: ui, hub: hub, showsExplainer: false, minSize: shot.size)
             .environment(\.previewTip, shot.tip)
@@ -495,6 +512,7 @@ enum PlaygroundShots {
         hosting.frame.size = shot.size
         let window = NSWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = hosting
         window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
         window.orderFrontRegardless()

@@ -85,12 +85,12 @@ import Testing
         defer { window.close() }
         searching("zig")
         keys.select(keys.targets().first!)
-        let unread = store.items.filter { $0.state == .unread }.count
+        let unread = store.entries.filter(\.isUnread).count
         // Letters, Space, ⌫, the side arrows, ⌘Z and the discard key (⌫) are the field's own.
         #expect(!press(kVK_ANSI_A, [], "a", in: window))
         #expect(!press(kVK_Space, [], " ", in: window) && !press(kVK_Delete, [], "\u{7f}", in: window))
         #expect(!press(kVK_LeftArrow, [], "\u{F702}", in: window) && !press(kVK_ANSI_Z, .command, "z", in: window))
-        #expect(hub.query == "zig" && store.items.filter { $0.state == .unread }.count == unread && log.opened.isEmpty)
+        #expect(hub.query == "zig" && store.entries.filter(\.isUnread).count == unread && log.opened.isEmpty)
     }
 
     @Test func theArrowsWalkTheResultsAndReturnOpensThePick() {
@@ -110,14 +110,16 @@ import Testing
         defer { window.close() }
         searching("zig")
         let target = keys.targets().first { $0.hasPrefix("i:") }!
+        // Unread, whatever the demo made of it.
+        store.marks[String(target.dropFirst(2))] = nil
         keys.select(target)
-        let item = store.items.first { "i:" + $0.id == target }!
-        let was = item.state
+        func isUnread() -> Bool { store.entries.first { "i:" + $0.id == target }?.isUnread == true }
         store.setShortcut(Shortcut(keyCode: UInt16(kVK_ANSI_KeypadEnter)), for: .toggleRead)
         #expect(press(kVK_ANSI_KeypadEnter, [], "\r", in: window))
-        #expect(store.items.first { $0.id == item.id }?.state != was && log.opened.isEmpty)
+        #expect(!isUnread() && log.opened.isEmpty)
+        // Seen is all it does, however often it is pressed.
         #expect(press(kVK_ANSI_KeypadEnter, [], "\r", in: window))
-        #expect(store.items.first { $0.id == item.id }?.state == was && log.opened.isEmpty)
+        #expect(!isUnread() && log.opened.isEmpty)
         // Return, still Open's, opens.
         #expect(press(kVK_Return, [], "\r", in: window) && log.opened.count == 1)
     }
@@ -173,9 +175,10 @@ import Testing
         let (window, _) = editingWindow()
         defer { window.close() }
         searching("")
-        #expect(store.list(.needsYou).contains { $0.state == .unread })
+        func anyUnread() -> Bool { store.entries(in: store.hubTab(hub)).contains { $0.isUnread } }
+        #expect(anyUnread())
         #expect(press(kVK_Space, .option, " ", in: window))
-        #expect(!store.list(.needsYou).contains { $0.state == .unread })
+        #expect(!anyUnread())
         #expect(!press(kVK_Space, [], " ", in: window))
     }
 

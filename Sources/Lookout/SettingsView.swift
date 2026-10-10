@@ -9,7 +9,6 @@ struct SettingsView: View {
     let hub: HubState
     @Environment(\.accessibilityReduceMotion) private var reduce
     @State private var token = ""
-    @State private var botInput = ""
     @State private var tokenError: String?
     @State private var typesafeKey = ""
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
@@ -28,7 +27,6 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
                     account
                     notifications
-                    bots
                     extensions
                     shortcuts
                     updates.id(Self.updatesID)
@@ -144,10 +142,6 @@ struct SettingsView: View {
                 }
             }
             SettingsDivider()
-            SettingsRow("Review requests from any repo") {
-                SettingsSwitch("Review requests from any repo", isOn: $store.settings.reviewRequests)
-            }
-            SettingsDivider()
             SettingsRow("Snooze", description: "Snoozing silences banners; the inbox keeps filling up.") {
                 if store.isSnoozed, let until = store.settings.snoozeUntil {
                     HStack(spacing: 12) {
@@ -175,38 +169,6 @@ struct SettingsView: View {
         // The notice that appears is said, once.
         .onChange(of: blocked, initial: true) { _, now in
             if now { Announce.say("Notifications are blocked in System Settings") }
-        }
-    }
-
-    private var bots: some View {
-        SettingsSection("Bots", description: "Bot comments still arrive, but silently and in their own Bots tab.") {
-            SettingsRow("Treat GitHub Apps (…[bot]) as bots") {
-                SettingsSwitch("Treat GitHub Apps (…[bot]) as bots", isOn: $store.settings.treatAppsAsBots)
-            }
-            SettingsDivider()
-            // A list (settings.md §4): its header row, the items in a nest card (or a line when there are none), then the
-            // field that adds one, under it: a handle has to be typed, so the add control can't be a lone button.
-            SettingsRow("Bot handles", description: "Accounts that post like a bot without being a GitHub App.",
-                        below: AnyView(VStack(alignment: .leading, spacing: CDS.Settings.rowPad) {
-                            if store.settings.botHandles.isEmpty {
-                                Text("No bot handles yet.").cdsText(footnote, .regular, CDS.Text.secondary)
-                            } else {
-                                SettingsNest {
-                                    ForEach(store.settings.botHandles, id: \.self) { handle in
-                                        SettingsRow("@\(handle)") {
-                                            Button("Remove") { store.removeBot(handle) }
-                                                .buttonStyle(SettingsButtonStyle(size: .sm))
-                                                .accessibilityLabel("Remove @\(handle)")
-                                        }
-                                    }
-                                }
-                            }
-                            HStack(spacing: 8) {
-                                SettingsTextField(placeholder: "Add a handle, e.g. vercel", text: $botInput,
-                                                  accessibilityLabel: "Bot handle", onSubmit: addBot)
-                                ActionButton("Add", height: CDS.Settings.field, action: addBot).disabled(botInput.isEmpty)
-                            }
-                        }))
         }
     }
 
@@ -496,12 +458,6 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: Helpers
-
-    private func addBot() {
-        store.addBot(botInput)
-        botInput = ""
-    }
 }
 
 // MARK: - Claude's settings primitives (settings.md §2–§3, comfortable)

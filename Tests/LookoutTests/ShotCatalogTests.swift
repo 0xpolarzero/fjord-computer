@@ -25,7 +25,7 @@ import Testing
             }
         }
         for edge in [DockEdge.right, .top] {
-            for state in ["repos", "tip", "picked", "focus-inbox", "focus-agents"] {
+            for state in ["categories", "tip", "picked", "focus-inbox", "focus-agents"] {
                 #expect(names.contains("\(edge.rawValue)-\(state)"), "\(edge.rawValue)-\(state)")
             }
         }

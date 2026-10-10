@@ -6,14 +6,12 @@ import UserNotifications
 // MARK: - Notifications
 
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
-    /// A click: the item id, the page the notification is about (for when the item is gone), and whether it was a quiet one.
-    var onOpen: ((_ id: String, _ url: String?, _ quiet: Bool) -> Void)?
+    /// A click: the notification's id (`inbox:<thing id>` for a thing) and the page it is about (for when the thing is gone).
+    var onOpen: ((_ id: String, _ url: String?) -> Void)?
     /// Tests: every post and withdrawal, whether or not the system would show it.
     var onPost: ((UNNotificationRequest) -> Void)?
     var onRemove: (([String]) -> Void)?
-    /// Tests: the banners that exist, delivered or still waiting, in place of asking the system.
-    var lookup: ((@escaping ([UNNotificationRequest]) -> Void) -> Void)?
-    /// Bulk summaries ("7 new items") belong to no one item: identified by this and a unique suffix.
+    /// Bulk summaries ("7 new in your inbox") belong to no one thing: identified by this and a unique suffix.
     nonisolated static let summaryPrefix = "summary#"
     /// Banners need an app bundle; a test run, hosted in one or not, never has the system's.
     private var available: Bool { Self.canReachSystem }
@@ -32,13 +30,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         return await UNUserNotificationCenter.current().notificationSettings().authorizationStatus == .denied
     }
 
-    /// `repos`: the repositories a banner covers, so stopping to watch one can find it again.
-    func post(id: String, title: String, subtitle: String, body: String, quiet: Bool, url: URL? = nil, repos: [String] = []) {
+    func post(id: String, title: String, subtitle: String, body: String, quiet: Bool, url: URL? = nil) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.subtitle = subtitle
         content.body = body
-        content.userInfo = ["id": id, "url": url?.absoluteString ?? "", "repos": repos, "quiet": quiet]
+        content.userInfo = ["id": id, "url": url?.absoluteString ?? ""]
         content.threadIdentifier = quiet ? "bots" : "main"
         if quiet {
             content.interruptionLevel = .passive
@@ -51,40 +48,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().add(req)
     }
 
-    /// Withdraws banners for items that were read, discarded or filtered out.
+    /// Withdraws banners.
     func remove(_ ids: [String]) {
         guard !ids.isEmpty else { return }
         onRemove?(ids)
         guard available else { return }
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
-    }
-
-    /// CI banners are identified by their commit page, which says which repo they belong to.
-    nonisolated static func isCI(_ identifier: String, of repo: String) -> Bool {
-        identifier.hasPrefix("https://github.com/\(repo)/commit/")
-    }
-
-    /// Summaries name the repos they cover.
-    nonisolated static func belongs(_ request: UNNotificationRequest, to repo: String) -> Bool {
-        if isCI(request.identifier, of: repo) { return true }
-        return request.identifier.hasPrefix(summaryPrefix)
-            && (request.content.userInfo["repos"] as? [String])?.contains(repo) == true
-    }
-
-    /// Withdraws a repo's CI and summary banners (the ones that can't be looked up by item), delivered or still waiting.
-    func removeBanners(of repo: String) {
-        guard lookup != nil || available else { return }
-        (lookup ?? Self.systemLookup) { [self] requests in
-            remove(requests.filter { Self.belongs($0, to: repo) }.map(\.identifier))
-        }
-    }
-
-    private static func systemLookup(_ done: @escaping ([UNNotificationRequest]) -> Void) {
-        let center = UNUserNotificationCenter.current()
-        center.getDeliveredNotifications { delivered in
-            center.getPendingNotificationRequests { done(delivered.map(\.request) + $0) }
-        }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
@@ -97,8 +67,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let info = response.notification.request.content.userInfo
         let id = info["id"] as? String ?? ""
         let url = info["url"] as? String
-        let quiet = info["quiet"] as? Bool ?? false
-        DispatchQueue.main.async { self.onOpen?(id, url, quiet) }
+        DispatchQueue.main.async { self.onOpen?(id, url) }
         completionHandler()
     }
 }
@@ -390,6 +359,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ClaudeCheck.run()
             return
         }
+        if CommandLine.arguments.contains("--check-inbox") {
+            InboxCheck.run(store: store)
+            return
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--check"), i + 1 < CommandLine.arguments.count {
             Check.run(store: store, repo: CommandLine.arguments[i + 1])
             return
@@ -417,7 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotKeys.paused = { [weak self] in self?.store.isRecordingShortcut ?? false }
 store.onRecordingShortcutChange = { [weak self] on in self?.globalShortcuts?.suspend(on) }
-        store.onOpenInbox = { [weak self] in self?.hub?.showInbox($0) }
+        store.onOpenInbox = { [weak self] category, thing in self?.hub?.showInbox(category: category, thing: thing) }
         // Default ⌃⌥L: ⌃⌥Space is macOS's "next input source".
         let globals = GlobalShortcuts(store: store, registrar: hotKeys) { [weak self] action in
             switch action {

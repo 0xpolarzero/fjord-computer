@@ -22,27 +22,38 @@ import Testing
         for scenario in Demo.Scenario.allCases { #expect(Demo.Scenario(rawValue: scenario.rawValue) == scenario) }
     }
 
+    private func open(_ store: Store, _ name: String) -> [InboxEntry] {
+        guard let category = store.categories.first(where: { $0.name == name }) else { return [] }
+        return store.entries(in: category.id)
+    }
+
     @Test func theCausesThatEmptyAListLeaveItEmptyAndTheRestFull() {
         let store = populated(.signedOut)
         #expect(store.me == nil && store.authError != nil && store.lastSync == nil)
-        #expect(populated(.reposFailed).repoErrors.count == 2)
+        #expect(populated(.inboxFailed).inboxError != nil)
         #expect(populated(.rateLimited).rateRemaining == 0)
         let first = populated(.firstSync)
-        #expect(first.isSyncing && first.items.isEmpty && first.ci.isEmpty)
-        #expect(populated(.empty).repos.isEmpty)
-        #expect(populated(.botsEmpty).items.filter { $0.state.isOpen }.allSatisfy { !populated(.botsEmpty).isLowPriority($0) })
-        #expect(populated(.doneEmpty).items.allSatisfy { $0.state.isOpen })
-        let caught = populated(.needsYouEmpty)
-        #expect(caught.list(.needsYou).isEmpty && !caught.list(.bots).isEmpty)
+        #expect(first.isSyncing && first.things.isEmpty)
+        #expect(populated(.empty).things.isEmpty)
+        let bots = populated(.botChatterEmpty)
+        #expect(open(bots, "Bot chatter").isEmpty && !open(bots, "Contributions").isEmpty)
+        #expect(populated(.doneEmpty).doneEntries.isEmpty && !populated(.busy).doneEntries.isEmpty)
+        let caught = populated(.contributionsEmpty)
+        #expect(open(caught, "Contributions").isEmpty && open(caught, "Reviews for you").isEmpty && !open(caught, "Bot chatter").isEmpty)
+        #expect(populated(.error).inboxError == nil && populated(.error).rateRemaining == 312)
+        #expect(populated(.hiddenCategory).categories.contains { $0.hidden })
     }
 
     @Test func ciScenariosHoldWhatTheirNamesSay() {
-        #expect(populated(.noCI).ci.isEmpty)
-        #expect(populated(.allPassing).ci.values.allSatisfy { $0.state == .success })
+        func workflows(_ store: Store) -> [Thing] { store.things.values.filter { $0.kind == .workflow } }
+        #expect(workflows(populated(.noCI)).isEmpty)
+        #expect(workflows(populated(.allPassing)).allSatisfy { $0.checks == .passing })
         let many = populated(.manyCI)
-        #expect(many.ci.count == 15 && many.ci.values.filter { $0.state == .failure }.count == 2)
-        let running = populated(.ciRunning).ci.values
-        #expect(running.contains { $0.state == .pending } && !running.contains { $0.state == .failure })
+        let ci = many.categories.first { $0.isCI }!
+        #expect(workflows(many).count == 15 && many.count(ci.id) == 9)
+        #expect(workflows(many).filter { $0.checks == .pending }.count == 2)
+        let running = workflows(populated(.ciRunning))
+        #expect(running.contains { $0.checks == .pending } && !running.contains { $0.checks == .failing })
     }
 
     @Test func sessionScenariosHoldWhatTheirNamesSay() {

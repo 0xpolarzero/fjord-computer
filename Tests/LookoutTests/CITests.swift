@@ -1,6 +1,4 @@
-import AppKit
 import Foundation
-import SwiftUI
 import Testing
 @testable import Lookout
 
@@ -35,7 +33,7 @@ import Testing
     @Test func aRepoWithOnlyLegacyStatusesHasAChangeTime() {
         let status = GHCombinedStatus.Status(context: "ci/jenkins", state: "failure", createdAt: t0, updatedAt: t0.addingTimeInterval(20))
         let reading = Store.readCI(runs: [], sha: nil, checks: [], combined: combined([status]))
-        #expect(reading == Store.CIReading(state: .failure, failing: ["ci/jenkins"], changedAt: t0.addingTimeInterval(20)))
+        #expect(reading.state == .failure && reading.failing == ["ci/jenkins"] && reading.changedAt == t0.addingTimeInterval(20))
         let neverUpdated = GHCombinedStatus.Status(context: "ci/x", state: "success", createdAt: t0, updatedAt: nil)
         #expect(Store.readCI(runs: [], sha: nil, checks: [], combined: combined([neverUpdated])).changedAt == t0)
     }
@@ -51,7 +49,8 @@ import Testing
         let reading = Store.readCI(runs: [run, other], sha: "s", checks: [mirror, external], combined: combined())
         #expect(reading.state == .success)
         #expect(reading.changedAt == t0.addingTimeInterval(70))
-        #expect(Store.readCI(runs: [], sha: nil, checks: [], combined: combined()) == Store.CIReading(state: .none, failing: [], changedAt: nil))
+        let nothing = Store.readCI(runs: [], sha: nil, checks: [], combined: combined())
+        #expect(nothing.state == .none && nothing.failing.isEmpty && nothing.changedAt == nil && nothing.workflows.isEmpty)
     }
 
     private func workflow(_ name: String, id: Int, suite: Int?, _ conclusion: String?, sha: String = "s",
@@ -115,260 +114,99 @@ import Testing
     @Test func aHeadlineIsOnlyAskedForWhenTheRunHasNone() async {
         let store = Store()
         store.persists = false
-        store.ci["a/x"] = CIStatus(state: .failure, branch: "main", sha: "c1", failing: ["build"], checkedAt: t0, title: nil, updatedAt: nil)
         #expect(await store.ciHeadline("a/x", commit: "c1", runTitle: "From the run") == "From the run")
-        store.ci["a/x"]?.title = "Known"
+        store.headlines["a/x"] = ("c1", "Known")
         // Same commit as last time: what was fetched then stands (no request).
         #expect(await store.ciHeadline("a/x", commit: "c1", runTitle: nil) == "Known")
     }
 
-    // MARK: Checking
+    // MARK: Per workflow
 
-    /// A GitHub the test answers by hand, in the order it likes.
-    @MainActor private final class Answers {
-        var waiting: [CheckedContinuation<CIStatus, Error>] = []
-        var asked = 0
-
-        func fetch(_ repo: RepoConfig) async throws -> CIStatus {
-            asked += 1
-            return try await withCheckedThrowingContinuation { waiting.append($0) }
-        }
-
-        func settle(_ index: Int, with status: CIStatus) {
-            guard waiting.indices.contains(index) else { Issue.record("No check \(index) is waiting"); return }
-            waiting[index].resume(returning: status)
-        }
-
-        func fail(_ index: Int, _ message: String) {
-            guard waiting.indices.contains(index) else { Issue.record("No check \(index) is waiting"); return }
-            waiting[index].resume(throwing: NSError(domain: "CI", code: 1, userInfo: [NSLocalizedDescriptionKey: message]))
-        }
+    @Test func eachWorkflowHasItsOwnStateAndFailedJobs() {
+        let ci = workflow("CI", id: 1, suite: 10, "failure")
+        let lint = workflow("Lint", id: 2, suite: 20, "success")
+        let docs = workflow("Docs", id: 3, suite: 30, nil, status: "in_progress")
+        let jobs = [check("Linux build", "completed", "failure", app: "github-actions", suite: 10),
+                    check("Windows test", "completed", "failure", app: "github-actions", suite: 10)]
+        let reading = Store.readCI(runs: [ci, lint, docs], sha: "s", checks: jobs, combined: combined())
+        // By name: CI, Docs, Lint.
+        #expect(reading.workflows.map(\.name) == ["CI", "Docs", "Lint"])
+        #expect(reading.workflows.map(\.id) == ["1", "3", "2"])
+        #expect(reading.workflows.map(\.state) == [.failure, .pending, .success])
+        #expect(reading.workflows[0].failing == ["Linux build", "Windows test"])
+        #expect(reading.workflows[1].failing.isEmpty && reading.workflows[2].failing.isEmpty)
+        // The whole is what it always was.
+        #expect(reading.state == .failure && reading.failing == ["Linux build", "Windows test"])
     }
 
-    private func status(_ state: CIState, sha: String) -> CIStatus {
-        CIStatus(state: state, branch: "main", sha: sha, failing: state == .failure ? ["build"] : [], checkedAt: Date(), title: nil,
-                 updatedAt: t0)
+    @Test func externalChecksAndStatusesAreOneWorkflowOfTheirOwn() {
+        let status = GHCombinedStatus.Status(context: "ci/jenkins", state: "failure", createdAt: t0, updatedAt: t0.addingTimeInterval(20))
+        let ci = workflow("CI", id: 1, suite: 10, "success")
+        let reading = Store.readCI(runs: [ci], sha: "s", checks: [check("deploy", "completed", "failure", started: 1, completed: 30)],
+                                   combined: combined([status]))
+        #expect(reading.workflows.map(\.id) == ["1", Store.externalWorkflowID])
+        let external = reading.workflows[1]
+        #expect(external.state == .failure && external.failing == ["deploy", "ci/jenkins"])
+        #expect(external.updatedAt == t0.addingTimeInterval(30))
+        // Nothing external, nothing to say about it.
+        #expect(Store.readCI(runs: [ci], sha: "s", checks: [], combined: combined()).workflows.map(\.id) == ["1"])
     }
 
-    /// A store watching `names` with CI on, whose checks wait for the test to answer them.
-    private func store(_ names: [String] = ["a/x"]) -> (Store, Answers) {
+    @Test func aBranchIsReadWorkflowByWorkflowFromOneListOfRuns() async throws {
         let store = Store()
         store.persists = false
-        store.settings.notifications = false
-        store.repos = names.map { RepoConfig(fullName: $0, events: [.ciMain]) }
-        let answers = Answers()
-        store.ciFetch = { try await answers.fetch($0) }
-        return (store, answers)
-    }
-
-    /// Lets the main actor turn until `condition` holds (see `waitUntil`).
-    private func eventually(_ condition: () -> Bool) async throws {
-        await waitUntil(condition)
-    }
-
-    @Test func checksForOneRepoWhileOneIsUnderWayShareItsAnswer() async throws {
-        let (store, answers) = store()
-        // Each caller is on the main actor when it says it has started, and starts or finds the check in the same turn (no
-        // suspension before it looks): once all three have said so, and the check has asked, all three are in it.
-        var started = 0
-        async let first: () = { @MainActor in started += 1; try? await store.syncCI("a/x") }()
-        async let second: () = { @MainActor in started += 1; try? await store.syncCI("a/x") }()
-        try await eventually { started == 2 && answers.waiting.count == 1 }
-        async let third: () = { @MainActor in started += 1; try? await store.syncCI("a/x") }()
-        try await eventually { started == 3 }
-        #expect(answers.asked == 1 && answers.waiting.count == 1)
-        // Every check asked is answered (one, when they share it), so a failure here fails rather than hangs.
-        let asked = answers.waiting.count
-        for i in 0..<asked { answers.settle(i, with: status(.failure, sha: "s1")) }
-        _ = await (first, second, third)
-        #expect(store.ci["a/x"]?.sha == "s1")
-        // Once it has answered, the next check asks again.
-        async let next: () = { try? await store.syncCI("a/x") }()
-        try await eventually { answers.waiting.count == asked + 1 }
-        answers.settle(asked, with: status(.success, sha: "s2"))
-        await next
-        #expect(store.ci["a/x"]?.sha == "s2")
-    }
-
-    @Test func anOlderAnswerThatArrivesLastDoesNotReplaceANewerOne() async throws {
-        let (store, answers) = store()
-        let repo = store.repos[0]
-        async let older: () = { try? await store.syncCI("a/x") }()
-        try await eventually { answers.waiting.count == 1 }
-        // CI turned off and on again while that check was out: the check it starts is the newer one.
-        store.toggle(.ciMain, on: repo)
-        store.toggle(.ciMain, on: store.repos[0])
-        try await eventually { answers.waiting.count == 2 }
-        answers.settle(1, with: status(.failure, sha: "s2"))
-        try await eventually { store.ci["a/x"]?.sha == "s2" }
-        answers.settle(0, with: status(.failure, sha: "s1"))
-        await older
-        #expect(store.ci["a/x"]?.sha == "s2")
-    }
-
-    @Test func anAnswerThatArrivesAfterTheRepoWasStoppedBringsNothingBack() async throws {
-        let (store, answers) = store()
-        async let check: () = { try? await store.syncCI("a/x") }()
-        try await eventually { answers.waiting.count == 1 }
-        store.removeRepo(store.repos[0])
-        answers.settle(0, with: status(.failure, sha: "s1"))
-        await check
-        #expect(store.ci.isEmpty)
-    }
-
-    @Test func anAnswerThatArrivesAfterCIWasSwitchedOffBringsNothingBack() async throws {
-        let (store, answers) = store()
-        async let check: () = { try? await store.syncCI("a/x") }()
-        try await eventually { answers.waiting.count == 1 }
-        store.toggle(.ciMain, on: store.repos[0])
-        answers.settle(0, with: status(.failure, sha: "s1"))
-        await check
-        #expect(store.ci.isEmpty)
-    }
-
-    @Test func aLateFailureDoesNotBringBackAFaultCIWasClearedOf() async throws {
-        let (store, answers) = store()
         store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
-        store.settings.reviewRequests = false
-        async let poll: () = store.pollAll()
-        try await eventually { answers.waiting.count == 1 }
-        // CI is switched off while the check is out, and the check then fails.
-        store.toggle(.ciMain, on: store.repos[0])
-        answers.fail(0, "Server error")
-        await poll
-        #expect(store.repoErrors.isEmpty)
-    }
-
-    @Test func aFailureOfTheCurrentCheckIsAFault() async throws {
-        let (store, answers) = store()
-        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
-        store.settings.reviewRequests = false
-        async let poll: () = store.pollAll()
-        try await eventually { answers.waiting.count == 1 }
-        answers.fail(0, "Server error")
-        await poll
-        #expect(store.repoErrors["a/x"] == "Server error")
-    }
-
-    @Test func aLateFailureOfAStoppedAndWatchedAgainRepoIsNotItsFault() async throws {
-        let (store, answers) = store()
-        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
-        store.settings.reviewRequests = false
-        async let poll: () = store.pollAll()
-        try await eventually { answers.waiting.count == 1 }
-        // The repo is stopped and watched anew while its check is out, and the check then fails.
-        let repo = store.repos[0]
-        store.removeRepo(repo)
-        var again = repo
-        again.addedAt = repo.addedAt.addingTimeInterval(1)
-        store.repos = [again]
-        answers.fail(0, "Server error")
-        await poll
-        #expect(store.repoErrors.isEmpty)
-    }
-
-    @Test func aLateAnswerOfAStoppedAndWatchedAgainRepoDoesNotClearItsFault() async throws {
-        let (store, answers) = store()
-        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
-        store.settings.reviewRequests = false
-        async let poll: () = store.pollAll()
-        try await eventually { answers.waiting.count == 1 }
-        let repo = store.repos[0]
-        store.removeRepo(repo)
-        var again = repo
-        again.addedAt = repo.addedAt.addingTimeInterval(1)
-        store.repos = [again]
-        store.repoErrors["a/x"] = "Forbidden"
-        answers.settle(0, with: status(.success, sha: "s1"))
-        await poll
-        #expect(store.repoErrors["a/x"] == "Forbidden")
-    }
-
-    @Test func conversationsFailingDoNotKeepCIFromBeingChecked() async throws {
-        let (store, answers) = store()
-        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
-        store.settings.reviewRequests = false
-        store.repos[0].events = [.issueOpened, .ciMain]
-        store.gh.session = StubbedGitHub.session { _ in .init(500, #"{"message": "Not here"}"#) }
-        async let poll: () = store.pollAll()
-        try await eventually { answers.waiting.count == 1 }
-        answers.settle(0, with: status(.success, sha: "s1"))
-        await poll
-        #expect(store.ci["a/x"]?.sha == "s1")
-        // The conversations' fault stays, though CI answered.
-        #expect(store.repoErrors["a/x"] == "Not here")
-    }
-
-    @Test func eachSourceKeepsItsFaultWhenTheOtherAnswers() async throws {
-        let (store, answers) = store()
-        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
-        store.settings.reviewRequests = false
-        // CI fails; the conversations (none asked for) are fine.
-        async let first: () = store.pollAll()
-        try await eventually { answers.waiting.count == 1 }
-        answers.fail(0, "CI down")
-        await first
-        #expect(store.repoErrors["a/x"] == "CI down")
-        // CI answers: its fault goes.
-        async let second: () = store.pollAll()
-        try await eventually { answers.waiting.count == 2 }
-        answers.settle(1, with: status(.success, sha: "s1"))
-        await second
-        #expect(store.repoErrors.isEmpty)
+        let paths = PathLog()
+        store.gh.session = StubbedGitHub.session { request in
+            let path = request.url?.path ?? ""
+            paths.add(path)
+            switch path {
+            case "/repos/a/x/actions/runs":
+                return .init(200, #"""
+                {"workflow_runs":[
+                  {"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"failure","check_suite_id":5,"html_url":"https://github.com/a/x/actions/runs/1"},
+                  {"name":"Lint","workflow_id":12,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"success","check_suite_id":6},
+                  {"name":"CI","workflow_id":11,"head_sha":"s0","display_title":"Older","status":"completed","conclusion":"success","check_suite_id":4}]}
+                """#)
+            case "/repos/a/x/commits/s1/check-runs":
+                return .init(200, #"""
+                {"total_count":1,"check_runs":[{"name":"build","status":"completed","conclusion":"failure","head_sha":"s1","app":{"slug":"github-actions"},"check_suite":{"id":5}}]}
+                """#)
+            case "/repos/a/x/commits/s1/status":
+                return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            default:
+                return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        let status = try await store.fetchBranchCI("a/x", branch: "main")
+        #expect(status.state == .failure && status.failing == ["build"] && status.title == "Fix")
+        #expect(status.workflows.map(\.name) == ["CI", "Lint"])
+        #expect(status.workflows.map(\.state) == [.failure, .success])
+        #expect(status.workflows[0].url?.absoluteString == "https://github.com/a/x/actions/runs/1")
+        // One list of runs, the commit's checks and statuses: three calls for the repo, however many workflows.
+        #expect(paths.all.count == 3)
+        let things = InboxSync.workflowThings(repo: "a/x", branch: "main", status: status)
+        #expect(things.map(\.id) == ["workflow:a/x:11@main", "workflow:a/x:12@main"])
     }
 }
 
-@Suite(.hostsWindows) struct FailingChecks {
+/// Paths a stub was asked for, from whichever thread it answers on.
+private final class PathLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var paths: [String] = []
+    func add(_ path: String) { lock.withLock { paths.append(path) } }
+    var all: [String] { lock.withLock { paths } }
+}
+
+@Suite struct FailingChecks {
     @Test func theChipNamesTheFailingChecksAndCountsTheRest() {
-        #expect(RepoChip.failingSummary(["build"]) == "build")
-        #expect(RepoChip.failingSummary(["build", "lint"]) == "build, lint")
-        #expect(RepoChip.failingSummary(["build", "lint", "test", "deploy"]) == "build, lint +2")
+        #expect(FailingNames.summary(["build"]) == "build")
+        #expect(FailingNames.summary(["build", "lint"]) == "build, lint")
+        #expect(FailingNames.summary(["build", "lint", "test", "deploy"]) == "build, lint +2")
     }
 
     @Test func aLongNameIsCutShort() {
-        #expect(RepoChip.failingSummary(["Linux build (release, arm64)"]) == "Linux build (re…")
-        #expect(RepoChip.failingSummary(["exactly sixteen!"]) == "exactly sixteen!")
-    }
-
-    /// What the chip's width is in a flow of `width`, as each chip reports it.
-    private struct Widths: PreferenceKey {
-        static let defaultValue: [CGFloat] = []
-        static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) { value += nextValue() }
-    }
-
-    /// Each chip's width once the flow has laid them all out and the widths stop changing, however slow the machine.
-    @MainActor private func chipWidths(_ chips: [(String, [String])], flow width: CGFloat) async -> [CGFloat] {
-        var seen: [CGFloat] = []
-        let flow = FlowLayout(spacing: 5) {
-            ForEach(chips.indices, id: \.self) { i in
-                RepoChip(repo: RepoConfig(fullName: chips[i].0), status: CIStatus(state: .failure, branch: "main", failing: chips[i].1,
-                                                                                   checkedAt: Date(), title: nil, updatedAt: nil),
-                         state: .failure) {}
-                    .background(GeometryReader { Color.clear.preference(key: Widths.self, value: [$0.size.width]) })
-            }
-        }
-        .frame(width: width)
-        .onPreferenceChange(Widths.self) { seen = $0 }
-        let host = NSHostingView(rootView: flow)
-        host.frame = CGRect(x: 0, y: 0, width: width, height: 400)
-        let window = NSWindow(contentRect: host.frame, styleMask: [], backing: .buffered, defer: true)
-        window.contentView = host
-        await waitUntil {
-            host.layoutSubtreeIfNeeded()
-            return seen.count == chips.count
-        }
-        await waitUntilSteady {
-            host.layoutSubtreeIfNeeded()
-            return seen
-        }
-        return seen
-    }
-
-    @MainActor @Test func wideFailingNamesStayInsideTheFlowTheCIPanelGivesThem() async {
-        // The horizontal panel gives its chips about 208 pt; a long repo name and wide failing names are more than that.
-        let wide = ["WWWWWWWWWWWWWWW", "MMMMMMMMMMMMMMM", "OOOOOOOOOOOOOOO"]
-        let widths = await chipWidths([("a/swift-format", wide), ("a/another-long-repository-name", wide), ("a/x", ["build"])], flow: 208)
-        #expect(widths.count == 3)
-        #expect(widths.allSatisfy { $0 <= 208 })
+        #expect(FailingNames.summary(["Linux build (release, arm64)"]) == "Linux build (re…")
+        #expect(FailingNames.summary(["exactly sixteen!"]) == "exactly sixteen!")
     }
 }

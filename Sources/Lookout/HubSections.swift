@@ -6,7 +6,7 @@ import SwiftUI
 // One set of measures for every piece, so the sections read as one surface, Claude's compact density on black:
 // - section headers are 30pt: the title as Claude's sidebar label (12/16 muted), then a status in its state's colour,
 //   trailing actions as Claude's 24pt ghost icon buttons;
-// - the inbox's tabs are Claude's Tabs, its counts Claude's Badges;
+// - the inbox's tabs (a category each, then Done) are Claude's Tabs, its counts Claude's Badges, its facts chips;
 // - rows pad their content 8 × 5 inside a radius-6 fill (white 7.5% on hover or when picked);
 //   the layout adds the one outer inset, so nothing here pads itself from the outside;
 // - every control has a tooltip: a verb phrase, then what it does and its shortcut, read from the user's settings.
@@ -14,24 +14,39 @@ import SwiftUI
 extension LookoutHub {
     // MARK: Inbox
 
+    /// The GitHub mark: opens the inbox on the first category with something unread, its newest entry picked so the keys
+    /// act on it at once.
     var inboxIcon: some View {
-        InboxCell(needsYou: store.unreadCount(.needsYou), bots: store.unreadCount(.bots), vertical: !edge.isHorizontal,
-                  showsCount: !(showsDetail && !shrunk(.inbox))) {
-            // Straight to what needs you, its newest item picked so the keys act on it at once.
-            withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) {
-                hub.go(.main)
-                hub.endSearch()
-                hub.filter = .needsYou
-            }
-            if let first = store.list(.needsYou).first {
-                hub.selection = "i:" + first.id
-                hub.requestScroll("i:" + first.id)
-                ui.drawerSelection = nil
-            }
+        InboxCell(vertical: !edge.isHorizontal) {
+            openInbox(on: store.tabNeedingYou)
         }
     }
 
-    /// The filter chips are the inbox's title and status; typing swaps them for the search.
+    /// The full view on a tab, its newest entry picked.
+    func openInbox(on tab: InboxTab) {
+        withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) {
+            hub.go(.main)
+            hub.endSearch()
+            hub.tab = tab
+        }
+        if let first = store.entries(in: tab).first {
+            hub.selection = "i:" + first.id
+            hub.requestScroll("i:" + first.id)
+            ui.drawerSelection = nil
+        }
+    }
+
+    /// One cell per category shown, in order: its symbol, and on its corner what is unread. Hovering one peeks its list.
+    @ViewBuilder var categoryCells: some View {
+        ForEach(store.shownCategories) { category in
+            CategoryCell(category: category, badge: store.badge(category), vertical: !edge.isHorizontal) {
+                openInbox(on: .category(category.id))
+            }
+            .onHover { if $0, !hub.expanded { hub.tab = .category(category.id) } }
+        }
+    }
+
+    /// The tabs are the inbox's title and status; typing swaps them for the search.
     @ViewBuilder var inboxHeader: some View {
         Group {
             if searching || hub.searchOpen { searchField.transition(.opacity) } else { filters.transition(.opacity) }
@@ -53,55 +68,101 @@ extension LookoutHub {
     }
 
     var filters: some View {
+        let tab = store.hubTab(hub)
+        let unread = tab == .done ? 0 : store.entries(in: tab).filter(\.isUnread).count
         // Claude's Tabs abut: each pill is inset 1 at its sides, so two pills are 2 apart.
-        HStack(spacing: 0) {
-            // The tabs never give up their words: the actions after them are what yields when the column is narrow.
-            ForEach(InboxFilter.allCases, id: \.self) { f in filterChip(f).fixedSize().layoutPriority(2) }
-            Spacer(minLength: 0)
-            if hub.filter != .done && store.unreadCount(hub.filter) > 0 {
-                IconButton(symbol: "checkmark.circle", help: "Mark all as read",
-                           detail: "Everything in \(hub.filter.label) · \(store.shortcut(.markAllRead).display)",
+        return HStack(spacing: 0) {
+            // The tabs scroll when the column is narrow: the actions after them stay.
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(store.shownCategories) { category in categoryTab(category, selected: tab == .category(category.id)) }
+                    doneTab(selected: tab == .done)
+                }
+            }
+            .scrollIndicators(.never)
+            .mask(tabsFade)
+            if unread > 0 {
+                IconButton(symbol: "checkmark.circle", help: "Mark all as seen",
+                           detail: "Everything in \(store.category(tab)?.name ?? "Done") · \(store.shortcut(.markAllRead).display)",
                            size: IconButton.Size.header) {
-                    withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { store.markAllRead(hub.filter) }
+                    withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { store.markAllSeen(tab) }
                 }
                 .transition(.opacity)
             }
+            categoriesMenu
             if showsDetail { focusButton(.inbox) }
         }
         .padding(.trailing, 3)
-        .motion(Theme.Motion.fade, value: store.unreadCount(hub.filter) > 0)
+        .motion(Theme.Motion.fade, value: unread > 0)
     }
 
-    func filterChip(_ f: InboxFilter) -> some View {
-        // Unread, like the count in the bar beside it; none once everything's been seen.
-        let unread = store.unreadCount(f)
-        let count: Int? = f == .done || unread == 0 ? nil : unread
-        let detail = switch f {
-        case .needsYou: "Reviews, mentions and replies from people"
-        case .bots: "Comments from bots, kept quiet"
-        case .done: "What you marked Done · Back to inbox from here"
+    /// The tabs' end fades out where more are scrolled out of sight.
+    private var tabsFade: some View {
+        HStack(spacing: 0) {
+            Color.black
+            LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 12)
         }
-        // What needs you counts in Claude's warning Badge; the bots' in the neutral one.
-        return Chip(label: f.label, count: count, selected: hub.filter == f, countTint: f == .needsYou ? Theme.amber : nil) {
-            withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { hub.filter = f }
+    }
+
+    func categoryTab(_ category: InboxCategory, selected: Bool) -> some View {
+        let n = store.badge(category)
+        return CategoryTab(category: category, selected: selected, badge: n, store: store) {
+            withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { hub.tab = .category(category.id) }
         }
-        .tip(f.label, detail)
+    }
+
+    func doneTab(selected: Bool) -> some View {
+        Button {
+            withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { hub.tab = .done }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark.circle").font(.system(size: 12, weight: .medium))
+                if selected { Text("Done") }
+            }
+            .font(CDS.sans(13, .medium))
+            .foregroundStyle(selected ? CDS.Text.primary : CDS.Text.muted)
+            .padding(.horizontal, selected ? CDS.Tabs.pad : 5)
+            .frame(height: CDS.Tabs.height)
+        }
+        .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
+                                          hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostHover,
+                                          pressed: CDS.Fill.ghostHover, isActive: selected))
+        .accessibilityLabel("Done")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .fixedSize()
+        .tip("Done", "What you marked Done · it comes back when something new happens")
+    }
+
+    /// Like a table's columns menu: a checkmark per category shown. Hidden ones are muted (no notifications, no icon in
+    /// the bar) and still collect, so the menu says how many each holds.
+    var categoriesMenu: some View {
+        CategoriesMenu(store: store) { hub.go(.categories) }
     }
 
     /// One quiet line where the list would be: nothing to act on, so nothing to draw the eye.
     var emptyInbox: some View {
-        HStack(spacing: 0) {
-            Text(searching ? "No inbox item matches" : hub.filter == .needsYou ? "All caught up"
-                 : hub.filter == .bots ? "Bots are quiet" : "Nothing here yet")
-                .font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
+        let tab = store.hubTab(hub)
+        let text: String = if searching {
+            "No inbox item matches"
+        } else if store.shownCategories.isEmpty && tab == .done && store.categories.isEmpty == false {
+            "Every category is hidden"
+        } else if tab == .done {
+            "Nothing here yet"
+        } else if store.category(tab)?.isCI == true {
+            "Everything is passing"
+        } else {
+            "All caught up"
+        }
+        return HStack(spacing: 0) {
+            Text(text).font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Space.md)
         .padding(.vertical, 5)
     }
 
-    func itemRow(_ item: InboxItem) -> some View {
-        CompactItemRow(item: item, store: store, ui: ui, hub: hub).capEdge()
+    func itemRow(_ entry: InboxEntry) -> some View {
+        EntryRow(entry: entry, store: store, ui: ui, hub: hub).capEdge()
     }
 
     /// A line of text with a link after it, padded like a row ("No CI shown  Choose repositories").
@@ -147,113 +208,6 @@ extension LookoutHub {
         .padding(.trailing, 3)
         .frame(height: Theme.Metrics.line)
         .motion(Theme.Motion.fade, value: status.map(\.0))
-    }
-
-    // MARK: CI
-
-    /// One order for CI everywhere: what needs attention first.
-    static let ciOrder: [CIState] = [.failure, .pending, .success]
-    /// `ciOrder`, then the repos without a run: for the lines that list repos (the bar's counts keep `ciOrder`).
-    /// Repo chips on one CI line before the rest fold into "+N".
-    static let ciChipLimit = 4
-    static let ciLineOrder: [CIState] = ciOrder + [.none]
-    /// A CI line's height in the hover panel: a chip and a little air, so the lines sit close. Open on the sides,
-    /// the lines keep the bar's cell height beside their counts, so the bar doesn't get shorter than at rest.
-    static let ciLineHeight: CGFloat = 26
-
-    /// The repos in a CI state; `.none` is the ones with no run (nothing known yet, or no checks).
-    func ciRepos(listedIn state: CIState) -> [RepoConfig] {
-        Self.ciRepos(listedIn: state, in: store.ciRepos, status: store.ci)
-    }
-
-    /// Pure form of `ciRepos(listedIn:)`: a repo with no status at all, or one stored as `CIState.none`, is "no runs".
-    static func ciRepos(listedIn state: CIState, in repos: [RepoConfig], status: [String: CIStatus]) -> [RepoConfig] {
-        repos.filter { (status[$0.fullName]?.state ?? CIState.none) == state }
-    }
-
-    /// CI's icon in the bar, tinted by the worst state; hovering lists the repos in each.
-    var ciCell: some View {
-        let worst = store.worstCI
-        let counts = Self.ciOrder.compactMap { state -> String? in
-            let n = ciRepos(listedIn: state).count
-            return n == 0 ? nil : "\(n) \(state.label)"
-        }
-        return Image(systemName: worst == .failure ? "xmark.seal.fill" : "checkmark.seal.fill")
-            .font(Theme.Typography.glyph(15))
-            .foregroundStyle(worst == CIState.none ? Theme.tertiary : worst.color)
-            .contentTransition(.symbolEffect(.replace))
-            .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
-            .contentShape(Rectangle())
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("CI: \(worst == CIState.none ? "no runs" : worst.label)")
-            .accessibilityValue(counts.joined(separator: ", "))
-    }
-
-    /// CI's section header: "CI" and how it's going, worst first.
-    var ciHeader: some View {
-        // Shrunk (another section focused), its lines are gone: every state's count, in its colour.
-        let status: [(String, Color)] = shrunk(.ci)
-            ? Self.ciOrder.compactMap { state in
-                let n = ciRepos(listedIn: state).count
-                return n == 0 ? nil : ("\(n) \(state.label)", state.color)
-            } + (ciRepos(listedIn: .none).isEmpty ? [] : [("\(ciRepos(listedIn: .none).count) no runs", CIState.none.color)])
-            : ciStatus.map { [$0] } ?? []
-        return sectionHeader("CI", status: status) { if showsDetail { focusButton(.ci) } }
-    }
-
-    /// "2 failing" in red; "1 running" while nothing fails but something runs; "all passing" once everything has.
-    var ciStatus: (String, Color)? {
-        let failing = ciRepos(listedIn: .failure).count
-        let running = ciRepos(listedIn: .pending).count
-        let passing = ciRepos(listedIn: .success).count
-        if failing > 0 { return ("\(failing) failing", CIState.failure.color) }
-        if running > 0 { return ("\(running) running", CIState.pending.color) }
-        // "All" only when every repo shown has passed; some without a run yet make it a count.
-        if passing > 0 { return (ciRepos(listedIn: CIState.none).isEmpty ? "all passing" : "\(passing) passing", Theme.tertiary) }
-        return store.ciRepos.isEmpty ? nil : ("no runs", Theme.tertiary)
-    }
-
-    /// The number of repos in a CI state, beside its line; hovering lists them.
-    func ciCount(_ state: CIState) -> some View {
-        let n = ciRepos(listedIn: state).count
-        return DotCount(n, color: state.color)
-            .frame(width: 32, height: Theme.Metrics.line)
-            .contentShape(Rectangle())
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(n) \(state.label)")
-    }
-
-    /// The repos in a CI state, as chips that open their checks.
-    /// `tight`: in the hover panel, where lines don't have to match the bar's cells.
-    func ciLine(_ state: CIState, tight: Bool = false) -> some View {
-        let repos = ciRepos(listedIn: state)
-        // Repos without a run only get a line when there are some.
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(state == CIState.none ? "No runs" : state.title)
-                .font(Theme.Typography.meta)
-                .foregroundStyle(repos.isEmpty ? Theme.tertiary : state.color)
-                .frame(width: 52, alignment: .leading)
-            if repos.isEmpty {
-                Text("—").font(Theme.Typography.meta).foregroundStyle(Theme.tertiary)
-            } else {
-                // A few chips, then "+N": a line never grows with the number of repos (it'd push the hub off the screen).
-                FlowLayout(spacing: 4) {
-                    ForEach(repos.prefix(Self.ciChipLimit), id: \.fullName) { repo in
-                        RepoChip(repo: repo, status: store.ci[repo.fullName], state: state) { store.openChecks(repo) }
-                    }
-                    if repos.count > Self.ciChipLimit {
-                        let rest = repos.dropFirst(Self.ciChipLimit)
-                        Text("+\(rest.count)").font(Theme.Typography.meta).foregroundStyle(Theme.tertiary)
-                            .padding(.horizontal, 6).frame(height: RepoChip.height)
-                            .accessibilityLabel("\(rest.count) more")
-                            .tip("\(rest.count) more", rest.map(\.fullName).joined(separator: "\n"))
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, Theme.Space.md)
-        .padding(.vertical, tight ? 2 : Theme.Space.xs)
-        .frame(maxWidth: .infinity, minHeight: tight ? Self.ciLineHeight : Theme.Metrics.line, alignment: .leading)
     }
 
     // MARK: Router
@@ -422,14 +376,14 @@ extension LookoutHub {
     }
 
     var reposButton: some View {
-        IconButton(symbol: "square.stack.3d.up.fill", help: "Repositories", detail: "Watched repos and what they notify",
-                   size: footerButton, active: hub.page == .repos) { hub.go(.repos) }
+        IconButton(symbol: "tray.2.fill", help: "Inbox categories", detail: "What the inbox collects, and where",
+                   size: footerButton, active: hub.page == .categories) { hub.go(.categories) }
     }
 
-    /// Lit on Settings; on Repositories too beside the bar, where the repositories button hides with the rows.
+    /// Lit on Settings; on the categories too beside the bar, where the categories button hides with the rows.
     var settingsCell: some View {
         IconButton(symbol: "gearshape.fill", help: "Settings", detail: "⌘,", size: footerButton,
-                   active: hub.page == .settings || (hub.page == .repos && !edge.isHorizontal)) { hub.go(.settings) }
+                   active: hub.page == .settings || (hub.page == .categories && !edge.isHorizontal)) { hub.go(.settings) }
     }
 
     // MARK: Footer
@@ -512,14 +466,13 @@ extension LookoutHub {
             return SyncState(color: Theme.amber, text: "Not syncing", title: "Couldn't reach GitHub",
                              detail: "Check your connection · Lookout tries again on its own\n" + refresh)
         }
-        let failed = store.repoErrors.keys.sorted()
-        if !failed.isEmpty {
-            return SyncState(color: Theme.amber, text: "\(plural(failed.count, "repo")) failed",
-                             title: "Some repositories didn't sync", detail: failed.joined(separator: "\n") + "\n" + refresh)
+        if let error = store.inboxError {
+            return SyncState(color: Theme.amber, text: "Inbox didn't sync", title: "GitHub didn't answer the inbox's search",
+                             detail: error + "\n" + refresh)
         }
         if store.isSyncing {
             return SyncState(color: Theme.tertiary, text: "Checking…", title: "Checking GitHub",
-                             detail: "Repositories, CI and review requests", spinning: true)
+                             detail: "Pull requests, issues and workflows", spinning: true)
         }
         guard let last = store.lastSync else {
             return SyncState(color: Theme.tertiary, text: store.me == nil ? "Connecting…" : "Not checked yet",
@@ -606,5 +559,110 @@ struct InboxSearchField: View {
             // Already focused (a key arrived while it was): nothing changes for `onChange` to answer.
             DispatchQueue.main.async(execute: hub.typePendingKeys)
         }
+    }
+}
+
+/// A category's tab: Claude's Tabs with its unread count, dragged onto another to reorder the categories (their order is
+/// their priority: the first to match a thing keeps it).
+struct CategoryTab: View {
+    let category: InboxCategory
+    let selected: Bool
+    let badge: Int
+    let store: Store
+    let action: () -> Void
+    @State private var target = false
+
+    var body: some View {
+        Button(action: action) { CategoryTabLabel(category: category, selected: selected, badge: badge) }
+            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
+                                              hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostHover,
+                                              pressed: CDS.Fill.ghostHover, isActive: selected))
+            .padding(.horizontal, CDS.Tabs.pillInset)
+            .fixedSize()
+            .accessibilityLabel(category.name)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityAction(named: "Move earlier") { withAnimation(.spring(duration: 0.25)) { move(-1) } }
+            .accessibilityAction(named: "Move later") { withAnimation(.spring(duration: 0.25)) { move(1) } }
+            .contextMenu {
+                Button("Move earlier") { withAnimation(.spring(duration: 0.25)) { move(-1) } }
+                    .disabled(!store.canMoveCategory(category.id, by: -1, among: store.shownCategories))
+                Button("Move later") { withAnimation(.spring(duration: 0.25)) { move(1) } }
+                    .disabled(!store.canMoveCategory(category.id, by: 1, among: store.shownCategories))
+            }
+            .overlay(alignment: .leading) {
+                if target { Capsule().fill(Theme.accent).frame(width: 2, height: 16) }
+            }
+            .draggable("category:" + category.id.uuidString) {
+                Text(category.name)
+                    .font(CDS.sans(CDS.Sidebar.rowFont))
+                    .padding(.horizontal, 8)
+                    .frame(height: CDS.Sidebar.rowHeight)
+                    .background(RoundedRectangle(cornerRadius: CDS.Sidebar.radius, style: .continuous).fill(CDS.Surface.s3))
+                    .foregroundStyle(CDS.Text.primary)
+            }
+            .dropDestination(for: String.self) { ids, _ in
+                guard let raw = ids.first, raw.hasPrefix("category:"), let id = UUID(uuidString: String(raw.dropFirst(9))) else { return false }
+                withAnimation(.spring(duration: 0.25)) { store.moveCategory(id, onto: category.id) }
+                return true
+            } isTargeted: { target = $0 }
+            .tip(category.name, "Drag to reorder · ⌃\(store.shownCategories.firstIndex { $0.id == category.id }.map { $0 + 1 } ?? 0)")
+    }
+}
+
+extension CategoryTab {
+    fileprivate func move(_ step: Int) { store.moveCategory(category.id, by: step, among: store.shownCategories) }
+}
+
+/// The inbox's columns menu: a checkmark per category shown; hidden ones carry their count.
+struct CategoriesMenu: View {
+    let store: Store
+    let edit: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Menu {
+            ForEach(store.categories) { category in
+                Toggle(isOn: Binding(get: { !category.hidden }, set: { store.setHidden(category.id, !$0) })) {
+                    Text(category.hidden ? "\(category.name) · \(store.count(category.id))" : category.name)
+                }
+            }
+            Divider()
+            Button("Edit Categories…", action: edit)
+        } label: {
+            Image(systemName: "eye")
+                .font(.system(size: CDS.GhostIcon.glyph(IconButton.Size.header), weight: .medium))
+                .foregroundStyle(hover ? Color.white : Theme.secondary)
+                .frame(width: IconButton.Size.header, height: IconButton.Size.header)
+                .background(Theme.Radius.shape(CDS.GhostIcon.radius(IconButton.Size.header)).fill(hover ? Theme.Fill.hover : .clear))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hover = $0 }
+        .accessibilityLabel("Show or hide categories")
+        .tip("Show or hide categories", "Hidden ones keep collecting, quietly")
+    }
+}
+
+/// A tab's face: its symbol in the category's colour; the picked one (and any with something unread) says its name too, so
+/// the tabs fit a narrow column.
+private struct CategoryTabLabel: View {
+    let category: InboxCategory
+    let selected: Bool
+    let badge: Int
+    @Environment(\.hoverFillHovering) private var hover
+
+    var body: some View {
+        HStack(spacing: selected ? 5 : 3) {
+            Image(systemName: category.symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(category.color.swatch)
+            if selected { Text(category.name).lineLimit(1) }
+            if badge > 0 { CountBadge(badge, tint: category.color.swatch) }
+        }
+        .font(CDS.sans(13, .medium))
+        .foregroundStyle(selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted)
+        // Only the picked tab has its name: the rest are tight, so all the tabs fit the column.
+        .padding(.horizontal, selected ? CDS.Tabs.pad - CDS.Tabs.pillInset : 4)
+        .frame(height: CDS.Tabs.height)
     }
 }

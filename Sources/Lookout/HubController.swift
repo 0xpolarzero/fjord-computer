@@ -386,9 +386,17 @@ final class HubController {
         openRouter(card)
     }
 
-    /// A summary banner's click: the full view on the inbox, to see what arrived.
-    func showInbox(_ tab: InboxFilter) {
+    /// A banner's click: the full view on the thing's category with it selected (on Done if it was done since), or, for a
+    /// summary, on the first category with something unread.
+    func showInbox(category: UUID?, thing: String?) {
+        let entry = thing.flatMap { id in store.entries.first { $0.id == id } }
+        let tab: InboxTab = entry.map { $0.isDone ? .done : .category($0.categoryID) }
+            ?? category.map { .category($0) } ?? store.tabNeedingYou
         hub.showInbox(tab)
+        if let entry {
+            hub.selection = "i:" + entry.id
+            hub.requestScroll("i:" + entry.id)
+        }
     }
 
     private func takeFocus() {
@@ -444,7 +452,8 @@ final class HubController {
         if open {
             // Every author in the inbox (not just the newest items: the view may list another filter or a search),
             // and the account's own picture in Settings.
-            var urls = Array(Set(store.items.compactMap(\.avatar))).prefix(60).compactMap { Avatar.sizedURL($0, size: 22) }
+            var urls = Array(Set(store.things.values.compactMap { $0.author?.avatar })).prefix(60)
+                .compactMap { Avatar.sizedURL($0, size: 22) }
             if let me = Avatar.sizedURL(store.me?.avatarUrl, size: 30) { urls.append(me) }
             ImageCache.shared.prefetch(urls)
         }

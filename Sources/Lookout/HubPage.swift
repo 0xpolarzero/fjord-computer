@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Settings and Repositories: a page that takes the rows' place while the bar stays.
+// Settings and the inbox's categories: a page that takes the rows' place while the bar stays.
 
 extension LookoutHub {
     // MARK: Pages
@@ -10,7 +10,7 @@ extension LookoutHub {
             pageHeader
             IslandRule()
             Group {
-                if hub.page == .repos { ReposView(store: store) } else { SettingsView(store: store, hub: hub) }
+                if hub.page == .categories { CategoriesView(store: store, hub: hub) } else { SettingsView(store: store, hub: hub) }
             }
             .id(hub.page)
             .transition(reduce ? .opacity.animation(Theme.Motion.fade) : .push(from: hub.forward ? .trailing : .leading))
@@ -39,12 +39,12 @@ extension LookoutHub {
         .frame(height: 40)
     }
 
-    /// "Settings | Repositories", the open one picked: Claude's compact SegmentedControl (a white-5% track, the picked
+    /// "Settings | Inbox", the open one picked: Claude's compact SegmentedControl (a white-5% track, the picked
     /// segment on a white-10% thumb with its 1pt ring).
     var pageSwitch: some View {
         HStack(spacing: 0) {
-            ForEach([HubPage.settings, .repos], id: \.self) { p in
-                PageSegment(label: p == .settings ? "Settings" : "Repositories", selected: hub.page == p) { hub.go(p) }
+            ForEach([HubPage.settings, .categories], id: \.self) { p in
+                PageSegment(label: p == .settings ? "Settings" : "Inbox", selected: hub.page == p) { hub.go(p) }
             }
         }
         .padding(1)

@@ -4,7 +4,7 @@ import SwiftUI
 // itself never moves, so what you're pointing at stays under the pointer. The whole view (every section at once)
 // is the pinned one.
 
-enum HubSection: Hashable { case inbox, ci, router, agents, controls }
+enum HubSection: Hashable { case inbox, router, agents, controls }
 
 struct PeekMeasure: Equatable {
     let section: HubSection
@@ -211,13 +211,9 @@ extension LookoutHub {
     /// A section header's height, the same as a CI or agents cell in the bar, so the lines under it line up.
     static let peekLine: CGFloat = Theme.Metrics.line
 
-    /// A panel's width: the controls' is a small menu; along the top and bottom, CI's is its column's.
+    /// A panel's width: the controls' is a small menu.
     func panelWidth(_ section: HubSection) -> CGFloat {
-        switch section {
-        case .controls: Self.controlsWidth
-        case .ci: edge.isHorizontal ? Self.ciWidth : Self.detail
-        default: Self.detail
-        }
+        section == .controls ? Self.controlsWidth : Self.detail
     }
 
     /// The controls' panel: a Claude menu's width (128–320).
@@ -241,8 +237,6 @@ extension LookoutHub {
             case .inbox:
                 inboxHeader.frame(height: Self.peekLine)
                 peekInbox.padding(.top, 4)
-            case .ci:
-                peekCI
             case .router:
                 peekRouter
             case .agents:
@@ -277,8 +271,6 @@ extension LookoutHub {
             case .inbox:
                 inboxHeader.frame(height: Self.peekLine)
                 peekInbox
-            case .ci:
-                peekCI
             case .router:
                 peekRouter
             case .agents:
@@ -292,7 +284,7 @@ extension LookoutHub {
                 EmptyView()
             }
         }
-        .frame(width: (section == .ci ? Self.ciWidth : Self.detail) - 2 * Self.peekPad, alignment: .leading)
+        .frame(width: Self.detail - 2 * Self.peekPad, alignment: .leading)
     }
 
     /// The bar's last cell at rest: a gear. Hovering shows the controls; a click goes to Settings.
@@ -300,7 +292,7 @@ extension LookoutHub {
         ControlsGear(active: hub.page != .main) { hub.go(.settings) }
     }
 
-    /// The controls: how syncing is going, then keep open, repositories and settings, each with its key.
+    /// The controls: how syncing is going, then keep open, the categories and settings, each with its key.
     var peekControls: some View {
         VStack(alignment: .leading, spacing: 0) {
             // As a Claude menu's group label: `px-2 py-1`, footnote, muted.
@@ -308,7 +300,7 @@ extension LookoutHub {
                 .padding(.horizontal, CDS.Menu.itemPadX)
                 .frame(maxWidth: .infinity, minHeight: CDS.Menu.labelHeight, alignment: .leading)
             MenuRow(symbol: "pin", title: "Keep open", key: store.shortcut(.togglePanel).display) { hub.pinned = true }
-            MenuRow(symbol: "square.stack.3d.up", title: "Repositories", key: nil) { hub.go(.repos) }
+            MenuRow(symbol: "tray.2", title: "Inbox categories", key: nil) { hub.go(.categories) }
             MenuRow(symbol: "gearshape", title: "Settings", key: "⌘,") { hub.go(.settings) }
         }
     }
@@ -319,22 +311,9 @@ extension LookoutHub {
         if items.isEmpty {
             emptyInbox
         } else {
-            CappedScroll(cap: 330, hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
+            CappedScroll(cap: 360, hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
                 AdaptiveStack(count: items.count, spacing: 1) { ForEach(items) { itemRow($0).id("i:" + $0.id) } }
                     .motion(Theme.Motion.fade, value: listKey)
-            }
-        }
-    }
-
-    /// CI in a panel: its header, then a line per state, each as tall as its count in the bar.
-    @ViewBuilder var peekCI: some View {
-        if store.ciRepos.isEmpty {
-            linkRow("No CI shown", action: "Choose repositories") { hub.go(.repos) }.frame(height: Self.peekLine)
-        } else {
-            ciHeader.frame(height: Self.peekLine)
-            ForEach(Self.ciLineOrder, id: \.self) { state in
-                // Repos without a run only get their line when there are some.
-                if state != CIState.none || !ciRepos(listedIn: .none).isEmpty { ciLine(state, tight: true) }
             }
         }
     }
@@ -369,7 +348,7 @@ struct ControlsGear: View {
                                               rest: .clear, hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostSelected,
                                               pressed: CDS.Fill.ghostSelected, isActive: active))
             .accessibilityLabel("Controls")
-            .accessibilityHint("Settings, repositories and keeping the hub open")
+            .accessibilityHint("Settings, the inbox categories and keeping the hub open")
     }
 }
 

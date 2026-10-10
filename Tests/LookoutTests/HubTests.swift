@@ -4,26 +4,30 @@ import SwiftUI
 import Testing
 @testable import Lookout
 
+@MainActor
 @Suite struct HubCI {
-    private func status(_ state: CIState) -> CIStatus {
-        CIStatus(state: state, branch: "main", sha: nil, url: nil, failing: [], checkedAt: Date(), title: nil, updatedAt: nil)
+    private func workflow(_ id: Int, _ state: CheckState, repo: String = "a/one") -> Thing {
+        var thing = Thing(id: "workflow:\(repo):\(id)@main", kind: .workflow, repo: repo, number: nil, title: "Fix",
+                          url: URL(string: "https://github.com/\(repo)/actions")!, createdAt: Date(), updatedAt: Date())
+        thing.checks = state
+        thing.workflowName = "W\(id)"
+        thing.branch = "main"
+        return thing
     }
 
-    private let repos = ["a/missing", "b/stored-none", "c/ok", "d/broken"].map { RepoConfig(fullName: $0) }
-
-    private func names(_ state: CIState) -> [String] {
-        let ci = ["b/stored-none": status(CIState.none), "c/ok": status(.success), "d/broken": status(.failure)]
-        return LookoutHub.ciRepos(listedIn: state, in: repos, status: ci).map(\.fullName)
-    }
-
-    @Test func noRunsIncludesMissingAndStoredNone() {
-        #expect(names(CIState.none) == ["a/missing", "b/stored-none"])
-    }
-
-    @Test func otherStatesAreExact() {
-        #expect(names(.success) == ["c/ok"])
-        #expect(names(.failure) == ["d/broken"])
-        #expect(names(.pending).isEmpty)
+    @Test func theCIBadgeCountsFailingWorkflowsNotRepos() {
+        var ci = InboxStore.defaultCategories[0]
+        ci.rules = [Rule(scope: Scope(kind: .workflow, in: Pick(include: [.repo("a/one"), .repo("b/two")])),
+                         conditions: [.workflow([.failing])], createdAt: .distantPast)]
+        // Two failing workflows in one repo, one passing, one running, one failing in another repo.
+        let store = InboxFixture.store([workflow(1, .failing), workflow(2, .failing), workflow(3, .passing), workflow(4, .pending),
+                                        workflow(5, .failing, repo: "b/two")], category: ci)
+        #expect(store.count(ci.id) == 3 && store.badge(ci) == 3)
+        #expect(store.entries(in: ci.id).allSatisfy { $0.thing.checks == .failing })
+        // The same workflow failing again after it was fine is a new failure: Done holds only while it keeps failing.
+        let entry = store.entries(in: ci.id)[0]
+        store.markDone(entry)
+        #expect(store.count(ci.id) == 2)
     }
 }
 
@@ -31,13 +35,14 @@ import Testing
 @Suite struct HubInbox {
     @Test func showingTheInboxClearsASearchAndPicksTheTabOfTheArrivals() {
         let hub = HubState()
+        let category = InboxFixture.category()
         hub.go(.settings)
-        hub.filter = .done
+        hub.tab = .done
         hub.query = "nothing like it"
         hub.startSearch()
-        hub.showInbox(.bots)
+        hub.showInbox(.category(category.id))
         #expect(hub.page == .main && hub.pinned && hub.focus == .inbox)
-        #expect(hub.filter == .bots)
+        #expect(hub.tab == .category(category.id))
         #expect(hub.query.isEmpty && !hub.searchOpen)
     }
 }

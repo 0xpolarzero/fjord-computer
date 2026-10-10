@@ -11,7 +11,6 @@ import Testing
     private func store(asks: OSAllocatedUnfairLock<Int>? = nil, token: String? = "token") -> Store {
         let s = Store()
         s.persists = false
-        s.settings.reviewRequests = false
         s.resolveToken = {
             asks?.withLock { $0 += 1 }
             return token.map { ($0, .environment) }
@@ -99,7 +98,7 @@ import Testing
     @Test func aResetLearnedByARefreshByHandBringsTheNextCheckForwardToIt() async {
         let s = store()
         s.me = GHUser(login: "me", avatarUrl: nil, type: nil)
-        s.repos = [RepoConfig(fullName: "a/one")]
+        InboxFixture.watch(s)
         // Before the refresh by hand there's budget to spare. During it every request finds it spent, the reset a few
         // seconds after that request (as GitHub's always is when nothing is left: never one already passed, whatever the
         // machine's speed). After it, a request is the loop's own, and counts once the reset has passed.
@@ -140,7 +139,7 @@ import Testing
     @Test func aResetThatPassedDuringASlowRefreshIsCheckedOnceNotOverAndOver() async {
         let s = store()
         s.me = GHUser(login: "me", avatarUrl: nil, type: nil)
-        s.repos = [RepoConfig(fullName: "a/one")]
+        InboxFixture.watch(s)
         // Checking every hour: whatever the observation below takes on a slow runner, no scheduled check falls inside it, so
         // any check it sees is an immediate one.
         s.settings.pollInterval = 3600
@@ -149,12 +148,12 @@ import Testing
         struct Phase { var manual = false; var reset: Date?; var offline = false; var after = 0 }
         let phase = OSAllocatedUnfairLock(initialState: Phase())
         let gate = StubbedGitHub.Gate()
-        // `after` counts the polls begun once the held answer is let go: each poll begins with the repo's issues (the rest of
-        // the held poll's own requests come after its issues, and aren't counted).
+        // `after` counts the polls begun once the held answer is let go: each poll begins with the inbox's search (the rest of
+        // the held poll's own requests come after it, and aren't counted).
         answer(s) { req in
             let now = phase.withLock { p -> (spent: Bool, reset: Date?, offline: Bool) in
                 if p.offline {
-                    if req.url?.path == "/repos/a/one/issues" { p.after += 1 }
+                    if req.url?.path == "/graphql" { p.after += 1 }
                     return (false, nil, true)
                 }
                 guard p.manual else { return (false, nil, false) }
