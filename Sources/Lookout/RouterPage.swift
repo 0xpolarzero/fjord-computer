@@ -248,6 +248,9 @@ private struct RouterHistory: View {
     private func scroll(to id: String, anchor: UnitPoint?, in all: [RouterPage.Entry], drawn: ArraySlice<RouterPage.Entry>) {
         if id != RouterModel.endID {
             guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+            // Off the bottom before the lines above are drawn: else their arrival reads as the pinned history falling short
+            // of its bottom, and it is stuck back there instead of going to the line.
+            pinned = false
             if i < drawn.startIndex { oldest = id }
         }
         pending = HistoryScroll(id: id, anchor: anchor, animated: true)
