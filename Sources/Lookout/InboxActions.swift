@@ -159,7 +159,7 @@ enum InboxActions {
     /// How long a thing must have been out of a category before coming back counts as entering again (a workflow that
     /// is re-run and fails again would otherwise be re-run for ever).
     static let reentryCooldown: TimeInterval = 3600
-    /// Runs remembered.
+    /// Runs remembered, beyond those for what is still present (never forgotten while their trigger is there).
     static let maxRuns = 2000
 
     /// One action due for one thing.
@@ -267,8 +267,18 @@ enum InboxActions {
                 ledger.runs[key] = nil
             }
         }
+        // Over the cap, only what nothing present can ask about again goes, oldest first: a run for a fact a thing still has
+        // (or the entering of a thing still in) is what keeps it from running again, so it stays however many there are.
         if ledger.runs.count > maxRuns {
-            let drop = ledger.runs.filter { $0.value.state != .running }.sorted { $0.value.at < $1.value.at }
+            var present: Set<String> = []
+            for entry in entries {
+                let prefix = "\(entry.categoryID.uuidString)\u{1F}\(entry.id)\u{1F}"
+                present.insert(prefix + "enter")
+                for fact in entry.facts { present.insert(prefix + fact.key) }
+            }
+            let drop = ledger.runs.filter { $0.value.state != .running
+                && !present.contains("\($0.value.category.uuidString)\u{1F}\($0.value.thing)\u{1F}\($0.value.trigger)") }
+                .sorted { $0.value.at < $1.value.at }
                 .prefix(ledger.runs.count - maxRuns)
             for (key, _) in drop { ledger.runs[key] = nil }
         }

@@ -191,6 +191,32 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.asked.count == 2)
     }
 
+    @Test func theCapNeverForgetsTheRunsOfFactsStillThere() {
+        var action = CategoryAction.make(.comment("seen"))
+        action.trigger = .eachFact
+        var category = InboxFixture.category()
+        category.actions = ActionList([action])
+        // 70 PRs with 30 facts each: 2,170 baseline records, over the cap, all for what is still there.
+        let entries = (1...70).map { n in
+            InboxEntry(thing: InboxFixture.pr(n, by: Person(login: "alice")), categoryID: category.id,
+                       facts: (1...30).map { Fact(key: "comment:c\(n)-\($0)", label: "c") }, isDone: false, isUnread: true)
+        }
+        var ledger = ActionLedger()
+        let first = InboxActions.plan(entries: entries, categories: [category], groups: [], ledger: &ledger, me: "me")
+        #expect(first.isEmpty)
+        #expect(ledger.runs.count == 70 * 31)
+        let again = InboxActions.plan(entries: entries, categories: [category], groups: [], ledger: &ledger, me: "me")
+        #expect(again.isEmpty)
+        // What nothing present can bring back is what goes, down to the cap.
+        let gone = (1...100).map { n in
+            ActionRun(category: category.id, thing: "pr:a/gone#\(n)", action: action.id, trigger: "comment:x", state: .done,
+                      at: Date(timeIntervalSince1970: TimeInterval(n)))
+        }
+        for run in gone { ledger.set(run) }
+        _ = InboxActions.plan(entries: entries, categories: [category], groups: [], ledger: &ledger, me: "me")
+        #expect(ledger.runs.count == 70 * 31)
+    }
+
     @Test func doneThingsDoNotRun() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()
