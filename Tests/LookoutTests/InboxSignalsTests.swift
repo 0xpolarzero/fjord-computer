@@ -249,3 +249,21 @@ import Testing
         #expect(s.marks["pr:a/one#1"]?.notified == ["comment:n1"])
     }
 }
+
+@MainActor
+@Suite struct InboxSignalsOrder {
+    @Test func aCategoryListsWhatJevRatesMoreImportantFirstThenTheNewest() {
+        let now = Date()
+        func pr(_ n: Int, minutes: Double, level: Importance?) -> Thing {
+            var t = InboxFixture.pr(n, greptile: nil, updated: now.addingTimeInterval(-minutes * 60))
+            t.assignees = ["me"]
+            if let level { t.signals = ThingSignals(importance: ImportanceSignal(level: level, stamp: "assigned")) }
+            return t
+        }
+        let category = InboxCategory(name: "Mine", symbol: "star", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), createdAt: .distantPast)])
+        let s = InboxFixture.store([pr(1, minutes: 1, level: nil), pr(2, minutes: 50, level: .urgent), pr(3, minutes: 5, level: .low),
+                                    pr(4, minutes: 9, level: .high), pr(5, minutes: 3, level: .normal)], category: category)
+        #expect(s.entries(in: category.id).map { $0.thing.number } == [2, 4, 1, 5, 3])
+    }
+}

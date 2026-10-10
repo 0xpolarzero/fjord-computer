@@ -33,9 +33,12 @@ extension Store {
         return result
     }
 
-    /// Open entries of a category, newest first.
+    /// Open entries of a category, what Jev rates more important first (unrated counts as normal), then newest first.
     func entries(in category: UUID) -> [InboxEntry] {
-        entries.filter { $0.categoryID == category && !$0.isDone }.sorted { $0.thing.updatedAt > $1.thing.updatedAt }
+        func rank(_ e: InboxEntry) -> Int { (e.importance ?? .normal).rank }
+        return entries.filter { $0.categoryID == category && !$0.isDone }.sorted {
+            rank($0) != rank($1) ? rank($0) > rank($1) : $0.thing.updatedAt > $1.thing.updatedAt
+        }
     }
 
     /// Done entries, most recently done first.
