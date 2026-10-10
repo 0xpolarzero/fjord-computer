@@ -601,6 +601,58 @@ import Testing
         }
     }
 
+    /// The place changed by the Go menu (the navigator itself, not `show`) while the window is on its way in, its fresh
+    /// picture taken already: the overlay takes another, of where it now goes.
+    @Test func goingElsewhereOnTheWayInRefreshesThePicture() {
+        morphing { controller, ticks in
+            AppTransition.isKey = { _ in true }
+            controller.show(.settings)
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            guard let run = controller.run, let taken = run.image else { return #expect(Bool(false), "no picture") }
+            controller.navigator.go(.done)
+            ticks.turns.forEach { $0() }
+            #expect(run.image != nil && run.image !== taken && run.shows == .done)
+        }
+    }
+
+    /// A card or a message of the Router asked for from the bar while the window is on its way in to the Router: the place
+    /// is the same, what it shows is not.
+    @Test func aRouterPickOnTheWayInRefreshesThePicture() throws {
+        try morphing { controller, ticks in
+            let cards = controller.store.openRouterCards
+            try #require(cards.count >= 2)
+            AppTransition.isKey = { _ in true }
+            controller.routerModel.select(cards[0].id, store: controller.store)
+            controller.show(.router)
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            guard let run = controller.run, let taken = run.image else { return #expect(Bool(false), "no picture") }
+            controller.pick(card: cards[1].id)
+            controller.show(.router)
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            guard let card = run.image else { return #expect(Bool(false), "no picture") }
+            #expect(card !== taken && controller.routerModel.selection == cards[1].id)
+            controller.pick(message: UUID())
+            ticks.turns.forEach { $0() }
+            #expect(run.image != nil && run.image !== card)
+        }
+    }
+
+    /// Any close turned round takes a fresh picture: what the window shows may have changed meanwhile (the store, a message
+    /// asked for) with nothing to say so.
+    @Test func everyCloseTurnedRoundRefreshesThePicture() {
+        morphing { controller, ticks in
+            openAndStartClosing(controller, ticks, on: .settings)
+            guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
+            controller.show(.settings)
+            #expect(controller.phase == .opening && controller.run === run)
+            ticks.turns.forEach { $0() }
+            #expect(run.image != nil && run.image !== shown)
+        }
+    }
+
     /// Minimized on its way in, then closed by a toggle, the window turned round by another toggle opens again: the close's
     /// end does not close it after all.
     @Test func aCloseOfAWindowMinimizedOnItsWayInTurnsRound() {

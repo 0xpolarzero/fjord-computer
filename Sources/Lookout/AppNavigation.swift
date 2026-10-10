@@ -140,24 +140,40 @@ final class AppNavigator {
     var canGoBack: Bool { history.canGoBack }
     var canGoForward: Bool { history.canGoForward }
 
+    /// Told when the place shown changes, by whatever changes it (the window's morph takes a fresh picture of it).
+    @ObservationIgnored var onChange: (() -> Void)?
+
     func go(_ destination: AppDestination) {
+        let was = selection
         history.visit(destination)
-        remember()
+        remember(was)
     }
 
-    func back() { if history.back() { remember() } }
-    func forward() { if history.forward() { remember() } }
+    func back() {
+        let was = selection
+        if history.back() { remember(was) }
+    }
+
+    func forward() {
+        let was = selection
+        if history.forward() { remember(was) }
+    }
 
     /// A place that no longer exists is replaced by the one it resolves to, in the history too.
     func settle(shown: [UUID], routerOn: Bool) {
+        let was = selection
         for item in Set(history.stack) {
             let real = item.resolved(shown: shown, routerOn: routerOn)
             if real != item { history.replace(item, with: real) }
         }
-        remember()
+        remember(was)
     }
 
-    private func remember() { defaults?.set(selection.token, forKey: Self.defaultsKey) }
+    /// `was`: the place shown before.
+    private func remember(_ was: AppDestination) {
+        defaults?.set(selection.token, forKey: Self.defaultsKey)
+        if selection != was { onChange?() }
+    }
 }
 
 // MARK: - Go menu

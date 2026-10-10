@@ -67,6 +67,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         navigator = AppNavigator(fallback: .category(store.tabNeedingYou.categoryID ?? UUID()),
                                  defaults: remembers ? .standard : nil)
         super.init()
+        // The place changed by whatever changes it (the Go menu, back and forward, a chip) while the window is on its way
+        // in: the overlay shows the new one.
+        navigator.onChange = { [weak self] in self?.contentChanged() }
         Self.active = self
         settle()
         Self.watchMemory()
@@ -114,10 +117,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     func show(_ destination: AppDestination? = nil, card: String? = nil) {
         Self.active = self
         settle()
-        let shown = navigator.selection
         var destination = destination
         if card != nil { destination = .router }
         if let card { routerModel.select(card, store: store) }
+        // Another place, while on its way in: the navigator says so (see `init`).
         if let destination { navigator.go(destination.resolved(shown: shownIDs, routerOn: store.routerOn)) }
         let window = self.window ?? makeWindow()
         self.window = window
@@ -137,11 +140,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         } else {
             // One on its way in with its window still to come gets it then.
             if pending == nil { bringIn(window) }
-            // On its way in to another place now: the overlay shows that one.
-            if arriving, navigator.selection != shown { contentChanged() }
         }
-        // A card picked on the way in (a close turned round included): the place may be the same, what it shows is not.
-        if card != nil, reversing || arriving { contentChanged() }
+        // A card picked on the way in: the place may be the same, what it shows is not.
+        if card != nil, arriving { contentChanged() }
         watchKeys()
         watchFront()
         reportFront()
@@ -206,13 +207,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             finishOpening(mine)
             return
         }
-        // No picture yet, or another place's: the fresh one fades in over it. A close turned round keeps the picture it
-        // shows, of the window as it still is, unless that is of another place (one the opening it cut short still owed a
-        // fresh picture of, or where it now goes).
+        // No picture yet, or another place's: the fresh one fades in over it. A close turned round takes a fresh one too,
+        // faded in over the one it shows: what the window shows may have changed while it was on its way out (the store,
+        // a message or a card asked for, another place) with nothing else to say so.
         let other = current.shows != navigator.selection
         pending = mine
-        let stale = !reversing || other || !current.imageIsKey
-        owed = stale ? (generation: mine, crossFade: other || (!reversing && kept == nil)) : nil
+        owed = (generation: mine, crossFade: reversing || other || kept == nil)
         current.open(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak window] in
             guard let self, let window, self.generation == mine else { return }
             // The real window must be in, and the overlay show it as it is now, before it takes over: whatever has not
@@ -427,6 +427,18 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         show(entry.isDone ? .done : .category(entry.categoryID))
         hub.selection = "i:" + entry.id
         hub.requestScroll("i:" + entry.id)
+        contentChanged()
+    }
+
+    /// A Router card picked from the bar (the window opens on the Router next).
+    func pick(card: String) {
+        routerModel.select(card, store: store)
+        contentChanged()
+    }
+
+    /// A message the Router left asked for from the bar, scrolled to in its conversation (the window opens on the Router next).
+    func pick(message: UUID) {
+        routerModel.show(message: message)
         contentChanged()
     }
 
