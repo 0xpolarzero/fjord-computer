@@ -593,6 +593,9 @@ struct EntryMarks: Codable, Hashable {
     /// counts after Done leaves the category's rules nothing new to match (so it doesn't fall into a later category).
     var doneIn: UUID?
     var doneFacts: [Fact]?
+    /// When the thing was first missing from a refresh (it is still missing): its marks are forgotten a month after. Kept
+    /// with them, so a restart doesn't start the month again.
+    var goneSince: Date?
 }
 
 extension EntryMarks {
@@ -605,6 +608,7 @@ extension EntryMarks {
         doneAt = try c.decodeIfPresent(Date.self, forKey: .doneAt)
         doneIn = try c.decodeIfPresent(UUID.self, forKey: .doneIn)
         doneFacts = try c.decodeIfPresent([Fact].self, forKey: .doneFacts)
+        goneSince = try c.decodeIfPresent(Date.self, forKey: .goneSince)
     }
 }
 

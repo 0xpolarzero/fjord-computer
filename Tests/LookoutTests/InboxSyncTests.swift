@@ -480,6 +480,32 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         s.applyThings([:], now: now.addingTimeInterval(31 * 86400))
         #expect(s.marks["pr:o/r#9"] == nil)
     }
+
+    @Test func aThingsMonthGoneGoesOnAcrossARestart() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-gone-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let now = Date()
+        let first = Store()
+        first.stateFile = file
+        first.marks = ["pr:o/r#9": EntryMarks(seen: ["x"]), "pr:o/r#1": EntryMarks(seen: ["y"])]
+        first.applyThings(["pr:o/r#1": InboxFixture.pr(1, repo: "o/r")], now: now)
+        first.flushSave()
+
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        second.persists = false
+        #expect(second.marks["pr:o/r#9"]?.goneSince != nil && second.marks["pr:o/r#1"]?.goneSince == nil)
+        // A month after it went (not after the restart), it is forgotten; the one still there stays.
+        second.applyThings(["pr:o/r#1": InboxFixture.pr(1, repo: "o/r")], now: now.addingTimeInterval(31 * 86400))
+        #expect(second.marks["pr:o/r#9"] == nil && second.marks["pr:o/r#1"] != nil)
+        // Back before the month is out: the count starts again.
+        second.marks["pr:o/r#1"]?.goneSince = now
+        second.applyThings(["pr:o/r#1": InboxFixture.pr(1, repo: "o/r")], now: now)
+        #expect(second.marks["pr:o/r#1"]?.goneSince == nil)
+    }
 }
 
 

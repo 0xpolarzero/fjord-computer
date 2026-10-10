@@ -85,8 +85,6 @@ final class Store {
     @ObservationIgnored var defaultBranches: [String: String] = [:]
     /// A commit's headline by repo, asked once per commit (see `ciHeadline`).
     @ObservationIgnored var headlines: [String: (commit: String, title: String)] = [:]
-    /// When a thing was first missing from a refresh: its marks are dropped after 30 days of that.
-    @ObservationIgnored var goneSince: [String: Date] = [:]
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()

@@ -987,18 +987,18 @@ extension Store {
         let me = inboxContext.me
         for id in next.keys { InboxJev.carry(things[id]?.signals, into: &next[id]!, me: me) }
         if next != things { things = next }
-        for id in next.keys { goneSince[id] = nil }
-        var forget: [String] = []
-        for id in marks.keys where next[id] == nil {
-            let since = goneSince[id] ?? now
-            goneSince[id] = since
-            if now.timeIntervalSince(since) > Double(InboxSync.marksDays) * 86400 { forget.append(id) }
+        // When each thing went missing is kept in its marks (and so across restarts).
+        var kept = marks
+        for (id, m) in marks {
+            if next[id] != nil {
+                if m.goneSince != nil { kept[id]?.goneSince = nil }
+            } else if let since = m.goneSince {
+                if now.timeIntervalSince(since) > Double(InboxSync.marksDays) * 86400 { kept[id] = nil }
+            } else {
+                kept[id]?.goneSince = now
+            }
         }
-        if !forget.isEmpty {
-            var kept = marks
-            for id in forget { kept[id] = nil; goneSince[id] = nil }
-            marks = kept
-        }
+        if kept != marks { marks = kept }
     }
 
     /// Signed in as someone else: the last account's repos, teams and what was asked about them go, and are asked again.
