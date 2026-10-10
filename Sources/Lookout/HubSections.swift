@@ -76,11 +76,15 @@ extension LookoutHub {
             ScrollView(.horizontal) {
                 HStack(spacing: 0) {
                     ForEach(store.shownCategories) { category in categoryTab(category, selected: tab == .category(category.id)) }
-                    doneTab(selected: tab == .done)
                 }
             }
             .scrollIndicators(.never)
             .mask(tabsFade)
+            // Done is not a category: after a gap and a rule, at the tabs' trailing end.
+            doneTab(selected: tab == .done).padding(.leading, 6)
+            Spacer(minLength: 2)
+            // The header's own buttons, apart from the tabs.
+            IslandRule(axis: .vertical).frame(height: 14).padding(.horizontal, 3)
             if unread > 0 {
                 IconButton(symbol: "checkmark.circle", help: "Mark all as seen",
                            detail: "Everything in \(store.category(tab)?.name ?? "Done") · \(store.shortcut(.markAllRead).display)",
@@ -116,12 +120,12 @@ extension LookoutHub {
             withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { hub.tab = .done }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: "checkmark.circle").font(.system(size: 12, weight: .medium))
+                Image(systemName: "archivebox").font(.system(size: 12, weight: .medium))
                 if selected { Text("Done") }
             }
             .font(CDS.sans(13, .medium))
             .foregroundStyle(selected ? CDS.Text.primary : CDS.Text.muted)
-            .padding(.horizontal, selected ? CDS.Tabs.pad : 5)
+            .padding(.horizontal, selected ? CDS.Tabs.pad : 4)
             .frame(height: CDS.Tabs.height)
         }
         .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
@@ -655,14 +659,15 @@ private struct CategoryTabLabel: View {
 
     var body: some View {
         HStack(spacing: selected ? 5 : 3) {
-            Image(systemName: category.symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(category.color.swatch)
+            Image(systemName: category.symbol).font(.system(size: 12, weight: .medium))
+                .foregroundStyle(badge > 0 || selected ? category.color.swatch : CDS.Text.muted)
             if selected { Text(category.name).lineLimit(1) }
             if badge > 0 { CountBadge(badge, tint: category.color.swatch) }
         }
         .font(CDS.sans(13, .medium))
         .foregroundStyle(selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted)
         // Only the picked tab has its name: the rest are tight, so all the tabs fit the column.
-        .padding(.horizontal, selected ? CDS.Tabs.pad - CDS.Tabs.pillInset : 4)
+        .padding(.horizontal, selected ? CDS.Tabs.pad - CDS.Tabs.pillInset : 3)
         .frame(height: CDS.Tabs.height)
     }
 }

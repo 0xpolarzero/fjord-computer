@@ -690,12 +690,13 @@ private struct InboxCellLabel: View {
     var body: some View {
         GitHubMark()
             .fill(hover ? Theme.text : Theme.secondary)
-            .frame(width: 17, height: 17)
+            // Optically the weight of a 14pt symbol next to it.
+            .frame(width: 15, height: 15)
             .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : Theme.Fill.rest))
-            .padding(.vertical, vertical ? 6 : 5)
-            .padding(.horizontal, vertical ? 4 : 5)
-            .frame(minWidth: vertical ? Theme.Metrics.row : nil)
+            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : .clear))
+            .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
+            .padding(.vertical, vertical ? 3 : 0)
+            .padding(.horizontal, vertical ? 0 : 2)
             .contentShape(Rectangle())
             .onHover { hover = $0 }
             .motion(Theme.Motion.hover, value: hover)
@@ -729,11 +730,14 @@ private struct CategoryCellLabel: View {
     @State private var hover = false
 
     var body: some View {
+        let tint = badge > 0 ? category.color.swatch : hover ? Theme.text : Theme.tertiary
         Image(systemName: category.symbol)
+            .symbolRenderingMode(.palette)
             .font(Theme.Typography.glyph(14))
-            .foregroundStyle(category.color.swatch)
+            // Its colour only while it holds something; neutral when empty (and CI, when nothing fails).
+            .foregroundStyle(tint, tint, tint)
             .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : Theme.Fill.rest))
+            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : .clear))
             .overlay(alignment: .topTrailing) { CornerBadge(count: badge, fill: category.color.swatch, ink: category.color.ink) }
             .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
             .padding(.vertical, vertical ? 3 : 0)
@@ -741,7 +745,8 @@ private struct CategoryCellLabel: View {
             .contentShape(Rectangle())
             .onHover { hover = $0 }
             .motion(Theme.Motion.hover, value: hover)
-            .tip(category.name, badge == 0 ? "Nothing new" : category.isCI ? "\(badge) failing" : "\(badge) unread")
+            .tip(badge == 0 ? category.name : "\(category.name) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
+                 badge == 0 ? (category.isCI ? "Nothing failing" : "Nothing new") : "Opens it in the inbox")
     }
 }
 

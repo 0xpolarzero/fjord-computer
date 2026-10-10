@@ -498,6 +498,8 @@ struct LookoutHub: View {
     @State var openContent: CGFloat = 0
     /// The inbox list's own height as laid out: with the filler, what the open column has left for it.
     @State var inboxListHeight: CGFloat = 0
+    @State var inboxMarkHeight: CGFloat = 0
+    @State var inboxCellsHeight: CGFloat = 0
     var openFiller: CGFloat {
         // An empty inbox stays one line: no room for nothing.
         guard showsDetail, !edge.isHorizontal, !items.isEmpty, barSize.height > 0, openContent > 0 else { return 0 }
@@ -725,7 +727,10 @@ struct LookoutHub: View {
         // Inbox: the GitHub mark and the tabs; under them the categories' cells in the bar, the list beside them.
         VStack(alignment: side, spacing: 0) {
             // Top-aligned, so the icon stays where it is at rest whatever the header beside it takes.
-            row(alignment: .top, cell: { inboxIcon.padding(.top, 2).padding(.bottom, 2) },
+            row(alignment: .top, cell: {
+                inboxIcon.padding(.top, 2).padding(.bottom, 2)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inboxMarkHeight = $0 }
+            },
                 detail: { inboxHeader.padding(.top, 6) })
             ZStack(alignment: Alignment(horizontal: side, vertical: .top)) {
                 if showsDetail && !shrunk(.inbox) {
@@ -753,8 +758,19 @@ struct LookoutHub: View {
                     .transition(.hubReveal)
                 }
                 VStack(spacing: 0) { categoryCells }.frame(width: Self.cell)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inboxCellsHeight = $0 }
             }
             .frame(width: rowWidth, alignment: Alignment(horizontal: side, vertical: .top))
+        }
+        // The inbox is one group: the mark and its categories share one well, apart from the Router and the sessions.
+        .background(alignment: Alignment(horizontal: side, vertical: .top)) {
+            if !store.shownCategories.isEmpty {
+                RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous)
+                    .fill(CDS.Fill.ghostSelected)
+                    .frame(width: Self.cell - 8, height: inboxMarkHeight + inboxCellsHeight + 2)
+                    .frame(width: Self.cell)
+                    .padding(.top, 1)
+            }
         }
         .modifier(probe(.inbox))
         // The Router, just before the sessions it works on: its cell and counts; kept open, what is running too.
@@ -886,7 +902,7 @@ struct LookoutHub: View {
     @ViewBuilder var strip: some View {
         let wide = showsDetail
         Group {
-            HStack(spacing: 8) {
+            HStack(spacing: wide ? 8 : 0) {
                 inboxIcon
                 if wide && !shrunk(.inbox) {
                     inboxHeader.transition(.hubReveal)
@@ -896,6 +912,12 @@ struct LookoutHub: View {
                 } else {
                     // At rest: the categories' cells beside the mark.
                     HStack(spacing: 0) { categoryCells }
+                }
+            }
+            .background {
+                if !wide && !store.shownCategories.isEmpty {
+                    RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous).fill(CDS.Fill.ghostSelected)
+                        .padding(.vertical, 5).padding(.horizontal, -3)
                 }
             }
             .padding(.leading, Self.inset + 1)
