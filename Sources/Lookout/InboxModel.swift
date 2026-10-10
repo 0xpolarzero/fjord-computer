@@ -465,6 +465,9 @@ struct ThingSignals: Codable, Hashable {
     var importance: ImportanceSignal?
     /// Whose inbox Jev read it for (a login as `InboxEngine.viewer` writes it): signed in as someone else, it says nothing.
     var viewer: String?
+    /// Your latest word there as ever seen: someone's later reply in a thread takes the place of yours in what GitHub
+    /// returns, and must not make a question you answered ask again.
+    var answeredAt: Date?
 }
 
 /// What Jev said of one message; nil where it wasn't sure.

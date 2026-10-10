@@ -424,7 +424,8 @@ enum InboxEngine {
             return [Fact(key: "greptile:\(score)", label: "Greptile \(score)/5", tint: .attention)]
         case .asksMe:
             // Answering there is what stops a question asking: only what came after your latest word, and after Done.
-            let after = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast)
+            let after = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast,
+                            signals(thing, r)?.answeredAt ?? .distantPast)
             return messages(thing).filter { m in
                 m.at > after && !isMe(m.author, r) && signals(thing, r)?.messages[m.id]?.asksMe == true
             }.map { Fact(key: "asks:\($0.id)", label: "Asks you", tint: .attention) }
@@ -476,6 +477,15 @@ enum InboxEngine {
     static func signals(_ thing: Thing, _ me: String) -> ThingSignals? {
         guard let signals = thing.signals, !me.isEmpty, signals.viewer == normalize(me) else { return nil }
         return signals
+    }
+
+    /// Your latest comment or thread reply on a thing, as it was fetched.
+    static func latestWord(_ thing: Thing, by me: String) -> Date? {
+        let me = normalize(me)
+        guard !me.isEmpty else { return nil }
+        let comments = thing.comments.filter { normalize($0.author.login) == me }.map(\.at)
+        let replies = thing.threads.filter { normalize($0.lastReplyBy.login) == me }.map(\.lastReplyAt)
+        return (comments + replies).max()
     }
 
     /// What Jev said that counts: nothing when it was for someone else, or Jev's reading is switched off.

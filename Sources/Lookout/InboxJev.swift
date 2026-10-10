@@ -117,13 +117,17 @@ enum InboxJev {
         }
     }
 
-    /// A refreshed thing keeps what Jev said of the messages it still has, and its rating, when it was said for `me`.
+    /// A refreshed thing keeps what Jev said of the messages it still has, and its rating, when it was said for `me`; and
+    /// your latest word there only ever moves later.
     static func carry(_ old: ThingSignals?, into thing: inout Thing, me: String) {
         guard thing.kind != .workflow else { return }
-        guard var signals = old, !me.isEmpty, signals.viewer == InboxEngine.viewer(me) else { thing.signals = nil; return }
+        guard !me.isEmpty else { thing.signals = nil; return }
+        let viewer = InboxEngine.viewer(me)
+        var signals = old.flatMap { $0.viewer == viewer ? $0 : nil } ?? ThingSignals(viewer: viewer)
         let ids = Set(InboxEngine.messages(thing).map(\.id))
         signals.messages = signals.messages.filter { ids.contains($0.key) }
-        thing.signals = signals.messages.isEmpty && signals.importance == nil ? nil : signals
+        signals.answeredAt = [signals.answeredAt, InboxEngine.latestWord(thing, by: me)].compactMap { $0 }.max()
+        thing.signals = signals.messages.isEmpty && signals.importance == nil && signals.answeredAt == nil ? nil : signals
     }
 
     /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).

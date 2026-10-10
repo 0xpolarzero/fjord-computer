@@ -269,6 +269,27 @@ import Testing
         #expect(s.entries.first?.facts.map(\.key).contains("asks:c1") == true)
     }
 
+    @Test func aQuestionIAnsweredDoesntAskAgainWhenSomeonesReplyTakesThePlaceOfMine() async {
+        func thread(_ by: Person, _ id: String, ago: TimeInterval) -> ThingThread {
+            ThingThread(id: "t1", isResolved: false, startedBy: tok, lastReplyBy: by, lastReplyID: id,
+                        lastReplyAt: now.addingTimeInterval(-ago), snippet: "…")
+        }
+        let (s, _) = store([pr(1, comments: [comment("c1", tok, ago: 300)])])
+        await s.readInbox()
+        #expect(s.entries.first?.facts.map(\.key) == ["asks:c1"])
+        // I answer in a thread; then a bot replies after me there: the thread's tail GitHub returns is the bot's, not mine.
+        var next = s.things
+        next["pr:a/one#1"]?.threads = [thread(Person(login: "me"), "r1", ago: 200)]
+        s.applyThings(next)
+        #expect(s.entries.isEmpty)
+        next = s.things
+        next["pr:a/one#1"]?.threads = [thread(bot, "r2", ago: 100)]
+        s.applyThings(next)
+        await s.readInbox()
+        #expect(s.things["pr:a/one#1"]?.signals?.answeredAt == now.addingTimeInterval(-200))
+        #expect(s.entries.isEmpty)
+    }
+
     @Test func aReviewRequestIsRatedOnceForEachRequest() async {
         var t = pr(1, comments: [])
         t.requestedReviewers = ["me"]
