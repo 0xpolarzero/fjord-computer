@@ -90,24 +90,6 @@ import Testing
         #expect(store.categories.map(\.name) == ["CI", "Mine"])
     }
 
-    @Test func aFoldedSectionAddsUpItsCategoriesCounts() {
-        let store = quiet()
-        store.categories = [category("Mine"), category("Reviews")]
-        let part = store.barSections[0]
-        #expect(store.sectionBadge(part) == nil)
-        store.toggleCollapsed(CategorySection.github.id)
-        #expect(store.categorySections[0].isCollapsed)
-        store.toggleCollapsed(CategorySection.github.id)
-        #expect(!store.categorySections[0].isCollapsed)
-        // On the demo's inbox: every category's count, added up, in the first one's colour that has any.
-        let demo = quiet()
-        Demo.populate(demo)
-        let all = demo.barSections[0]
-        let badged = all.categories.filter { demo.badge($0) > 0 }
-        #expect(demo.sectionBadge(all)?.count == badged.map(demo.badge).reduce(0, +))
-        #expect(demo.sectionBadge(all)?.fill == badged.first?.color.swatch)
-    }
-
     @Test func aSectionsIconComesFromItsName() {
         #expect(SectionIcon.local(name: "My GitHub") == CategorySection.githubMark)
         #expect(SectionIcon.local(name: "Reviews") == "eye")

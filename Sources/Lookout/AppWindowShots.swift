@@ -129,12 +129,6 @@ enum AppWindowShots {
         }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
-        // Two sections, one folded: its row with the counts added up and its caret turned, its categories gone from the sidebar.
-        Shot(name: "categories-sections", destination: { _ in .categories }, compose: { _, store in
-            let builds = store.createSection(name: "Builds")
-            for c in store.categories where c.isCI { store.moveCategory(c.id, toSection: builds.id) }
-            store.toggleCollapsed(builds.id)
-        }),
         Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),
         Shot(name: "router-collapsed", destination: { _ in .router }, sidebarHidden: true),
         Shot(name: "router-760", destination: { _ in .router }, size: CGSize(width: 760, height: 1000)),

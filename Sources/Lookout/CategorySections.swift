@@ -15,10 +15,6 @@ struct CategorySection: Codable, Hashable, Identifiable {
     var symbol: String
     /// Chosen by hand: its name no longer picks it.
     var iconChosen: Bool? = nil
-    /// Folded, in the sidebar and the bar: its icon alone, with its categories' counts added up on it.
-    var collapsed: Bool? = nil
-
-    var isCollapsed: Bool { collapsed == true }
 
     var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : name }
 
@@ -94,20 +90,6 @@ extension Store {
             let inside = shown.filter { sectionID(of: $0) == section.id }
             return inside.isEmpty ? nil : BarSection(section: section, categories: inside)
         }
-    }
-
-    /// Folds or unfolds a section, in the sidebar and the bar alike.
-    func toggleCollapsed(_ id: UUID) {
-        guard let i = categorySections.firstIndex(where: { $0.id == id }) else { return }
-        categorySections[i].collapsed = categorySections[i].isCollapsed ? nil : true
-    }
-
-    /// What a section's categories hold, added up: shown on its icon while it is folded. In the colour of the first one with
-    /// something (CI's red when it is that).
-    func sectionBadge(_ part: BarSection) -> RailBadge? {
-        let counts = part.categories.map { ($0, badge($0)) }.filter { $0.1 > 0 }
-        guard let first = counts.first?.0 else { return nil }
-        return RailBadge(count: counts.reduce(0) { $0 + $1.1 }, fill: first.color.swatch, ink: first.color.ink)
     }
 
     /// New section: named, its icon from the name (the local pick; the page asks Jev after), at the end.
@@ -200,33 +182,26 @@ extension Store {
 /// A section's icon in the bar, atop its well: the inbox's GitHub mark cell, with the section's own icon. A click opens it.
 struct SectionCell: View {
     let section: CategorySection
-    /// Its categories' counts added up, shown while it is folded.
-    let badge: RailBadge?
     let vertical: Bool
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) { SectionCellLabel(symbol: section.symbol, badge: section.isCollapsed ? badge : nil, vertical: vertical) }
+        Button(action: action) { SectionCellLabel(symbol: section.symbol, vertical: vertical) }
             .buttonStyle(.plain)
             .accessibilityLabel(section.title)
-            .accessibilityValue(section.isCollapsed ? "collapsed" + (badge.map { ", \($0.count) new" } ?? "") : "expanded")
-            .accessibilityHint(section.isCollapsed ? "Shows its categories" : "Folds its categories into it")
+            .accessibilityHint("Opens its first category in the inbox")
     }
 }
 
 private struct SectionCellLabel: View {
     let symbol: String
-    let badge: RailBadge?
     let vertical: Bool
     @State private var hover = false
 
     var body: some View {
-        SectionGlyph(symbol: symbol, size: 14, color: hover || badge != nil ? Theme.text : Theme.secondary)
+        SectionGlyph(symbol: symbol, size: 14, color: hover ? Theme.text : Theme.secondary)
             .frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : .clear))
-            .overlay(alignment: .topTrailing) {
-                if let badge { CornerBadge(count: badge.count, fill: badge.fill, ink: badge.ink) }
-            }
             .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
             .padding(.vertical, vertical ? 3 : 0)
             .padding(.horizontal, vertical ? 0 : 2)
@@ -245,8 +220,6 @@ struct SectionHeaderRow: View {
     let section: CategorySection
     /// Something dragged over it: a category goes to its top, a section takes its place.
     let dropping: Bool
-    /// + : a new category in it.
-    let add: () -> Void
     @State private var picking = false
     @State private var renamed = false
     @State private var hovered = false
@@ -256,11 +229,10 @@ struct SectionHeaderRow: View {
     /// Its icon follows its name until you choose one.
     private var iconAuto: Bool { section.iconChosen != true }
 
-    init(store: Store, section: CategorySection, dropping: Bool, focusing: Binding<UUID?>, add: @escaping () -> Void) {
+    init(store: Store, section: CategorySection, dropping: Bool, focusing: Binding<UUID?>) {
         self.store = store
         self.section = section
         self.dropping = dropping
-        self.add = add
         _focusing = focusing
     }
 
@@ -302,8 +274,6 @@ struct SectionHeaderRow: View {
                     .accessibilityAction { beginEditing() }
             }
             Spacer(minLength: 8)
-            IconButton(symbol: "plus", help: "New category in \(section.title)", label: "New category in \(section.title)",
-                       size: 24, tint: CDS.Text.secondary, action: add)
             IconButton(symbol: "trash", help: count > 0 ? "Delete: its categories go to the first section left" : "Delete",
                        label: "Delete \(section.title)", size: 24, tint: CDS.Text.muted) {
                 store.deleteSection(section.id)

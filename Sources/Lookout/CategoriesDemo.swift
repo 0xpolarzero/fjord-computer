@@ -51,8 +51,7 @@ enum CategoriesDemo {
             if let actions = names[store.categories[i].name] { store.categories[i].actions = ActionList(actions) }
         }
         var ledger = ActionLedger()
-        _ = InboxActions.plan(entries: store.entries, categories: store.categories, groups: store.groups, ledger: &ledger,
-                              me: store.me?.login ?? "demo")
+        _ = InboxActions.plan(entries: store.entries, categories: store.categories, ledger: &ledger, me: store.me?.login ?? "demo")
         let now = Date()
         func record(_ category: String, _ n: Int, _ action: UUID, _ state: ActionRun.State, _ detail: String, ago: TimeInterval,
                     url: URL? = nil, session: String? = nil) {

@@ -150,7 +150,8 @@ private final class LauncherLog {
         _ = try await ActionSessions.start(Self.request(message: "Redesign the pool's eviction"), store: store,
                                            clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
         #expect(calls.map(\.questions) == [["clone", "scope"]])
-        #expect(calls.first?.state["task"] == "Redesign the pool's eviction")
+        // A message without its GitHub block is read as GitHub's, fenced whole.
+        #expect(calls.first?.state["task"] == InboxActions.fenceWarning + "\n" + InboxActions.fenceOpen + "\nRedesign the pool's eviction\n" + InboxActions.fenceClose)
         #expect(log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"])
         #expect(log.signedSettings == [SessionSettings(model: "opus", effort: "max")])
         #expect(store.router.decisions.last?.doneLines == ["started a session in x (opus, max · picked by Jev)"])

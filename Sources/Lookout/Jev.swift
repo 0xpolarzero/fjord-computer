@@ -74,10 +74,14 @@ struct JevClient {
                 guard let p = Self.unit(answer["noul"]) else { throw Failure(message: "TypeSafe's yes/no for `\(id)` is invalid") }
                 out[id] = .noul(p)
             case .score(let levels, _):
-                guard let value = Self.level(answer, count: levels.count), let confidence = Self.confidence(answer["confidence"]) else {
+                guard let n = answer["score"] as? NSNumber, n.doubleValue.isFinite else {
                     throw Failure(message: "TypeSafe's score for `\(id)` is invalid")
                 }
-                out[id] = .score(value, confidence: confidence)
+                // The legend numbers the levels; bring the score to 0…count-1 whatever it starts from.
+                let first = (answer["legend"] as? [String: Any])?.keys.compactMap { Double($0) }.min()
+                let raw = n.doubleValue
+                let value = raw - (first ?? (raw > Double(levels.count - 1) ? 1 : 0))
+                out[id] = .score(min(max(value, 0), Double(levels.count - 1)), confidence: (answer["confidence"] as? Double) ?? 0)
             }
         }
         return out
@@ -115,36 +119,6 @@ struct JevClient {
         option.replacingOccurrences(of: ".", with: "_")
     }
 
-    /// A score brought to 0…count-1: a number (never a boolean) on the levels its legend numbers (from 0 or from 1, one
-    /// key per level), or without a legend one that can only be on one of the two scales. Anything else, or out of range,
-    /// is no score: never guessed or clamped.
-    static func level(_ answer: [String: Any], count: Int) -> Double? {
-        guard count > 1, let n = answer["score"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return nil }
-        let raw = n.doubleValue
-        let last = Double(count - 1)
-        let first: Double
-        if let legend = answer["legend"] {
-            guard let keys = (legend as? [String: Any])?.keys else { return nil }
-            let numbers = keys.compactMap { Int($0) }.sorted()
-            guard numbers.count == keys.count, numbers == Array(0..<count) || numbers == Array(1...count) else { return nil }
-            first = Double(numbers[0])
-        } else if raw < 1 {
-            first = 0
-        } else if raw > last {
-            first = 1
-        } else {
-            return nil
-        }
-        let value = raw - first
-        return (0...last).contains(value) ? value : nil
-    }
-
-    /// A confidence: none said is 0 (not sure); one said must be a number in 0…1.
-    static func confidence(_ value: Any?) -> Double? {
-        guard let value, !(value is NSNull) else { return 0 }
-        return unit(value)
-    }
-
     private static func unit(_ value: Any?) -> Double? {
         guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite,
               (0...1).contains(n.doubleValue) else { return nil }
@@ -175,8 +149,7 @@ struct JevClient {
         guard (0.98...1.02).contains(probabilities.values.reduce(0, +)) else {
             throw Failure(message: "TypeSafe's probabilities don't add up")
         }
-        guard let confidence = confidence(pick["confidence"]) else { throw Failure(message: "TypeSafe's confidence is invalid") }
-        return Choice(choice: option, confidence: confidence, probabilities: probabilities)
+        return Choice(choice: option, confidence: (pick["confidence"] as? Double) ?? 0, probabilities: probabilities)
     }
 }
 

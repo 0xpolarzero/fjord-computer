@@ -98,11 +98,9 @@ struct CategoriesView: View {
         }
     }
 
-    /// New category: the editor on a draft, in `section` (the first when nil). Nothing is made until Create.
-    private func create(in section: UUID?) {
-        var made = Self.newDraft(after: store.categories)
-        made.section = section
-        draft = made
+    /// New category: the editor on a draft. Nothing is made until Create.
+    private func create() {
+        draft = Self.newDraft(after: store.categories)
         editing = .new
     }
 
@@ -137,15 +135,27 @@ struct CategoriesView: View {
                 SettingsSection("Categories",
                                 info: ("Categories", store.categorySections.isEmpty
                                        ? "A thing goes to the first category, from the top, with a rule matching it. Drag to reorder."
-                                       : "A thing goes to the first category, from the top, with a rule matching it. Drag a category to reorder it or into another section; drag a section to move it with its categories.")) {
+                                       : "A thing goes to the first category, from the top, with a rule matching it. Drag a category to reorder it or into another section; drag a section to move it with its categories."),
+                                action: {
+                    HStack(spacing: 6) {
+                        Button { focusSection = store.createSection(name: "").id } label: {
+                            HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("Section") }
+                        }
+                        .buttonStyle(SettingsButtonStyle(size: .sm))
+                        .accessibilityLabel("New section")
+                        Button(action: create) {
+                            HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("Category") }
+                        }
+                        .buttonStyle(SettingsButtonStyle(size: .sm))
+                        .accessibilityLabel("New category")
+                    }
+                }, content: {
                     SettingsNest {
                         if store.categorySections.isEmpty {
                             ForEach(Array(store.categories.enumerated()), id: \.element.id) { i, category in
                                 if i > 0 { SettingsDivider() }
                                 categoryRow(category)
                             }
-                            if !store.categories.isEmpty { SettingsDivider() }
-                            NewRow(title: "New category", symbol: "plus") { create(in: nil) }
                         } else {
                             ForEach(Array(store.categorySections.enumerated()), id: \.element.id) { i, section in
                                 if i > 0 { SettingsDivider() }
@@ -153,11 +163,9 @@ struct CategoriesView: View {
                             }
                         }
                         SettingsDivider()
-                        NewRow(title: "New section", symbol: "plus") { focusSection = store.createSection(name: "").id }
-                        SettingsDivider()
                         DoneRow(count: store.doneEntries.count)
                     }
-                }
+                })
                 GroupsSection(store: store, expanded: $expandedGroup)
             }
             .padding(.horizontal, CDS.Settings.pagePadX)
@@ -171,7 +179,7 @@ struct CategoriesView: View {
     /// A section's header, then its categories, indented under it (or, with none, a place to drop one).
     @ViewBuilder private func sectionBlock(_ section: CategorySection) -> some View {
         let key = "section:\(section.id.uuidString)"
-        SectionHeaderRow(store: store, section: section, dropping: dropTarget == key, focusing: $focusSection) { create(in: section.id) }
+        SectionHeaderRow(store: store, section: section, dropping: dropTarget == key, focusing: $focusSection)
             .draggable(key)
             .dropDestination(for: String.self) { items, _ in
                 drop(items.first) { dragged in
@@ -248,8 +256,7 @@ extension Store {
         made.name = made.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !made.name.isEmpty else { return false }
         for i in made.rules.indices { made.rules[i].createdAt = now }
-        // At the end of its section (the tree's order is the order things match in).
-        changingInbox(.newCategoryButton) { categories = treeOrdered(categories + [made]) }
+        changingInbox(.newCategoryButton) { categories.append(made) }
         history?.observe(self)
         return true
     }
@@ -339,33 +346,6 @@ private struct CategoryRow: View {
     private func update(_ change: (inout InboxCategory) -> Void) {
         guard let i = store.categories.firstIndex(where: { $0.id == category.id }) else { return }
         change(&store.categories[i])
-    }
-}
-
-/// The last row of the tree: a dashed tile with a plus, and what it makes ("New section"; "New category" with no sections).
-private struct NewRow: View {
-    let title: String
-    let symbol: String
-    let action: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(CDS.Text.muted.opacity(hovered ? 0.9 : 0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                    .frame(width: 22, height: 22)
-                    .overlay(Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(hovered ? CDS.Text.secondary : CDS.Text.muted))
-                Text(title).cdsText(CDS.Density.comfortable.body, .regular, hovered ? CDS.Text.secondary : CDS.Text.muted)
-                Spacer(minLength: 8)
-            }
-            .frame(minHeight: 40)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .accessibilityLabel(title)
     }
 }
 

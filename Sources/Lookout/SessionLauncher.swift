@@ -233,8 +233,9 @@ enum ActionSessions {
         if sized { questions["scope"] = SessionScope.question }
         var answers: [String: JevClient.Answer] = [:]
         if let ask, !questions.isEmpty {
-            answers = (try? await ask(questions, ["item": request.summary, "action": request.category,
-                                                  "task": String(request.message.prefix(2000))])) ?? [:]
+            // What GitHub wrote is read as data: the item fenced, the task's own GitHub block bounded and framed again.
+            answers = (try? await ask(questions, ["item": UntrustedFence.github.warned(UntrustedText.clean(request.summary, limit: 300)),
+                                                  "action": request.category, "task": InboxActions.forJev(request.message)])) ?? [:]
         }
         let scope = answers["scope"]?.score
         if clones.count == 1 { return (clones[0], scope) }
