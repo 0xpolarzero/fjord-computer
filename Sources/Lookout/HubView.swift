@@ -217,7 +217,7 @@ struct LookoutHub: View {
         .frame(width: Self.cell)
         .background(alignment: .top) {
             if !store.shownCategories.isEmpty {
-                RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous)
+                inboxWell
                     .fill(CDS.Fill.ghostSelected)
                     .frame(width: Self.cell - 8, height: inboxMarkHeight + inboxCellsHeight + 2)
                     .frame(width: Self.cell)
@@ -236,6 +236,15 @@ struct LookoutHub: View {
                 .frame(width: Self.cell)
                 .transition(.scaleFade(0.8, reduce: reduce))
         }
+    }
+
+    /// The inbox's well, 4pt inside the bar's top: its top corners follow the bar's (concentric where the bar is rounded,
+    /// the tile's radius where it meets the screen edge), its bottom ones the tile's.
+    var inboxWell: UnevenRoundedRectangle {
+        let base = CDS.Tile.radius + 4, bar = barOutline.cornerRadii
+        func inner(_ r: CGFloat) -> CGFloat { max(base, r - 4) }
+        return UnevenRoundedRectangle(topLeadingRadius: inner(bar.topLeading), bottomLeadingRadius: base,
+                                      bottomTrailingRadius: base, topTrailingRadius: inner(bar.topTrailing), style: .continuous)
     }
 
     /// A short rule centred in the bar.
