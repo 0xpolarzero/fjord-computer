@@ -37,22 +37,72 @@ enum Brand {
 
     private static func map(_ c: RGB) -> RGB {
         let hi = max(c.r, c.g, c.b), lo = min(c.r, c.g, c.b), l = (hi + lo) / 2
-        if hi - lo < 0.09 {
-            // a neutral: keep its lightness on the studio ramp; on light, the dark surfaces (t < 0.2) stay within a few
-            // steps of paper and text runs from there down to ink
-            var t = min(1, max(0, (l - 0.04) / 0.92))
-            if isLight { t = t < 0.2 ? 1 - t * 0.35 : 0.93 - (t - 0.2) / 0.8 * 0.9 }
-            return mix(deep, paper, t)
+        let neutral = hi - lo < 0.09
+        if !isLight {
+            // dark: a neutral keeps its lightness on the studio ramp; colours are unchanged
+            return neutral ? mix(deep, paper, min(1, max(0, (l - 0.04) / 0.92))) : c
         }
-        // a colour keeps its hue; on paper the light ones darken so they still read, and the dark tints behind badges
-        // and banners become pale washes
-        if isLight, l > 0.5 { return mix(c, ink0, 0.32) }
-        if isLight, l < 0.35 { return mix(c, paper, 0.84) }
-        return c
+        // light: everything keeps the contrast it has against the dark ground, now against paper, so text reads as
+        // well as in dark and tints stay as faint. Neutrals take the studio's cool hue; colours keep hue and saturation
+        // (capped just above AA, so text reads and the same hue still makes a clean tint).
+        let ratio = (luminance(c) + 0.05) / (luminance(darkGround) + 0.05)
+        let target = max(luminance(ink0), (luminance(paper) + 0.05) / min(ratio, neutral ? 21 : 4.8) - 0.05)
+        var (h, s, _) = hsl(c)
+        if neutral { (h, s) = (205, 0.16) }
+        return withLuminance(h: h, s: s, target)
+    }
+
+    /// The darkest ground of the dark design (CDS surface 0): what paper stands in for.
+    private static let darkGround = RGB(r: 0x0B / 255, g: 0x0B / 255, b: 0x0B / 255)
+
+    /// A tint of `color` at `opacity`, as a card's fill: on dark the colour itself made transparent; on light a pale,
+    /// opaque colour of the same hue, since a transparent text colour over the ground turns grey.
+    static func wash(_ color: Color, _ opacity: Double) -> Color {
+        guard isLight, let c = NSColor(color).usingColorSpace(.sRGB) else { return color.opacity(opacity) }
+        let (h, s, _) = hsl(RGB(r: c.redComponent, g: c.greenComponent, b: c.blueComponent))
+        let out = rgb(h: h, s: s, l: 1 - opacity * 0.9)
+        return Color(.sRGB, red: out.r, green: out.g, blue: out.b)
     }
 
     private static func mix(_ a: RGB, _ b: RGB, _ t: Double) -> RGB {
         RGB(r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t)
+    }
+
+    private static func luminance(_ c: RGB) -> Double {
+        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    private static func hsl(_ c: RGB) -> (Double, Double, Double) {
+        let hi = max(c.r, c.g, c.b), lo = min(c.r, c.g, c.b), l = (hi + lo) / 2, d = hi - lo
+        guard d > 0 else { return (0, 0, l) }
+        let s = d / (1 - abs(2 * l - 1))
+        var h: Double = hi == c.r ? (c.g - c.b) / d : hi == c.g ? (c.b - c.r) / d + 2 : (c.r - c.g) / d + 4
+        h *= 60
+        return (h < 0 ? h + 360 : h, min(1, s), l)
+    }
+
+    private static func rgb(h: Double, s: Double, l: Double) -> RGB {
+        let c = (1 - abs(2 * l - 1)) * s, x = c * (1 - abs((h / 60).truncatingRemainder(dividingBy: 2) - 1)), m = l - c / 2
+        let (r, g, b): (Double, Double, Double) = switch h {
+        case ..<60: (c, x, 0)
+        case ..<120: (x, c, 0)
+        case ..<180: (0, c, x)
+        case ..<240: (0, x, c)
+        case ..<300: (x, 0, c)
+        default: (c, 0, x)
+        }
+        return RGB(r: r + m, g: g + m, b: b + m)
+    }
+
+    /// The colour of this hue and saturation whose luminance is `target` (lightness found by bisection).
+    private static func withLuminance(h: Double, s: Double, _ target: Double) -> RGB {
+        var lo = 0.0, hi = 1.0
+        for _ in 0..<24 {
+            let mid = (lo + hi) / 2
+            if luminance(rgb(h: h, s: s, l: mid)) < target { lo = mid } else { hi = mid }
+        }
+        return rgb(h: h, s: s, l: (lo + hi) / 2)
     }
 
     // MARK: Type

@@ -1309,7 +1309,7 @@ private struct CardView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(warm.opacity(expanded ? 0.15 : hovered ? 0.13 : 0.09)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Brand.wash(warm, expanded ? 0.15 : hovered ? 0.13 : 0.09)))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(warm.opacity(marked || expanded || focused ? 0.8 : 0.4), lineWidth: marked ? 1.5 : 1)
@@ -1455,13 +1455,13 @@ private struct AskBackCard: View {
                         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(CDS.Fill.field))
                         .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                 ClaudeButton("Dismiss", variant: .ghost, size: .sm) { store.routerDispatcher.dismiss(ask.id) }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(warm.opacity(0.15)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Brand.wash(warm, 0.15)))
         .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(warm.opacity(0.8), lineWidth: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Where should this go? \(ask.message)")
