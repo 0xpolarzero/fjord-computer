@@ -25,11 +25,31 @@ enum RouterWaits {
         }
     }
 
-    /// What the session is told: "The CI on owner/repo#12 finished: passing." Only what Lookout itself saw goes in (never
-    /// another session's words).
+    /// What the session is told: "The CI on owner/repo#12 finished: passing." It goes to the session as your own words
+    /// (signed), so nothing free-form goes in, not even what Lookout saw (a workflow's or job's name, a title, another
+    /// session's): only a repo and number checked to look like GitHub's, and the outcome in fixed words.
     static func message(_ triage: RouterTriage) -> String? {
-        guard let ready = triage.ready else { return nil }
-        return "The \(triage.waitingLabel) finished: \(ready.result)."
+        guard let ready = triage.ready, let target = triage.watch?.target else { return nil }
+        switch target {
+        case .ci:
+            let outcome = ready.result == "passing" ? "passing" : ready.result.hasPrefix("failing") ? "failing" : "finished"
+            let what = triage.watch?.ref.flatMap(safeRef).map { "CI on \($0)" } ?? "CI you were waiting on"
+            return "The \(what) finished: \(outcome)."
+        case .session:
+            let outcome = ready.result == "it stopped, blocked" ? "it stopped, blocked" : "it finished its turn"
+            return "The session you were waiting on finished: \(outcome)."
+        }
+    }
+
+    /// "owner/repo#12" or "owner/repo", when it is only that (GitHub's characters, GitHub's lengths); nil otherwise.
+    static func safeRef(_ ref: String) -> String? {
+        ref.range(of: #"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}(#[0-9]{1,9})?$"#, options: .regularExpression) != nil
+            && !ref.contains("..") ? ref : nil
+    }
+
+    /// The CI's repo and number for the message, checked.
+    static func ref(_ thing: Thing) -> String? {
+        safeRef(thing.kind == .workflow ? thing.repo : "\(thing.repo)\(thing.number.map { "#\($0)" } ?? "")")
     }
 
     /// "CI on owner/repo#12" for a PR, "CI: Tests on main" for a workflow.
@@ -60,7 +80,8 @@ extension Store {
         }.sorted { $0.updatedAt > $1.updatedAt }.prefix(6)
         options += ci.enumerated().map { i, thing in
             RouterTriage.WaitOption(key: "c\(i)", hint: "\(RouterWaits.ciLabel(thing)): \(thing.title), checks running",
-                                    watch: .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing)))
+                                    watch: .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing),
+                                                 ref: RouterWaits.ref(thing)))
         }
         return options
     }

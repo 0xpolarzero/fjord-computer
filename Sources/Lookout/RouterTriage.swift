@@ -33,8 +33,10 @@ struct RouterTriage: Codable, Hashable {
         }
 
         var target: Target
-        /// "CI on owner/repo#12", "session “Title”".
+        /// "CI on owner/repo#12", "session “Title”": shown here, never sent.
         var label: String
+        /// For CI: "owner/repo#12" (or "owner/repo" for a workflow), the only part of it the session is told.
+        var ref: String?
     }
 
     /// The awaited thing finished: what came of it.

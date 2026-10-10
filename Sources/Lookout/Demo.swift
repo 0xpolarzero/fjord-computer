@@ -297,7 +297,7 @@ enum Demo {
         }
         let s = { (id: String) in store.claudeSessions[id]! }
         var ready = RouterTriage(state: .waiting, urgency: 1, work: .pr, waitingOn: .ci,
-                                 watch: .init(target: .ci(thing: "pr:me/lookout#212"), label: "CI on me/lookout#212"))
+                                 watch: .init(target: .ci(thing: "pr:me/lookout#212"), label: "CI on me/lookout#212", ref: "me/lookout#212"))
         ready.ready = .init(result: "passing", at: now.addingTimeInterval(-40))
         store.router.cards += [
             card(s("local_demo-release"), RouterTriage(state: .approval, questions: ["OK to publish 2.4 to the App Store and push the `v2.4.0` tag?"],
