@@ -1017,14 +1017,16 @@ private struct ZoneScroll<Content: View>: View {
 // MARK: - Working card
 
 /// A session working on its own: calm and small, one line. Its icon and title, what it is doing now (shimmering), what it
-/// left running, and for how long; opening it opens the session in Claude. Its sparkles button (on hover) summarizes it, and
-/// its newest summary sits under it.
+/// left running, and for how long. A click expands it in place: every summary of it, newest first, and its subagents and
+/// commands with what each is on (Open in Claude is there and in its menu). Its sparkles button (on hover) summarizes it, and
+/// folded, its newest summary sits under it.
 private struct WorkingCard: View {
     let store: Store
     @Bindable var model: RouterModel
     let row: AgentRow
     let summary: RouterSummary?
     @State private var hovered = false
+    @State private var expanded = false
     @Environment(\.cdsColumnWidth) private var columnWidth
 
     var body: some View {
@@ -1038,7 +1040,7 @@ private struct WorkingCard: View {
         let marked = model.highlighted == RouterModel.workingID(row.id)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Button { store.openAgent(row.id) } label: {
+                Button { withAnimation(Theme.Motion.hover) { expanded.toggle() } } label: {
                     HStack(spacing: 8) {
                         SessionGlyph(row: row, size: 18, dot: false)
                         Text(row.session.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
@@ -1060,13 +1062,15 @@ private struct WorkingCard: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(row.session.title)
                 .accessibilityValue("working, \(row.projectName), \(doing)\(row.tasks.isEmpty ? "" : ", \(row.tasksText ?? "")")")
-                .accessibilityHint("Opens it in Claude")
+                .accessibilityHint(expanded ? "Folds its details" : "Shows its summaries, subagents and commands")
+                .accessibilityAddTraits(expanded ? .isSelected : [])
+                .accessibilityAction(named: "Open in Claude") { store.openAgent(row.id) }
                 .accessibilityAction(named: "Summarize") { summarizer.request(row.id, store: store) }
                 SparklesButton(busy: busy, done: busy, label: "Summarize this session", shown: hovered) {
                     summarizer.request(row.id, store: store)
                 }
             }
-            if let summary { WorkingSummary(summary: summary) }
+            if expanded { details } else if let summary { WorkingSummary(summary: summary) }
             if let error = summarizer.errors[row.id] {
                 Text(error).cdsText((12, 16), .regular, CDS.Fill.warning).lineLimit(2).padding(.leading, 26)
             }
@@ -1077,6 +1081,46 @@ private struct WorkingCard: View {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .contextMenu { SessionMenu(row: row, store: store) }
+    }
+
+    /// Expanded: its summaries, newest first, then its subagents and commands, then Open in Claude.
+    @ViewBuilder private var details: some View {
+        let summaries = store.router.summaries.filter { $0.sessionID == row.id }.reversed()
+        VStack(alignment: .leading, spacing: 8) {
+            if summaries.isEmpty {
+                Text("No summary yet: the sparkles button makes one.")
+                    .cdsText((12, 16), .regular, CDS.Text.muted).padding(.leading, 26)
+            } else {
+                ForEach(Array(summaries)) { WorkingSummary(summary: $0) }
+            }
+            if !row.tasks.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(row.tasks) { task in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: task.kind == .agent ? "person.crop.circle" : "terminal")
+                                .font(.system(size: 10, weight: .medium)).foregroundStyle(CDS.Text.muted).frame(width: 18)
+                            Text(task.title).cdsText((12, 16), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(1)
+                            if let activity = task.activity {
+                                Text(activity.text).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
+                            }
+                            Spacer(minLength: 4)
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(AgentRow.duration(context.date.timeIntervalSince(task.since)))
+                                    .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                            }
+                        }
+                        .padding(.trailing, 30)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(task.kind == .agent ? "Subagent" : "Command") \(task.title)")
+                        .accessibilityValue(task.activity?.text ?? "")
+                    }
+                }
+            }
+            Button("Open in Claude") { store.openAgent(row.id) }
+                .buttonStyle(.link).font(CDS.sans(12))
+                .padding(.leading, 26)
+        }
+        .transition(.opacity)
     }
 
     /// "2 agents · 1 command" with their names on hover.
