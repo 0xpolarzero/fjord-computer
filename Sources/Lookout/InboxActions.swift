@@ -206,13 +206,20 @@ enum InboxActions {
     // MARK: Plan
 
     /// What the rules say, in a number that is the same at every launch: any edit of a rule (not only adding or removing
-    /// one) makes what matches it old news.
-    static func fingerprint(_ rules: [Rule]) -> String {
+    /// one) makes what matches it old news. So does an edit of a group a rule names: adding Carol to it brings in what
+    /// Carol already had, and that isn't new either. Rules that name no group read as they always did.
+    static func fingerprint(_ rules: [Rule], groups: [InboxGroup]) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         encoder.dateEncodingStrategy = .iso8601
+        var data = (try? encoder.encode(rules)) ?? Data()
+        let text = String(decoding: data, as: UTF8.self)
+        for group in groups.sorted(by: { $0.id.uuidString < $1.id.uuidString }) where text.contains(group.id.uuidString) {
+            let members = Set(group.members.map { $0.lowercased() }).sorted().joined(separator: "\u{1F}")
+            data.append(contentsOf: Array("\u{1E}\(group.id.uuidString)\u{1F}\(group.kind.rawValue)\u{1F}\(members)".utf8))
+        }
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in (try? encoder.encode(rules)) ?? Data() {
+        for byte in data {
             hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
         }
         return String(hash, radix: 16)
@@ -221,13 +228,13 @@ enum InboxActions {
     /// Brings the ledger up to date with the categories (a category, rule set or action seen for the first time takes what
     /// is there as old; runs of what is gone are forgotten) and returns the runs that are due, in the order of the
     /// categories, newest things first.
-    static func plan(entries: [InboxEntry], categories: [InboxCategory], ledger: inout ActionLedger, me: String,
-                     now: Date = Date()) -> [Job] {
+    static func plan(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: inout ActionLedger,
+                     me: String, now: Date = Date()) -> [Job] {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
         // Baselines: what is there when a category's rules change, or an action is added, is old.
         for category in categories {
-            let ruleIDs = fingerprint(category.rules)
+            let ruleIDs = fingerprint(category.rules, groups: groups)
             let actionIDs = Set(category.actions.items.map(\.id))
             let before = ledger.baselines[category.id]
             let all = before == nil || before!.rules != ruleIDs
@@ -265,15 +272,17 @@ enum InboxActions {
                 .prefix(ledger.runs.count - maxRuns)
             for (key, _) in drop { ledger.runs[key] = nil }
         }
-        return due(entries: entries, categories: categories, ledger: ledger, me: me)
+        return due(entries: entries, categories: categories, groups: groups, ledger: ledger, me: me)
     }
 
     /// The runs due now, without changing anything.
-    static func due(entries: [InboxEntry], categories: [InboxCategory], ledger: ActionLedger, me: String) -> [Job] {
+    static func due(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: ActionLedger,
+                    me: String) -> [Job] {
         var jobs: [Job] = []
         for category in categories where !category.actions.isEmpty {
             // Not yet taken in: nothing is due (the baseline comes first).
-            guard let baseline = ledger.baselines[category.id], baseline.rules == fingerprint(category.rules) else { continue }
+            guard let baseline = ledger.baselines[category.id], baseline.rules == fingerprint(category.rules, groups: groups)
+            else { continue }
             let mine = entries.filter { $0.categoryID == category.id && !$0.isDone }
                 .sorted { ($0.thing.updatedAt, $0.id) > ($1.thing.updatedAt, $1.id) }
             for entry in mine {
@@ -405,9 +414,10 @@ enum InboxActions {
         return "\(s / 86400)d ago"
     }
 
-    static func chips(for entry: InboxEntry, category: InboxCategory, ledger: ActionLedger, me: String, now: Date = Date()) -> [Chip] {
+    static func chips(for entry: InboxEntry, category: InboxCategory, groups: [InboxGroup], ledger: ActionLedger, me: String,
+                      now: Date = Date()) -> [Chip] {
         guard !category.actions.isEmpty else { return [] }
-        let queued = Set(due(entries: [entry], categories: [category], ledger: ledger, me: me).map(\.action.id))
+        let queued = Set(due(entries: [entry], categories: [category], groups: groups, ledger: ledger, me: me).map(\.action.id))
         var out: [Chip] = []
         for action in category.actions.items where action.applies(to: entry.thing.kind) {
             let latest = ledger.runs.values
@@ -655,7 +665,7 @@ extension Store {
         repeat {
             actionsAgain = false
             var ledger = actionLedger
-            let jobs = InboxActions.plan(entries: entries, categories: categories, ledger: &ledger, me: me, now: now)
+            let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me, now: now)
             let batch = Array(jobs.prefix(InboxActions.perSync))
             for job in batch {
                 for key in job.keys {
@@ -695,13 +705,13 @@ extension Store {
     func baselineActions(now: Date = Date()) {
         guard let me = me?.login, !me.isEmpty else { return }
         var ledger = actionLedger
-        _ = InboxActions.plan(entries: entries, categories: categories, ledger: &ledger, me: me, now: now)
+        _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me, now: now)
         if ledger != actionLedger { actionLedger = ledger }
     }
 
     func actionChips(for entry: InboxEntry) -> [InboxActions.Chip] {
         guard let category = categories.first(where: { $0.id == entry.categoryID }), !category.actions.isEmpty else { return [] }
-        return InboxActions.chips(for: entry, category: category, ledger: actionLedger, me: me?.login ?? "")
+        return InboxActions.chips(for: entry, category: category, groups: groups, ledger: actionLedger, me: me?.login ?? "")
     }
 
     /// The most recently updated thing the rules match, with its facts: what "Try on latest match" tries on.

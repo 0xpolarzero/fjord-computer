@@ -79,6 +79,30 @@ final class FakePerformer: ActionPerformer {
         #expect(performer.asked.count == 1)
     }
 
+    @Test func addingSomeoneToAGroupTheRuleNamesTakesWhatTheyHadAsOld() async {
+        let friends = InboxGroup(name: "Friends", kind: .people, members: ["alice"])
+        var category = InboxFixture.category()
+        category.rules[0].scope.by = Pick(include: [.group(friends.id)])
+        category.actions = ActionList([session])
+        let carol = Person(login: "carol")
+        let store = InboxFixture.store([InboxFixture.pr(1, by: Person(login: "alice")), InboxFixture.pr(2, by: carol)],
+                                       category: category)
+        store.groups = [friends]
+        let performer = FakePerformer()
+        store.actionPerformer = performer
+        await store.runActions()
+        #expect(performer.asked.isEmpty)
+        // Carol joins: her PR, already cached, comes into the category, but it isn't new.
+        store.groups[0].members.append("Carol")
+        #expect(store.entries.contains { $0.id == "pr:a/one#2" })
+        await store.runActions()
+        #expect(performer.asked.isEmpty)
+        // What she opens next is.
+        add(store, InboxFixture.pr(3, by: carol))
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+    }
+
     @Test func anActionAddedLaterBaselinesOnlyItself() async {
         let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
         await store.runActions()
