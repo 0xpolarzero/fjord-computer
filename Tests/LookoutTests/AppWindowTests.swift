@@ -127,7 +127,7 @@ import Testing
         let hub = HubState()
         hub.enter(.inbox)
         #expect(hub.section == nil)
-        await waitUntil(within: 5) { hub.section == .inbox }
+        await waitUntil { hub.section == .inbox }
         #expect(hub.section == .inbox)
         hub.enter(.router)
         #expect(hub.section == .router)
