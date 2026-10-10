@@ -417,6 +417,7 @@ enum PlaygroundShots {
             exit(1)
         }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        ShotRun.prepare()
         Task {
             // Some at a time: every window is a live SwiftUI hierarchy, and a full set is too much to hold at once.
             for batch in stride(from: 0, to: shots.count, by: 10).map({ Array(shots[$0..<min($0 + 10, shots.count)]) }) {
@@ -451,12 +452,11 @@ enum PlaygroundShots {
             .frame(width: shot.size.width, height: shot.size.height)
         let hosting = NSHostingView(rootView: root)
         hosting.frame.size = shot.size
-        let window = NSWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let window = ShotWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        window.orderFrontRegardless()
+        ShotRun.show(window)
         return window
     }
 
@@ -486,12 +486,11 @@ enum PlaygroundShots {
             .frame(width: size.width, height: size.height)
         let hosting = NSHostingView(rootView: root)
         hosting.frame.size = size
-        let window = NSWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let window = ShotWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        window.orderFrontRegardless()
+        ShotRun.show(window)
         return window
     }
 

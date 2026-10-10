@@ -204,12 +204,11 @@ enum CategoriesDemo {
             .tipSpace()
         let hosting = NSHostingView(rootView: root)
         hosting.frame.size = size
-        let window = NSWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let window = ShotWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        window.orderFrontRegardless()
+        ShotRun.show(window)
         return window
     }
 }

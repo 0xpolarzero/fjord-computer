@@ -16,9 +16,27 @@ enum AppWindowDev {
     }
 }
 
-/// A titled window that may sit anywhere, so a shot's can be off every screen.
-private final class ShotWindow: NSWindow {
+/// The window of a shot: it may sit anywhere, so it can be off every screen, and it never becomes key or main, so no field
+/// in it takes keyboard focus or the keystrokes typed in other apps while a shot runs.
+final class ShotWindow: NSWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// The shot runs (`--window-shots`, `--playground-shots`) never activate the app.
+@MainActor
+enum ShotRun {
+    /// Before any shot window is made: an accessory app (no Dock icon, no menu bar) that nothing activates.
+    static func prepare() {
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// Shows a shot's window offscreen: ordered front without activating the app or making the window key.
+    static func show(_ window: NSWindow) {
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+    }
 }
 
 @MainActor
@@ -64,6 +82,7 @@ enum AppWindowShots {
             exit(1)
         }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        ShotRun.prepare()
         Task {
             for shot in shots {
                 let window = open(shot)
@@ -93,10 +112,7 @@ enum AppWindowShots {
         AppWindowController.style(window)
         window.contentViewController = controller
         window.setContentSize(shot.size)
-        window.setFrameOrigin(NSPoint(x: 80, y: 60))
-        AppPolicy.update(windowOpen: true)
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        ShotRun.show(window)
         return window
     }
 
