@@ -40,6 +40,8 @@ struct RouterPage: Equatable {
     /// Open cards: what blocks a session first (questions, plans, stuck turns), then the finished turns; newest first in each
     /// part, as the sidebar lists them (the arrow keys walk the same order).
     var needs: [RouterCard] = []
+    /// Messages waiting for you to say where they go (nothing is sent until you do), above the cards.
+    var asks: [RouterAskBack] = []
     /// Sessions working on their own, the longest running first.
     var working: [AgentRow] = []
     /// Oldest first: the Router's conversation and the addressed cards by time.
@@ -52,11 +54,12 @@ struct RouterPage: Equatable {
     }
 
     static func make(cards: [RouterCard], chat: [RouterMessage], working: [AgentRow],
-                     decisions: [RouterDecision] = [], overviews: [RouterOverview] = []) -> RouterPage {
+                     decisions: [RouterDecision] = [], overviews: [RouterOverview] = [], asks: [RouterAskBack] = []) -> RouterPage {
         let open = cards.filter(\.isOpen).sorted(by: newestFirst)
         var page = RouterPage()
         page.needs = open.filter { $0.kind != .done } + open.filter { $0.kind == .done }
         page.working = working
+        page.asks = asks
         let entries = chat.map(Entry.message) + decisions.map(Entry.decision) + overviews.map(Entry.overview) + cards.filter { !$0.isOpen }.map(Entry.card)
         page.history = entries.enumerated().sorted { a, b in
             a.element.date != b.element.date ? a.element.date < b.element.date : a.offset < b.offset
@@ -76,7 +79,7 @@ extension Store {
         // carry yet (the Router's own words, notices, sessions' messages).
         let kept = router.chat.filter { [.router, .error, .peer].contains($0.role) }
         return .make(cards: router.cards, chat: kept, working: routerWorkingRows, decisions: router.decisions,
-                     overviews: router.overviews)
+                     overviews: router.overviews, asks: routerDispatcher.askBacks)
     }
 }
 
@@ -339,6 +342,10 @@ private struct HistoryDecisionLine: View {
 
     private var key: String { decision.id.uuidString }
     private var open: Bool { model.expanded.contains(key) }
+    /// While a typed run is under way, how far it is (classifying, sending…); else how it ended.
+    private var status: String {
+        decision.outcome == .pending ? store.routerDispatcher.progress[decision.id].map { $0 + "…" } ?? decision.summary : decision.summary
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -349,7 +356,7 @@ private struct HistoryDecisionLine: View {
                     Text(RouterDecision.clip(decision.triggerText, 90))
                         .cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
-                    Text("· \(decision.summary)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    Text("· \(status)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
                     Text(shortAgo(decision.at)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
@@ -368,7 +375,7 @@ private struct HistoryDecisionLine: View {
             .focused($focused)
             .onHover { hovered = $0 }
             .accessibilityLabel(decision.triggerText)
-            .accessibilityValue("\(decision.summary), \(open ? "expanded" : "collapsed")")
+            .accessibilityValue("\(status), \(open ? "expanded" : "collapsed")")
 
             if open { details.transition(.opacity) }
         }
@@ -379,6 +386,7 @@ private struct HistoryDecisionLine: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: 10) {
             CDSProse(text: decision.triggerText, color: CDS.Text.secondary, inset: false)
+            if let reply = decision.reply { CDSProse(text: reply, color: CDS.Text.primary, inset: false) }
             ForEach(Array(decision.doneLines.enumerated()), id: \.offset) { _, line in
                 Text(line).cdsText((12, 16), .regular, CDS.Text.muted).fixedSize(horizontal: false, vertical: true)
             }
@@ -508,7 +516,7 @@ private struct RouterZones: View {
         let working = page.working.isEmpty ? 0 : 24 + CGFloat(page.working.count) * 34 + 12 + 40
         let rows = CGFloat(max(0, page.needs.count - 1)) * (wide ? 40 : 58)
         let formCap = max(180, min(400, height - working - 28 - rows - (wide ? 52 : 100) - 24 - 12 - 24))
-        if page.needs.isEmpty {
+        if page.needs.isEmpty && page.asks.isEmpty {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.system(size: 12, weight: .medium))
                 Text("Nothing needs you").cdsText((13, 18), .regular, CDS.Text.muted)
@@ -520,7 +528,7 @@ private struct RouterZones: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 7) {
                     Text("Needs you").cdsText((14, 20), .semibold, CDS.Fill.warning)
-                    Text("\(page.needs.count)")
+                    Text("\(page.needs.count + page.asks.count)")
                         .cdsText((12, 16), .semibold, Color.black.opacity(0.8)).monospacedDigit()
                         .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 18)
                         .background(Capsule().fill(CDS.Fill.warning))
@@ -528,9 +536,16 @@ private struct RouterZones: View {
                 .padding(.leading, 2)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
-                .accessibilityLabel("Needs you, \(page.needs.count)")
-                ZoneScroll(maxHeight: max(220, height * 0.9), reveal: model.revealRequest, ids: Set(page.needs.map(\.id))) {
+                .accessibilityLabel("Needs you, \(page.needs.count + page.asks.count)")
+                ZoneScroll(maxHeight: max(220, height * 0.9), reveal: model.revealRequest,
+                           ids: Set(page.needs.map(\.id) + page.asks.map { $0.id.uuidString })) {
                     VStack(spacing: 6) {
+                        ForEach(page.asks) { ask in
+                            AskBackCard(store: store, ask: ask)
+                                .id(ask.id.uuidString)
+                                .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
+                                                        removal: .scaleFade(0.97, reduce: reduceMotion)))
+                        }
                         ForEach(page.needs) { card in
                             NeedsCard(store: store, model: model, card: card, expanded: card.id == open, formCap: formCap)
                                 .id(card.id)
@@ -827,5 +842,65 @@ private struct NeedsCard: View {
                 ClaudeButton("Mark handled", variant: .ghost, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
             }
         }
+    }
+}
+
+// MARK: - Ask-back card
+
+/// "Where should this go?": a message the Router couldn't place with confidence. The top targets are buttons, "Something else…"
+/// lists every session and project, and typing a target's name in the composer answers it too. Nothing is sent until you pick.
+private struct AskBackCard: View {
+    let store: Store
+    let ask: RouterAskBack
+
+    var body: some View {
+        let warm = CDS.Fill.warning
+        let pickers = store.routerDispatcher.pickerOptions()
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "questionmark.bubble").font(.system(size: 13, weight: .medium)).foregroundStyle(warm)
+                Text("Where should this go?").cdsText((14, 20), .semibold, CDS.Text.primary)
+                Spacer(minLength: 4)
+                Text(shortAgo(ask.at)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
+            }
+            Text("“\(RouterDecision.clip(ask.message, 160))”")
+                .cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            FlowLayout(spacing: 6) {
+                ForEach(ask.options) { option in
+                    ClaudeButton(option.title + (option.detail.isEmpty ? "" : " · \(option.detail)"), variant: .secondary, size: .sm) {
+                        store.routerDispatcher.pick(ask.id, target: option.target)
+                    }
+                }
+                Menu {
+                    if !pickers.sessions.isEmpty {
+                        Section("Send to a session") {
+                            ForEach(pickers.sessions) { option in
+                                Button("\(option.title) · \(option.detail)") { store.routerDispatcher.pick(ask.id, target: option.target) }
+                            }
+                        }
+                    }
+                    if !pickers.projects.isEmpty {
+                        Section("Start a session in") {
+                            ForEach(pickers.projects) { option in
+                                Button(option.detail) { store.routerDispatcher.pick(ask.id, target: option.target) }
+                            }
+                        }
+                    }
+                } label: {
+                    Text("Something else…").cdsText((13, 18), .medium, CDS.Text.secondary)
+                        .padding(.horizontal, 10).frame(height: 28)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(CDS.Fill.field))
+                        .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                ClaudeButton("Dismiss", variant: .ghost, size: .sm) { store.routerDispatcher.dismiss(ask.id) }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(warm.opacity(0.15)))
+        .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(warm.opacity(0.8), lineWidth: 1) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Where should this go? \(ask.message)")
     }
 }

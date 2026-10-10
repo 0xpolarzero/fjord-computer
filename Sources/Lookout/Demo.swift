@@ -249,7 +249,20 @@ enum Demo {
         }
         state.overviews = [RouterOverview(at: now.addingTimeInterval(-420),
                                           text: "Lookout is running its tests and microsandbox is in review; the transfer session finished a while ago and the LCU session is waiting on your answer.")]
+        // A message the Router couldn't place: asks where it goes (its run's entry waits for the pick), and one run under way.
+        var asking = RouterDecision(at: now.addingTimeInterval(-15), trigger: .you("ship it tomorrow morning"), decision: .init(intent: "message", label: "reply", confidence: 0.48))
+        asking.add(.asked(["Fix the flaky sandbox test", "Repository ownership transfer setup"]))
+        var running = RouterDecision(at: now.addingTimeInterval(-4), trigger: .you("tell the transfer session to archive the old fork"), decision: .init(intent: "message"))
+        running.decision.label = "reply"
+        running.decision.confidence = 0.93
+        state.decisions += [asking, running]
         store.router = state
+        func option(_ session: String) -> RouterAskBack.Option? { store.routerDispatcher.option("session:\(session)", store: store) }
+        store.routerDispatcher.preview(
+            ask: RouterAskBack(id: asking.id, message: "ship it tomorrow morning", context: RouterContext(),
+                               options: [option("local_demo-ci"), option("local_demo-transfer"), option("local_demo-calc")].compactMap { $0 },
+                               suggestion: "session:local_demo-ci", at: now.addingTimeInterval(-15)),
+            progress: [running.id: "sending"])
     }
 
     /// The Router changing Lookout itself: what the user asked, and a card for each change (one taken back).

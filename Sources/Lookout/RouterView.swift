@@ -49,7 +49,7 @@ extension Store {
                                              projects: projects.isEmpty ? nil : projects))
             router.chat.append(RouterMessage(role: .router, text: "In a demo the Router only says what it would do.", date: now))
         } else {
-            routerAgent.send(text, context: RouterContext(replyTo: replyTo, projects: projects))
+            routerDispatcher.submit(text, context: RouterContext(replyTo: replyTo, projects: projects))
         }
     }
 

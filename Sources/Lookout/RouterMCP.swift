@@ -500,7 +500,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// The messages `prepare` (and `start_session`) made, by the `to` they're for: the next SendMessage there must carry
     /// exactly that text.
-    private(set) var prepared: [String: Prepared] = [:]
+    var prepared: [String: Prepared] = [:]
     /// Haiku's rephrasing (message, title, project); tests answer for it.
     var rephrase: ((String, String, String) async throws -> Prepared)?
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
@@ -516,6 +516,9 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// The inbox action's message the current turn answers (its id in the chat), if an action started it.
     private(set) var automatedRef: UUID?
+    /// The decision-log entry of the run this instance serves (a typed run of the dispatcher, see RouterDispatcher): its
+    /// changes join that entry, not whichever run is `activeDecision`.
+    var decision: UUID?
 
     /// A turn of yours begins (nil: a session's message started it). `automatedRef`: it is an inbox action's message, which
     /// can read Lookout but changes nothing in it.
@@ -544,7 +547,7 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// A run of a program for the current turn, stopped with it; listed from before its program starts.
-    private func tracked<T>(_ body: (OneShot.Handle) async throws -> T) async throws -> T {
+    func tracked<T>(_ body: (OneShot.Handle) async throws -> T) async throws -> T {
         let handle = OneShot.Handle()
         let key = ObjectIdentifier(handle)
         runs[key] = handle
@@ -792,7 +795,7 @@ final class RouterMCPServer: @unchecked Sendable {
     // MARK: route
 
     /// A target `route` can name, and what tells it apart.
-    private struct Target {
+    struct Target {
         var target: String
         var hint: String
         var title: String
@@ -810,7 +813,7 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// `projects`: folders the user tagged; only their cards, sessions and new-session targets are offered then.
-    private func targets(_ store: Store, projects: Set<String>? = nil) -> [Target] {
+    func targets(_ store: Store, projects: Set<String>? = nil) -> [Target] {
         // The projects narrow first; the limits apply to what's left.
         var out: [Target] = []
         for card in store.openRouterCards.filter({ projects?.contains($0.folder ?? "") ?? true }).prefix(60) {
@@ -839,7 +842,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// Without Jev: a session whose title the message names, then its project, then shared words. `named` is the one
     /// target the message names outright, if exactly one.
-    private static func unassisted(_ message: String, _ targets: [Target]) -> (ranked: [(target: String, score: Int)], named: String?) {
+    static func unassisted(_ message: String, _ targets: [Target]) -> (ranked: [(target: String, score: Int)], named: String?) {
         let text = message.lowercased()
         let words = Set(text.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
         func mentions(_ name: String) -> Bool {

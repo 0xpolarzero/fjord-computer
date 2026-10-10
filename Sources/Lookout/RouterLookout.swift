@@ -231,7 +231,7 @@ extension RouterTools {
         state.chat.append(RouterMessage(role: .change, text: change.title, date: change.date, change: change))
         RouterFeed.prune(&state)
         store.router = state
-        store.logChange(change)
+        store.logChange(change, into: decision)
         return change
     }
 

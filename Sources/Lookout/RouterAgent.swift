@@ -900,7 +900,7 @@ struct RouterContext: Equatable {
     }
 
     /// Why SendMessage didn't deliver, from its result (`{"success":false,"message":…}`); nil when it did.
-    nonisolated private static func undelivered(_ result: String) -> String? {
+    nonisolated static func undelivered(_ result: String) -> String? {
         guard let obj = (try? JSONSerialization.jsonObject(with: Data(result.utf8))) as? [String: Any],
               obj["success"] as? Bool == false else { return nil }
         return obj["message"] as? String ?? "Not delivered"
@@ -1015,7 +1015,7 @@ extension Store {
 }
 
 /// Bytes from a pipe, cut into whole lines; touched only by the pipe's handler.
-private final class LineBuffer: @unchecked Sendable {
+final class LineBuffer: @unchecked Sendable {
     private var data = Data()
     private let lock = NSLock()
 

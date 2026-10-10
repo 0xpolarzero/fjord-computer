@@ -234,6 +234,12 @@ final class Store {
     @ObservationIgnored var claudeTaskInventory: Set<String>?
     @ObservationIgnored let formBridge = FormBridge()
     @ObservationIgnored lazy var routerAgent = RouterAgent(store: self)
+    /// Your messages to the Router, as typed runs (each its own); the agent keeps what these don't cover yet.
+    @ObservationIgnored lazy var routerDispatcher: RouterDispatcher = {
+        let dispatcher = RouterDispatcher(store: self)
+        dispatcher.claudePath = { [weak self] in self?.routerAgent.claudeCode?.path }
+        return dispatcher
+    }()
     /// Where the Router's files go, in a test (see `routerFiles`).
     @ObservationIgnored var routerPaths: RouterPaths?
     /// The executable the hook runs; this one unless a test says otherwise.

@@ -62,6 +62,9 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     var done: [Done] = []
     var outcome: Outcome = .pending
     var links = Links()
+    /// What a typed run said back (shown when the line opens), and the one phrase it gave for what it did.
+    var reply: String?
+    var note: String?
 
     init(id: UUID = UUID(), at: Date = Date(), trigger: Trigger, decision: Decided = Decided(), done: [Done] = [],
          outcome: Outcome = .pending, links: Links = Links()) {
@@ -118,7 +121,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .corrected(_, let to): return "corrected to \(to)"
         default: break
         }
-        guard let first = done.first else { return outcome == .pending ? "working" : "replied" }
+        guard let first = done.first else { return note.map { Self.clip($0, 80) } ?? (outcome == .pending ? "working" : "replied") }
         let more = done.count > 1 ? " +\(done.count - 1)" : ""
         switch first {
         case .sent(let to, _, _): return "sent to \(to)" + more
@@ -204,13 +207,14 @@ extension Store {
     }
 
     /// The last `count` decisions, oldest first, one line each: context for a model (or Jev).
-    func recentDecisions(_ count: Int = 10, now: Date = Date()) -> String {
-        router.decisions.suffix(count).map { $0.contextLine(now: now) }.joined(separator: "\n")
+    /// `excluding`: the entry of the run asking (it is the newest, and not yet history).
+    func recentDecisions(_ count: Int = 10, now: Date = Date(), excluding: UUID? = nil) -> String {
+        router.decisions.filter { $0.id != excluding }.suffix(count).map { $0.contextLine(now: now) }.joined(separator: "\n")
     }
 
     /// A change made in Lookout: part of the run under way, else an entry of its own.
-    func logChange(_ change: LookoutChange) {
-        if let id = activeDecision, router.decisions.contains(where: { $0.id == id }) {
+    func logChange(_ change: LookoutChange, into run: UUID? = nil) {
+        if let id = run ?? activeDecision, router.decisions.contains(where: { $0.id == id }) {
             updateDecision(id) { $0.add(.changed(change.id)) }
         } else {
             logDecision(RouterDecision(at: change.date, trigger: .system, decision: RouterDecision.Decided(intent: change.title),
