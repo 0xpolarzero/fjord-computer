@@ -150,6 +150,33 @@ import Testing
         #expect(s.routerTriager.telling.isEmpty)
     }
 
+    @Test func aSendIsDroppedWhenItsCardChangesBeforeDelivery() async {
+        // Handled meanwhile.
+        let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
+        s.resolveWaits()
+        s.tellWaiting("a#t3")
+        s.setCardAddressed("a#t3", true)
+        await settle()
+        #expect(sent.messages.isEmpty && s.router.decisions.last?.done == [.failed("Not sent: it no longer waits for this")])
+        // The session went on (running again).
+        let (t, sentT) = store(watch: ciWatch, things: [ci(.passing)])
+        t.resolveWaits()
+        t.tellWaiting("a#t3")
+        t.claudeSessions["a"]?.running = true
+        await settle()
+        #expect(sentT.messages.isEmpty && t.router.cards[0].isOpen)
+        // Continuing automatically turned off while it was on its way.
+        let (u, sentU) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
+        u.things["pr:o/app#1"]?.checks = .passing
+        u.setContinuesAutomatically("a", false)
+        await settle()
+        #expect(sentU.messages.isEmpty && u.router.cards[0].triage?.told == nil)
+        // Nothing changed: it goes.
+        u.tellWaiting("a#t3")
+        await settle()
+        #expect(sentU.messages.count == 1)
+    }
+
     @Test func continuingAutomaticallySendsOnItsOwnAsLookoutsRun() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
         var ready = 0

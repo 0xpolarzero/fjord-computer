@@ -140,7 +140,21 @@ extension Store {
                                    links: .init(sessions: [card.sessionID], cards: [card.id]))
         if automatic { entry.reply = "Sent on its own: “Continue it automatically” is on for this session." }
         let id = logDecision(entry)
-        let send = routerTriager.sender ?? (routerIsPretend ? { _, _ in } : Self.sendVerbatim(store: self))
+        // Bound to this card as it is now: anything that changes it meanwhile (handled, the session going on, auto-continue
+        // turned off) stops the send, checked again right before it is delivered.
+        let revision = cardRevisions[cardID, default: 0]
+        let check: @MainActor () throws -> Void = { [weak self] in
+            guard let self, self.waitStillTellable(cardID, revision: revision, automatic: automatic) else {
+                throw RouterTools.Failure("Not sent: it no longer waits for this")
+            }
+        }
+        let send: RouterTriager.Sender = if let sender = routerTriager.sender {
+            { session, text in try await check(); try await sender(session, text) }
+        } else if routerIsPretend {
+            { _, _ in try await check() }
+        } else {
+            Self.sendVerbatim(store: self, check: check)
+        }
         Task { [weak self] in
             do {
                 try await send(card.sessionID, text)
@@ -165,9 +179,21 @@ extension Store {
         }
     }
 
+    /// Whether a waiting card can still be told, as it was when the send began (`revision`): open, ready and untold, of
+    /// the session's latest turn, which isn't running, and (`automatic`) still to be continued on its own.
+    func waitStillTellable(_ cardID: String, revision: Int, automatic: Bool) -> Bool {
+        guard router.enabled, cardRevisions[cardID, default: 0] == revision,
+              let card = router.cards.first(where: { $0.id == cardID }), card.isOpen, card.kind == .waiting,
+              card.triage?.ready != nil, card.triage?.told == nil,
+              let session = claudeSessions[card.sessionID], !session.isArchived, !session.running,
+              card.id == "\(session.id)#t\(session.completedTurns)" else { return false }
+        return !automatic || continuesAutomatically(card.sessionID)
+    }
+
     /// The Router's send path with the words as they are (no rephrasing): prepared and signed for the session's plugin, then
-    /// through the gate, which lets only exactly this text go, once.
-    static func sendVerbatim(store: Store) -> RouterTriager.Sender {
+    /// through the gate, which lets only exactly this text go, once. `check` runs right before it is delivered, after the
+    /// preparing, and stops it by throwing.
+    static func sendVerbatim(store: Store, check: @escaping @MainActor () throws -> Void) -> RouterTriager.Sender {
         { [weak store] session, text in
             guard let store else { throw RouterTools.Failure("Lookout isn't ready") }
             let tools = RouterTools(store: store)
@@ -182,6 +208,7 @@ extension Store {
                 throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
             }
             try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try await check()
             try await RouterSender.send(binary: binary, cwd: home, to: to, text: ready.text, tools: tools,
                                         inbox: await store.relayInbox(forSigned: ready.text))
         }
