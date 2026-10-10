@@ -487,6 +487,28 @@ enum InboxSync {
         return now < resetsAt
     }
 
+    /// Whether a fact's key is an event the thing still has (a comment, a review, a commit, a thread's reply, a pending
+    /// request by when it was made), rather than a state that comes and goes (checks, a label, a score, conflicts).
+    static func isEvent(_ key: String, of thing: Thing) -> Bool {
+        let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return false }
+        let id = parts[1]
+        switch parts[0] {
+        case "comment", "mention", "last", "asks", "noise", "person":
+            return thing.comments.contains { $0.id == id } || thing.threads.contains { $0.lastReplyID == id }
+        case "review", "approved", "changes":
+            return thing.reviews.contains { $0.id == id }
+        case "commit":
+            return thing.commits.contains { $0.id == id }
+        case "thread":
+            return thing.threads.contains { "\($0.id):\($0.lastReplyID)" == id }
+        case "requested":
+            return thing.requestedReviewers.contains { id.hasPrefix($0.lowercased() + ":") }
+        default:
+            return false
+        }
+    }
+
     // MARK: - Workflows
 
     /// The repo and branch each workflow rule watches; branches nil is the repo's default.
@@ -830,8 +852,9 @@ extension Store {
     // MARK: Notifications
 
     /// For each open entry, the facts not seen before: one notification per entry, once per fact. A category's first
-    /// evaluation (and any with rules it hasn't seen) is a baseline: what is there is noted, not announced. A fact that
-    /// goes away is forgotten, so it announces again if it comes back.
+    /// evaluation (and any with rules it hasn't seen) is a baseline: what is there is noted, not announced. A state that
+    /// goes away (checks failing, a label) is forgotten, so it announces again if it comes back; an event (a comment, a
+    /// review) is kept while the thing still has it, so a rule that stops matching for a while doesn't announce it twice.
     func announceInbox() {
         defer { scheduleActions() }
         let all = entries
@@ -869,11 +892,12 @@ extension Store {
             }
             if baseline { baselines[category.id] = ruleIDs }
         }
-        // Facts that are gone: forgotten, for a thing that is still fetched.
-        for id in things.keys {
+        // Facts that are gone: forgotten, for a thing that is still fetched (events only once the thing no longer has them).
+        for (id, thing) in things {
             guard var m = updated[id], !m.notified.isEmpty || !m.acked.isEmpty else { continue }
             let current = Set(byThing[id]?.facts.map(\.key) ?? [])
-            let notified = m.notified.intersection(current), acked = m.acked.intersection(current)
+            let kept = { (key: String) in current.contains(key) || InboxSync.isEvent(key, of: thing) }
+            let notified = m.notified.filter(kept), acked = m.acked.filter(kept)
             if notified != m.notified || acked != m.acked {
                 m.notified = notified
                 m.acked = acked

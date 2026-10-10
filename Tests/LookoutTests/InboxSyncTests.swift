@@ -366,6 +366,44 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.inboxError == nil && posted.isEmpty)
     }
 
+    @Test func anEventAnnouncedOnceStaysAnnouncedThoughTheRuleStopsMatchingForAWhile() async {
+        final class Checks: @unchecked Sendable { var state = "SUCCESS" }
+        let checks = Checks()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { _ in
+            let pr = node(["commits": ["nodes": [["commit": ["oid": "abc", "committedDate": "2026-10-08T11:00:00Z",
+                                                             "author": ["user": ["login": "me"]],
+                                                             "statusCheckRollup": ["state": checks.state]]]]]])
+            let reply: [String: Any] = ["data": ["rateLimit": ["cost": 1, "remaining": 4000],
+                                                  "s0": ["pageInfo": ["hasNextPage": false], "nodes": [pr]]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        var category = InboxCategory(name: "Mine", symbol: "star", color: .blue)
+        category.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])), match: .all,
+                               conditions: [.newComment(by: Pick()), .checks([.failing])], createdAt: .distantPast)]
+        s.categories = [category]
+        var bodies: [String] = []
+        s.notifier.onPost = { bodies.append($0.content.body) }
+        await s.syncInbox()
+        checks.state = "FAILURE"
+        await s.syncInbox()
+        #expect(bodies.count == 1 && bodies[0].contains("comment by @greptile-apps[bot]"))
+        // Passing, then failing again: the failure is new, the comment isn't.
+        checks.state = "SUCCESS"
+        await s.syncInbox()
+        #expect(s.marks["pr:o/r#12"]?.notified.contains("comment:c1") == true)
+        #expect(s.marks["pr:o/r#12"]?.notified.contains("checks:failing") == false)
+        checks.state = "FAILURE"
+        await s.syncInbox()
+        #expect(bodies.count == 2 && !bodies[1].contains("comment"))
+        // Not an event once the thing no longer has it.
+        let t = try! #require(InboxSync.thing(node()))
+        #expect(InboxSync.isEvent("comment:c1", of: t) && !InboxSync.isEvent("comment:gone", of: t))
+        #expect(InboxSync.isEvent("requested:bob:1", of: t) && !InboxSync.isEvent("checks:failing", of: t))
+    }
+
     @Test func marksOfThingsGoneForAMonthAreForgotten() {
         let (s, _) = store(Log())
         s.marks = ["pr:o/r#9": EntryMarks(seen: ["x"])]
