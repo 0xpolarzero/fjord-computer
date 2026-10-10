@@ -110,6 +110,11 @@ struct RouterPageView: View {
     @Namespace private var ns
     @State private var height: CGFloat = 700
     @State private var width = CDS.Transcript.measure
+    /// The Router's working line over the zones, when it shows.
+    @State private var statusHeight: CGFloat = 0
+
+    /// What the history keeps however much the zones hold: a few lines at least, more of a tall page.
+    static func historyFloor(page height: CGFloat) -> CGFloat { min(height / 2, max(140, height * 0.28)) }
 
     private var spring: Animation? { Theme.Motion.spring.resolved(reduce: reduceMotion) }
 
@@ -122,8 +127,10 @@ struct RouterPageView: View {
         VStack(spacing: 0) {
             RouterHistory(store: store, model: model)
             VStack(spacing: 0) {
-                routerStatus
-                RouterZones(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
+                VStack(spacing: 0) { routerStatus }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { statusHeight = $0 }
+                RouterZones(store: store, model: model, page: page, height: height,
+                            room: height - Self.historyFloor(page: height) - statusHeight, ns: ns, travelling: travelling,
                             travellingWorking: Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID))))
             }
             .frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter)
@@ -663,12 +670,15 @@ private extension View {
 
 // MARK: - Zones
 
-/// Working over Needs you, pinned above the composer. Each caps at a share of the page and scrolls inside.
+/// Working over Needs you, pinned above the composer. Each caps at a share of the page and scrolls inside; together they
+/// stay within `room`, so the history above keeps its floor.
 private struct RouterZones: View {
     let store: Store
     @Bindable var model: RouterModel
     let page: RouterPage
     let height: CGFloat
+    /// The height the zones may take, the history's floor kept.
+    let room: CGFloat
     let ns: Namespace.ID
     /// Sessions whose card moves between the zones (matched geometry), from the needs side and from the working side.
     let travelling: Set<String>
@@ -677,6 +687,12 @@ private struct RouterZones: View {
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
     @State private var overviewer = RouterOverviewer()
+    /// The zones less Needs you's scroll (Working, the headers, the margins): what Needs you's cap leaves room for.
+    @State private var total: CGFloat = 0
+    @State private var needsShown: CGFloat = 0
+
+    /// Needs you's cap: the room less the rest of the zones, never under a card and a half.
+    private var needsCap: CGFloat { max(120, room - max(0, total - needsShown)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -687,6 +703,7 @@ private struct RouterZones: View {
         .padding(.top, 8)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { total = $0 }
         .overlay(alignment: .top) { Rectangle().fill(CDS.border).frame(height: CDS.hairline) }
     }
 
@@ -754,10 +771,9 @@ private struct RouterZones: View {
     @ViewBuilder private var needs: some View {
         let open = page.openNeed(preferred: model.expandedNeed)
         let wide = columnWidth >= 620
-        // What an open form may take: the page less the other rows, the working zone and a sliver of history.
-        let working = page.working.isEmpty ? 0 : 24 + CGFloat(page.working.count) * 34 + 12 + 40
-        let rows = CGFloat(max(0, page.needs.count - 1)) * (wide ? 40 : 58)
-        let formCap = max(180, min(400, height - working - 28 - rows - (wide ? 52 : 100) - 24 - 12 - 24))
+        // What an open form may take: as much of Needs you's height as leaves the open card's own lines whole in it (the
+        // other cards scroll).
+        let formCap = max(120, min(400, needsCap - (wide ? 52 : 100) - 24))
         if page.needs.isEmpty && page.asks.isEmpty {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.system(size: 12, weight: .medium))
@@ -779,7 +795,7 @@ private struct RouterZones: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityLabel("Needs you, \(page.needs.count + page.asks.count)")
-                ZoneScroll(maxHeight: max(220, height * 0.9), reveal: model.revealRequest,
+                ZoneScroll(maxHeight: needsCap, reveal: model.revealRequest,
                            ids: Set(page.needs.map(\.id) + page.asks.map { $0.id.uuidString })) {
                     VStack(spacing: 6) {
                         ForEach(page.asks) { ask in
@@ -799,6 +815,7 @@ private struct RouterZones: View {
                     // The card's ring and shadow need a little room inside the scroll.
                     .padding(.vertical, 1)
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { needsShown = $0 }
             }
         }
     }

@@ -72,6 +72,11 @@ enum AppWindowShots {
                 model.tap(card.id, store: store)
             }
         }),
+        // A long Needs you: every open card six times over, so the zones would take the page.
+        Shot(name: "router-many-needs", destination: { _ in .router }, compose: { _, store in
+            let open = store.router.cards.filter(\.isOpen)
+            store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
+        }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
         Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),

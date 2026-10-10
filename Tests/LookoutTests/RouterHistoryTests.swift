@@ -138,4 +138,39 @@ import Testing
         await waitUntilSteady(turns: 8) { fromBottom() }
         #expect(fromBottom() > 1000, "the page opened on the message, far above the bottom")
     }
+
+    @Test func aLongNeedsYouLeavesTheHistoryItsFloor() async {
+        let store = Store()
+        Demo.populate(store, .router)
+        store.interceptOpen = { _ in }
+        // Every open card six times over: far more than the page holds.
+        let open = store.router.cards.filter(\.isOpen)
+        store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
+        let model = RouterModel()
+        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
+            .frame(width: 1100, height: 900))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: .borderless, backing: .buffered,
+                              defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
+        /// The history is the topmost scroll; Needs you the one holding the most of the others (an open form and the
+        /// composer scroll too).
+        func frames() -> (history: NSRect, needs: NSRect, needsContent: CGFloat)? {
+            hosting.layoutSubtreeIfNeeded()
+            let all = scrolls(hosting).filter { $0.frame.height > 0 }.map { ($0.convert($0.bounds, to: nil), $0.documentView?.frame.height ?? 0) }
+            guard let top = all.max(by: { $0.0.maxY < $1.0.maxY }),
+                  let low = all.filter({ $0.0 != top.0 }).max(by: { $0.1 < $1.1 }) else { return nil }
+            return (top.0, low.0, low.1)
+        }
+        await waitUntil { frames() != nil }
+        await waitUntilSteady(turns: 8) { frames().map { [Int($0.history.height), Int($0.needs.height)] } ?? [] }
+        guard let f = frames() else { Issue.record("no scrolls"); return }
+        #expect(f.history.height >= 140, "the history keeps a few lines: \(f.history)")
+        #expect(f.needsContent > f.needs.height + 100, "Needs you scrolls inside: \(f.needs.height) of \(f.needsContent)")
+        #expect(f.needs.height >= 120, "\(f.needs)")
+    }
 }
