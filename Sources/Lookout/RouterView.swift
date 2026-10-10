@@ -1,13 +1,13 @@
 import AppKit
 import SwiftUI
 
-// The Router's window: what needs you on the left (its cards), the chat with the Router on the right. The bar only says how
-// many cards are open and what is running; everything else is here.
+// The Router as two columns (the app window shows `RouterCodeView`): what needs you on the left (its cards), the chat with
+// the Router on the right. The bar only says how many cards are open and what is running; everything else is here.
 
 // MARK: - Store
 
 extension Store {
-    /// The Router works on the sessions: it is on only while the sessions extension is too.
+    /// The Router works on the sessions: it is on only while Lookout reads them too (they follow its switch).
     var routerOn: Bool { router.enabled && agents.enabled }
 
     /// A card's project, as the lists name and colour it.
@@ -16,12 +16,11 @@ extension Store {
         return (folderName(folder), projectColor(folder))
     }
 
-    /// Router only, with the Router on: the bar has no session tiles (see `LookoutHub.showsSessions`).
-    var sessionsHidden: Bool { routerOn && router.routerOnly }
-
-    func setRouterOnly(_ on: Bool) {
-        guard router.routerOnly != on else { return }
-        router.routerOnly = on
+    /// The Router's switch: it turns the reading of Claude's sessions, which it works on, on and off with it.
+    func switchRouter(_ on: Bool) {
+        if on { setAgentsEnabled(true) }
+        setRouterEnabled(on)
+        if !on { setAgentsEnabled(false) }
     }
 
     /// The sessions working now (not those stopped on you), and those whose turn is over with subagents or commands still
@@ -38,9 +37,6 @@ extension Store {
 
     /// The cards the window lists: the open ones, or all of them.
     func routerCards(all: Bool) -> [RouterCard] { all ? routerCards : openRouterCards }
-
-    /// The line of live work, as of `now` (see `RouterStatusLine`).
-    func routerStatus(now: Date) -> String { RouterStatusLine.text(allAgentRows, now: now) }
 
     /// The Router's own process must never reach real sessions from a demo or a playground: it answers for itself there.
     var routerIsPretend: Bool { Store.isDemo || !persists }
@@ -93,28 +89,8 @@ extension Store {
     }
 }
 
-/// The one-line summary of live work, built from the session rows alone (no model writes it): how many are working, the
-/// longest running with what each is doing and for how long, then those waiting on you. "All quiet" when nothing runs.
+/// How long, in whole minutes: the lists are redrawn once a minute, so seconds would only ever be wrong.
 enum RouterStatusLine {
-    /// Named sessions per kind; the count before them says how many there are in all.
-    static let shown = 2
-
-    static func text(_ rows: [AgentRow], now: Date) -> String {
-        let working = rows.filter { $0.session.running && !$0.waitsForYou }
-            .sorted { ($0.workingSince ?? now) < ($1.workingSince ?? now) }
-        let waiting = rows.filter(\.waitsForYou)
-        if working.isEmpty && waiting.isEmpty { return "All quiet" }
-        var parts: [String] = []
-        if !working.isEmpty { parts.append("\(working.count) working") }
-        parts += working.prefix(shown).map {
-            "\($0.projectName): \($0.activity?.text ?? "Working") \(minutes(now.timeIntervalSince($0.workingSince ?? now)))"
-        }
-        parts += waiting.prefix(shown).map { "\($0.projectName): waiting on you" }
-        if waiting.count > shown { parts.append("\(waiting.count - shown) more waiting") }
-        return parts.joined(separator: " · ")
-    }
-
-    /// Whole minutes: the line is redrawn once a minute, so seconds would only ever be wrong.
     static func minutes(_ t: TimeInterval) -> String {
         let m = max(0, Int(t)) / 60
         if m < 1 { return "<1m" }
@@ -129,28 +105,6 @@ struct MinuteTicking<Content: View>: View {
 
     var body: some View {
         TimelineView(.everyMinute) { context in content(context.date) }
-    }
-}
-
-/// The status line wherever it shows: a dot (clay while something works) and the line, cut short at its width.
-struct RouterStatusView: View {
-    let store: Store
-    var lines = 1
-
-    var body: some View {
-        MinuteTicking { now in
-            let text = store.routerStatus(now: now)
-            let quiet = text == "All quiet"
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Circle().fill(quiet ? Theme.tertiary : Theme.claude).frame(width: 6, height: 6)
-                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-                    .accessibilityHidden(true)
-                Text(text).font(Theme.Typography.meta).foregroundStyle(quiet ? Theme.tertiary : Theme.secondary)
-                    .lineLimit(lines).truncationMode(.tail)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Sessions: \(text)")
-        }
     }
 }
 
@@ -257,7 +211,11 @@ struct RouterCardLine: View {
         let project = store.routerProject(card)
         Button { open(card.id) } label: {
             HStack(alignment: .top, spacing: 9) {
-                Circle().fill(card.kind.color).frame(width: 6, height: 6).padding(.top, 6)
+                if let session = store.sessionRow(card.sessionID) {
+                    SessionGlyph(row: session, size: 18, dot: false).padding(.top, 1)
+                } else {
+                    Circle().fill(card.kind.color).frame(width: 6, height: 6).padding(.top, 6)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(card.title).font(Theme.Typography.bodyStrong).foregroundStyle(Theme.text).lineLimit(1)
@@ -280,6 +238,7 @@ struct RouterCardLine: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .contextMenu { if let session = store.sessionRow(card.sessionID) { SessionMenu(row: session, store: store) } }
         .accessibilityLabel("\(card.kind.label): \(card.title)")
         .accessibilityValue("\(project.name), \(card.text), \(AgentRow.spokenAge(Date().timeIntervalSince(card.createdAt))) ago")
         .accessibilityHint("Opens it in Claude")
@@ -295,6 +254,9 @@ struct RouterCardLine: View {
 final class RouterModel {
     /// The card the keys act on.
     var selection: String?
+    /// What the sidebar's search holds, and whether the keyboard is asked for it (what the sessions shortcut does).
+    var search = ""
+    var searchWanted = false
     /// Every card, not only the open ones.
     var showAll = false
     var draft = "" {
@@ -618,7 +580,7 @@ final class RouterModel {
 
 // MARK: - Window content
 
-/// The Router window: the cards for you on the left, the chat on the right.
+/// The Router: the cards for you on the left, the chat on the right.
 struct RouterView: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -692,7 +654,7 @@ struct RouterCardsColumn: View {
                     .scrollIndicators(.automatic)
                     .onChange(of: model.scrollRequest) { _, request in
                         guard let request else { return }
-                        withAnimation(Theme.Motion.hover.resolved(reduce: LookoutHub.reduceNow)) { proxy.scrollTo(request.id) }
+                        withAnimation(Theme.Motion.hover.resolved(reduce: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { proxy.scrollTo(request.id) }
                     }
                     .onAppear { if let id = model.selection { proxy.scrollTo(id) } }
                 }
@@ -780,6 +742,7 @@ struct RouterCardRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Circle().fill(card.isOpen ? card.kind.color : .clear).frame(width: 6, height: 6)
                     .accessibilityHidden(true)
+                if let session = store.sessionRow(card.sessionID) { SessionGlyph(row: session, size: 16, dot: false) }
                 Text(card.title)
                     .font(card.isOpen ? Theme.Typography.bodyStrong : Theme.Typography.body)
                     .foregroundStyle(card.isOpen ? Theme.text : Theme.secondary)
@@ -1061,14 +1024,8 @@ struct RouterSetupNotice: View {
 
     var body: some View {
         Group {
-            if !store.agents.enabled {
-                line("The Router works on your Claude sessions: the sessions extension is off.", color: Theme.amber,
-                     action: Claude.isInstalled ? "Turn both on" : nil) {
-                    store.setAgentsEnabled(true)
-                    store.setRouterEnabled(true)
-                }
-            } else if !store.router.enabled {
-                line("The Router is off.", color: Theme.amber, action: "Turn on") { store.setRouterEnabled(true) }
+            if !store.agents.enabled || !store.router.enabled {
+                line("The Router is off.", color: Theme.amber, action: "Turn on") { store.switchRouter(true) }
             } else if model.claudeCodeMissing == true && agent.claudeCode == nil {
                 line("Claude Code wasn't found. Install or open the Claude desktop app.", color: Theme.amber,
                      action: "Look again") { Task { await model.checkClaudeCode(store) } }
@@ -1373,7 +1330,8 @@ private struct WorkingLine: View {
         let doing = row.session.running ? row.activity?.text ?? "Working" : row.tasksText ?? "Working"
         Button { store.openAgent(row.id) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Circle().fill(row.color ?? Theme.tertiary).frame(width: 6, height: 6).accessibilityHidden(true)
+                SessionGlyph(row: row, size: 16, dot: false)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
                 Text(row.session.title).font(Theme.Typography.bodyMedium).foregroundStyle(Theme.text).lineLimit(1)
                     .layoutPriority(1)
                 Text(doing).font(Theme.Typography.meta).foregroundStyle(row.session.running ? Theme.secondary : Theme.claude)
@@ -1386,6 +1344,8 @@ private struct WorkingLine: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .contextMenu { SessionMenu(row: row, store: store) }
+        .runningTip(row.tasks)
         .accessibilityLabel(row.session.title)
         .accessibilityValue("working, \(row.projectName), \(doing), \(since)")
         .accessibilityHint("Opens it in Claude")

@@ -33,8 +33,6 @@ struct RouterState: Codable, Equatable {
         /// Your last message when it ended (ms): a newer one means you've moved on, and no card is made for it.
         var message: Int64?
     }
-    /// "Router only": the bar shows no session tiles, the Router stands in for them (on unless turned off).
-    var routerOnly = true
 
     init() {}
 
@@ -50,7 +48,6 @@ struct RouterState: Codable, Equatable {
         waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]
         formSeen = (try? c.decodeIfPresent([String: Int64].self, forKey: .formSeen)) ?? [:]
         pendingTurns = (try? c.decodeIfPresent([String: PendingTurn].self, forKey: .pendingTurns)) ?? [:]
-        routerOnly = (try? c.decodeIfPresent(Bool.self, forKey: .routerOnly)) ?? true
     }
 }
 

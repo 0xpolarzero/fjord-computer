@@ -2,11 +2,12 @@ import AppKit
 import Carbon
 import SwiftUI
 
-// `--playground`: a window with a fake desktop to try the hub with the demo data.
+// `--playground`: a window with a fake desktop to try the bar and the app window with the demo data.
 
 // MARK: - Playground window
 
-/// A fake desktop: the bar on the edge you pick, an app behind it, and the keys wired up.
+/// A fake desktop: the bar on the edge you pick and an app behind it. A click on the bar opens the app window (a real one) and
+/// takes the bar away until it closes.
 struct PlaygroundView: View {
     let store: Store
     @Bindable var ui: UIState
@@ -14,8 +15,8 @@ struct PlaygroundView: View {
     /// The "Lookout playground" card: hidden in shots, where it is no part of what is looked at.
     var showsExplainer = true
     var minSize = CGSize(width: 1280, height: 820)
-    /// Opens the Router's window; a toast says so when there is none (in shots).
-    var openRouter: ((String?) -> Void)? = nil
+    /// Opens the app window on a place; a toast says so when there is none (in shots).
+    var openApp: ((AppDestination) -> Void)? = nil
     var pickRouterCard: ((String) -> Void)? = nil
     @State private var behindClicks = 0
     @State private var leaveTask: Task<Void, Never>?
@@ -33,7 +34,7 @@ struct PlaygroundView: View {
                                       y: geo.size.height / 2 + (ui.edge == .top ? 120 : ui.edge == .bottom ? -120 : 0))
                 }
                 fakeMenuBar.frame(maxHeight: .infinity, alignment: .top)
-                docked(geo.size)
+                if !hub.barHidden { docked }
                 if let toast = hub.toast {
                     Text(toast).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
                         .padding(.horizontal, 14).padding(.vertical, 8)
@@ -45,8 +46,8 @@ struct PlaygroundView: View {
         }
         .frame(minWidth: minSize.width, minHeight: minSize.height)
         .environment(\.pickRouterCard) { card in pickRouterCard?(card) }
-        .environment(\.openRouter) { [hub] card in
-            if let openRouter { openRouter(card) } else { hub.toast = "Open the Router" + (card.map { " on \($0)" } ?? "") }
+        .environment(\.openApp) { [hub] destination in
+            if let openApp { openApp(destination) } else { hub.toast = "Open the window on \(destination.token)" }
         }
         // As in the app: tooltips over the whole window, outside the hub's clipped shape.
         .tipSpace()
@@ -57,11 +58,8 @@ struct PlaygroundView: View {
         }
     }
 
-    @ViewBuilder private func docked(_ size: CGSize) -> some View {
-        let hubView = LookoutHub(store: store, ui: ui, hub: hub,
-                                 maxLength: ui.edge.isHorizontal ? size.height - menuBar - 80 : size.height - menuBar - 60,
-                                 maxWidth: size.width)
-            .onHover(perform: hover)
+    @ViewBuilder private var docked: some View {
+        let hubView = LookoutHub(store: store, ui: ui, hub: hub).onHover(perform: hover)
         switch ui.edge {
         case .right: hubView.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(.top, menuBar + 40)
         case .left: hubView.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.top, menuBar + 40)
@@ -124,7 +122,7 @@ struct PlaygroundView: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Lookout playground").font(.system(size: 15, weight: .semibold))
-            Picker("Edge", selection: Binding(get: { ui.edge }, set: { e in hub.page = .main; ui.edge = e })) {
+            Picker("Edge", selection: Binding(get: { ui.edge }, set: { ui.edge = $0 })) {
                 Text("Left").tag(DockEdge.left)
                 Text("Top").tag(DockEdge.top)
                 Text("Right").tag(DockEdge.right)
@@ -132,15 +130,11 @@ struct PlaygroundView: View {
             }
             .pickerStyle(.segmented)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Hover the bar to expand it · right ⌘ keeps it open").foregroundStyle(.secondary)
-                Text("Esc: back / close").foregroundStyle(.secondary)
-                Text("↑ ↓ ↩ Space ⌫ ⌘K ⌘⌫ ⌥Space ⌘, as in the app").foregroundStyle(.secondary)
+                Text("Hover an item of the bar to peek at it").foregroundStyle(.secondary)
+                Text("Click one to open the window · right ⌘ toggles it").foregroundStyle(.secondary)
+                Text("Closing the window (red button, ⌘W) puts the bar back").foregroundStyle(.secondary)
             }
             .font(.system(size: 11.5))
-            HStack(spacing: 10) {
-                Label(hub.pinned ? "Pinned" : "Not pinned", systemImage: hub.pinned ? "pin.fill" : "pin")
-            }
-            .font(.system(size: 11.5, weight: .medium))
         }
         .padding(16)
         .frame(width: 400)
@@ -149,7 +143,7 @@ struct PlaygroundView: View {
     }
 }
 
-/// `--playground`: the window, the demo data and the keys.
+/// `--playground`: the fake desktop, the demo data, and the app window a click on the bar opens.
 @MainActor
 final class Playground: NSObject, NSWindowDelegate {
     private let store = Store()
@@ -158,17 +152,20 @@ final class Playground: NSObject, NSWindowDelegate {
     private var window: NSWindow!
     private var monitor: Any?
     private var tap = ModifierTap()
-    private lazy var keys = HubKeys(store: store, ui: ui, hub: hub)
-    private lazy var router = RouterWindowController(store: store)
+    private lazy var app = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
 
     func run() {
         Demo.populate(store, .router)
-        store.agents.expanded = true
         store.interceptOpen = { [hub] text in hub.toast = text }
-        let view = PlaygroundView(store: store, ui: ui, hub: hub, openRouter: { [weak self] card in self?.router.show(card: card) },
+        app.onClose = { [hub] in
+            hub.barHidden = false
+            // The playground's own window keeps the app regular.
+            NSApp.setActivationPolicy(.regular)
+        }
+        let view = PlaygroundView(store: store, ui: ui, hub: hub, openApp: { [weak self] in self?.openApp($0) },
                                   pickRouterCard: { [weak self] card in
                                       guard let self else { return }
-                                      self.router.model.select(card, store: self.store)
+                                      self.app.routerModel.select(card, store: self.store)
                                   })
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                           styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
@@ -182,32 +179,33 @@ final class Playground: NSObject, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .leftMouseDown]) { [weak self] event in
-            guard let self else { return event }
-            // Only a Bool crosses the isolation hop: NSEvent is not Sendable.
-            let consumed = MainActor.assumeIsolated { self.handle(event) }
-            return consumed ? nil : event
+            self?.handle(event)
+            return event
         }
     }
 
     func windowWillClose(_ notification: Notification) {
-        // The Router's window closing is not the playground's.
+        // The app window closing is not the playground's.
         if (notification.object as? NSWindow) === window { NSApp.terminate(nil) }
     }
 
-    /// True when the event was consumed.
-    private func handle(_ event: NSEvent) -> Bool {
+    /// A click on the bar: the app window opens on it and the bar is away until the window closes.
+    private func openApp(_ destination: AppDestination) {
+        hub.section = nil
+        hub.hovering = false
+        hub.barHidden = true
+        app.show(destination)
+    }
+
+    /// Right ⌘ alone toggles the window, as the app's shortcut does.
+    private func handle(_ event: NSEvent) {
         switch event.type {
         case .flagsChanged:
-            if tap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags.rawValue) == 54 { keys.toggleTap() }
-            return false
-        case .leftMouseDown:
-            tap.interrupt()
-            return false
+            if tap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags.rawValue) == 54 {
+                if app.isOpen { app.close() } else { openApp(app.navigator.selection) }
+            }
         default:
             tap.interrupt()
-            // As in the app, the hub's keys are the hub window's: a popover's field keeps its Return and Esc.
-            guard event.window == nil || event.window === window else { return false }
-            return keys.key(event)
         }
     }
 }
@@ -242,7 +240,7 @@ extension [DockEdge] {
     static let rightAndTop: [DockEdge] = [.right, .top]
 }
 
-/// The Router's window in a shot: every card or only the open ones, and the card picked.
+/// The Router in a shot (it fills the app window's content): every card or only the open ones, and the card picked.
 struct RouterWindowShot {
     var all = false
     /// The open question picked, its form showing.
@@ -268,33 +266,23 @@ enum ShotSelection {
 /// `PlaygroundShots.catalog`; everything but `name` has a default.
 struct Shot {
     static let standard = CGSize(width: 1280, height: 820)
-    /// A 1280x720 screen: the hub must fit its edge without overflowing.
+    /// A 1280x720 screen: the bar and its peek must fit the edge without overflowing.
     static let hd = CGSize(width: 1280, height: 720)
 
     var name: String
     var edge = DockEdge.right
     /// The data (see `Demo.Scenario`).
     var scenario = Demo.Scenario.agents
-    /// Kept open (as when pinned) rather than at rest.
-    var pinned = false
-    var page = HubPage.main
     /// Just this section open beside the bar, as when it is hovered.
     var section: HubSection?
-    /// The section filling the view, as when its header is clicked.
-    var focus: HubSection?
-    /// The inbox's tab, by category name (or "Done").
+    /// The inbox peek's tab, by category name (or "Done").
     var tab: String?
-    var query = ""
     var selection: ShotSelection?
-    /// A session row under the pointer.
-    var hoveredSession: String?
     /// A tooltip shown at once, by title (see `Tip`).
     var tip: String?
     var size = Shot.standard
     var environment = ShotEnvironment()
-    /// Settings scrolled to this section (by its id).
-    var settingsSection: String?
-    /// The Router's window instead of the playground (the edge only names the shot).
+    /// The Router instead of the playground (the edge only names the shot).
     var routerWindow: RouterWindowShot?
     /// The category editor's page instead of the playground (see `CategoriesDemo`).
     var categories: CategoriesShot?
@@ -311,14 +299,14 @@ struct Shot {
 
 /// `--playground-shots <dir> [substring...]`: the real views, on the demo data, rendered offscreen as PNGs. Shots whose
 /// name contains one of the substrings are rendered (all of them without any), so a change is checked in a few seconds:
-/// `.build/debug/Lookout --playground-shots /tmp/shots right-open`.
+/// `.build/debug/Lookout --playground-shots /tmp/shots right-peek`.
 ///
 /// Names are `<edge>-<state>`, the edge being right, top, left or bottom. Every shot is one line of `catalog`, under a
 /// comment saying what the group shows. Most states are on the right edge and along the top, which stand for the sides and
-/// the strip; the baseline and the bar at rest are on all four.
+/// the strip; the baseline and the bar at rest are on all four. The app window has its own shots (`--window-shots`).
 @MainActor
 enum PlaygroundShots {
-    /// States of the data, as `(name, scenario)`; each is shown at rest and open.
+    /// States of the data, as `(name, scenario)`; each is shown at rest and with the inbox's peek.
     private static let causes: [(String, Demo.Scenario)] = [
         ("signed-out", .signedOut), ("inbox-failed", .inboxFailed), ("rate-limited", .rateLimited), ("snoozed", .snoozed),
         ("error", .error), ("contributions-empty", .contributionsEmpty), ("first-sync", .firstSync), ("sync-fault", .syncFault),
@@ -327,93 +315,56 @@ enum PlaygroundShots {
     private static let ci: [(String, Demo.Scenario)] = [
         ("no-ci", .noCI), ("all-passing", .allPassing), ("many-ci", .manyCI), ("ci-running", .ciRunning),
     ]
-    private static let sessions: [(String, Demo.Scenario)] = [
-        ("sessions-waiting", .sessionsWaiting), ("sessions-working", .sessionsWorking), ("sessions-unread", .sessionsUnread),
-        ("sessions-new-activity", .sessionsNewActivity), ("sessions-scratch", .sessionsScratch), ("sessions-none", .sessionsNone),
-        ("sessions-12", .sessions12), ("sessions-many-new", .sessionsManyNew), ("sessions-waiting-10", .sessionsWaiting10),
-    ]
     private static let updates: [(String, Demo.Scenario)] = [
         ("update-available", .updateAvailable), ("update-downloading", .updateDownloading), ("update-ready", .updateReady),
     ]
 
-    /// The baseline, the inbox and the accessibility settings: one line each.
+    /// The baseline and the peeks: one line each.
     private static let baseline: [Shot] = [
         Shot.edges("rest"),
-        Shot.edges("open") { $0.pinned = true },
-        Shot.edges("settings") { $0.pinned = true; $0.page = .settings },
-        Shot.edges("categories", on: .rightAndTop) { $0.pinned = true; $0.page = .categories },
-        Shot.edges("search") { $0.pinned = true; $0.query = "sand" },
-        Shot.edges("tip", on: .rightAndTop) { $0.pinned = true; $0.tip = "Settings" },
         Shot.edges("peek-inbox") { $0.section = .inbox },
         Shot.edges("peek-ci") { $0.section = .inbox; $0.tab = "CI" },
-        Shot.edges("peek-agents") { $0.section = .agents },
         Shot.edges("peek-controls") { $0.section = .controls },
-        // An inbox item and a session picked, their actions showing, to compare them.
-        Shot.edges("picked", on: .rightAndTop) { $0.pinned = true; $0.selection = .firstNeedsYou; $0.hoveredSession = "local_demo-ci" },
-        Shot.edges("focus-inbox", on: .rightAndTop) { $0.pinned = true; $0.focus = .inbox },
-        Shot.edges("focus-agents", on: .rightAndTop) { $0.pinned = true; $0.focus = .agents },
+        Shot.edges("peek-tip", on: .rightAndTop) { $0.scenario = .router; $0.section = .router; $0.tip = "Open Router" },
+        // An inbox item picked, its actions showing.
+        Shot.edges("peek-picked", on: .rightAndTop) { $0.section = .inbox; $0.selection = .firstNeedsYou },
     ].flatMap { $0 }
 
-    /// Inbox: the tabs, a search with no match, and a list longer than it shows.
+    /// Inbox: the tabs of its peek, and a list longer than it shows.
     private static let inbox: [Shot] = [
-        Shot.edges("open-reviews", on: .rightAndTop) { $0.pinned = true; $0.tab = "Reviews for you" },
-        Shot.edges("open-bot-chatter", on: .rightAndTop) { $0.pinned = true; $0.tab = "Bot chatter" },
-        Shot.edges("open-ci", on: .rightAndTop) { $0.pinned = true; $0.tab = "CI" },
-        Shot.edges("open-done", on: .rightAndTop) { $0.pinned = true; $0.tab = "Done" },
-        Shot.edges("search-none", on: .rightAndTop) { $0.pinned = true; $0.query = "zzzz" },
-        Shot.edges("search-fact", on: .rightAndTop) { $0.pinned = true; $0.query = "greptile" },
-        Shot.edges("open-bot-chatter-empty", on: .rightAndTop) { $0.pinned = true; $0.scenario = .botChatterEmpty; $0.tab = "Bot chatter" },
-        Shot.edges("open-done-empty", on: .rightAndTop) { $0.pinned = true; $0.scenario = .doneEmpty; $0.tab = "Done" },
+        Shot.edges("peek-reviews", on: .rightAndTop) { $0.section = .inbox; $0.tab = "Reviews for you" },
+        Shot.edges("peek-bot-chatter", on: .rightAndTop) { $0.section = .inbox; $0.tab = "Bot chatter" },
+        Shot.edges("peek-done", on: .rightAndTop) { $0.section = .inbox; $0.tab = "Done" },
+        Shot.edges("peek-bot-chatter-empty", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .botChatterEmpty; $0.tab = "Bot chatter" },
+        Shot.edges("peek-done-empty", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .doneEmpty; $0.tab = "Done" },
         // A category hidden: no icon in the bar, no tab.
         Shot.edges("rest-hidden-category", on: .rightAndTop) { $0.scenario = .hiddenCategory },
-        Shot.edges("open-hidden-category", on: .rightAndTop) { $0.pinned = true; $0.scenario = .hiddenCategory },
-        Shot.edges("open-inbox-many", on: .rightAndTop) { $0.pinned = true; $0.scenario = .inboxMany },
+        Shot.edges("peek-hidden-category", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .hiddenCategory },
+        Shot.edges("peek-inbox-many", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .inboxMany },
     ].flatMap { $0 }
 
-    /// A scenario open on the right and top, with its peek and focused section when it has one.
+    /// A scenario on the right and top at rest and/or with its peek.
     private static func scenarioShots(_ slug: String, _ scenario: Demo.Scenario, rest: Bool = false, peek: HubSection? = nil,
-                                      tab: String? = nil, focus: Bool = false) -> [Shot] {
+                                      tab: String? = nil) -> [Shot] {
         var shots: [Shot] = []
         if rest { shots += Shot.edges("rest-\(slug)", on: .rightAndTop) { $0.scenario = scenario } }
-        shots += Shot.edges("open-\(slug)", on: .rightAndTop) { $0.pinned = true; $0.scenario = scenario; $0.tab = tab }
         if let peek {
-            let name = tab == nil ? "agents" : "ci"
-            shots += Shot.edges("peek-\(name)-\(slug)", on: .rightAndTop) { $0.section = peek; $0.scenario = scenario; $0.tab = tab }
-        }
-        if focus {
-            shots += Shot.edges("focus-agents-\(slug)", on: .rightAndTop) { $0.pinned = true; $0.focus = .agents; $0.scenario = scenario }
+            shots += Shot.edges("peek-\(slug)", on: .rightAndTop) { $0.section = peek; $0.scenario = scenario; $0.tab = tab }
         }
         return shots
     }
 
-    /// The accessibility settings, on the bar at rest and kept open.
+    /// The accessibility settings, on the bar at rest and with its peek.
     private static func environmentShots(_ slug: String, _ environment: ShotEnvironment) -> [Shot] {
         Shot.edges("rest-\(slug)", on: .rightAndTop) { $0.environment = environment }
-            + Shot.edges("open-\(slug)", on: .rightAndTop) { $0.pinned = true; $0.environment = environment }
+            + Shot.edges("peek-\(slug)", on: .rightAndTop) { $0.section = .inbox; $0.environment = environment }
     }
 
-    /// The Router: its cell at rest, its panel and kept open on every edge; its window, with the cards open or all, the
+    /// The Router: its cell at rest and its peek on every edge; the Router itself, with the cards open or all, the
     /// question's form picked, under Increase Contrast, and switched off.
     private static let routerShots: [Shot] = {
         var shots = Shot.edges("rest-router") { $0.scenario = .router }
         shots += Shot.edges("peek-router") { $0.scenario = .router; $0.section = .router }
-        shots += Shot.edges("open-router") { $0.scenario = .router; $0.pinned = true }
-        shots += Shot.edges("rest-router-only") { $0.scenario = .routerOnly }
-        shots += Shot.edges("peek-router-only") { $0.scenario = .routerOnly; $0.section = .router }
-        shots += Shot.edges("open-router-only") { $0.scenario = .routerOnly; $0.pinned = true }
-        shots += Shot.edges("search-router-only", on: .rightAndTop) { $0.scenario = .routerOnly; $0.pinned = true; $0.query = "lcu" }
-        shots += Shot.edges("open-router-only-1024", on: [.top, .bottom]) {
-            $0.scenario = .routerOnly; $0.pinned = true; $0.size = CGSize(width: 1024, height: 720)
-        }
-        shots += Shot.edges("focus-agents-router", on: .rightAndTop) { $0.scenario = .router; $0.pinned = true; $0.focus = .agents }
-        // A 1024-wide screen: the Router keeps its cell, its column goes, nothing overflows.
-        shots += Shot.edges("open-router-1024", on: [.top, .bottom]) {
-            $0.scenario = .router; $0.pinned = true; $0.size = CGSize(width: 1024, height: 720)
-        }
-        shots += Shot.edges("open-router-720", on: .rightAndTop) { $0.scenario = .router; $0.pinned = true; $0.size = Shot.hd }
-        shots += Shot.edges("settings-router", on: [.right]) { $0.scenario = .router; $0.pinned = true; $0.page = .settings
-            $0.settingsSection = SettingsView.routerID
-        }
         let window = { (name: String, configure: (inout Shot) -> Void) -> Shot in
             var shot = Shot(name: "right-router-window\(name)", scenario: .router, routerWindow: RouterWindowShot())
             configure(&shot)
@@ -435,19 +386,17 @@ enum PlaygroundShots {
     static let catalog: [Shot] = {
         var shots = baseline + inbox
         // Causes: why a list is empty or the sync is not healthy.
-        for (slug, scenario) in causes { shots += scenarioShots(slug, scenario, rest: true) }
+        for (slug, scenario) in causes { shots += scenarioShots(slug, scenario, rest: true, peek: .inbox) }
         for (slug, scenario) in ci { shots += scenarioShots(slug, scenario, peek: .inbox, tab: "CI") }
-        for (slug, scenario) in sessions { shots += scenarioShots(slug, scenario, peek: .agents, focus: true) }
         for (slug, scenario) in updates { shots += scenarioShots(slug, scenario, rest: true) }
         shots += environmentShots("contrast", .contrast)
         shots += environmentShots("motion", .motion)
         shots += environmentShots("differentiate", .differentiate)
         shots += routerShots
         shots += CategoriesShot.allCases.map { Shot(name: $0.name, categories: $0) }
-        // A 1280x720 screen: the hub must fit its edge without overflowing.
-        shots += Shot.edges("open-720", on: .rightAndTop) { $0.pinned = true; $0.size = Shot.hd }
-        shots += Shot.edges("open-sessions-12-720", on: .rightAndTop) { $0.pinned = true; $0.scenario = .sessions12; $0.size = Shot.hd }
-        shots += Shot.edges("open-many-ci-720", on: .rightAndTop) { $0.pinned = true; $0.scenario = .manyCI; $0.tab = "CI"; $0.size = Shot.hd }
+        // A 1280x720 screen: the bar and its peek must fit the edge without overflowing.
+        shots += Shot.edges("peek-720", on: .rightAndTop) { $0.section = .inbox; $0.size = Shot.hd }
+        shots += Shot.edges("peek-many-ci-720", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .manyCI; $0.tab = "CI"; $0.size = Shot.hd }
         return shots
     }()
 
@@ -487,23 +436,15 @@ enum PlaygroundShots {
     private static func open(_ shot: Shot) -> NSWindow {
         let store = Store()
         Demo.populate(store, shot.scenario)
-        store.agents.expanded = true
         if let router = shot.routerWindow { return openRouterWindow(router, store: store, environment: shot.environment) }
         if let page = shot.categories { return CategoriesDemo.window(page, store: store) }
         let ui = UIState(persists: false, edge: shot.edge)
         let hub = HubState()
-        // Kept open a moment after showing at rest, as in use: the hub measures the bar at rest first.
-        if shot.pinned { Task { try? await Task.sleep(for: .seconds(0.5)); hub.pinned = true } }
-        hub.page = shot.page
-        if let section = shot.settingsSection { hub.settingsScroll = ScrollRequest(id: section, seq: 1) }
-        hub.query = shot.query
-        hub.focus = shot.focus
         hub.section = shot.section
         if let name = shot.tab {
             hub.tab = name == "Done" ? .done : store.categories.first { $0.name == name }.map { .category($0.id) }
         }
         if shot.selection == .firstNeedsYou { hub.selection = store.entries(in: store.tabNeedingYou).first.map { "i:" + $0.id } }
-        ui.drawerSelection = shot.hoveredSession
         let root = PlaygroundView(store: store, ui: ui, hub: hub, showsExplainer: false, minSize: shot.size)
             .environment(\.previewTip, shot.tip)
             .shotEnvironment(shot.environment)
@@ -519,7 +460,7 @@ enum PlaygroundShots {
         return window
     }
 
-    /// The Router's window, offscreen, as `RouterWindowController` shows it.
+    /// The Router, offscreen, as the app window shows it.
     private static func openRouterWindow(_ shot: RouterWindowShot, store: Store, environment: ShotEnvironment) -> NSWindow {
         let model = RouterModel()
         model.showAll = shot.all

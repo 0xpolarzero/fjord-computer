@@ -6,8 +6,6 @@ import SwiftUI
 /// What Lookout remembers about a Claude session it has shown.
 struct AgentEntry: Codable, Hashable, Identifiable {
     var id: String
-    /// Kept sessions stay in your list (in your order); the others are pending until you keep or remove them.
-    var kept = false
     /// Two letters or an emoji chosen by you; nil uses letters from the title.
     var label: String?
     /// Lookout's own read flag. It follows the app (new turns, opening the session, the sidebar dot) but can be
@@ -15,7 +13,7 @@ struct AgentEntry: Codable, Hashable, Identifiable {
     var unread = false
     /// Activity last seen (see `ClaudeSession.activity`).
     var seen = ""
-    /// Removed at this activity: hidden until there is newer activity.
+    /// Not listed at this activity (an entry made only to hold a label or an icon): hidden until there is newer activity.
     var hiddenAt: String?
     var focusedAt: Date?
     /// SF Symbol picked by Jev (shown unless you set a label yourself).
@@ -25,12 +23,9 @@ struct AgentEntry: Codable, Hashable, Identifiable {
 }
 
 struct AgentsState: Codable {
-    /// The Claude sessions extension. Off by default: Lookout is a GitHub app first.
+    /// Whether Claude's sessions are read: they follow the Router's switch (see `Store.switchRouter`).
     var enabled = false
     var enabledAt: Date?
-    /// Pill strip: one tile per session, or just the counts.
-    var expanded = false
-    /// Kept entries in display order; pending ones anywhere (they're sorted by activity).
     var entries: [AgentEntry] = []
     /// Folders whose sessions never show up as pending ("" = scratch chats).
     var mutedFolders: [String] = []
@@ -62,7 +57,6 @@ struct AgentsState: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         enabledAt = try c.decodeIfPresent(Date.self, forKey: .enabledAt)
-        expanded = try c.decodeIfPresent(Bool.self, forKey: .expanded) ?? false
         entries = try c.decodeIfPresent([AgentEntry].self, forKey: .entries) ?? []
         mutedFolders = try c.decodeIfPresent([String].self, forKey: .mutedFolders) ?? []
         appUnread = try c.decodeIfPresent([String].self, forKey: .appUnread)
@@ -89,27 +83,10 @@ enum AgentStatus {
     case running, blocked, finished, idle
 }
 
-/// Where a session is listed, in this order: what needs you, what finished, what's working, your pinned ones, then
-/// the recent rest: unpinned and quiet, listed for `Store.recentWindow` after their last activity so you can pin them.
-enum AgentGroup: Int, CaseIterable, Identifiable {
-    case needsYou, done, working, pinned, idle
-    var id: Int { rawValue }
-    var title: String {
-        switch self {
-        case .needsYou: "Needs you"
-        case .done: "Done"
-        case .working: "Working"
-        case .pinned: "Pinned"
-        case .idle: "Recent"
-        }
-    }
-}
-
-/// One group's sessions, as the bar and the lists show them.
-struct AgentSection: Identifiable, Hashable {
-    let group: AgentGroup
-    let rows: [AgentRow]
-    var id: AgentGroup { group }
+/// What a session is doing for the Router: needs you, finished, working, or quiet (listed for `Store.recentWindow` after its
+/// last activity).
+enum AgentGroup: Int, CaseIterable {
+    case needsYou, done, working, idle
 }
 
 struct AgentRow: Identifiable, Hashable {
@@ -137,7 +114,6 @@ struct AgentRow: Identifiable, Hashable {
 
     var id: String { session.id }
     var unread: Bool { entry.unread }
-    var pending: Bool { !entry.kept }
 
     /// Mid-turn but stopped on you (a question, a plan): counts as waiting, not as working.
     var waitsForYou: Bool { session.running && activity?.waitsForYou == true }
@@ -149,7 +125,7 @@ struct AgentRow: Identifiable, Hashable {
         // Turn over but subagents or commands it started still run: it isn't done, it picks up again when they finish.
         if !tasks.isEmpty { return .working }
         if entry.unread { return .done }
-        return entry.kept ? .pinned : .idle
+        return .idle
     }
 
     var status: AgentStatus {
@@ -202,7 +178,7 @@ struct AgentRow: Identifiable, Hashable {
         case .blocked: return "waiting"
         case .running: return "working" + running
         case .finished: return (unread ? "done, unread" : "done") + running
-        case .idle: return (entry.kept ? "pinned" : "idle") + running
+        case .idle: return "idle" + running
         }
     }
 
@@ -292,36 +268,18 @@ enum AgentLabel {
         }
         return result
     }
-
-    /// Up to two characters, or one emoji.
-    static func sanitize(_ input: String) -> String? {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let first = trimmed.first else { return nil }
-        // Digits, # and * count as emoji in Unicode; real emoji are past Latin-1.
-        if let scalar = first.unicodeScalars.first, scalar.properties.isEmoji, scalar.value > 0xFF {
-            return String(first)
-        }
-        let letters = String(trimmed.filter { !$0.isWhitespace }.prefix(2))
-        return letters.isEmpty ? nil : letters.uppercased()
-    }
 }
 
 // MARK: - Store
 
 /// What the views derive from the agents and the read sessions, computed once per change.
 struct AgentCache {
-    var rows: (kept: [AgentRow], pending: [AgentRow])
     var all: [AgentRow]
-    var sections: [AgentSection]
-    var counts: (blocked: Int, done: Int)
-    var folders: [String]
     var entries: [String: AgentEntry]
     var labels: [String: String]
 }
 
 extension Store {
-    var agentsEnabled: Bool { agents.enabled }
-
     /// Derived rows, memoized: views read these dozens of times per render. The getters still read the observed
     /// properties, so SwiftUI keeps tracking them; `agentCache` is dropped whenever one of them changes.
     private var cache: AgentCache {
@@ -337,16 +295,12 @@ extension Store {
                                  _ activity: [String: ClaudeActivity], _ tasks: [String: [ClaudeTask]]) -> AgentCache {
         let byID = Dictionary(state.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let muted = Set(state.mutedFolders)
-        let ordered = state.entries.filter(\.kept).compactMap { e in sessions[e.id].map { ($0, e) } }
-        var folderOrder: [String] = []
-        for (s, _) in ordered where !folderOrder.contains(s.folderKey) { folderOrder.append(s.folderKey) }
-        let kept = folderOrder.flatMap { folder in ordered.filter { $0.0.folderKey == folder } }
-        // Unpinned ones stay while they work or wait to be read, and for an hour after their last activity; then
-        // only a search finds them.
+        // Sessions stay while they work or wait to be read, and for an hour after their last activity; then only a
+        // search finds them.
         let now = Date(), cutoff = now.addingTimeInterval(-Self.recentWindow)
         let pending = sessions.values
             .compactMap { s -> (ClaudeSession, AgentEntry)? in
-                guard let e = byID[s.id], !e.kept, e.hiddenAt == nil, !muted.contains(s.folderKey) else { return nil }
+                guard let e = byID[s.id], e.hiddenAt == nil, !muted.contains(s.folderKey) else { return nil }
                 guard s.running || e.unread || tasks[s.id]?.isEmpty == false || s.lastActivity > cutoff else { return nil }
                 return (s, e)
             }
@@ -354,37 +308,18 @@ extension Store {
         // The list is read again when the next of them ages out.
         let quiet = pending.filter { !$0.0.running && !$0.1.unread && tasks[$0.0.id]?.isEmpty != false }.map { $0.0.lastActivity + Self.recentWindow }
         scheduleRecentExpiry(quiet.min().map { $0.timeIntervalSince(now) })
-        let all = kept + pending
-        let labels = AgentLabel.assign(all.map { (id: $0.0.id, title: $0.0.title, custom: $0.1.label) },
-                                       folders: Dictionary(all.map { ($0.0.id, $0.0.folderName) }, uniquingKeysWith: { a, _ in a }))
-        func rows(_ list: [(ClaudeSession, AgentEntry)]) -> [AgentRow] {
-            list.map { makeRow($0.0, $0.1, label: labels[$0.0.id]) }
-        }
-        let keptRows = rows(kept), pendingRows = rows(pending)
-        let allRows = keptRows + pendingRows
+        let labels = AgentLabel.assign(pending.map { (id: $0.0.id, title: $0.0.title, custom: $0.1.label) },
+                                       folders: Dictionary(pending.map { ($0.0.id, $0.0.folderName) }, uniquingKeysWith: { a, _ in a }))
+        let allRows = pending.map { makeRow($0.0, $0.1, label: labels[$0.0.id]) }
         // Summaries of sessions that are gone (or have a newer one) needn't stay parsed.
         if summaryTexts.count > allRows.count + 32 {
             let current = Set(allRows.compactMap { $0.session.summary?.detail })
             summaryTexts = summaryTexts.filter { current.contains($0.key) }
         }
-        var folders: [String] = []
-        for row in allRows where !row.session.folderKey.isEmpty && !folders.contains(row.session.folderKey) {
-            folders.append(row.session.folderKey)
-        }
-        // Pinned ones in your order, recent ones by recency (as pending already is), the rest most recent first.
-        let sections = AgentGroup.allCases.compactMap { group -> AgentSection? in
-            var rows = allRows.filter { $0.group == group }
-            if group.rawValue < AgentGroup.pinned.rawValue {
-                rows.sort { $0.session.lastActivity > $1.session.lastActivity }
-            }
-            return rows.isEmpty ? nil : AgentSection(group: group, rows: rows)
-        }
-        return AgentCache(rows: (keptRows, pendingRows), all: allRows, sections: sections,
-                          counts: (allRows.filter { $0.group == .needsYou }.count, allRows.filter { $0.group == .done }.count),
-                          folders: folders, entries: byID, labels: Dictionary(allRows.map { ($0.id, $0.label) }, uniquingKeysWith: { a, _ in a }))
+        return AgentCache(all: allRows, entries: byID, labels: Dictionary(allRows.map { ($0.id, $0.label) }, uniquingKeysWith: { a, _ in a }))
     }
 
-    /// How long an unpinned session that went quiet stays listed.
+    /// How long a session that went quiet stays listed.
     static let recentWindow: TimeInterval = 3600
 
     private func scheduleRecentExpiry(_ delay: TimeInterval?) {
@@ -398,14 +333,7 @@ extension Store {
         recentExpiry = timer
     }
 
-    /// Kept sessions in your order, grouped by project (projects in the order their first session appears), then
-    /// pending ones, most recent first. Labels are unique across both.
-    var agentRows: (kept: [AgentRow], pending: [AgentRow]) { cache.rows }
-
-    /// The listed sessions by group (`AgentGroup`), empty groups left out.
-    var agentSections: [AgentSection] { cache.sections }
-
-    /// A row for any session, kept or not (search results show sessions Lookout hasn't listed).
+    /// A row for any session, listed or not (search results show sessions Lookout hasn't listed).
     func row(_ session: ClaudeSession, _ entry: AgentEntry? = nil, label: String? = nil) -> AgentRow {
         makeRow(session, entry ?? cache.entries[session.id], label: label)
     }
@@ -435,30 +363,16 @@ extension Store {
         return Theme.projectColors[i % Theme.projectColors.count]
     }
 
-    /// Kept sessions split by project, for the strip's gaps and the Agents tab's headers.
-    func groups(_ rows: [AgentRow]) -> [[AgentRow]] {
-        var out: [[AgentRow]] = []
-        for row in rows {
-            if let last = out.last?.last, last.session.folderKey == row.session.folderKey {
-                out[out.count - 1].append(row)
-            } else {
-                out.append([row])
-            }
-        }
-        return out
-    }
-
     func setProjectColor(_ folder: String, _ index: Int) {
         agents.folderColors[folder] = index
     }
 
-    /// Every session matching all the words (title or folder), best first: title starts with the query, kept ones,
-    /// then the most recent. For the hub's search; its list scrolls, so none is left out.
+    /// Every session matching all the words (title or folder), best first: title starts with the query, then the most
+    /// recent. For the Router's search.
     func searchSessions(_ query: String) -> [AgentRow] {
         let words = query.lowercased().split(separator: " ").map(String.init)
         guard !words.isEmpty else { return [] }
         let labels = cache.labels
-        let kept = Set(agents.entries.filter(\.kept).map(\.id))
         // 3: title starts with it, 2: the title has every word, 1: only with the folder's name.
         func score(_ s: ClaudeSession) -> Int {
             let title = s.title.lowercased()
@@ -471,27 +385,12 @@ extension Store {
             .filter { $0.1 > 0 }
             .sorted { a, b in
                 if a.1 != b.1 { return a.1 > b.1 }
-                let ka = kept.contains(a.0.id), kb = kept.contains(b.0.id)
-                if ka != kb { return ka }
                 return a.0.lastActivity > b.0.lastActivity
             }
             .map { row($0.0, label: labels[$0.0.id]) }
     }
 
     var allAgentRows: [AgentRow] { cache.all }
-
-    /// What the sessions shortcut picks: the first session that needs you (stopped on a question mid-turn, or finished and
-    /// unread), else the first kept one. A question mid-turn is still `running`, so "unread and not running" alone skipped it.
-    var sessionShortcutPick: AgentRow? {
-        let rows = agentRows
-        return agentSections.first { $0.group == .needsYou || $0.group == .done }?.rows.first ?? rows.kept.first
-    }
-
-    /// Unread sessions waiting on you (amber) and the other unread finished ones (blue).
-    var agentCounts: (blocked: Int, done: Int) { cache.counts }
-
-    /// Projects with a session in your list or pending, in the order they're listed: where a new session can start.
-    var agentFolders: [String] { cache.folders }
 
     /// Every folder a name can be asked for: the ones sessions are in and the ones muted.
     var namedFolders: Set<String> { Set(claudeSessions.values.map(\.folderKey)).union(agents.mutedFolders).subtracting([""]) }
@@ -502,7 +401,7 @@ extension Store {
         folder.isEmpty ? "Scratch" : folderNames[folder] ?? FolderNames.name(folder, among: Array(namedFolders))
     }
 
-    /// Called when the sessions or the muted folders change (and with every change of what is kept, which changes neither): the
+    /// Called when the sessions or the muted folders change : the
     /// names are worked out again only when the set of folders is another, and the dictionary is only written when a name did.
     func refreshFolderNames() {
         let folders = namedFolders
@@ -626,7 +525,7 @@ extension Store {
 
         // Forget long-gone pending sessions so the state file stays small, except those you gave a label or an icon.
         state.entries.removeAll { e in
-            guard !e.kept, e.hiddenAt != nil, e.label == nil, e.icon == nil, !iconRequests.contains(e.id),
+            guard e.hiddenAt != nil, e.label == nil, e.icon == nil, !iconRequests.contains(e.id),
                   let s = byID[e.id] else { return false }
             return now.timeIntervalSince(s.lastActivity) > 30 * 86400
         }
@@ -653,76 +552,16 @@ extension Store {
         mutateAgent(id) { $0.unread = false }
     }
 
-    func startAgent(in folder: String) {
-        if let interceptOpen { interceptOpen("New Claude session in \(folderName(folder))"); return }
-        Claude.newSession(in: folder)
-    }
-
     func toggleAgentRead(_ id: String) {
         mutateAgent(id) { $0.unread.toggle() }
     }
 
-    /// Sessions you could add: not kept yet, best match first (every word must appear in the title or folder);
-    /// with no query, the most recent ones.
-    func agentCandidates(matching query: String, limit: Int = 6) -> [ClaudeSession] {
-        let kept = Set(agents.entries.filter(\.kept).map(\.id))
-        let words = query.lowercased().split(separator: " ").map(String.init)
-        return claudeSessions.values
-            .filter { !kept.contains($0.id) }
-            .filter { s in
-                let haystack = (s.title + " " + folderName(s.folderKey)).lowercased()
-                return words.allSatisfy { haystack.contains($0) }
-            }
-            .sorted { a, b in
-                // Titles starting with the query first, then the most recent.
-                let pa = words.first.map { a.title.lowercased().hasPrefix($0) } ?? false
-                let pb = words.first.map { b.title.lowercased().hasPrefix($0) } ?? false
-                return pa != pb ? pa : a.lastActivity > b.lastActivity
-            }
-            .prefix(limit)
-            .map { $0 }
-    }
-
-    /// Kept sessions go to the end of your list (any session: it doesn't have to be pending). One already kept stays where it is.
-    func keepAgent(_ id: String) {
-        guard agents.entries.first(where: { $0.id == id })?.kept != true else { return }
-        ensureEntry(id)
-        guard let i = agents.entries.firstIndex(where: { $0.id == id }) else { return }
-        var entry = agents.entries.remove(at: i)
-        entry.kept = true
-        entry.hiddenAt = nil
-        agents.entries.append(entry)
-    }
-
-    /// Sessions Lookout holds no entry for (old, muted, past the first read's cap) get one when you customize or
-    /// keep them: hidden, so they stay unlisted until their next activity.
+    /// Sessions Lookout holds no entry for (old, muted, past the first read's cap) get one when an icon is picked for them:
+    /// hidden, so they stay unlisted until their next activity.
     private func ensureEntry(_ id: String) {
         guard !agents.entries.contains(where: { $0.id == id }), let session = claudeSessions[id] else { return }
         agents.entries.append(AgentEntry(id: id, seen: session.activity, hiddenAt: session.activity, focusedAt: session.lastFocused))
         agents.assignColor(session.folderKey)
-    }
-
-    /// Pins it, or unpins a pinned one (it stays listed as recent, leaving an hour after its last activity).
-    func togglePin(_ id: String) {
-        if agents.entries.first(where: { $0.id == id })?.kept == true {
-            mutateAgent(id) { $0.kept = false }
-        } else {
-            keepAgent(id)
-        }
-    }
-
-    /// Pending: hidden until its next activity. Kept: leaves your list (and comes back as pending on new activity).
-    func dismissAgent(_ id: String) {
-        mutateAgent(id) {
-            $0.kept = false
-            $0.hiddenAt = $0.seen
-        }
-    }
-
-    func moveAgent(_ id: String, onto target: String) {
-        guard id != target, let from = agents.entries.firstIndex(where: { $0.id == id }),
-              let to = agents.entries.firstIndex(where: { $0.id == target }) else { return }
-        agents.entries.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
     }
 
     // MARK: Icons (Jev)
@@ -859,12 +698,6 @@ extension Store {
         pickIcons()
     }
 
-    func setAgentLabel(_ id: String, _ label: String?) {
-        let label = label.flatMap(AgentLabel.sanitize)
-        if label != nil { ensureEntry(id) }
-        mutateAgent(id) { $0.label = label }
-    }
-
     func isFolderMuted(_ folder: String) -> Bool { agents.mutedFolders.contains(folder) }
 
     func setFolderMuted(_ folder: String, _ muted: Bool) {
@@ -884,7 +717,6 @@ extension Store {
             claudeSessions = [:]
             claudeLink = .off
         }
-        onAgentsEnabledChange?(on)
     }
 }
 

@@ -15,15 +15,10 @@ enum Demo {
         case inboxMany, hiddenCategory
         // CI.
         case noCI, allPassing, manyCI, ciRunning
-        // Sessions, replacing the `agents` ones: a handful of each state, and long lists.
-        case sessionsWaiting, sessionsWorking, sessionsUnread, sessionsNewActivity, sessionsScratch, sessionsNone, sessions12
-        case sessionsManyNew, sessionsWaiting10
         // The update tile.
         case updateAvailable, updateDownloading, updateReady
         // The Router: cards of each kind (a question with its form) and a chat with receipts; and the Router switched off.
         case router, routerOff
-        // Router only: the session tiles gone, the Router standing in for them.
-        case routerOnly
     }
 
     static func populate(_ store: Store, _ scenario: Scenario = .busy) {
@@ -131,60 +126,6 @@ enum Demo {
             for key in store.things.keys where store.things[key]?.checks == .failing && store.things[key]?.kind == .workflow {
                 store.things[key]?.checks = .pending
             }
-        case .sessionsWaiting:
-            // w2's activity is what an AskUserQuestion call yields: its first question, as the transcript reader reports it.
-            sessions(store, now, [
-                .init(session("w1", "LCU update notifications", "lcu", minutes: 2, blocked: true,
-                              detail: "Should updates install silently, or ask first each time?"), unread: true),
-                .init(session("w2", "Release notes wording", "lookout", minutes: 5, running: true), unread: true),
-                .init(session("w3", "CI failure diagnosis", "microsandbox", minutes: 40, detail: "Fixed the flaky sandbox test.")),
-            ], activity: ["w2": ClaudeActivity(text: "Which tone should the release notes take?", since: now.addingTimeInterval(-300),
-                                               waitsForYou: true)])
-        case .sessionsWorking:
-            sessions(store, now, [
-                .init(session("k1", "Agent completion notifications", "lookout", minutes: 1, running: true)),
-                .init(session("k2", "CI failure diagnosis", "microsandbox", minutes: 4, detail: "Reviewing the sandbox changes."), unread: true),
-                .init(session("k3", "Transfer setup", "lcu", minutes: 120, detail: "Both remotes point at the new org.")),
-            ], activity: ["k1": ClaudeActivity(text: "Running swift test", since: now.addingTimeInterval(-90))],
-                     tasks: ["k2": [
-                        ClaudeTask(id: "a1", kind: .agent, title: "Review the sandbox changes", since: now.addingTimeInterval(-190),
-                                   activity: ClaudeActivity(text: "Reading sandbox.rs", since: now.addingTimeInterval(-5))),
-                        ClaudeTask(id: "a2", kind: .agent, title: "Check the other CI jobs", since: now.addingTimeInterval(-70)),
-                        ClaudeTask(id: "b1", kind: .command, title: "Run the full test suite", since: now.addingTimeInterval(-370)),
-                     ]])
-        case .sessionsUnread:
-            sessions(store, now, [
-                .init(session("u1", "CI failure diagnosis", "microsandbox", minutes: 4, detail: "Fixed the flaky sandbox test."), unread: true),
-                .init(session("u2", "Calculator display reading", "lcu", minutes: 15, detail: "The display reads 1,234.5."), unread: true),
-                .init(session("u3", "Game recommendations", nil, minutes: 60, detail: "Single-player or online squads?"), unread: true),
-                .init(session("u4", "Transfer setup", "lookout", minutes: 300, detail: "Transfer is done.")),
-            ])
-        case .sessionsNewActivity:
-            // Nothing kept: every session is new activity, offered to keep or hide.
-            sessions(store, now, [
-                .init(session("n1", "CI failure diagnosis", "microsandbox", minutes: 4, detail: "Fixed the flaky sandbox test."),
-                      kept: false, unread: true),
-                .init(session("n2", "Calculator display reading", "lcu", minutes: 15, detail: "The display reads 1,234.5."),
-                      kept: false, unread: true),
-                .init(session("n3", "Game recommendations", nil, minutes: 60, detail: "Single-player or online squads?"), kept: false),
-                .init(session("n4", "Transfer setup", "lookout", minutes: 300, detail: "Transfer is done."), kept: true),
-            ])
-        case .sessionsScratch:
-            sessions(store, now, [
-                .init(session("s1", "Game recommendations", nil, minutes: 25, detail: "Single-player immersion or online squads?"),
-                      unread: true),
-                .init(session("s2", "Regex for semver tags", nil, minutes: 90, detail: "Use `^v\\d+\\.\\d+\\.\\d+$`.")),
-                .init(session("s3", "Agent completion notifications", "lookout", minutes: 3, detail: "Done; tests pass."), unread: true),
-            ])
-        case .sessionsNone:
-            sessions(store, now, [])
-        case .sessions12:
-            sessions12(store, now)
-        case .sessionsManyNew:
-            sessionsManyNew(store, now)
-        case .sessionsWaiting10:
-            // Twelve sessions, ten of them waiting: none of them may be hidden.
-            questions(store, now, total: 12, waiting: 10)
         case .updateAvailable:
             agents(store, now)
             store.updater.preview(.available, version: "0.5.0")
@@ -199,10 +140,6 @@ enum Demo {
             router(store, now)
         case .routerOff:
             agents(store, now)
-        case .routerOnly:
-            agents(store, now)
-            router(store, now)
-            store.router.routerOnly = true
         }
     }
 
@@ -279,8 +216,6 @@ enum Demo {
             RouterMessage(role: .error, text: "SendMessage to Game recommendations: not delivered (the session isn't open in Claude)",
                           date: now.addingTimeInterval(-10), sessionID: "local_demo-games"),
         ]
-        // The scenario shows the tiles too; `routerOnly` hides them.
-        state.routerOnly = false
         store.router = state
     }
 
@@ -489,24 +424,22 @@ enum Demo {
                              summary: running ? nil : ClaudeSession.Summary(blocked: blocked, detail: detail), running: running)
     }
 
-    /// A session and how Lookout lists it: kept or new activity, read or not.
+    /// A session and how Lookout lists it: read or not, with the label or icon it was given.
     private struct Listed {
         var session: ClaudeSession
-        var kept = true
         var unread = false
         var label: String?
         var icon: String?
 
-        init(_ session: ClaudeSession, kept: Bool = true, unread: Bool = false, label: String? = nil, icon: String? = nil) {
+        init(_ session: ClaudeSession, unread: Bool = false, label: String? = nil, icon: String? = nil) {
             self.session = session
-            self.kept = kept
             self.unread = unread
             self.label = label
             self.icon = icon
         }
     }
 
-    /// The Claude sessions extension, on, with these sessions. `colors` pins each project's colour; the others get the
+    /// The Router's reading of Claude's sessions, on, with these sessions. `colors` pins each project's colour; the others get the
     /// least used one, in listing order. `unlisted` are known to the app but without an entry: only found by search.
     private static func sessions(_ store: Store, _ now: Date, _ listed: [Listed], activity: [String: ClaudeActivity] = [:],
                                  tasks: [String: [ClaudeTask]] = [:], colors: [String: Int] = [:],
@@ -523,7 +456,7 @@ enum Demo {
         state.seeded = true
         state.iconsEnabled = true
         state.entries = listed.map { l in
-            AgentEntry(id: l.session.id, kept: l.kept, label: l.label, unread: l.unread, seen: l.session.activity,
+            AgentEntry(id: l.session.id, label: l.label, unread: l.unread, seen: l.session.activity,
                        focusedAt: l.session.lastFocused, icon: l.icon)
         }
         store.agents = state
@@ -542,9 +475,9 @@ enum Demo {
             Listed(session("local_demo-linux", "LCU JavaScript sandbox on Linux", "microsandbox", minutes: 1500,
                            detail: "Sandbox runs on Linux; two follow-ups listed."), label: "\u{1F427}"),
             Listed(session("local_demo-calc", "Calculator display reading", "lcu-research", minutes: 1,
-                           detail: "The display reads 1,234.5; the screenshot is attached."), kept: false, unread: true),
+                           detail: "The display reads 1,234.5; the screenshot is attached."), unread: true),
             Listed(session("local_demo-games", "Game recommendations", nil, minutes: 25,
-                           detail: "Single-player immersion or online squads?"), kept: false),
+                           detail: "Single-player immersion or online squads?")),
         ]
         let hidden = session("local_demo-storage", "Sandbox storage directory customization", "microsandbox", minutes: 2900,
                              detail: "Storage path is configurable through the CLI and the env.")
@@ -561,52 +494,6 @@ enum Demo {
                  unlisted: [hidden])
     }
 
-    /// Twelve sessions: one waiting, one working, the rest finished, two of them new activity. More than the bar shows.
-    private static func sessions12(_ store: Store, _ now: Date) {
-        let projects = ["lcu", "microsandbox", "lookout", "lcu-research", "zig-docs"]
-        var listed = [
-            Listed(session("t0", "LCU update notifications", "lcu", minutes: 2, blocked: true,
-                           detail: "Should updates install silently, or ask first each time?"), unread: true),
-            Listed(session("t1", "Agent completion notifications", "lookout", minutes: 1, running: true)),
-        ]
-        for i in 2..<12 {
-            listed.append(Listed(session("t\(i)", "Session number \(i)", projects[i % projects.count], minutes: Double(i * 17),
-                                         detail: "Finished turn \(i)."), kept: i < 10, unread: i % 3 == 0))
-        }
-        sessions(store, now, listed, activity: ["t1": ClaudeActivity(text: "Running swift test", since: now.addingTimeInterval(-90))])
-    }
-
-    /// One waiting, two kept, and eleven with new activity: more than that group lists.
-    private static func sessionsManyNew(_ store: Store, _ now: Date) {
-        let projects = ["lcu", "microsandbox", "lookout", "lcu-research"]
-        var listed = [
-            Listed(session("m0", "LCU update notifications", "lcu", minutes: 2, blocked: true,
-                           detail: "Should updates install silently, or ask first each time?"), unread: true),
-            Listed(session("m1", "Transfer setup", "lookout", minutes: 200, detail: "Both remotes point at the new org.")),
-            Listed(session("m2", "Calculator display reading", "lcu", minutes: 90, detail: "The display reads 1,234.5.")),
-        ]
-        for i in 0..<11 {
-            let made = session("m\(i + 3)", "New activity \(i + 1)", projects[i % projects.count], minutes: Double(3 + i * 11),
-                               detail: "Finished turn \(i + 1).")
-            listed.append(Listed(made, kept: false, unread: i % 2 == 0))
-        }
-        sessions(store, now, listed)
-    }
-
-    /// `total` sessions, the first `waiting` of them waiting for you: more than the bar has room for.
-    private static func questions(_ store: Store, _ now: Date, total: Int, waiting: Int) {
-        let projects = ["lcu", "microsandbox", "lookout", "lcu-research", "zig-docs"]
-        // Built a step at a time: as one expression, older compilers give up type-checking it.
-        var listed: [Listed] = []
-        for i in 0..<total {
-            let isWaiting = i < waiting
-            let detail = isWaiting ? "Which one should it be?" : "Finished turn \(i)."
-            let made = session("q\(i)", "Question number \(i)", projects[i % projects.count], minutes: Double(i * 7 + 1),
-                               blocked: isWaiting, detail: detail)
-            listed.append(Listed(made, unread: isWaiting))
-        }
-        sessions(store, now, listed)
-    }
 }
 
 /// `--check owner/repo`: headless refresh against live GitHub, prints what the inbox would contain for the repo's PRs, issues
@@ -641,7 +528,7 @@ enum Check {
     }
 }
 
-/// `--claude`: what the Claude sessions extension reads from the desktop app right now.
+/// `--claude`: what the Router reads of Claude's sessions from the desktop app right now.
 @MainActor
 enum ClaudeCheck {
     static func run() {
@@ -697,14 +584,13 @@ enum ClaudeCheck {
         var last = ""
         func dump(_ reason: String) {
             store.refreshClaude()
-            let rows = store.agentRows
-            let lines = (rows.kept + rows.pending).map { r in
-                "\(r.label) \(r.pending ? "pending" : "kept   ") \(r.unread ? "UNREAD" : "read  ") \(r.statusText().padding(toLength: 10, withPad: " ", startingAt: 0)) \(r.session.title)"
+            let lines = store.allAgentRows.map { r in
+                "\(r.label) \(r.unread ? "UNREAD" : "read  ") \(r.statusText().padding(toLength: 10, withPad: " ", startingAt: 0)) \(r.session.title)"
             }
             let text = lines.joined(separator: "\n")
             guard text != last else { return }
             last = text
-            print("--- \(Date().formatted(date: .omitted, time: .standard)) (\(reason)) counts=\(store.agentCounts)\n" + text)
+            print("--- \(Date().formatted(date: .omitted, time: .standard)) (\(reason))\n" + text)
             fflush(stdout)
         }
         dump("start")

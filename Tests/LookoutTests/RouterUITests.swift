@@ -43,21 +43,6 @@ import UserNotifications
 
     // MARK: Status line
 
-    @Test func theStatusLineIsQuietWhenNothingRuns() {
-        #expect(RouterStatusLine.text([], now: now) == "All quiet")
-        #expect(RouterStatusLine.text([row("a", folder: "app", running: false)], now: now) == "All quiet")
-    }
-
-    @Test func theStatusLineSaysWhatWorksForHowLongThenWhatWaits() {
-        let rows = [
-            row("a", folder: "lookout", running: true, since: 12 * 60 + 30),
-            row("b", folder: "api", running: true, waits: true, since: 60),
-            row("c", folder: "web", running: true, since: 30, activity: "Thinking"),
-        ]
-        #expect(RouterStatusLine.text(rows, now: now)
-                == "2 working · lookout: Running swift test 12m · web: Thinking <1m · api: waiting on you")
-    }
-
     @Test func durationsAreWholeMinutes() {
         #expect(RouterStatusLine.minutes(59) == "<1m")
         #expect(RouterStatusLine.minutes(61) == "1m")
@@ -618,109 +603,23 @@ import UserNotifications
 
     // MARK: Bar
 
-    /// The kept-open hub's width along the top or bottom of a screen `width` wide.
-    private func openWidth(_ edge: DockEdge, _ width: CGFloat, _ scenario: Demo.Scenario = .router) async throws
-        -> (hub: CGFloat, column: Bool) {
-        let store = demo(scenario)
-        let hub = HubState()
-        let box = WidthBox()
-        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: edge), hub: hub, maxLength: 600, maxWidth: width)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { box.width = $0 }
-            .frame(width: width, height: 800, alignment: .topLeading)
-        let hosting = NSHostingView(rootView: view)
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: 800), styleMask: .borderless,
-                              backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        window.orderFrontRegardless()
-        defer { window.close() }
-        await waitUntil {
-            hosting.layoutSubtreeIfNeeded()
-            return box.width > 0
-        }
-        await waitUntilSteady { box.width }
-        let rest = box.width
-        hub.pinned = true
-        // Kept open, the strip spans its columns: wider than at rest.
-        await waitUntil {
-            hosting.layoutSubtreeIfNeeded()
-            return box.width > rest
-        }
-        // Until the width settles where pinning took it, however slowly the machine lays it out.
-        await waitUntilSteady(turns: 10) {
-            hosting.layoutSubtreeIfNeeded()
-            return box.width
-        }
-        hosting.layoutSubtreeIfNeeded()
-        return (box.width, LookoutHub.routerColumnFits(maxWidth: width, trailing: 140, sessions: !store.sessionsHidden))
-    }
+    // MARK: What works
 
-    @Test(.hostsWindows) func alongTheTopAndBottomTheRoutersColumnGoesBeforeTheHubOverflows() async throws {
-        for edge in [DockEdge.top, .bottom] {
-            let narrow = try await openWidth(edge, 1024)
-            #expect(narrow.hub <= 1024, "\(edge) at 1024: \(narrow.hub)")
-            #expect(!narrow.column)
-            let wide = try await openWidth(edge, 1280)
-            #expect(wide.hub <= 1280, "\(edge) at 1280: \(wide.hub)")
-            #expect(wide.column)
-        }
-    }
-
-    // MARK: Router only
-
-    @Test(.hostsWindows) func routerOnlyGivesTheRoomBackAlongTheTopAndBottom() async throws {
-        for edge in [DockEdge.top, .bottom] {
-            for width in [CGFloat(1024), 1280] {
-                let only = try await openWidth(edge, width, .routerOnly)
-                let both = try await openWidth(edge, width, .router)
-                #expect(only.hub <= width, "\(edge) at \(width): \(only.hub)")
-                // The Router keeps its column (the sessions' room is its), and the hub is no wider than with the sessions.
-                #expect(only.column && only.hub <= both.hub + 0.5, "\(edge) at \(width): \(only.hub) vs \(both.hub)")
-            }
-        }
-    }
-
-    @Test func routerOnlyTakesTheSessionsOffTheBarAndBringsThemBack() async throws {
-        func labels(_ scenario: Demo.Scenario, _ configure: @escaping (Store, HubState) -> Void) async throws -> [String] {
-            try await AccessibilityTree.render(scenario: scenario, configure: configure).all.map(\.label)
-        }
-        for edge in [DockEdge.right, .top] {
-            for pinned in [false, true] {
-                let only = try await AccessibilityTree.render(edge: edge, scenario: .routerOnly, configure: { _, hub in hub.pinned = pinned })
-                #expect(!only.all.contains { $0.label == "Sessions" || $0.label == "Calculator display reading" && $0.role == "AXButton" },
-                        "\(edge) \(pinned)")
-                let back = try await AccessibilityTree.render(edge: edge, scenario: .routerOnly, configure: { store, hub in
-                    store.setRouterOnly(false)
-                    hub.pinned = pinned
-                })
-                #expect(back.all.contains { $0.label == "Sessions" }, "\(edge) \(pinned)")
-            }
-        }
-        // The Router's panel lists what works, each line opening its session.
-        let peek = try await labels(.routerOnly) { _, hub in hub.section = .router }
-        #expect(peek.contains("Agent completion notifications"))
-        // Off again with the Router off: the sessions are back whatever the setting says.
-        let off = try await labels(.routerOnly) { store, _ in store.setRouterEnabled(false) }
-        #expect(off.contains("Sessions"))
-    }
-
-    @Test func inRouterOnlyABrokenReadOfClaudesFilesIsStillSaid() async throws {
+    @Test func aBrokenReadOfClaudesFilesIsSaidOnTheBar() async throws {
         func says(_ link: ClaudeLink, _ configure: @escaping (HubState) -> Void) async throws -> Bool {
-            let tree = try await AccessibilityTree.render(edge: .top, scenario: .routerOnly, configure: { store, hub in
+            let tree = try await AccessibilityTree.render(edge: .top, scenario: .router, configure: { store, hub in
                 store.claudeLink = link
                 configure(hub)
             })
             return tree.all.contains { ($0.label + $0.value).contains("Claude's sessions") }
         }
-        for state in [{ (hub: HubState) in hub.section = .router }, { (hub: HubState) in hub.pinned = true }] {
-            #expect(try await says(.missing, state))
-            #expect(try await !says(.ok, state))
-        }
+        let state = { (hub: HubState) in hub.section = .router }
+        #expect(try await says(.missing, state))
+        #expect(try await !says(.ok, state))
     }
 
-    @Test func theWindowListsWhatIsWorkingInBothModes() async throws {
-        for scenario in [Demo.Scenario.router, .routerOnly] {
+    @Test func theWindowListsWhatIsWorking() async throws {
+        for scenario in [Demo.Scenario.router] {
             let store = demo(scenario)
             let tree = try await AccessibilityTree.render(RouterView(store: store, model: RouterModel(), checksClaudeCode: false))
             // A line per working session, the one that left things running included, each a button that opens it.
@@ -729,8 +628,19 @@ import UserNotifications
         }
     }
 
+    @Test func theBarHasNoSessionsOfItsOwn() async throws {
+        for edge in [DockEdge.right, .top] {
+            for peeking in [false, true] {
+                let tree = try await AccessibilityTree.render(edge: edge, scenario: .router,
+                                                              configure: { _, hub in hub.section = peeking ? .router : nil })
+                #expect(!tree.all.contains { $0.label == "Sessions" || $0.label == "New session" }, "\(edge) \(peeking)")
+                #expect(tree.all.contains { $0.label == "Router" }, "\(edge) \(peeking)")
+            }
+        }
+    }
+
     @Test func theWorkingListIsWhatRunsLongestFirstAndOpensIt() {
-        let store = demo(.routerOnly)
+        let store = demo(.router)
         var opened: [String] = []
         store.interceptOpen = { opened.append($0) }
         let rows = store.routerWorkingRows
@@ -740,98 +650,6 @@ import UserNotifications
         #expect(!rows.contains { $0.waitsForYou })
         store.openAgent(rows[1].id)
         #expect(opened.first?.contains("Agent completion notifications") == true)
-    }
-
-    @Test(.hostsWindows) func turningRouterOnlyOnDropsTheSessionsFocusAndPick() async throws {
-        for edge in [DockEdge.right, .top] {
-            let store = demo(.router)
-            let hub = HubState(), ui = UIState(persists: false, edge: edge)
-            hub.pinned = true
-            hub.focus = .agents
-            hub.selection = "a:local_demo-ci"
-            let hosting = NSHostingView(rootView: LookoutHub(store: store, ui: ui, hub: hub, maxLength: 700, maxWidth: 1280)
-                .frame(width: 1280, height: 800, alignment: .topLeading))
-            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1280, height: 800), styleMask: .borderless,
-                                  backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.contentView = hosting
-            window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-            window.orderFrontRegardless()
-            defer { window.close() }
-            hosting.layoutSubtreeIfNeeded()
-            // On screen with the sessions focused and one picked; then Router only.
-            #expect(hub.focus == .agents && hub.selection == "a:local_demo-ci")
-            store.setRouterOnly(true)
-            await waitUntil {
-                hosting.layoutSubtreeIfNeeded()
-                return hub.focus == nil && hub.selection == nil
-            }
-            #expect(hub.focus == nil, "\(edge): \(String(describing: hub.focus))")
-            #expect(hub.selection == nil, "\(edge): \(String(describing: hub.selection))")
-            // And the section itself is gone from what the hub draws now.
-            let tree = try await AccessibilityTree.render(LookoutHub(store: store, ui: ui, hub: hub, maxLength: 700, maxWidth: 1280)
-                .frame(width: 1280, height: 800, alignment: .topLeading), size: CGSize(width: 1280, height: 800))
-            #expect(!tree.all.contains { $0.label == "Sessions" }, "\(edge)")
-            #expect(tree.all.contains { $0.label == "Inbox" })
-        }
-    }
-
-    @Test func rowKeysLeaveAHiddenSessionAlone() {
-        let store = demo(.routerOnly)
-        var opened: [String] = []
-        store.interceptOpen = { opened.append($0) }
-        let hub = HubState(), ui = UIState(persists: false, edge: .right)
-        hub.pinned = true
-        let keys = HubKeys(store: store, ui: ui, hub: hub)
-        // Picked before the tiles went (not listed now): Return, ⌘K and ⌘⌫ do nothing to it.
-        hub.selection = "a:local_demo-ci"
-        let pinned = store.agents.entries.first { $0.id == "local_demo-ci" }?.kept
-        for shortcut in [store.shortcut(.openItem), store.shortcut(.keepSession), store.shortcut(.removeSession)] {
-            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shortcut.flags, timestamp: 0, windowNumber: 0,
-                                         context: nil, characters: "", charactersIgnoringModifiers: shortcut.keyCode == 40 ? "k" : "",
-                                         isARepeat: false, keyCode: shortcut.keyCode)!
-            _ = keys.key(event)
-        }
-        #expect(opened.isEmpty)
-        #expect(store.agents.entries.first { $0.id == "local_demo-ci" }?.kept == pinned)
-        keys.followSessionsHidden()
-        #expect(hub.selection == nil)
-    }
-
-    @Test func theSwitcherSearchesWhenThereAreNoTiles() {
-        let store = demo(.routerOnly)
-        let hub = HubState(), ui = UIState(persists: false, edge: .right)
-        let keys = HubKeys(store: store, ui: ui, hub: hub)
-        // No session rows to walk with the arrows while nothing is searched.
-        #expect(store.hubTargets(hub).allSatisfy { $0.hasPrefix("i:") })
-        keys.showSessions()
-        #expect(hub.pinned && hub.searchOpen && hub.selection == nil)
-        hub.query = "calc"
-        #expect(store.hubTargets(hub).contains("a:local_demo-calc"))
-        // With the tiles, it picks the first that needs you, as before.
-        let tiles = demo(.router)
-        let hub2 = HubState()
-        HubKeys(store: tiles, ui: ui, hub: hub2).showSessions()
-        #expect(hub2.pinned && !hub2.searchOpen && hub2.selection?.hasPrefix("a:") == true)
-    }
-
-    @Test func routerOnlyIsOnUnlessTurnedOffAndRemembered() throws {
-        #expect(RouterState().routerOnly)
-        let old = try JSONDecoder().decode(RouterState.self, from: Data(#"{"enabled":true}"#.utf8))
-        #expect(old.routerOnly)
-        var state = RouterState()
-        state.routerOnly = false
-        let back = try JSONDecoder().decode(RouterState.self, from: JSONEncoder().encode(state))
-        #expect(!back.routerOnly)
-    }
-
-    @Test func withTheRouterOnTheBarHasNoNewSessionRow() async throws {
-        func hasNewSession(_ scenario: Demo.Scenario) async throws -> Bool {
-            let tree = try await AccessibilityTree.render(scenario: scenario, configure: { _, hub in hub.pinned = true })
-            return tree.all.contains { $0.label == "New session" }
-        }
-        #expect(try await hasNewSession(.routerOff))
-        #expect(try await !hasNewSession(.router))
     }
 
     /// "All" once froze the window. With a few hundred cards, a card picked far down and the minute clock running, flipping
@@ -944,10 +762,6 @@ private final class Registrar: HotKeyRegistrar {
         registered[id] = shortcut
         return true
     }
-}
-
-@MainActor private final class WidthBox {
-    var width: CGFloat = 0
 }
 
 /// A watchdog on a thread of its own: a main thread stuck in layout can't time itself.

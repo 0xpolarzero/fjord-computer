@@ -8,7 +8,6 @@ import SwiftUI
 struct RouterSidebar: View {
     let store: Store
     @Bindable var model: RouterModel
-    @State private var query = ""
 
     typealias M = CDS.Sidebar
 
@@ -17,16 +16,25 @@ struct RouterSidebar: View {
         let needs = open.filter { $0.kind != .done }
         let done = open.filter { $0.kind == .done }
         let working = store.allAgentRows.filter { $0.group == .working }
+        // Searching also finds any session, listed or not, to open in Claude.
+        let found = query.trimmingCharacters(in: .whitespaces).isEmpty ? [] : Array(store.searchSessions(query).prefix(8))
         let earlier = filtered(store.router.cards.filter { !$0.isOpen }).sorted { $0.createdMs > $1.createdMs }.prefix(8)
         var sections: [(String, [AnyView])] = []
         if !needs.isEmpty { sections.append(("Needs you", needs.map { cardRow($0) })) }
         if !done.isEmpty { sections.append(("Done", done.map { cardRow($0) })) }
         if !working.isEmpty {
             sections.append(("Working", working.map { row in
-                AnyView(SidebarRow(dot: .working, title: row.session.title, on: false) { store.openAgent(row.id) })
+                AnyView(SidebarRow(dot: .working, glyph: row, title: row.session.title, on: false) { store.openAgent(row.id) }
+                    .contextMenu { SessionMenu(row: row, store: store) })
             }))
         }
         if !earlier.isEmpty { sections.append(("Earlier", earlier.map { cardRow($0) })) }
+        if !found.isEmpty {
+            sections.append(("Sessions", found.map { row in
+                AnyView(SidebarRow(dot: ClaudeDot.Kind(row), glyph: row, title: row.session.title, on: false) { store.openAgent(row.id) }
+                    .contextMenu { SessionMenu(row: row, store: store) })
+            }))
+        }
 
         return VStack(alignment: .leading, spacing: 0) {
             // The title row (§2.2): room for the window's buttons. Lookout has no sidebar toggle, back/forward or
@@ -53,8 +61,8 @@ struct RouterSidebar: View {
                             if i > 0 { Color.clear.frame(height: M.sectionGap) }
                             section(sections[i].0, sections[i].1)
                         }
-                        if sections.isEmpty && query.isEmpty {
-                            Text("Nothing needs you").cdsText(CDS.Density.compact.body, .regular, CDS.Text.muted)
+                        if sections.isEmpty {
+                            Text(query.isEmpty ? "Nothing needs you" : "No match").cdsText(CDS.Density.compact.body, .regular, CDS.Text.muted)
                                 .padding(.leading, M.labelInset).padding(.top, M.groupTop)
                         }
                     }
@@ -69,6 +77,8 @@ struct RouterSidebar: View {
         .font(CDS.sans(M.rowFont))
     }
 
+    private var query: String { model.search }
+
     private func filtered(_ cards: [RouterCard]) -> [RouterCard] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return cards }
@@ -76,10 +86,11 @@ struct RouterSidebar: View {
     }
 
     /// §2.3: a 26pt field, white 5% with a 1pt white 10% inset ring, the magnifying glass in a 24pt slot, muted text.
-    private var search: some View { SearchField(query: $query) }
+    private var search: some View { SearchField(query: $model.search, wanted: $model.searchWanted) }
 
     private func cardRow(_ card: RouterCard) -> AnyView {
-        AnyView(SidebarRow(dot: ClaudeDot.Kind(card), title: card.title, on: model.selection == card.id) {
+        AnyView(SidebarRow(dot: ClaudeDot.Kind(card), glyph: store.sessionRow(card.sessionID), title: card.title,
+                           on: model.selection == card.id) {
             model.select(card.id, store: store)
         })
     }
@@ -100,8 +111,17 @@ struct RouterSidebar: View {
 
 private struct SearchField: View {
     @Binding var query: String
+    /// Set to ask for the keyboard (the sessions shortcut); taken once the field has it.
+    @Binding var wanted: Bool
     @State private var hovered = false
+    @FocusState private var focused: Bool
     typealias M = CDS.Sidebar
+
+    private func takeWanted() {
+        guard wanted else { return }
+        wanted = false
+        DispatchQueue.main.async { focused = true }
+    }
 
     var body: some View {
         HStack(spacing: M.rowGap) {
@@ -115,6 +135,8 @@ private struct SearchField: View {
                 .textFieldStyle(.plain)
                 .font(CDS.sans(M.rowFont))
                 .foregroundStyle(CDS.Text.primary)
+                .accessibilityLabel("Search sessions")
+                .focused($focused)
                 .background(alignment: .leading) {
                     if query.isEmpty {
                         Text("Search").font(CDS.sans(M.rowFont)).foregroundStyle(CDS.Text.muted)
@@ -131,6 +153,8 @@ private struct SearchField: View {
             .strokeBorder(hovered ? Color.clear : CDS.border, lineWidth: 1))
         .onHover { hovered = $0 }
         .animation(.easeOut(duration: 0.06), value: hovered)
+        .onChange(of: wanted) { takeWanted() }
+        .onAppear { takeWanted() }
         .padding(.horizontal, M.railShift / 2)
         .padding(.top, 4)
         .padding(.bottom, 8)
@@ -218,12 +242,27 @@ private struct NavRow: View {
 /// A session row (§2.7): Claude's status dot in the leading slot.
 struct SidebarRow: View {
     let dot: ClaudeDot.Kind
+    /// The session behind it, when there is one: its icon takes the dot's place, the dot on its corner.
+    var glyph: AgentRow?
     let title: String
     let on: Bool
     let action: () -> Void
 
     var body: some View {
-        SidebarRowButton(title: title, on: on, action: action) { _ in ClaudeDot(kind: dot) }
+        SidebarRowButton(title: title, on: on, action: action) { _ in
+            if let glyph {
+                SessionGlyph(row: glyph, size: 18, dot: false)
+                    .overlay(alignment: .topTrailing) {
+                        if dot != .quiet {
+                            ClaudeDot(kind: dot).scaleEffect(0.8)
+                                .background(Circle().fill(Color.black).frame(width: 9, height: 9))
+                                .offset(x: 5, y: -5)
+                        }
+                    }
+            } else {
+                ClaudeDot(kind: dot)
+            }
+        }
     }
 }
 

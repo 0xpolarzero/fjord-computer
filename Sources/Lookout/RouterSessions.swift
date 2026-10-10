@@ -1,0 +1,144 @@
+import AppKit
+import SwiftUI
+
+// What the Router shows of a Claude session: its icon (or letters) and status dot, its project, what it left running, and
+// the menu on its rows.
+
+extension ClaudeDot.Kind {
+    /// A session's dot, as Claude's list draws it: needs you, done and unread, working (or left something running), else
+    /// the quiet hollow ring.
+    init(_ row: AgentRow) {
+        switch row.group {
+        case .needsYou: self = .needsYou
+        case .done: self = .done
+        case .working: self = .working
+        case .idle: self = .quiet
+        }
+    }
+}
+
+/// A session's face in the Router's lists: the icon Jev picked (else its letters, or an emoji) on a neutral square, in the
+/// project's colour, with Claude's status dot on its corner when `dot` is on. Without a session behind it, nothing.
+struct SessionGlyph: View {
+    let row: AgentRow
+    var size: CGFloat = 18
+    var dot = true
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: CDS.Tile.radius * size / CDS.Tile.size + 1, style: .continuous)
+        let kind = ClaudeDot.Kind(row)
+        let emoji = row.label.unicodeScalars.first.map { $0.properties.isEmoji && $0.value > 0xFF } ?? false
+        Group {
+            if let icon = row.icon {
+                Image(systemName: icon).font(.system(size: size * 0.6, weight: .medium)).symbolRenderingMode(.monochrome)
+            } else {
+                Text(row.label)
+                    .font(emoji ? .system(size: size * 0.55) : CDS.sans(size * 0.45, .medium))
+                    .minimumScaleFactor(0.6).lineLimit(1)
+            }
+        }
+        .foregroundStyle(row.color ?? CDS.Text.secondary)
+        .frame(width: size, height: size)
+        .background(shape.fill(CDS.Tile.fill))
+        .overlay(alignment: .topTrailing) {
+            if dot, kind != .quiet {
+                ClaudeDot(kind: kind)
+                    .scaleEffect(0.8)
+                    .background(Circle().fill(Color.black).frame(width: 9, height: 9))
+                    .offset(x: 5, y: -5)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// A project's colour dot and name.
+struct ProjectLabel: View {
+    let name: String
+    let color: Color?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let color {
+                Circle().fill(color).frame(width: 6, height: 6)
+            } else {
+                Image(systemName: "text.bubble").font(.system(size: 9, weight: .medium))
+            }
+            Text(name)
+        }
+    }
+}
+
+/// A session's context menu in the Router: open it, pick it another icon, give its project a colour, mute the project.
+struct SessionMenu: View {
+    let row: AgentRow
+    let store: Store
+
+    var body: some View {
+        Button("Open in Claude") { store.openAgent(row.id) }
+        if store.canPickIcons && row.entry.label == nil {
+            Button(row.entry.icon == nil ? "Pick an icon" : "Pick another icon") { store.repickIcon(row.id) }
+        }
+        if !row.session.folderKey.isEmpty {
+            Menu("Colour for \(row.projectName)") {
+                ForEach(Theme.projectColorNames.indices, id: \.self) { i in
+                    Button(Theme.projectColorNames[i]) { store.setProjectColor(row.session.folderKey, i) }
+                }
+            }
+        }
+        // A session found through search can be of a project muted already: muting it again would do nothing.
+        if store.isFolderMuted(row.session.folderKey) {
+            Button("Unmute \(row.projectName)") { store.setFolderMuted(row.session.folderKey, false) }
+        } else {
+            Button("Mute \(row.projectName)") { store.setFolderMuted(row.session.folderKey, true) }
+        }
+    }
+}
+
+extension Store {
+    /// The row of a session, listed or not (a card's, say).
+    func sessionRow(_ id: String) -> AgentRow? { claudeSessions[id].map { row($0) } }
+}
+
+/// The Claude link's state as a dot and a line ("Synced with Claude", "Claude's sessions not found"…).
+struct ClaudeLinkStatus: View {
+    let store: Store
+
+    var body: some View {
+        let (color, text, detail): (Color, String, String) = switch store.claudeLink {
+        case .ok where Claude.isRunning: (Theme.green, "Synced with Claude", "Updates as the Claude app writes its session files")
+        case .ok, .off: (Theme.tertiary, "Claude isn't running", "Sessions update again when the app is open")
+        case .missing: (Theme.red, "Claude's sessions not found", "Open the Claude desktop app once")
+        case .unreadable: (Theme.red, "Can't read Claude's sessions", "The app's session format changed")
+        }
+        Circle().fill(color).frame(width: 6, height: 6)
+        Text(text).tip(text, detail)
+    }
+}
+
+/// "N API calls left this hour", only when the shared GitHub rate limit is running low.
+struct RateLimitWarning: View {
+    let store: Store
+
+    var body: some View {
+        if let rate = store.rateRemaining, rate < 500 {
+            Label("\(rate.formatted()) API calls left this hour", systemImage: "exclamationmark.triangle.fill")
+                .monospacedDigit()
+                .foregroundStyle(Theme.amber)
+                .tip("GitHub rate limit low",
+                     "Shared with gh and other tools. Syncing pauses at 0.")
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Playground only: force a tooltip to show.
+    @Entry var previewTip: String? = nil
+}
+
+extension View {
+    /// What a session left running, by name, in a tooltip (nothing when it left nothing).
+    @ViewBuilder func runningTip(_ tasks: [ClaudeTask]) -> some View {
+        if tasks.isEmpty { self } else { tip("Running", tasks.map(\.title).joined(separator: "\n")) }
+    }
+}

@@ -92,7 +92,6 @@ final class Store {
     var agents = AgentsState() {
         didSet {
             agentCache = nil
-            agentsRevision &+= 1
             persistedRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
@@ -129,26 +128,21 @@ final class Store {
     @ObservationIgnored var namedFoldersSeen: Set<String>?
     /// What works the names out (the tests count its runs).
     @ObservationIgnored var nameFolders: (Set<String>) -> [String: String] = FolderNames.names(for:)
-    /// Bumped whenever the rows the hub shows can change (agents, sessions, activity, tasks): a cheap memo/animation key.
-    private(set) var agentsRevision = 0
     var claudeSessions: [String: ClaudeSession] = [:] {
         didSet {
             agentCache = nil
-            agentsRevision &+= 1
             refreshFolderNames()
         }
     }
     var claudeActivity: [String: ClaudeActivity] = [:] {
         didSet {
             agentCache = nil
-            agentsRevision &+= 1
         }
     }
     /// Bumped when a recent session ages out of the list (see `Store.recentWindow`).
     var recentTick = 0 {
         didSet {
             agentCache = nil
-            agentsRevision &+= 1
         }
     }
     @ObservationIgnored var recentExpiry: Timer?
@@ -156,7 +150,6 @@ final class Store {
     var claudeTasks: [String: [ClaudeTask]] = [:] {
         didSet {
             agentCache = nil
-            agentsRevision &+= 1
         }
     }
     /// Filled in right after launch (see `start`): the Keychain read stays off the main thread.
@@ -225,7 +218,6 @@ final class Store {
     /// The system-wide shortcuts the system last refused to register (another app holds the key), by the key it refused:
     /// one still stored does nothing, and Settings says so.
     var refusedShortcuts: [ShortcutAction: Shortcut] = [:]
-    @ObservationIgnored var onAgentsEnabledChange: ((Bool) -> Void)?
     /// Cards the feed just made (for banners).
     @ObservationIgnored var onNewRouterCards: (([RouterCard]) -> Void)?
     /// Whether the Claude app is in front (tests answer for it).
@@ -322,6 +314,11 @@ final class Store {
         updater.start()
         observeSleep()
         restartPolling()
+        // The Router is the only reader of Claude's sessions, and they have no switch of their own: they follow it.
+        if agents.enabled != router.enabled {
+            agents.enabled = router.enabled
+            if router.enabled { agents.enabledAt = agents.enabledAt ?? Date() }
+        }
         watchClaude()
         startRouter()
         Task.detached(priority: .utility) {

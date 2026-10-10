@@ -5,8 +5,6 @@ import SwiftUI
 @Observable
 @MainActor
 final class UIState {
-    /// Session row hovered anywhere in the hub (or picked with the keys).
-    var drawerSelection: String?
     var edge: DockEdge = DockEdge(rawValue: UserDefaults.standard.string(forKey: "pill.edge") ?? "")
         ?? (UserDefaults.standard.bool(forKey: "pill.onLeft") ? .left : .right) {
         didSet { if persists { UserDefaults.standard.set(edge.rawValue, forKey: "pill.edge") } }
@@ -34,7 +32,6 @@ enum DockEdge: String {
 
 class FloatingPanel: NSPanel {
     var allowsKey = false
-    var onCancel: (() -> Void)?
 
     init(size: NSSize) {
         super.init(contentRect: NSRect(origin: .zero, size: size),
@@ -56,7 +53,6 @@ class FloatingPanel: NSPanel {
 
     override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
-    override func cancelOperation(_ sender: Any?) { onCancel?() }
 }
 
 /// The whole pill is draggable. A mouse-down is held back until we know whether it's a click (forwarded to

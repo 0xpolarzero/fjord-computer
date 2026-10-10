@@ -1,10 +1,9 @@
 import SwiftUI
 
 // Hovering a section of the bar opens just that section beside it, in a panel lined up with its cells. The bar
-// itself never moves, so what you're pointing at stays under the pointer. The whole view (every section at once)
-// is the pinned one.
+// itself never moves, so what you're pointing at stays under the pointer. A click goes to the app window.
 
-enum HubSection: Hashable { case inbox, router, agents, controls }
+enum HubSection: Hashable { case inbox, router, controls }
 
 struct PeekMeasure: Equatable {
     let section: HubSection
@@ -20,9 +19,8 @@ struct SectionProbe: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
-            // Only at rest, where the panels are: the full view's changes don't re-run anything.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(LookoutHub.barSpace)) } action: { frame in
-                if !hub.expanded, frames[section] != frame { frames[section] = frame }
+                if frames[section] != frame { frames[section] = frame }
             }
             .onHover { if $0 { hub.enter(section) } else { hub.cancelDwell() } }
     }
@@ -37,8 +35,8 @@ extension LookoutHub {
         SectionProbe(section: section, hub: hub, frames: $sectionFrames)
     }
 
-    /// The hovered section, when the whole view isn't open.
-    var peeking: HubSection? { expanded || hub.quiet ? nil : hub.section }
+    /// The hovered section.
+    var peeking: HubSection? { hub.quiet ? nil : hub.section }
 
     /// Where a panel sits along the bar: from `start`, `length` long (both along the bar's edge), and which of the
     /// bar's ends it reaches.
@@ -179,7 +177,7 @@ extension LookoutHub {
 
     /// The bar's outline: a corner goes square where a panel is flush with (or runs past) that end of the bar.
     var barOutline: UnevenRoundedRectangle {
-        let r: CGFloat = expanded ? 22 : 20
+        let r: CGFloat = 20
         let place = currentPlacement
         let start: CGFloat = place?.atStart == true ? 0 : r
         let end: CGFloat = place?.atEnd == true ? 0 : r
@@ -230,7 +228,7 @@ extension LookoutHub {
     }
 
     /// Beside the bar: the header level with the section's first cell, then one line per cell, as tall as the
-    /// cell (CI's states, the sessions); then whatever only the panel has (the inbox list, a new session).
+    /// cell; then whatever only the panel has (the inbox list).
     @ViewBuilder func peekRows(_ section: HubSection) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             switch section {
@@ -239,23 +237,6 @@ extension LookoutHub {
                 peekInbox.padding(.top, 4)
             case .router:
                 peekRouter
-            case .agents:
-                let sections = agentSections
-                agentsHeader.frame(height: Self.peekLine)
-                ClaudeNotice(store: store).padding(.horizontal, 8)
-                // Group by group, each line as tall as the bar's slot beside it.
-                ForEach(sections) { section in
-                    if !searching {
-                        groupLabel(section, twoLines: false).frame(height: Self.groupLine)
-                    }
-                    ForEach(section.rows) { r in
-                        DrawerRow(row: r, store: store, ui: ui, number: 0, showsKept: searching, inHub: true, secondLine: slotHeight(r) > Theme.Metrics.row)
-                            .frame(height: slotHeight(r))
-                            .sessionMenu(r, store)
-                            .modifier(ReorderIf(enabled: section.group == .pinned && !searching, row: r, store: store))
-                    }
-                }
-                if !store.routerOn { NewSessionRow(store: store, style: .detail).frame(height: Theme.Metrics.row) }
             default:
                 // (The controls have their own panel.)
                 EmptyView()
@@ -273,13 +254,6 @@ extension LookoutHub {
                 peekInbox
             case .router:
                 peekRouter
-            case .agents:
-                agentsHeader.frame(height: Self.peekLine)
-                ClaudeNotice(store: store).padding(.horizontal, 8)
-                CappedScroll(cap: maxLength - Self.cell - 120, hub: hub) {
-                    VStack(alignment: .leading, spacing: 2) { agentGroupList(agentSections) }
-                }
-                if !store.routerOn { NewSessionRow(store: store, style: .twoLines) }
             default:
                 EmptyView()
             }
@@ -287,21 +261,23 @@ extension LookoutHub {
         .frame(width: Self.detail - 2 * Self.peekPad, alignment: .leading)
     }
 
-    /// The bar's last cell at rest: a gear. Hovering shows the controls; a click goes to Settings.
+    /// The bar's last cell: a gear. Hovering shows the controls; a click goes to Settings.
     var controlsCell: some View {
-        ControlsGear(active: hub.page != .main) { hub.go(.settings) }
+        ControlsGear { openApp(.settings) }
     }
 
-    /// The controls: how syncing is going, then keep open, the categories and settings, each with its key.
+    /// The controls: how syncing is going, then the window, the categories and settings, each with its key.
     var peekControls: some View {
         VStack(alignment: .leading, spacing: 0) {
             // As a Claude menu's group label: `px-2 py-1`, footnote, muted.
             syncStatus
                 .padding(.horizontal, CDS.Menu.itemPadX)
                 .frame(maxWidth: .infinity, minHeight: CDS.Menu.labelHeight, alignment: .leading)
-            MenuRow(symbol: "pin", title: "Keep open", key: store.shortcut(.togglePanel).display) { hub.pinned = true }
-            MenuRow(symbol: "tray.2", title: "Inbox categories", key: nil) { hub.go(.categories) }
-            MenuRow(symbol: "gearshape", title: "Settings", key: "⌘,") { hub.go(.settings) }
+            MenuRow(symbol: "macwindow", title: "Open window", key: store.shortcut(.togglePanel).display) {
+                openApp(firstDestination)
+            }
+            MenuRow(symbol: "tray.2", title: "Inbox categories", key: nil) { openApp(.categories) }
+            MenuRow(symbol: "gearshape", title: "Settings", key: "⌘,") { openApp(.settings) }
         }
     }
 
@@ -337,29 +313,26 @@ extension LookoutHub {
 }
 
 /// The gear at the end of the bar, without a tooltip: hovering it opens the controls. Claude's ghost icon button, compact:
-/// a 24 square, radius 6, secondary glyph going white on a white-7.5% hover (15% while its page is open).
+/// a 24 square, radius 6, secondary glyph going white on a white-7.5% hover.
 struct ControlsGear: View {
-    let active: Bool
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) { ControlsGearLabel(active: active) }
+        Button(action: action) { ControlsGearLabel() }
             .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous),
-                                              rest: .clear, hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostSelected,
-                                              pressed: CDS.Fill.ghostSelected, isActive: active))
+                                              rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
             .accessibilityLabel("Controls")
-            .accessibilityHint("Settings, the inbox categories and keeping the hub open")
+            .accessibilityHint("Opens Settings; hover for the inbox categories and the window")
     }
 }
 
 private struct ControlsGearLabel: View {
-    let active: Bool
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
         Image(systemName: "gearshape")
             .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-            .foregroundStyle(hover || active ? Color.white : CDS.Text.secondary)
+            .foregroundStyle(hover ? Color.white : CDS.Text.secondary)
             .frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control)
     }
 }

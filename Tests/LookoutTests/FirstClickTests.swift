@@ -53,19 +53,4 @@ import Testing
         other.orderOut(nil)
     }
 
-    @Test func aSessionRowOpensOnTheClickThatMakesThePanelKey() async {
-        await EventLoop.hold()
-        let (s, opened) = store()
-        let row = try! #require(s.agentRows.pending.first)
-        await firstClick(on: DrawerRow(row: row, store: s, ui: UIState(persists: false, edge: .right), inHub: true)) { !opened().isEmpty }
-        #expect(opened() == ["Open in Claude · Session a"])
-    }
-
-    @Test func aSessionBlockOpensOnTheClickThatMakesThePanelKey() async {
-        await EventLoop.hold()
-        let (s, opened) = store()
-        let row = try! #require(s.agentRows.pending.first)
-        await firstClick(on: SessionBlock(row: row, twoLines: false, store: s, ui: UIState(persists: false, edge: .right), hub: HubState())) { !opened().isEmpty }
-        #expect(opened() == ["Open in Claude · Session a"])
-    }
 }

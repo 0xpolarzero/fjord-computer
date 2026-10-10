@@ -127,33 +127,28 @@ struct ModifierTap {
 }
 
 enum ShortcutAction: String, CaseIterable, Identifiable {
-    case togglePanel, sessionSwitcher, router, openItem, toggleRead, discard, markAllRead, refresh, keepSession, removeSession
+    case togglePanel, sessionSwitcher, router, openItem, toggleRead, discard, markAllRead, refresh
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .togglePanel: "Keep open"
+        case .togglePanel: "Open Lookout window"
         case .openItem: "Open on GitHub"
         case .toggleRead: "Mark seen"
         case .discard: "Done / back to inbox"
         case .markAllRead: "Mark all seen"
         case .refresh: "Refresh now"
-        case .sessionSwitcher: "Switch Claude session"
+        case .sessionSwitcher: "Search the Router's sessions"
         case .router: "Open the Router"
-        case .keepSession: "Pin or unpin a session"
-        case .removeSession: "Hide a session until its next activity"
         }
     }
 
     /// Works from any app (registered system-wide) rather than only while the panel has focus.
     var isGlobal: Bool { self == .togglePanel || self == .sessionSwitcher || self == .router }
 
-    /// Only meaningful with the Claude sessions extension on.
-    var isAgents: Bool { self == .sessionSwitcher || self == .keepSession || self == .removeSession || self == .router }
-
     /// Only meaningful with the Router on (see `Store.routerOn`).
-    var isRouter: Bool { self == .router }
+    var isRouter: Bool { self == .sessionSwitcher || self == .router }
 
     var defaultShortcut: Shortcut {
         switch self {
@@ -165,9 +160,6 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .refresh: Shortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.command])
         case .sessionSwitcher: Shortcut(keyCode: UInt16(kVK_ANSI_S), modifiers: [.control, .option])
         case .router: Shortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .option])
-        case .keepSession: Shortcut(keyCode: UInt16(kVK_ANSI_K), modifiers: [.command])
-        // ⌘⌫ rather than a bare ⌫: removing a session is easy to hit by accident and awkward to undo.
-        case .removeSession: Shortcut(keyCode: UInt16(kVK_Delete), modifiers: [.command])
         }
     }
 }
@@ -273,12 +265,6 @@ final class GlobalShortcuts {
     func start() {
         for action in ShortcutAction.allCases where action.isGlobal && !register(action) { announceRefusal(action) }
         store.onGlobalShortcutChange = { [weak self] action, shortcut in self?.register(action, shortcut) ?? true }
-        store.onAgentsEnabledChange = { [weak self] _ in
-            guard let self else { return }
-            // Turning the extension on is what registers it, and nothing on screen says it did not take: the recorder only
-            // does in Settings.
-            if !self.register(.sessionSwitcher) { self.announceRefusal(.sessionSwitcher) }
-        }
         routerOn = store.routerOn
         followRouter()
     }
@@ -293,7 +279,9 @@ final class GlobalShortcuts {
         }
         guard on != routerOn else { return }
         routerOn = on
-        if !register(.router), on { announceRefusal(.router) }
+        // Turning the Router on is what registers its keys, and nothing on screen says one did not take: the recorder only
+        // does in Settings.
+        for action in [ShortcutAction.router, .sessionSwitcher] where !register(action) && on { announceRefusal(action) }
     }
 
     /// Releases the system-wide keys while a shortcut is recorded, and takes them back after. A key another app claimed
@@ -315,7 +303,7 @@ final class GlobalShortcuts {
     func register(_ action: ShortcutAction, _ shortcut: Shortcut? = nil) -> Bool {
         guard action.isGlobal else { return true }
         let shortcut = shortcut ?? store.shortcut(action)
-        let off = (action == .sessionSwitcher && !store.agents.enabled) || (action == .router && !store.routerOn)
+        let off = action.isRouter && !store.routerOn
         let wanted = off ? nil : shortcut
         let taken = registrar.set(action.hotKeyID, wanted.flatMap { $0.isUnassigned ? nil : $0 }) { [perform] in
             DispatchQueue.main.async { perform(action) }
@@ -385,7 +373,7 @@ struct ShortcutRecorder: View {
         // A refusal belongs to the key it was about.
         .onChange(of: current) { error = nil }
         .onDisappear(perform: stop)
-        // Settings can stay pinned and mounted while another app takes over, so none of the other ways out run.
+        // Settings can stay mounted while another app takes over, so none of the other ways out run.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stop() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { leave($0) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { leave($0) }
@@ -400,7 +388,7 @@ struct ShortcutRecorder: View {
         recording = true
         window = NSApp.keyWindow
         // Stops any other recorder first, and releases the global hotkeys: Carbon would otherwise take a
-        // combination like Keep open's before it reaches the monitor below.
+        // combination like the window shortcut before it reaches the monitor below.
         store.beginRecordingShortcut(stop: stop)
         tap = ModifierTap()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .otherMouseDown]) { event in

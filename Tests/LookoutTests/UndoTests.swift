@@ -66,51 +66,12 @@ import Testing
         #expect(s.undoStack.line == nil && s.undoLast() && isDone(s, 1) == false)
     }
 
-    @Test func commandZInTheHubUndoesButAFocusedFieldKeepsIt() {
-        let s = store([1])
-        let hub = HubState()
-        hub.pinned = true
-        let keys = HubKeys(store: s, ui: UIState(persists: false, edge: .right), hub: hub)
-        func press(in window: NSWindow? = nil) -> Bool {
-            keys.key(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
-                                      windowNumber: window?.windowNumber ?? 0, context: nil, characters: "z",
-                                      charactersIgnoringModifiers: "z", isARepeat: false, keyCode: UInt16(kVK_ANSI_Z))!)
-        }
-        s.finish(entry(s, 1)!)
-        // The search field's ⌘Z is its own undo: its field editor has the keyboard.
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 60), styleMask: .titled, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        let field = NSTextField(frame: NSRect(x: 10, y: 10, width: 180, height: 24))
-        window.contentView?.addSubview(field)
-        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        window.orderFrontRegardless()
-        window.makeFirstResponder(field)
-        defer { window.close() }
-        hub.searchFocused = true
-        hub.searchOpen = true
-        #expect(!press(in: window))
-        #expect(isDone(s, 1) == true)
-        hub.endSearch()
-        window.makeFirstResponder(nil)
-        #expect(press(in: window) && isDone(s, 1) == false)
-        #expect(!press(in: window))
-    }
-
-    @Test func theFocusedUndoButtonKeepsSpaceAndReturn() async throws {
+    @Test func thePeeksUndoLinePutsTheThingBack() async throws {
         let s = store([1, 2])
         let ui = UIState(persists: false, edge: .right)
-        let hub = HubState()
-        hub.pinned = true
-        let keys = HubKeys(store: s, ui: ui, hub: hub)
-        func press(_ code: Int, _ chars: String, in window: NSWindow) -> Bool {
-            keys.key(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
-                                      context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false,
-                                      keyCode: UInt16(code))!)
-        }
         s.finish(entry(s, 1)!)
-        keys.select("i:pr:a/one#2")
-        // The line as the hub shows it, its Undo button on the Tab ring.
-        let host = NSHostingView(rootView: LookoutHub(store: s, ui: ui, hub: hub).undoLine.frame(width: 400))
+        // The line as the inbox peek shows it, its Undo button on the Tab ring.
+        let host = NSHostingView(rootView: LookoutHub(store: s, ui: ui, hub: HubState()).undoLine.frame(width: 400))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 60), styleMask: .titled, backing: .buffered, defer: false)
         window.contentView = host
         window.isReleasedWhenClosed = false
@@ -123,15 +84,9 @@ import Testing
             return host.first(NSButton.self) != nil
         }
         let undo = try #require(host.first(NSButton.self))
-        #expect(window.makeFirstResponder(undo))
-        // Space and Return are the button's: the picked row is not marked seen, and the button still activates.
-        #expect(!press(kVK_Space, " ", in: window) && !press(kVK_Return, "\r", in: window) && !press(kVK_ANSI_KeypadEnter, "\r", in: window))
-        #expect(entry(s, 2)?.isUnread == true && isDone(s, 1) == true)
+        #expect(isDone(s, 1) == true)
         undo.performClick(nil)
-        #expect(isDone(s, 1) == false)
-        // Off the button they are the hub's again.
-        window.makeFirstResponder(nil)
-        #expect(press(kVK_Space, " ", in: window) && entry(s, 2)?.isUnread == false)
+        #expect(isDone(s, 1) == false && entry(s, 2)?.isUnread == true)
     }
 }
 

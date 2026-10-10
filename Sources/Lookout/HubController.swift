@@ -9,9 +9,9 @@ final class HubLayout {
     /// Docked: the window spans the edge and the hub is placed along it. Floating: the window is exactly the bar
     /// (while it's dragged to another edge).
     var floating = false
-    /// The bar's length along its edge at rest: the expanded view keeps the bar's start where it was.
+    /// The bar's length along its edge: the bar keeps its start where it was whatever its peek takes.
     var restLength: CGFloat = 0
-    /// The bar's size at rest, to carry exactly that when it's dragged.
+    /// The bar's size, to carry exactly that when it's dragged.
     @ObservationIgnored var restSize: CGSize = .zero
     /// The hub's frame in the window (top-left origin).
     @ObservationIgnored var frame: CGRect = .zero {
@@ -68,7 +68,7 @@ private struct EdgeLayout: Layout {
         guard let hub = subviews.first else { return }
         let size = hub.sizeThatFits(.unspecified)
         func along(_ length: CGFloat, _ own: CGFloat) -> CGFloat {
-            // From where the bar starts at rest, so the bar never moves as the view opens or a divider is dragged.
+            // From where the bar starts, so the bar never moves as a peek opens.
             let start = length * position - restLength / 2
             return min(max(start, inset), length - own - inset)
         }
@@ -87,58 +87,44 @@ struct HubRoot: View {
     let ui: UIState
     let hub: HubState
     let layout: HubLayout
-    var maxLength: CGFloat
+    var openApp: (AppDestination) -> Void = { _ in }
     var openRouter: (String?) -> Void = { _ in }
     var pickRouterCard: (String) -> Void = { _ in }
 
     var body: some View {
-        GeometryReader { geo in content(in: geo.size) }
+        GeometryReader { _ in content }
             .coordinateSpace(.named(LookoutHub.rootSpace))
+            .environment(\.openApp, openApp)
             .environment(\.openRouter, openRouter)
             .environment(\.pickRouterCard, pickRouterCard)
             // Tooltips are drawn over the whole window, outside the hub's clipped shape, so they're never cut off.
             .tipSpace()
     }
 
-    /// On the sides the view grows down from the bar, into the room below it, so the bar doesn't move as it opens;
-    /// it only moves up when there's too little room below.
-    private func length(in size: CGSize) -> CGFloat {
-        guard !ui.edge.isHorizontal else { return maxLength }
-        let position = store.settings.centerPill == true ? 0.5 : ui.position
-        let top = min(max(size.height * position - layout.restLength / 2, 6), size.height - layout.restLength - 6)
-        return min(maxLength, max(size.height - top - 12, 560))
-    }
-
-    @ViewBuilder private func content(in size: CGSize) -> some View {
-        let view = LookoutHub(store: store, ui: ui, hub: hub, maxLength: length(in: size), maxWidth: size.width)
+    @ViewBuilder private var content: some View {
+        let view = LookoutHub(store: store, ui: ui, hub: hub)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(LookoutHub.rootSpace)) } action: { frame in
                 if HubController.debug { NSLog("Lookout hub frame \(frame)") }
                 layout.frame = frame
-                if !hub.expanded, hub.page == .main {
-                    layout.restLength = ui.edge.isHorizontal ? frame.width : frame.height
-                    layout.restSize = frame.size
-                }
+                layout.restLength = ui.edge.isHorizontal ? frame.width : frame.height
+                layout.restSize = frame.size
             }
-        Group {
-            if layout.floating {
-                view.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-                EdgeLayout(edge: ui.edge, position: store.settings.centerPill == true ? 0.5 : ui.position,
-                           restLength: layout.restLength) { view }
-                    .motion(hub.expanded ? LookoutHub.opening : LookoutHub.closing, value: hub.expanded)
-            }
+        if layout.floating {
+            view.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            EdgeLayout(edge: ui.edge, position: store.settings.centerPill == true ? 0.5 : ui.position,
+                       restLength: layout.restLength) { view }
         }
     }
 }
 
-/// The app's one window: the hub on its screen edge. The window spans the edge (so the hub can grow without the
-/// window being resized mid-animation) and lets the mouse through everywhere but the hub itself.
+/// The bar on its screen edge. The window spans the edge (so a peek can open without the window being resized mid-animation)
+/// and lets the mouse through everywhere but the bar and its peek. While the app window is open the bar is away.
 @MainActor
 final class HubController {
     let store: Store
     let ui: UIState
     let hub = HubState()
-    let keys: HubKeys
     private let layout = HubLayout()
     private let window: PillPanel
     private let host: NSHostingView<HubRoot>
@@ -149,19 +135,18 @@ final class HubController {
     private var pendingHover: Bool?
     /// Whether the hub was last reported to the store as visible beyond the bare bar.
     private var reportedOpen = false
-    private var lastPinned = false
-    /// The app that had focus before the hub took it, to hand it back.
-    private var previousApp: NSRunningApplication?
+    /// The app window is open: the bar is not on the edge.
+    private(set) var windowOpen = false
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
 
     fileprivate static let debug = ProcessInfo.processInfo.environment["LOOKOUT_DEBUG"] != nil
     private let trigger = HoverTrigger(size: NSSize(width: 10, height: 10))
     private var globalMouse: Any?
-    /// Opens the Router's window (the app's delegate owns it).
-    var openRouter: (String?) -> Void = { _ in } {
-        didSet { host.rootView.openRouter = { [weak self] in self?.routerOpened($0) } }
+    /// Opens the app window on a place (the app's delegate owns it).
+    var openApp: (AppDestination) -> Void = { _ in } {
+        didSet { host.rootView.openApp = { [weak self] in self?.opened($0) } }
     }
-    /// Picks a card in the Router's window.
+    /// Picks a card in the Router, before the window opens on it.
     var pickRouterCard: (String) -> Void = { _ in } {
         didSet { host.rootView.pickRouterCard = pickRouterCard }
     }
@@ -175,24 +160,14 @@ final class HubController {
     init(store: Store, demo: Bool = false, arguments: [String] = CommandLine.arguments) {
         self.store = store
         ui = demo ? UIState(persists: false, edge: Self.edge(in: arguments) ?? .right) : UIState()
-        keys = HubKeys(store: store, ui: ui, hub: hub)
         // The screen you're looking at: the one with the mouse.
         screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         window = PillPanel(size: NSSize(width: 100, height: 100))
-        window.allowsKey = true
         window.acceptsMouseMovedEvents = true
         window.ignoresMouseEvents = true
-        host = NSHostingView(rootView: HubRoot(store: store, ui: ui, hub: hub, layout: layout, maxLength: 600))
+        host = NSHostingView(rootView: HubRoot(store: store, ui: ui, hub: hub, layout: layout))
         host.sizingOptions = []
         window.contentView = host
-        keys.onClose = { [weak self] in self?.giveFocusBack() }
-        window.onCancel = { [weak self] in
-            guard let self, let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                                                        windowNumber: 0, context: nil, characters: "\u{1b}",
-                                                        charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
-            else { return }
-            _ = self.keys.key(esc)
-        }
         trigger.onHover = { [weak self] in self?.mouseMoved() }
         layout.onFrame = { [weak self] in self?.syncTrigger() }
         window.canDrag = { [weak self] p in self?.isOnBar(p) ?? false }
@@ -202,7 +177,6 @@ final class HubController {
         window.orderFrontRegardless()
         watchMouse()
         syncTrigger()
-        watchKeys()
         observe()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -216,27 +190,27 @@ final class HubController {
 
     // MARK: Window
 
-    /// The window along the edge, deep enough for the expanded hub and its shadow.
-    private func dockFrame() -> (NSRect, CGFloat) {
+    /// The window along the edge, deep enough for the bar's peek and its shadow.
+    private func dockFrame() -> NSRect {
         let vf = screen.visibleFrame
         switch ui.edge {
         case .right, .left:
             let depth = LookoutHub.cell + LookoutHub.detail + 40
             let x = ui.edge == .right ? vf.maxX - depth : vf.minX
-            return (NSRect(x: x, y: vf.minY, width: depth, height: vf.height), vf.height - 12)
+            return NSRect(x: x, y: vf.minY, width: depth, height: vf.height)
         case .top, .bottom:
             let depth = min(vf.height, 780)
             let y = ui.edge == .top ? vf.maxY - depth : vf.minY
-            return (NSRect(x: vf.minX, y: y, width: vf.width, height: depth), depth - 40)
+            return NSRect(x: vf.minX, y: y, width: vf.width, height: depth)
         }
     }
 
     private func dock() {
-        let (frame, maxLength) = dockFrame()
         layout.floating = false
-        host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout, maxLength: maxLength,
-                                openRouter: { [weak self] in self?.routerOpened($0) }, pickRouterCard: pickRouterCard)
-        window.setFrame(frame, display: true)
+        host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout,
+                                openApp: { [weak self] in self?.opened($0) },
+                                openRouter: { [weak self] in self?.opened(.router, card: $0) }, pickRouterCard: pickRouterCard)
+        window.setFrame(dockFrame(), display: true)
         syncTrigger()
     }
 
@@ -251,19 +225,10 @@ final class HubController {
 
     /// The bar itself (where a drag can start), in window coordinates (bottom-left origin).
     private func isOnBar(_ p: NSPoint) -> Bool {
-        guard hub.page == .main else { return false }
         let f = layout.frame
         let h = window.frame.height
         let hubRect = NSRect(x: f.minX, y: h - f.maxY, width: f.width, height: f.height)
-        guard hubRect.contains(p) else { return false }
-        if layout.floating || !hub.expanded { return true }
-        let d = ui.edge.isHorizontal ? Theme.Metrics.bar : LookoutHub.cell
-        return switch ui.edge {
-        case .right: p.x >= hubRect.maxX - d
-        case .left: p.x <= hubRect.minX + d
-        case .top: p.y >= hubRect.maxY - d
-        case .bottom: p.y <= hubRect.minY + d
-        }
+        return hubRect.contains(p)
     }
 
     // MARK: Mouse
@@ -288,6 +253,7 @@ final class HubController {
     /// While the window takes the mouse: the global monitor runs (to notice the pointer leaving) and the arming
     /// window is away. Otherwise the arming window sits over the hub and nothing else watches.
     private func syncTrigger() {
+        guard !windowOpen else { return }
         if !window.ignoresMouseEvents {
             if globalMouse == nil {
                 globalMouse = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseUp]) { [weak self] _ in
@@ -310,7 +276,7 @@ final class HubController {
     }
 
     private func mouseMoved() {
-        guard dragStart == nil else { return }
+        guard dragStart == nil, !windowOpen else { return }
         let mouse = NSEvent.mouseLocation
         let inside = hubScreenFrame.insetBy(dx: -1, dy: -1).contains(mouse)
             || hub.openPanelFrame.map { screenFrame($0).insetBy(dx: -2, dy: -2).contains(mouse) } == true
@@ -342,99 +308,56 @@ final class HubController {
         }
     }
 
-    /// Mouse gone and not pinned: back to the bar, and the keyboard back to whatever had it.
+    /// The pointer left the bar and its peek.
     private func closedByLeaving() {
-        guard !hub.pinned else { return }
-        // Unpinned on a page and left: next time it opens on the main view.
-        hub.go(.main)
         hub.selection = nil
-        hub.endSearch()
-        if window.isKeyWindow { giveFocusBack() }
+        hub.tab = nil
     }
 
-    // MARK: Keys and focus
+    // MARK: The app window
 
-    private func watchKeys() {
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            guard let self else { return event }
-            // Only a Bool crosses the isolation hop: NSEvent is not Sendable.
-            let consumed = MainActor.assumeIsolated {
-                guard self.window.isKeyWindow, !self.store.isRecordingShortcut else { return false }
-                // A tooltip on screen takes the first Esc.
-                return TipCenter.dismissVisible(for: event) || self.keys.key(event)
-            }
-            return consumed ? nil : event
-        }) { monitors.append(local) }
-    }
-
-    /// The keep-open shortcut (right ⌘, say): opens and keeps it open, or closes it.
-    func toggleShortcut() {
-        keys.toggleTap()
-    }
-
-    /// The session switcher shortcut: open on the sessions, the first one that needs you picked.
-    func showSessions() {
-        keys.showSessions()
-    }
-
-    /// The Router's window takes the keyboard: the hub closes, as if left, so the window isn't under an open view.
-    private func routerOpened(_ card: String?) {
+    /// A click on an item of the bar (or one of its peek's): the app window opens on it.
+    private func opened(_ destination: AppDestination, card: String? = nil) {
         hub.section = nil
-        hub.endSearch()
-        // The keyboard goes to the window, so nothing hands it back to the app before.
-        hub.pinned = false
-        openRouter(card)
+        hub.cancelDwell()
+        if let card { pickRouterCard(card) }
+        openApp(destination)
     }
 
-    /// A banner's click: the full view on the thing's category with it selected (on Done if it was done since), or, for a
-    /// summary, on the first category with something unread.
-    func showInbox(category: UUID?, thing: String?) {
-        let entry = thing.flatMap { id in store.entries.first { $0.id == id } }
-        let tab: InboxTab = entry.map { $0.isDone ? .done : .category($0.categoryID) }
-            ?? category.map { .category($0) } ?? store.tabNeedingYou
-        hub.showInbox(tab)
-        if let entry {
-            hub.selection = "i:" + entry.id
-            hub.requestScroll("i:" + entry.id)
-        }
-    }
-
-    private func takeFocus() {
-        let front = NSWorkspace.shared.frontmostApplication
-        if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-        setAcceptsMouse(true)
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKey()
-    }
-
-    private func giveFocusBack() {
+    /// The app window is open (or closed): the bar leaves the edge, and comes back where it was. The pointer may be over it
+    /// when it does, which shows no peek until it has left.
+    func setWindowOpen(_ open: Bool) {
+        guard open != windowOpen else { return }
+        windowOpen = open
+        hub.barHidden = open
+        hoverTask?.cancel()
+        pendingHover = nil
+        hub.cancelDwell()
+        hub.section = nil
+        hub.hovering = false
         hub.selection = nil
-        let app = previousApp ?? NSWorkspace.shared.frontmostApplication
-        previousApp = nil
-        if let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier { app.activate() }
-        window.resignKey()
-        mouseMoved()
+        if open {
+            setAcceptsMouse(false)
+            trigger.orderOut(nil)
+            if let global = globalMouse { NSEvent.removeMonitor(global); globalMouse = nil }
+            window.orderOut(nil)
+        } else {
+            hub.quiet = true
+            window.orderFrontRegardless()
+            syncTrigger()
+        }
+        reportOpen()
     }
 
-    /// Pinning takes the keyboard; unpinning gives it back.
+    /// Re-evaluates the pointer and what the store is told when the bar's state changes under a still pointer.
     private func observe() {
         withObservationTracking {
-            _ = hub.pinned
             _ = ui.edge
             _ = hub.section
             _ = hub.quiet
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                // Keyboard focus moves only when pinning changes: a panel closing under a pinned hub must not steal it back.
-                let pinnedChanged = self.hub.pinned != self.lastPinned
-                self.lastPinned = self.hub.pinned
-                if !pinnedChanged {
-                } else if self.hub.pinned, !self.window.isKeyWindow {
-                    self.takeFocus()
-                } else if !self.hub.pinned, !self.hub.hovering, self.window.isKeyWindow {
-                    self.giveFocusBack()
-                }
                 self.mouseMoved()
                 self.reportOpen()
                 self.observe()
@@ -442,24 +365,22 @@ final class HubController {
         }
     }
 
-    /// Tells the store when the hub is more than the bare bar (a panel or the full view), so it refreshes stale
+    /// Tells the store when the hub is more than the bare bar (a peek or the app window), so it refreshes stale
     /// data and polls faster meanwhile; warms the avatars the inbox is about to show.
     private func reportOpen() {
-        let open = hub.pinned || (hub.section != nil && !hub.quiet)
+        let open = windowOpen || (hub.section != nil && !hub.quiet)
         guard open != reportedOpen else { return }
         reportedOpen = open
         store.setHubOpen(open)
         if open {
-            // Every author in the inbox (not just the newest items: the view may list another filter or a search),
-            // and the account's own picture in Settings.
+            // Every author in the inbox (not just the newest items: the view may list another filter), and the
+            // account's own picture in Settings.
             var urls = Array(Set(store.things.values.compactMap { $0.author?.avatar })).prefix(60)
                 .compactMap { Avatar.sizedURL($0, size: 22) }
             if let me = Avatar.sizedURL(store.me?.avatarUrl, size: 30) { urls.append(me) }
             ImageCache.shared.prefetch(urls)
         }
     }
-
-    func agentsChanged() {}
 
     // MARK: Dragging to another edge
 
@@ -474,9 +395,7 @@ final class HubController {
             var instant = Transaction(animation: nil)
             instant.disablesAnimations = true
             withTransaction(instant) {
-                hub.pinned = false
                 hub.hovering = false
-                hub.page = .main
                 layout.floating = true
             }
             let rest = layout.restSize == .zero ? hubScreenFrame.size : layout.restSize
@@ -519,7 +438,7 @@ final class HubController {
     /// Where the bar rests on its edge: the same place `EdgeLayout` puts it once docked.
     private func restFrame(size: NSSize, in vf: NSRect) -> NSRect {
         let position = store.settings.centerPill == true ? 0.5 : ui.position
-        let (dock, _) = dockFrame()
+        let dock = dockFrame()
         let inset: CGFloat = 6
         switch ui.edge {
         case .right, .left:

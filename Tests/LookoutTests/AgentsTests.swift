@@ -26,39 +26,20 @@ import Testing
         return s
     }
 
+    /// Not listed until its next activity (an entry kept only for a label or an icon).
+    private func hide(_ s: Store, _ id: String) {
+        guard let i = s.agents.entries.firstIndex(where: { $0.id == id }) else { return }
+        s.agents.entries[i].hiddenAt = s.agents.entries[i].seen
+    }
+
     private func entry(_ s: Store, _ id: String) -> AgentEntry? { s.agents.entries.first { $0.id == id } }
 
     @Test func searchShowsTheSavedLabelOfAHiddenSession() {
         let s = store([session("a"), session("b")])
-        s.setAgentLabel("a", "🔥")
-        s.dismissAgent("a")
-        #expect(s.agentRows.pending.map(\.id) == ["b"])
+        s.agents.entries[0].label = "🔥"
+        hide(s, "a")
+        #expect(s.allAgentRows.map(\.id) == ["b"])
         #expect(s.searchSessions("session").first { $0.id == "a" }?.label == "🔥")
-    }
-
-    @Test func aLabelOnAnOldSessionFoundThroughSearchIsKept() {
-        let s = store([session("a"), session("old", minutesAgo: 3 * 24 * 60)])
-        s.setAgentLabel("old", "🔥")
-        #expect(s.searchSessions("session old").first?.label == "🔥")
-        #expect(s.allAgentRows.map(\.id) == ["a"])
-    }
-
-    @Test func aLabelOnAnOldSessionSurvivesTheNextRefresh() {
-        let old = session("old", minutesAgo: 45 * 24 * 60)
-        let s = store([session("a"), old])
-        s.setAgentLabel("old", "🔥")
-        s.ingest([session("a"), old], appUnread: [], claudeFrontmost: false, now: now)
-        #expect(entry(s, "old")?.label == "🔥")
-        #expect(s.searchSessions("session old").first?.label == "🔥")
-    }
-
-    @Test func anOldSessionNobodyCustomizedIsStillForgotten() {
-        let old = session("old", minutesAgo: 45 * 24 * 60)
-        let s = store([session("a"), old])
-        s.keepAgent("old")
-        s.dismissAgent("old")
-        s.ingest([session("a"), old], appUnread: [], claudeFrontmost: false, now: now)
-        #expect(entry(s, "old") == nil)
     }
 
     /// Icons on and a key saved, so an icon can be asked for; the store has not read the key, so none is.
@@ -69,7 +50,7 @@ import Testing
 
     @Test func askingForAnIconOfAHiddenSessionPicksIt() {
         let s = store([session("a"), session("b")])
-        s.dismissAgent("a")
+        hide(s, "a")
         #expect(s.allAgentRows.map(\.id) == ["b"])
         keySaved(s)
         s.repickIcon("a")  // the key is not read yet, so nothing is asked for yet
@@ -108,7 +89,7 @@ import Testing
         var hidden = session("a")
         hidden.cliID = "cli-a"
         let s = iconStore([hidden, session("b")])
-        s.dismissAgent("a")
+        hide(s, "a")
         s.repickIcon("a")
         await finishIcons(s)
         #expect(entry(s, "a")?.icon != nil)
@@ -145,7 +126,7 @@ import Testing
         untitled.cliID = "cli-u"
         let s = iconStore([untitled, session("b")])
         s.iconFirstMessage = { reads.ids.append($0); return nil }
-        s.dismissAgent("u")
+        hide(s, "u")
         s.repickIcon("u")
         await finishIcons(s)
         #expect(entry(s, "b")?.icon != nil)
@@ -161,23 +142,6 @@ import Testing
         #expect(s.iconTarget()?.id == "u")
     }
 
-    @Test func theSessionsShortcutPicksTheFirstSessionThatNeedsYou() {
-        let s = store([session("done", minutesAgo: 1, running: false), session("asking", minutesAgo: 2, running: true)], dots: ["done"])
-        s.keepAgent("done")
-        s.keepAgent("asking")
-        s.claudeActivity["asking"] = ClaudeActivity(text: "Asking you a question", since: now, waitsForYou: true)
-        // Stopped on a question mid-turn counts as waiting, not as the working session it is still marked as.
-        #expect(s.agentRows.kept.first { $0.id == "asking" }?.waitsForYou == true)
-        // A question comes before a finished turn.
-        #expect(s.sessionShortcutPick?.id == "asking")
-        // Answered: the finished one.
-        s.claudeActivity["asking"] = nil
-        #expect(s.sessionShortcutPick?.id == "done")
-        // Nothing needs you: the first kept one.
-        s.toggleAgentRead("done")
-        #expect(s.sessionShortcutPick?.id == s.agentRows.kept.first?.id)
-    }
-
     @Test func aMutedFolderSaysSoAndMutingItAgainChangesNothing() {
         let s = store([session("a")])
         #expect(!s.isFolderMuted("/code/app"))
@@ -190,9 +154,8 @@ import Testing
     @Test func firstReadOffersRecentSessionsOnly() {
         let s = store([session("a", minutesAgo: 30), session("old", minutesAgo: 3 * 24 * 60)], dots: ["a"])
         #expect(s.agents.entries.map(\.id) == ["a"])
-        #expect(entry(s, "a")?.kept == false)
         #expect(entry(s, "a")?.unread == true)  // the sidebar dot decides on first sight
-        #expect(s.agentRows.pending.map(\.id) == ["a"])
+        #expect(s.allAgentRows.map(\.id) == ["a"])
     }
 
     @Test func finishedTurnMarksUnread() {
@@ -242,31 +205,18 @@ import Testing
 
     @Test func dismissedPendingComesBackOnNewActivity() {
         let s = store([session("a")])
-        s.dismissAgent("a")
-        #expect(s.agentRows.pending.isEmpty)
+        hide(s, "a")
+        #expect(s.allAgentRows.isEmpty)
         s.ingest([session("a")], appUnread: [], claudeFrontmost: false, now: now)
-        #expect(s.agentRows.pending.isEmpty)
+        #expect(s.allAgentRows.isEmpty)
         s.ingest([session("a", turns: 4, minutesAgo: 0)], appUnread: [], claudeFrontmost: false, now: now)
-        #expect(s.agentRows.pending.map(\.id) == ["a"])
-    }
-
-    @Test func removedKeptSessionReturnsAsPending() {
-        let s = store([session("a")])
-        s.keepAgent("a")
-        #expect(s.agentRows.kept.map(\.id) == ["a"])
-        s.dismissAgent("a")
-        #expect(s.agentRows.kept.isEmpty && s.agentRows.pending.isEmpty)
-        s.ingest([session("a", turns: 4, minutesAgo: 0)], appUnread: [], claudeFrontmost: false, now: now)
-        #expect(s.agentRows.kept.isEmpty)
-        #expect(s.agentRows.pending.map(\.id) == ["a"])
+        #expect(s.allAgentRows.map(\.id) == ["a"])
     }
 
     @Test func archivedSessionsLeave() {
         let s = store([session("a")])
-        s.keepAgent("a")
         s.ingest([session("a", archived: true)], appUnread: [], claudeFrontmost: false, now: now)
         #expect(s.agents.entries.isEmpty)
-        #expect(s.agentRows.kept.isEmpty)
     }
 
     @Test func newSessionsAfterSeedingArePendingUnlessMuted() {
@@ -274,21 +224,13 @@ import Testing
         s.setFolderMuted("", true)  // scratch chats
         s.ingest([session("a"), session("new", minutesAgo: 0), session("chat", minutesAgo: 0, folder: nil)],
                  appUnread: [], claudeFrontmost: false, now: now)
-        #expect(Set(s.agentRows.pending.map(\.id)) == ["a", "new"])
+        #expect(Set(s.allAgentRows.map(\.id)) == ["a", "new"])
         #expect(entry(s, "new")?.unread == true)
         #expect(entry(s, "chat") == nil)
         // Old sessions with nothing new stay out.
         s.ingest([session("a"), session("new", minutesAgo: 0), session("stale", minutesAgo: 600)],
                  appUnread: [], claudeFrontmost: false, now: now)
         #expect(entry(s, "stale") == nil)
-    }
-
-    @Test func keepingAKeptSessionLeavesItsPlace() {
-        let s = store([session("a"), session("b")])
-        s.keepAgent("a")
-        s.keepAgent("b")
-        s.keepAgent("a")
-        #expect(s.agentRows.kept.map(\.id) == ["a", "b"])
     }
 
     @Test func theAgeVoiceOverHearsIsTheOneTheRowShowsAndMovesWithTheClock() throws {
@@ -323,13 +265,11 @@ import Testing
         let row = try #require(s.allAgentRows.first { $0.id == "f" })
         #expect(row.unread && row.group == .working && row.status == .running && row.tint == nil)
         #expect(row.stateName == "working, 1 running" && row.statusText(now: now) == "working")
-        #expect(s.agentSections.map(\.group) == [.working] && s.agentCounts.done == 0 && s.agentCounts.blocked == 0)
-        #expect(s.sessionShortcutPick?.id != "f")
         // The work ends: still unread, so it is done again.
         s.claudeTasks = [:]
         let done = try #require(s.allAgentRows.first { $0.id == "f" })
         #expect(done.unread && done.group == .done && done.status == .finished && done.tint == Theme.accent)
-        #expect(done.stateName == "done, unread" && s.agentCounts.done == 1 && s.sessionShortcutPick?.id == "f")
+        #expect(done.stateName == "done, unread")
     }
 
     @Test func aBlockedSessionWithWorkStillRunningStillNeedsYou() throws {
@@ -337,7 +277,6 @@ import Testing
         s.claudeTasks = ["b": [ClaudeTask(id: "c", kind: .command, title: "Run the full test suite", since: now)]]
         let row = try #require(s.allAgentRows.first { $0.id == "b" })
         #expect(row.group == .needsYou && row.status == .blocked && row.tint == Theme.amber)
-        #expect(s.agentCounts.blocked == 1 && s.agentCounts.done == 0)
     }
 
     @Test func sessionsOfSameNamedProjectsSayWhichProjectTheyAreIn() throws {
@@ -397,73 +336,28 @@ import Testing
         }
     }
 
-    @Test func keptOrderAndReorder() {
-        let s = store([session("a"), session("b"), session("c")])
-        s.keepAgent("b")
-        s.keepAgent("a")
-        s.keepAgent("c")
-        #expect(s.agentRows.kept.map(\.id) == ["b", "a", "c"])
-        s.moveAgent("c", onto: "b")
-        #expect(s.agentRows.kept.map(\.id) == ["c", "b", "a"])
-    }
-
-    @Test func searchAndKeepAnySession() {
-        var old = session("old", minutesAgo: 3 * 24 * 60, folder: "/code/lookout")
-        old.title = "Agent completion notifications"
-        let s = store([session("a"), old])
-        #expect(entry(s, "old") == nil)  // too old to be offered as pending
-        #expect(s.agentCandidates(matching: "agent notif").map(\.id) == ["old"])
-        #expect(s.agentCandidates(matching: "lookout").map(\.id) == ["old"])
-        #expect(s.agentCandidates(matching: "").map(\.id) == ["a", "old"])
-        s.keepAgent("old")
-        #expect(s.agentRows.kept.map(\.id) == ["old"])
-        #expect(s.agentCandidates(matching: "agent").isEmpty)
-    }
-
-    @Test func keptSessionsGroupByProject() {
-        let s = store([session("a", folder: "/code/x"), session("b", folder: "/code/y"), session("c", folder: "/code/x")])
-        for id in ["a", "b", "c"] { s.keepAgent(id) }
-        #expect(s.agentRows.kept.map(\.id) == ["a", "c", "b"])
-        #expect(s.groups(s.agentRows.kept).map { $0.map(\.id) } == [["a", "c"], ["b"]])
-        // Each project got its own colour.
-        #expect(s.agents.folderColors["/code/x"] != s.agents.folderColors["/code/y"])
-        #expect(s.agentRows.kept.first?.color != nil)
-    }
-
-    @Test func searchFindsAnySessionKeptFirst() {
+    @Test func searchFindsAnySessionTitlePrefixFirst() {
         var other = session("other", minutesAgo: 1, folder: "/code/sandbox")
         other.title = "Storage directory"
         var mine = session("mine", minutesAgo: 50)
         mine.title = "Sandbox on Linux"
         let s = store([other, mine])
-        s.keepAgent("mine")
-        #expect(s.searchSessions("sand").map(\.id) == ["mine", "other"])  // title prefix and kept first
+        #expect(s.searchSessions("sand").map(\.id) == ["mine", "other"])  // title prefix first
         #expect(s.searchSessions("sto dir").map(\.id) == ["other"])
         #expect(s.searchSessions("").isEmpty)
     }
 
     @Test func aSearchListsEverySessionThatMatchesNotTheFirstEight() {
         let s = store((0..<12).map { session("n\($0)", minutesAgo: Double($0 + 1)) })
-        let hub = HubState()
-        hub.query = "Session"
-        #expect(s.searchSessions("Session").count == 12 && s.hubSessions(hub).count == 12)
+        #expect(s.searchSessions("Session").count == 12)
         #expect(s.searchSessions("Session n11").map(\.id) == ["n11"])
-        // The oldest of them is reachable by the keys, so is a count of them.
-        #expect(s.hubTargets(hub).contains("a:n11"))
-    }
-
-    @Test func countsSplitBlockedFromDone() {
-        let s = store([session("a", blocked: true), session("b"), session("c"), session("d", running: true)], dots: ["a", "b", "d"])
-        let counts = s.agentCounts
-        #expect(counts.blocked == 1)
-        #expect(counts.done == 1)
     }
 
     @Test func oldStateFilesStillLoad() throws {
         let state = try JSONDecoder().decode(PersistedState.self, from: Data(#"{"repos":[],"items":[],"ci":{},"settings":{"botHandles":[],"treatAppsAsBots":true,"pollInterval":60,"notifications":true,"reviewRequests":true,"didInitialReviewSync":true}}"#.utf8))
         #expect(state.agents == nil)
         let partial = try JSONDecoder().decode(AgentsState.self, from: Data(#"{"enabled":true}"#.utf8))
-        #expect(partial.enabled && !partial.expanded && partial.entries.isEmpty)
+        #expect(partial.enabled && partial.entries.isEmpty)
     }
 }
 
@@ -492,12 +386,6 @@ import Testing
         #expect(labels["2"] != labels["3"])
     }
 
-    @Test func sanitizeKeepsTwoLettersOrOneEmoji() {
-        #expect(AgentLabel.sanitize(" ab c ") == "AB")
-        #expect(AgentLabel.sanitize("🐧 linux") == "🐧")
-        #expect(AgentLabel.sanitize("1") == "1")
-        #expect(AgentLabel.sanitize("   ") == nil)
-    }
 }
 
 @Suite struct ClaudeFiles {

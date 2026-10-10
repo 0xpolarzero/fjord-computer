@@ -1,105 +1,8 @@
 import AppKit
 import Carbon
-import SwiftUI
+import Foundation
 
-extension EnvironmentValues {
-    /// Opens the Router window, on a card if one is given. The app's window controller in the app; a toast in the playground.
-    @Entry var openRouter: (String?) -> Void = { _ in }
-    /// Picks a card in the Router window (closed or not), after a click on it elsewhere opened its session.
-    @Entry var pickRouterCard: (String) -> Void = { _ in }
-}
-
-/// The Router's window: a normal titled window (Lookout is otherwise all panels), opened from the bar, its shortcut or a
-/// banner. Its content exists only while it is shown, so nothing in it ticks behind a closed window; what you were writing
-/// and the card you picked are kept in `model`.
-@MainActor
-final class RouterWindowController: NSObject, NSWindowDelegate {
-    let store: Store
-    let model = RouterModel()
-    private(set) lazy var keys = RouterKeys(store: store, model: model) { [weak self] in self?.close() }
-    private var window: NSWindow?
-    private var monitor: Any?
-    /// The app in front before the window took it, to hand the keyboard back on close.
-    private var previousApp: NSRunningApplication?
-
-    static let autosave = "LookoutRouter"
-    static let minSize = NSSize(width: 760, height: 520)
-
-    init(store: Store) {
-        self.store = store
-    }
-
-    /// Whether the window has the keyboard (no banner then: you are looking at the cards).
-    var isKey: Bool { window?.isKeyWindow == true }
-    var isVisible: Bool { window?.isVisible == true }
-
-    /// Shows the window in front, on `card` when one is given.
-    func show(card: String? = nil) {
-        if let card { model.select(card, store: store) }
-        let window = self.window ?? makeWindow()
-        self.window = window
-        if window.contentView == nil || !window.isVisible {
-            window.contentView = NSHostingView(rootView: RouterCodeView(store: store, model: model) { [weak self] in self?.close() })
-        }
-        let front = NSWorkspace.shared.frontmostApplication
-        if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-        // An accessory app: the window only comes to the front with the app.
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        watchKeys()
-    }
-
-    func close() { window?.performClose(nil) }
-
-    private func makeWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: NSSize(width: 1100, height: 720)),
-                              styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
-                              backing: .buffered, defer: true)
-        window.title = "Router"
-        window.isReleasedWhenClosed = false
-        window.minSize = Self.minSize
-        window.appearance = NSAppearance(named: .darkAqua)
-        // As the Code tab: no title bar of its own, the sidebar runs up under the window's buttons.
-        window.backgroundColor = NSColor(CDS.Surface.s1)
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.delegate = self
-        window.collectionBehavior.insert(.fullScreenAuxiliary)
-        if !window.setFrameUsingName(Self.autosave) { window.center() }
-        window.setFrameAutosaveName(Self.autosave)
-        return window
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-        model.composerFocused = false
-        // The content goes with the window: no view, no clock.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.window?.isVisible != true else { return }
-            self.window?.contentView = nil
-            let app = self.previousApp
-            self.previousApp = nil
-            if NSApp.isActive, let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier { app.activate() }
-        }
-    }
-
-    /// The window's keys (see `RouterKeys`), only while it is the key window.
-    private func watchKeys() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            let consumed = MainActor.assumeIsolated {
-                guard let window = self.window, window.isKeyWindow, event.window === window,
-                      !self.store.isRecordingShortcut else { return false }
-                return TipCenter.dismissVisible(for: event) || self.keys.key(event)
-            }
-            return consumed ? nil : event
-        }
-    }
-}
-
-/// The Router window's keys. In the composer: Return sends, ⇧Return starts a new line, ↑↓ pick a card while it is empty;
+/// The Router's keys in the app window. In the composer: Return sends, ⇧Return starts a new line, ↑↓ pick a card while it is empty;
 /// with @ suggestions showing, ↑↓ walk them and Return or Tab picks one; Backspace at the very start takes the last chip off.
 /// Elsewhere: ↑↓ pick a card, Space marks it addressed (or open again), Return replies to it, and typing goes to the
 /// composer. Esc dismisses the suggestions, then the reply chip, then closes the window.
@@ -196,7 +99,7 @@ final class RouterKeys {
 }
 
 /// A banner for each new card that needs you (a question, a plan, a stuck turn), unless notifications are off or snoozed or
-/// the Router window has the keyboard. Clicking it opens the window on that card.
+/// the app window is open on the Router. Clicking it opens the window on that card.
 @MainActor
 enum RouterBanners {
     /// Banner ids: the card's, after this.

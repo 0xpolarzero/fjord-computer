@@ -14,57 +14,24 @@ import SwiftUI
 extension LookoutHub {
     // MARK: Inbox
 
-    /// The GitHub mark: opens the inbox on the first category with something unread, its newest entry picked so the keys
-    /// act on it at once.
+    /// The GitHub mark: opens the window on the first category with something unread (the first, when none has).
     var inboxIcon: some View {
-        InboxCell(vertical: !edge.isHorizontal) {
-            openInbox(on: store.tabNeedingYou)
-        }
-    }
-
-    /// The full view on a tab, its newest entry picked.
-    func openInbox(on tab: InboxTab) {
-        withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) {
-            hub.go(.main)
-            hub.endSearch()
-            hub.tab = tab
-        }
-        if let first = store.entries(in: tab).first {
-            hub.selection = "i:" + first.id
-            hub.requestScroll("i:" + first.id)
-            ui.drawerSelection = nil
-        }
+        InboxCell(vertical: !edge.isHorizontal) { openApp(firstDestination) }
     }
 
     /// One cell per category shown, in order: its symbol, and on its corner what is unread. Hovering one peeks its list.
     @ViewBuilder var categoryCells: some View {
         ForEach(store.shownCategories) { category in
             CategoryCell(category: category, badge: store.badge(category), vertical: !edge.isHorizontal) {
-                openInbox(on: .category(category.id))
+                openApp(.category(category.id))
             }
-            .onHover { if $0, !hub.expanded { hub.tab = .category(category.id) } }
+            .onHover { if $0 { hub.tab = .category(category.id) } }
         }
     }
 
-    /// The tabs are the inbox's title and status; typing swaps them for the search.
-    @ViewBuilder var inboxHeader: some View {
-        Group {
-            if searching || hub.searchOpen { searchField.transition(.opacity) } else { filters.transition(.opacity) }
-        }
-        .frame(height: Theme.Metrics.line)
-    }
-
-    var searchField: some View {
-        InboxSearchField(hub: hub, ui: ui, store: store, count: searchCount)
-    }
-
-    /// What the search found, by kind: "3 items · 2 sessions".
-    var searchCount: String {
-        let found = items.count
-        let sessions = store.agents.enabled ? store.hubSessions(hub).count : 0
-        if found == 0 && sessions == 0 { return "No match" }
-        return [found == 0 ? nil : plural(found, "item"), sessions == 0 ? nil : plural(sessions, "session")]
-            .compactMap { $0 }.joined(separator: " · ")
+    /// The peek's header: the inbox's tabs.
+    var inboxHeader: some View {
+        filters.frame(height: Theme.Metrics.line)
     }
 
     var filters: some View {
@@ -94,7 +61,6 @@ extension LookoutHub {
                 .transition(.opacity)
             }
             categoriesMenu
-            if showsDetail { focusButton(.inbox) }
         }
         .padding(.trailing, 3)
         .motion(Theme.Motion.fade, value: unread > 0)
@@ -140,15 +106,13 @@ extension LookoutHub {
     /// Like a table's columns menu: a checkmark per category shown. Hidden ones are muted (no notifications, no icon in
     /// the bar) and still collect, so the menu says how many each holds.
     var categoriesMenu: some View {
-        CategoriesMenu(store: store) { hub.go(.categories) }
+        CategoriesMenu(store: store) { openApp(.categories) }
     }
 
     /// One quiet line where the list would be: nothing to act on, so nothing to draw the eye.
     var emptyInbox: some View {
         let tab = store.hubTab(hub)
-        let text: String = if searching {
-            "No inbox item matches"
-        } else if store.shownCategories.isEmpty && tab == .done && store.categories.isEmpty == false {
+        let text: String = if store.shownCategories.isEmpty && tab == .done && store.categories.isEmpty == false {
             "Every category is hidden"
         } else if tab == .done {
             "Nothing here yet"
@@ -166,7 +130,7 @@ extension LookoutHub {
     }
 
     func itemRow(_ entry: InboxEntry) -> some View {
-        EntryRow(entry: entry, store: store, ui: ui, hub: hub).capEdge()
+        EntryRow(entry: entry, store: store, hub: hub).capEdge()
     }
 
     /// A line of text with a link after it, padded like a row ("No CI shown  Choose repositories").
@@ -219,21 +183,21 @@ extension LookoutHub {
     /// The Router's cell in the bar; a click opens its window.
     var routerCell: some View {
         let counts = store.routerCounts
-        return RouterCell(needsYou: counts.needsYou, done: counts.done) { openRouter(nil) }
+        return RouterCell(needsYou: counts.needsYou, done: counts.done) { openApp(.router) }
     }
 
     /// "Router", then what's open (amber for what needs you, blue for finished turns). The whole line opens its window.
     var routerHeader: some View {
         sectionHeader("Router", status: routerStatusParts)
             .contentShape(Rectangle())
-            .onTapGesture { openRouter(nil) }
+            .onTapGesture { openApp(.router) }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
-            .accessibilityHint("Opens the Router window · \(store.shortcut(.router).display)")
-            .accessibilityAction { openRouter(nil) }
+            .accessibilityHint("Opens the Router · \(store.shortcut(.router).display)")
+            .accessibilityAction { openApp(.router) }
     }
 
-    /// A card clicked on the bar: its session opens in Claude, and it is the one picked in the Router's window.
+    /// A card clicked on the bar: its session opens in Claude, and it is the one picked in the Router.
     func openRouterCard(_ id: String) {
         store.openCard(id)
         pickRouterCard(id)
@@ -266,13 +230,12 @@ extension LookoutHub {
                     .foregroundStyle(Theme.tertiary).padding(.horizontal, Theme.Space.md).padding(.top, 2)
             }
         }
-        if store.sessionsHidden { routerWorking }
+        routerWorking
         Hairline(inset: Theme.Space.md).padding(.vertical, Theme.Space.xs)
         routerFooter
     }
 
-    /// Router only: what is working, under the cards (the sessions' section is gone), and Claude's files failing to read,
-    /// which the sessions' header would otherwise say: a broken read never goes silent.
+    /// What is working, under the cards, and Claude's files failing to read: a broken read never goes silent.
     var routerWorking: some View {
         VStack(alignment: .leading, spacing: 0) {
             ClaudeNotice(store: store).padding(.horizontal, Theme.Space.md)
@@ -280,134 +243,16 @@ extension LookoutHub {
         }
     }
 
-    /// What is running, in one line, and the button to the window.
+    /// The button to the Router in the window (the Working list above says what is running).
     var routerFooter: some View {
         HStack(spacing: 8) {
-            // Router only: the Working list above says it already.
-            if !store.sessionsHidden { RouterStatusView(store: store).layoutPriority(-1) }
             Spacer(minLength: 0)
-            ActionButton("Open Router") { openRouter(nil) }
+            ActionButton("Open Router") { openApp(.router) }
                 .fixedSize()
                 .tip("Open Router", "Cards and the chat · \(store.shortcut(.router).display)")
         }
         .padding(.leading, Theme.Space.md)
         .frame(minHeight: Theme.Metrics.line)
-    }
-
-    /// Kept open beside the bar: under the header, the status line.
-    var routerStatusRow: some View {
-        RouterStatusView(store: store)
-            .padding(.horizontal, Theme.Space.md)
-            .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
-            .contentShape(Rectangle())
-            .onTapGesture { openRouter(nil) }
-    }
-
-    /// Along the top and bottom, kept open: the column under the Router's segment, the status line over the latest cards.
-    var routerColumn: some View {
-        let cards = store.openRouterCards
-        return VStack(alignment: .leading, spacing: 1) {
-            if !store.sessionsHidden {
-                RouterStatusView(store: store, lines: 3)
-                    .padding(.horizontal, Theme.Space.md)
-                    .padding(.vertical, Theme.Space.sm)
-            }
-            if cards.isEmpty {
-                Text("Nothing needs you").font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
-                    .padding(.horizontal, Theme.Space.md).padding(.vertical, Theme.Space.sm)
-            }
-            ForEach(cards.prefix(Self.routerColumnLimit)) { RouterCardLine(card: $0, store: store, narrow: true) { openRouterCard($0) } }
-            if cards.count > Self.routerColumnLimit {
-                Text("\(cards.count - Self.routerColumnLimit) more").font(Theme.Typography.meta).foregroundStyle(Theme.tertiary)
-                    .padding(.horizontal, Theme.Space.md).padding(.top, 2)
-            }
-            if store.sessionsHidden { routerWorking.padding(.top, 6) }
-        }
-        .padding(.horizontal, Self.inset)
-        .padding(.vertical, Theme.Space.sm)
-        .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    static let routerColumnLimit = 4
-
-    // MARK: Agents
-
-    var claudeMark: some View {
-        Image(systemName: "asterisk")
-            .font(Theme.Typography.glyph(14, .bold))
-            .foregroundStyle(Theme.claude)
-            .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
-            .contentShape(Rectangle())
-            .accessibilityLabel("Sessions")
-    }
-
-    /// "Sessions", then what's waiting for you (amber) and what's done and unread (blue).
-    var agentsHeader: some View {
-        let counts = store.agentCounts
-        var status: [(String, Color)] = []
-        if counts.blocked > 0 { status.append(("\(counts.blocked) waiting", Theme.amber)) }
-        if counts.done > 0 { status.append(("\(counts.done) done", Theme.accent)) }
-        // Claude's files missing or unreadable: the notice under the header says so; this stays when the list is shrunk.
-        switch store.claudeLink {
-        case .missing, .unreadable: status.append(("!", Theme.red))
-        default: break
-        }
-        return sectionHeader("Sessions", status: status) { if showsDetail { focusButton(.agents) } }
-    }
-
-    /// A session's tile in the bar; opens it in Claude.
-    func tile(_ r: AgentRow, size: CGFloat) -> some View {
-        BarTile(row: r, size: size, store: store, ui: ui, hub: hub)
-    }
-
-    /// The "+" in the bar, a tile like the sessions' above it: a scratch session.
-    var newSessionCell: some View {
-        NewSessionTile(size: Theme.Metrics.chip) { store.startScratchSession() }
-            .frame(height: Theme.Metrics.row)
-    }
-
-    /// Beside the "+": the label and the projects to start a session in.
-    var newSessionDetail: some View { NewSessionRow(store: store, style: .detail) }
-
-    // MARK: Bar actions
-
-    var pinButton: some View {
-        IconButton(symbol: hub.pinned ? "pin.fill" : "pin", help: hub.pinned ? "Unpin" : "Keep open",
-                   detail: store.shortcut(.togglePanel).display,
-                   size: footerButton, tint: hub.pinned ? Theme.amber : Theme.secondary, active: hub.pinned) {
-            hub.pinned.toggle()
-        }
-    }
-
-    var reposButton: some View {
-        IconButton(symbol: "tray.2.fill", help: "Inbox categories", detail: "What the inbox collects, and where",
-                   size: footerButton, active: hub.page == .categories) { hub.go(.categories) }
-    }
-
-    /// Lit on Settings; on the categories too beside the bar, where the categories button hides with the rows.
-    var settingsCell: some View {
-        IconButton(symbol: "gearshape.fill", help: "Settings", detail: "⌘,", size: footerButton,
-                   active: hub.page == .settings || (hub.page == .categories && !edge.isHorizontal)) { hub.go(.settings) }
-    }
-
-    // MARK: Footer
-
-    /// The bar actions' size: header-size in the open column's footer, so it stays one compact line; the bar's size
-    /// along the top and bottom, where they sit in the bar itself.
-    var footerButton: CGFloat { edge.isHorizontal ? IconButton.Size.bar : IconButton.Size.header }
-    /// The open column's footer: a header-size button and 5pt above and below.
-    static let footerHeight: CGFloat = 34
-
-    /// Beside the settings cell: how syncing is going, then pin and repositories.
-    var footer: some View {
-        // 9pt apart: the same step as from repositories to the settings cell beside them.
-        HStack(spacing: 9) {
-            syncStatus
-            Spacer(minLength: 0)
-            pinButton
-            reposButton
-        }
-        .frame(height: Self.footerHeight)
     }
 
     /// Sync state, as a dot and a few words: problems first, then checking, snoozed, and up to date.
@@ -424,7 +269,7 @@ extension LookoutHub {
     private func syncLabel(now: Date) -> some View {
         let s = sync(now: now)
         return Button {
-            if store.authError != nil { hub.go(.settings) } else { store.refreshNow() }
+            if store.authError != nil { openApp(.settings) } else { store.refreshNow() }
         } label: {
             HStack(spacing: 6) {
                 Group {
@@ -496,73 +341,6 @@ extension LookoutHub {
         let next = max(0, Int(last.addingTimeInterval(interval).timeIntervalSince(now)))
         return SyncState(color: Theme.green, text: "Up to date", title: checked,
                          detail: "Next check in about \(next < 60 ? "\(next)s" : "\(next / 60)m")\n\(refresh)")
-    }
-}
-
-/// The search: a real text field (paste, selection, dead keys and input methods work, and VoiceOver reads it), with what it
-/// found and the Esc that ends it. Typing elsewhere in the hub opens it and hands it the key (see `HubKeys`), which
-/// leaves it alone while it has focus.
-struct InboxSearchField: View {
-    @Bindable var hub: HubState
-    let ui: UIState
-    let store: Store
-    let count: String
-    @FocusState private var focused: Bool
-
-    @State private var hover = false
-
-    /// Claude's sidebar search field (global §2.3), typed into: 26 tall, radius 6, white 5% (14% on hover) inside a 1pt
-    /// white-10% ring; the 16pt search glyph in a 24 slot, 13pt text, muted placeholder and count, the Esc keycap.
-    var body: some View {
-        HStack(spacing: CDS.Sidebar.rowGap) {
-            Image(systemName: "magnifyingglass").font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-                .foregroundStyle(CDS.Text.muted)
-                .frame(width: CDS.Sidebar.leadingSlot, height: CDS.Sidebar.leadingSlot)
-                .accessibilityHidden(true)
-            TextField("Search inbox and sessions", text: $hub.query,
-                      prompt: Text("Search inbox and sessions").foregroundStyle(CDS.Text.muted))
-                .textFieldStyle(.plain)
-                .font(CDS.sans(CDS.Sidebar.rowFont))
-                .foregroundStyle(CDS.Text.primary)
-                .lineLimit(1)
-                .accessibilityLabel("Search inbox and sessions")
-                .focused($focused)
-                .focusEffectDisabled()
-            if !hub.query.isEmpty {
-                Text(count).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(CDS.Text.muted).lineLimit(1)
-            }
-            KeyCap("Esc")
-        }
-        .padding(.leading, CDS.Sidebar.rowPadding)
-        .padding(.trailing, 4)
-        .frame(height: CDS.Sidebar.rowHeight)
-        .background(Theme.Radius.shape(CDS.Sidebar.radius).fill(hover && !focused ? CDS.Fill.secondaryHover : CDS.Fill.field))
-        .overlay(Theme.Radius.shape(CDS.Sidebar.radius).strokeBorder(CDS.border, lineWidth: 1))
-        .onHover { hover = $0 }
-        .motion(Theme.Motion.hover, value: hover)
-        .onAppear { requestFocus() }
-        .onChange(of: hub.focusRequest) { requestFocus() }
-        .onChange(of: focused) { _, isFocused in
-            hub.searchFocused = isFocused
-            if isFocused { DispatchQueue.main.async(execute: hub.typePendingKeys) }
-        }
-        .onDisappear { hub.searchFocused = false }
-        // What is typed, pasted or composed in the field doesn't go through the keys: the first result is picked like theirs,
-        // and nothing stays shrunk behind the results.
-        .onChange(of: hub.query) {
-            if !hub.query.isEmpty, hub.focus != nil {
-                withAnimation(LookoutHub.refocus.resolved(reduce: LookoutHub.reduceNow)) { hub.focus = nil }
-            }
-            hub.pick(store.hubTargets(hub).first, ui: ui)
-        }
-    }
-
-    private func requestFocus() {
-        DispatchQueue.main.async {
-            focused = true
-            // Already focused (a key arrived while it was): nothing changes for `onChange` to answer.
-            DispatchQueue.main.async(execute: hub.typePendingKeys)
-        }
     }
 }
 

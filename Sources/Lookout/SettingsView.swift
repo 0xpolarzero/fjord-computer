@@ -18,7 +18,7 @@ struct SettingsView: View {
     @State private var notificationsBlocked = false
 
     static let updatesID = "updates"
-    /// The Router's lines in Extensions (shots scroll there).
+    /// The Router's section (shots scroll there).
     static let routerID = "router"
 
     var body: some View {
@@ -27,7 +27,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
                     account
                     notifications
-                    extensions
+                    claude
                     shortcuts
                     updates.id(Self.updatesID)
                     general
@@ -175,7 +175,7 @@ struct SettingsView: View {
     private var shortcuts: some View {
         SettingsSection("Shortcuts",
                         info: ("Shortcuts", "Click one, then press the new keys (Esc cancels, Delete clears). Ones that work from any app also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on.")) {
-            let actions = ShortcutAction.allCases.filter { (!$0.isAgents || store.agents.enabled) && (!$0.isRouter || store.routerOn) }
+            let actions = ShortcutAction.allCases.filter { !$0.isRouter || store.routerOn }
             ForEach(actions) { action in
                 if action != actions.first { SettingsDivider() }
                 let needsAccess = action.isGlobal && !accessibilityTrusted
@@ -208,34 +208,28 @@ struct SettingsView: View {
         }
     }
 
-    private var extensions: some View {
-        SettingsSection("Extensions") {
-            let installed = Claude.isInstalled
-            SettingsRow("Claude sessions",
-                        description: !installed && !store.agents.enabled ? "Needs the Claude desktop app" : nil,
-                        adornment: AnyView(Image(systemName: "asterisk").font(.system(size: 11, weight: .bold)).foregroundStyle(CDS.clay)),
-                        info: ("Claude sessions", "Your Claude Code sessions on the bar: working, done or waiting. Sessions with new activity arrive as pending; keep the ones you use. Lookout never writes to the app's files.")) {
-                SettingsSwitch("Claude sessions", isOn: Binding(get: { store.agents.enabled }, set: { store.setAgentsEnabled($0) }))
-                    .disabled(!installed && !store.agents.enabled)
-            }
-            if store.agents.enabled {
+    private var claude: some View {
+        SettingsSection("Claude") {
+            router
+            if store.router.enabled {
                 SettingsDivider()
                 mutedFolders
                 SettingsDivider()
                 sessionIcons
-                SettingsDivider()
-                router
             }
         }
     }
 
-    /// The Router: its switch, then what it needs and how each part is doing (the hook, Claude Code, routing).
+    /// The Router, which reads your Claude Code sessions (never writing to the desktop app's files): its switch, then what it
+    /// needs and how each part is doing (the hook, Claude Code, routing).
     @ViewBuilder private var router: some View {
         SettingsRow("Router",
+                    description: !Claude.isInstalled && !store.router.enabled ? "Needs the Claude desktop app" : nil,
                     adornment: AnyView(Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(CDS.Text.secondary)),
-                    info: ("Router", "Lookout adds a hook to Claude Code's settings (`~/.claude/settings.json`) so a session's questions can be answered here, and a Claude Code plugin so your messages reach sessions as yours; turning the Router off takes both out. The Router is a Claude Code session Lookout runs: it only messages your sessions, answers their forms and starts new ones when you ask. \(store.shortcut(.router).display) opens it.")) {
-            SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setRouterEnabled($0) }))
+                    info: ("Router", "Your Claude Code sessions: what is working, what is waiting on you and what is done, with the sessions' questions answered here. Lookout adds a hook to Claude Code's settings (`~/.claude/settings.json`) so a session's questions can be answered here, and a Claude Code plugin so your messages reach sessions as yours; turning the Router off takes both out. The Router is a Claude Code session Lookout runs: it only messages your sessions, answers their forms and starts new ones when you ask. \(store.shortcut(.router).display) opens it.")) {
+            SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.switchRouter($0) }))
+                .disabled(!Claude.isInstalled && !store.router.enabled)
         }
         .id(Self.routerID)
         // Off, but taking the hook or the plugin out failed: that stays in sight, with a way to try again.
@@ -247,9 +241,6 @@ struct SettingsView: View {
         }
         if store.router.enabled {
             SettingsRail {
-                SettingsRow("Hide session tiles") {
-                    SettingsSwitch("Hide session tiles", isOn: Binding(get: { store.router.routerOnly }, set: { store.setRouterOnly($0) }))
-                }
                 VStack(alignment: .leading, spacing: 6) {
                     SettingsStatusLine(text: hookStatus.0, color: hookStatus.1)
                     let plugin = Self.pluginLine(store.routerPluginStatus, error: store.routerPluginError)
@@ -290,7 +281,7 @@ struct SettingsView: View {
 
     @ViewBuilder private var sessionIcons: some View {
         SettingsRow("Icons picked for you",
-                    info: ("Icons picked for you", "Each session in your list gets an icon instead of letters. Its title, project name and first message go to TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, about $0.0002 a session. Keys come from console.typesafe.ai.")) {
+                    info: ("Icons picked for you", "Each session in the Router gets an icon instead of letters. Its title, project name and first message go to TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, about $0.0002 a session. Keys come from console.typesafe.ai.")) {
             SettingsSwitch("Icons picked for you", isOn: Binding(get: { store.agents.iconsEnabled }, set: { store.setIconsEnabled($0) }))
         }
         if store.agents.iconsEnabled {
@@ -320,7 +311,7 @@ struct SettingsView: View {
         let muted = store.agents.mutedFolders
         let unmuted = store.knownFolders.filter { !muted.contains($0) }
         let name = { (folder: String) in folder.isEmpty ? "Scratch chats" : store.folderName(folder) }
-        SettingsRow("Muted folders", info: ("Muted folders", "Their sessions stay off the bar"),
+        SettingsRow("Muted folders", info: ("Muted folders", "The Router ignores their sessions: no cards, nothing listed"),
                     below: AnyView(Group {
                         if muted.isEmpty {
                             Text("None").cdsText(footnote, .regular, CDS.Text.secondary)

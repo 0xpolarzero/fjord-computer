@@ -31,22 +31,6 @@ import Testing
     }
 }
 
-@MainActor
-@Suite struct HubInbox {
-    @Test func showingTheInboxClearsASearchAndPicksTheTabOfTheArrivals() {
-        let hub = HubState()
-        let category = InboxFixture.category()
-        hub.go(.settings)
-        hub.tab = .done
-        hub.query = "nothing like it"
-        hub.startSearch()
-        hub.showInbox(.category(category.id))
-        #expect(hub.page == .main && hub.pinned && hub.focus == .inbox)
-        #expect(hub.tab == .category(category.id))
-        #expect(hub.query.isEmpty && !hub.searchOpen)
-    }
-}
-
 @Suite struct CappedScrollFit {
     @Test func stopsOnTheLastRowThatFits() {
         #expect(CappedScrollSpace.fit(cap: 100, edges: [36, 72, 108, 144]) == 72)
@@ -245,13 +229,11 @@ import Testing
     @MainActor @Test func checkForUpdatesAsksForTheUpdatesSectionEveryTime() {
         let hub = HubState()
         hub.showUpdates()
-        #expect(hub.page == .settings)
         let first = hub.settingsScroll
         #expect(first?.id == SettingsView.updatesID)
         // Settings open already, and scrolled elsewhere (the request was taken): asking again is a new request.
         hub.settingsScroll = nil
         hub.showUpdates()
-        #expect(hub.page == .settings)
         #expect(hub.settingsScroll?.id == SettingsView.updatesID)
         // Not taken yet: still a different request, so what watches it sees a change.
         let pending = hub.settingsScroll

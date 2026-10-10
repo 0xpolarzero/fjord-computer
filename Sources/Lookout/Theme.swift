@@ -25,7 +25,7 @@ enum Theme {
     static let purple = Color(red: 0xA0 / 255, green: 0x96 / 255, blue: 0xEB / 255)
     /// Claude's clay, for anything about Claude sessions.
     static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
-    /// The Router window, as Claude's Code tab: sidebar (surface-1) and content (surface-2).
+    /// The Router, as Claude's Code tab: sidebar (surface-1) and content (surface-2).
     static let sidebar = Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x15 / 255)
     static let panel = Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x19 / 255)
     /// Project colours for Claude sessions: as far apart as possible, and nowhere near the status colours (amber
@@ -104,32 +104,12 @@ private struct IconButtonLabel: View {
 }
 
 extension IconButton {
-    /// The hub's three button sizes: one per kind of place, so the same action looks the same everywhere.
+    /// The button sizes: one per kind of place, so the same action looks the same everywhere.
     enum Size {
-        /// The bar and its trailing group (pin, repositories, settings): CDS `lg` control, 28.
-        static let bar: CGFloat = 28
-        /// A section header's actions (mark all read, back): CDS compact control, 24.
+        /// A section header's actions (mark all read): CDS compact control, 24.
         static let header: CGFloat = 24
         /// A row's hover actions: Claude's row controls, 24 (sidebar §2.7).
         static let row: CGFloat = 24
-    }
-}
-
-/// A key as printed on a keycap, e.g. "Esc" or "⌘K": Claude's Shortcut cap (forms-buttons.md §4.6), one look everywhere a
-/// key is shown. 18 tall (one glyph: 18 square, more: 3 padding), radius 4, no fill, a 1pt line at 22% of the ink #a5a49a.
-struct KeyCap: View {
-    let key: String
-
-    init(_ key: String) { self.key = key }
-
-    var body: some View {
-        Text(key)
-            .font(key.count > 1 && key.unicodeScalars.allSatisfy({ $0.isASCII }) ? CDS.sans(11) : .system(size: 11))
-            .foregroundStyle(CDS.Keycap.ink)
-            .padding(.horizontal, key.count > 1 ? 3 : 0)
-            .frame(minWidth: CDS.Keycap.size, minHeight: CDS.Keycap.size, maxHeight: CDS.Keycap.size)
-            .overlay(RoundedRectangle(cornerRadius: CDS.Keycap.radius, style: .continuous)
-                .strokeBorder(CDS.Keycap.ink.opacity(0.22), lineWidth: 1))
     }
 }
 

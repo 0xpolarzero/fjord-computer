@@ -56,16 +56,6 @@ import Testing
         #expect(running.contains { $0.checks == .pending } && !running.contains { $0.checks == .failing })
     }
 
-    @Test func sessionScenariosHoldWhatTheirNamesSay() {
-        #expect(populated(.sessionsNone).claudeSessions.isEmpty)
-        #expect(populated(.sessions12).claudeSessions.count == 12)
-        let waiting = populated(.sessionsWaiting10)
-        #expect(waiting.claudeSessions.values.filter { $0.summary?.blocked == true }.count == 10)
-        let many = populated(.sessionsManyNew)
-        #expect(many.agents.entries.filter { !$0.kept }.count == 11)
-        #expect(populated(.sessionsNewActivity).agents.entries.contains { !$0.kept })
-    }
-
     @Test func theUpdateScenariosPutTheUpdaterInEachPhase() {
         #expect(populated(.updateAvailable).updater.phase == .available)
         let downloading = populated(.updateDownloading).updater

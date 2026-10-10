@@ -331,11 +331,10 @@ enum LaunchAtLogin {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: Store!
     private var hub: HubController?
-    /// The Router's window, made the first time it is shown.
-    private var router: RouterWindowController?
     private lazy var hotKeys = HotKeys()
     private var globalShortcuts: GlobalShortcuts?
     private var playground: Playground?
+    private var appWindow: AppWindowController?
     private var sigtermSource: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -344,6 +343,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store = Store()
         if let i = CommandLine.arguments.firstIndex(of: "--playground-shots"), i + 1 < CommandLine.arguments.count {
             PlaygroundShots.run(to: CommandLine.arguments[i + 1])
+            return
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--window-shots"), i + 1 < CommandLine.arguments.count {
+            AppWindowShots.run(to: CommandLine.arguments[i + 1])
+            return
+        }
+        if CommandLine.arguments.contains("--window") {
+            appWindow = AppWindowDev.open(store)
             return
         }
         if CommandLine.arguments.contains("--playground") {
@@ -373,40 +380,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             store.start()
         }
-        let router = RouterWindowController(store: store)
-        self.router = router
-        hub = HubController(store: store, demo: CommandLine.arguments.contains("--demo"))
-        hub?.openRouter = { [weak router] in router?.show(card: $0) }
-        hub?.pickRouterCard = { [weak router, weak store] id in if let store { router?.model.select(id, store: store) } }
+        let demo = CommandLine.arguments.contains("--demo")
+        let window = AppWindowController(store: store)
+        appWindow = window
+        let hub = HubController(store: store, demo: demo)
+        self.hub = hub
+        // The window is the bar's other mode: while it is open the bar is away, and closing it puts the bar back.
+        window.onClose = { [weak hub] in hub?.setWindowOpen(false) }
+        hub.openApp = { [weak self] in self?.showWindow($0) }
+        hub.pickRouterCard = { [weak window, weak store] id in if let store { window?.routerModel.select(id, store: store) } }
         // Banners for new cards that need you; a demo posts none.
-        if !CommandLine.arguments.contains("--demo") {
-            RouterBanners.attach(store: store, windowIsKey: { [weak router] in router?.isKey ?? false }) { [weak router] card in
-                router?.show(card: card)
+        if !demo {
+            RouterBanners.attach(store: store, windowIsKey: { [weak window] in window?.isKey == true && window?.navigator.selection == .router }) {
+                [weak self] card in self?.showWindow(.router, card: card)
             }
         }
-        // Demo: the keep-open key on right ⌘ (not saved), to try tap and double-tap.
-        if CommandLine.arguments.contains("--demo"), hub != nil {
+        // Demo: the window's key on right ⌘ (not saved), to try tap and double-tap.
+        if demo {
             store.settings.shortcuts = [ShortcutAction.togglePanel.rawValue: Shortcut(keyCode: 54)]
         }
         hotKeys.paused = { [weak self] in self?.store.isRecordingShortcut ?? false }
-store.onRecordingShortcutChange = { [weak self] on in self?.globalShortcuts?.suspend(on) }
-        store.onOpenInbox = { [weak self] category, thing in self?.hub?.showInbox(category: category, thing: thing) }
+        store.onRecordingShortcutChange = { [weak self] on in self?.globalShortcuts?.suspend(on) }
+        // A banner's click: the window on the thing's category with it picked (on Done if it was done since), or, for a
+        // summary, on the first category with something unread.
+        store.onOpenInbox = { [weak self] category, thing in
+            guard let self else { return }
+            if let thing, let entry = self.store.entries.first(where: { $0.id == thing }) {
+                self.appWindow?.show(entry: entry)
+                self.hub?.setWindowOpen(true)
+            } else {
+                self.showWindow(category.map { .category($0) } ?? AppDestination(self.store.tabNeedingYou))
+            }
+        }
         // Default ⌃⌥L: ⌃⌥Space is macOS's "next input source".
         let globals = GlobalShortcuts(store: store, registrar: hotKeys) { [weak self] action in
             switch action {
-            case .togglePanel: self?.hub?.toggleShortcut()
-            case .sessionSwitcher: self?.hub?.showSessions()
-            case .router: if self?.store.routerOn == true { self?.router?.show() }
+            case .togglePanel: self?.toggleWindow()
+            case .sessionSwitcher: if self?.store.routerOn == true { self?.showWindow(.router, search: true) }
+            case .router: if self?.store.routerOn == true { self?.showWindow(.router) }
             default: break
             }
         }
         globals.start()
         globalShortcuts = globals
-        if CommandLine.arguments.contains("--open") {
-            hub?.toggleShortcut()
-        }
+        if CommandLine.arguments.contains("--open") { toggleWindow() }
         if CommandLine.arguments.contains(Lifecycle.flag) { Lifecycle.start(store) }
     }
+
+    /// Opens the app window on `destination` (the bar leaves the edge), on a Router card, or on the Router's search.
+    private func showWindow(_ destination: AppDestination?, card: String? = nil, search: Bool = false) {
+        appWindow?.show(destination, card: card, search: search)
+        hub?.setWindowOpen(true)
+    }
+
+    /// The window shortcut: opens the window where it was left, or closes it (the bar comes back).
+    private func toggleWindow() {
+        if appWindow?.isOpen == true { appWindow?.close() } else { showWindow(nil) }
+    }
+
+    @objc private func openSettings() { showWindow(.settings) }
 
     /// SIGTERM would skip `applicationWillTerminate` and lose a pending save.
     private func handleSigterm() {
@@ -423,7 +455,8 @@ store.onRecordingShortcutChange = { [weak self] on in self?.globalShortcuts?.sus
         store?.flushSave()
     }
 
-    /// Accessory apps have no visible menu bar, but key equivalents (⌘C/⌘V/⌘A) still route through the main menu.
+    /// The main menu: shown while the app window is open; an accessory app has none, but key equivalents (⌘C/⌘V/⌘A) still route
+    /// through it.
     private func installMainMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem()
@@ -431,6 +464,9 @@ store.onRecordingShortcutChange = { [weak self] on in self?.globalShortcuts?.sus
         appMenu.addItem(withTitle: "Quit Lookout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
+        appMenu.insertItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",", at: 0)
+        appMenu.items[0].target = self
+        appMenu.insertItem(.separator(), at: 1)
 
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
@@ -443,6 +479,15 @@ store.onRecordingShortcutChange = { [weak self] on in self?.globalShortcuts?.sus
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         main.addItem(editItem)
+        main.addItem(GoMenu.shared.makeItem())
+        // ⌘W closes the window, which puts the bar back; ⌘Q quits.
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowItem.submenu = windowMenu
+        main.addItem(windowItem)
+        NSApp.windowsMenu = windowMenu
         NSApp.mainMenu = main
     }
 }

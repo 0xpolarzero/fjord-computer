@@ -165,7 +165,6 @@ extension CappedScroll {
 struct EntryRow: View {
     let entry: InboxEntry
     let store: Store
-    let ui: UIState
     let hub: HubState
     @State private var hover = false
 
@@ -222,10 +221,7 @@ struct EntryRow: View {
         .contextMenu { EntryMenu(entry: entry, store: store) }
         .onHover {
             hover = $0
-            if $0 {
-                hub.selection = "i:" + entry.id
-                ui.drawerSelection = nil
-            }
+            if $0 { hub.selection = "i:" + entry.id }
         }
         .motion(Theme.Motion.hover, value: open)
     }
@@ -475,39 +471,17 @@ struct RowActions<Content: View>: View {
     }
 }
 
-extension AnyTransition {
-    /// Content of the expanded view: fades in once the shape has started to grow, and out at once on close.
-    static var hubReveal: AnyTransition {
-        .asymmetric(insertion: .opacity.animation(Theme.Motion.fade.delay(0.08)),
-                    removal: .opacity.animation(.easeIn(duration: 0.08)))
-    }
-}
-
 /// A request to scroll the lists to a row; `seq` makes asking for the same row again a new request.
 struct ScrollRequest: Equatable {
     let id: String
     let seq: Int
 }
 
-/// The last session search's result, valid for one query and one state of the agents.
-struct SessionSearchMemo {
-    var query = ""
-    var revision = -1
-    var result: [AgentRow] = []
-}
-
-/// The last search's result, valid for one query and one state of the inbox.
-struct SearchMemo {
-    var revision = -1
-    var query = ""
-    var result: [InboxEntry] = []
-}
-
 extension Store {
     /// The categories shown in the bar and as tabs: all but the hidden ones.
     var shownCategories: [InboxCategory] { categories.filter { !$0.hidden } }
 
-    /// The tab the inbox shows: the one picked while it is still there, else the first category shown, else Done.
+    /// The tab the inbox peek shows: the one picked while it is still there, else the first category shown, else Done.
     func hubTab(_ hub: HubState) -> InboxTab {
         switch hub.tab {
         case .done?: return .done
@@ -539,31 +513,6 @@ extension Store {
 
     /// The number a category carries in the bar and its tab: what is unread; CI's is how many fail.
     func badge(_ category: InboxCategory) -> Int { category.isCI ? count(category.id) : unreadCount(category.id) }
-
-    /// The inbox as the hub shows it: the picked tab, or every entry matching the search, all categories and Done
-    /// (memoized on the query and the inbox's revision).
-    func hubEntries(_ hub: HubState) -> [InboxEntry] {
-        let words = hub.query.lowercased().split(separator: " ")
-        guard !words.isEmpty else { return entries(in: hubTab(hub)) }
-        let memo = hub.searchMemo
-        if memo.revision == inboxRevision, memo.query == hub.query { return memo.result }
-        let names = Dictionary(categories.map { ($0.id, $0.name.lowercased()) }, uniquingKeysWith: { first, _ in first })
-        let result = entries.filter { entry in
-            let t = entry.thing
-            let key = "\(t.title) \(t.repo) #\(t.number ?? 0) @\(t.author?.login ?? "") \(t.workflowName ?? "") \(names[entry.categoryID] ?? "") "
-                + entry.facts.map(\.label).joined(separator: " ")
-            let lowered = key.lowercased()
-            return words.allSatisfy { lowered.contains($0) }
-        }
-        .sorted { ($0.isDone ? 1 : 0, $1.thing.updatedAt) < ($1.isDone ? 1 : 0, $0.thing.updatedAt) }
-        hub.searchMemo = SearchMemo(revision: inboxRevision, query: hub.query, result: result)
-        return result
-    }
-
-    /// Every row the arrows walk through, top to bottom: inbox entries, then sessions.
-    func hubTargets(_ hub: HubState) -> [String] {
-        hubEntries(hub).map { "i:" + $0.id } + hubSessions(hub).map { "a:" + $0.id }
-    }
 
     /// Opens a thing on GitHub, and it is seen; the playground reports it instead.
     func open(_ entry: InboxEntry) {
@@ -626,46 +575,6 @@ extension Store {
         return list.indices.contains(at + step)
     }
 
-
-    /// A scratch Claude session (no folder), through the same interception as every other open.
-    func startScratchSession() {
-        if let interceptOpen { interceptOpen("New Claude session in Scratch"); return }
-        NewSessionRow.startScratch()
-    }
-
-    /// Sessions as the hub lists them: yours and the pending ones, or any session matching the search.
-    func hubSessions(_ hub: HubState) -> [AgentRow] {
-        guard agents.enabled else { return [] }
-        let searching = !hub.query.trimmingCharacters(in: .whitespaces).isEmpty
-        // Router only: no session rows to walk, but a search finds them.
-        if sessionsHidden && !searching { return [] }
-        if !hub.query.trimmingCharacters(in: .whitespaces).isEmpty {
-            let memo = hub.sessionMemo
-            if memo.revision == agentsRevision, memo.query == hub.query { return memo.result }
-            let result = searchSessions(hub.query)
-            hub.sessionMemo = SessionSearchMemo(query: hub.query, revision: agentsRevision, result: result)
-            return result
-        }
-        return agentSections.flatMap(\.rows)
-    }
-}
-
-/// A session's context menu (open, read state, label, keep/remove, colour, mute) and the popover its label editor
-/// opens in. Attach with `.sessionMenu(row, store)`.
-private struct SessionContextMenu: ViewModifier {
-    let row: AgentRow
-    let store: Store
-    @State private var editing = false
-
-    func body(content: Content) -> some View {
-        content
-            .contextMenu { SessionMenu(row: row, store: store, editLabel: { editing = true }) }
-            .popover(isPresented: $editing, arrowEdge: .bottom) { LabelEditor(row: row, store: store) }
-    }
-}
-
-extension View {
-    func sessionMenu(_ row: AgentRow, _ store: Store) -> some View { modifier(SessionContextMenu(row: row, store: store)) }
 }
 
 /// The inbox in the bar: the GitHub mark. A click opens the inbox; the categories have their own cells under it (beside it
@@ -953,164 +862,6 @@ enum FailingNames {
     }
 }
 
-/// The "+" tile: shaped and filled like a session's tile, so it reads as the next one in the column.
-struct NewSessionTile: View {
-    var size: CGFloat = Theme.Metrics.chip
-    let action: () -> Void
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        Button(action: action) { NewSessionTileLabel(size: size) }
-            .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous),
-                                              rest: Theme.Fill.field, hover: Theme.Fill.tile))
-            .accessibilityLabel("New session")
-            .accessibilityHint("Scratch chat, or pick a project")
-            .focused($focused)
-            .tip("New session", "Scratch chat, or pick a project", focused: focused)
-    }
-}
-
-private struct NewSessionTileLabel: View {
-    let size: CGFloat
-    @Environment(\.hoverFillHovering) private var hover
-
-    var body: some View {
-        Image(systemName: "plus")
-            .font(.system(size: CDS.Sidebar.newGlyph + 2, weight: .semibold))
-            .foregroundStyle(hover ? CDS.Text.primary : CDS.Text.secondary)
-            .frame(width: size, height: size)
-    }
-}
-
-/// What a session left running, on one line: each subagent and command with its icon.
-struct RunningLine: View {
-    let tasks: [ClaudeTask]
-
-    var body: some View {
-        tasks.enumerated().reduce(Text("")) { line, item in
-            let (i, task) = item
-            let icon = Text(Image(systemName: task.kind == .agent ? "asterisk" : "terminal")).foregroundStyle(Theme.claude)
-            return line + (i == 0 ? Text("") : Text("   ")) + icon + Text(" " + task.title).foregroundStyle(Theme.secondary)
-        }
-        .font(Theme.Typography.meta)
-        .lineLimit(1)
-        .truncationMode(.tail)
-        // Cut short at the row's width: hovering has the whole list.
-        .tip("Running", tasks.map(\.title).joined(separator: "\n"))
-    }
-}
-
-/// A session's tile in the bar; opens it in Claude. Its highlight is compared here, in its own body, so hovering a
-/// tile doesn't rebuild the whole hub. No tooltip: hovering opens the sessions' panel, a row beside each tile.
-struct BarTile: View {
-    let row: AgentRow
-    let size: CGFloat
-    let store: Store
-    let ui: UIState
-    let hub: HubState
-
-    var body: some View {
-        Button { store.openAgent(row.id) } label: {
-            AgentTile(row: row, size: size, selected: hub.selection == "a:" + row.id)
-        }
-        .buttonStyle(.plain)
-        .frame(height: Theme.Metrics.row)
-        .accessibilityLabel(row.session.title)
-        .spokenValue(of: row)
-        .accessibilityHint(row.spokenHint)
-        .sessionMenu(row, store)
-        .onHover {
-            if $0 {
-                hub.selection = "a:" + row.id
-                ui.drawerSelection = row.id
-            }
-        }
-    }
-}
-
-/// A session in the full view: its line, then (short) what it did and what it left running. One block: it
-/// highlights, opens and shows its actions as a whole, wherever the pointer is on it. Whether it's the picked one
-/// is compared here, in its own body.
-struct SessionBlock: View {
-    let row: AgentRow
-    let twoLines: Bool
-    let store: Store
-    @Bindable var ui: UIState
-    let hub: HubState
-
-    var body: some View {
-        let selected = ui.drawerSelection == row.id
-        VStack(alignment: .leading, spacing: 0) {
-            DrawerRow(row: row, store: store, ui: ui, number: 0, twoLines: twoLines, highlight: hub.query,
-                      showsKept: !hub.query.isEmpty, inHub: !twoLines, plain: true)
-                // The card below is the one button; its inner row's own (a second, unnamed-or-duplicate button) is hidden.
-                .accessibilityHidden(true)
-            // Under the title, at the title's own inset (two-line rows past the tile).
-            Group { if twoLines { cardDetail } else { details } }
-                .padding(.leading, twoLines ? DrawerRow.twoLineTitleInset : DrawerRow.titleInset)
-                .padding(.trailing, 8)
-                .padding(.top, twoLines ? -8 : -3)
-                .padding(.bottom, twoLines ? 4 : 7)
-        }
-        .background(Theme.Radius.shape(Theme.Radius.md).fill(selected ? Theme.Fill.hover : Theme.Fill.rest))
-        // The same actions as an inbox item's, over the title line's right end, centred on it.
-        .overlay(alignment: .topTrailing) {
-            if selected {
-                AgentActions(row: row, store: store, size: IconButton.Size.row)
-                    .padding(.top, twoLines ? 9 : 0)
-                    .padding(.trailing, 4)
-                    .transition(.opacity)
-            }
-        }
-        .motion(Theme.Motion.hover, value: selected)
-        .contentShape(Rectangle())
-        .onTapGesture { store.openAgent(row.id) }
-        .opensOnFirstClick()
-        // One button for the card (named, with its state); the hover actions stay reachable inside it.
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(row.session.title)
-        .spokenValue(of: row)
-        .accessibilityHint("Opens it in Claude")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { store.openAgent(row.id) }
-        .sessionMenu(row, store)
-        .onHover { if $0 { ui.drawerSelection = row.id } }
-    }
-
-    private var summary: String? {
-        guard !row.session.running, let detail = row.session.summary?.detail, !detail.isEmpty else { return nil }
-        return detail
-    }
-
-    /// A grid card's one line under its title, always there so every card is the same height: the turn's summary,
-    /// else what's still running (the count is in the status above either way).
-    private var cardDetail: some View { DetailLine(row: row) }
-
-    /// At most two short lines: the turn's summary, and what's still running after it.
-    @ViewBuilder private var details: some View {
-        if row.session.running || summary != nil || !row.tasks.isEmpty {
-            VStack(alignment: .leading, spacing: 1) {
-                DetailLine(row: row)
-                if summary != nil && !row.tasks.isEmpty { RunningLine(tasks: row.tasks) }
-            }
-        }
-    }
-}
-
-/// Keeps `ui.drawerSelection` (a session row hovered anywhere) and the hub's selection (what the keys act on) the
-/// same, from a view of its own: only this body reads the drawer's selection, not the hub's.
-struct SelectionSync: View {
-    let ui: UIState
-    let hub: HubState
-
-    var body: some View {
-        Color.clear.frame(width: 0, height: 0)
-            .onChange(of: ui.drawerSelection) { _, id in
-                if let id, hub.selection != "a:" + id { hub.selection = "a:" + id }
-            }
-    }
-}
-
 /// Says a failed update check, download or restart to VoiceOver, wherever it was asked for (Settings' row is not always
 /// on screen), from a view of its own: only this body reads the updater's failures.
 struct UpdateAnnouncer: View {
@@ -1125,20 +876,8 @@ struct UpdateAnnouncer: View {
     }
 }
 
-/// Your sessions in the hub can be dragged onto one another to reorder them, when `enabled` (the bar's tiles at
-/// rest are plain buttons).
-struct ReorderIf: ViewModifier {
-    let enabled: Bool
-    let row: AgentRow
-    let store: Store
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if enabled { content.modifier(AgentReorder(row: row, store: store)) } else { content }
-    }
-}
-
 /// The Router in the bar: its symbol, and on its corner how many cards are open, amber while one needs you (a question, a
-/// plan, a stuck turn), blue when they are only finished turns, nothing at zero. A click opens the Router's window.
+/// plan, a stuck turn), blue when they are only finished turns, nothing at zero. A click opens the Router in the app window.
 struct RouterCell: View {
     let needsYou: Int
     let done: Int
@@ -1152,7 +891,7 @@ struct RouterCell: View {
             .accessibilityLabel("Router")
             .accessibilityValue([needsYou > 0 ? "\(needsYou) need you" : nil, done > 0 ? "\(done) done" : nil]
                 .compactMap { $0 }.joined(separator: ", ").nonEmpty ?? "Nothing open")
-            .accessibilityHint("Opens the Router window")
+            .accessibilityHint("Opens the Router")
             .motion(.snappy, value: needsYou + done)
     }
 }

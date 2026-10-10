@@ -20,15 +20,20 @@ import Testing
     @Test func theNamesThatWereAlwaysThereStillAre() {
         let names = Set(PlaygroundShots.catalog.map(\.name))
         for edge in [DockEdge.right, .top, .left, .bottom] {
-            for state in ["rest", "open", "settings", "search", "peek-inbox", "peek-ci", "peek-agents", "peek-controls"] {
+            for state in ["rest", "peek-inbox", "peek-ci", "peek-controls"] {
                 #expect(names.contains("\(edge.rawValue)-\(state)"), "\(edge.rawValue)-\(state)")
             }
         }
         for edge in [DockEdge.right, .top] {
-            for state in ["categories", "tip", "picked", "focus-inbox", "focus-agents"] {
+            for state in ["peek-tip", "peek-picked"] {
                 #expect(names.contains("\(edge.rawValue)-\(state)"), "\(edge.rawValue)-\(state)")
             }
         }
+    }
+
+    @Test func noShotShowsTheExpandedHubAnymore() {
+        let names = PlaygroundShots.catalog.map(\.name)
+        #expect(!names.contains { $0.contains("-open") || $0.contains("-focus") || $0.contains("-search") })
     }
 
     @Test func aFilterKeepsTheShotsWhoseNameContainsIt() {

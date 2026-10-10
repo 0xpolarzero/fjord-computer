@@ -19,7 +19,7 @@ struct AXNode: Equatable {
                                         "AXTextArea", "AXSlider", "AXLink", "AXComboBox"]
 }
 
-/// The hub in a window of its own, offscreen, and its accessibility tree.
+/// The bar (or the app window) in a window of its own, offscreen, and its accessibility tree.
 @MainActor
 enum AccessibilityTree {
     /// SwiftUI builds the tree only when it believes an assistive technology is attached.
@@ -28,18 +28,15 @@ enum AccessibilityTree {
         NSApp.perform(NSSelectorFromString("setAccessibilityEnhancedUserInterface:"), with: true as NSNumber)
     }()
 
-    /// The tree of a hub on `edge`, in the state `configure` asks for once it is on screen.
+    /// The tree of the bar on `edge`, in the state `configure` asks for once it is on screen.
     static func render(edge: DockEdge = .right, scenario: Demo.Scenario = .agents, size: CGSize = CGSize(width: 1000, height: 800),
                        ready: (AXNode) -> Bool = hasControls,
                        configure: (Store, HubState) -> Void = { _, _ in }) async throws -> AXNode {
         _ = enabled
         let store = Store()
         Demo.populate(store, scenario)
-        // The categories page asks GitHub for suggestions: a GitHub of its own, with nothing to suggest.
-        store.gh.session = StubbedGitHub.session { _ in .init(200, "[]") }
-        store.agents.expanded = true
         let hub = HubState()
-        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: edge), hub: hub, maxLength: 700, maxWidth: size.width)
+        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: edge), hub: hub)
             .frame(width: size.width, height: size.height, alignment: .topLeading)
         let hosting = NSHostingView(rootView: view)
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: .borderless, backing: .buffered, defer: false)
@@ -52,7 +49,7 @@ enum AccessibilityTree {
         return await settled(hosting, ready: ready)
     }
 
-    /// The tree of any view, in a window of its own (the Router's window, say).
+    /// The tree of any view, in a window of its own (the app window, say).
     static func render<V: View>(_ view: V, size: CGSize = CGSize(width: 920, height: 640),
                                 ready: (AXNode) -> Bool = hasControls) async throws -> AXNode {
         _ = enabled
@@ -115,7 +112,7 @@ enum AccessibilityTree {
 
     @Test func theTreeHasTheControlsItIsMeasuredOn() async throws {
         // A render that came out empty would pass the test below for nothing.
-        let tree = try await AccessibilityTree.render(configure: { _, hub in hub.pinned = true })
+        let tree = try await AccessibilityTree.render(configure: { _, hub in hub.section = .inbox })
         let buttons = tree.all.filter { $0.role == "AXButton" }
         #expect(buttons.count > 5, "\(buttons.count) buttons in \(tree.all.map(\.role))")
         #expect(buttons.contains { !$0.label.isEmpty })
@@ -125,30 +122,37 @@ enum AccessibilityTree {
         var missing: [String] = []
         for edge in [DockEdge.right, .top] {
             missing += try await unnamed("at rest", edge: edge) { _, _ in }
-            missing += try await unnamed("kept open", edge: edge) { _, hub in hub.pinned = true }
-            missing += try await unnamed("searching", edge: edge) { _, hub in hub.pinned = true; hub.query = "zig" }
+            for section in [HubSection.inbox, .router, .controls] {
+                missing += try await unnamed("peek \(section)", edge: edge) { _, hub in hub.section = section }
+            }
         }
-        for section in [HubSection.inbox, .router, .agents, .controls] {
-            missing += try await unnamed("peek \(section)") { _, hub in hub.section = section }
-        }
-        for focus in [HubSection.inbox, .agents] {
-            missing += try await unnamed("\(focus) focused") { _, hub in hub.pinned = true; hub.focus = focus }
-        }
-        missing += try await unnamed("Done tab") { _, hub in hub.pinned = true; hub.tab = .done }
+        missing += try await unnamed("Done tab") { _, hub in hub.section = .inbox; hub.tab = .done }
         missing += try await unnamed("CI tab") { store, hub in
-            hub.pinned = true
+            hub.section = .inbox
             hub.tab = store.categories.first { $0.isCI }.map { .category($0.id) }
         }
-        missing += try await unnamed("Settings") { _, hub in hub.go(.settings) }
-        missing += try await unnamed("Categories") { _, hub in hub.go(.categories) }
-        missing += try await unnamed("signed out", scenario: .signedOut) { _, hub in hub.pinned = true }
-        missing += try await unnamed("update ready", scenario: .updateReady) { _, hub in hub.pinned = true }
-        missing += try await unnamed("many sessions", scenario: .sessionsManyNew) { _, hub in hub.pinned = true; hub.focus = .agents }
+        missing += try await unnamed("signed out", scenario: .signedOut) { _, hub in hub.section = .inbox }
+        missing += try await unnamed("update ready", scenario: .updateReady) { _, hub in hub.section = .controls }
         missing += try await unnamed("peek router", scenario: .router) { _, hub in hub.section = .router }
-        missing += try await unnamed("peek router only", scenario: .routerOnly) { _, hub in hub.section = .router }
-        missing += try await unnamed("router only kept open", edge: .top, scenario: .routerOnly) { _, hub in hub.pinned = true }
-        for edge in [DockEdge.right, .top] {
-            missing += try await unnamed("router kept open", edge: edge, scenario: .router) { _, hub in hub.pinned = true }
+        #expect(missing.isEmpty, "\(missing)")
+    }
+
+    @Test func everyPlaceOfTheAppWindowNamesItsControls() async throws {
+        var missing: [String] = []
+        let places: [(String, (Store) -> AppDestination)] = [
+            ("category", { $0.shownCategories[0].id.asDestination }), ("Done", { _ in .done }), ("Router", { _ in .router }),
+            ("Settings", { _ in .settings }), ("Inbox categories", { _ in .categories }),
+        ]
+        for (name, destination) in places {
+            let store = Store()
+            Demo.populate(store, .router)
+            // The categories ask GitHub for suggestions: a GitHub of its own, with nothing to suggest.
+            store.gh.session = StubbedGitHub.session { _ in .init(200, "[]") }
+            let root = AppRootView(store: store, navigator: AppNavigator(start: destination(store), defaults: nil),
+                                   routerModel: RouterModel(), hub: HubState(), checksClaudeCode: false)
+            let tree = try await AccessibilityTree.render(root, size: CGSize(width: 1200, height: 800))
+            missing += tree.all.filter { AXNode.controls.contains($0.role) && $0.label.isEmpty }
+                .map { "\(name): \($0.role) has no label" }
         }
         #expect(missing.isEmpty, "\(missing)")
     }
@@ -165,4 +169,8 @@ enum AccessibilityTree {
         #expect(unnamed.isEmpty, "\(unnamed)")
         #expect(tree.all.contains { $0.label == "Message the Router" })
     }
+}
+
+private extension UUID {
+    var asDestination: AppDestination { .category(self) }
 }
