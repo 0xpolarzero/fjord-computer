@@ -34,9 +34,11 @@ struct RouterPage: Equatable {
         }
     }
 
-    /// Open cards: what blocks a session first (questions, plans, stuck turns), then the finished turns; newest first in each
-    /// part, as the page shows them (the arrow keys walk the same order).
+    /// Open cards as the page shows them (the arrow keys walk the same order, see `ranked`): an OK asked first, then what
+    /// stops a session on you, stuck turns, then the finished ones.
     var needs: [RouterCard] = []
+    /// Sessions whose turn ended waiting on something (CI, another session…), with the working ones; newest first.
+    var waiting: [RouterCard] = []
     /// Messages waiting for you to say where they go (nothing is sent until you do), above the cards.
     var asks: [RouterAskBack] = []
     /// Sessions working on their own, the longest running first.
@@ -61,9 +63,12 @@ struct RouterPage: Equatable {
     /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`).
     static func make(cards: [RouterCard], working: [AgentRow], asks: [RouterAskBack], history: [Entry],
                      summaries: [RouterSummary] = []) -> RouterPage {
-        let open = cards.filter(\.isOpen).sorted(by: newestFirst)
+        let open = cards.filter(\.isOpen)
         var page = RouterPage()
-        page.needs = open.filter { $0.kind != .done } + open.filter { $0.kind == .done }
+        page.needs = open.filter { $0.kind != .waiting }.sorted(by: ranked)
+        // A session that is working again shows as working.
+        let busy = Set(working.map(\.id))
+        page.waiting = open.filter { $0.kind == .waiting && !busy.contains($0.sessionID) }.sorted(by: newestFirst)
         page.working = working
         page.asks = asks
         page.history = history
@@ -95,6 +100,19 @@ struct RouterPage: Equatable {
 
     private static func newestFirst(_ a: RouterCard, _ b: RouterCard) -> Bool {
         a.createdAt != b.createdAt ? a.createdAt > b.createdAt : a.id > b.id
+    }
+
+    /// Needs you's order: by kind (`Kind.rank`), then the most urgent (Jev's score; a session stopped mid-turn on a question
+    /// or plan counts as blocking now, a turn he didn't score as today), then the newest.
+    static func ranked(_ a: RouterCard, _ b: RouterCard) -> Bool {
+        if a.kind.rank != b.kind.rank { return a.kind.rank < b.kind.rank }
+        let ua = urgency(a), ub = urgency(b)
+        if ua != ub { return ua > ub }
+        return newestFirst(a, b)
+    }
+
+    static func urgency(_ card: RouterCard) -> Double {
+        card.triage?.urgency ?? (card.kind.isTurn ? 2 : 4)
     }
 }
 
@@ -671,6 +689,7 @@ private struct CardDetails: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 KindTag(kind: card.kind)
+                TriageChips(triage: card.triage)
                 ProjectLabel(name: project.name, color: project.color)
                     .cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
                 if let origin = card.origin { OriginTag(origin: origin) }
@@ -774,7 +793,7 @@ private struct RouterZones: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !page.working.isEmpty { working }
+            if !page.working.isEmpty || !page.waiting.isEmpty { working }
             needs
         }
         .padding(.horizontal, gutter)
@@ -792,21 +811,30 @@ private struct RouterZones: View {
                 WorkingMark()
                 Text("Working").cdsText((12, 16), .medium, CDS.Text.muted)
                 Text("· \(page.working.count)").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                if !page.waiting.isEmpty {
+                    Text("· \(page.waiting.count) waiting").cdsText((12, 16), .regular, RouterTriage.waitingTint).monospacedDigit()
+                }
             }
             .padding(.leading, 2)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
-            .accessibilityLabel("Working, \(page.working.count)")
-            overview
+            .accessibilityLabel("Working, \(page.working.count)" + (page.waiting.isEmpty ? "" : ", \(page.waiting.count) waiting"))
+            if !page.working.isEmpty { overview }
             ZoneScroll(maxHeight: RouterSplit.workingCap(room: room, needsEmpty: page.needs.isEmpty && page.asks.isEmpty),
                        reveal: model.revealRequest,
-                       ids: Set(page.working.map { RouterModel.workingID($0.id) })) {
+                       ids: Set(page.working.map { RouterModel.workingID($0.id) } + page.waiting.map { RouterModel.workingID($0.sessionID) })) {
                 VStack(spacing: 0) {
                     ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
                         if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
                         WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id])
                             .id(RouterModel.workingID(row.id))
                             .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
+                            .transition(.asymmetric(insertion: .opacity, removal: .opacity))
+                    }
+                    ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
+                        if i > 0 || !page.working.isEmpty { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
+                        WaitingCard(store: store, card: card)
+                            .id(RouterModel.workingID(card.sessionID))
                             .transition(.asymmetric(insertion: .opacity, removal: .opacity))
                     }
                 }
@@ -1066,6 +1094,122 @@ private struct WorkingCard: View {
     }
 }
 
+// MARK: - Waiting card
+
+/// A session whose turn ended waiting on something (CI, a deploy, another session): with the working ones, in a cool tint
+/// and an hourglass, saying what for. Once Lookout sees that done it says the session is ready to continue, and Tell it
+/// sends the session so; its arrow button continues it on its own next time. Opening it opens the session in Claude.
+private struct WaitingCard: View {
+    let store: Store
+    let card: RouterCard
+    @State private var hovered = false
+
+    private var triage: RouterTriage { card.triage ?? RouterTriage() }
+
+    private var line: String {
+        if triage.told != nil { return "told it to continue" }
+        if let ready = triage.ready { return "ready to continue · \(triage.waitingLabel) finished: \(ready.result)" }
+        return "waiting for \(triage.waitingLabel)"
+    }
+
+    var body: some View {
+        let tint = RouterTriage.waitingTint
+        let ready = triage.ready != nil
+        HStack(spacing: 8) {
+            Button { store.openAgent(card.sessionID) } label: {
+                HStack(spacing: 8) {
+                    if let row = store.sessionRow(card.sessionID) { SessionGlyph(row: row, size: 18, dot: false) }
+                    Text(card.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
+                    Image(systemName: ready ? "checkmark.circle.fill" : "hourglass").font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(tint)
+                    Text(line).cdsText((12, 16), ready ? .medium : .regular, tint).lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    MinuteTicking { now in
+                        Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(card.text)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(card.title)
+            .accessibilityValue(line)
+            .accessibilityHint("Opens it in Claude")
+            if ready, triage.told == nil, let message = RouterWaits.message(triage) {
+                ClaudeButton("Tell it", variant: .secondary, size: .sm, icon: "arrow.turn.down.right") { store.tellWaiting(card.id) }
+                    .help("Sends it: \(message)")
+            }
+            AutoContinueToggle(on: store.continuesAutomatically(card.sessionID), shown: hovered) {
+                store.setContinuesAutomatically(card.sessionID, $0)
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(ready ? 0.13 : hovered ? 0.09 : 0.06))
+        .overlay(alignment: .leading) { Rectangle().fill(tint.opacity(ready ? 0.9 : 0.5)).frame(width: 2) }
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .contextMenu {
+            Button("Mark handled") { store.setCardAddressed(card.id, true) }
+            CardSessionMenu(store: store, sessionID: card.sessionID)
+        }
+    }
+}
+
+/// Whether a waiting session is told on its own once its wait is over: a toggle in an icon, shown on hover or when on.
+private struct AutoContinueToggle: View {
+    let on: Bool
+    let shown: Bool
+    let set: (Bool) -> Void
+    @State private var hovered = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button { set(!on) } label: {
+            Image(systemName: on ? "forward.fill" : "forward").font(.system(size: 10, weight: .medium))
+                .foregroundStyle(on ? RouterTriage.waitingTint : hovered ? CDS.Text.secondary : CDS.Text.muted)
+                .frame(width: 22, height: 20)
+                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                    .fill(hovered ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focused($focused)
+        .onHover { hovered = $0 }
+        .opacity(on || shown || focused ? 1 : 0)
+        .help(on ? "Continues it automatically when the wait is over: click to stop" : "Continue it automatically when the wait is over")
+        .accessibilityLabel("Continue it automatically")
+        .accessibilityValue(on ? "on" : "off")
+        .accessibilityAddTraits(.isToggle)
+    }
+}
+
+/// What Jev's triage says of a turn's work, in tiny chips: it claims a success it didn't check; its changes aren't pushed,
+/// or a PR is open.
+struct TriageChips: View {
+    let triage: RouterTriage?
+
+    var body: some View {
+        if let triage {
+            if triage.unverified {
+                chip("unverified", CDS.Fill.warning, help: "It says it works without having checked (“should work”, untested)")
+            }
+            if let work = triage.workLabel {
+                chip(work, CDS.Text.muted, help: "Its changes: \(work)")
+            }
+        }
+    }
+
+    private func chip(_ text: String, _ color: Color, help: String) -> some View {
+        Text(text).cdsText((11, 14), .medium, color).lineLimit(1)
+            .padding(.horizontal, 6).frame(height: 16)
+            .background(Capsule().fill(color.opacity(0.14)))
+            .fixedSize()
+            .help(help)
+    }
+}
+
 // MARK: - Origin
 
 /// "⚡ from <category> · <thing>": the session was started by an inbox action.
@@ -1100,10 +1244,18 @@ private struct CardView: View {
     private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
     private var when: Date { card.createdAt }
 
-    /// What the card asks, on one line.
+    /// What the card asks, on one line: the first question still open, else its text.
     private var excerpt: AttributedString {
+        if let first = openQuestions.first { return RouterText.inline(first) }
         let flat = card.text.split(whereSeparator: \.isNewline).map { $0.drop { "#-* ".contains($0) } }.joined(separator: " ")
         return RouterText.inline(flat)
+    }
+
+    /// The questions Jev found in the turn's final message that your messages haven't answered.
+    private var openQuestions: [String] {
+        let all = card.triage?.questions ?? []
+        guard let left = card.left else { return all }
+        return all.filter(left.contains)
     }
 
     var body: some View {
@@ -1135,7 +1287,7 @@ private struct CardView: View {
     private var open: some View {
         let project = store.routerProject(card)
         let form = store.pendingForm(for: card)
-        let warm = CDS.Fill.warning
+        let warm = card.kind == .approval ? RouterTriage.approvalTint : CDS.Fill.warning
         return VStack(alignment: .leading, spacing: 0) {
             header { summary(project: project) }
             if let left = card.left, let total = card.total {
@@ -1182,6 +1334,7 @@ private struct CardView: View {
                     lead(glyph)
                     title.layoutPriority(2)
                     KindTag(kind: card.kind)
+                    TriageChips(triage: card.triage)
                     if !expanded { ask.padding(.leading, 4).layoutPriority(0) }
                     Spacer(minLength: 4)
                     projectLabel(project)
@@ -1191,7 +1344,7 @@ private struct CardView: View {
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); Spacer(minLength: 4); projectLabel(project); age; hoverOpen }
+                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; hoverOpen }
                     HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); Spacer(minLength: 4); age; hoverOpen }
                     HStack(spacing: 8) { lead(glyph); title; Spacer(minLength: 4); age; hoverOpen }
                 }
@@ -1235,6 +1388,20 @@ private struct CardView: View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: formCap)
             .fixedSize(horizontal: false, vertical: true)
+        } else if !openQuestions.isEmpty {
+            // What it asks, as it asked it; what the turn did under it.
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(openQuestions, id: \.self) { question in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "questionmark.circle").font(.system(size: 11, weight: .medium)).foregroundStyle(card.kind.color)
+                        Text(RouterText.inline(question)).cdsText((13, 18), .regular, CDS.Text.primary)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                }
+                if card.text != RouterFeed.placeholder {
+                    CDSProse(text: card.text, color: CDS.Text.secondary, inset: false).padding(.top, 2)
+                }
+            }
         } else {
             CDSProse(text: card.text, color: card.kind == .stuck ? CDS.Text.danger : CDS.Text.primary, inset: false)
         }

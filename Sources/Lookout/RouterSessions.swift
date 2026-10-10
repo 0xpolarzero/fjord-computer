@@ -22,14 +22,15 @@ extension ClaudeDot.Kind {
 /// "stuck" state; Lookout's stuck card keeps a red 6pt dot (`CDS.Text.danger`).
 struct ClaudeDot: View {
     enum Kind {
-        case needsYou, done, stuck, working, quiet
+        case needsYou, done, stuck, working, waiting, quiet
 
         init(_ card: RouterCard) {
             guard card.isOpen else { self = .quiet; return }
             switch card.kind {
-            case .question, .plan: self = .needsYou
+            case .question, .plan, .asks, .approval: self = .needsYou
             case .stuck: self = .stuck
             case .done: self = .done
+            case .waiting: self = .waiting
             }
         }
     }
@@ -42,6 +43,7 @@ struct ClaudeDot: View {
             case .needsYou: Circle().fill(CDS.Fill.warning).frame(width: 6, height: 6)
             case .done: Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6)
             case .stuck: Circle().fill(CDS.Text.danger).frame(width: 6, height: 6)
+            case .waiting: Circle().fill(RouterTriage.waitingTint).frame(width: 6, height: 6)
             case .quiet: Circle().strokeBorder(CDS.Text.muted, lineWidth: 1).frame(width: 6, height: 6).opacity(0.5)
             case .working: BlinkingDot()
             }

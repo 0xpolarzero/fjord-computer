@@ -618,12 +618,13 @@ import UserNotifications
     @Test func thePageGroupsAndOrdersItsThreeZones() {
         let store = demo()
         let page = store.routerPage
-        // Needs you: blockers first, then finished turns, newest first in each; only open cards.
+        // Needs you: blockers first (a question or plan before a stuck turn, newest first among equals), then finished
+        // turns; only open cards.
         #expect(!page.needs.isEmpty && page.needs.allSatisfy(\.isOpen))
         let kinds = page.needs.map { $0.kind == .done }
         #expect(kinds == kinds.sorted { !$0 && $1 })
         let blockers = page.needs.filter { $0.kind != .done }
-        #expect(blockers.map(\.createdAt) == blockers.map(\.createdAt).sorted(by: >))
+        #expect(blockers.map(\.kind) == [.question, .plan, .stuck])
         // Working: the sessions running on their own, none of them stopped on you.
         #expect(Set(page.working.map(\.id)) == Set(store.routerWorkingRows.map(\.id)))
         #expect(!page.working.isEmpty && page.working.allSatisfy { !$0.waitsForYou })

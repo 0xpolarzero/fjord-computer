@@ -101,8 +101,9 @@ final class RouterKeys {
     }
 }
 
-/// A banner for each new card that needs you (a question, a plan, a stuck turn), unless notifications are off or snoozed or
-/// the app window is open on the Router. Clicking it opens the window on that card.
+/// A banner for each new card that needs you (a question, a plan, a turn that asks you or is stuck) and for a waiting session
+/// ready to continue, unless notifications are off or snoozed or the app window is open on the Router. Clicking it opens the
+/// window on that card.
 @MainActor
 enum RouterBanners {
     /// Banner ids: the card's, after this.
@@ -111,6 +112,7 @@ enum RouterBanners {
     /// Hooks the store's new cards to banners, and banner clicks to `open`.
     static func attach(store: Store, windowIsKey: @escaping () -> Bool, open: @escaping (String) -> Void) {
         store.onNewRouterCards = { cards in post(cards, store: store, windowIsKey: windowIsKey()) }
+        store.routerTriager.onReady = { card in postReady(card, store: store, windowIsKey: windowIsKey()) }
         let previous = store.notifier.onOpen
         store.notifier.onOpen = { id, url in
             if id.hasPrefix(prefix) { open(String(id.dropFirst(prefix.count))) } else { previous?(id, url) }
@@ -121,8 +123,18 @@ enum RouterBanners {
         guard !windowIsKey, store.settings.notifications, !store.isSnoozed else { return }
         for card in cards where card.kind.needsYou {
             let project = store.routerProject(card).name
+            // A turn that asks you says what, as it asked it.
+            let asked = card.triage?.questions ?? []
             store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "\(card.kind.label) · \(project)",
-                                body: card.text, quiet: false)
+                                body: asked.isEmpty ? card.text : asked.joined(separator: "\n"), quiet: false)
         }
+    }
+
+    /// A waiting session's wait is over: it is ready to continue.
+    static func postReady(_ card: RouterCard, store: Store, windowIsKey: Bool) {
+        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let triage = card.triage,
+              let message = RouterWaits.message(triage) else { return }
+        store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "Ready to continue · \(store.routerProject(card).name)",
+                            body: message, quiet: false)
     }
 }

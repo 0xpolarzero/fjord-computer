@@ -20,7 +20,7 @@ final class Store {
     /// Where those log lines go; the tests read them.
     @ObservationIgnored var inboxLog: (String) -> Void = InboxLog.write
     var things: [String: Thing] = [:] {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits() }
     }
     var marks: [String: EntryMarks] = [:] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
@@ -234,8 +234,10 @@ final class Store {
     /// The system-wide shortcuts the system last refused to register (another app holds the key), by the key it refused:
     /// one still stored does nothing, and Settings says so.
     var refusedShortcuts: [ShortcutAction: Shortcut] = [:]
-    /// Cards the feed just made (for banners).
+    /// Cards the feed just made, or that Jev's triage found need you (for banners).
     @ObservationIgnored var onNewRouterCards: (([RouterCard]) -> Void)?
+    /// What finished turns ended on, by Jev (see RouterTriage.swift).
+    @ObservationIgnored let routerTriager = RouterTriager()
     /// Whether the Claude app is in front (tests answer for it).
     @ObservationIgnored var claudeIsFrontmost: () -> Bool = { Claude.isFrontmost }
     /// The Router was just switched on: its open cards are settled against how things are now at the next feed.

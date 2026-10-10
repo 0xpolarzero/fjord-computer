@@ -108,6 +108,9 @@ extension RouterCard.Kind {
         case .plan: "Plan"
         case .done: "Done"
         case .stuck: "Stuck"
+        case .asks: "Asks you"
+        case .approval: "Needs your OK"
+        case .waiting: "Waiting"
         }
     }
 
@@ -117,6 +120,9 @@ extension RouterCard.Kind {
         case .plan: Theme.purple
         case .done: Theme.accent
         case .stuck: Theme.red
+        case .asks: Theme.amber
+        case .approval: RouterTriage.approvalTint
+        case .waiting: RouterTriage.waitingTint
         }
     }
 
@@ -126,6 +132,9 @@ extension RouterCard.Kind {
         case .plan: "list.bullet.clipboard.fill"
         case .done: "checkmark"
         case .stuck: "exclamationmark.triangle.fill"
+        case .asks: "bubble.left.and.text.bubble.right.fill"
+        case .approval: "hand.raised.fill"
+        case .waiting: "hourglass"
         }
     }
 }
@@ -302,11 +311,11 @@ final class RouterModel {
     /// The cards listed at the last reconcile, in order: where a picked card that left the list was.
     @ObservationIgnored private var listed: [String] = []
 
-    /// The cards the keys walk, in the order the page shows them: what needs you (questions, plans, stuck turns), then the
-    /// finished turns, both open; then the latest addressed ones (Earlier).
+    /// The cards the keys walk, in the order the page shows them: what needs you (see `RouterPage.ranked`), then the
+    /// finished turns, both open; then the latest addressed ones (Earlier). Sessions waiting are with the working ones.
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
-        let open = store.routerCards.filter(\.isOpen)
-        // `routerCards` has each part newest first.
+        let open = store.router.cards.filter { $0.isOpen && $0.kind != .waiting }.sorted(by: RouterPage.ranked)
+        // `routerCards` has the addressed ones newest first.
         let earlier = store.routerCards.filter { !$0.isOpen }.prefix(Self.earlierLimit)
         return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, Array(earlier))
     }
@@ -354,6 +363,8 @@ final class RouterModel {
         selection = id
         guard let id else { reveal(Self.endID, highlight: false); return }
         if let card = store.router.cards.first(where: { $0.id == id }) {
+            // A session waiting is a row of Working.
+            if card.isOpen, card.kind == .waiting { if shows { reveal(Self.workingID(card.sessionID)) }; return }
             if card.isOpen { expandedNeed = id } else { expanded.insert(id) }
         }
         if shows { reveal(id) }
