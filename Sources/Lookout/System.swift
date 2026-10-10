@@ -385,9 +385,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appWindow = window
         let hub = HubController(store: store, demo: demo)
         self.hub = hub
-        // The window is the bar's other mode: while it is open the bar is away, and closing it puts the bar back.
+        // The window is the bar's other mode: while it is in front the bar is away, and closing it (or leaving it behind) puts the bar back.
         window.onClose = { [weak hub] in hub?.setWindowOpen(false) }
         window.barScreen = { [weak hub] in hub?.dockedScreen }
+        window.bar = { [weak hub] in hub?.morph }
+        window.onClosing = { [weak hub] in hub?.setWindowOpen(false) }
+        // The bar is back on its edge while the window is out of sight (another app in front, minimized), away when it returns.
+        window.onFront = { [weak hub] front in hub?.setWindowFront(front) }
         hub.openApp = { [weak self] in self?.showWindow($0) }
         hub.openUpdates = { [weak self] in
             self?.appWindow?.showUpdates()
@@ -485,6 +489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editItem.submenu = edit
         main.addItem(editItem)
         main.addItem(GoMenu.shared.makeItem())
+        main.addItem(SidebarMenu.shared.makeItem())
         // ⌘W closes the window, which puts the bar back; ⌘Q quits.
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")

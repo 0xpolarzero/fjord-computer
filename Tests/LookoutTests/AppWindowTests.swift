@@ -150,3 +150,68 @@ import Testing
         #expect(hub.selection == nil)
     }
 }
+
+/// The bar and the window: the bar is away only while the window is open and in front, and the morph is a no-op under test.
+@MainActor
+@Suite(.hostsWindows) struct BarComesBack {
+    @Test func theBarIsAwayOnlyWhileTheOpenWindowIsInFront() {
+        var presence = BarPresence()
+        #expect(!presence.barAway)
+        presence.opened(true)
+        #expect(presence.barAway)
+        // Another app in front: the bar is back, the window stays open behind.
+        presence.front(false)
+        #expect(!presence.barAway && presence.windowOpen)
+        // The window returns (a click on the bar's item, the Dock icon).
+        presence.front(true)
+        #expect(presence.barAway)
+        presence.opened(false)
+        #expect(!presence.barAway)
+        // A window that is not open is never in front.
+        presence.front(true)
+        #expect(!presence.barAway)
+    }
+
+    @Test func resigningActiveReportsOutOfSightAndBecomingActiveReportsFront() async {
+        _ = NSApplication.shared
+        let store = Store()
+        store.persists = false
+        Demo.populate(store, .router)
+        let controller = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
+        var reports: [Bool] = []
+        controller.onFront = { reports.append($0) }
+        controller.show(.settings)
+        controller.window?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        // The window is on screen; whether the app counts as active depends on the runner, so say it.
+        controller.reportFront(active: true)
+        #expect(reports.last == true || controller.window?.occlusionState.contains(.visible) == false)
+        let seen = reports.count
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        await waitUntil { reports.count > seen || reports.last == false }
+        #expect(reports.last == false)
+        controller.close()
+        await waitUntil { !controller.isOpen }
+        #expect(!controller.isOpen)
+    }
+
+    @Test func theMorphIsSkippedUnderTestSoTheWindowOpensAndClosesAtOnce() async {
+        #expect(!AppTransition.enabled)
+        _ = NSApplication.shared
+        let store = Store()
+        store.persists = false
+        Demo.populate(store, .router)
+        let controller = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
+        var asked = 0
+        controller.bar = { asked += 1; return BarMorph(frame: NSRect(x: 0, y: 0, width: 50, height: 200)) }
+        var closing = 0
+        var closed = 0
+        controller.onClosing = { closing += 1 }
+        controller.onClose = { closed += 1 }
+        controller.show(.settings)
+        controller.window?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        #expect(controller.window?.alphaValue == 1 && controller.isOpen)
+        controller.close()
+        await waitUntil { closed == 1 }
+        #expect(closed == 1 && closing == 0 && asked == 0 && !controller.isOpen)
+    }
+}

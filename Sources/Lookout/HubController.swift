@@ -139,8 +139,13 @@ final class HubController {
     private var pendingHover: Bool?
     /// Whether the hub was last reported to the store as visible beyond the bare bar.
     private var reportedOpen = false
-    /// The app window is open: the bar is not on the edge.
+    /// The app window is open. The bar is off the edge only while the window is also in front.
     private(set) var windowOpen = false
+    /// The open window is in front of the user (else the bar is back on its edge, the window behind it).
+    private(set) var windowFront = false
+    /// Whether the bar is away from the edge now: the window is open and in front.
+    var barAway: Bool { BarPresence(windowOpen: windowOpen, windowFront: windowFront).barAway }
+    private var barApplied = false
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
 
     fileprivate static let debug = ProcessInfo.processInfo.environment["LOOKOUT_DEBUG"] != nil
@@ -262,7 +267,7 @@ final class HubController {
     /// While the window takes the mouse: the global monitor runs (to notice the pointer leaving) and the arming
     /// window is away. Otherwise the arming window sits over the hub and nothing else watches.
     private func syncTrigger() {
-        guard !windowOpen else { return }
+        guard !barAway else { return }
         if !window.ignoresMouseEvents {
             if globalMouse == nil {
                 globalMouse = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseUp]) { [weak self] _ in
@@ -285,7 +290,7 @@ final class HubController {
     }
 
     private func mouseMoved() {
-        guard dragStart == nil, !windowOpen else { return }
+        guard dragStart == nil, !barAway else { return }
         let mouse = NSEvent.mouseLocation
         let inside = hubScreenFrame.insetBy(dx: -1, dy: -1).contains(mouse)
             || hub.openPanelFrame.map { screenFrame($0).insetBy(dx: -2, dy: -2).contains(mouse) } == true
@@ -341,28 +346,83 @@ final class HubController {
     }
 
     /// The app window is open (or closed): the bar leaves the edge, and comes back where it was. The pointer may be over it
-    /// when it does, which shows no peek until it has left.
+    /// when it does, which shows no peek until it has left. Opening is also bringing it to the front.
     func setWindowOpen(_ open: Bool) {
-        guard open != windowOpen else { return }
+        guard open != windowOpen || (open && !windowFront) else { return }
         windowOpen = open
-        hub.barHidden = open
-        hoverTask?.cancel()
-        pendingHover = nil
-        hub.cancelDwell()
-        hub.section = nil
-        hub.hovering = false
-        hub.selection = nil
-        if open {
-            setAcceptsMouse(false)
-            trigger.orderOut(nil)
-            if let global = globalMouse { NSEvent.removeMonitor(global); globalMouse = nil }
-            window.orderOut(nil)
-        } else {
-            hub.quiet = true
-            window.orderFrontRegardless()
-            syncTrigger()
+        windowFront = open
+        applyBar()
+    }
+
+    /// The open window came to the front or went out of sight (another app, minimized, covered): the bar is away in the first
+    /// case and back on its edge in the second, the window staying open.
+    func setWindowFront(_ front: Bool) {
+        guard windowOpen, front != windowFront else { return }
+        windowFront = front
+        applyBar()
+    }
+
+    /// The bar's picture and place, for the window to grow out of or shrink into.
+    var morph: BarMorph? {
+        guard layout.frame != .zero else { return nil }
+        let frame = hubScreenFrame
+        var image: NSImage?
+        if window.isVisible, !barApplied, let rep = host.bitmapImageRepForCachingDisplay(in: layout.frame) {
+            host.cacheDisplay(in: layout.frame, to: rep)
+            image = NSImage(size: layout.frame.size)
+            image?.addRepresentation(rep)
+        }
+        return BarMorph(frame: frame, snapshot: image)
+    }
+
+    /// Puts the bar where `barAway` says: off the edge (faded out) or on it (faded in).
+    private func applyBar() {
+        let away = barAway
+        if away != barApplied {
+            barApplied = away
+            hub.barHidden = away
+            hoverTask?.cancel()
+            pendingHover = nil
+            hub.cancelDwell()
+            hub.section = nil
+            hub.hovering = false
+            hub.selection = nil
+            if away {
+                setAcceptsMouse(false)
+                trigger.orderOut(nil)
+                if let global = globalMouse { NSEvent.removeMonitor(global); globalMouse = nil }
+                fadeOut()
+            } else {
+                hub.quiet = true
+                fadeIn()
+                syncTrigger()
+            }
         }
         reportOpen()
+    }
+
+    private func fadeOut() {
+        guard AppTransition.enabled else { window.orderOut(nil); return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.12
+            window.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.barApplied else { return }
+                self.window.orderOut(nil)
+            }
+        })
+    }
+
+    private func fadeIn() {
+        guard AppTransition.enabled else { window.alphaValue = 1; window.orderFrontRegardless(); return }
+        window.alphaValue = 0
+        window.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = AppTransition.reduceMotion ? AppTransition.reducedDuration : AppTransition.duration
+            context.timingFunction = AppTransition.curve
+            window.animator().alphaValue = 1
+        }
     }
 
     /// Re-evaluates the pointer and what the store is told when the bar's state changes under a still pointer.
@@ -467,4 +527,16 @@ final class HubController {
             return NSRect(x: dock.minX + left, y: y, width: size.width, height: size.height)
         }
     }
+}
+
+/// Whether the bar is on its edge: it is, unless the app window is open and in front of the user.
+struct BarPresence: Equatable {
+    var windowOpen = false
+    var windowFront = false
+    var barAway: Bool { windowOpen && windowFront }
+
+    /// The window opened (and so came to the front), or closed.
+    mutating func opened(_ open: Bool) { windowOpen = open; windowFront = open }
+    /// The open window came to the front or went out of sight.
+    mutating func front(_ front: Bool) { if windowOpen { windowFront = front } }
 }

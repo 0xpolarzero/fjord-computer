@@ -29,6 +29,19 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
     /// The screen the bar is docked on: the window opens there. Nil (or no answer) is the main screen.
     var barScreen: () -> NSScreen? = { nil }
+    /// Where the bar is, to morph out of when the window opens and into when it closes. Nil: no morph.
+    var bar: () -> BarMorph? = { nil }
+    /// The window starts closing (its morph is under way): the bar may fade back in now. `onClose` follows.
+    var onClosing: (() -> Void)?
+    /// The window came to the front, or went out of sight (another app in front, minimized, covered): the bar is away
+    /// while the window is in front, and back on its edge otherwise.
+    var onFront: ((Bool) -> Void)?
+    private var lastFront: Bool?
+    private var observers: [NSObjectProtocol] = []
+    /// What a morph in progress is, so a new `show` or `close` can take it over.
+    private var run: AppTransition.Run?
+    private var generation = 0
+    private var closing = false
     private(set) var window: NSWindow?
     private let checksClaudeCode: Bool
     /// The rows' picked state, Settings' scroll requests and the category editor's step back, shared by the destinations.
@@ -78,14 +91,109 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             window.contentViewController = makeContent()
             window.setFrame(frame, display: false)
         }
+        cancelTransition(window)
+        let opening = !window.isVisible && !window.isMiniaturized && AppTransition.enabled
         if !window.isVisible { moveToBarScreen(window) }
+        // The bar as it is now, before whoever called us hides it.
+        let morph = opening && !AppTransition.reduceMotion ? bar() : nil
+        if opening { window.alphaValue = 0 }
         AppPolicy.update(windowOpen: true)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        if opening {
+            generation += 1
+            let mine = generation
+            let reveal = { [weak self, weak window] in
+                guard let self, let window, self.generation == mine else { return }
+                window.alphaValue = 1
+            }
+            if AppTransition.reduceMotion {
+                AppTransition.fade(window, in: true, done: reveal)
+            } else if let morph {
+                run = AppTransition.open(window, from: morph, done: reveal)
+            } else {
+                reveal()
+            }
+        }
         watchKeys()
+        watchFront()
+        reportFront()
     }
 
     func close() { window?.performClose(nil) }
+
+    /// Closing morphs the window into the bar (the real window waits, invisible, until it is done), then really closes.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard AppTransition.enabled, !closing, isFront else { return true }
+        closing = true
+        generation += 1
+        let mine = generation
+        let finish = { [weak self, weak sender] in
+            guard let self, let sender, self.generation == mine else { return }
+            self.run = nil
+            self.closing = false
+            sender.alphaValue = 1
+            sender.ignoresMouseEvents = false
+            sender.close()
+        }
+        sender.ignoresMouseEvents = true
+        if AppTransition.reduceMotion {
+            onClosing?()
+            AppTransition.fade(sender, in: false, done: finish)
+        } else if let morph = bar(), let image = AppTransition.snapshot(of: sender) {
+            sender.alphaValue = 0
+            onClosing?()
+            run = AppTransition.close(sender, image: image, into: morph, done: finish)
+        } else {
+            finish()
+            return false
+        }
+        return false
+    }
+
+    /// Takes over a morph in progress: the window is as it should be, and the overlay is gone.
+    private func cancelTransition(_ window: NSWindow) {
+        guard run != nil || closing || window.alphaValue != 1 else { return }
+        generation += 1
+        run?.end()
+        run = nil
+        closing = false
+        window.alphaValue = 1
+        window.ignoresMouseEvents = false
+    }
+
+    /// Whether the window is in front of the user: the app is active and the window is on screen and not covered.
+    var isFront: Bool { isFront(active: NSApp.isActive) }
+
+    func isFront(active: Bool) -> Bool {
+        guard active, let window, window.isVisible, !window.isMiniaturized else { return false }
+        return window.occlusionState.contains(.visible)
+    }
+
+    /// Tells `onFront` when that changes. `active` is passed by the notifications that know it before `NSApp` does.
+    func reportFront(active: Bool = NSApp.isActive) {
+        let front = isFront(active: active)
+        guard front != lastFront else { return }
+        lastFront = front
+        onFront?(front)
+    }
+
+    private func watchFront() {
+        guard observers.isEmpty, let window else { return }
+        let center = NotificationCenter.default
+        func watch(_ name: Notification.Name, object: AnyObject?, active: Bool? = nil) {
+            observers.append(center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if let active { self?.reportFront(active: active) } else { self?.reportFront() }
+                }
+            })
+        }
+        watch(NSApplication.didResignActiveNotification, object: nil, active: false)
+        watch(NSApplication.didBecomeActiveNotification, object: nil, active: true)
+        watch(NSWindow.didChangeOcclusionStateNotification, object: window)
+        watch(NSWindow.didMiniaturizeNotification, object: window)
+        watch(NSWindow.didDeminiaturizeNotification, object: window)
+    }
 
     /// Opening puts the window on the bar's screen, where it was left if that is the one, else at the same place relative
     /// to the screen it was on.
@@ -190,6 +298,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+        lastFront = nil
         routerModel.composerFocused = false
         closedFrame = window?.frame
         // The content goes with the window: no view, nothing ticking behind a closed window.
@@ -241,26 +352,29 @@ struct AppRootView: View {
     let hub: HubState
     var search = InboxSearch()
     var checksClaudeCode = true
-    @State private var sidebarShown = true
+    var sidebar: SidebarState = .shared
 
     static let sidebarWidth: CGFloat = 240
 
     var body: some View {
+        let collapsed = sidebar.collapsed
+        // The rail is narrower than the window's three buttons; the content starts after what sticks out. It follows the
+        // sidebar's width on the same spring (an implicit animation here would end up fighting the explicit one).
+        let railInset = collapsed ? max(0, AppNavButtons.trafficLights - AppSidebar.railWidth) : 0
         HStack(spacing: 0) {
-            if sidebarShown {
-                AppSidebar(store: store, navigator: navigator)
-                    .padding(.top, CDS.Sidebar.titleRow)
-                    .frame(width: Self.sidebarWidth)
-                    .frame(maxHeight: .infinity)
-                    .background(CDS.Surface.sidebar)
-                    .overlay(alignment: .trailing) { Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge) }
-                    .transition(.move(edge: .leading))
-            }
+            AppSidebar(store: store, navigator: navigator, collapsed: collapsed)
+                .padding(.top, CDS.Sidebar.titleRow)
+                .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
+                .frame(maxHeight: .infinity)
+                .clipped()
+                .background(CDS.Surface.sidebar)
+                .overlay(alignment: .trailing) { Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge) }
             AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                       checksClaudeCode: checksClaudeCode, leadingInset: sidebarShown ? 0 : AppNavButtons.trafficLights)
+                       checksClaudeCode: checksClaudeCode, leadingInset: railInset)
                 .overlay(alignment: .topLeading) {
-                    AppNavButtons(navigator: navigator, sidebarShown: $sidebarShown)
-                        .padding(.leading, sidebarShown ? 12 : 12 + AppNavButtons.trafficLights)
+                    AppNavButtons(navigator: navigator,
+                                  sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
+                        .padding(.leading, 12 + railInset)
                         .frame(height: CDS.TitleBar.header)
                 }
         }

@@ -39,6 +39,8 @@ enum AppWindowShots {
         Shot(name: "router") { _ in .router },
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
+        Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),
+        Shot(name: "router-collapsed", destination: { _ in .router }, sidebarHidden: true),
         Shot(name: "category-narrow", destination: { $0.shownCategories[0].id.asCategory }, size: CGSize(width: 1000, height: 640)),
     ]
 
@@ -70,7 +72,8 @@ enum AppWindowShots {
         Demo.populate(store, .router)
         let navigator = AppNavigator(start: shot.destination(store), defaults: nil)
         let root = AppRootView(store: store, navigator: navigator, routerModel: RouterModel(), hub: HubState(),
-                               checksClaudeCode: false)
+                               checksClaudeCode: false,
+                               sidebar: SidebarState(defaults: nil, collapsed: shot.sidebarHidden))
         let controller = NSHostingController(rootView: root)
         controller.sizingOptions = []
         let window = ShotWindow(contentRect: NSRect(origin: .zero, size: shot.size),
