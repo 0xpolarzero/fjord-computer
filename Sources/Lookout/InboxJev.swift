@@ -14,6 +14,9 @@ enum InboxJev {
     static let sure = 0.75
     /// A rating whose confidence is lower is no rating.
     static let sureScore = 0.4
+    /// A banner for a message Jev hasn't read yet waits at most this many refreshes for it (beyond the cap, or a slow
+    /// round), so it can still turn out to be noise; then it shows whatever Jev said.
+    static let bannerWaits = 2
     /// A failed call waits this long before the next.
     static let pause: TimeInterval = 600
 
@@ -41,11 +44,10 @@ enum InboxJev {
         let me = context.me.lowercased()
         var reads: [Work.Read] = []
         var ratings: [(Work.Rating, Date)] = []
-        for thing in things.values where thing.kind != .workflow && (thing.status == .open || thing.status == .draft) {
+        for thing in things.values where isRead(thing) {
             let mine = InboxEngine.signals(thing, me)
             let judged = mine?.messages ?? [:]
-            for m in InboxEngine.messages(thing) where judged[m.id] == nil && m.author.login.lowercased() != me
-                && context.now.timeIntervalSince(m.at) < horizon {
+            for m in InboxEngine.messages(thing) where judged[m.id] == nil && unread(m, context) {
                 reads.append(Work.Read(thing: thing.id, message: m))
             }
             if let stamp = InboxEngine.importanceStamp(thing, context: context), mine?.importance?.stamp != stamp {
@@ -54,6 +56,34 @@ enum InboxJev {
         }
         return Work(reads: Array(reads.sorted { ($0.message.at, $0.message.id) > ($1.message.at, $1.message.id) }.prefix(maxMessages)),
                     ratings: ratings.sorted { ($0.1, $0.0.thing) > ($1.1, $1.0.thing) }.prefix(maxRatings).map(\.0))
+    }
+
+    /// Things whose messages Jev reads: open PRs and issues.
+    private static func isRead(_ thing: Thing) -> Bool {
+        thing.kind != .workflow && (thing.status == .open || thing.status == .draft)
+    }
+
+    /// A message Jev reads once: not yours, and recent.
+    private static func unread(_ m: InboxEngine.Message, _ context: InboxContext) -> Bool {
+        InboxEngine.viewer(m.author.login) != InboxEngine.viewer(context.me) && context.now.timeIntervalSince(m.at) < horizon
+    }
+
+    /// A fact about a message Jev will read but hasn't yet: its banner waits (see `bannerWaits`).
+    static func awaitsReading(_ fact: Fact, _ thing: Thing, context: InboxContext) -> Bool {
+        guard isRead(thing), let id = messageID(fact),
+              let m = InboxEngine.messages(thing).first(where: { $0.id == id }) else { return false }
+        return InboxEngine.signals(thing, context.me)?.messages[id] == nil && unread(m, context)
+    }
+
+    /// The message a fact is about, if it is about one.
+    private static func messageID(_ fact: Fact) -> String? {
+        let parts = fact.key.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        switch parts[0] {
+        case "comment", "review", "mention", "last", "person": return parts[1]
+        case "thread": return parts[1].split(separator: ":").last.map(String.init)
+        default: return nil
+        }
     }
 
     /// The call: one state with every message (`m1`…) and every thing to rate (`t1`…), and the questions about each.
@@ -132,15 +162,9 @@ enum InboxJev {
 
     /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).
     static func isQuiet(_ fact: Fact, _ thing: Thing, context: InboxContext) -> Bool {
-        let signals = InboxEngine.signals(thing, context: context)
-        let parts = fact.key.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return false }
-        switch parts[0] {
-        case "noise": return true
-        case "comment", "review", "mention", "last", "person": return signals?.messages[parts[1]]?.noise == true
-        case "thread": return signals?.messages[String(parts[1].split(separator: ":").last ?? "")]?.noise == true
-        default: return false
-        }
+        if fact.key.hasPrefix("noise:") { return true }
+        guard let id = messageID(fact) else { return false }
+        return InboxEngine.signals(thing, context: context)?.messages[id]?.noise == true
     }
 
     // MARK: What Jev reads

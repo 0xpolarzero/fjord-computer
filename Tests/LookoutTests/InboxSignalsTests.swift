@@ -308,6 +308,43 @@ import Testing
         #expect(calls.questions.count == 1)
     }
 
+    @Test func aBannerWaitsForJevToReadItsMessageARefreshOrTwoAtMost() async {
+        let (s, calls) = store([pr(1, comments: [])], conditions: [.newComment(by: Pick())])
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.identifier) }
+        s.announceInbox()
+        // One more new comment than Jev reads in a call, all of them CI noise: the oldest waits for the next round.
+        s.inboxAsker = { questions, _ in
+            calls.questions.append(questions)
+            return questions.mapValues { _ in .noul(0.95) }
+        }
+        var next = s.things
+        next["pr:a/one#1"]?.comments = (0...InboxJev.maxMessages).map { comment("n\($0)", Person(login: "ci-reporter"), ago: Double($0 + 1) * 60) }
+        s.applyThings(next)
+        await s.readInbox()
+        s.announceInbox()
+        #expect(posted.isEmpty && s.marks["pr:a/one#1"]?.notified.contains("comment:n\(InboxJev.maxMessages)") == false)
+        await s.readInbox()
+        s.announceInbox()
+        #expect(posted.isEmpty && s.marks["pr:a/one#1"]?.notified.contains("comment:n\(InboxJev.maxMessages)") == true)
+        // Jev never gets to it: the banner shows after two refreshes.
+        next = s.things
+        next["pr:a/one#1"]?.comments.append(comment("p1", tok, ago: 1))
+        s.applyThings(next)
+        s.announceInbox()
+        s.announceInbox()
+        #expect(posted.isEmpty)
+        s.announceInbox()
+        #expect(posted == ["inbox:pr:a/one#1"])
+        // Switched off, nothing waits.
+        s.settings.jevReadsInbox = false
+        next = s.things
+        next["pr:a/one#1"]?.comments.append(comment("p2", tok, ago: 0))
+        s.applyThings(next)
+        s.announceInbox()
+        #expect(posted.count == 2)
+    }
+
     @Test func noiseIsNotedButNeverAnnounced() async {
         let (s, calls) = store([pr(1, comments: []), pr(2, comments: [])], yes: 0.9, conditions: [.newComment(by: Pick())])
         var posted: [String] = []

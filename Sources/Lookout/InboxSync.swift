@@ -792,6 +792,9 @@ extension Store {
         var baselines = categoryBaselines
         var posts: [(category: InboxCategory, entry: InboxEntry, fresh: [Fact])] = []
         let context = inboxContext
+        // Jev reads at each refresh: a banner for a message it hasn't read yet waits for it, a refresh or two at most.
+        let jevReads = jevReadsInboxNow && Date() >= inboxJevPausedUntil
+        var waits: [String: Int] = [:]
         let byThing = Dictionary(all.map { ($0.thing.id, $0) }, uniquingKeysWith: { a, _ in a })
         for category in categories {
             let ruleIDs = Set(category.rules.map(\.id))
@@ -799,7 +802,17 @@ extension Store {
             let silent = baseline || category.hidden || !category.notifies
             for entry in all where entry.categoryID == category.id {
                 var m = updated[entry.id] ?? EntryMarks()
-                let fresh = entry.facts.filter { !m.notified.contains($0.key) }
+                var fresh = entry.facts.filter { !m.notified.contains($0.key) }
+                if jevReads, !silent, !entry.isDone {
+                    fresh = fresh.filter { fact in
+                        let key = entry.thing.id + "|" + fact.key
+                        let waited = inboxBannerWaits[key] ?? 0
+                        guard waited < InboxJev.bannerWaits, !InboxJev.isQuiet(fact, entry.thing, context: context),
+                              InboxJev.awaitsReading(fact, entry.thing, context: context) else { return true }
+                        waits[key] = waited + 1
+                        return false
+                    }
+                }
                 guard !fresh.isEmpty else { continue }
                 m.notified.formUnion(fresh.map(\.key))
                 updated[entry.id] = m
@@ -820,6 +833,7 @@ extension Store {
                 updated[id] = m
             }
         }
+        inboxBannerWaits = waits
         // A deleted category's baseline goes with it.
         baselines = baselines.filter { id, _ in categories.contains { $0.id == id } }
         if baselines != categoryBaselines { categoryBaselines = baselines }

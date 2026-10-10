@@ -293,6 +293,8 @@ final class Store {
     /// Jev's reading of the inbox (InboxJev.swift): tests answer for TypeSafe. A failed call waits until this.
     @ObservationIgnored var inboxAsker: InboxJev.Asker?
     @ObservationIgnored var inboxJevPausedUntil = Date.distantPast
+    /// Banners held back for Jev to read their message first, by thing id and fact key: how many refreshes each has waited.
+    @ObservationIgnored var inboxBannerWaits: [String: Int] = [:]
     /// What keeps a key in the Keychain (tests answer for it).
     @ObservationIgnored var keychainWrite: ((String, String) -> Bool)?
     @ObservationIgnored private var transcriptWatcher: FolderWatcher?
