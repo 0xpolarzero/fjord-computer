@@ -109,6 +109,33 @@ import Testing
         #expect(posted().count == 1)
     }
 
+    @Test func whatTheSummaryToldOfAsYouCameBackGetsNoBannerOfItsOwn() {
+        let (s, idle, posted) = store()
+        var waiting = card("wait", .waiting)
+        waiting.triage = RouterTriage(state: .waiting, waitingOn: .ci,
+                                      watch: .init(target: .ci(thing: "pr:o/r#1"), label: "CI on o/r#1", ref: "o/r#1"))
+        let stuck = card("stuck", .stuck)
+        s.router.cards = [waiting, stuck]
+        idle.seconds = 400
+        RouterBanners.post([waiting, stuck], store: s, windowIsKey: false)
+        #expect(posted().isEmpty)
+        // Back, before the timer looked: its CI went green meanwhile, so the summary that coming back makes tells of it.
+        idle.seconds = 1
+        s.router.cards[0].triage?.ready = .init(result: "passing", at: Date())
+        RouterBanners.postReady(s.router.cards[0], store: s, windowIsKey: false)
+        #expect(s.routerAttention.strip?.line(s.router.cards) == "1 needs you, 1 ready to continue")
+        #expect(posted() == [RouterBanners.prefix + "stuck"])
+        // Nor the stuck one, weighed again after its triage.
+        RouterBanners.post([stuck], store: s, windowIsKey: false)
+        #expect(posted().count == 1)
+        // Away again: what comes then is new.
+        idle.seconds = 400
+        s.routerAttention.refresh()
+        idle.seconds = 1
+        RouterBanners.postReady(s.router.cards[0], store: s, windowIsKey: false)
+        #expect(posted().count == 2)
+    }
+
     @Test func aLockedScreenIsAwayAndNothingCameMeansNoSummary() {
         let (s, _, posted) = store()
         s.routerAttention.locked = true

@@ -61,6 +61,8 @@ struct AwayStrip: Equatable {
     @ObservationIgnored private(set) var heldInbox = 0
     /// The cards a banner was shown for: never a second one.
     @ObservationIgnored private(set) var delivered: Set<String> = []
+    /// The cards the summary when you came back told of: no banner of their own after it, until you're away again.
+    @ObservationIgnored private(set) var summarized: Set<String> = []
     /// What came while you were last away, on the Router until dismissed.
     var strip: AwayStrip?
     /// You're back and something came meanwhile (the summary banner).
@@ -89,15 +91,16 @@ struct AwayStrip: Equatable {
     func admit(_ new: [RouterCard]) -> [RouterCard] {
         let away = refresh()
         if away { for card in new where card.kind.isTurn || card.kind.needsYou { hold(card.id) } }
-        return new.filter { !delivered.contains($0.id) && Self.bannerNow($0, away: away) }
+        return new.filter { !delivered.contains($0.id) && !summarized.contains($0.id) && Self.bannerNow($0, away: away) }
     }
 
     /// A card's banner was shown.
     func posted(_ id: String) { delivered.insert(id) }
 
-    /// A waiting session ready to continue: a banner now, or, away, in the summary.
+    /// A waiting session ready to continue: a banner now, or, away, in the summary (also when it became ready as you came
+    /// back, and the summary that coming back makes says so already).
     func admitReady(_ card: RouterCard) -> Bool {
-        guard refresh() else { return true }
+        guard refresh() else { return !summarized.contains(card.id) }
         hold(card.id)
         return false
     }
@@ -127,7 +130,10 @@ struct AwayStrip: Equatable {
         let idle = idleSeconds()
         let away = locked || asleep || idle >= Self.awayAfter
         if away {
-            if awaySince == nil { awaySince = clock().addingTimeInterval(locked || asleep ? 0 : -idle) }
+            if awaySince == nil {
+                awaySince = clock().addingTimeInterval(locked || asleep ? 0 : -idle)
+                summarized = []
+            }
         } else if let since = awaySince {
             back(since: since)
         }
@@ -140,6 +146,7 @@ struct AwayStrip: Equatable {
         heldCards = []
         heldInbox = 0
         guard came.line(cards()) != nil else { return }
+        summarized = Set(came.listed(cards()).map(\.id))
         strip = came
         onBack?(came)
     }
