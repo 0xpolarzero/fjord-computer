@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { CAPABILITIES, fromBase64, hmac, keyId, macInput, parse } from '../hooks/register.ts'
+import { CAPABILITIES, fromBase64, hmac, invalid, keyId, macInput, parse, type Settings } from '../hooks/register.ts'
 
 // The vector Lookout's Swift tests check too (ClaudePluginTests): the same key, fields and body give the same MAC and
 // the same wire text.
@@ -26,10 +26,13 @@ const base64 = (bytes: Uint8Array) => {
   }
   return out
 }
-const sign = async (body: string, { target = TARGET, nonce = NONCE, ts = TS, key = KEY } = {}) => {
+const sign = async (body: string, { target = TARGET, nonce = NONCE, ts = TS, key = KEY, settings }: { target?: string; nonce?: string; ts?: number; key?: string; settings?: Settings } = {}) => {
   const bytes = enc.encode(body)
-  const mac = await hmac(enc.encode(key), macInput(target, nonce, String(ts), bytes))
-  return `⟦lookout v1 ${target} ${nonce} ${ts} ${mac}⟧\n${base64(bytes)}`
+  const mac = await hmac(enc.encode(key), macInput(target, nonce, String(ts), bytes, settings))
+  const head = settings
+    ? `v2 ${target} ${nonce} ${ts} ${settings.model ?? '-'} ${settings.effort ?? '-'}`
+    : `v1 ${target} ${nonce} ${ts}`
+  return `⟦lookout ${head} ${mac}⟧\n${base64(bytes)}`
 }
 /** As the peer channel delivers it. */
 const envelope = (text: string) =>
@@ -45,6 +48,9 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     written: {} as Record<string, string>,
     key: KEY as string | undefined,
     inbox: {} as Record<string, string>,
+    commands: [] as { command: string; args?: string }[],
+    commandFails: {} as Record<string, string>,
+    order: [] as string[],
     registry: { '4242.json': { pid: 4242, sessionId: TARGET, startedAt: 111 } } as Record<string, Record<string, unknown> | string>,
   }
   mock.store(on, store)
@@ -83,7 +89,14 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     if (e.path.startsWith('/inbox/')) w.inbox[e.path.slice('/inbox/'.length)] = e.text
     return { value: undefined }
   })
+  on('command.run', ($, e) => {
+    w.commands.push({ command: e.command, args: e.args })
+    w.order.push(`${e.command} ${e.args}`)
+    if (w.commandFails[e.command]) throw new Error(w.commandFails[e.command])
+    return { ok: true }
+  })
   on('prompt.submit', ($, e) => {
+    w.order.push('submit')
     w.submitted.push({ text: e.text, asUser: e.origin?.kind === 'plugin' ? e.origin.asUser : undefined })
     return { text: e.text }
   })
@@ -110,6 +123,14 @@ describe('the wire format', () => {
     expect(parsed && { ...parsed, body: new TextDecoder().decode(parsed.body) }).toEqual({
       target: TARGET, nonce: NONCE, ts: String(TS), mac: MAC, body: BODY,
     })
+  })
+
+  test('v2 matches the vector Lookout signs settings with', async () => {
+    const mac = 'a6d0f7aec97dfa6bf5f6f11f0bdd229e6d72bdc019132b7265213710c7823bb1'
+    const settings = { model: 'opus', effort: 'high' }
+    expect(await hmac(enc.encode(KEY), macInput(TARGET, NONCE, String(TS), enc.encode(BODY), settings))).toBe(mac)
+    expect(parse(envelope(await sign(BODY, { settings })))?.settings).toEqual(settings)
+    expect(parse(envelope(await sign(BODY, { settings: { effort: 'low' } })))?.settings).toEqual({ model: undefined, effort: 'low' })
   })
 
   test('base64 is read strictly', async () => {
@@ -365,6 +386,97 @@ describe('the inbox', () => {
   })
 
   test('presence names the capability', () => {
-    expect(CAPABILITIES).toEqual(['inbox-v1'])
+    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1'])
+  })
+
+  const SETTINGS_NONCE = '223e4567-e89b-12d3-a456-426614174000'
+  const put = async (w: ReturnType<typeof world>, settings: Settings, nonce = SETTINGS_NONCE) => {
+    w.inbox[`${TARGET}/${nonce}.msg`] = await sign(BODY, { nonce, settings })
+  }
+
+  test('v2 signs the settings: the model, then the effort, are set before the text is submitted', async ($, on) => {
+    const w = world(on)
+    await put(w, { model: 'opus', effort: 'high' })
+    await look($, w)
+    await settle()
+    expect(w.order).toEqual(['model opus', 'effort high', 'submit'])
+    expect(w.submitted).toEqual([{ text: BODY, asUser: true }])
+    expect(w.written[ack(SETTINGS_NONCE)]).toBe('ok model=opus effort=high\n')
+  })
+
+  test('only what was asked for is set', async ($, on) => {
+    const w = world(on)
+    await put(w, { effort: 'low' })
+    await look($, w)
+    await settle()
+    expect(w.order).toEqual(['effort low', 'submit'])
+    expect(w.written[ack(SETTINGS_NONCE)]).toBe('ok effort=low\n')
+  })
+
+  test('a command that fails is told in the ack, the other still runs, and the words still go', async ($, on) => {
+    const w = world(on)
+    w.commandFails.model = 'unknown model'
+    await put(w, { model: 'opus', effort: 'max' })
+    await look($, w)
+    await settle()
+    expect(w.order).toEqual(['model opus', 'effort max', 'submit'])
+    expect(w.written[ack(SETTINGS_NONCE)]).toMatch(/^ok model=error:\S+ effort=max\n$/)
+  })
+
+  test('a full model id is accepted', async ($, on) => {
+    const w = world(on)
+    await put(w, { model: 'claude-opus-4-5', effort: 'xhigh' })
+    await look($, w)
+    await settle()
+    expect(w.written[ack(SETTINGS_NONCE)]).toBe('ok model=claude-opus-4-5 effort=xhigh\n')
+  })
+
+  for (const settings of [{ model: 'gpt-5' }, { model: 'opus;rm' }, { effort: 'extreme' }, { model: 'opus', effort: '--x' }]) {
+    test(`refuses ${JSON.stringify(settings)} and sends nothing`, async ($, on) => {
+      const w = world(on)
+      await put(w, settings)
+      await look($, w)
+      await settle()
+      expect(w.commands).toEqual([])
+      expect(w.submitted).toEqual([])
+      expect(w.written[ack(SETTINGS_NONCE)]).toMatch(/^refused: invalid (model|effort)/)
+    })
+  }
+
+  test('settings can’t be forged: changing them after signing is a bad signature', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${SETTINGS_NONCE}.msg`] = (await sign(BODY, { nonce: SETTINGS_NONCE, settings: { model: 'haiku' } })).replace(' haiku ', ' opus ')
+    await look($, w)
+    await settle()
+    expect(w.commands).toEqual([])
+    expect(w.written[ack(SETTINGS_NONCE)]).toBe('refused: bad signature\n')
+  })
+
+  test('a v1 message sets nothing', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await settle()
+    expect(w.commands).toEqual([])
+    expect(w.written[ack(NONCE)]).toBe('ok\n')
+  })
+
+  test('over the peer channel the settings are not applied (that hook is waited on), the words still arrive', async ($, on) => {
+    const w = world(on)
+    const result = await receive($, envelope(await sign(BODY, { settings: { model: 'opus' } })))
+    await settle()
+    expect(result.consumed).toBeDefined()
+    expect(w.commands).toEqual([])
+    expect(w.submitted).toEqual([{ text: BODY, asUser: true }])
+  })
+
+  test('the allowlists', () => {
+    expect(invalid({ model: 'sonnet[1m]', effort: 'medium' })).toBeUndefined()
+    expect(invalid({ model: 'Opus' })).toBeDefined()
+    expect(invalid({ effort: 'ultra' })).toBeDefined()
+  })
+
+  test('a v2 header is unknown to a v1-only reader: the old pattern finds nothing', async () => {
+    expect(/⟦lookout v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧/.test(await sign(BODY, { settings: { model: 'opus' } }))).toBe(false)
   })
 })

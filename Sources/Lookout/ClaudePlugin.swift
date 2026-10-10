@@ -102,6 +102,8 @@ enum ClaudePlugin {
 
     /// The plugin takes signed messages from `relay/<session id>/` (see `RelayInbox`).
     static let inboxCapability = "inbox-v1"
+    /// The plugin reads v2 messages (a model and an effort inside the signed bytes) from its inbox and applies them.
+    static let settingsCapability = "settings-v1"
 
     /// How long a presence lasts without being renewed: the plugin renews it every 10 s.
     static let lease: TimeInterval = 30
@@ -161,14 +163,22 @@ import type { EngineInterface, Register } from 'claude-code'
 // Lookout reads the ack and deletes both files; the plugin has no way to delete, and needs none.
 // Presence files list `capabilities`, so a Lookout knows which way a session can be reached.
 //
+// `settings-v1`: a v2 message carries the model and effort the session should use, inside the signed bytes:
+//   ⟦lookout v2 <target> <nonce> <ms> <model|-> <effort|-> <hex HMAC-SHA256>⟧\n<base64 body>
+// with the MAC over "v2\n<target>\n<nonce>\n<ms>\n<model|->\n<effort|->\n" and the body. A plugin without the capability
+// sees an unknown header (unsigned) and ignores it; Lookout only sends v2 to a plugin that advertises `settings-v1`.
+// From the inbox (never the peer channel, whose hook the turn waits on), the plugin sets the model, then the effort (a
+// model switch resets the effort), with `/model` and `/effort` run for this session only, and only then submits the
+// text, so the turn it starts uses them. The ack says what happened: "ok model=opus effort=high", or "model=error:why".
+//
 // Lookout writes this file; edits are overwritten.
 
-const HEADER = /(?:^|\n)⟦lookout v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧\n/
+const HEADER = /(?:^|\n)⟦lookout (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)) ([0-9a-f]{64})⟧\n/
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const CLOSE = '</cross-session-message>'
 const WINDOW_MS = 10 * 60 * 1000
 const NONCE = 'nonce.'
-export const CAPABILITIES = ['inbox-v1']
+export const CAPABILITIES = ['inbox-v1', 'settings-v1']
 const POLL_MS = 500
 const ACTIVATION = crypto.randomUUID()
 
@@ -194,9 +204,29 @@ export const hmac = async (key: Uint8Array, message: Uint8Array) => {
   return hex(await sha256(outer, await sha256(inner, message)))
 }
 
-/** What the MAC covers: the version, the target, the nonce and the time, one per line, then the body's bytes. */
-export const macInput = (target: string, nonce: string, ts: string, body: Uint8Array) =>
-  join(enc.encode(`v1\n${target}\n${nonce}\n${ts}\n`), body)
+/** The model and effort a v2 message asks for; `-` on the wire is none. */
+export type Settings = { model?: string; effort?: string }
+
+/** What the MAC covers: the version, the target, the nonce and the time, one per line (v2: also the model and the effort),
+ * then the body's bytes. */
+export const macInput = (target: string, nonce: string, ts: string, body: Uint8Array, settings?: Settings) =>
+  join(
+    enc.encode(
+      settings
+        ? `v2\n${target}\n${nonce}\n${ts}\n${settings.model ?? '-'}\n${settings.effort ?? '-'}\n`
+        : `v1\n${target}\n${nonce}\n${ts}\n`,
+    ),
+    body,
+  )
+
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+/** A model `/model` takes: an alias (with the 1M-context suffix), or a full id. */
+const MODEL = /^(?:(?:opus|sonnet|haiku|fable)|claude-[a-z0-9][a-z0-9.-]*)(?:\[1m\])?$/
+/** Why a settings request can't be applied (undefined: fine). */
+export const invalid = (s: Settings) =>
+  s.model !== undefined && !MODEL.test(s.model) ? `invalid model ${JSON.stringify(s.model.slice(0, 40))}`
+    : s.effort !== undefined && !EFFORTS.includes(s.effort) ? `invalid effort ${JSON.stringify(s.effort.slice(0, 40))}`
+      : undefined
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
@@ -223,13 +253,19 @@ export const fromBase64 = (text: string) => {
 export const parse = (text: string) => {
   const m = HEADER.exec(text)
   if (!m) return undefined
-  const [header, target, nonce, ts, mac] = m
+  const header = m[0]
+  const v2 = m[4] !== undefined
+  const [target, nonce, ts] = v2 ? [m[4], m[5], m[6]] : [m[1], m[2], m[3]]
+  const mac = m[9]
+  const settings: Settings | undefined = v2
+    ? { model: m[7] === '-' ? undefined : m[7], effort: m[8] === '-' ? undefined : m[8] }
+    : undefined
   let rest = text.slice(m.index + header.length)
   const close = rest.indexOf(CLOSE)
   if (close >= 0) rest = rest.slice(0, close)
   const body = fromBase64(rest.trim())
   if (!body) return undefined
-  return { target, nonce, ts, mac, body }
+  return { target, nonce, ts, mac, body, settings }
 }
 
 /** Compares two MACs in time that doesn't depend on where they differ. */
@@ -312,18 +348,24 @@ async function unmark($: EngineInterface) {
 
 /** Checks a signed text the way both ways in must, and submits it as the person's own words. `unsigned` means it isn't
  * Lookout's at all (the peer channel then passes it on); anything else is a refusal with its reason. */
-export async function accept($: EngineInterface, text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+export async function accept(
+  $: EngineInterface,
+  text: string,
+  apply = false,
+): Promise<{ ok: true; applied?: string } | { ok: false; reason: string }> {
   const signed = parse(text)
   if (!signed) return { ok: false, reason: 'unsigned' }
   const { keyPath } = await config($)
   if (!keyPath) return { ok: false, reason: 'no key configured' }
   const key = (await $.fs.read(keyPath)).trim()
-  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body))
+  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body, signed.settings))
   const now = await $.clock.now()
   const ts = Number(signed.ts)
   if (!same(expected, signed.mac)) return { ok: false, reason: 'bad signature' }
   if (signed.target !== (await $.session.id())) return { ok: false, reason: 'addressed to another session' }
   if (!(Math.abs(now - ts) < WINDOW_MS)) return { ok: false, reason: 'stale' }
+  const bad = signed.settings && invalid(signed.settings)
+  if (bad) return { ok: false, reason: bad }
   // A leading byte-order mark is part of what was written: the decoder drops one, so exactly one is put back.
   let decoded: string
   try {
@@ -346,8 +388,23 @@ export async function accept($: EngineInterface, text: string): Promise<{ ok: tr
     return true
   })
   if (!claimed) return { ok: false, reason: 'already delivered' }
+  // The settings first, so the turn the text starts uses them: the model, then the effort (a model resets it). Each can fail
+  // on its own; the person's words go either way. Only from the inbox (`apply`): never from inside a hook a turn waits on.
+  const applied: string[] = []
+  if (apply && signed.settings) {
+    for (const [command, args] of [['model', signed.settings.model], ['effort', signed.settings.effort]] as const) {
+      if (args === undefined) continue
+      try {
+        await $.command.run({ command, args })
+        applied.push(`${command}=${args}`)
+      } catch (error) {
+        const why = String((error as { message?: unknown })?.message ?? error).replace(/\s+/g, '_').slice(0, 80)
+        applied.push(`${command}=error:${why}`)
+      }
+    }
+  }
   void $.prompt.submit({ text: body, asUser: true })
-  return { ok: true }
+  return applied.length ? { ok: true, applied: applied.join(' ') } : { ok: true }
 }
 
 /** When the look in progress began (0: none). A look that hangs is given up on after `POLL_STUCK_MS`, so one stuck call can't
@@ -369,8 +426,8 @@ export async function poll($: EngineInterface) {
       if (!name.endsWith('.msg') || names.has(`${name.slice(0, -4)}.ack`)) continue
       const text = await $.fs.read(`${dir}/${name}`).catch(() => undefined)
       if (text === undefined) continue
-      const outcome = await accept($, text).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
-      await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? 'ok\n' : `refused: ${outcome.reason}\n`)
+      const outcome = await accept($, text, true).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
+      await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? `ok${outcome.applied ? ` ${outcome.applied}` : ''}\n` : `refused: ${outcome.reason}\n`)
     }
   } catch {
     // No folder yet (nothing was ever sent here), or it can't be read: nothing to do until the next look.
@@ -432,12 +489,29 @@ export const register: Register = (on) => {
 enum RelaySigner {
     /// The text to send to the session whose CLI session id is `target`: the header line, then the body's UTF-8 bytes in
     /// standard base64 (padded, one line), so the peer channel's escaping and Unicode normalization can't change them.
-    static func sign(body: String, target: String, key: String, nonce: UUID = UUID(), now: Date = Date()) -> String {
+    ///
+    /// With a `model` or an `effort` (already allowlisted, see `SessionSettings`) the header is v2 and the MAC covers them, so
+    /// they can't be forged or changed on the way; only a plugin that says `settings-v1` knows that header, so it's the
+    /// caller's to ask `Store.supportsSettings` first. Without either it is the v1 text, which every plugin reads.
+    static func sign(body: String, target: String, key: String, nonce: UUID = UUID(), now: Date = Date(),
+                     model: String? = nil, effort: String? = nil) -> String {
         let ts = String(RouterFeed.Stamp.ms(now))
         let id = nonce.uuidString.lowercased()
         let bytes = Data(body.utf8)
-        return "⟦lookout v1 \(target) \(id) \(ts) \(mac(key: key, target: target, nonce: id, ts: ts, body: bytes))⟧\n"
+        guard model != nil || effort != nil else {
+            return "⟦lookout v1 \(target) \(id) \(ts) \(mac(key: key, target: target, nonce: id, ts: ts, body: bytes))⟧\n"
+                + bytes.base64EncodedString()
+        }
+        let m = model ?? "-", e = effort ?? "-"
+        return "⟦lookout v2 \(target) \(id) \(ts) \(m) \(e) \(mac(key: key, target: target, nonce: id, ts: ts, body: bytes, model: m, effort: e))⟧\n"
             + bytes.base64EncodedString()
+    }
+
+    /// The v2 MAC: `v2\n<target>\n<nonce>\n<ts>\n<model|->\n<effort|->\n` and the body.
+    static func mac(key: String, target: String, nonce: String, ts: String, body: Data, model: String, effort: String) -> String {
+        let input = Data("v2\n\(target)\n\(nonce)\n\(ts)\n\(model)\n\(effort)\n".utf8) + body
+        let code = HMAC<SHA256>.authenticationCode(for: input, using: SymmetricKey(data: Data(key.utf8)))
+        return code.map { String(format: "%02x", $0) }.joined()
     }
 
     /// HMAC-SHA256, keyed with the key's hex text (UTF-8), over the UTF-8 of `v1\n<target>\n<nonce>\n<ts>\n` followed by
@@ -733,8 +807,14 @@ extension ClaudePlugin {
     /// thread.
     static func inboxSessions(in presence: URL, registry: [Int32: [ClaudePeers.Registered]], keyID: String?, now: Date = leaseNow,
                               alive: (Int32) -> Bool = FormBridge.processAlive) -> Set<String> {
+        sessions(with: inboxCapability, in: presence, registry: registry, keyID: keyID, now: now, alive: alive)
+    }
+
+    /// The sessions whose plugin says it has `capability`.
+    static func sessions(with capability: String, in presence: URL, registry: [Int32: [ClaudePeers.Registered]], keyID: String?,
+                         now: Date = leaseNow, alive: (Int32) -> Bool = FormBridge.processAlive) -> Set<String> {
         Set(live(in: presence, registry: registry, keyID: keyID, now: now, alive: alive)
-            .filter { $0.value.capabilities?.contains(inboxCapability) == true }.keys)
+            .filter { $0.value.capabilities?.contains(capability) == true }.keys)
     }
 }
 
@@ -777,10 +857,13 @@ struct RelayInbox: Sendable {
     /// The target and the nonce in a signed text's header line.
     static func header(of text: String) -> (target: String, nonce: String)? {
         guard let line = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first,
-              line.hasPrefix("⟦lookout v1 "), line.hasSuffix("⟧") else { return nil }
-        let fields = line.dropFirst("⟦lookout v1 ".count).dropLast().split(separator: " ")
-        guard fields.count == 4 else { return nil }
-        return (String(fields[0]), String(fields[1]))
+              line.hasSuffix("⟧") else { return nil }
+        for (prefix, count) in [("⟦lookout v1 ", 4), ("⟦lookout v2 ", 6)] where line.hasPrefix(prefix) {
+            let fields = line.dropFirst(prefix.count).dropLast().split(separator: " ")
+            guard fields.count == count else { return nil }
+            return (String(fields[0]), String(fields[1]))
+        }
+        return nil
     }
 
     private static func safe(_ name: String) -> Bool {
@@ -790,8 +873,10 @@ struct RelayInbox: Sendable {
     func folder(for session: String) -> URL { root.appendingPathComponent(session, isDirectory: true) }
 
     /// Writes `text` for `session` and waits for the plugin's answer. Throws `unanswered` when there's none within `timeout`
-    /// (the message is withdrawn first), `refused` when the plugin says no.
-    func deliver(_ text: String, to session: String, interval: TimeInterval = 0.03) async throws {
+    /// (the message is withdrawn first), `refused` when the plugin says no. Returns the plugin's answer: "ok", with what it
+    /// applied after it when the message carried settings ("ok model=opus effort=high").
+    @discardableResult
+    func deliver(_ text: String, to session: String, interval: TimeInterval = 0.03) async throws -> String {
         guard let header = Self.header(of: text), header.target == session, Self.safe(session), Self.safe(header.nonce) else {
             throw Failure.refused("not a message signed for this session")
         }
@@ -804,9 +889,9 @@ struct RelayInbox: Sendable {
             guard let data = try? Data(contentsOf: ack), let text = String(data: data, encoding: .utf8) else { return nil }
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        func outcome(_ reply: String) throws {
+        func outcome(_ reply: String) throws -> String {
             withdraw()
-            if reply == "ok" { return }
+            if reply == "ok" || reply.hasPrefix("ok ") { return reply }
             throw Failure.refused(reply.hasPrefix("refused: ") ? String(reply.dropFirst("refused: ".count)) : reply)
         }
         let deadline = Date().addingTimeInterval(timeout)
@@ -854,6 +939,17 @@ extension Store {
                                        keyID: keyID).contains(cli)
         }
         return capable ? RelayInbox(root: paths.relay) : nil
+    }
+
+    /// Whether `cli`'s plugin applies a model and an effort carried in a message (it says `settings-v1`, under the key held
+    /// now). An older plugin doesn't: nothing with settings is sent to it.
+    func supportsSettings(_ cli: String) async -> Bool {
+        guard let paths = routerFiles, let keyID = relayKeyCache?.keyID else { return false }
+        return await OffMain.run {
+            ClaudePlugin.sessions(with: ClaudePlugin.settingsCapability, in: paths.pluginSessions,
+                                  registry: ClaudePeers.registry(dir: paths.claudeDir.appendingPathComponent("sessions", isDirectory: true)),
+                                  keyID: keyID).contains(cli)
+        }
     }
 }
 

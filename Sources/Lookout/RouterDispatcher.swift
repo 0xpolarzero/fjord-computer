@@ -83,6 +83,9 @@ struct RouterAskBack: Identifiable, Equatable {
         var rephrased: Bool
         var session: String?
         var newSessionIn: String?
+        /// For a new session: the model and effort asked for, and whether the text carries them (the session's plugin takes them).
+        var settings: SessionSettings? = nil
+        var settingsSigned = false
     }
 
     /// Everything a run does outside Lookout's own state, so a test stands in for each. The defaults are the real ones.
@@ -92,9 +95,9 @@ struct RouterAskBack: Identifiable, Equatable {
         /// Haiku's minimal edit of the message for a session, and its signature.
         var prepare: @MainActor (RouterTools, _ session: String) async throws -> Delivery
         /// A new session in a project (folder) with the prepared first message.
-        var start: @MainActor (RouterTools, _ folder: String, _ title: String) async throws -> Delivery
-        /// The signed send, through the gate.
-        var send: @MainActor (RouterTools, Delivery) async throws -> Void
+        var start: @MainActor (RouterTools, _ folder: String, _ title: String, _ settings: SessionSettings?) async throws -> Delivery
+        /// The signed send, through the gate: the plugin's ack when it went through the inbox.
+        var send: @MainActor (RouterTools, Delivery) async throws -> String?
         /// A form answered for a card: what was answered.
         var answer: @MainActor (RouterTools, _ card: String, _ answers: [String: String]) async throws -> String
         /// A Haiku run for an intent, given the context it starts from.
@@ -320,7 +323,7 @@ struct RouterAskBack: Identifiable, Equatable {
         // The cards open now, as they are: one that changes while this goes isn't addressed by it.
         let eligible = Dictionary(store.router.cards.filter(\.isOpen).map { ($0.id, store.cardRevisions[$0.id, default: 0]) },
                                   uniquingKeysWith: { a, _ in a })
-        try await effects.send(job.tools, delivery)
+        _ = try await effects.send(job.tools, delivery)
         note(job, .sent(to: delivery.to, text: delivery.body, original: delivery.rephrased ? delivery.original : nil),
              session: session, card: card)
         // Which of the session's open cards the message resolves is Jev's call; none are addressed just for being sent to.
@@ -332,11 +335,18 @@ struct RouterAskBack: Identifiable, Equatable {
     private func start(_ job: Job, folder: String) async throws {
         guard let store else { return }
         stage(job, "starting a session")
-        let delivery = try await effects.start(job.tools, folder, Self.title(for: job.text))
+        // "…with opus, high effort": set in the session by its plugin before the first message.
+        let settings = SessionSettings.parse(job.text)
+        let delivery = try await effects.start(job.tools, folder, Self.title(for: job.text), settings)
         stage(job, "sending")
-        try await effects.send(job.tools, delivery)
-        note(job, .started(session: delivery.session, project: store.folderName(folder), model: nil, effort: nil),
-             session: delivery.session)
+        let ack = try await effects.send(job.tools, delivery)
+        let project = store.folderName(folder)
+        if let settings {
+            let applied = AppliedSettings.from(ack: ack, requested: settings, supported: delivery.settingsSigned)
+            store.updateDecision(job.id) { applied.record(session: delivery.session, project: project, in: &$0) }
+        } else {
+            note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
+        }
     }
 
     /// Haiku, fresh, for what needs judgment or tools; its reply is what the history shows.
@@ -498,7 +508,7 @@ extension RouterDispatcher.Effects {
     /// Nothing is available: before the dispatcher has set up its own.
     static var unavailable: Self {
         let no = RouterTools.Failure("The Router isn't ready")
-        return Self(rank: { _, _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _ in throw no },
+        return Self(rank: { _, _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _, _ in throw no },
                     send: { _, _ in throw no }, answer: { _, _, _ in throw no }, run: { _, _, _ in throw no })
     }
 
@@ -546,13 +556,14 @@ extension RouterDispatcher.Effects {
                 return .init(to: to, text: ready.text, body: ready.body ?? ready.text, original: ready.original,
                              rephrased: ready.rephrased, session: session, newSessionIn: nil)
             },
-            start: { [weak dispatcher] tools, folder, title in
+            start: { [weak dispatcher] tools, folder, title, settings in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
                 let store = try store(dispatcher)
-                let answer = object(try await tools.startSession(store, project: folder, title: title, ticket: tools.ticket()))
+                let answer = object(try await tools.startSession(store, project: folder, title: title, ticket: tools.ticket(), settings: settings))
                 guard let peer = answer["peer"] as? String, let ready = tools.prepared[peer] else { throw RouterTools.Failure("Not prepared") }
                 return .init(to: peer, text: ready.text, body: ready.body ?? ready.text, original: ready.original,
-                             rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn)
+                             rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn,
+                             settings: settings, settingsSigned: ready.text.hasPrefix("⟦lookout v2 "))
             },
             send: { [weak dispatcher] tools, delivery in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
@@ -561,8 +572,8 @@ extension RouterDispatcher.Effects {
                     throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
                 }
                 try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                try await RouterSender.send(binary: binary, cwd: home, to: delivery.to, text: delivery.text, tools: tools,
-                                            inbox: await store.relayInbox(for: delivery.to))
+                return try await RouterSender.send(binary: binary, cwd: home, to: delivery.to, text: delivery.text, tools: tools,
+                                                   inbox: await store.relayInbox(for: delivery.to))
             },
             answer: { [weak dispatcher] tools, card, answers in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }

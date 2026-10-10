@@ -14,6 +14,10 @@ import Testing
         var prepared: [String] = []
         var sent: [RouterDispatcher.Delivery] = []
         var started: [(folder: String, title: String)] = []
+        var startSettings: [SessionSettings?] = []
+        /// What the plugin acks; whether the start's text carries settings.
+        var ack: String?
+        var settingsSigned = true
         var answered: [(card: String, answers: [String: String])] = []
         var runs: [(intent: RouterRun.Intent, input: String)] = []
         var answer = RouterRun.Answer(reply: "Done.", done: "set it")
@@ -40,14 +44,17 @@ import Testing
                     return RouterDispatcher.Delivery(to: "peer-\(session)", text: "⟦signed⟧\nbody-\(session)", body: "body-\(session)",
                                                      original: "orig", rephrased: true, session: session, newSessionIn: nil)
                 },
-                start: { [unowned self] _, folder, title in
+                start: { [unowned self] _, folder, title, settings in
                     started.append((folder, title))
+                    startSettings.append(settings)
                     return RouterDispatcher.Delivery(to: "peer-new", text: "⟦signed⟧\nhello", body: "hello", original: "hello",
-                                                     rephrased: false, session: "local_new", newSessionIn: "x")
+                                                     rephrased: false, session: "local_new", newSessionIn: "x",
+                                                     settings: settings, settingsSigned: settingsSigned)
                 },
                 send: { [unowned self] _, delivery in
                     if let failSend { throw RouterTools.Failure(failSend) }
                     sent.append(delivery)
+                    return ack
                 },
                 answer: { [unowned self] _, card, answers in
                     answered.append((card, answers))
@@ -123,6 +130,31 @@ import Testing
         var two = form
         two.questions.append(two.questions[0])
         #expect(RouterDispatcher.formAnswers(two, message: "SQLite") == nil)
+    }
+
+    @Test func aNewSessionTakesTheModelAndEffortYouAskedForAndTheLogSaysWhatWasApplied() async {
+        let (s, d, f) = setup()
+        f.ack = "ok model=opus effort=high"
+        let a = d.submit("start a new session to add a badge with opus, high effort", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.startSettings == [SessionSettings(model: "opus", effort: "high")])
+        #expect(decision(s, a)?.done == [.started(session: "local_new", project: "lookout", model: "opus", effort: "high")])
+        // One setting failed in the session: the other is recorded, and the failure is said.
+        f.ack = "ok model=error:no_such_model effort=low"
+        let b = d.submit("start a new session to add a badge using sonnet, low effort", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, b)
+        #expect(decision(s, b)?.done == [.started(session: "local_new", project: "lookout", model: nil, effort: "low"),
+                                         .failed("model/effort: model not set: no such model")])
+        // A plugin too old for settings: the message went plain, and the log says why.
+        f.settingsSigned = false
+        f.ack = "ok"
+        let c = d.submit("start a new session to add a badge with haiku", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, c)
+        #expect(decision(s, c)?.done.contains(.failed("model/effort: the session's plugin is older and can't set them")) == true)
+        // No words about it: nothing asked.
+        let e = d.submit("start a new session to add a badge", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, e)
+        #expect(f.startSettings.last! == nil)
     }
 
     @Test func aTaggedProjectStartsASessionWhenAskedOrWhenItHasNothingElse() async {

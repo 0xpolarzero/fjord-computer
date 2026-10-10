@@ -248,15 +248,15 @@ enum RouterSender {
     /// Claude Code process and no model, behind the same gate: only exactly the prepared text, once. A refusal by the plugin
     /// fails the send (the peer channel would be refused the same way); a plugin that doesn't answer in time leaves the
     /// message to the process below, the gate's approval given back first.
-    @MainActor
+    /// Returns the plugin's ack when it went through the inbox (what it applied of the message's settings), else nil.
+    @MainActor @discardableResult
     static func send(binary: String, cwd: URL, to: String, text: String, tools: RouterTools, timeout: TimeInterval = 45,
-                     inbox: RelayInbox? = nil) async throws {
+                     inbox: RelayInbox? = nil) async throws -> String? {
         if let inbox {
             let ready = tools.prepared[to]
             if let refusal = tools.approveSend(["to": to, "message": text], otherFields: []) { throw RouterTools.Failure(refusal) }
             do {
-                try await inbox.deliver(text, to: to)
-                return
+                return try await inbox.deliver(text, to: to)
             } catch RelayInbox.Failure.unanswered {
                 tools.prepared[to] = ready
             } catch let failure as RelayInbox.Failure {
@@ -343,5 +343,6 @@ enum RouterSender {
         guard delivered else {
             throw RouterTools.Failure(failure ?? tail.last ?? "The message wasn't delivered")
         }
+        return nil
     }
 }

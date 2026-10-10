@@ -955,7 +955,8 @@ final class RouterMCPServer: @unchecked Sendable {
         func claim() -> Bool { lock.withLock { defer { claimed = true }; return !claimed } }
     }
 
-    private func signed(_ store: Store, _ ready: Prepared, title: String, cli: String?, ticket: Ticket) async throws -> Prepared {
+    private func signed(_ store: Store, _ ready: Prepared, title: String, cli: String?, ticket: Ticket,
+                        settings: SessionSettings? = nil) async throws -> Prepared {
         // What the user says to the Router with @router never goes on: if any is still there, nothing is sent.
         try noMarker(ready.text)
         guard store.routerPluginStatus == .installed else {
@@ -965,13 +966,15 @@ final class RouterMCPServer: @unchecked Sendable {
         guard await pluginSessions(store).contains(cli) else {
             throw Failure("\(title) started before Lookout's plugin was installed: restart it or run /reload-plugins in it")
         }
-        var text = store.signRelay(body: ready.text, target: cli)
+        // Settings go only to a plugin that takes them; to an older one the message goes plain (the delivery says so).
+        let settings = settings == nil ? nil : (await store.supportsSettings(cli) ? settings : nil)
+        var text = store.signRelay(body: ready.text, target: cli, settings: settings)
         if text == nil {
             // Not cached yet, or the file changed: read it again (bounded), and sign once more if this is still the turn.
             let reload = keyReload ?? { [weak store] in await store?.reloadRelayKey() ?? false }
             await Self.race(deadline: keyReloadWait) { _ = await reload() }
             try live(ticket)
-            text = store.signRelay(body: ready.text, target: cli)
+            text = store.signRelay(body: ready.text, target: cli, settings: settings)
         }
         guard let text else {
             throw Failure("Lookout couldn't sign the message (its plugin key is missing); nothing was sent")
@@ -1039,7 +1042,7 @@ final class RouterMCPServer: @unchecked Sendable {
         return !stem.isEmpty && stem.count < full.count && full.hasPrefix(stem)
     }
 
-    func startSession(_ store: Store, project: String, title: String, ticket: Ticket) async throws -> String {
+    func startSession(_ store: Store, project: String, title: String, ticket: Ticket, settings: SessionSettings? = nil) async throws -> String {
         let message = try yourMessage()
         let folder = try Self.folder(project, folders: store.knownFolders.filter { !$0.isEmpty }, name: store.folderName)
         let name = store.folderName(folder)
@@ -1061,7 +1064,7 @@ final class RouterMCPServer: @unchecked Sendable {
         try live(ticket)
         // Its plugin comes up with it: waited for (bounded), then the prompt is signed for it.
         try await waitForPlugin(store, cli: started.cliID, ticket: ticket)
-        ready = try await signed(store, ready, title: title, cli: started.cliID, ticket: ticket)
+        ready = try await signed(store, ready, title: title, cli: started.cliID, ticket: ticket, settings: settings)
         try live(ticket)
         ready.newSessionIn = name
         prepared[started.peer] = ready

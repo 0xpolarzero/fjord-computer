@@ -3,16 +3,31 @@ import Foundation
 // Starting a Claude Code session without a model turn, and the inbox action that uses it (docs/design/spec/router.md, C).
 // The steps are the ones `start_session` takes (RouterMCP), minus the model: a CLI session is made in the folder (its one line
 // renames it), the Claude app imports it, its process registers as a peer, Lookout's plugin comes up in it, and the first
-// message is signed for that plugin and delivered through the same gate as every other send. Phase 4 moves RouterMCP and the
-// dispatcher onto this and removes the copy.
+// message is signed for that plugin and delivered through the same gate as every other send. The model and effort ride inside
+// the signed message and the plugin sets them for the session (a plugin too old to is sent none, and the log says so).
 
 // MARK: - Settings an action may carry
 
 enum ActionSettings {
-    /// What `claude --model` takes as an alias.
+    /// What the editor offers as a model.
     static let models = ["opus", "sonnet", "haiku"]
-    /// What `claude --effort` takes (it also has `xhigh`, which the editor doesn't offer).
+    /// What the editor offers as an effort.
     static let efforts = ["low", "medium", "high", "max"]
+    /// What a session's plugin is asked to set with `/model` and `/effort`: the aliases (with the 1M suffix) or a full id, and
+    /// the five efforts.
+    static let acceptedModels = ["opus", "sonnet", "haiku", "fable"]
+    static let acceptedEfforts = ["low", "medium", "high", "xhigh", "max"]
+
+    /// `value` as `/model` takes it: an alias, with or without `[1m]`, or a full `claude-…` id.
+    static func cleanModel(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces).lowercased(), !value.isEmpty, value.count <= 64 else { return nil }
+        let base = value.hasSuffix("[1m]") ? String(value.dropLast(4)) : value
+        if acceptedModels.contains(base) { return value }
+        let id = base.dropFirst("claude-".count)
+        guard base.hasPrefix("claude-"), !id.isEmpty, id.first?.isLetter == true || id.first?.isNumber == true,
+              id.allSatisfy({ $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "." || $0 == "-") }) else { return nil }
+        return value
+    }
 
     /// `value` if it is one of `allowed`; anything else (nothing, a value saved by a newer version) is the default.
     static func clean(_ value: String?, in allowed: [String]) -> String? {
@@ -28,13 +43,16 @@ final class SessionLauncher {
     /// Everything it does outside Lookout's own state; tests stand in for each. The defaults are the real ones.
     struct Effects {
         /// Makes the CLI session in `folder`, has the app import it and waits for its process.
-        var bootstrap: @MainActor (_ folder: String, _ title: String, _ model: String?, _ effort: String?) async throws -> SessionStart.Started
+        var bootstrap: @MainActor (_ folder: String, _ title: String) async throws -> SessionStart.Started
         /// Waits until Lookout's plugin runs in the session (its Claude Code id).
         var pluginReady: @MainActor (_ cli: String) async throws -> Void
-        /// `body` signed for the session's plugin.
-        var sign: @MainActor (_ body: String, _ cli: String) async throws -> String
-        /// Delivers the signed message to the peer, through the gate.
-        var send: @MainActor (_ peer: String, _ prepared: Prepared) async throws -> Void
+        /// Whether the session's plugin applies a model and effort carried in a message.
+        var supportsSettings: @MainActor (_ cli: String) async -> Bool
+        /// `body` signed for the session's plugin, with the settings inside the signature when given.
+        var sign: @MainActor (_ body: String, _ cli: String, _ settings: SessionSettings?) async throws -> String
+        /// Delivers the signed message to the peer, through the gate. The plugin's ack ("ok model=opus"), nil when it went
+        /// over the peer channel.
+        var send: @MainActor (_ peer: String, _ prepared: Prepared) async throws -> String?
     }
 
     private weak var store: Store?
@@ -49,10 +67,11 @@ final class SessionLauncher {
     }
 
     /// A new session in `folder` with `firstMessage` as its first message, as Lookout's own words (signed), and the session's
-    /// id and peer name. `model` and `effort` are `claude --model` / `--effort` values, nil for your defaults.
+    /// id and peer name. `model` and `effort` are set in the session by its plugin before the first message (nil: your defaults);
+    /// `applied` says what took, or why not (nil when none was asked for).
     @discardableResult
     func start(folder: String, title: String, firstMessage: String, model: String? = nil,
-               effort: String? = nil) async throws -> (sessionID: String, peer: String) {
+               effort: String? = nil) async throws -> (sessionID: String, peer: String, applied: AppliedSettings?) {
         guard let store else { throw RouterTools.Failure("Lookout isn't ready") }
         guard store.router.enabled, store.agents.enabled else { throw RouterTools.Failure("The Router is off") }
         guard store.routerPluginStatus == .installed else {
@@ -62,43 +81,38 @@ final class SessionLauncher {
             throw RouterTools.Failure("There is no message to start the session with")
         }
         let title = SessionStart.cleanTitle(title)
-        let started = try await effects.bootstrap(folder, title, ActionSettings.clean(model, in: ActionSettings.models),
-                                                  ActionSettings.clean(effort, in: ActionSettings.efforts))
+        let started = try await effects.bootstrap(folder, title)
         try await effects.pluginReady(started.cliID)
-        let signed = try await effects.sign(firstMessage, started.cliID)
+        let requested = SessionSettings(model: model, effort: effort)
+        // Only a plugin that says it takes settings is sent them; an older one gets the plain message.
+        let supported = requested == nil ? false : await effects.supportsSettings(started.cliID)
+        let signed = try await effects.sign(firstMessage, started.cliID, supported ? requested : nil)
         let prepared = Prepared(text: signed, original: firstMessage, rephrased: false, newSessionIn: store.folderName(folder), body: firstMessage)
-        try await effects.send(started.peer, prepared)
-        return (started.sessionID, started.peer)
-    }
-
-    /// The bootstrap's arguments: `SessionStart`'s, with the model and effort of the session. The app starts the process it
-    /// imports with your settings, so these reach the session only as far as the app takes them from its transcript.
-    static func bootstrapArguments(uuid: String, title: String, model: String?, effort: String?) -> [String] {
-        var arguments = SessionStart.bootstrapArguments(uuid: uuid, title: title)
-        if let model { arguments += ["--model", model] }
-        if let effort { arguments += ["--effort", effort] }
-        return arguments
+        let ack = try await effects.send(started.peer, prepared)
+        let applied = requested.map { AppliedSettings.from(ack: ack, requested: $0, supported: supported) }
+        return (started.sessionID, started.peer, applied)
     }
 }
 
 extension SessionLauncher.Effects {
     static let unavailable = SessionLauncher.Effects(
-        bootstrap: { _, _, _, _ in throw RouterTools.Failure("Lookout isn't ready") },
+        bootstrap: { _, _ in throw RouterTools.Failure("Lookout isn't ready") },
         pluginReady: { _ in throw RouterTools.Failure("Lookout isn't ready") },
-        sign: { _, _ in throw RouterTools.Failure("Lookout isn't ready") },
+        supportsSettings: { _ in false },
+        sign: { _, _, _ in throw RouterTools.Failure("Lookout isn't ready") },
         send: { _, _ in throw RouterTools.Failure("Lookout isn't ready") })
 
     @MainActor
     static func live(_ launcher: SessionLauncher) -> SessionLauncher.Effects {
         SessionLauncher.Effects(
-            bootstrap: { [weak launcher] folder, title, model, effort in
+            bootstrap: { [weak launcher] folder, title in
                 guard let store = launcher?.store else { throw RouterTools.Failure("Lookout isn't ready") }
                 guard let binary = store.routerStatus.claudeCode?.path,
                       let peersDir = store.routerFiles?.claudeDir.appendingPathComponent("sessions") else {
                     throw RouterTools.Failure("Claude Code wasn't found, so no session can be started")
                 }
                 let uuid = UUID().uuidString.lowercased()
-                let output = try await OneShot.run(binary, SessionLauncher.bootstrapArguments(uuid: uuid, title: title, model: model, effort: effort),
+                let output = try await OneShot.run(binary, SessionStart.bootstrapArguments(uuid: uuid, title: title),
                                                    cwd: URL(fileURLWithPath: folder), timeout: SessionStart.wait)
                 _ = try OneShot.result(output)
                 guard let url = SessionStart.importURL(uuid: uuid) else { throw RouterTools.Failure("Couldn't make the link") }
@@ -121,12 +135,13 @@ extension SessionLauncher.Effects {
                 if await up() { return }
                 throw RouterTools.Failure("The new session started, but Lookout's plugin didn't come up in it within \(Int(RouterTools.bounded(launcher.pluginWait))) s; nothing was sent")
             },
-            sign: { [weak launcher] body, cli in
+            supportsSettings: { [weak launcher] cli in await launcher?.store?.supportsSettings(cli) ?? false },
+            sign: { [weak launcher] body, cli, settings in
                 guard let store = launcher?.store else { throw RouterTools.Failure("Lookout isn't ready") }
-                if let text = store.signRelay(body: body, target: cli) { return text }
+                if let text = store.signRelay(body: body, target: cli, settings: settings) { return text }
                 // Not cached yet, or the file changed: read it again, once.
                 _ = await store.reloadRelayKey()
-                if let text = store.signRelay(body: body, target: cli) { return text }
+                if let text = store.signRelay(body: body, target: cli, settings: settings) { return text }
                 throw RouterTools.Failure("Lookout couldn't sign the message (its plugin key is missing); nothing was sent")
             },
             send: { [weak launcher] peer, prepared in
@@ -140,8 +155,8 @@ extension SessionLauncher.Effects {
                 tools.beginTurn(prepared.original)
                 tools.prepared[peer] = prepared
                 defer { tools.endTurn() }
-                try await RouterSender.send(binary: binary, cwd: home, to: peer, text: prepared.text, tools: tools,
-                                            inbox: await store.relayInbox(for: peer))
+                return try await RouterSender.send(binary: binary, cwd: home, to: peer, text: prepared.text, tools: tools,
+                                                   inbox: await store.relayInbox(for: peer))
             })
     }
 }
@@ -171,12 +186,16 @@ enum ActionSessions {
         let project = store.folderName(folder)
         store.updateDecision(id) { $0.decision.target = project }
         do {
-            let (session, _) = try await launcher.start(folder: folder, title: request.title, firstMessage: request.message,
-                                                        model: request.model, effort: request.effort)
+            let (session, _, applied) = try await launcher.start(folder: folder, title: request.title, firstMessage: request.message,
+                                                                 model: request.model, effort: request.effort)
             store.noteOrigin(SessionOrigin(category: request.category, thing: request.title, actionID: request.action.uuidString,
                                            runID: request.run.uuidString), for: session)
             store.updateDecision(id) {
-                $0.add(.started(session: session, project: project, model: request.model, effort: request.effort), session: session)
+                if let applied {
+                    applied.record(session: session, project: project, in: &$0)
+                } else {
+                    $0.add(.started(session: session, project: project, model: nil, effort: nil), session: session)
+                }
                 $0.outcome = .done
             }
             return ActionSessionStarted(sessionID: session, project: project)
@@ -226,5 +245,84 @@ extension Store {
             state.cards[i].origin = origin
         }
         router = state
+    }
+}
+
+// MARK: - Model and effort for a session
+
+/// The model and effort a new session should run with (nil: your Claude Code defaults). Values are allowlisted
+/// (`ActionSettings`) before they go anywhere; they travel inside the signed message (`RelaySigner`) and the session's
+/// plugin sets them for that session alone before its first prompt (`/model`, then `/effort`).
+struct SessionSettings: Equatable, Sendable {
+    var model: String?
+    var effort: String?
+
+    /// nil when neither value is one the plugin takes.
+    init?(model: String?, effort: String?) {
+        let model = ActionSettings.cleanModel(model), effort = ActionSettings.clean(effort, in: ActionSettings.acceptedEfforts)
+        guard model != nil || effort != nil else { return nil }
+        self.model = model
+        self.effort = effort
+    }
+
+    /// "…with opus, high effort", "using sonnet", "with xhigh effort": the model named after with/using/use, the effort
+    /// before the word effort (or after "effort"). Nothing else in the text counts.
+    static func parse(_ text: String) -> SessionSettings? {
+        let t = text.lowercased()
+        func capture(_ pattern: String) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let m = regex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)), m.numberOfRanges > 1,
+                  let r = Range(m.range(at: 1), in: t) else { return nil }
+            return String(t[r])
+        }
+        let model = capture(#"\b(?:with|using|use|on)\s+(?:the\s+)?(opus|sonnet|haiku|fable)\b"#)
+        let effort = capture(#"\b(low|medium|high|xhigh|max)\s+effort\b"#)
+            ?? capture(#"\beffort\s+(?:of\s+|to\s+|level\s+)?(low|medium|high|xhigh|max)\b"#)
+        return SessionSettings(model: model, effort: effort)
+    }
+}
+
+/// What the session's plugin did with a `SessionSettings`, from its ack, for the decision log.
+struct AppliedSettings: Equatable, Sendable {
+    var model: String?
+    var effort: String?
+    /// Why a setting did not apply, one per setting.
+    var problems: [String] = []
+
+    /// The plugin's ack ("ok model=opus effort=high", "ok model=error:why effort=high"), against what was asked. `nil` ack:
+    /// delivered over the peer channel, which never applies settings. `supported` false: the plugin is too old to be sent them.
+    static func from(ack: String?, requested: SessionSettings, supported: Bool) -> AppliedSettings {
+        var out = AppliedSettings()
+        guard supported else {
+            out.problems = ["the session's plugin is older and can't set them"]
+            return out
+        }
+        guard let ack else {
+            out.problems = ["sent over the peer channel, which can't set them"]
+            return out
+        }
+        var seen: Set<String> = []
+        for token in ack.split(separator: " ").dropFirst() {
+            guard let eq = token.firstIndex(of: "=") else { continue }
+            let key = String(token[..<eq]), value = String(token[token.index(after: eq)...])
+            seen.insert(key)
+            if value.hasPrefix("error:") {
+                out.problems.append("\(key) not set: \(value.dropFirst("error:".count).replacingOccurrences(of: "_", with: " "))")
+            } else if key == "model" {
+                out.model = value
+            } else if key == "effort" {
+                out.effort = value
+            }
+        }
+        for (key, asked) in [("model", requested.model), ("effort", requested.effort)] where asked != nil && !seen.contains(key) {
+            out.problems.append("\(key) not reported by the plugin")
+        }
+        return out
+    }
+
+    /// Adds what was applied (and what wasn't) to a decision's log.
+    func record(session: String?, project: String, in entry: inout RouterDecision) {
+        entry.add(.started(session: session, project: project, model: model, effort: effort), session: session)
+        for problem in problems { entry.add(.failed("model/effort: \(problem)")) }
     }
 }

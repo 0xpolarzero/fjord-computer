@@ -280,6 +280,49 @@ enum PluginFixture {
         #expect(RelaySigner.mac(key: Self.key, target: Self.target, nonce: Self.nonce, ts: String(Self.ts), body: Self.body) == Self.mac)
     }
 
+    @Test func theSettingsAreInsideTheSignature() throws {
+        // The same vector the plugin's tests check.
+        let mac = "a6d0f7aec97dfa6bf5f6f11f0bdd229e6d72bdc019132b7265213710c7823bb1"
+        #expect(RelaySigner.mac(key: Self.key, target: Self.target, nonce: Self.nonce, ts: String(Self.ts), body: Data(Self.body.utf8),
+                                model: "opus", effort: "high") == mac)
+        let now = Date(timeIntervalSince1970: Double(Self.ts) / 1000)
+        let signed = RelaySigner.sign(body: Self.body, target: Self.target, key: Self.key, nonce: UUID(uuidString: Self.nonce)!, now: now,
+                                      model: "opus", effort: "high")
+        #expect(signed == "⟦lookout v2 cli-target \(Self.nonce) \(Self.ts) opus high \(mac)⟧\nVXNlIFBvc3RncmVzCmFuZCBzaGlwIOKfpsOp4p+n")
+        // An absent one is a dash, and still signed: changing it changes the MAC.
+        let effortOnly = RelaySigner.sign(body: "x", target: "t", key: Self.key, nonce: UUID(uuidString: Self.nonce)!, now: now, effort: "low")
+        #expect(effortOnly.hasPrefix("⟦lookout v2 t \(Self.nonce) \(Self.ts) - low "))
+        let modelOnly = RelaySigner.sign(body: "x", target: "t", key: Self.key, nonce: UUID(uuidString: Self.nonce)!, now: now, model: "low")
+        #expect(effortOnly.suffix(80) != modelOnly.suffix(80))
+        // No settings: the v1 text every plugin reads.
+        #expect(RelaySigner.sign(body: Self.body, target: Self.target, key: Self.key, nonce: UUID(uuidString: Self.nonce)!, now: now) == Self.wire)
+        // The inbox reads either header.
+        #expect(RelayInbox.header(of: signed)?.nonce == Self.nonce && RelayInbox.header(of: signed)?.target == "cli-target")
+    }
+
+    @Test func theSettingsAreAllowlistedAndParsedFromWords() {
+        #expect(SessionSettings(model: "gpt", effort: "--x") == nil)
+        #expect(SessionSettings(model: "sonnet[1m]", effort: "bogus") == SessionSettings(model: "sonnet[1m]", effort: nil))
+        #expect(SessionSettings(model: "claude-opus-4-5", effort: "xhigh")?.effort == "xhigh")
+        #expect(SessionSettings(model: "claude-x; rm", effort: nil) == nil)
+        #expect(SessionSettings.parse("@lookout fix the bug with opus, high effort") == SessionSettings(model: "opus", effort: "high"))
+        #expect(SessionSettings.parse("start a new session using Sonnet") == SessionSettings(model: "sonnet", effort: nil))
+        #expect(SessionSettings.parse("do it with xhigh effort") == SessionSettings(model: nil, effort: "xhigh"))
+        #expect(SessionSettings.parse("effort max please") == SessionSettings(model: nil, effort: "max"))
+        #expect(SessionSettings.parse("write about opus the band") == nil)
+        #expect(SessionSettings.parse("fix the thing") == nil)
+    }
+
+    @Test func theAckSaysWhatWasApplied() {
+        let asked = SessionSettings(model: "opus", effort: "high")!
+        #expect(AppliedSettings.from(ack: "ok model=opus effort=high", requested: asked, supported: true) == AppliedSettings(model: "opus", effort: "high"))
+        let partial = AppliedSettings.from(ack: "ok model=error:unknown_model effort=high", requested: asked, supported: true)
+        #expect(partial.model == nil && partial.effort == "high" && partial.problems == ["model not set: unknown model"])
+        #expect(AppliedSettings.from(ack: "ok", requested: asked, supported: true).problems.count == 2)
+        #expect(AppliedSettings.from(ack: nil, requested: asked, supported: true).problems.count == 1)
+        #expect(AppliedSettings.from(ack: "ok", requested: asked, supported: false).problems.first?.contains("older") == true)
+    }
+
     @Test func theWireIsTheHeaderLineThenTheBodyInBase64() throws {
         let signed = RelaySigner.sign(body: Self.body, target: Self.target, key: Self.key, nonce: UUID(uuidString: Self.nonce)!,
                                       now: Date(timeIntervalSince1970: Double(Self.ts) / 1000))
@@ -631,6 +674,16 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
             }
             return nil
         }
+    }
+
+    @Test func settingsAreOnlyForPluginsThatSaySo() throws {
+        let dir = TempDir()
+        try presence(dir, "cli-v2", capabilities: ["inbox-v1", "settings-v1"])
+        try presence(dir, "cli-v1", capabilities: ["inbox-v1"])
+        let reg: [Int32: [ClaudePeers.Registered]] = [100: ["cli-v2", "cli-v1"].map { ClaudePeers.Registered(sessionID: $0, startedAt: 5) }]
+        let id = ClaudePlugin.keyID(of: key)
+        #expect(ClaudePlugin.sessions(with: ClaudePlugin.settingsCapability, in: dir.url, registry: reg, keyID: id) { _ in true } == ["cli-v2"])
+        #expect(ClaudePlugin.inboxSessions(in: dir.url, registry: reg, keyID: id) { _ in true } == ["cli-v1", "cli-v2"])
     }
 
     @Test func onlyAPluginThatSaysSoIsReachedDirectly() throws {

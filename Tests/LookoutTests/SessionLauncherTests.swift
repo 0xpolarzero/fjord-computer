@@ -5,7 +5,10 @@ import Testing
 /// Records what the launcher does instead of doing it.
 @MainActor
 private final class LauncherLog {
-    var bootstraps: [(folder: String, title: String, model: String?, effort: String?)] = []
+    var bootstraps: [(folder: String, title: String)] = []
+    var supports = true
+    var ack: String? = "ok model=opus effort=high"
+    var signedSettings: [SessionSettings?] = []
     var waited: [String] = []
     var signed: [(body: String, cli: String)] = []
     var sent: [(peer: String, prepared: Prepared)] = []
@@ -13,17 +16,19 @@ private final class LauncherLog {
 
     func effects() -> SessionLauncher.Effects {
         SessionLauncher.Effects(
-            bootstrap: { folder, title, model, effort in
+            bootstrap: { folder, title in
                 if let failure = self.failure { throw failure }
-                self.bootstraps.append((folder, title, model, effort))
+                self.bootstraps.append((folder, title))
                 return SessionStart.Started(sessionID: "local_abc", peer: "peer-abc")
             },
             pluginReady: { self.waited.append($0) },
-            sign: { body, cli in
+            supportsSettings: { _ in self.supports },
+            sign: { body, cli, settings in
                 self.signed.append((body, cli))
+                self.signedSettings.append(settings)
                 return "SIGNED:" + body
             },
-            send: { peer, prepared in self.sent.append((peer, prepared)) })
+            send: { peer, prepared in self.sent.append((peer, prepared)); return self.ack })
     }
 }
 
@@ -57,7 +62,8 @@ private final class LauncherLog {
         #expect(started.sessionID == "local_abc" && started.peer == "peer-abc")
         #expect(log.bootstraps.count == 1)
         #expect(log.bootstraps[0].folder == "/code/r" && log.bootstraps[0].title == "Fix the thing")
-        #expect(log.bootstraps[0].model == "opus" && log.bootstraps[0].effort == "high")
+        #expect(log.signedSettings == [SessionSettings(model: "opus", effort: "high")])
+        #expect(started.applied == AppliedSettings(model: "opus", effort: "high"))
         #expect(log.waited == ["abc"])
         #expect(log.signed.map(\.cli) == ["abc"])
         #expect(log.sent.count == 1 && log.sent[0].peer == "peer-abc")
@@ -68,11 +74,26 @@ private final class LauncherLog {
         let store = ready()
         let log = LauncherLog()
         try await launcher(store, log).start(folder: "/code/r", title: "t", firstMessage: "m", model: "gpt", effort: "--evil")
-        #expect(log.bootstraps[0].model == nil && log.bootstraps[0].effort == nil)
-        let plain = SessionLauncher.bootstrapArguments(uuid: "u", title: "t", model: nil, effort: nil)
-        #expect(!plain.contains("--model") && !plain.contains("--effort"))
-        let both = SessionLauncher.bootstrapArguments(uuid: "u", title: "t", model: "sonnet", effort: "max")
-        #expect(Array(both.suffix(4)) == ["--model", "sonnet", "--effort", "max"])
+        #expect(log.signedSettings == [nil])
+        let args = SessionStart.bootstrapArguments(uuid: "u", title: "t")
+        #expect(!args.contains("--model") && !args.contains("--effort"))
+    }
+
+    @Test func anOlderPluginGetsThePlainMessageAndTheLogSaysTheOverrideCouldNotApply() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        log.supports = false
+        log.ack = "ok"
+        let started = try await launcher(store, log).start(folder: "/code/r", title: "t", firstMessage: "m", model: "opus", effort: "low")
+        #expect(log.signedSettings == [nil])
+        #expect(started.applied?.problems.first?.contains("older") == true && started.applied?.model == nil)
+    }
+
+    @Test func noOverrideAsksNothingOfThePlugin() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        let started = try await launcher(store, log).start(folder: "/code/r", title: "t", firstMessage: "m")
+        #expect(started.applied == nil && log.signedSettings == [nil])
     }
 
     @Test func nothingIsStartedWhileTheRouterIsOffOrWithoutThePlugin() async {
@@ -165,9 +186,9 @@ private final class LauncherLog {
         let entry = try #require(store.router.decisions.last)
         guard case .action(let category, let thing, let actionID, let runID) = entry.trigger else { Issue.record("not an action"); return }
         #expect(category == "Contributions" && thing == "o/r#12" && actionID == request.action.uuidString && runID == request.run.uuidString)
-        #expect(entry.done == [.started(session: "local_abc", project: "r", model: "sonnet", effort: "low")])
+        #expect(entry.done == [.started(session: "local_abc", project: "r", model: "opus", effort: "high")], "what the plugin acked")
         #expect(entry.links.sessions == ["local_abc"] && entry.outcome == .done)
-        #expect(entry.doneLines == ["started a session in r (sonnet, low)"])
+        #expect(entry.doneLines == ["started a session in r (opus, high)"])
     }
 
     @Test func aFailedLaunchIsLoggedAsFailedAndLeavesNoTag() async {
@@ -227,7 +248,7 @@ private final class LauncherLog {
         let performer = FakePerformer()
         var action = CategoryAction.make(.askRouter(prompt: "go"))
         action.model = "--dangerously-skip-permissions"
-        action.effort = "xhigh"
+        action.effort = "ultra"
         var category = InboxFixture.category()
         category.actions = ActionList([action])
         let store = InboxFixture.store([], category: category)

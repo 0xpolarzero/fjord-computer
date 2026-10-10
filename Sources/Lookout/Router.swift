@@ -821,10 +821,10 @@ extension Store {
     /// Router is off, or not set up yet). The key is read off the main thread (by the switch, or `reloadRelayKey`) and used
     /// while its file is the same; here only a stat is made. A key not read yet, or changed, is read again in the
     /// background, and nil is returned meanwhile.
-    func signRelay(body: String, target: String) -> String? {
+    func signRelay(body: String, target: String, settings: SessionSettings? = nil) -> String? {
         guard let paths = routerFiles else { return nil }
         if let cached = relayKeyCache, cached.matches(paths.relayKey) {
-            return RelaySigner.sign(body: body, target: target, key: cached.key)
+            return RelaySigner.sign(body: body, target: target, key: cached.key, model: settings?.model, effort: settings?.effort)
         }
         relayKeyCache = nil
         Task { await reloadRelayKey() }
