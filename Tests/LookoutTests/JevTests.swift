@@ -62,6 +62,25 @@ final class StubProtocol: URLProtocol {
         #expect(StubProtocol.lastAuth == "Bearer ts-test")
     }
 
+    @Test func severalTypedQuestionsGoInOneCall() async throws {
+        StubProtocol.status = 200
+        StubProtocol.response = Data(#"{"answers":{"kind":{"type":"choice","choice":"asks","probabilities":{"asks":0.7,"done":0.3},"confidence":0.6},"q1":{"type":"noul","noul":0.92},"urgency":{"type":"score","score":2.4,"legend":{"1":"whenever","2":"soon","3":"now"},"confidence":0.5}}}"#.utf8)
+        let answers = try await client().ask([
+            "kind": .choice(["asks", "done"], instructions: "What state?"),
+            "q1": .noul(instructions: "Does this ask the user?", yes: "It asks"),
+            "urgency": .score(levels: ["whenever", "soon", "now"], instructions: "How urgent?"),
+        ], about: ["message": "Shall I push?"])
+        #expect(answers["kind"]?.choice?.choice == "asks")
+        #expect(answers["q1"]?.yes == 0.92)
+        // The legend numbers levels from 1: the score comes back as 0…count-1.
+        #expect(answers["urgency"]?.score == 1.4)
+        let questions = try #require(StubProtocol.lastBody?["questions"] as? [String: Any])
+        #expect((questions["q1"] as? [String: Any])?["type"] as? String == "noul")
+        #expect((questions["urgency"] as? [String: Any])?["criteria"] as? [String] == ["whenever", "soon", "now"])
+        StubProtocol.response = Data(#"{"answers":{"q1":{"type":"noul","noul":1.4}}}"#.utf8)
+        await #expect(throws: JevClient.Failure.self) { try await client().ask(["q1": .noul(instructions: "?")], about: "x") }
+    }
+
     @Test func rejectedKeyAndOddAnswersAreErrors() async {
         StubProtocol.status = 401
         StubProtocol.response = Data("{}".utf8)
