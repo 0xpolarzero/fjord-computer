@@ -192,17 +192,37 @@ import Testing
         let store = working(5)
         let ids = store.routerWorkingRows.map(\.id)
         #expect(ids.count == 5)
+        // The first `concurrency` calls wait for each other (a signal, not a sleep: on a loaded machine a timed overlap may
+        // never happen), so the bound is reached for certain; a fourth that started early would show as a higher peak.
+        let bound = RouterSummarizer.concurrency
         final class Calls: @unchecked Sendable {
+            let bound: Int
+            init(bound: Int) { self.bound = bound }
             let lock = NSLock()
             var now = 0, most = 0, total = 0
-            func change(_ by: Int) { lock.withLock { now += by; most = max(most, now); if by > 0 { total += 1 } } }
+            var waiting: [CheckedContinuation<Void, Never>] = []
+            func enter() async {
+                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                    let release: [CheckedContinuation<Void, Never>]? = lock.withLock {
+                        now += 1; total += 1; most = max(most, now)
+                        guard total <= bound else { return [c] }
+                        waiting.append(c)
+                        guard total == bound else { return nil }
+                        defer { waiting = [] }
+                        return waiting
+                    }
+                    release?.forEach { $0.resume() }
+                }
+            }
+            func leave() { lock.withLock { now -= 1 } }
         }
-        let calls = Calls()
+        let calls = Calls(bound: bound)
         let summarizer = RouterSummarizer()
         summarizer.runner = { _ in
-            calls.change(1)
-            try await Task.sleep(for: .milliseconds(40))
-            calls.change(-1)
+            await calls.enter()
+            // Yield, so the others in flight have started before this one ends.
+            await Task.yield()
+            calls.leave()
             return "Fine."
         }
         summarizer.request(ids[0], store: store)
