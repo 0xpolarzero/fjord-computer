@@ -126,4 +126,18 @@ import Testing
         model.pinPrediction(store: s)
         #expect(model.replyTo == nil && model.live.pinned == nil && model.live.prediction == nil)
     }
+
+    @Test func nothingIsAskedOnceTheComposerIsGoneAndItsDraftIsAskedAboutWhenBack() async {
+        let (s, model, calls) = setup()
+        model.live.delay = .milliseconds(100)
+        type("use sqlite for the database", model, s)
+        model.live.suspend()
+        try? await Task.sleep(for: .milliseconds(250))
+        #expect(calls() == 0 && model.live.prediction == nil, "the draft wasn't sent to Jev")
+        model.predictTarget(store: s)
+        await waitUntil(within: 2) { model.live.prediction != nil }
+        #expect(calls() == 1 && model.live.prediction?.target == "answer:local_a#w1")
+        model.live.suspend()
+        #expect(model.live.prediction == nil)
+    }
 }

@@ -61,7 +61,10 @@ struct RouterComposer: View {
         .onChange(of: model.highlighted) { _, now in
             if now == nil, let mark = model.live.prediction?.mark { model.highlighted = mark }
         }
-        .onAppear { if on { requestFocus() } }
+        .onAppear {
+            if on { requestFocus() }
+            model.predictTarget(store: store)
+        }
         .onChange(of: model.focusRequest) { requestFocus() }
         .onChange(of: focused) { _, now in
             model.composerFocused = now
@@ -70,6 +73,8 @@ struct RouterComposer: View {
         .onDisappear {
             model.composerFocused = false
             model.markPrediction(from: model.live.prediction?.mark, to: nil)
+            // Nothing of the draft goes to Jev while the composer isn't there.
+            model.live.suspend()
         }
         // The @ suggestions follow the caret, wherever it is in the text.
         .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { note in

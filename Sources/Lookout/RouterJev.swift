@@ -174,6 +174,14 @@ final class RouterLiveTarget {
         predicted = RouterDispatcher.liveKey(prediction.text, [])
     }
 
+    /// The composer is gone (its window closed, the page left): nothing more is asked, and no pick is shown, until it is
+    /// back. What you pinned or waved off stays with the draft.
+    func suspend() {
+        cancel()
+        clear()
+        current = nil
+    }
+
     /// Sent or cleared: everything starts over.
     func reset() {
         cancel()
