@@ -413,7 +413,7 @@ struct CategoriesMenu: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: CDS.GhostIcon.glyph(IconButton.Size.header), weight: .medium))
-                .foregroundStyle(hover ? Color.white : Theme.secondary)
+                .foregroundStyle(hover ? Brand.ink : Theme.secondary)
                 .frame(width: IconButton.Size.header, height: IconButton.Size.header)
                 .background(Theme.Radius.shape(CDS.GhostIcon.radius(IconButton.Size.header)).fill(hover ? Theme.Fill.hover : .clear))
         }

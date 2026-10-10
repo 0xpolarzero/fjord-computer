@@ -316,7 +316,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         window.title = "Lookout"
         window.isReleasedWhenClosed = false
         window.minSize = minSize
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = Brand.appearance
         window.backgroundColor = NSColor(CDS.Surface.s1)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -426,7 +426,7 @@ struct AppRootView: View {
         }
         .frame(minWidth: 640, minHeight: 600)
         .foregroundStyle(Theme.text)
-        .environment(\.colorScheme, .dark)
+        .environment(\.colorScheme, Brand.scheme)
         .tipSpace()
         .ignoresSafeArea(.container, edges: .top)
         .background(CDS.Surface.s1)
@@ -498,7 +498,7 @@ struct AppIconButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-                .foregroundStyle(!enabled ? CDS.Text.disabled : hovered ? Color.white : CDS.Text.secondary)
+                .foregroundStyle(!enabled ? CDS.Text.disabled : hovered ? Brand.ink : CDS.Text.secondary)
                 .frame(width: CDS.TitleBar.button, height: CDS.TitleBar.button)
                 .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
                     .fill(hovered && enabled ? CDS.Fill.ghostHover : .clear))

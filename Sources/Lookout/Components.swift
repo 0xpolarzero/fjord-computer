@@ -49,12 +49,12 @@ extension Theme {
     /// Translucent white fills, one per state, so hover looks the same everywhere: Claude's alpha steps (dark mode).
     enum Fill {
         static let rest = Color.clear
-        static let faint = Color.white.opacity(0.05)
-        static let field = Color.white.opacity(0.05)
-        static let hover = Color.white.opacity(0.075)
-        static let tile = Color.white.opacity(0.10)
-        static let selected = Color.white.opacity(0.15)
-        static let pressed = Color.white.opacity(0.15)
+        static let faint = CDS.alpha(0.05)
+        static let field = CDS.alpha(0.05)
+        static let hover = CDS.alpha(0.075)
+        static let tile = CDS.alpha(0.10)
+        static let selected = CDS.alpha(0.15)
+        static let pressed = CDS.alpha(0.15)
     }
 
     /// Claude's type: Anthropic Sans (read from the Claude app, see `ClaudeFonts`) on the CDS compact scale, at Claude's

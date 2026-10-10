@@ -9,12 +9,12 @@ enum CDS {
     // MARK: Colour (dark)
 
     static func hex(_ v: UInt32, _ a: Double = 1) -> Color {
-        Color(.sRGB, red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255,
-              opacity: a)
+        Brand.map(Color(.sRGB, red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255,
+                        opacity: a))
     }
 
     /// The neutral alpha steps: white in dark mode.
-    static func alpha(_ a: Double) -> Color { Color.white.opacity(a) }
+    static func alpha(_ a: Double) -> Color { Brand.ink.opacity(a) }
 
     enum Surface {
         static let s0 = hex(0x0B0B0B)
@@ -46,7 +46,7 @@ enum CDS {
         static let ghostHover = alpha(0.075)
         static let ghostSelected = alpha(0.15)
         static let control = alpha(0.10)
-        static let primary = Color.white
+        static let primary = Brand.ink
         static let primaryHover = hex(0xE1E0D9)
         static let accent = hex(0x2A78D6)
         static let warning = hex(0xFAB219)
@@ -280,7 +280,9 @@ enum CDS {
         let key = "\(size)-\(weight.rawValue)"
         if let cached = cache[key] { return cached }
         let font: NSFont
-        if ClaudeFonts.available, let base = NSFont(name: ClaudeFonts.name("Regular"), size: size) {
+        if let fjord = Brand.sans(size, weight) {
+            font = fjord
+        } else if ClaudeFonts.available, let base = NSFont(name: ClaudeFonts.name("Regular"), size: size) {
             let axis = NSNumber(value: 0x7767_6874) // 'wght'
             font = NSFont(descriptor: base.fontDescriptor.addingAttributes([.variation: [axis: weight.rawValue]]), size: size) ?? base
         } else {
@@ -293,7 +295,8 @@ enum CDS {
 
     /// SF Mono, as Claude falls back to (no Anthropic Mono on the Mac).
     static func mono(_ size: CGFloat, _ weight: Weight = .regular) -> Font {
-        .system(size: size, weight: weight == .regular ? .regular : .medium, design: .monospaced)
+        if let fjord = Brand.mono(size, weight) { return fjord }
+        return .system(size: size, weight: weight == .regular ? .regular : .medium, design: .monospaced)
     }
 
     nonisolated(unsafe) private static var cache: [String: NSFont] = [:]
