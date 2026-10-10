@@ -212,7 +212,9 @@ struct LookoutHub: View {
                     if let section = part.section {
                         sectionCell(section, part).padding(.vertical, 2).frame(width: Self.cell)
                     }
-                    VStack(spacing: 0) { categoryCells(part.categories) }.frame(width: Self.cell)
+                    if part.section?.isCollapsed != true {
+                        VStack(spacing: 0) { categoryCells(part.categories) }.frame(width: Self.cell)
+                    }
                 }
                 .padding(.bottom, 2)
                 .frame(width: Self.cell)
@@ -271,7 +273,7 @@ struct LookoutHub: View {
                 HStack(spacing: 0) {
                     if let section = part.section { sectionCell(section, part) }
                     // The categories' cells beside its icon.
-                    HStack(spacing: 0) { categoryCells(part.categories) }
+                    if part.section?.isCollapsed != true { HStack(spacing: 0) { categoryCells(part.categories) } }
                 }
                 .background {
                     if part.section != nil {
