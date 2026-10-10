@@ -69,6 +69,26 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         super.init()
         Self.active = self
         settle()
+        Self.watchMemory()
+    }
+
+    /// The system short of memory: the window made last lets go of what it keeps only to open faster (see `releaseKept`).
+    private static var memoryWatch: DispatchSourceMemoryPressure?
+
+    private static func watchMemory() {
+        guard memoryWatch == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { MainActor.assumeIsolated { active?.releaseKept() } }
+        source.resume()
+        memoryWatch = source
+    }
+
+    /// Lets go of the picture kept from the last close and, while the window is closed, of its content (a window's worth
+    /// of views, and the picture some 15 MB): the next opening makes them again, as a first one does.
+    func releaseKept() {
+        closedPicture = nil
+        guard phase == .idle, pending == nil, window?.isVisible != true, window?.contentViewController == nil else { return }
+        content = nil
     }
 
     /// Open, or on its way in (its morph plays before the window itself is in); one on its way out is closed already (a
@@ -77,7 +97,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// The window's content, kept while the window is closed: out of the window it stands still (no body runs, no clock,
     /// timeline or animation ticks, its tasks are cancelled), and back in it picks up where it was, its scroll positions and
     /// the rest of its state kept, its appearing (`onAppear`, `.task`, `onChange(initial:)`) run again as on a first open.
-    private var content: NSViewController?
+    private(set) var content: NSViewController?
     /// The window's picture at its last close: the next opening starts on it (see `startOpening`).
     private var closedPicture: AppTransition.Picture?
     /// An opening whose window is still to be brought in: its generation.

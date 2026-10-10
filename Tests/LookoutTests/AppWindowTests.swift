@@ -138,6 +138,27 @@ import Testing
         await waitUntil { closed == 2 }
     }
 
+    /// Short of memory, a closed window lets go of the content it kept, and the next open makes it again; an open one keeps it.
+    @Test func memoryPressureReleasesTheContentKeptWhileClosed() async throws {
+        let (window, _) = controller()
+        var closed = 0
+        window.onClose = { closed += 1 }
+        window.show(.settings)
+        away(window)
+        let content = try #require(window.content)
+        window.releaseKept()
+        #expect(window.content === content && window.window?.contentViewController === content)
+        window.close()
+        await waitUntil { closed == 1 }
+        window.releaseKept()
+        #expect(window.content == nil)
+        window.show(.settings)
+        away(window)
+        #expect(window.window?.contentViewController != nil && window.window?.contentViewController !== content)
+        window.close()
+        await waitUntil { closed == 2 }
+    }
+
     @Test func aPlaceThatIsGoneOpensOnTheFirstCategory() async {
         let (window, store) = controller()
         window.show(.category(UUID()))
