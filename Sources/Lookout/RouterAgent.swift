@@ -411,20 +411,6 @@ struct RouterContext: Equatable {
         }
     }
 
-    /// Ends the process and starts the chat over.
-    func newConversation() {
-        end()
-        let dropped = pending.count
-        pending = []
-        setPhase(.idle)
-        guard let store else { return }
-        var state = store.router
-        state.chat = []
-        state.claudeSessionID = nil
-        if state != store.router { store.router = state }
-        if dropped > 0 { append(.receipt, "Dropped \(dropped) queued message\(dropped == 1 ? "" : "s")") }
-    }
-
     /// On quit: ends the process and waits a moment (bounded) for it to be gone, so none is left behind.
     func shutdown() {
         // Haiku or a bootstrap under way is stopped too, and waited for with the rest.
@@ -446,7 +432,7 @@ struct RouterContext: Equatable {
     }
 
     /// Stops the process and its server and cancels their tool calls. A new generation: what they still say is ignored.
-    private func end() {
+    func end() {
         generation += 1
         tools.reset()
         launching = false

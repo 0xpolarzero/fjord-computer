@@ -281,21 +281,6 @@ import Testing
         #expect(agent.receipt("mcp__lookout__board", [:]) == nil && agent.receipt("ListAgents", [:]) == nil)
     }
 
-    @Test func aNewConversationClearsTheChatAndTheSessionToResume() async {
-        let dir = TempDir()
-        let s = store(dir)
-        let agent = RouterAgent(store: s)
-        agent.apply([.started(sessionID: "cli-router"), .text("Hello")])
-        #expect(!s.router.chat.isEmpty)
-        agent.newConversation()
-        #expect(s.router.chat.isEmpty && s.router.claudeSessionID == nil && agent.phase == .idle)
-        // Not found (a test has no Claude app): sending says so and fails, ready to try again.
-        agent.send("hello")
-        await settle { if case .failed = agent.phase { return true }; return false }
-        #expect(s.router.chat.map(\.role) == [.you, .error])
-        guard case .failed = agent.phase else { Issue.record("not failed"); return }
-    }
-
     @Test func nothingIsSentWhileTheRouterOrTheSessionsAreOff() {
         let dir = TempDir()
         let s = store(dir)
@@ -371,7 +356,7 @@ import Testing
         let first = try #require(events.spawned.first)
         // Once it ignores SIGTERM, end it and ask for another.
         await settle { ready(dir, first) }
-        agent.newConversation()
+        agent.end()
         agent.send("two")
         #expect(agent.phase == .starting)
         await settle { events.spawned.count == 2 }
@@ -394,7 +379,7 @@ import Testing
         for i in 0..<5 {
             agent.send("message \(i)")
             await settle { events.spawned.count > i }
-            agent.newConversation()
+            agent.end()
         }
         agent.send("last")
         await settle { events.spawned.count == 6 }
@@ -531,7 +516,7 @@ import Testing
                                           .toolResult(id: "t1", isError: false, text: "Sent")]
         // Reset before the registry is read: the old message addresses nothing.
         agent.apply(sent)
-        agent.newConversation()
+        agent.end()
         try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(s.router.cards.first { $0.id == "local_a#t1" }?.isOpen == true)
         // Switched off meanwhile: the same.
@@ -890,7 +875,7 @@ import Testing
             let helper = pid(file)
             #expect(alive(helper))
             // Stopped (or reset), then quit at once: the helper, still dying, is waited for and gone.
-            if reset { agent.newConversation() } else { agent.tools.endTurn() }
+            if reset { agent.end() } else { agent.tools.endTurn() }
             agent.shutdown()
             #expect(!alive(helper), "reset: \(reset)")
             #expect(await preparing.value?.isError == true)
