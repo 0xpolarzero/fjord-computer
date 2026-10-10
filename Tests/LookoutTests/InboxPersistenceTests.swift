@@ -62,6 +62,27 @@ import Testing
         #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
     }
 
+    @Test func aWriteThatFailedIsNotCountedAsSavedAndQuittingTriesAgain() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // Its folder isn't there yet: writing fails.
+        let file = folder.appendingPathComponent("gone", isDirectory: true).appendingPathComponent("state.json")
+
+        let first = Store()
+        first.stateFile = file
+        first.marks = ["pr:a/one#1": EntryMarks(seen: ["greptile:3"])]
+        first.flushSave()
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        // The folder is back: the change still pending is written, though nothing changed since.
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        first.flushSave()
+
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
+    }
+
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OSLog
 
 @Observable
 @MainActor
@@ -612,22 +613,29 @@ final class Store {
     private static let writer = DispatchQueue(label: "lookout.save")
 
     /// Coalesced: the write happens shortly after the last call, off the main thread.
-    func save() {
+    func save() { scheduleSave(after: .milliseconds(500)) }
+
+    private func scheduleSave(after delay: Duration) {
         // (Asked now, not when the write comes: a test that reaches the user's file is stopped where it did.)
         guard persists, !loading, file != nil else { return }
         saveTask?.cancel()
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             self?.writeSnapshot(wait: false)
         }
     }
 
-    /// Writes any pending change now (quitting).
+    /// Writes any pending change now (quitting): one that failed before is tried again, twice if need be.
     func flushSave() {
         saveTask?.cancel()
         writeSnapshot(wait: true)
+        if persistedRevision != savedRevision { writeSnapshot(wait: true) }
     }
+
+    /// Writes that failed in a row: the next is tried after a longer wait (2, 4, 8… seconds, a minute at most).
+    @ObservationIgnored private var saveFailures = 0
+    private static let stateLog = Logger(subsystem: InboxLog.subsystem, category: "state")
 
     private func writeSnapshot(wait: Bool) {
         guard persistedRevision != savedRevision, persists, !loading else {
@@ -635,20 +643,46 @@ final class Store {
             return
         }
         guard let url = file else { return }
-        savedRevision = persistedRevision
+        let revision = persistedRevision
         let box = SnapshotBox(state: PersistedState(settings: settings, agents: agents, router: router, categories: categories,
                                                        groups: groups, categorySections: categorySections, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
                                                        contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
                                                        myTeams: myTeams, login: login.isEmpty ? nil : login))
-        let write: @Sendable () -> Void = {
+        let write: @Sendable () -> String? = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
-            if let data = try? enc.encode(box.state) {
-                try? data.write(to: url, options: .atomic)
+            do {
+                try enc.encode(box.state).write(to: url, options: .atomic)
+                return nil
+            } catch {
+                return error.localizedDescription
             }
         }
-        if wait { Self.writer.sync(execute: write) } else { Self.writer.async(execute: write) }
+        if wait {
+            wrote(revision, failure: Self.writer.sync(execute: write), retry: false)
+        } else {
+            Self.writer.async {
+                let failure = write()
+                Task { @MainActor [weak self] in self?.wrote(revision, failure: failure, retry: true) }
+            }
+        }
+    }
+
+    /// Only a write that happened counts as saved: one that failed leaves the change pending, says why in the log, and is
+    /// tried again later (and when quitting).
+    private func wrote(_ revision: Int, failure: String?, retry: Bool) {
+        guard let failure else {
+            saveFailures = 0
+            savedRevision = revision
+            return
+        }
+        saveFailures += 1
+        Self.stateLog.error("saving the state failed (\(self.saveFailures, privacy: .public) in a row): \(failure, privacy: .public)")
+        // (A change made since has a write of its own coming, which retries in turn.)
+        if retry, persistedRevision == revision {
+            scheduleSave(after: .seconds(min(60, 1 << min(saveFailures, 6))))
+        }
     }
 
     private struct SnapshotBox: @unchecked Sendable { let state: PersistedState }
