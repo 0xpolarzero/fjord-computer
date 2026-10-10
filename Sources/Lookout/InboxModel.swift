@@ -94,8 +94,6 @@ struct Scope: Hashable {
         self.named = named
     }
 
-    init(kind: ThingKind) { self.init(kinds: [kind]) }
-
     /// A workflow rule: repos, branches and names rather than people.
     var isWorkflow: Bool { kinds.contains(.workflow) }
 }

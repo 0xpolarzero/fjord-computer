@@ -197,7 +197,7 @@ struct CategoryEditor: View {
                     }
                 }
                 if !c.isCI {
-                    Button { draft.wrappedValue.rules.append(Rule(scope: Scope(kind: .pr))) } label: {
+                    Button { draft.wrappedValue.rules.append(Rule(scope: Scope(kinds: [.pr]))) } label: {
                         HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("Add rule") }
                     }
                     .buttonStyle(SettingsButtonStyle(size: .sm))

@@ -18,7 +18,7 @@ import Testing
 
     @Test func aDiffSaysWhatWasCreatedChangedDeletedAndReordered() {
         let a = InboxCategory(name: "A", symbol: "eye", color: .red), b = InboxCategory(name: "B", symbol: "star", color: .blue)
-        let c = InboxCategory(name: "", symbol: "tray", color: .clay, rules: [Rule(scope: Scope(kind: .pr))])
+        let c = InboxCategory(name: "", symbol: "tray", color: .clay, rules: [Rule(scope: Scope(kinds: [.pr]))])
         var renamed = a
         renamed.name = "A2"
         let lines = InboxLog.categories(from: [a, b], to: [c, renamed], source: .editor)

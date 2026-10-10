@@ -105,7 +105,7 @@ struct CategoriesView: View {
     static func newDraft(after categories: [InboxCategory]) -> InboxCategory {
         let used = Set(categories.map(\.color))
         let color = CategoryColor.allCases.first { !used.contains($0) && $0 != .gray } ?? .blue
-        return InboxCategory(name: "", symbol: CategoryIcon.fallback, color: color, rules: [Rule(scope: Scope(kind: .pr))])
+        return InboxCategory(name: "", symbol: CategoryIcon.fallback, color: color, rules: [Rule(scope: Scope(kinds: [.pr]))])
     }
 
     /// Create: the draft goes in, one step of the page's history, and the page is back on the list.
