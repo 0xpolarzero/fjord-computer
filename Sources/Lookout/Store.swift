@@ -589,7 +589,11 @@ final class Store {
         guard let file, let data = try? Data(contentsOf: file) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        guard let state = try? dec.decode(PersistedState.self, from: data) else { return }
+        guard let state = try? dec.decode(PersistedState.self, from: data) else {
+            keepAside(file, data, dropped: ["everything"])
+            return
+        }
+        if !state.dropped.isEmpty { keepAside(file, data, dropped: state.dropped) }
         settings = state.settings
         agents = state.agents ?? AgentsState()
         router = state.router ?? RouterState()
@@ -608,6 +612,23 @@ final class Store {
         login = state.login ?? ""
         savedRevision = persistedRevision
         loadActions()
+    }
+
+    /// A file read only in part is copied aside (`state.json.bak-<date>`) before anything is written over it: what this
+    /// build couldn't read (a newer build's, or a damaged part) can still be brought back by hand.
+    private func keepAside(_ file: URL, _ data: Data, dropped: [String]) {
+        guard persists else { return }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy-MM-dd-HHmmss"
+        let stamp = format.string(from: Date())
+        let backup = file.deletingLastPathComponent().appendingPathComponent("\(file.lastPathComponent).bak-\(stamp)")
+        do {
+            try data.write(to: backup, options: .withoutOverwriting)
+            Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup.lastPathComponent, privacy: .public)")
+        } catch {
+            Self.stateLog.error("the saved state was read only in part, and keeping it aside failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static let writer = DispatchQueue(label: "lookout.save")

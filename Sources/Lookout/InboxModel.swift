@@ -344,6 +344,24 @@ struct InboxCategory: Codable, Hashable, Identifiable {
     var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : name }
 }
 
+extension InboxCategory {
+    /// Tolerant of a file from an older build: a field added since it was written (`actions`, `section`) takes its
+    /// default, where the synthesized decoding lost every category for it.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        color = try c.decode(CategoryColor.self, forKey: .color)
+        rules = try c.decodeIfPresent([Rule].self, forKey: .rules) ?? []
+        notifies = try c.decodeIfPresent(Bool.self, forKey: .notifies) ?? true
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        isCI = try c.decodeIfPresent(Bool.self, forKey: .isCI) ?? false
+        actions = try c.decodeIfPresent(ActionList.self, forKey: .actions) ?? ActionList()
+        section = try c.decodeIfPresent(UUID.self, forKey: .section)
+    }
+}
+
 struct InboxGroup: Codable, Hashable, Identifiable {
     enum Kind: String, Codable { case people, repos }
     var id = UUID()
@@ -462,6 +480,45 @@ struct Thing: Codable, Hashable, Identifiable {
     var signals: ThingSignals?
 }
 
+extension Thing {
+    /// Tolerant of a file from an older build: a field added since it was written (`behindBase`, `reviewRequests`…) takes
+    /// its default, where the synthesized decoding lost the thing (and, with it, every thing).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(ThingKind.self, forKey: .kind)
+        repo = try c.decode(String.self, forKey: .repo)
+        number = try c.decodeIfPresent(Int.self, forKey: .number)
+        title = try c.decode(String.self, forKey: .title)
+        url = try c.decode(URL.self, forKey: .url)
+        author = try c.decodeIfPresent(Person.self, forKey: .author)
+        status = try c.decodeIfPresent(ThingStatus.self, forKey: .status) ?? .open
+        labels = try c.decodeIfPresent([String].self, forKey: .labels) ?? []
+        assignees = try c.decodeIfPresent([String].self, forKey: .assignees) ?? []
+        requestedReviewers = try c.decodeIfPresent([String].self, forKey: .requestedReviewers) ?? []
+        mentioned = try c.decodeIfPresent([String].self, forKey: .mentioned) ?? []
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        comments = try c.decodeIfPresent([ThingComment].self, forKey: .comments) ?? []
+        reviews = try c.decodeIfPresent([ThingReview].self, forKey: .reviews) ?? []
+        threads = try c.decodeIfPresent([ThingThread].self, forKey: .threads) ?? []
+        commits = try c.decodeIfPresent([ThingCommit].self, forKey: .commits) ?? []
+        checks = try c.decodeIfPresent(CheckState.self, forKey: .checks)
+        hasConflicts = try c.decodeIfPresent(Bool.self, forKey: .hasConflicts) ?? false
+        behindBase = try c.decodeIfPresent(Bool.self, forKey: .behindBase) ?? false
+        headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
+        reviewRequests = try c.decodeIfPresent([ThingReviewRequest].self, forKey: .reviewRequests) ?? []
+        greptileScore = try c.decodeIfPresent(Int.self, forKey: .greptileScore)
+        workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        failingJobs = try c.decodeIfPresent([String].self, forKey: .failingJobs) ?? []
+        additions = try c.decodeIfPresent(Int.self, forKey: .additions)
+        deletions = try c.decodeIfPresent(Int.self, forKey: .deletions)
+        changedFiles = try c.decodeIfPresent(Int.self, forKey: .changedFiles)
+        signals = try c.decodeIfPresent(ThingSignals.self, forKey: .signals)
+    }
+}
+
 /// Jev's verdicts on a thing, each asked once for what it was judged on.
 struct ThingSignals: Codable, Hashable {
     /// By comment, review or thread reply id: every message Jev read.
@@ -529,6 +586,19 @@ struct EntryMarks: Codable, Hashable {
     /// counts after Done leaves the category's rules nothing new to match (so it doesn't fall into a later category).
     var doneIn: UUID?
     var doneFacts: [Fact]?
+}
+
+extension EntryMarks {
+    /// Tolerant of a file from an older build: a set it didn't write yet is empty.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seen = try c.decodeIfPresent(Set<String>.self, forKey: .seen) ?? []
+        acked = try c.decodeIfPresent(Set<String>.self, forKey: .acked) ?? []
+        notified = try c.decodeIfPresent(Set<String>.self, forKey: .notified) ?? []
+        doneAt = try c.decodeIfPresent(Date.self, forKey: .doneAt)
+        doneIn = try c.decodeIfPresent(UUID.self, forKey: .doneIn)
+        doneFacts = try c.decodeIfPresent([Fact].self, forKey: .doneFacts)
+    }
 }
 
 /// Resolves what slots name that the engine can't know alone.

@@ -125,23 +125,40 @@ struct PersistedState: Codable {
         self.login = login
     }
 
+    /// The parts the file had that this build could not read (a damaged file, or one from a build whose parts this one
+    /// doesn't know): they are lost when the state is next saved, so the file is kept aside first (see `Store.load`).
+    var dropped: [String] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case settings, agents, router, categories, groups, categorySections, things, marks, categoryBaselines, ownedRepos,
+             contributedRepos, reposResolvedAt, myTeams, login
+    }
+
     /// Tolerant: a file from before the categories (repos, items, ci) loses that data and loads the rest; a part that no
-    /// longer decodes is lost alone.
+    /// longer decodes is lost alone (and named in `dropped`).
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        settings = (try? c.decodeIfPresent(AppSettings.self, forKey: .settings)) ?? AppSettings()
-        agents = try? c.decodeIfPresent(AgentsState.self, forKey: .agents)
-        router = try? c.decodeIfPresent(RouterState.self, forKey: .router)
-        categories = try? c.decodeIfPresent([InboxCategory].self, forKey: .categories)
-        groups = try? c.decodeIfPresent([InboxGroup].self, forKey: .groups)
-        categorySections = try? c.decodeIfPresent([CategorySection].self, forKey: .categorySections)
-        things = try? c.decodeIfPresent([String: Thing].self, forKey: .things)
-        marks = try? c.decodeIfPresent([String: EntryMarks].self, forKey: .marks)
-        categoryBaselines = try? c.decodeIfPresent([UUID: Set<UUID>].self, forKey: .categoryBaselines)
-        ownedRepos = try? c.decodeIfPresent(Set<String>.self, forKey: .ownedRepos)
-        contributedRepos = try? c.decodeIfPresent(Set<String>.self, forKey: .contributedRepos)
-        reposResolvedAt = try? c.decodeIfPresent(Date.self, forKey: .reposResolvedAt)
-        myTeams = try? c.decodeIfPresent(Set<String>.self, forKey: .myTeams)
-        login = try? c.decodeIfPresent(String.self, forKey: .login)
+        var dropped: [String] = []
+        func part<T: Decodable>(_ key: CodingKeys) -> T? {
+            do { return try c.decodeIfPresent(T.self, forKey: key) } catch {
+                dropped.append(key.stringValue)
+                return nil
+            }
+        }
+        settings = part(.settings) ?? AppSettings()
+        agents = part(.agents)
+        router = part(.router)
+        categories = part(.categories)
+        groups = part(.groups)
+        categorySections = part(.categorySections)
+        things = part(.things)
+        marks = part(.marks)
+        categoryBaselines = part(.categoryBaselines)
+        ownedRepos = part(.ownedRepos)
+        contributedRepos = part(.contributedRepos)
+        reposResolvedAt = part(.reposResolvedAt)
+        myTeams = part(.myTeams)
+        login = part(.login)
+        self.dropped = dropped
     }
 }

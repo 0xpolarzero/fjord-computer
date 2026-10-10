@@ -83,6 +83,70 @@ import Testing
         #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
     }
 
+    /// The first inbox's file (fed5f6c): categories with no `actions` or `section`, rules with one `kind`, things with no
+    /// `behindBase`, `headSha` or `reviewRequests`, and no sections.
+    static let firstInboxFile = #"""
+    {"settings": {"pollInterval": 60, "notifications": true},
+     "categories": [{"id": "0E7C1A52-6A3B-4C59-9E0D-1F2A3B4C5D6E", "name": "Reviews", "symbol": "eye", "color": "violet",
+                     "rules": [{"id": "5B0F3D9E-2C7A-4E1B-8F6D-7A8B9C0D1E2F", "scope": {"kind": "pr", "toRoles": ["reviewRequested"]},
+                                "match": "any", "conditions": [], "createdAt": "2026-10-10T09:00:00Z"}],
+                     "notifies": false, "hidden": false, "isCI": false}],
+     "groups": [{"id": "9D8C7B6A-5F4E-4D3C-8B2A-1F0E9D8C7B6A", "name": "Friends", "kind": "people", "members": ["octo"]}],
+     "things": {"pr:a/one#1": {"id": "pr:a/one#1", "kind": "pr", "repo": "a/one", "number": 1, "title": "Fix the build",
+                               "url": "https://github.com/a/one/pull/1", "status": "open", "labels": [], "assignees": [],
+                               "requestedReviewers": ["me"], "mentioned": [], "createdAt": "2026-10-09T09:00:00Z",
+                               "updatedAt": "2026-10-10T09:00:00Z", "comments": [], "reviews": [], "threads": [], "commits": [],
+                               "hasConflicts": false, "failingJobs": []}},
+     "marks": {"pr:a/one#1": {"seen": ["k"], "acked": ["k"], "notified": ["k"], "doneAt": "2026-10-10T10:00:00Z"}},
+     "categoryBaselines": ["0E7C1A52-6A3B-4C59-9E0D-1F2A3B4C5D6E", ["5B0F3D9E-2C7A-4E1B-8F6D-7A8B9C0D1E2F"]],
+     "ownedRepos": ["me/own"], "contributedRepos": [], "reposResolvedAt": "2026-10-10T08:00:00Z"}
+    """#
+
+    @Test func theFirstInboxsFileKeepsItsCategoriesThingsAndMarks() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        try Data(Self.firstInboxFile.utf8).write(to: file)
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        #expect(store.categories.map(\.name) == ["Reviews"])
+        #expect(store.categories.first?.actions.isEmpty == true && store.categories.first?.notifies == false)
+        #expect(store.categories.first?.rules.first?.scope.kinds == [.pr])
+        #expect(store.groups.map(\.members) == [["octo"]])
+        #expect(store.things["pr:a/one#1"]?.behindBase == false && store.things["pr:a/one#1"]?.reviewRequests == [])
+        #expect(store.marks["pr:a/one#1"]?.acked == ["k"])
+        #expect(store.categorySections == [.github])
+        #expect(store.categoryBaselines.count == 1)
+        // Nothing was lost: nothing is kept aside.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["state.json"])
+    }
+
+    @Test func aFileReadOnlyInPartIsKeptAsideBeforeItIsWrittenOver() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let original = Data(#"{"settings": {"pollInterval": 45, "notifications": true}, "categories": [{"name": 5}]}"#.utf8)
+        try original.write(to: file)
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(backups.count == 1)
+        #expect(try backups.first.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == original)
+
+        // A file that isn't read at all is kept aside too.
+        let other = try self.folder()
+        defer { try? FileManager.default.removeItem(at: other) }
+        try Data("not json".utf8).write(to: other.appendingPathComponent("state.json"))
+        let second = Store()
+        second.stateFile = other.appendingPathComponent("state.json")
+        second.load()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: other.path).contains { $0.hasPrefix("state.json.bak-") })
+    }
+
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
