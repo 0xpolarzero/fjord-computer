@@ -782,7 +782,7 @@ extension Store {
             let known = Set(router.cards.map(\.id))
             router = state
             let fresh = state.cards.filter { $0.isOpen && !known.contains($0.id) }
-            if !fresh.isEmpty { onNewRouterCards?(fresh) }
+            if !fresh.isEmpty { announceRouterCards(fresh) }
         }
         // What the turns ended on (Jev), and the waits that are over.
         triageTurns()
