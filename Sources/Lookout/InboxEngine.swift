@@ -424,10 +424,10 @@ enum InboxEngine {
             // Answering there is what stops a question asking: only what came after your latest word, and after Done.
             let after = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast)
             return messages(thing).filter { m in
-                m.at > after && !isMe(m.author, r) && thing.signals?.messages[m.id]?.asksMe == true
+                m.at > after && !isMe(m.author, r) && signals(thing, r.me)?.messages[m.id]?.asksMe == true
             }.map { Fact(key: "asks:\($0.id)", label: "Asks you", tint: .attention) }
         case .noise(let wanted):
-            return messages(thing).filter { m in m.at > cutoff && !isMe(m.author, r) && isNoise(m, thing) == wanted }.map {
+            return messages(thing).filter { m in m.at > cutoff && !isMe(m.author, r) && isNoise(m, thing, me: r.me) == wanted }.map {
                 wanted ? Fact(key: "noise:\($0.id)", label: "noise from @\($0.author.login)")
                     : Fact(key: "person:\($0.id)", label: "comment by @\($0.author.login)", tint: .attention)
             }
@@ -467,9 +467,18 @@ enum InboxEngine {
         return (comments + replies).sorted { $0.at < $1.at }
     }
 
+    /// A login as signals keep it: lowercased, without `@` or `[bot]`.
+    static func viewer(_ login: String) -> String { normalize(login) }
+
+    /// What Jev said of a thing for `me` (any login form): nothing when it was read for someone else.
+    static func signals(_ thing: Thing, _ me: String) -> ThingSignals? {
+        guard let signals = thing.signals, !me.isEmpty, signals.viewer == normalize(me) else { return nil }
+        return signals
+    }
+
     /// Noise: what Jev said of it once it read it (nil when it wasn't sure); before that, whether a bot wrote it.
-    static func isNoise(_ m: Message, _ thing: Thing) -> Bool? {
-        guard let signal = thing.signals?.messages[m.id] else { return m.author.isBot }
+    static func isNoise(_ m: Message, _ thing: Thing, me: String) -> Bool? {
+        guard let signal = signals(thing, me)?.messages[m.id] else { return m.author.isBot }
         return signal.noise
     }
 
@@ -493,7 +502,7 @@ enum InboxEngine {
 
     /// Jev's rating of what is asked of you now; nil when nothing is, or it wasn't rated (or wasn't sure).
     private static func importance(_ thing: Thing, _ r: Resolved) -> Importance? {
-        guard let signal = thing.signals?.importance, let stamp = importanceStamp(thing, r), signal.stamp == stamp else { return nil }
+        guard let signal = signals(thing, r.me)?.importance, let stamp = importanceStamp(thing, r), signal.stamp == stamp else { return nil }
         return signal.level
     }
 

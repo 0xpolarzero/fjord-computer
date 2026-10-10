@@ -463,6 +463,8 @@ struct ThingSignals: Codable, Hashable {
     /// By comment, review or thread reply id: every message Jev read.
     var messages: [String: MessageSignal] = [:]
     var importance: ImportanceSignal?
+    /// Whose inbox Jev read it for (a login as `InboxEngine.viewer` writes it): signed in as someone else, it says nothing.
+    var viewer: String?
 }
 
 /// What Jev said of one message; nil where it wasn't sure.

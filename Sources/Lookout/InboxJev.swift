@@ -42,12 +42,13 @@ enum InboxJev {
         var reads: [Work.Read] = []
         var ratings: [(Work.Rating, Date)] = []
         for thing in things.values where thing.kind != .workflow && (thing.status == .open || thing.status == .draft) {
-            let judged = thing.signals?.messages ?? [:]
+            let mine = InboxEngine.signals(thing, me)
+            let judged = mine?.messages ?? [:]
             for m in InboxEngine.messages(thing) where judged[m.id] == nil && m.author.login.lowercased() != me
                 && context.now.timeIntervalSince(m.at) < horizon {
                 reads.append(Work.Read(thing: thing.id, message: m))
             }
-            if let stamp = InboxEngine.importanceStamp(thing, context: context), thing.signals?.importance?.stamp != stamp {
+            if let stamp = InboxEngine.importanceStamp(thing, context: context), mine?.importance?.stamp != stamp {
                 ratings.append((Work.Rating(thing: thing.id, stamp: stamp), thing.updatedAt))
             }
         }
@@ -87,15 +88,20 @@ enum InboxJev {
         return (questions, state)
     }
 
-    /// The answers, onto `things`: every message asked is read (unsure included), every thing asked is rated.
-    static func apply(_ answers: [String: JevClient.Answer], _ work: Work, to things: inout [String: Thing]) {
+    /// The answers, onto `things`, for `me`: every message asked is read (unsure included), every thing asked is rated.
+    /// What was read for someone else is dropped.
+    static func apply(_ answers: [String: JevClient.Answer], _ work: Work, for me: String, to things: inout [String: Thing]) {
+        let viewer = InboxEngine.viewer(me)
+        func fresh(_ id: String) -> ThingSignals {
+            things[id].flatMap { InboxEngine.signals($0, me) } ?? ThingSignals(viewer: viewer)
+        }
         func verdict(_ key: String) -> Bool? {
             guard let p = answers[key]?.yes else { return nil }
             return p >= sure ? true : p <= 1 - sure ? false : nil
         }
         for (i, read) in work.reads.enumerated() where things[read.thing] != nil {
             let id = "m\(i + 1)"
-            var signals = things[read.thing]?.signals ?? ThingSignals()
+            var signals = fresh(read.thing)
             signals.messages[read.message.id] = MessageSignal(asksMe: read.asks ? verdict(id + "_asks") : nil, noise: verdict(id + "_noise"))
             things[read.thing]?.signals = signals
         }
@@ -105,28 +111,30 @@ enum InboxJev {
                 let index = min(max(Int(score.rounded()), 0), Importance.allCases.count - 1)
                 level = Importance.allCases[index]
             }
-            var signals = things[rating.thing]?.signals ?? ThingSignals()
+            var signals = fresh(rating.thing)
             signals.importance = ImportanceSignal(level: level, stamp: rating.stamp)
             things[rating.thing]?.signals = signals
         }
     }
 
-    /// A refreshed thing keeps what Jev said of the messages it still has, and its rating.
-    static func carry(_ old: ThingSignals?, into thing: inout Thing) {
-        guard var signals = old, thing.kind != .workflow else { return }
+    /// A refreshed thing keeps what Jev said of the messages it still has, and its rating, when it was said for `me`.
+    static func carry(_ old: ThingSignals?, into thing: inout Thing, me: String) {
+        guard thing.kind != .workflow else { return }
+        guard var signals = old, !me.isEmpty, signals.viewer == InboxEngine.viewer(me) else { thing.signals = nil; return }
         let ids = Set(InboxEngine.messages(thing).map(\.id))
         signals.messages = signals.messages.filter { ids.contains($0.key) }
         thing.signals = signals.messages.isEmpty && signals.importance == nil ? nil : signals
     }
 
     /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).
-    static func isQuiet(_ fact: Fact, _ thing: Thing) -> Bool {
+    static func isQuiet(_ fact: Fact, _ thing: Thing, me: String) -> Bool {
+        let signals = InboxEngine.signals(thing, me)
         let parts = fact.key.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return false }
         switch parts[0] {
         case "noise": return true
-        case "comment", "review", "mention", "last", "person": return thing.signals?.messages[parts[1]]?.noise == true
-        case "thread": return thing.signals?.messages[String(parts[1].split(separator: ":").last ?? "")]?.noise == true
+        case "comment", "review", "mention", "last", "person": return signals?.messages[parts[1]]?.noise == true
+        case "thread": return signals?.messages[String(parts[1].split(separator: ":").last ?? "")]?.noise == true
         default: return false
         }
     }
@@ -215,9 +223,11 @@ extension Store {
         let (questions, state) = InboxJev.request(work, things: things, context: context)
         do {
             let answers = try await ask(questions, state)
-            // Onto the things as they are now: the refresh may have moved on while Jev answered.
+            // Onto the things as they are now: the refresh may have moved on while Jev answered. Signed in as someone else
+            // meanwhile, the answers were about another's inbox.
+            guard InboxEngine.viewer(inboxContext.me) == InboxEngine.viewer(context.me) else { return }
             var next = things
-            InboxJev.apply(answers, work, to: &next)
+            InboxJev.apply(answers, work, for: context.me, to: &next)
             if next != things { things = next }
         } catch {
             inboxJevPausedUntil = Date().addingTimeInterval(InboxJev.pause)

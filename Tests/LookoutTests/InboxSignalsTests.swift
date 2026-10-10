@@ -34,7 +34,7 @@ import Testing
         // Nothing judged: no fact, never a guess.
         #expect(keys([.asksMe], t) == nil)
         t.signals = ThingSignals(messages: ["c1": MessageSignal(asksMe: true, noise: false), "c2": MessageSignal(asksMe: nil),
-                                            "r1": MessageSignal(asksMe: true)])
+                                            "r1": MessageSignal(asksMe: true)], viewer: "me")
         // Unsure (c2) is no fact; a thread reply asks like a comment.
         #expect(keys([.asksMe], t) == ["asks:c1", "asks:r1"])
         let entry = InboxEngine.facts(Rule(scope: Scope(kinds: [.pr]), conditions: [.asksMe], createdAt: .distantPast), t,
@@ -54,7 +54,7 @@ import Testing
         #expect(keys([.noise(true)], t) == ["noise:b"])
         #expect(keys([.noise(false)], t) == ["person:h", "person:c"])
         // Jev reads the CI account as automated; a bot it reads as a person's words is no longer noise; unsure is neither.
-        t.signals = ThingSignals(messages: ["c": MessageSignal(noise: true), "b": MessageSignal(noise: false), "h": MessageSignal()])
+        t.signals = ThingSignals(messages: ["c": MessageSignal(noise: true), "b": MessageSignal(noise: false), "h": MessageSignal()], viewer: "me")
         #expect(keys([.noise(true)], t) == ["noise:c"])
         #expect(keys([.noise(false)], t) == ["person:b"])
     }
@@ -66,7 +66,7 @@ import Testing
         t.reviewRequests = [ThingReviewRequest(reviewer: "acme/core", at: asked)]
         let stamp = InboxEngine.importanceStamp(t, context: context)
         #expect(stamp == "requested:\(Int(asked.timeIntervalSince1970))")
-        t.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: stamp!))
+        t.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: stamp!), viewer: "me")
         #expect(keys([.importance(.high)], t) == ["importance:urgent:\(stamp!)"])
         let entries = InboxEngine.evaluate(things: [t], categories: [InboxCategory(name: "R", symbol: "eye", color: .blue,
             rules: [Rule(scope: Scope(kinds: [.pr]), createdAt: .distantPast)])], marks: [:], context: context)
@@ -90,7 +90,8 @@ import Testing
         var t = pr()
         t.requestedReviewers = ["me"]
         t.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now.addingTimeInterval(-6000))]
-        t.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: InboxEngine.importanceStamp(t, context: context)!))
+        t.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: InboxEngine.importanceStamp(t, context: context)!),
+                                 viewer: "me")
         let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.importance(.high)], createdAt: .distantPast)
         let old = InboxEngine.facts(rule, t, marks: nil, context: context)!.map(\.key)
         let done = EntryMarks(acked: Set(old), doneAt: now.addingTimeInterval(-3000))
@@ -121,7 +122,8 @@ import Testing
         let old = try JSONDecoder().decode(Thing.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(old.signals == nil && old.additions == nil && old == t)
         var judged = t
-        judged.signals = ThingSignals(messages: ["c": MessageSignal(asksMe: true)], importance: ImportanceSignal(level: .high, stamp: "assigned"))
+        judged.signals = ThingSignals(messages: ["c": MessageSignal(asksMe: true)], importance: ImportanceSignal(level: .high, stamp: "assigned"),
+                                      viewer: "me")
         #expect(try JSONDecoder().decode(Thing.self, from: JSONEncoder().encode(judged)) == judged)
     }
 
@@ -224,6 +226,29 @@ import Testing
         #expect(asked == 1 && s.inboxJevPausedUntil > Date())
     }
 
+    @Test func whatJevSaidForOneAccountSaysNothingForAnother() async {
+        let (s, calls) = store([pr(1, comments: [comment("c1", tok)])])
+        await s.readInbox()
+        #expect(s.things["pr:a/one#1"]?.signals?.viewer == "me" && s.entries.first?.facts.map(\.key) == ["asks:c1"])
+        // Signed in as Bob: Alice's "asks you" isn't his, and a refresh lets it go; Jev reads it again, for him.
+        s.me = GHUser(login: "Bob", avatarUrl: nil, type: "User")
+        #expect(s.entries.isEmpty)
+        s.applyThings(s.things)
+        #expect(s.things["pr:a/one#1"]?.signals == nil)
+        await s.readInbox()
+        #expect(calls.questions.count == 2 && s.things["pr:a/one#1"]?.signals?.viewer == "bob")
+        // An answer that comes back after the account changed is dropped.
+        var next = s.things
+        next["pr:a/one#1"]?.comments.append(comment("c2", tok, ago: 5))
+        s.applyThings(next)
+        s.inboxAsker = { questions, _ in
+            s.me = GHUser(login: "carol", avatarUrl: nil, type: "User")
+            return questions.mapValues { _ in .noul(0.9) }
+        }
+        await s.readInbox()
+        #expect(s.things["pr:a/one#1"]?.signals?.messages["c2"] == nil)
+    }
+
     @Test func aReviewRequestIsRatedOnceForEachRequest() async {
         var t = pr(1, comments: [])
         t.requestedReviewers = ["me"]
@@ -274,7 +299,7 @@ import Testing
         func pr(_ n: Int, minutes: Double, level: Importance?) -> Thing {
             var t = InboxFixture.pr(n, greptile: nil, updated: now.addingTimeInterval(-minutes * 60))
             t.assignees = ["me"]
-            if let level { t.signals = ThingSignals(importance: ImportanceSignal(level: level, stamp: "assigned")) }
+            if let level { t.signals = ThingSignals(importance: ImportanceSignal(level: level, stamp: "assigned"), viewer: "me") }
             return t
         }
         let category = InboxCategory(name: "Mine", symbol: "star", color: .blue,

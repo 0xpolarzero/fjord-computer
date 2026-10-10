@@ -498,7 +498,7 @@ enum Demo {
         let context = InboxContext(me: me.login)
         func jev(_ id: String, asks: [String] = [], noise: [String] = [], importance: Importance? = nil) {
             guard let i = things.firstIndex(where: { $0.id == id }) else { return }
-            var signals = ThingSignals()
+            var signals = ThingSignals(viewer: InboxEngine.viewer(me.login))
             for m in InboxEngine.messages(things[i]) where m.author.login != me.login {
                 signals.messages[m.id] = MessageSignal(asksMe: m.author.isBot ? nil : asks.contains(m.id), noise: noise.contains(m.id))
             }
