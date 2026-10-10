@@ -249,7 +249,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// overlay shrinks into the bar's cell, then it really closes.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard AppTransition.enabled, phase != .closing, phase == .opening || isFront else { return phase != .closing }
-        let interrupting = phase == .opening
+        // An opening whose overlay has let go of its picture shows the real window already: it closes as an open one does.
+        let interrupting = phase == .opening && run?.handedOver != true
         phase = .closing
         generation += 1
         let mine = generation

@@ -175,6 +175,9 @@ enum AppTransition {
         private(set) var imageIsKey: Bool
         /// When the animation under way has settled (media time): the overlay does not go before.
         private var settlesAt: CFTimeInterval = 0
+        /// The opening has handed over: its picture is gone and the real window's live pixels show (the overlay's shadow
+        /// may still be fading). Nothing is left to turn round: a close starts from the window as it is.
+        private(set) var handedOver = false
 
         fileprivate init(window: NSWindow, image: CGImage?, imageIsKey: Bool, screen: NSScreen, bar: BarMorph?,
                          radius: CGFloat) {
@@ -266,6 +269,8 @@ enum AppTransition {
         }
 
         private func containers(set pose: Pose) {
+            // The handoff's cut-out (see `letGo`) is no part of any pose: the whole shadow shows again.
+            shadow.mask = nil
             let rect = local(pose.rect)
             for layer in [container, shadow] {
                 layer.bounds = CGRect(origin: .zero, size: rect.size)
@@ -526,6 +531,7 @@ enum AppTransition {
         /// The window's picture goes at once (the real window under it has the same pixels, and its own are live), the
         /// overlay's shadow gives way to the window's own, then the overlay goes.
         private func letGo(_ mine: Int, finished: @escaping () -> Void) {
+            handedOver = true
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             container.opacity = 0

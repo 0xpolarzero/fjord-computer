@@ -378,6 +378,28 @@ import Testing
         }
     }
 
+    /// Once the overlay has let go of its picture (the real window's live pixels show, the overlay's shadow still fading),
+    /// a close is a close of the window as it is: a fresh picture, shown before the real window goes, which then shrinks
+    /// into the bar, rather than the opening's overlay turned round from nothing to see.
+    @Test func closingAsTheOverlayLetsGoMorphsFromAFreshPicture() {
+        morphing { controller, ticks in
+            controller.show(.settings)
+            guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+            ticks.turns.removeFirst()()
+            opened.complete()
+            ticks.blocks.removeFirst()()
+            ticks.blocks.removeFirst()()
+            #expect(opened.handedOver && controller.phase == .opening && window.isVisible)
+            controller.close()
+            guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
+            #expect(controller.phase == .closing && closing !== opened && closing.image != nil)
+            // The overlay shows the window before the real one goes.
+            #expect(window.isVisible && closing.overlay.isVisible && ticks.blocks.count == 1)
+            ticks.blocks.removeFirst()()
+            #expect(!window.isVisible && closing.startPose?.container == 1 && closing.startPose?.window == 1)
+        }
+    }
+
     @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
         morphing { controller, ticks in
             controller.show(.settings)
