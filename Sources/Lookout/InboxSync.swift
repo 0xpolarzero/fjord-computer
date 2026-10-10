@@ -10,7 +10,7 @@ enum InboxSync {
     static let maxThings = 150
     /// Searches in one request.
     static let searchesPerRequest = 4
-    /// Searches a refresh makes at most; rules past it are over-fetched less precisely rather than dropped.
+    /// Searches a refresh makes at most, shared out a turn at a time between the rules so that none goes without.
     static let maxSearches = 16
     /// Workflow things a refresh checks at most.
     static let maxWorkflows = 30
@@ -27,22 +27,30 @@ enum InboxSync {
     }
 
     /// The GitHub search queries that cover every rule's PRs and issues. What search can't say (maintainers, bots, `except`
-    /// of groups) is left out, so a query may return more than the rule matches: the engine decides.
-    static func searches(categories: [InboxCategory], groups: [InboxGroup], me: String, owned: Set<String>,
-                         contributed: Set<String>, myTeams: Set<String> = [], now: Date = Date()) -> [String] {
-        var out: [String] = []
+    /// of groups) is left out, so a query may return more than the rule matches: the engine decides. Past the cap, every
+    /// rule still gets its first queries: they are taken a turn per rule, not the first rules' all.
+    static func searches(categories: [InboxCategory], groups: [InboxGroup], me: String, contributed: Set<String>,
+                         myTeams: Set<String> = [], now: Date = Date()) -> [String] {
         let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-Double(closedDays) * 86400)).prefix(10)
+        var perRule: [[String]] = []
         for category in categories {
             for rule in category.rules where rule.scope.kind != .workflow {
-                let queries = searches(for: rule, groups: groups, me: me, owned: owned, contributed: contributed, myTeams: myTeams)
-                for query in queries {
-                    out.append(query + " is:open")
-                    if asksForClosed(rule) { out.append(query + " is:closed updated:>=\(since)") }
-                }
+                let queries = searches(for: rule, groups: groups, me: me, contributed: contributed, myTeams: myTeams)
+                perRule.append(queries.flatMap { query in
+                    [query + " is:open"] + (asksForClosed(rule) ? [query + " is:closed updated:>=\(since)"] : [])
+                })
             }
         }
+        var out: [String] = []
         var seen = Set<String>()
-        return Array(out.filter { seen.insert($0).inserted }.prefix(maxSearches))
+        var turn = 0
+        while out.count < maxSearches, perRule.contains(where: { turn < $0.count }) {
+            for queries in perRule where turn < queries.count && out.count < maxSearches {
+                if seen.insert(queries[turn]).inserted { out.append(queries[turn]) }
+            }
+            turn += 1
+        }
+        return out
     }
 
     /// People a slot names as search logins, nil when search can't say it (anyone, maintainers, bots).
@@ -83,8 +91,9 @@ enum InboxSync {
         login.hasSuffix("[bot]") ? "app/" + login.dropLast(5) : login
     }
 
-    /// Repo qualifiers a slot names (`repo:`/`user:`), and `involves:` when it says anywhere you're involved.
-    static func places(_ pick: Pick<RepoRef>?, groups: [InboxGroup], owned: Set<String>, contributed: Set<String>)
+    /// Repo qualifiers a slot names (`repo:`/`user:`), and `involves:` when it says anywhere you're involved. Repos you own
+    /// are `user:` you, one qualifier however many there are (each a `repo:` would take the searches of a hundred repos).
+    static func places(_ pick: Pick<RepoRef>?, groups: [InboxGroup], me: String, contributed: Set<String>)
         -> (qualifiers: [String], involved: Bool, except: [String]) {
         guard let pick else { return ([], false, []) }
         func qualifier(_ name: String) -> String? {
@@ -96,7 +105,7 @@ enum InboxSync {
             case .repo(let name): [qualifier(name)].compactMap { $0 }
             case .owner(let owner): ["user:" + owner]
             case .group(let id): (groups.first { $0.id == id && $0.kind == .repos }?.members ?? []).compactMap(qualifier)
-            case .owned: owned.sorted().map { "repo:" + $0 }
+            case .owned: ["user:" + me]
             case .contributed: contributed.sorted().map { "repo:" + $0 }
             case .involved: []
             }
@@ -108,7 +117,7 @@ enum InboxSync {
     }
 
     /// Queries (without state) for one PR or issue rule.
-    static func searches(for rule: Rule, groups: [InboxGroup], me: String, owned: Set<String>, contributed: Set<String>,
+    static func searches(for rule: Rule, groups: [InboxGroup], me: String, contributed: Set<String>,
                          myTeams: Set<String> = []) -> [String] {
         let scope = rule.scope
         let base = (scope.kind == .pr ? "is:pr" : "is:issue") + " archived:false"
@@ -145,7 +154,7 @@ enum InboxSync {
         if authors.count * toQualifiers.count > maxSearches { authors = [nil] }
         if authors.count * toQualifiers.count > maxSearches { toQualifiers = [nil] }
 
-        let place = places(scope.in, groups: groups, owned: owned, contributed: contributed)
+        let place = places(scope.in, groups: groups, me: me, contributed: contributed)
         var clauses: [[String]] = []
         if place.involved || (place.qualifiers.isEmpty && scope.by == nil && scope.to == nil) {
             clauses.append(["involves:" + me])
@@ -591,8 +600,8 @@ extension Store {
                 if ownedRepos.isEmpty && contributedRepos.isEmpty { inboxError = error.localizedDescription; return }
             }
         }
-        let searches = InboxSync.searches(categories: categories, groups: groups, me: me, owned: ownedRepos,
-                                          contributed: contributedRepos, myTeams: myTeams)
+        let searches = InboxSync.searches(categories: categories, groups: groups, me: me, contributed: contributedRepos,
+                                          myTeams: myTeams)
         let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
                                                 contributed: contributedRepos)
         guard !searches.isEmpty || !targets.isEmpty else {

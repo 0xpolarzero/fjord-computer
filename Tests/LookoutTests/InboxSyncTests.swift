@@ -132,7 +132,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     }
 
     private func searches(_ categories: [InboxCategory], groups: [InboxGroup] = []) -> [String] {
-        InboxSync.searches(categories: categories, groups: groups, me: "me", owned: ["me/own"], contributed: ["o/c"],
+        InboxSync.searches(categories: categories, groups: groups, me: "me", contributed: ["o/c"],
                            now: Date(timeIntervalSince1970: 1_791_000_000))
     }
 
@@ -164,8 +164,18 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         let q = searches([rule(Scope(kind: .pr, by: Pick(include: [.group(people.id)]),
                                      in: Pick(include: [.group(repos.id), .owned, .contributed])))], groups: [people, repos])
         #expect(q.count == 2)
-        #expect(["repo:a/b", "user:c", "repo:me/own", "repo:o/c"].allSatisfy { q[0].contains($0) })
+        #expect(["repo:a/b", "user:c", "user:me", "repo:o/c"].allSatisfy { q[0].contains($0) })
         #expect(q[0].contains("author:alice") && q[1].contains("author:app/greptile-apps"))
+    }
+
+    @Test func everyRuleGetsSearchesPastTheCap() {
+        // A hundred named repos make a rule of many queries; the rule after it still gets its turn.
+        let many = Pick<RepoRef>(include: (0..<100).map { .repo("owner/repository-\($0)") })
+        let q = searches([InboxCategory(name: "x", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kind: .pr, in: many)), Rule(scope: Scope(kind: .issue, in: Pick(include: [.owned, .owner("org")]))),
+        ])])
+        #expect(q.count == InboxSync.maxSearches)
+        #expect(q.filter { $0.contains("is:issue") } == ["is:issue archived:false user:me user:org sort:updated-desc is:open"])
     }
 
     @Test func closedThingsAreOnlyFetchedWhenAskedForAndRecent() {
@@ -380,7 +390,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     }
 
     private func searches(_ categories: [InboxCategory]) -> [String] {
-        InboxSync.searches(categories: categories, groups: [], me: "me", owned: [], contributed: [])
+        InboxSync.searches(categories: categories, groups: [], me: "me", contributed: [])
     }
 
     // MARK: Review requests, behind base, teams, contributed
@@ -405,7 +415,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(mixed.count == 2)
         #expect(mixed.contains { $0.contains("review-requested:me") } && mixed.contains { $0.contains("team-review-requested:acme/core") })
         let mine = InboxSync.searches(categories: [rule(Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))],
-                                      groups: [], me: "me", owned: [], contributed: [], myTeams: ["a/x", "a/y"])
+                                      groups: [], me: "me", contributed: [], myTeams: ["a/x", "a/y"])
         #expect(mine.count == 2 && mine.allSatisfy { $0.contains("team-review-requested:a/") })
         // Not resolved yet (or in none): nothing to search, rather than every PR on GitHub.
         #expect(searches([rule(Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))]).isEmpty)
