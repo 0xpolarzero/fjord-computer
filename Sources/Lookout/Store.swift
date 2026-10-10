@@ -46,6 +46,11 @@ final class Store {
     /// Does what actions do; nil is the real one (and nothing at all in the playground and tests).
     @ObservationIgnored var actionPerformer: ActionPerformer?
     @ObservationIgnored var actionsBusy = false
+    /// The categories page's undo history while it is open (⌘Z there is the editor's, not Done's).
+    @ObservationIgnored var categoryHistory: CategoryHistory?
+    /// Rules were edited and the actions have not yet taken in what they match: nothing runs until they have.
+    @ObservationIgnored var baselinePending = false
+    @ObservationIgnored var baselineTask: Task<Void, Never>?
     @ObservationIgnored var actionsAgain = false
     /// Runs at most this many per refresh.
     @ObservationIgnored var actionLimit = InboxActions.perSync

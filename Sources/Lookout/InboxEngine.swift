@@ -16,13 +16,16 @@ enum InboxEngine {
     static func evaluate(things: [Thing], categories: [InboxCategory], marks: [String: EntryMarks],
                          context: InboxContext) -> [InboxEntry] {
         let resolved = Resolved(context)
+        // A rule with a chip that can never match is off until it is fixed (edits apply as they are made); judged once here.
+        var off = Set<UUID>()
+        for category in categories { for rule in category.rules where !problems(rule).isEmpty { off.insert(rule.id) } }
         var entries: [InboxEntry] = []
         for thing in things {
             let m = marks[thing.id]
             for category in categories {
                 var union: [Fact] = []
                 var keys = Set<String>()
-                for rule in category.rules {
+                for rule in category.rules where !off.contains(rule.id) {
                     guard let matched = facts(rule, thing, marks: m, resolved: resolved) else { continue }
                     for fact in matched where keys.insert(fact.key).inserted { union.append(fact) }
                 }

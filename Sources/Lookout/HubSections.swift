@@ -583,7 +583,7 @@ struct CategoryTab: View {
                                               pressed: CDS.Fill.ghostHover, isActive: selected))
             .padding(.horizontal, CDS.Tabs.pillInset)
             .fixedSize()
-            .accessibilityLabel(category.name)
+            .accessibilityLabel(category.title)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityAction(named: "Move earlier") { withAnimation(.spring(duration: 0.25)) { move(-1) } }
             .accessibilityAction(named: "Move later") { withAnimation(.spring(duration: 0.25)) { move(1) } }
@@ -597,7 +597,7 @@ struct CategoryTab: View {
                 if target { Capsule().fill(Theme.accent).frame(width: 2, height: 16) }
             }
             .draggable("category:" + category.id.uuidString) {
-                Text(category.name)
+                Text(category.title)
                     .font(CDS.sans(CDS.Sidebar.rowFont))
                     .padding(.horizontal, 8)
                     .frame(height: CDS.Sidebar.rowHeight)
@@ -609,7 +609,7 @@ struct CategoryTab: View {
                 withAnimation(.spring(duration: 0.25)) { store.moveCategory(id, onto: category.id) }
                 return true
             } isTargeted: { target = $0 }
-            .tip(category.name, "Drag to reorder · ⌃\(store.shownCategories.firstIndex { $0.id == category.id }.map { $0 + 1 } ?? 0)")
+            .tip(category.title, "Drag to reorder · ⌃\(store.shownCategories.firstIndex { $0.id == category.id }.map { $0 + 1 } ?? 0)")
     }
 }
 
@@ -627,7 +627,7 @@ struct CategoriesMenu: View {
         Menu {
             ForEach(store.categories) { category in
                 Toggle(isOn: Binding(get: { !category.hidden }, set: { store.setHidden(category.id, !$0) })) {
-                    Text(category.hidden ? "\(category.name) · \(store.count(category.id))" : category.name)
+                    Text(category.hidden ? "\(category.title) · \(store.count(category.id))" : category.title)
                 }
             }
             Divider()
@@ -661,7 +661,7 @@ private struct CategoryTabLabel: View {
         HStack(spacing: selected ? 5 : 3) {
             Image(systemName: category.symbol).font(.system(size: 12, weight: .medium))
                 .foregroundStyle(badge > 0 || selected ? category.color.swatch : CDS.Text.muted)
-            if selected { Text(category.name).lineLimit(1) }
+            if selected { Text(category.title).lineLimit(1) }
             if badge > 0 { CountBadge(badge, tint: category.color.swatch) }
             if !category.actions.isEmpty {
                 Image(systemName: "bolt.fill").font(.system(size: 8)).foregroundStyle(CDS.Text.muted).accessibilityHidden(true)

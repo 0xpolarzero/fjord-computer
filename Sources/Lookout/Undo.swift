@@ -86,3 +86,90 @@ extension Store {
     /// ⌘Z and the line's button.
     @discardableResult func undoLast() -> Bool { undoStack.undo() }
 }
+
+// MARK: - The categories page's history
+
+/// Undo and redo for the categories page: snapshots of the categories and groups, taken as they change (every edit is
+/// applied at once). Typing in one field is one step until it pauses.
+@MainActor @Observable
+final class CategoryHistory {
+    struct Snapshot: Equatable {
+        var categories: [InboxCategory]
+        var groups: [InboxGroup]
+    }
+
+    static let limit = 200
+    /// A pause this long ends a run of typing in one field.
+    nonisolated static let pause: TimeInterval = 1
+
+    private(set) var undos: [Snapshot] = []
+    private(set) var redos: [Snapshot] = []
+    @ObservationIgnored private var current: Snapshot
+    @ObservationIgnored private var lastField: ObjectIdentifier?
+    @ObservationIgnored private var lastAt = Date.distantPast
+
+    var canUndo: Bool { !undos.isEmpty }
+    var canRedo: Bool { !redos.isEmpty }
+
+    init(store: Store) { current = Snapshot(categories: store.categories, groups: store.groups) }
+
+    /// Notes what the store holds now. `field` is the text field being typed in, if any: changes in it, each within a
+    /// second of the last, are one step.
+    func observe(_ store: Store, field: ObjectIdentifier? = nil, now: Date = Date()) {
+        let snapshot = Snapshot(categories: store.categories, groups: store.groups)
+        guard snapshot != current else { return }
+        let merges = field != nil && field == lastField && now.timeIntervalSince(lastAt) <= Self.pause && !undos.isEmpty
+        if !merges {
+            undos.append(current)
+            if undos.count > Self.limit { undos.removeFirst(undos.count - Self.limit) }
+        }
+        redos.removeAll()
+        current = snapshot
+        lastField = field
+        lastAt = now
+    }
+
+    @discardableResult func undo(_ store: Store) -> Bool {
+        flush(store)
+        guard let previous = undos.popLast() else { return false }
+        redos.append(current)
+        apply(previous, to: store)
+        return true
+    }
+
+    @discardableResult func redo(_ store: Store) -> Bool {
+        flush(store)
+        guard let next = redos.popLast() else { return false }
+        undos.append(current)
+        apply(next, to: store)
+        return true
+    }
+
+    /// Takes back the step that just made `id`'s category, when nothing came after it (a new category left untouched).
+    func discardCreation(of id: UUID, in store: Store) {
+        flush(store)
+        guard let previous = undos.last, !previous.categories.contains(where: { $0.id == id }) else { return }
+        undos.removeLast()
+        apply(previous, to: store)
+    }
+
+    /// An edit the page has not yet been told about counts as the step it belongs to.
+    private func flush(_ store: Store) {
+        observe(store, field: lastField, now: lastAt)
+    }
+
+    private func apply(_ snapshot: Snapshot, to store: Store) {
+        current = snapshot
+        lastField = nil
+        store.categories = snapshot.categories
+        store.groups = snapshot.groups
+    }
+}
+
+extension CategoryHistory {
+    /// The text field being typed in: its owner, so two fields are two steps.
+    static func typingField() -> ObjectIdentifier? {
+        guard let text = NSApp?.keyWindow?.firstResponder as? NSTextView else { return nil }
+        return ObjectIdentifier((text.delegate as AnyObject?) ?? text)
+    }
+}

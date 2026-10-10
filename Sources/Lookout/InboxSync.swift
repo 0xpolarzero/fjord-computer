@@ -783,7 +783,7 @@ extension Store {
         if updated != marks { marks = updated }
         guard !posts.isEmpty else { return }
         if posts.count > 4 {
-            let names = Set(posts.map(\.category.name)).sorted()
+            let names = Set(posts.map(\.category.title)).sorted()
             notify(id: Notifier.summaryPrefix + UUID().uuidString, title: "\(posts.count) new in your inbox",
                    subtitle: names.joined(separator: ", "), body: "", quiet: false)
             return
@@ -791,7 +791,7 @@ extension Store {
         for post in posts {
             let thing = post.entry.thing
             let name = thing.number.map { "\(thing.repo)#\($0)" } ?? "\(thing.repo) · \(thing.branch ?? "")"
-            notify(id: Self.inboxNotificationPrefix + thing.id, title: "\(post.category.name) · \(name)", subtitle: thing.title,
+            notify(id: Self.inboxNotificationPrefix + thing.id, title: "\(post.category.title) · \(name)", subtitle: thing.title,
                    body: post.fresh.map(\.label).joined(separator: " · "), quiet: false, url: thing.url)
         }
     }

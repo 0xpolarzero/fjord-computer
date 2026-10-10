@@ -260,6 +260,9 @@ struct InboxCategory: Codable, Hashable, Identifiable {
     var isCI = false
     /// What it does by itself when a thing comes in (InboxActions.swift).
     var actions = ActionList()
+
+    /// What the bar and the lists call it; a category still being named is "Untitled".
+    var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : name }
 }
 
 struct InboxGroup: Codable, Hashable, Identifiable {

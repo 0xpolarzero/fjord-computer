@@ -282,6 +282,24 @@ private struct WordButton: View {
     }
 }
 
+/// The small trailing + of a slot with values: muted, primary on hover.
+private struct AddValueGlyph: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus").font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(hovering ? CDS.Text.primary : CDS.Text.muted)
+                .opacity(hovering ? 1 : 0.55)
+                .frame(width: 18, height: 24).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel("Add another value")
+    }
+}
+
 /// The values of a slot: its tokens, `except` ones after the word, and the chip that opens the autocomplete.
 /// Several direct children, so it flows with the sentence. A slot with a `SlotWord` opens its autocomplete from the word.
 struct SlotField<V: Codable & Hashable>: View {
@@ -316,9 +334,11 @@ struct SlotField<V: Codable & Hashable>: View {
                     .accessibilityLabel("Choose \(placeholder)")
                     .popover(isPresented: anchor(word == nil), arrowEdge: .bottom) { popover }
             }
-            ForEach(Array(pick.include.enumerated()), id: \.element) { i, value in
-                token(value, dim: false)
-                    .popover(isPresented: anchor(word == nil && i == 0), arrowEdge: .bottom) { popover }
+            ForEach(pick.include, id: \.self) { value in token(value, dim: false) }
+            if !pick.include.isEmpty {
+                // A quiet + after the last chip: another value, whether or not the slot has a word.
+                AddValueGlyph { open = true }
+                    .popover(isPresented: anchor(word == nil), arrowEdge: .bottom) { popover }
             }
             if !pick.except.isEmpty {
                 Word(pick.include.isEmpty ? placeholder + " except" : "except")

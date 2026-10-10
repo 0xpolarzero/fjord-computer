@@ -269,6 +269,14 @@ final class HubKeys {
         let shortcut = Shortcut(event)
         if hub.searchFocused, hub.page == .main, let handled = searchKey(event, flags: flags, shortcut: shortcut) { return handled }
         let editing = event.window?.firstResponder is NSText
+        // The categories page keeps its own history of edits: ⌘Z undoes, ⇧⌘Z redoes, typing in a field or not. (By the
+        // character, as Done's undo is, so it is the Z key on any layout.)
+        if hub.page == .categories, flags == .command || flags == [.command, .shift],
+           event.charactersIgnoringModifiers?.lowercased() == "z", let history = store.categoryHistory {
+            if editing { event.window?.makeFirstResponder(nil) }
+            if flags == .command { history.undo(store) } else { history.redo(store) }
+            return true
+        }
         if editing, event.keyCode != UInt16(kVK_Escape) { return false }
         if event.keyCode == UInt16(kVK_Escape), flags.isEmpty {
             if editing { event.window?.makeFirstResponder(nil) }

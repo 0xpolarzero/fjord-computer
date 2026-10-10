@@ -130,12 +130,8 @@ struct RuleEditor: View {
         if required || rule.scope.in != nil {
             let slot = RepoSlot(pick: Binding(get: { rule.scope.in ?? Pick() }, set: { rule.scope.in = $0 }), store: store, kind: kind, onMoved: { notice = $0 },
                                 placeholder: required ? (isCI ? "all watched repos" : "choose repos") : "anywhere", tone: tone("in"))
-            if required {
-                Word("in", tone: tone("in") == .danger ? .danger : .neutral)
-                slot
-            } else {
-                slot.slotWord(SlotWord(name: "in", text: "in", tone: tone("in"), remove: { rule.scope.in = nil }))
-            }
+            // Required: the word still opens the picker, but there is nothing to remove.
+            slot.slotWord(SlotWord(name: "in", text: "in", tone: tone("in"), remove: required ? nil : { rule.scope.in = nil }))
         }
     }
 

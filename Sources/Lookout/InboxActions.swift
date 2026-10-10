@@ -548,6 +548,8 @@ extension Store {
     /// Takes in what changed (baselines) and runs what is due, at most `actionLimit` per call.
     func runActions(now: Date = Date()) async {
         guard let performer = resolvedPerformer, let me = me?.login, !me.isEmpty else { return }
+        // An edit is waiting to be taken in: what it now matches is old news, and must not fire first.
+        guard !baselinePending else { return }
         guard !actionsBusy else { actionsAgain = true; return }
         actionsBusy = true
         defer { actionsBusy = false }
@@ -576,7 +578,21 @@ extension Store {
         } while actionsAgain
     }
 
-    /// Takes what is in the categories now as old, for the actions they have (called when a category is saved).
+    /// The categories were edited: what they match now is taken as old once the edits pause (so typing doesn't thrash), and
+    /// no action runs in between.
+    func categoriesEdited(delay: Duration = .seconds(1)) {
+        baselinePending = true
+        baselineTask?.cancel()
+        baselineTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            baselineActions()
+            baselinePending = false
+            scheduleActions()
+        }
+    }
+
+    /// Takes what is in the categories now as old, for the actions they have.
     func baselineActions(now: Date = Date()) {
         guard let me = me?.login, !me.isEmpty else { return }
         var ledger = actionLedger

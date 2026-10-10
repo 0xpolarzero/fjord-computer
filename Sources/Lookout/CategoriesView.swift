@@ -5,7 +5,6 @@ private let foot12: (CGFloat, CGFloat) = (12, 16)
 
 /// What to open first: the editor of a category, or a group unfolded (shots, and the New category button).
 enum CategoryEditing: Hashable {
-    case new
     case existing(UUID)
 }
 
@@ -21,6 +20,10 @@ struct CategoriesView: View {
     @State private var editing: CategoryEditing?
     @State private var expandedGroup: UUID?
     @State private var dropTarget: UUID?
+    /// Every edit applies at once; this is what takes them back.
+    @State private var history: CategoryHistory
+    /// A category just made by New category, until it is edited: leaving it untouched makes nothing.
+    @State private var fresh: InboxCategory?
     private let notice: String?
     /// The hub's state, when shown in it: an open editor takes Esc and the back button (back to the list) first.
     private let hub: HubState?
@@ -28,6 +31,7 @@ struct CategoriesView: View {
     init(store: Store, hub: HubState? = nil, preview: CategoriesPreview? = nil) {
         self.store = store
         self.hub = hub
+        _history = State(initialValue: CategoryHistory(store: store))
         notice = preview?.notice
         _editing = State(initialValue: preview?.editing)
         _expandedGroup = State(initialValue: preview?.expandedGroup)
@@ -36,17 +40,49 @@ struct CategoriesView: View {
     var body: some View {
         Group {
             if let editing {
-                CategoryEditor(store: store, editing: editing, firstRuleNotice: notice) { self.editing = nil }
+                CategoryEditor(store: store, editing: editing, history: history, isNew: fresh?.id == editingID,
+                               firstRuleNotice: notice) { self.editing = nil }
                     .id(editing)
             } else {
                 list
             }
         }
-        .onChange(of: editing != nil, initial: true) { _, open in syncStepBack(open) }
-        .onDisappear { hub?.stepBack = nil }
+        .onChange(of: editing != nil, initial: true) { _, open in
+            syncStepBack(open)
+            if !open { dropUntouched() }
+        }
+        .onChange(of: store.categories) {
+            history.observe(store, field: CategoryHistory.typingField())
+            store.categoriesEdited()
+        }
+        .onChange(of: store.groups) { history.observe(store, field: CategoryHistory.typingField()) }
+        .onAppear { store.categoryHistory = history }
+        .onDisappear {
+            hub?.stepBack = nil
+            if store.categoryHistory === history { store.categoryHistory = nil }
+        }
     }
 
-    /// Registers the editor's step back with the hub while one is open (its leaving saves or keeps the draft, as "‹ Categories").
+    private var editingID: UUID? { if case .existing(let id) = editing { id } else { nil } }
+
+    /// New category made, nothing typed or changed: leaving it leaves nothing behind.
+    private func dropUntouched() {
+        guard let fresh else { return }
+        self.fresh = nil
+        if store.categories.first(where: { $0.id == fresh.id }) == fresh { history.discardCreation(of: fresh.id, in: store) }
+    }
+
+    private func create() {
+        let used = Set(store.categories.map(\.color))
+        let color = CategoryColor.allCases.first { !used.contains($0) && $0 != .gray } ?? .blue
+        let category = InboxCategory(name: "", symbol: CategoryIcon.fallback, color: color, rules: [Rule(scope: Scope(kind: .pr))])
+        store.categories.append(category)
+        history.observe(store)
+        fresh = category
+        editing = .existing(category.id)
+    }
+
+    /// Registers the editor's step back with the hub while one is open (back to the list: there is nothing to save).
     private func syncStepBack(_ open: Bool) {
         guard let hub else { return }
         let binding = $editing
@@ -62,7 +98,7 @@ struct CategoriesView: View {
                 SettingsSection("Categories",
                                 info: ("Categories", "A thing goes to the first category, from the top, with a rule matching it. Drag to reorder."),
                                 action: {
-                    Button { editing = .new } label: {
+                    Button(action: create) {
                         HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("New category") }
                     }
                     .buttonStyle(SettingsButtonStyle(size: .sm))
@@ -118,7 +154,7 @@ private struct CategoryRow: View {
                     CategoryTile(symbol: category.symbol, color: category.color)
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 5) {
-                            Text(category.name).cdsText(body14).lineLimit(1)
+                            Text(category.title).cdsText(body14).lineLimit(1)
                             if !category.actions.isEmpty {
                                 Image(systemName: "bolt.fill").font(.system(size: 9)).foregroundStyle(CDS.Text.muted)
                                     .help("Does something by itself when a thing comes in")

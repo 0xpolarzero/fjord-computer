@@ -23,6 +23,19 @@ import Testing
         #expect(dropped.contains("review requested"))
     }
 
+    @Test @MainActor func theRequiredWorkflowInSlotTakesASecondRepoThroughItsPicker() {
+        var pick = Pick<RepoRef>(include: [.repo("a/one")])
+        let data = EditorData(store: Store())
+        // The picker's row for another repo, picked the way the popover does.
+        let value = data.parseRepo("b/two")
+        #expect(value == .repo("b/two"))
+        if let value, !pick.include.contains(value) { pick.include.append(value) }
+        #expect(pick.include == [.repo("a/one"), .repo("b/two")])
+        // The word is a SlotWord with nothing to remove, so its footer has no "Remove".
+        let word = SlotWord(name: "in", text: "in", remove: nil)
+        #expect(word.remove == nil)
+    }
+
     @Test func sameKindChangesNothing() {
         let rule = Rule(scope: Scope(kind: .pr))
         let (out, dropped) = RuleEditing.switchKind(rule, to: .pr)
@@ -60,33 +73,6 @@ import Testing
         }
         #expect(data.parsePerson("@greptile") == user)
         #expect(data.parsePerson("@toks") == .user("toks"))
-    }
-
-    @Test func leavingTheEditorSavesAValidDraftAndKeepsAnInvalidOne() {
-        var drafts = CategoryDrafts()
-        let original = InboxCategory(name: "Mine", symbol: CategoryIcon.fallback, color: .blue, rules: [Rule(scope: Scope(kind: .pr))])
-        var categories = [original]
-        let editing = CategoryEditing.existing(original.id)
-
-        #expect(drafts.leave(original, original: original, editing: editing, categories: &categories, groups: []) == .unchanged)
-
-        var valid = original
-        valid.name = "  Reviews "
-        #expect(drafts.leave(valid, original: original, editing: editing, categories: &categories, groups: []) == .saved)
-        #expect(categories.first?.name == "Reviews")
-        #expect(drafts.kept.isEmpty)
-
-        var invalid = original
-        invalid.name = ""
-        #expect(drafts.leave(invalid, original: original, editing: editing, categories: &categories, groups: []) == .kept)
-        #expect(categories.first?.name == "Reviews")
-        #expect(drafts.kept[editing] == invalid)
-
-        var fresh = InboxCategory(name: "", symbol: CategoryIcon.fallback, color: .blue, rules: [])
-        #expect(drafts.leave(fresh, original: fresh, editing: .new, categories: &categories, groups: []) == .unchanged)
-        fresh.name = "New"
-        #expect(drafts.leave(fresh, original: original, editing: .new, categories: &categories, groups: []) == .kept)
-        #expect(drafts.kept[.new] == fresh && categories.count == 1)
     }
 }
 

@@ -5,7 +5,7 @@ import SwiftUI
 // groups seeded here. Each is the hub page's width, tall enough to show the whole page.
 
 enum CategoriesShot: String, CaseIterable {
-    case page, editor, actions, impossible, groups, autocomplete, single, switched
+    case page, editor, actions, impossible, groups, autocomplete, single, switched, ci
 
     var name: String { "right-categories-\(rawValue)" }
 
@@ -19,6 +19,7 @@ enum CategoriesShot: String, CaseIterable {
         case .autocomplete: 400
         case .single: 520
         case .switched: 560
+        case .ci: 520
         }
     }
 }
@@ -163,6 +164,13 @@ enum CategoriesDemo {
                 Rule(scope: Scope(kind: .pr, by: Pick(include: [me])), conditions: [.greptileBelow(4)]),
             ]), at: 0)
             preview.editing = .existing(single)
+        case .ci:
+            // A Workflows rule with two repos in its required `in`.
+            store.categories.insert(InboxCategory(id: switched, name: "Builds", symbol: "hammer", color: .red, rules: [
+                Rule(scope: Scope(kind: .workflow, in: Pick(include: [.repo("superradcompany/microsandbox"), .repo("libkrun/libkrun")])),
+                     conditions: [.workflow([.failing])]),
+            ]), at: 0)
+            preview.editing = .existing(switched)
         case .switched:
             // A PR rule turned into a Workflows one: what could not come along is said under it.
             let before = Rule(scope: Scope(kind: .pr, by: Pick(include: [me]), in: Pick(include: [.repo("superradcompany/microsandbox")])),

@@ -717,7 +717,7 @@ struct CategoryCell: View {
         Button(action: action) { CategoryCellLabel(category: category, badge: badge, vertical: vertical) }
             .buttonStyle(.plain)
             .focused($focused)
-            .accessibilityLabel(category.name)
+            .accessibilityLabel(category.title)
             .accessibilityValue(badge == 0 ? "Nothing new" : category.isCI ? "\(badge) failing" : "\(badge) unread")
             .accessibilityHint("Opens it in the inbox")
             .motion(.snappy, value: badge)
@@ -746,7 +746,7 @@ private struct CategoryCellLabel: View {
             .contentShape(Rectangle())
             .onHover { hover = $0 }
             .motion(Theme.Motion.hover, value: hover)
-            .tip(badge == 0 ? category.name : "\(category.name) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
+            .tip(badge == 0 ? category.title : "\(category.title) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
                  badge == 0 ? (category.isCI ? "Nothing failing" : "Nothing new") : "Opens it in the inbox")
     }
 }

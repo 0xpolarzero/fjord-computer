@@ -3,100 +3,64 @@ import SwiftUI
 private let body14 = CDS.Density.comfortable.body
 private let foot12: (CGFloat, CGFloat) = (12, 16)
 
-/// Edits that could not be saved when the editor was left (Esc, the back chevron): kept per category, and for a new one,
-/// until the editor is reopened. Only Cancel discards them.
-struct CategoryDrafts {
-    static var shared = CategoryDrafts()
-    var kept: [CategoryEditing: InboxCategory] = [:]
-
-    enum Outcome: Equatable { case unchanged, saved, kept }
-
-    /// Why `draft` can't be saved, in words; nil when it can.
-    static func blocker(_ draft: InboxCategory, groups: [InboxGroup], missing: Set<String> = []) -> String? {
-        if draft.name.trimmingCharacters(in: .whitespaces).isEmpty { return "Give the category a name." }
-        if draft.rules.isEmpty { return "Add a rule: without one nothing lands here." }
-        let n = draft.rules.reduce(0) { $0 + RuleEditing.problems($1, groups: groups, isCI: draft.isCI, missing: missing).count }
-        if n > 0 { return "Fix the \(plural(n, "chip")) marked red to save." }
-        return nil
-    }
-
-    /// Leaving without Cancel: a valid draft is saved, an invalid one is kept; one nobody touched is nothing.
-    mutating func leave(_ draft: InboxCategory, original: InboxCategory, editing: CategoryEditing,
-                        categories: inout [InboxCategory], groups: [InboxGroup]) -> Outcome {
-        if draft == original { kept[editing] = nil; return .unchanged }
-        guard Self.blocker(draft, groups: groups) == nil else { kept[editing] = draft; return .kept }
-        var saved = draft
-        saved.name = saved.name.trimmingCharacters(in: .whitespaces)
-        if let i = categories.firstIndex(where: { $0.id == saved.id }) { categories[i] = saved } else { categories.append(saved) }
-        kept[editing] = nil
-        return .saved
-    }
-}
-
-/// One category: its name, icon (Jev picks it from the name), colour, notifications and rules. Edits a draft; Save writes it.
+/// One category: its name, icon (Jev picks it from the name), colour, notifications and rules. Every change is made in the
+/// store as it happens; the page's history (undo and redo, in the header) takes it back.
 struct CategoryEditor: View {
     let store: Store
     let editing: CategoryEditing
+    let history: CategoryHistory
+    let isNew: Bool
     let close: () -> Void
     /// A note under the first rule, as after a switch of kind (shots).
     var firstRuleNotice: String?
-    @State private var draft: InboxCategory
-    private let original: InboxCategory
-    /// Set by Save, Cancel and Delete: they decide for themselves, so leaving must not.
-    @State private var finished = false
-    @State private var restored: Bool
     /// Jev may still choose the icon: until you pick one yourself (and for a category that already has its own).
     @State private var iconAuto: Bool
     @State private var pickingIcon = false
     @State private var confirmingDelete = false
     @FocusState private var nameFocused: Bool
 
-    init(store: Store, editing: CategoryEditing, firstRuleNotice: String? = nil, close: @escaping () -> Void) {
+    init(store: Store, editing: CategoryEditing, history: CategoryHistory, isNew: Bool = false, firstRuleNotice: String? = nil,
+         close: @escaping () -> Void) {
         self.firstRuleNotice = firstRuleNotice
         self.store = store
         self.editing = editing
+        self.history = history
+        self.isNew = isNew
         self.close = close
-        let start: InboxCategory
-        if case .existing(let id) = editing, let found = store.categories.first(where: { $0.id == id }) {
-            start = found
-            _iconAuto = State(initialValue: false)
-        } else {
-            let used = Set(store.categories.map(\.color))
-            let color = CategoryColor.allCases.first { !used.contains($0) && $0 != .gray } ?? .blue
-            start = InboxCategory(name: "", symbol: CategoryIcon.fallback, color: color, rules: [Rule(scope: Scope(kind: .pr))])
-            _iconAuto = State(initialValue: true)
-        }
-        original = start
-        if let kept = CategoryDrafts.shared.kept[editing] {
-            _draft = State(initialValue: kept)
-            _restored = State(initialValue: true)
-            _iconAuto = State(initialValue: false)
-        } else {
-            _draft = State(initialValue: start)
-            _restored = State(initialValue: false)
-        }
+        _iconAuto = State(initialValue: isNew)
     }
 
-    private var isNew: Bool { if case .new = editing { true } else { false } }
-    private var problemCount: Int {
-        draft.rules.reduce(0) { $0 + RuleEditing.problems($1, groups: store.groups, isCI: draft.isCI, missing: store.missingRepos).count }
-    }
+    private var id: UUID { if case .existing(let id) = editing { id } else { UUID() } }
+    private var index: Int? { store.categories.firstIndex { $0.id == id } }
 
-    /// Why Save is off, in words.
-    private var blocker: String? { CategoryDrafts.blocker(draft, groups: store.groups, missing: store.missingRepos) }
+    /// The category in the store, edited in place.
+    private var draft: Binding<InboxCategory> {
+        let id = id
+        return Binding(get: { store.categories.first { $0.id == id } ?? InboxCategory(id: id, name: "", symbol: "", color: .gray) },
+                       set: { if let i = store.categories.firstIndex(where: { $0.id == id }) { store.categories[i] = $0 } })
+    }
 
     var body: some View {
+        if let current = index.map({ store.categories[$0] }) {
+            content(current)
+        } else {
+            // Gone (deleted, or undone): back to the list.
+            Color.clear.onAppear(perform: close)
+        }
+    }
+
+    private func content(_ c: InboxCategory) -> some View {
         VStack(spacing: 0) {
             header
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    identity
+                    identity(c)
                     SettingsRow("Notify", info: ("Notify", "Once when a thing comes in, and again only on something new.")) {
-                        SettingsSwitch("Notify for \(draft.name)", isOn: $draft.notifies)
+                        SettingsSwitch("Notify for \(c.title)", isOn: draft.notifies)
                     }
-                    rules
-                    ActionsEditor(actions: $draft.actions, store: store, rules: draft.rules, categoryName: draft.name)
-                    if !draft.isCI, !isNew { deleteRow }
+                    rules(c)
+                    ActionsEditor(actions: draft.actions, store: store, rules: c.rules, categoryName: c.name)
+                    if !c.isCI, !isNew { deleteRow(c) }
                 }
                 .padding(.horizontal, CDS.Settings.pagePadX)
                 .padding(.top, 4)
@@ -104,35 +68,27 @@ struct CategoryEditor: View {
             }
             .scrollIndicators(.never)
         }
-        .task(id: draft.name) { await pickIcon() }
+        .task(id: c.name) { await pickIcon() }
         .onAppear { if isNew { nameFocused = true } }
-        .onDisappear { leave() }
     }
 
     // MARK: Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button(action: close) {
-                    HStack(spacing: 4) { Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold)); Text("Categories") }
-                }
-                .buttonStyle(SettingsButtonStyle(variant: .ghost, size: .sm))
-                .accessibilityLabel("Back to categories")
-                .padding(.leading, -10)
-                Spacer(minLength: 8)
-                Button("Cancel", action: cancel).buttonStyle(SettingsButtonStyle(size: .sm))
-                Button("Save", action: save)
-                    .buttonStyle(PrimaryButtonStyle())
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(blocker != nil)
+        HStack(spacing: 8) {
+            Button(action: close) {
+                HStack(spacing: 4) { Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold)); Text("Categories") }
             }
-            if let blocker {
-                Text(blocker).cdsText(foot12, .regular, problemCount > 0 ? CDS.Text.danger : CDS.Text.muted)
-            }
-            if restored, draft != original {
-                Text("Unsaved changes kept").cdsText(foot12, .regular, CDS.Text.muted)
-            }
+            .buttonStyle(SettingsButtonStyle(variant: .ghost, size: .sm))
+            .accessibilityLabel("Back to categories")
+            .padding(.leading, -10)
+            Spacer(minLength: 8)
+            IconButton(symbol: "arrow.uturn.backward", help: "Undo", label: "Undo", size: 24,
+                       tint: history.canUndo ? CDS.Text.secondary : CDS.Text.muted) { _ = history.undo(store) }
+                .disabled(!history.canUndo)
+            IconButton(symbol: "arrow.uturn.forward", help: "Redo", label: "Redo", size: 24,
+                       tint: history.canRedo ? CDS.Text.secondary : CDS.Text.muted) { _ = history.redo(store) }
+                .disabled(!history.canRedo)
         }
         .padding(.horizontal, CDS.Settings.pagePadX)
         .padding(.top, CDS.Settings.pageTop + 4)
@@ -141,36 +97,36 @@ struct CategoryEditor: View {
 
     // MARK: Name, icon, colour
 
-    private var identity: some View {
+    private func identity(_ c: InboxCategory) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Button { pickingIcon = true } label: { CategoryTile(symbol: draft.symbol, color: draft.color, size: 32) }
+                Button { pickingIcon = true } label: { CategoryTile(symbol: c.symbol, color: c.color, size: 32) }
                     .buttonStyle(.plain)
                     .tip("Icon", "Picked from the name; click to choose another")
-                    .accessibilityLabel("Icon: \(draft.symbol). Choose another")
+                    .accessibilityLabel("Icon: \(c.symbol). Choose another")
                     .popover(isPresented: $pickingIcon, arrowEdge: .bottom) {
-                        SymbolPicker(selection: draft.symbol, color: draft.color) { symbol in
-                            draft.symbol = symbol
+                        SymbolPicker(selection: c.symbol, color: c.color) { symbol in
+                            draft.wrappedValue.symbol = symbol
                             iconAuto = false
                             pickingIcon = false
                         }
                     }
-                TextField("", text: $draft.name)
-                    .cdsPlaceholder("Name, like Reviews or Mine", shown: draft.name.isEmpty)
+                TextField("", text: draft.name)
+                    .cdsPlaceholder("Name, like Reviews or Mine", shown: c.name.isEmpty)
                     .focused($nameFocused)
                     .cdsField(focused: nameFocused)
                     .accessibilityLabel("Category name")
             }
             HStack(spacing: 8) {
                 ForEach(CategoryColor.allCases, id: \.self) { color in
-                    Button { draft.color = color } label: {
+                    Button { draft.wrappedValue.color = color } label: {
                         Circle().fill(color.swatch).frame(width: 16, height: 16)
-                            .overlay(Circle().strokeBorder(CDS.Text.primary, lineWidth: draft.color == color ? 2 : 0).padding(-3))
+                            .overlay(Circle().strokeBorder(CDS.Text.primary, lineWidth: c.color == color ? 2 : 0).padding(-3))
                             .frame(width: 24, height: 24).contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(color.title)
-                    .accessibilityAddTraits(draft.color == color ? .isSelected : [])
+                    .accessibilityAddTraits(c.color == color ? .isSelected : [])
                     .tip(color.title)
                 }
             }
@@ -180,41 +136,46 @@ struct CategoryEditor: View {
     /// Debounced. Jev's pick wins when it works; without a key or offline, a keyword in the name picks locally. Never once
     /// the icon was chosen by hand.
     private func pickIcon() async {
-        let name = draft.name.trimmingCharacters(in: .whitespaces)
+        let name = draft.wrappedValue.name.trimmingCharacters(in: .whitespaces)
         guard iconAuto, name.count >= 2 else { return }
         try? await Task.sleep(for: .milliseconds(800))
         guard !Task.isCancelled, iconAuto else { return }
         if let key = store.typesafeKey, !key.isEmpty,
            let symbol = try? await CategoryIcon.pick(name: name, key: key) {
             guard !Task.isCancelled, iconAuto else { return }
-            draft.symbol = symbol
+            draft.wrappedValue.symbol = symbol
         } else if !Task.isCancelled, iconAuto, let symbol = CategoryIcon.local(name: name) {
-            draft.symbol = symbol
+            draft.wrappedValue.symbol = symbol
         }
     }
 
     // MARK: Rules
 
-    private var rules: some View {
+    private func rules(_ c: InboxCategory) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: CDS.Settings.labelGap) {
-                Text(draft.isCI ? "Repos" : "Rules").cdsText(CDS.Density.comfortable.heading, .semibold)
+                Text(c.isCI ? "Repos" : "Rules").cdsText(CDS.Density.comfortable.heading, .semibold)
                     .accessibilityAddTraits(.isHeader)
-                    .tip(draft.isCI ? "Repos" : "Rules",
-                         draft.isCI ? "Failures stay until the workflow is green again" : "A thing is here if any rule matches it")
+                    .tip(c.isCI ? "Repos" : "Rules",
+                         c.isCI ? "Failures stay until the workflow is green again" : "A thing is here if any rule matches it")
             }
             .padding(.bottom, 12)
             VStack(alignment: .leading, spacing: 6) {
-                ForEach($draft.rules) { $rule in
-                    if rule.id != draft.rules.first?.id {
+                ForEach(draft.rules) { $rule in
+                    if rule.id != c.rules.first?.id {
                         Text("or").cdsText(foot12, .regular, CDS.Text.muted).padding(.leading, 4)
                     }
-                    RuleEditor(rule: $rule, store: store, isCI: draft.isCI,
-                               notice: rule.id == draft.rules.first?.id ? firstRuleNotice : nil,
-                               onRemove: draft.isCI ? nil : { draft.rules.removeAll { $0.id == rule.id } })
+                    RuleEditor(rule: $rule, store: store, isCI: c.isCI,
+                               notice: rule.id == c.rules.first?.id ? firstRuleNotice : nil,
+                               onRemove: c.isCI ? nil : { draft.wrappedValue.rules.removeAll { $0.id == rule.id } })
+                    let off = InboxEngine.problems(rule)
+                    if !off.isEmpty {
+                        Text("Off until fixed").cdsText(foot12, .regular, CDS.Text.danger).padding(.leading, 4)
+                            .tip("Off until fixed", off.map(\.reason).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: ". "))
+                    }
                 }
-                if !draft.isCI {
-                    Button { draft.rules.append(Rule(scope: Scope(kind: .pr))) } label: {
+                if !c.isCI {
+                    Button { draft.wrappedValue.rules.append(Rule(scope: Scope(kind: .pr))) } label: {
                         HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("Add rule") }
                     }
                     .buttonStyle(SettingsButtonStyle(size: .sm))
@@ -224,17 +185,15 @@ struct CategoryEditor: View {
         }
     }
 
-    private var deleteRow: some View {
+    private func deleteRow(_ c: InboxCategory) -> some View {
         HStack(spacing: 8) {
             if confirmingDelete {
-                Text("Delete “\(draft.name)”? Its things go to the next category that matches.")
+                Text("Delete “\(c.title)”? Its things go to the next category that matches.")
                     .cdsText(foot12, .regular, CDS.Text.secondary)
                 Spacer(minLength: 8)
                 Button("Keep") { confirmingDelete = false }.buttonStyle(SettingsButtonStyle(size: .sm))
                 Button("Delete") {
-                    store.categories.removeAll { $0.id == draft.id }
-                    CategoryDrafts.shared.kept[editing] = nil
-                    finished = true
+                    store.categories.removeAll { $0.id == c.id }
                     close()
                 }
                 .buttonStyle(SettingsButtonStyle(size: .sm))
@@ -243,37 +202,6 @@ struct CategoryEditor: View {
                     .padding(.leading, -10)
             }
         }
-    }
-
-    /// Esc or the back chevron: save what is valid, keep what is not. Only Cancel discards.
-    private func leave() {
-        guard !finished else { return }
-        finished = true
-        let outcome = CategoryDrafts.shared.leave(draft, original: original, editing: editing,
-                                                  categories: &store.categories, groups: store.groups)
-        // What is already here is old news to the actions it brought.
-        if outcome == .saved { store.baselineActions() }
-    }
-
-    private func cancel() {
-        CategoryDrafts.shared.kept[editing] = nil
-        finished = true
-        close()
-    }
-
-    private func save() {
-        guard blocker == nil else { return }
-        CategoryDrafts.shared.kept[editing] = nil
-        finished = true
-        var saved = draft
-        saved.name = saved.name.trimmingCharacters(in: .whitespaces)
-        if let i = store.categories.firstIndex(where: { $0.id == saved.id }) {
-            store.categories[i] = saved
-        } else {
-            store.categories.append(saved)
-        }
-        store.baselineActions()
-        close()
     }
 }
 
