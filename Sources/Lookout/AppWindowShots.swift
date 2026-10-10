@@ -88,9 +88,15 @@ enum AppWindowShots {
             }
         }),
         // A long Needs you: every open card six times over, so the zones would take the page.
-        Shot(name: "router-many-needs", destination: { _ in .router }, compose: { _, store in
-            let open = store.router.cards.filter(\.isOpen)
-            store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
+        Shot(name: "router-many-needs", destination: { _ in .router }, compose: { _, store in manyNeeds(store) }),
+        // The line between the history and the zones at each snap point, the zones holding more than either gives them.
+        Shot(name: "router-divider-history-big", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { _, store in
+            manyNeeds(store)
+            store.setZonesShare(RouterSplit.historyBig)
+        }),
+        Shot(name: "router-divider-zones-big", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { _, store in
+            manyNeeds(store)
+            store.setZonesShare(RouterSplit.zonesBig)
         }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
@@ -100,6 +106,12 @@ enum AppWindowShots {
         Shot(name: "router-collapsed-760", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 760, height: 1000)),
         Shot(name: "category-narrow", destination: { $0.shownCategories[0].id.asCategory }, size: CGSize(width: 1000, height: 640)),
     ]
+
+    /// Every open card six times over, so the zones would take the page.
+    private static func manyNeeds(_ store: Store) {
+        let open = store.router.cards.filter(\.isOpen)
+        store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
+    }
 
     /// `--window-shots <dir> [substring...]`.
     static func run(to dir: String) {

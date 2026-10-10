@@ -132,11 +132,16 @@ struct RouterPageView: View {
     @State private var width = CDS.Transcript.measure
     /// The Router's working line over the zones, when it shows.
     @State private var statusHeight: CGFloat = 0
-
-    /// What the history keeps however much the zones hold: a few lines at least, more of a tall page.
-    static func historyFloor(page height: CGFloat) -> CGFloat { min(height / 2, max(140, height * 0.28)) }
+    /// The zones' height as shown (the Router's line with them).
+    @State private var zonesShown: CGFloat = 0
+    /// While the line between the history and the zones is dragged: the zones' height when it began, and the share it is at.
+    @State private var dragBase: CGFloat?
+    @State private var dragShare: CGFloat?
 
     private var spring: Animation? { Theme.Motion.spring.resolved(reduce: reduceMotion) }
+
+    /// The zones' share of the page: the line being dragged, else as last set.
+    private var share: CGFloat { dragShare ?? store.router.zonesShare.map { CGFloat($0) } ?? RouterSplit.initial }
 
     var body: some View {
         let page = store.routerZones
@@ -144,22 +149,47 @@ struct RouterPageView: View {
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let bothZones = Set(page.working.map(\.id))
         let travelling = Set(once).subtracting(bothZones)
+        let room = RouterSplit.room(page: height, share: share)
         VStack(spacing: 0) {
             RouterHistory(store: store, model: model)
+            divider
+                .frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter)
+                .frame(maxWidth: .infinity)
+                .zIndex(1)
             VStack(spacing: 0) {
                 VStack(spacing: 0) { routerStatus }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { statusHeight = $0 }
-                RouterZones(store: store, model: model, page: page, height: height,
-                            room: height - Self.historyFloor(page: height) - statusHeight, ns: ns, travelling: travelling,
+                RouterZones(store: store, model: model, page: page, room: room - statusHeight, ns: ns, travelling: travelling,
                             travellingWorking: Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID))))
             }
             .frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter)
             .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { zonesShown = $0 }
         }
         .motion(Theme.Motion.spring, value: page.needs.map(\.id) + page.working.map(\.id))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { height = $0.height; width = $0.width }
         .environment(\.routerGutter, gutter)
         .environment(\.cdsColumnWidth, min(CDS.Transcript.measure, max(0, width - 2 * gutter)))
+    }
+
+    private var divider: some View {
+        RouterDivider(zonesBig: RouterSplit.zonesAreBig(shown: zonesShown, page: height),
+                      share: height > 0 ? zonesShown / height : share, trailing: max(4, gutter - 22),
+                      drag: { dy in
+                          let base = dragBase ?? zonesShown
+                          dragBase = base
+                          dragShare = RouterSplit.dragged(from: base, by: dy, page: height)
+                      },
+                      dragEnded: {
+                          if let dragShare { store.setZonesShare(dragShare) }
+                          dragBase = nil
+                          dragShare = nil
+                      },
+                      toggle: {
+                          let next = RouterSplit.toggled(shown: zonesShown, page: height)
+                          withAnimation(spring) { store.setZonesShare(next) }
+                      },
+                      adjust: { up in store.setZonesShare(RouterSplit.adjusted(shown: zonesShown, page: height, up: up)) })
     }
 
     private var gutter: CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
@@ -720,14 +750,13 @@ private extension View {
 
 // MARK: - Zones
 
-/// Working over Needs you, pinned above the composer. Each caps at a share of the page and scrolls inside; together they
-/// stay within `room`, so the history above keeps its floor.
+/// Working over Needs you, pinned above the composer. Each caps at a part of `room` and scrolls inside; together they stay
+/// within it, and take only what they need of it.
 private struct RouterZones: View {
     let store: Store
     @Bindable var model: RouterModel
     let page: RouterPage
-    let height: CGFloat
-    /// The height the zones may take, the history's floor kept.
+    /// The height the zones may take (their share of the page, the floors kept).
     let room: CGFloat
     let ns: Namespace.ID
     /// Sessions whose card moves between the zones (matched geometry), from the needs side and from the working side.
@@ -753,7 +782,6 @@ private struct RouterZones: View {
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { total = $0 }
-        .overlay(alignment: .top) { Rectangle().fill(CDS.border).frame(height: CDS.hairline) }
     }
 
     // MARK: Working
@@ -770,8 +798,8 @@ private struct RouterZones: View {
             .accessibilityAddTraits(.isHeader)
             .accessibilityLabel("Working, \(page.working.count)")
             overview
-            // With summaries under the rows, the card may take a little more before it scrolls.
-            ZoneScroll(maxHeight: max(88, height * (page.summaries.isEmpty ? 0.2 : 0.3)), reveal: model.revealRequest,
+            ZoneScroll(maxHeight: RouterSplit.workingCap(room: room, needsEmpty: page.needs.isEmpty && page.asks.isEmpty),
+                       reveal: model.revealRequest,
                        ids: Set(page.working.map { RouterModel.workingID($0.id) })) {
                 VStack(spacing: 0) {
                     ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
