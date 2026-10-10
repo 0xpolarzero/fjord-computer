@@ -68,7 +68,7 @@ enum MiniHTTP {
         return data
     }
 
-    static func reason(_ status: Int) -> String {
+    private static func reason(_ status: Int) -> String {
         switch status {
         case 200: "OK"
         case 202: "Accepted"
@@ -468,7 +468,6 @@ final class RouterMCPServer: @unchecked Sendable {
     private weak var store: Store?
     /// Jev's pick for `route`; tests answer for it (else TypeSafe, with the user's key).
     var chooser: (([String], [String: String], [String: String], String) async throws -> JevClient.Choice)?
-    var now: () -> Date = Date.init
     /// Bumped when the Router is reset (new conversation, quit, switched off): a call that began before acts on nothing.
     private(set) var epoch = 0
     /// Bumped when a turn ends (its result, or Stop): the turn's unfinished work acts on nothing.
@@ -549,7 +548,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// The same text byte for byte (UTF-8), not just equal as Swift strings are (which treats canonically equivalent Unicode
     /// as the same): the wire text is signed, and only exactly it goes.
-    nonisolated static func sameBytes(_ a: String, _ b: String) -> Bool { Data(a.utf8) == Data(b.utf8) }
+    nonisolated private static func sameBytes(_ a: String, _ b: String) -> Bool { Data(a.utf8) == Data(b.utf8) }
 
     /// The send the gate let through for (to, message), once: its receipt says what was prepared.
     func takeApproved(_ to: String, _ message: String) -> Prepared? {
@@ -568,8 +567,6 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// `live` as a yes/no, for a check made later (the form writer's, right before it writes).
     private func isLive(_ ticket: Ticket) -> Bool { (try? live(ticket)) != nil }
-
-    static let names = ["board", "route", "prepare", "answer_form", "start_session", "open_session", "mark"]
 
     static let specs: [[String: Any]] = [
         [
@@ -720,7 +717,7 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// Dates read from disk may be anything: bounded before they're turned into whole seconds.
-    private func age(_ date: Date) -> String { AgentRow.duration(Self.bounded(now().timeIntervalSince(date))) }
+    private func age(_ date: Date) -> String { AgentRow.duration(Self.bounded(Date().timeIntervalSince(date))) }
 
     private func sessionFields(_ store: Store, _ session: ClaudeSession, _ peers: [String: ClaudePeers.Peer]) -> [String: Any] {
         let peer = peers[session.id]
@@ -785,7 +782,7 @@ final class RouterMCPServer: @unchecked Sendable {
     // MARK: route
 
     /// A target `route` can name, and what tells it apart.
-    struct Target {
+    private struct Target {
         var target: String
         var hint: String
         var title: String
@@ -832,7 +829,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// Without Jev: a session whose title the message names, then its project, then shared words. `named` is the one
     /// target the message names outright, if exactly one.
-    static func unassisted(_ message: String, _ targets: [Target]) -> (ranked: [(target: String, score: Int)], named: String?) {
+    private static func unassisted(_ message: String, _ targets: [Target]) -> (ranked: [(target: String, score: Int)], named: String?) {
         let text = message.lowercased()
         let words = Set(text.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
         func mentions(_ name: String) -> Bool {
@@ -1098,25 +1095,16 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// Runs `work`, returning when it's done or at `deadline`, whichever comes first: a stalled `work` is left to finish on
     /// its own (what it does late is only a cache filled for next time), the caller isn't held by it.
-    /// True when the deadline came first.
-    @discardableResult
-    /// `armWhenStarted`: the deadline counts from when `work` begins, not from the call (tests use it to know the work
-    /// was under way when the deadline won).
-    static func race(deadline: TimeInterval, armWhenStarted: Bool = false,
-                     _ work: @escaping @MainActor () async -> Void) async -> Bool {
+    private static func race(deadline: TimeInterval, _ work: @escaping @MainActor () async -> Void) async {
         let once = Once()
-        return await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
-            let arm = {
-                DispatchQueue.global().asyncAfter(deadline: .now() + Self.bounded(deadline)) {
-                    if once.claim() { done.resume(returning: true) }
-                }
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.bounded(deadline)) {
+                if once.claim() { done.resume() }
             }
             Task { @MainActor in
-                if armWhenStarted { arm() }
                 await work()
-                if once.claim() { done.resume(returning: false) }
+                if once.claim() { done.resume() }
             }
-            if !armWhenStarted { arm() }
         }
     }
 
@@ -1310,7 +1298,7 @@ final class RouterMCPServer: @unchecked Sendable {
         let card = try card(store, Self.string(args, "card"))
         let addressed = try Self.bool(args, "addressed")
         try live(ticket)
-        store.setCardAddressed(card.id, addressed, now: now())
+        store.setCardAddressed(card.id, addressed)
         return addressed ? "Marked “\(card.title)” addressed." : "Opened “\(card.title)” again."
     }
 }

@@ -222,7 +222,7 @@ extension RouterMessage {
 /// Turns reads of the sessions into cards. Pure: the same reads give the same cards, so the rules are tested here.
 enum RouterFeed {
     /// What a turn card says until the app writes the turn's summary.
-    static let placeholder = "Finished its turn"
+    private static let placeholder = "Finished its turn"
     static let maxCards = 300
     static let maxChat = 500
 
@@ -530,7 +530,7 @@ extension Store {
     }
 
     /// The calls whose forms Lookout's hook holds, by desktop session; nil until the forms folder has been read.
-    var heldForms: [String: Set<String>]? {
+    private var heldForms: [String: Set<String>]? {
         guard routerFormsLoaded else { return nil }
         var held: [String: Set<String>] = [:]
         guard !pendingForms.isEmpty else { return held }
@@ -619,9 +619,8 @@ extension Store {
         }
     }
 
-    /// A read of the Claude app now; a test counts it instead (and a store that doesn't persist reads nothing on its own).
-    func requestClaudeRead() {
-        if let onClaudeRead { onClaudeRead(); return }
+    /// A read of the Claude app now (a store that doesn't persist reads nothing on its own).
+    private func requestClaudeRead() {
         guard persists else { return }
         refreshClaude()
     }

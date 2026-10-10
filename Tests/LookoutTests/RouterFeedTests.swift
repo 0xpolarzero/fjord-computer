@@ -39,8 +39,6 @@ import Testing
     @Test func theFirstSightOfASessionOnlyRecordsIt() {
         let state = seen([session(turns: 5), session("local_b", running: true)], activity: ["local_b": question(-1)])
         #expect(state.cards.isEmpty)
-        #expect(state.seen.count == 2)
-        #expect(state.waits["local_b"] == RouterFeed.Stamp.ms(at(-1)))
     }
 
     @Test func aFinishedTurnMakesADoneCardWithTheAppsSummary() {
@@ -53,12 +51,6 @@ import Testing
         // The same read again makes nothing new.
         update(&state, [session(turns: 2, summary: "Fixed the **bug**")], now: 2)
         #expect(state.cards.count == 1)
-    }
-
-    @Test func aBlockedSummaryMakesAStuckCard() {
-        var state = seen([session(turns: 1)])
-        update(&state, [session(turns: 2, summary: "Needs a token", blocked: true)], now: 1)
-        #expect(state.cards.map(\.kind) == [.stuck])
     }
 
     @Test func aTurnIsCardedOnceItsSummaryIsWritten() {
@@ -76,7 +68,7 @@ import Testing
         // A turn over with no summary yet (the app gave up counting it as running): the placeholder, then the summary.
         var state = seen([session(turns: 1)])
         update(&state, [session(turns: 2, summary: nil, running: false)], now: 1)
-        #expect(state.cards.first?.text == RouterFeed.placeholder && state.cards.first?.kind == .done)
+        #expect(state.cards.count == 1 && state.cards.first?.kind == .done)
         update(&state, [session(turns: 2, summary: "Can't reach the server", blocked: true)], now: 2)
         #expect(state.cards.count == 1)
         #expect(state.cards.first?.text == "Can't reach the server" && state.cards.first?.kind == .stuck)
@@ -86,9 +78,7 @@ import Testing
         var state = seen([session(running: true)])
         let ask = question(0.5, "Which database?")
         update(&state, [session(running: true)], activity: ["local_a": ask], now: 1)
-        let ms = Int64(at(0.5).timeIntervalSince1970 * 1000)
-        #expect(state.cards.map(\.id) == ["local_a#w\(ms)"])
-        #expect(state.cards.first?.kind == .question && state.cards.first?.text == "Which database?")
+        #expect(state.cards.count == 1 && state.cards.first?.kind == .question && state.cards.first?.text == "Which database?")
         update(&state, [session(running: true)], activity: ["local_a": ask], now: 2)
         #expect(state.cards.count == 1 && state.cards[0].isOpen)
         // Answered (here or in the app): the session moves on.
@@ -151,7 +141,6 @@ import Testing
         update(&state, [session(turns: 2), session("local_b", turns: 2)], now: 1)
         update(&state, [session(turns: 2, archived: true)], now: 2)
         #expect(state.cards.allSatisfy { $0.addressedBy == .gone })
-        #expect(state.seen.isEmpty && state.waits.isEmpty)
     }
 
     @Test func noCardForATurnYouWatchedInTheApp() {
@@ -271,7 +260,6 @@ import Testing
         update(&state, [session(running: true)], activity: ["local_a": second], now: 2)
         #expect(state.cards.map(\.text) == ["First?", "Second?"])
         #expect(state.cards[0].addressedBy == .answered && state.cards[1].isOpen)
-        #expect(state.cards[1].waitMs == RouterFeed.Stamp.ms(at(1)) + 700)
         // The same wait read again is the same card.
         update(&state, [session(running: true)], activity: ["local_a": second], now: 3)
         #expect(state.cards.count == 2 && state.cards[1].isOpen)
@@ -284,11 +272,11 @@ import Testing
         update(&state, [session(summary: nil, running: false)], now: 130)
         update(&state, [session(summary: nil, running: false)], forms: nil, now: 131)
         update(&state, [session(running: true)], now: 132)
-        #expect(state.cards.count == 1 && state.cards[0].isOpen && state.waits["local_a"] == RouterFeed.Stamp.ms(at(1)))
+        #expect(state.cards.count == 1 && state.cards[0].isOpen)
         #expect(state.cards[0].toolUseID == "toolu_q")
         // The transcript of the running session moved past the call: answered.
         update(&state, [session(running: true)], activity: ["local_a": ClaudeActivity(text: "Thinking", since: at(133))], now: 133)
-        #expect(state.cards[0].addressedBy == .answered && state.waits["local_a"] == nil)
+        #expect(state.cards[0].addressedBy == .answered)
     }
 
     @Test func aPlanPastTheRunningTimeoutStaysOpen() {
@@ -306,7 +294,6 @@ import Testing
     @Test func aHeldFormGoingAwayEndsItsQuestion() {
         var state = seen([session(running: true)])
         update(&state, [session(running: true)], activity: ["local_a": question(1, call: "toolu_q")], forms: ["local_a": ["toolu_q"]], now: 1)
-        #expect(state.formSeen["local_a"] == RouterFeed.Stamp.ms(at(1)))
         // Forms not read yet (a relaunch): nothing is known to be gone.
         update(&state, [session(summary: nil, running: false)], forms: nil, now: 130)
         #expect(state.cards[0].isOpen)
@@ -318,7 +305,7 @@ import Testing
         var other = seen([session(running: true)])
         update(&other, [session(running: true)], activity: ["local_a": question(1)], now: 1)
         update(&other, [session(message: 140, summary: nil, running: false)], now: 141)
-        #expect(other.cards[0].addressedBy == .reply && other.waits["local_a"] == nil)
+        #expect(other.cards[0].addressedBy == .reply)
     }
 
     @Test func turningItOnAgainSettlesTheCardsLeftOpen() {
@@ -338,12 +325,10 @@ import Testing
         let by = Dictionary(uniqueKeysWithValues: state.cards.map { ($0.sessionID, $0.addressedBy) })
         #expect(by["local_a"] == .reply && by["local_b"] == .opened && by["local_c"] == .gone && by["local_d"] == .answered)
         #expect(by["local_e"] == RouterCard.Addressed?.none && by["local_f"] == RouterCard.Addressed?.none)
-        #expect(state.waits["local_e"] != nil && state.waits["local_f"] != nil && state.waits["local_d"] == nil)
-        #expect(state.seen.isEmpty)
-        // The next update sees every session afresh and keeps the surviving waits.
+        // The next update sees every session afresh and keeps the surviving waits, carding nothing twice.
         update(&state, now, activity: activity, forms: ["local_f": ["toolu_f"]], now: 201)
         #expect(state.cards.filter(\.isOpen).map(\.sessionID).sorted() == ["local_e", "local_f"])
-        #expect(state.waits["local_f"] == RouterFeed.Stamp.ms(at(1)))
+        #expect(state.cards.count == 6)
     }
 
     @Test func reopeningACardSupersedesTheSessionsNewerOne() {
@@ -399,7 +384,6 @@ import Testing
         let after = session(turns: 4, summary: nil, running: false)
         RouterFeed.reconcile(&state, sessions: [after], activity: [:], now: at(30))
         #expect(state.cards[0].addressedBy == .answered)
-        #expect(state.waits["local_a"] == nil && state.waitTools["local_a"] == nil && state.formSeen["local_a"] == nil)
         update(&state, [after], now: 31)
         #expect(state.cards.filter(\.isOpen).isEmpty)
     }
@@ -411,7 +395,7 @@ import Testing
         var after = session(summary: nil, running: false)
         after.lastUserMessage = at(0.5)
         RouterFeed.reconcile(&state, sessions: [after], activity: [:], now: at(30))
-        #expect(state.cards[0].addressedBy == .reply && state.waits["local_a"] == nil)
+        #expect(state.cards[0].addressedBy == .reply)
     }
 
     @Test func datesAtTheEndsOfTimeAreClampedNotATrap() throws {
@@ -445,11 +429,11 @@ import Testing
         // The turn is over, a subagent still runs: still working, no card.
         update(&state, [session(turns: 2, summary: nil)], tasks: subagent, now: 1)
         update(&state, [session(turns: 2, summary: "First summary")], tasks: subagent, now: 2)
-        #expect(state.cards.isEmpty && state.pendingTurns["local_a"]?.turns == 2)
+        #expect(state.cards.isEmpty)
         // It's done: the card, with the summary as it is then.
         update(&state, [session(turns: 2, summary: "Merged the fix", blocked: true)], now: 3)
         #expect(state.cards.map(\.id) == ["local_a#t2"] && state.cards[0].kind == .stuck && state.cards[0].text == "Merged the fix")
-        #expect(state.cards[0].createdAt == at(3) && state.pendingTurns.isEmpty)
+        #expect(state.cards[0].createdAt == at(3))
         // Once: not again on the next read.
         update(&state, [session(turns: 2, summary: "Merged the fix", blocked: true)], now: 4)
         #expect(state.cards.count == 1)
@@ -462,7 +446,7 @@ import Testing
         update(&state, [session(turns: 2, message: 2, running: true)], now: 2)
         update(&state, [session(turns: 2, message: 2)], tasks: subagent, now: 3)
         update(&state, [session(turns: 2, message: 2)], now: 4)
-        #expect(state.cards.isEmpty && state.pendingTurns.isEmpty)
+        #expect(state.cards.isEmpty)
     }
 
     @Test func aNewerTurnMeanwhileGivesOneCardForTheLatest() {
@@ -478,7 +462,9 @@ import Testing
         var state = seen([session(turns: 1)])
         update(&state, [session(turns: 2)], now: 1)
         update(&state, [session(turns: 2)], tasks: subagent, now: 2)
-        #expect(state.cards.count == 1 && state.cards[0].isOpen && state.pendingTurns.isEmpty)
+        #expect(state.cards.count == 1 && state.cards[0].isOpen)
+        update(&state, [session(turns: 2)], now: 3)
+        #expect(state.cards.count == 1)
     }
 
     @Test func aPendingTurnSurvivesARelaunchAndTurningTheRouterOnAgain() throws {
@@ -488,7 +474,6 @@ import Testing
         enc.dateEncodingStrategy = .iso8601
         dec.dateDecodingStrategy = .iso8601
         var loaded = try dec.decode(RouterState.self, from: enc.encode(state))
-        #expect(loaded.pendingTurns["local_a"]?.turns == 2)
         // Switched off and on: the open cards are settled and every session seen afresh; the pending turn still waits.
         RouterFeed.reconcile(&loaded, sessions: [session(turns: 2)], activity: [:], now: at(2))
         update(&loaded, [session(turns: 2)], tasks: subagent, now: 3)

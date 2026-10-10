@@ -23,9 +23,11 @@ import Testing
         store.persists = false
         store.settings.snoozeUntil = Date().addingTimeInterval(0.3)
         store.snooze(for: nil)
-        let revision = store.snoozeRevision
+        let flag = Flag()
+        withObservationTracking { _ = store.isSnoozed } onChange: { flag.set() }
         try await Task.sleep(for: .seconds(0.7))
-        #expect(store.snoozeRevision == revision)
+        // Nothing redraws what reads it at the old deadline.
+        #expect(!flag.value && !store.isSnoozed)
     }
 }
 

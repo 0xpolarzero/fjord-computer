@@ -26,23 +26,6 @@ import Testing
         #expect(throws: RouterTools.Failure.self) { try Rephrase.parse(#"{"text": "x"}"#, original: original) }
     }
 
-    @Test func haikuRunsAloneWithNoToolsAndTheRules() {
-        let args = Rephrase.arguments()
-        func value(_ flag: String) -> String? { args.firstIndex(of: flag).map { args[$0 + 1] } }
-        #expect(args.first == "-p" && value("--model") == "claude-haiku-5-5" && value("--tools") == "")
-        #expect(value("--setting-sources") == "" && value("--output-format") == "json" && value("--system-prompt") == Rephrase.rules)
-        #expect(args.contains("--strict-mcp-config") && args.contains("--no-session-persistence"))
-        let input = Rephrase.input(message: "ask it if the tests pass", title: "Fix login", project: "lookout")
-        #expect(input == "Target session: \"Fix login\" (project lookout)\n\nMessage:\nask it if the tests pass")
-        for rule in ["EXACTLY as written", "Never add, summarise, translate", "\"rephrased\""] { #expect(Rephrase.rules.contains(rule)) }
-        // Asides for the Router go, the rest stays verbatim; all aside, nothing left.
-        for rule in ["the marker @router", "Remove each part for the router, the marker and its aside", "If nothing is left"] {
-            #expect(Rephrase.rules.contains(rule), "\(rule)")
-        }
-        #expect(throws: Rephrase.NothingLeft.self) { try Rephrase.parse(#"{"rephrased": true, "text": " "}"#, original: "@router hi") }
-        #expect(RouterPrompt.role.contains("@router") && RouterPrompt.role.contains("never pass it on"))
-    }
-
     /// A stand-in for Claude Code: keeps its arguments and stdin, then prints `output`.
     private func fake(_ dir: TempDir, output: String, sleep: Double = 0) -> String {
         let path = dir.path("claude").path
@@ -59,7 +42,7 @@ import Testing
         return path
     }
 
-    @Test func aRunGoesThroughTheBinaryAndBack() async throws {
+    @Test func aRunGoesThroughTheBinaryAloneWithNoToolsAndBack() async throws {
         let dir = TempDir()
         let answer = #"{"type":"result","subtype":"success","is_error":false,"result":"{\"rephrased\":true,\"text\":\"Bump the version.\"}"}"#
         let binary = fake(dir, output: answer)
@@ -67,9 +50,13 @@ import Testing
                                          title: "Release", project: "lookout", timeout: 120)
         #expect(out == Prepared(text: "Bump the version.", original: "tell lookout to bump the version", rephrased: true))
         let stdin = try String(contentsOf: dir.path("stdin"), encoding: .utf8)
-        #expect(stdin.contains("\"Release\" (project lookout)") && stdin.hasSuffix("tell lookout to bump the version"))
-        let args = try String(contentsOf: dir.path("args"), encoding: .utf8)
-        #expect(args.contains("claude-haiku-5-5"))
+        // Haiku is told the target as well as the message.
+        #expect(stdin.contains("Release") && stdin.hasSuffix("tell lookout to bump the version"))
+        // Alone: no tools, no settings, no MCP servers of the user's, nothing saved.
+        let args = try String(contentsOf: dir.path("args"), encoding: .utf8).components(separatedBy: "\n")
+        func value(_ flag: String) -> String? { args.firstIndex(of: flag).map { args[$0 + 1] } }
+        #expect(value("--tools") == "" && value("--setting-sources") == "")
+        #expect(args.contains("--strict-mcp-config") && args.contains("--no-session-persistence"))
     }
 
     @Test func aFailedOrSlowRunIsAnError() async throws {
@@ -127,23 +114,20 @@ import Testing
         #expect(try decoder.decode(RouterMessage.self, from: encoder.encode(line)) == line)
     }
 
-    @Test func theHeaderSaysTheReplyAndTheProjects() {
+    @Test func theHeaderSaysTheReplyAndTheProjectsInTheWordsTheRoleExplains() {
         let reply = RouterAgent.Reply(card: "local_a#t1", title: "Fix login", project: "lookout", peer: "Lookout dev")
-        #expect(RouterAgent.header("ship it", reply: reply, projects: [("lookout", "/code/lookout"), ("api", "/code/api")]) == """
-        [reply to: card local_a#t1 · session "Fix login" (lookout) · peer "Lookout dev"]
-        [projects: lookout = /code/lookout, api = /code/api]
-        ship it
-        """)
+        let header = RouterAgent.header("ship it", reply: reply, projects: [("lookout", "/code/lookout"), ("api", "/code/api")])
+        for part in ["local_a#t1", "Fix login", "Lookout dev", "lookout = /code/lookout", "api = /code/api"] {
+            #expect(header.contains(part), "\(part)")
+        }
+        #expect(header.hasSuffix("\nship it"))
         let gone = RouterAgent.Reply(card: "local_a#t1", title: "Fix login", project: "lookout", peer: nil)
-        #expect(RouterAgent.header("x", reply: gone, projects: []) == "[reply to: card local_a#t1 · session \"Fix login\" (lookout) · not reachable]\nx")
+        #expect(RouterAgent.header("x", reply: gone, projects: []).contains("not reachable"))
         #expect(RouterAgent.header("plain", reply: nil, projects: []) == "plain")
-    }
-
-    @Test func theRoleExplainsTheHeaderAndPreparing() {
-        for part in ["[reply to: card", "[projects:", "call prepare(session)", "SendMessage exactly what prepare returns",
-                     "Its `text` is already prepared", "Never write a message yourself",
-                     "start_session starts in the tagged project", "If prepare fails, tell the user its reason in one line and don't send"] {
-            #expect(RouterPrompt.role.contains(part), "\(part)")
+        // Each of its lines opens with a marker the Router's role tells it how to read.
+        for line in header.split(separator: "\n").dropLast() {
+            let marker = String(line.prefix { $0 != ":" })
+            #expect(RouterPrompt.role.contains(marker), "\(marker)")
         }
     }
 

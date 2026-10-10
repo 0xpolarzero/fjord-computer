@@ -242,7 +242,7 @@ struct RouterContext: Equatable {
     }
 
     /// Numeric, part by part ("2.1.293" > "2.1.29" > "2.1.3").
-    nonisolated static func compare(_ a: String, _ b: String) -> ComparisonResult {
+    nonisolated private static func compare(_ a: String, _ b: String) -> ComparisonResult {
         let pa = a.split(whereSeparator: { !$0.isNumber }).map { Int($0) ?? 0 }
         let pb = b.split(whereSeparator: { !$0.isNumber }).map { Int($0) ?? 0 }
         for i in 0..<max(pa.count, pb.count) {
@@ -696,7 +696,8 @@ struct RouterContext: Equatable {
                 setPhase(.working)
                 // A session's report is shown as it came (the peer line); the Router doesn't speak over it.
                 if !peerTurn {
-                    let shown = Self.withoutRelayHeader(text)
+                    // Never the lines that sign a message for Lookout's plugin (`⟦lookout v1 …⟧`).
+                    let shown = RelaySigner.readable(text)
                     if !shown.isEmpty { append(.router, shown) }
                 }
             case .toolUse(let id, let name, let input):
@@ -819,7 +820,7 @@ struct RouterContext: Equatable {
     }
 
     /// Why SendMessage didn't deliver, from its result (`{"success":false,"message":…}`); nil when it did.
-    nonisolated static func undelivered(_ result: String) -> String? {
+    nonisolated private static func undelivered(_ result: String) -> String? {
         guard let obj = (try? JSONSerialization.jsonObject(with: Data(result.utf8))) as? [String: Any],
               obj["success"] as? Bool == false else { return nil }
         return obj["message"] as? String ?? "Not delivered"
@@ -876,9 +877,6 @@ struct RouterContext: Equatable {
 
     // MARK: Receipts
 
-    /// Text without the lines that sign a message for Lookout's plugin (`⟦lookout v1 …⟧`): the chat never shows them.
-    nonisolated static func withoutRelayHeader(_ text: String) -> String { RelaySigner.readable(text) }
-
     /// `mcp__lookout__board` → `board`.
     static func shortName(_ name: String) -> String {
         name.hasPrefix("mcp__lookout__") ? String(name.dropFirst("mcp__lookout__".count)) : name
@@ -897,7 +895,7 @@ struct RouterContext: Equatable {
         case "SendMessage":
             let to = input["to"] ?? "a session"
             // Your words as the session got them: the body, never the line that signs it.
-            let message = prepared?.body ?? Self.withoutRelayHeader(input["message"] ?? input["content"] ?? input["text"] ?? "")
+            let message = prepared?.body ?? RelaySigner.readable(input["message"] ?? input["content"] ?? input["text"] ?? "")
             var first = message.split(separator: "\n").first.map(String.init) ?? ""
             if first.count > 120 { first = String(first.prefix(119)) + "…" }
             let original = prepared?.rephrased == true ? prepared?.original : nil

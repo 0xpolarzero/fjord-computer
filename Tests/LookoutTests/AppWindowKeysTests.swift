@@ -311,9 +311,7 @@ import Testing
         // Centred on the main screen: centred on the other.
         let frame = NSRect(x: 210, y: 120, width: 1180, height: 760)
         let moved = AppWindowPlacement.frame(frame, from: main, in: side)
-        #expect(moved.size == NSSize(width: 1180, height: 760) || moved.size.width <= side.width)
-        #expect(side.contains(moved.origin))
-        #expect(abs(moved.midX - side.midX) < 1 && abs(moved.midY - side.midY) < 1 || moved.width == side.width)
+        #expect(moved.size == frame.size && abs(moved.midX - side.midX) < 1 && abs(moved.midY - side.midY) < 1)
         // A frame at the main screen's left edge lands at the other's left edge.
         let left = NSRect(x: 0, y: 100, width: 800, height: 600)
         let placed = AppWindowPlacement.frame(left, from: main, in: side)

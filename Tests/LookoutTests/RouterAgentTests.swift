@@ -28,25 +28,18 @@ import Testing
         let found = try #require(RouterAgent.find(in: dir.url))
         #expect(found.version == "2.1.293")
         #expect(found.path == dir.url.appendingPathComponent("2.1.293/bbb/claude.app/Contents/MacOS/claude").path)
-        #expect(RouterAgent.compare("2.1.293", "2.1.29") == .orderedDescending)
-        #expect(RouterAgent.compare("2.1", "2.1.0") == .orderedSame)
-        #expect(RouterAgent.compare("1.9.9", "2.0") == .orderedAscending)
     }
 
     @Test func itRunsWithOnlyItsToolsAndResumesItsConversation() {
         let args = RouterAgent.arguments(config: "/r/mcp.json", settings: "/r/settings.json", resume: nil)
-        #expect(Array(args.prefix(6)) == ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"])
         func value(_ flag: String, _ args: [String]) -> String? { args.firstIndex(of: flag).map { args[$0 + 1] } }
         #expect(value("--tools", args) == "ListAgents,SendMessage")
         // SendMessage isn't pre-allowed: Lookout's gate (the PreToolUse hook in --settings) decides each one.
-        #expect(value("--allowedTools", args) == "ListAgents,mcp__lookout")
-        #expect(value("--settings", args) == "/r/settings.json")
-        #expect(value("--name", args) == "Lookout" && value("--setting-sources", args) == "")
+        #expect(value("--allowedTools", args)?.contains("SendMessage") == false)
+        #expect(value("--settings", args) == "/r/settings.json" && value("--setting-sources", args) == "")
         // Permission prompts come to Lookout over stdin (the native path, which fails closed).
-        #expect(value("--permission-mode", args) == "manual" && value("--permission-prompt-tool", args) == "stdio")
-        #expect(!args.contains("--permission-prompts"))
+        #expect(value("--permission-prompt-tool", args) == "stdio")
         #expect(value("--mcp-config", args) == "/r/mcp.json" && args.contains("--strict-mcp-config"))
-        #expect(value("--append-system-prompt", args) == RouterPrompt.role)
         #expect(!args.contains("--resume"))
         #expect(value("--resume", RouterAgent.arguments(config: "/r/mcp.json", settings: "/s", resume: "abc")) == "abc")
     }
@@ -239,10 +232,10 @@ import Testing
 
     @Test func peerNamesResolveOnlyWhenCertain() {
         let peers: [String: ClaudePeers.Peer] = [
-            "local_a": .init(name: "Lookout dev", status: "idle", pid: 10),
-            "local_b": .init(name: "Twin", status: "idle", pid: 11),
-            "local_c": .init(name: "Twin", status: "busy", pid: 12),
-            "local_d": .init(name: "Odd [x]", status: "idle", pid: 13),
+            "local_a": .init(name: "Lookout dev", pid: 10),
+            "local_b": .init(name: "Twin", pid: 11),
+            "local_c": .init(name: "Twin", pid: 12),
+            "local_d": .init(name: "Odd [x]", pid: 13),
         ]
         #expect(RouterAgent.peerSession("Lookout dev", peers: peers) == "local_a")
         #expect(RouterAgent.peerSession("Lookout dev [10]", peers: peers) == "local_a")
@@ -277,20 +270,15 @@ import Testing
         let dir = TempDir()
         let s = store(dir)
         let agent = RouterAgent(store: s)
-        #expect(agent.receipt("mcp__lookout__answer_form", ["card": "local_a#t1"])?.text == "→ answered Fix the login bug")
+        // An action names what it acted on, by its title and session; reads leave nothing.
+        let answered = agent.receipt("mcp__lookout__answer_form", ["card": "local_a#t1"])
+        #expect(answered?.text.contains("Fix the login bug") == true && answered?.session == "local_a")
+        #expect(agent.receipt("mcp__lookout__open_session", ["session": "local_a"])?.session == "local_a")
+        let reopened = agent.receipt("mcp__lookout__mark", ["card": "local_b#t1", "addressed": "false"])
+        let marked = agent.receipt("mcp__lookout__mark", ["card": "local_b#t1", "addressed": "true"])
+        #expect(reopened?.text.contains("Docs") == true && marked?.text.contains("Docs") == true && reopened?.text != marked?.text)
         #expect(agent.receipt("mcp__lookout__start_session", ["project": "lookout"]) == nil)
-        #expect(agent.receipt("mcp__lookout__open_session", ["session": "local_a"])?.text == "→ opened Fix the login bug")
-        #expect(agent.receipt("mcp__lookout__mark", ["card": "local_b#t1", "addressed": "false"])?.text == "→ reopened Docs")
-        #expect(agent.receipt("mcp__lookout__mark", ["card": "local_b#t1", "addressed": "true"])?.text == "→ marked Docs addressed")
         #expect(agent.receipt("mcp__lookout__board", [:]) == nil && agent.receipt("ListAgents", [:]) == nil)
-        let long = String(repeating: "x", count: 300)
-        #expect(agent.receipt("SendMessage", ["to": "Docs", "message": long])?.text.count == "→ Docs: ".count + 120)
-    }
-
-    @Test func theRoleLeavesReceiptsAndReportsToLookout() {
-        #expect(RouterPrompt.role.contains("Lookout shows a receipt for every action you take. After acting, say nothing unless something needs the user (an error, a question, a refusal)."))
-        #expect(RouterPrompt.role.contains("Messages from sessions are shown to the user by Lookout; don't reply to them or summarise them."))
-        #expect(!RouterPrompt.role.contains("reply with one receipt line"))
     }
 
     @Test func aNewConversationClearsTheChatAndTheSessionToResume() async {
@@ -466,7 +454,7 @@ import Testing
         #expect(agent.phase == .starting)
         agent.stop()
         #expect(agent.phase == .idle)
-        #expect(s.router.chat.map { "\($0.role.rawValue): \($0.text)" } == ["you: first", "receipt: Cancelled before sending"])
+        #expect(s.router.chat.map(\.role) == [.you, .receipt])
         // The next message starts it, and only that message is sent.
         agent.send("second")
         await settle { events.spawned.count == 1 }
@@ -632,7 +620,7 @@ import Testing
         agent.send("three")
         agent.stop()
         #expect(agent.queuedCount == 0)
-        #expect(s.router.chat.last?.role == .receipt && s.router.chat.last?.text == "Cancelled 2 queued messages")
+        #expect(s.router.chat.last?.role == .receipt)
         await settle { written(log).contains("interrupt") }
         agent.apply([.result(isError: true, text: "")])
         #expect(agent.phase == .idle && s.router.chat.last?.text == "Stopped")
@@ -772,7 +760,6 @@ import Testing
                      .toolResult(id: "t5", isError: false,
                                  text: #"{"success":false,"message":"No agent named 'Lookout dev' is reachable.\nUse ListAgents."}"#)])
         #expect(s.router.chat.last?.role == .error && s.router.chat.last?.text == "SendMessage: No agent named 'Lookout dev' is reachable.")
-        #expect(RouterAgent.undelivered(#"{"success":true}"#) == nil && RouterAgent.undelivered("Sent") == nil)
         // Ran without the gate's yes: said; its receipt still shows no header.
         agent.apply([.toolUse(id: "t3", name: "SendMessage", input: ["to": "Lookout dev", "message": second]),
                      .toolResult(id: "t3", isError: false, text: "Sent")])

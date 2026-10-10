@@ -87,16 +87,6 @@ extension Store {
     }
 }
 
-/// How long, in whole minutes: the lists are redrawn once a minute, so seconds would only ever be wrong.
-enum RouterStatusLine {
-    static func minutes(_ t: TimeInterval) -> String {
-        let m = max(0, Int(t)) / 60
-        if m < 1 { return "<1m" }
-        if m < 60 { return "\(m)m" }
-        return m % 60 == 0 ? "\(m / 60)h" : "\(m / 60)h \(m % 60)m"
-    }
-}
-
 /// Content redrawn on the minute and only then (ages, the status line): nothing else ticks for it.
 struct MinuteTicking<Content: View>: View {
     @ViewBuilder let content: (Date) -> Content
@@ -324,11 +314,10 @@ final class RouterModel {
     }
 
     /// Looks for Claude Code once the window shows (the app updates its copy now and then): until the search has finished
-    /// nothing is said, and Send waits. In a demo it is never missing; under test, `root` stands in for the app's folder.
-    func checkClaudeCode(_ store: Store, root: URL? = nil) async {
-        if store.routerIsPretend && root == nil { claudeCodeMissing = false; return }
-        if store.routerAgent.claudeCode != nil && root == nil { claudeCodeMissing = false; return }
-        guard let root = root ?? store.routerAgent.codeRoot else { claudeCodeMissing = false; return }
+    /// nothing is said, and Send waits. In a demo it is never missing.
+    func checkClaudeCode(_ store: Store) async {
+        if store.routerIsPretend || store.routerAgent.claudeCode != nil { claudeCodeMissing = false; return }
+        guard let root = store.routerAgent.codeRoot else { claudeCodeMissing = false; return }
         let found = await Task.detached(priority: .utility) { RouterAgent.find(in: root) != nil }.value
         if claudeCodeMissing != !found { claudeCodeMissing = !found }
     }
@@ -693,10 +682,18 @@ private struct WorkingLine: View {
     let now: Date
     @State private var hover = false
 
+    /// How long, in whole minutes: the lists are redrawn once a minute, so seconds would only ever be wrong.
+    private static func minutes(_ t: TimeInterval) -> String {
+        let m = max(0, Int(t)) / 60
+        if m < 1 { return "<1m" }
+        if m < 60 { return "\(m)m" }
+        return m % 60 == 0 ? "\(m / 60)h" : "\(m / 60)h \(m % 60)m"
+    }
+
     var body: some View {
         // A turn that is over but left things running: how many, since the oldest of them.
         let start = Store.workingStart(row)
-        let since = RouterStatusLine.minutes(now.timeIntervalSince(start ?? now))
+        let since = Self.minutes(now.timeIntervalSince(start ?? now))
         let doing = row.session.running ? row.activity?.text ?? "Working" : row.tasksText ?? "Working"
         Button { store.openAgent(row.id) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {

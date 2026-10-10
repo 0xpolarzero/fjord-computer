@@ -52,8 +52,6 @@ final class Store {
     @ObservationIgnored var baselinePending = false
     @ObservationIgnored var baselineTask: Task<Void, Never>?
     @ObservationIgnored var actionsAgain = false
-    /// Runs at most this many per refresh.
-    @ObservationIgnored var actionLimit = InboxActions.perSync
     /// What the last inbox refresh failed at, if it did (InboxSync.swift); the things it had stay.
     var inboxError: String?
     /// Repos (lowercased) GitHub said don't exist, or can't be seen: their chips are red and block Save.
@@ -126,8 +124,6 @@ final class Store {
     var folderNames: [String: String] = [:]
     /// The folders `folderNames` was worked out for: the work is skipped while they are the same.
     @ObservationIgnored var namedFoldersSeen: Set<String>?
-    /// What works the names out (the tests count its runs).
-    @ObservationIgnored var nameFolders: (Set<String>) -> [String: String] = FolderNames.names(for:)
     var claudeSessions: [String: ClaudeSession] = [:] {
         didSet {
             agentCache = nil
@@ -229,8 +225,6 @@ final class Store {
     /// The sessions whose background work the last read looked at (see `ClaudeSnapshot.taskInventory`); nil until a read
     /// has said (a test feeding sessions by hand: every one).
     @ObservationIgnored var claudeTaskInventory: Set<String>?
-    /// Stands in for a read of the Claude app the Router asks for (see `requestClaudeRead`); tests count it.
-    @ObservationIgnored var onClaudeRead: (() -> Void)?
     @ObservationIgnored let formBridge = FormBridge()
     @ObservationIgnored lazy var routerAgent = RouterAgent(store: self)
     /// Where the Router's files go, in a test (see `routerFiles`).
@@ -486,13 +480,10 @@ final class Store {
         if awaitsToken, !isSyncing { refreshNow() }
     }
 
-    private var effectivePollInterval: TimeInterval {
-        Self.pollInterval(base: settings.pollInterval, hubOpen: hubOpen, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
-    }
-
     /// How often to poll: the setting, at most 30 s while the hub is open, and doubled in Low Power Mode whichever it is.
-    nonisolated static func pollInterval(base: TimeInterval, hubOpen: Bool, lowPower: Bool) -> TimeInterval {
-        (hubOpen ? min(base, 30) : base) * (lowPower ? 2 : 1)
+    private var effectivePollInterval: TimeInterval {
+        let base = settings.pollInterval
+        return (hubOpen ? min(base, 30) : base) * (ProcessInfo.processInfo.isLowPowerModeEnabled ? 2 : 1)
     }
 
     /// Sleeps in slices so a change (hub opening, wake, new interval) can cut it short.
@@ -629,7 +620,7 @@ final class Store {
     }
 
     /// Bumped when a snooze's deadline passes.
-    private(set) var snoozeRevision = 0
+    private var snoozeRevision = 0
     @ObservationIgnored private var snoozeExpiry: (deadline: Date, task: Task<Void, Never>)?
 
     /// One cancellable one-shot at the snooze's deadline, kept in step with the setting.

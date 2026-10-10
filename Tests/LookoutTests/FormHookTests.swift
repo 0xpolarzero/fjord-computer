@@ -99,7 +99,7 @@ import Testing
         })
         #expect(outcome == .answered)
         let form = try #require(seenPending)
-        #expect(form.id == "cli-1-\(Int64(2_000_000_000) * 1000)-4242" && form.questions.count == 2)
+        #expect(form.questions.count == 2)
         // One line of JSON, and nothing else.
         let text = String(decoding: box.output, as: UTF8.self)
         #expect(text.hasSuffix("}\n") && text.filter { $0 == "\n" }.count == 1)
@@ -416,6 +416,7 @@ import Testing
         var parent = true
         let (outcome, _) = run(dir, input: request(transcript: transcript), parentAlive: { parent }, step: { n, forms in
             named = FormBridge.read(dir: forms) { $0 == 4242 }["cli-1"]?.toolUseID
+            // Written again with its call: still private.
             #expect(mode(forms.appendingPathComponent(try! FileManager.default.contentsOfDirectory(atPath: forms.path)
                 .first { $0.hasSuffix(".json") }!)) == 0o600)
             if n == 2 { parent = false }

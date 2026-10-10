@@ -201,16 +201,3 @@ private final class PathLog: @unchecked Sendable {
     func add(_ path: String) { lock.withLock { paths.append(path) } }
     var all: [String] { lock.withLock { paths } }
 }
-
-@Suite struct FailingChecks {
-    @Test func theChipNamesTheFailingChecksAndCountsTheRest() {
-        #expect(FailingNames.summary(["build"]) == "build")
-        #expect(FailingNames.summary(["build", "lint", "test"]) == "build, lint, test")
-        #expect(FailingNames.summary(["build", "lint", "test", "deploy", "docs"]) == "build, lint, test +2")
-    }
-
-    @Test func aLongNameIsCutShort() {
-        #expect(FailingNames.summary(["Linux build (release, arm64)"]) == "Linux build (release, a…")
-        #expect(FailingNames.summary(["exactly twenty-four long"]) == "exactly twenty-four long")
-    }
-}

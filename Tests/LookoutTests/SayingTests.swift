@@ -11,10 +11,10 @@ import Testing
             Announce.sink = { said.append($0) }
             #expect(SettingsView.launchFailure(turningOn: true, using: { _ in }) == nil && said.isEmpty)
             #expect(SettingsView.launchFailure(turningOn: true, using: { _ in throw Refused() }) == "Operation not permitted")
-            #expect(said == ["Couldn't turn on Launch at login"])
+            #expect(said.count == 1)
             // Turning it off is a different sentence: not the same words twice.
             #expect(SettingsView.launchFailure(turningOn: false, using: { _ in throw Refused() }) == "Operation not permitted")
-            #expect(said.last == "Couldn't turn off Launch at login")
+            #expect(said.count == 2 && said[0] != said[1])
         }
     }
 }

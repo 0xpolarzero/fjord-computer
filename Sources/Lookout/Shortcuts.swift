@@ -219,18 +219,6 @@ enum ShortcutRefusal: Equatable {
     }
 }
 
-/// Where a system-wide shortcut is registered: `HotKeys`, or a stand-in under test.
-protocol HotKeyRegistrar: AnyObject {
-    /// `nil` unregisters. A shortcut that can't be registered is refused (`false`), and what `id` held stays held.
-    @discardableResult
-    func set(_ id: UInt32, _ shortcut: Shortcut?, handler: @escaping () -> Void) -> Bool
-    /// While true, the combinations are released so their keys reach the app; they are registered again when it turns false,
-    /// which another app holding one meanwhile refuses.
-    var isSuspended: Bool { get set }
-}
-
-extension HotKeys: HotKeyRegistrar {}
-
 extension ShortcutAction {
     /// The registration a global action holds, one per action.
     var hotKeyID: UInt32 {
@@ -242,22 +230,19 @@ extension ShortcutAction {
     }
 }
 
-/// Keeps the registrar in step with the store's global shortcuts: one registration per action, the session switcher only
-/// while the Claude extension is on, the Router's only while it is on, and none for a shortcut that was cleared.
+/// Keeps the system's hot keys in step with the store's global shortcuts: one registration per action, the session
+/// switcher only while the Claude extension is on, the Router's only while it is on, and none for a shortcut that was cleared.
 @MainActor
 final class GlobalShortcuts {
     private let store: Store
-    private let registrar: HotKeyRegistrar
+    private let hotKeys: HotKeys
     private let perform: (ShortcutAction) -> Void
-    private let say: (String) -> Void
 
-    /// `perform` runs on the main queue when a global shortcut is pressed; `say` speaks what nothing on screen shows.
-    init(store: Store, registrar: HotKeyRegistrar, perform: @escaping (ShortcutAction) -> Void,
-         say: ((String) -> Void)? = nil) {
+    /// `perform` runs on the main queue when a global shortcut is pressed.
+    init(store: Store, hotKeys: HotKeys, perform: @escaping (ShortcutAction) -> Void) {
         self.store = store
-        self.registrar = registrar
+        self.hotKeys = hotKeys
         self.perform = perform
-        self.say = say ?? { Announce.say($0) }
     }
 
     /// Registers both and follows the store from here on. A key another app already holds is said once, here: at launch
@@ -287,13 +272,13 @@ final class GlobalShortcuts {
     /// Releases the system-wide keys while a shortcut is recorded, and takes them back after. A key another app claimed
     /// meanwhile is refused as at launch: Settings warns, it is said, and it is tried again with every call.
     func suspend(_ on: Bool) {
-        registrar.isSuspended = on
+        hotKeys.isSuspended = on
         guard !on else { return }
         for action in ShortcutAction.allCases where action.isGlobal && !register(action) { announceRefusal(action) }
     }
 
     private func announceRefusal(_ action: ShortcutAction) {
-        say("\(action.title): \(store.shortcut(action).display) is used by another app, so it does nothing")
+        Announce.say("\(action.title): \(store.shortcut(action).display) is used by another app, so it does nothing")
     }
 
     /// `shortcut` is what the store is about to set, or its current one. `false` when the system refused it, which the store
@@ -305,7 +290,7 @@ final class GlobalShortcuts {
         let shortcut = shortcut ?? store.shortcut(action)
         let off = action.isRouter && !store.routerOn
         let wanted = off ? nil : shortcut
-        let taken = registrar.set(action.hotKeyID, wanted.flatMap { $0.isUnassigned ? nil : $0 }) { [perform] in
+        let taken = hotKeys.set(action.hotKeyID, wanted.flatMap { $0.isUnassigned ? nil : $0 }) { [perform] in
             DispatchQueue.main.async { perform(action) }
         }
         if taken {

@@ -318,7 +318,7 @@ extension Store {
         let folders = namedFolders
         guard folders != namedFoldersSeen else { return }
         namedFoldersSeen = folders
-        let names = nameFolders(folders)
+        let names = FolderNames.names(for: folders)
         if names != folderNames { folderNames = names }
     }
 

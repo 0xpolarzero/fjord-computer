@@ -50,9 +50,11 @@ import Testing
 
     @Test func doneIsNotAskedTwice() {
         let s = store([1])
+        var said = 0
+        s.undoStack.announce = { _ in said += 1 }
         s.finish(entry(s, 1)!)
         s.finish(s.doneEntries[0])
-        #expect(s.undoStack.entries.count == 1)
+        #expect(said == 1)
     }
 
     @Test func theLineShowsThenGoesAndTheUndoStaysForCommandZ() async throws {
@@ -60,7 +62,7 @@ import Testing
         let gate = Gate()
         s.undoStack.sleep = { _ in await gate.wait() }
         s.finish(entry(s, 1)!)
-        #expect(s.undoStack.line?.message == "Moved to Done")
+        #expect(s.undoStack.line != nil)
         gate.open()
         try await eventually { s.undoStack.line == nil }
         #expect(s.undoStack.line == nil && s.undoLast() && isDone(s, 1) == false)

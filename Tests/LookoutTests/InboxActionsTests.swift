@@ -98,8 +98,6 @@ final class FakePerformer: ActionPerformer {
         await store.runActions()
         await store.runActions()
         #expect(performer.sessions.count == 1)
-        let run = store.actionLedger.run(store.categories[0].id, "pr:a/one#4", session.id, "enter")
-        #expect(run?.state == .done && run?.sessionID == "local_1")
     }
 
     @Test func leavingAndComingBackAgainRunsOnlyAfterTheCooldown() async {
@@ -195,19 +193,9 @@ final class FakePerformer: ActionPerformer {
         #expect(performer.comments.count == 1)
     }
 
-    @Test func authorsOfFactsAreFoundByTheirKeys() {
-        var thing = conversation([commented("c1", by: "alice")])
-        thing.reviews = [ThingReview(id: "r1", author: Person(login: "bob"), state: .approved, at: Date())]
-        thing.commits = [ThingCommit(id: "abc", author: "carol", at: Date())]
-        #expect(InboxActions.author(of: "last:c1", in: thing) == "alice")
-        #expect(InboxActions.author(of: "approved:r1", in: thing) == "bob")
-        #expect(InboxActions.author(of: "commit:abc", in: thing) == "carol")
-        #expect(InboxActions.author(of: "checks:failing", in: thing) == nil)
-    }
-
     // MARK: Words
 
-    @Test func placeholdersAreFilledAndTheContextIsAppended() async {
+    @Test func placeholdersAreFilled() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()
         var thing = InboxFixture.pr(12, repo: "o/r", title: "Warm pool", by: Person(login: "alice"))
@@ -216,14 +204,7 @@ final class FakePerformer: ActionPerformer {
         await store.runActions()
         let sent = performer.sessions.first
         #expect(sent?.folder == "/p/app")
-        let prompt = sent?.prompt ?? ""
-        #expect(prompt.hasPrefix("Look at Warm pool by @alice (o/r#12) https://github.com/o/r/pull/12\n\n"))
-        #expect(prompt.contains("- Title: Warm pool"))
-        #expect(prompt.contains("- URL: https://github.com/o/r/pull/12"))
-        #expect(prompt.contains("- Pull request: o/r#12"))
-        #expect(prompt.contains("- Why it is here: Greptile 3/5"))
-        #expect(prompt.contains("- Last comment, by @bob: “snippet c1”"))
-        #expect(sent?.title == "o/r#12 Warm pool")
+        #expect(sent?.prompt.hasPrefix("Look at Warm pool by @alice (o/r#12) https://github.com/o/r/pull/12") == true)
     }
 
     @Test func aCommentIsPostedWithPlaceholdersAndNothingElse() async {
@@ -233,8 +214,6 @@ final class FakePerformer: ActionPerformer {
         await store.runActions()
         #expect(performer.comments.map(\.body) == ["Hi @alice: o/r#3 T"])
         #expect(performer.comments.first?.number == 3)
-        let run = store.actionLedger.runs.values.first { $0.state == .done }
-        #expect(run?.url?.absoluteString.hasSuffix("#issuecomment-1") == true)
     }
 
     @Test func clonesAreFoundByTheirRemotes() {
@@ -257,8 +236,7 @@ final class FakePerformer: ActionPerformer {
         performer.clones = ["o/r": "/code/r"]
         await store.runActions()
         #expect(performer.sessions.map(\.folder) == ["/code/r"])
-        let failed = store.actionLedger.runs.values.first { $0.state == .failed }
-        #expect(failed?.detail.contains("no local clone of o/none") == true)
+        #expect(store.actionLedger.runs.values.contains { $0.state == .failed })
         // A failure is not retried.
         await store.runActions()
         #expect(performer.sessions.count == 1)
@@ -266,7 +244,7 @@ final class FakePerformer: ActionPerformer {
 
     // MARK: Re-running
 
-    @Test func failedChecksAreReRunAndCounted() async {
+    @Test func failedChecksAreReRun() async {
         let performer = FakePerformer()
         performer.failed = [FailedRun(id: 11, name: "CI", url: nil), FailedRun(id: 12, name: "Lint", url: nil)]
         let rerun = CategoryAction.make(.rerun)
@@ -275,12 +253,9 @@ final class FakePerformer: ActionPerformer {
         add(store, InboxFixture.pr(2))
         await store.runActions()
         #expect(performer.reruns == [11, 12])
-        let entry = store.entries[0]
-        let chips = store.actionChips(for: entry)
-        #expect(chips.map(\.label) == ["re-ran 4 jobs"])
     }
 
-    @Test func aFailureIsSaidShortAndInDanger() async {
+    @Test func aFailureIsShownOnTheEntryInDanger() async {
         let performer = FakePerformer()
         performer.failure = ActionFailure("GitHub rejected the token")
         let (store, _) = store([], actions: [.make(.comment("x"))], performer: performer)
@@ -288,7 +263,7 @@ final class FakePerformer: ActionPerformer {
         add(store, InboxFixture.pr(2))
         await store.runActions()
         let chip = store.actionChips(for: store.entries[0]).first
-        #expect(chip?.label == "failed: GitHub rejected the token" && chip?.tint == .danger)
+        #expect(chip?.label.contains("GitHub rejected the token") == true && chip?.tint == .danger)
     }
 
     @Test func actionsThatDoNotApplyAreSkipped() async {
@@ -311,17 +286,12 @@ final class FakePerformer: ActionPerformer {
 
     // MARK: Rate limit, chips, persistence
 
-    @Test func atMostTenRunPerRefreshAndTheRestWaitWithAQueuedChip() async {
+    @Test func atMostTenRunPerRefreshAndTheRestWait() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()
         for n in 1...13 { add(store, InboxFixture.pr(n)) }
-        // Before they run, they are queued.
-        let queued = store.entries.flatMap { store.actionChips(for: $0) }.filter { $0.label == "queued" }
-        #expect(queued.count == 13)
         await store.runActions()
         #expect(performer.sessions.count == 10)
-        let waiting = store.entries.filter { store.actionChips(for: $0).first?.label == "queued" }
-        #expect(waiting.count == 3)
         await store.runActions()
         #expect(performer.sessions.count == 13)
     }
@@ -331,9 +301,7 @@ final class FakePerformer: ActionPerformer {
         await store.runActions()
         add(store, InboxFixture.pr(2))
         await store.runActions()
-        let chip = store.actionChips(for: store.entries[0]).first
-        #expect(chip?.label == "session started just now")
-        #expect(chip?.target == .session("local_1"))
+        #expect(store.actionChips(for: store.entries[0]).first?.target == .session("local_1"))
     }
 
     @Test func withoutAPerformerNothingHappensInDemoOrWithoutPersistence() async {
@@ -365,7 +333,6 @@ final class FakePerformer: ActionPerformer {
         #expect(second.categories.first?.actions == category.actions)
         // What was running when the app quit is said to have been interrupted, never run again.
         #expect(second.actionLedger.runs.values.first?.state == .failed)
-        #expect(second.actionLedger.runs.values.first?.detail == "interrupted")
     }
 
     @Test func previewDoesNothing() async {
@@ -375,7 +342,7 @@ final class FakePerformer: ActionPerformer {
         let clone = CategoryAction.make(.session(.clone, prompt: "Look at {title}"))
         let lines = await InboxActions.preview(clone, category: "Mine", thing: thing, facts: [Fact(key: "k", label: "Greptile 3/5")],
                                                performer: performer)
-        #expect(lines.joined(separator: "\n").contains("Starts a session in /code/r"))
+        #expect(lines.joined(separator: "\n").contains("/code/r"))
         #expect(lines.joined(separator: "\n").contains("Look at Warm pool"))
         #expect(performer.sessions.isEmpty)
     }

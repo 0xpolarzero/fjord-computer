@@ -6,8 +6,6 @@ enum ClaudePeers {
     struct Peer: Hashable {
         /// What `SendMessage` takes as `to`: the session's title.
         var name: String
-        /// `busy` or `idle`, as the process says.
-        var status: String
         var pid: Int32
     }
 
@@ -21,7 +19,7 @@ enum ClaudePeers {
                   let host = obj["hostSessionId"] as? String, !host.isEmpty,
                   let pid = (obj["pid"] as? NSNumber)?.int32Value ?? Int32(url.deletingPathExtension().lastPathComponent),
                   alive(pid) else { continue }
-            peers[host] = Peer(name: obj["name"] as? String ?? "", status: obj["status"] as? String ?? "", pid: pid)
+            peers[host] = Peer(name: obj["name"] as? String ?? "", pid: pid)
         }
         return peers
     }

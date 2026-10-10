@@ -143,7 +143,7 @@ enum InboxActions {
     // MARK: Loop guard
 
     /// Who made a fact, when it is about someone's act (a comment, review, commit, reply); nil for facts about state.
-    static func author(of key: String, in thing: Thing) -> String? {
+    private static func author(of key: String, in thing: Thing) -> String? {
         let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
         guard parts.count >= 2 else { return nil }
         let id = parts[1]
@@ -315,7 +315,7 @@ enum InboxActions {
         var help: String
     }
 
-    static func ago(_ date: Date, now: Date = Date()) -> String {
+    private static func ago(_ date: Date, now: Date) -> String {
         let s = Int(now.timeIntervalSince(date))
         if s < 60 { return "just now" }
         if s < 3600 { return "\(s / 60)m ago" }
@@ -538,7 +538,7 @@ extension Store {
         return real
     }
 
-    /// Takes in what changed (baselines) and runs what is due, at most `actionLimit` per call.
+    /// Takes in what changed (baselines) and runs what is due, at most `InboxActions.perSync` per call.
     func runActions(now: Date = Date()) async {
         guard let performer = resolvedPerformer, let me = me?.login, !me.isEmpty else { return }
         // An edit is waiting to be taken in: what it now matches is old news, and must not fire first.
@@ -550,7 +550,7 @@ extension Store {
             actionsAgain = false
             var ledger = actionLedger
             let jobs = InboxActions.plan(entries: entries, categories: categories, ledger: &ledger, me: me, now: now)
-            let batch = Array(jobs.prefix(actionLimit))
+            let batch = Array(jobs.prefix(InboxActions.perSync))
             for job in batch {
                 for key in job.keys {
                     ledger.set(ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,

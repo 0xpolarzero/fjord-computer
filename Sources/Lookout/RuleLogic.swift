@@ -133,8 +133,6 @@ enum RuleEditing {
         }
     }
 
-    static let behindTip = "GitHub only says a PR is behind its base branch when the base has branch protection that requires branches to be up to date before merging"
-
     /// The roles "to" can mean for a kind.
     static func roles(_ kind: ThingKind) -> [ToRole] {
         kind == .issue ? [.assigned, .mentioned] : ToRole.allCases
@@ -285,7 +283,11 @@ extension Condition {
     static let sinceTip = "Done: since you last marked the thing done (or made the rule). My last review: after your latest review there; with none, nothing matches. My last comment: after your latest comment, review with text or thread reply; with none, since it was opened"
 
     /// What hovering the condition's words says.
-    var tip: String? { self == .behindBase ? RuleEditing.behindTip : nil }
+    var tip: String? {
+        self == .behindBase
+            ? "GitHub only says a PR is behind its base branch when the base has branch protection that requires branches to be up to date before merging"
+            : nil
+    }
 
     /// The words before the values.
     var phrase: String {

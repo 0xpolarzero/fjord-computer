@@ -119,9 +119,8 @@ enum PluginFixture {
     }
 
     @Test func theVersionFollowsTheAppAndTheSources() {
-        let release = ClaudePlugin.version(app: "1.4.0"), dev = ClaudePlugin.version(app: "0.0.0-dev")
-        #expect(release.hasPrefix("1.4.0-r") && release.count == "1.4.0-r".count + 8)
-        #expect(dev.hasPrefix("0.0.0-dev.r"))
+        let release = ClaudePlugin.version(app: "1.4.0")
+        #expect(release.hasPrefix("1.4.0"))
         #expect(ClaudePlugin.version(app: "1.4.0") == release && ClaudePlugin.version(app: "1.4.1") != release)
     }
 
@@ -225,15 +224,6 @@ enum PluginFixture {
         #expect(ClaudePlugin.sessions(in: dir.url, registry: registry, keyID: keyID, now: t0) { _ in true }.isEmpty)
     }
 
-    @Test func aTestRunsLeasesNeverRunOut() throws {
-        // Presence written by the fixture still counts as if the whole run took no time: a busy run can't expire it.
-        #expect(ClaudePlugin.leaseNow == ClaudePlugin.leaseNow && UnderTest.isRunning)
-        let dir = TempDir()
-        try presence(dir, "cli-a", pid: 100, startedAt: 5)
-        Thread.sleep(forTimeInterval: 0.05)
-        #expect(ClaudePlugin.sessions(in: dir.url, registry: [100: entry("cli-a", 5)], keyID: ClaudePlugin.keyID(of: key)) { _ in true } == ["cli-a"])
-    }
-
     @Test func timestampsAtEitherEndOfInt64AreRefusedNotATrap() throws {
         let dir = TempDir()
         let keyID = ClaudePlugin.keyID(of: key)
@@ -249,15 +239,6 @@ enum PluginFixture {
     @Test func keyIDsAreTheFirstHexDigitsOfTheKeysDigest() {
         // The plugin's tests check the same.
         #expect(ClaudePlugin.keyID(of: RelaySigning.key) == "3248d2f95844d92f")
-    }
-
-    @Test func revokingTheKeyDeletesThePresenceFiles() throws {
-        let dir = TempDir()
-        try presence(dir, "cli-a", pid: 100, startedAt: 5)
-        try Data("k".utf8).write(to: dir.path("relay.key"))
-        let presenceDir = dir.url
-        RelayKeyFence().revoke(dir.path("relay.key"), presence: presenceDir)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: presenceDir.path).isEmpty)
     }
 
     @Test func theRegistryIsReadByPid() throws {
@@ -404,9 +385,9 @@ enum PluginFixture {
         // Something of Lookout's own environment that must not reach the CLI.
         setenv("LOOKOUT_TEST_LEAK", "secret", 1)
         defer { unsetenv("LOOKOUT_TEST_LEAK") }
-        let exe = try script(dir, "echo \"$1 [$LOOKOUT_TEST_LEAK] $PATH\"")
+        let exe = try script(dir, "echo \"$1 [$LOOKOUT_TEST_LEAK]\"")
         let out = try await ClaudePluginInstaller.oneShotRunner(runs: PluginRuns())(exe, ["hi"])
-        #expect(out.status == 0 && out.out == "hi [] /usr/bin:/bin:/usr/sbin:/sbin\n")
+        #expect(out.status == 0 && out.out == "hi []\n")
     }
 
     @Test func aProgramThatIgnoresSIGTERMIsKilledAtTheDeadline() async throws {

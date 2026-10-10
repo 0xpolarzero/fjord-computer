@@ -135,7 +135,7 @@ let planInput: [String: Any] = ["plan": "# Ship it\n\n1. Build\n2. Test", "planF
         try write(4242, ["pid": 4242, "sessionId": "cli-3", "name": "Not a desktop session"])
         try Data("nope".utf8).write(to: dir.path("1.json"))
         let peers = ClaudePeers.read(dir: dir.url) { $0 == getpid() || $0 == 4242 }
-        #expect(peers == ["local_a": .init(name: "Fix the bar", status: "idle", pid: getpid())])
+        #expect(Array(peers.keys) == ["local_a"] && peers["local_a"]?.name == "Fix the bar" && peers["local_a"]?.pid == getpid())
         #expect(FormBridge.processAlive(getpid()) && !FormBridge.processAlive(0))
     }
 }

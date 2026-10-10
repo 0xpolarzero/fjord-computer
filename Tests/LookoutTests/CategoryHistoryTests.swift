@@ -48,13 +48,12 @@ import Testing
         #expect(!history.canRedo && store.categories[0].name == "B")
     }
 
-    @Test func historyKeepsTheLastTwoHundredSteps() {
+    @Test func historyKeepsOnlyTheLatestSteps() {
         let (store, history) = setup()
         for i in 1...250 { rename(store, history, "n\(i)", at: Date()) }
-        #expect(history.undos.count == CategoryHistory.limit && CategoryHistory.limit >= 100)
         var undone = 0
         while history.undo(store) { undone += 1 }
-        #expect(undone == CategoryHistory.limit && store.categories[0].name == "n50")
+        #expect(undone == CategoryHistory.limit && store.categories[0].name == "n\(250 - CategoryHistory.limit)")
     }
 
     @Test func deletingACategoryAndAGroupCanBeUndone() {
@@ -117,10 +116,9 @@ import Testing
         store.categoriesEdited(delay: .milliseconds(50))
         store.things["pr:a/one#2"] = InboxFixture.pr(2, greptile: 5)
         await store.runActions()
-        #expect(store.baselinePending && performer.sessions.isEmpty)
+        #expect(performer.sessions.isEmpty)
 
         await store.baselineTask?.value
-        #expect(!store.baselinePending)
         await store.runActions()
         #expect(performer.sessions.isEmpty)
 

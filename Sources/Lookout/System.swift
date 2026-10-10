@@ -422,7 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // Default ⌃⌥L: ⌃⌥Space is macOS's "next input source".
-        let globals = GlobalShortcuts(store: store, registrar: hotKeys) { [weak self] action in
+        let globals = GlobalShortcuts(store: store, hotKeys: hotKeys) { [weak self] action in
             switch action {
             case .togglePanel: self?.toggleWindow()
             case .sessionSwitcher: if self?.store.routerOn == true { self?.showWindow(.router, search: true) }

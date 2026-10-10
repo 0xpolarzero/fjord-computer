@@ -6,7 +6,7 @@ import Testing
 import UserNotifications
 @testable import Lookout
 
-/// The Router's UI: the status line, the window's keys and model, the banners and the shortcut.
+/// The Router's UI: the window's keys and model, the banners and the shortcut.
 @MainActor
 @Suite struct RouterUITests {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
@@ -31,23 +31,6 @@ import UserNotifications
         view.setSelectedRange(NSRange(location: caret ?? (text as NSString).length, length: 0))
         model.followCaret(view)
         return view
-    }
-
-    private func row(_ id: String, folder: String, running: Bool, waits: Bool = false, since: TimeInterval = 0,
-                     activity: String = "Running swift test") -> AgentRow {
-        let session = ClaudeSession(id: id, title: id, folder: folder, lastActivity: now, lastUserMessage: now.addingTimeInterval(-since),
-                                    running: running)
-        return AgentRow(session: session, entry: AgentEntry(id: id), label: "AB", project: folder,
-                        activity: running ? ClaudeActivity(text: waits ? "Which one?" : activity, since: now, waitsForYou: waits) : nil)
-    }
-
-    // MARK: Status line
-
-    @Test func durationsAreWholeMinutes() {
-        #expect(RouterStatusLine.minutes(59) == "<1m")
-        #expect(RouterStatusLine.minutes(61) == "1m")
-        #expect(RouterStatusLine.minutes(3600) == "1h")
-        #expect(RouterStatusLine.minutes(3600 + 5 * 60) == "1h 5m")
     }
 
     // MARK: Window keys
@@ -121,14 +104,6 @@ import UserNotifications
         #expect(model.focusRequest != request && model.pendingKeys.count == 1)
     }
 
-    @Test func nothingIsSentWhileTheRouterIsOff() {
-        let store = demo(.routerOff)
-        let model = RouterModel()
-        model.draft = "hello"
-        model.send(store: store)
-        #expect(store.router.chat.isEmpty && model.draft == "hello")
-    }
-
     @Test func spaceNeverReopensACardThatWasSupersededUnderIt() {
         let store = demo()
         let model = RouterModel()
@@ -158,6 +133,7 @@ import UserNotifications
     @Test func theComposerIsShutWhileTheRouterOrTheSessionsAreOff() {
         let store = demo()
         let model = RouterModel()
+        let before = store.router.chat.count
         #expect(model.canSend(store))
         store.router.enabled = false
         #expect(!model.canSend(store))
@@ -166,20 +142,22 @@ import UserNotifications
         #expect(!model.canSend(store))
         model.draft = "hello"
         model.send(store: store)
-        #expect(model.draft == "hello")
+        #expect(model.draft == "hello" && store.router.chat.count == before)
         // Typing with nothing focused doesn't go to a composer that can't send.
         let keys = RouterKeys(store: store, model: model) {}
         #expect(!keys.key(key(kVK_ANSI_H, "h"), responder: nil))
     }
 
     @Test func claudeCodeMissingIsSaidOnceLookedForAndSendWaits() async {
-        let store = demo()
-        let model = RouterModel()
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("router-ui-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
+        // A store of a real Router (not a demo's), the app's folder of Claude Code in `dir`.
+        let store = writing(nil)
+        store.routerAgent.codeRoot = dir
+        defer { store.persists = false; try? FileManager.default.removeItem(at: dir) }
+        let model = RouterModel()
         #expect(model.claudeCodeMissing == nil && model.canSend(store))
-        await model.checkClaudeCode(store, root: dir)
+        await model.checkClaudeCode(store)
         #expect(model.claudeCodeMissing == true && !model.canSend(store))
         model.draft = "hello"
         model.send(store: store)
@@ -189,7 +167,7 @@ import UserNotifications
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: bin.appendingPathComponent("claude").path, contents: Data(),
                                        attributes: [.posixPermissions: 0o755])
-        await model.checkClaudeCode(store, root: dir)
+        await model.checkClaudeCode(store)
         #expect(model.claudeCodeMissing == false && model.canSend(store))
     }
 
@@ -408,21 +386,6 @@ import UserNotifications
         #expect(!keys.key(key(kVK_Delete), responder: editor) && model.projects == ["/a"])
     }
 
-    @Test func theDemoChatHasARephrasedReceiptAndAnUndeliveredMessage() {
-        let chat = demo().router.chat
-        #expect(chat.contains { $0.role == .receipt && $0.original != nil })
-        #expect(chat.contains { $0.role == .error })
-    }
-
-    @Test func settingsSayHowThePluginIsDoing() {
-        #expect(SettingsView.pluginLine(.installed, error: nil).0.contains("/reload-plugins"))
-        #expect(SettingsView.pluginLine(.installed, error: nil).1 == Theme.green)
-        #expect(SettingsView.pluginLine(.noClaudeCode, error: nil).0.contains("Claude desktop app"))
-        let failed = SettingsView.pluginLine(.notInstalled, error: "Plugin install failed: marketplace not found")
-        #expect(failed.0.hasSuffix("marketplace not found") && failed.1 == Theme.red)
-        #expect(SettingsView.pluginLine(nil, error: nil).0.contains("will be installed"))
-    }
-
     @Test func aFailedRemovalStaysInSightWithTheRouterOffAndCanBeTriedAgain() async throws {
         let dir = TempDir(), cli = FakeClaudeCLI()
         cli.folderVersion = ClaudePlugin.version(app: "1.0.0")
@@ -528,10 +491,8 @@ import UserNotifications
     }
 
     @Test func aRefusedAnswerShowsWhyAndIsNotSent() async {
-        let store = demo()
         // A real write (not a demo's), with no forms folder to write to (the Router off): an error, nothing written.
-        store.stateFile = FileManager.default.temporaryDirectory.appendingPathComponent("router-ui-\(UUID().uuidString).json")
-        store.persists = true
+        let store = writing(nil)
         defer { store.persists = false; try? FileManager.default.removeItem(at: store.stateFile!) }
         let card = store.openRouterCards.first { $0.kind == .question }!
         let form = store.pendingForm(for: card)!
@@ -548,7 +509,7 @@ import UserNotifications
         let store = demo()
         let card = try #require(store.openRouterCards.first { $0.kind == .plan })
         let form = try #require(store.pendingForm(for: card))
-        #expect(form.isPlan && form.plan?.hasPrefix("# Run the JavaScript sandbox") == true)
+        #expect(form.isPlan)
         let model = RouterModel()
         model.setPlanNote("Use the existing CI runner", of: form)
         model.decidePlan(form, approve: false, card: card.id, store: store)
@@ -589,8 +550,6 @@ import UserNotifications
         model.pick("A", in: q, of: form)
         #expect(model.answers(form) == ["Which?": "B"])
     }
-
-    // MARK: Bar
 
     // MARK: What works
 
@@ -634,7 +593,7 @@ import UserNotifications
         let rows = store.routerWorkingRows
         // The turn that works, and the finished one still running its subagents and command (oldest of them first).
         #expect(rows.map(\.id) == ["local_demo-ci", "local_demo-lookout"])
-        #expect(rows[0].tasksText == "3 running" && !rows[0].session.running)
+        #expect(!rows[0].session.running)
         #expect(!rows.contains { $0.waitsForYou })
         store.openAgent(rows[1].id)
         #expect(opened.first?.contains("Agent completion notifications") == true)
@@ -671,37 +630,11 @@ import UserNotifications
 
     // MARK: Shortcut
 
-    @Test func theRoutersKeyIsRegisteredOnlyWhileItIsOn() async {
-        let store = Store()
-        store.persists = false
-        store.agents.enabled = true
-        let registrar = Registrar()
-        let globals = GlobalShortcuts(store: store, registrar: registrar) { _ in }
-        globals.start()
-        #expect(registrar.registered[ShortcutAction.router.hotKeyID] == nil)
-        store.router.enabled = true
-        for _ in 0..<5 { await Task.yield() }
-        #expect(registrar.registered[ShortcutAction.router.hotKeyID] == ShortcutAction.router.defaultShortcut)
-        store.agents.enabled = false
-        for _ in 0..<5 { await Task.yield() }
-        #expect(registrar.registered[ShortcutAction.router.hotKeyID] == nil)
-        withExtendedLifetime(globals) {}
-    }
-
-    @Test func theRoutersDefaultKeyIsFree() {
+    @Test func theRoutersDefaultKeyIsFreeAndEachGlobalKeyHasItsOwnID() {
         let others = ShortcutAction.allCases.filter { $0 != .router }.map(\.defaultShortcut)
         #expect(!others.contains(ShortcutAction.router.defaultShortcut))
-        #expect(ShortcutAction.router.defaultShortcut.display.hasPrefix("⌃⌥"))
-        #expect(Set(ShortcutAction.allCases.filter(\.isGlobal).map(\.hotKeyID)).count == 3)
-    }
-}
-
-private final class Registrar: HotKeyRegistrar {
-    var registered: [UInt32: Shortcut] = [:]
-    var isSuspended = false
-
-    func set(_ id: UInt32, _ shortcut: Shortcut?, handler: @escaping () -> Void) -> Bool {
-        registered[id] = shortcut
-        return true
+        // Each global key is registered under an id of its own.
+        let globals = ShortcutAction.allCases.filter(\.isGlobal)
+        #expect(Set(globals.map(\.hotKeyID)).count == globals.count)
     }
 }

@@ -252,7 +252,7 @@ struct SettingsView: View {
     }
 
     /// Lookout's Claude Code plugin, which makes your words arrive in a session as yours.
-    static func pluginLine(_ status: ClaudePluginInstaller.Status?, error: String?) -> (String, Color) {
+    private static func pluginLine(_ status: ClaudePluginInstaller.Status?, error: String?) -> (String, Color) {
         if let error { return ("Lookout's Claude Code plugin: \(error)", Theme.red) }
         return switch status {
         case .installed: ("Lookout's Claude Code plugin: installed: your messages reach sessions as yours. Sessions already "

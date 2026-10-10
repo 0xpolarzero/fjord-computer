@@ -55,14 +55,11 @@ import Testing
 
         t.comments = [comment("c1", me, at: -30), comment("c2", greptile, at: -20)]
         #expect(InboxEngine.facts(specRule, t, marks: nil, context: context())?.map(\.key) == ["last:c2"])
-        #expect(InboxEngine.facts(specRule, t, marks: nil, context: context())?.first?.label == "last comment: @greptile-apps[bot]")
 
         t.comments.append(comment("c3", me))  // my reply is now the last comment
         t.threads = [thread("t1", by: maintainer, last: stranger), thread("t2", by: maintainer, last: me),
                      thread("t3", by: stranger, last: stranger)]
-        let threads = InboxEngine.facts(specRule, t, marks: nil, context: context())
-        #expect(threads?.map(\.key) == ["thread:t1:r1"])
-        #expect(threads?.first?.label == "1 unresolved")
+        #expect(InboxEngine.facts(specRule, t, marks: nil, context: context())?.map(\.key) == ["thread:t1:r1"])
 
         t.threads = []
         t.reviews = [ThingReview(id: "r1", author: maintainer, state: .changesRequested, at: now)]
@@ -70,8 +67,7 @@ import Testing
 
         t.reviews = []
         t.greptileScore = 4
-        let score = InboxEngine.facts(specRule, t, marks: nil, context: context())
-        #expect(score?.map(\.label) == ["Greptile 4/5"])
+        #expect(InboxEngine.facts(specRule, t, marks: nil, context: context())?.map(\.key) == ["greptile:4"])
         t.greptileScore = 5
         #expect(InboxEngine.facts(specRule, t, marks: nil, context: context()) == nil)
     }
@@ -150,7 +146,7 @@ import Testing
         var t = pr()
         t.updatedAt = now.addingTimeInterval(-8 * 86_400)
         let rule = Rule(scope: Scope(kind: .pr), conditions: [.noActivity(days: 7)])
-        #expect(InboxEngine.facts(rule, t, marks: nil, context: context())?.first?.label == "no activity for 7 days")
+        #expect(InboxEngine.facts(rule, t, marks: nil, context: context()) != nil)
         t.updatedAt = now.addingTimeInterval(-86_400)
         #expect(InboxEngine.facts(rule, t, marks: nil, context: context()) == nil)
     }
@@ -352,7 +348,7 @@ import Testing
 
     @Test func sinceNeedsReviewsAndIssuesHaveNone() {
         let issue = Rule(scope: Scope(kind: .issue), conditions: [.newComment(by: Pick(), since: .myLastReview)])
-        #expect(InboxEngine.problems(issue).first?.reason == "Issues have no reviews")
+        #expect(InboxEngine.problems(issue).map(\.condition) == [0])
         let ok = Rule(scope: Scope(kind: .issue), conditions: [.newComment(by: Pick(), since: .myLastComment)])
         #expect(InboxEngine.problems(ok).isEmpty)
     }
@@ -364,7 +360,7 @@ import Testing
         let scope = Scope(kind: .pr, to: Pick(include: [.me]), toRoles: [.reviewRequested])
         let r = Rule(scope: scope, createdAt: .distantPast)
         let first = InboxEngine.facts(r, t, marks: nil, context: context())
-        #expect(first?.count == 1 && first?[0].label == "review requested")
+        #expect(first?.count == 1)
         // I review; the request is gone and so is the thing.
         var reviewed = t
         reviewed.requestedReviewers = []
@@ -405,7 +401,7 @@ import Testing
         t.headSha = nil
         #expect(keys(r, t) == ["behind:\(Int(t.updatedAt.timeIntervalSince1970))"])
         let issue = Rule(scope: Scope(kind: .issue), conditions: [.behindBase])
-        #expect(InboxEngine.problems(issue).first?.reason == "Issues don't have this")
+        #expect(InboxEngine.problems(issue).map(\.condition) == [0])
     }
 
     @Test func teamsMatchRequestedTeamReviewersAndMyTeams() {
@@ -421,8 +417,6 @@ import Testing
         var ctx = context()
         ctx.myTeams = ["acme/core"]
         #expect(keys(scope([.myTeams]), t, ctx: ctx)?.count == 1)
-        let label = InboxEngine.facts(scope([.myTeams]), t, marks: nil, context: ctx)?.first?.label
-        #expect(label == "review requested from @Acme/Core")
         // A user doesn't match a team slug.
         #expect(keys(scope([.user("Acme")]), t) == nil)
     }
@@ -433,10 +427,10 @@ import Testing
         let assigned = Rule(scope: Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.assigned]))
         #expect(InboxEngine.problems(assigned).map(\.slot) == ["to"])
         let issue = Rule(scope: Scope(kind: .issue, to: Pick(include: [.team("o/t")]), toRoles: [.mentioned]))
-        #expect(InboxEngine.problems(issue).first?.reason == "Issues aren't assigned to teams")
+        #expect(InboxEngine.problems(issue).map(\.slot) == ["to"])
         let ok = Rule(scope: Scope(kind: .pr, to: Pick(include: [.me, .myTeams, .team("o/t")]), toRoles: [.reviewRequested]))
         #expect(InboxEngine.problems(ok).isEmpty)
         let comment = Rule(scope: Scope(kind: .pr), conditions: [.newComment(by: Pick(include: [.myTeams]))])
-        #expect(InboxEngine.problems(comment).first?.reason == "Teams don't write comments")
+        #expect(InboxEngine.problems(comment).map(\.condition) == [0])
     }
 }

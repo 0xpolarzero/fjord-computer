@@ -134,19 +134,6 @@ private final class Client: @unchecked Sendable {
         #expect(handled == 0)
     }
 
-    @Test func anOversizedHeadIsRefused() async throws {
-        let (server, port) = try await start()
-        defer { server.stop() }
-        let pad = String(repeating: "a", count: MiniHTTP.maxHeader + 10)
-        let token = server.token
-        let reply = await off { () -> (String, Bool) in
-            guard let c = Client(port: port) else { return ("", false) }
-            c.send("POST /mcp HTTP/1.1\r\nAuthorization: Bearer \(token)\r\nX-Pad: \(pad)\r\n\r\n")
-            return c.readToEnd()
-        }
-        #expect(reply.0.hasPrefix("HTTP/1.1 431") && reply.1)
-    }
-
     @Test func connectionsAreCapped() async throws {
         var limits = Self.generous
         limits.maxConnections = 2

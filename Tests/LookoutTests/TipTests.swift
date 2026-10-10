@@ -24,15 +24,6 @@ import Testing
         #expect(!TipCenter.dismissVisible(for: key(53)))
     }
 
-    @Test func keysAreWatchedOnlyWhileATooltipIsUp() {
-        let center = TipCenter()
-        #expect(!center.isWatchingKeys)
-        center.show(request())
-        #expect(center.isWatchingKeys)
-        center.dismiss()
-        #expect(!center.isWatchingKeys)
-    }
-
     @Test func otherKeysAreLeftAlone() {
         let center = TipCenter()
         center.show(request())

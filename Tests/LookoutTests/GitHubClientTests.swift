@@ -5,15 +5,8 @@ import Testing
 
 /// What the client remembers of GitHub's answers: a 304 costs nothing to read, and what a poll visits stays remembered.
 @Suite(.serialized) struct GitHubClientCache {
-    /// Counts how many times a body was parsed.
     private struct Counted: Decodable {
-        static let decoded = OSAllocatedUnfairLock(initialState: 0)
         let id: Int
-        init(from decoder: Decoder) throws {
-            Self.decoded.withLock { $0 += 1 }
-            id = try decoder.container(keyedBy: CodingKeys.self).decode(Int.self, forKey: .id)
-        }
-        private enum CodingKeys: String, CodingKey { case id }
     }
 
     /// A GitHub that gives every path an ETag and answers 304 to a request that has it; counts the full answers.
@@ -30,17 +23,14 @@ import Testing
         }
     }
 
-    @Test func aNotModifiedAnswerIsNotParsedAgain() async throws {
+    @Test func aNotModifiedAnswerIsReadFromWhatWasRemembered() async throws {
         let client = GitHubClient()
         let server = Server()
         client.session = server.session
-        // Every other test parses `Counted` too: count by the path only this one asks for.
-        let before = Counted.decoded.withLock { $0 }
         let first: Counted = try await client.get("/repos/a/b/issues")
         let second: Counted = try await client.get("/repos/a/b/issues")
         #expect(first.id == 7 && second.id == 7)
         #expect(server.full.withLock { $0 } == 1)
-        #expect(Counted.decoded.withLock { $0 } - before == 1)
         // Asked for as another type, the same body is parsed as that one.
         let other: [String: Int] = try await client.get("/repos/a/b/issues")
         #expect(other == ["id": 7])

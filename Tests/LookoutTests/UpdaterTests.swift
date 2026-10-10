@@ -20,26 +20,14 @@ import Testing
         #expect(!Updater().isRelease)
     }
 
-    @MainActor @Test func aReleaseWithoutChecksumIsNeverStaged() async throws {
-        let updater = Updater(forceRelease: true)
-        updater.preview(.available)
-        #expect(updater.release?.checksum == nil)
-        updater.download()
-        // It fails before fetching anything, so it settles without the network.
-        await waitUntil { updater.phase != .downloading }
-        guard case .failed(let message) = updater.phase else { Issue.record("phase \(updater.phase)"); return }
-        #expect(message.contains("no checksum"))
-        #expect(updater.stagedPath == nil)
-    }
-
-    @MainActor @Test(arguments: [true, false]) func aChecksumFailureShowsOnEveryCheck(manual: Bool) async throws {
+    @MainActor @Test(arguments: [true, false]) func aReleaseWithoutAChecksumIsNeverStagedAndFailsOnEveryCheck(manual: Bool) async throws {
         let updater = Updater(current: "0.0.1", forceRelease: true)
         let page = URL(string: "https://example.com")!
         updater.latest = { Updater.Release(version: "9.9.9", zip: page, checksum: nil, page: page) }
         await updater.update(manual: manual)
         await waitUntil { updater.phase != .downloading }
         guard case .failed(let message) = updater.phase else { Issue.record("phase \(updater.phase)"); return }
-        #expect(message.contains("no checksum"))
+        #expect(message.contains("no checksum") && updater.stagedPath == nil)
         // The next check tries again rather than leaving the failure for good.
         await updater.update(manual: manual)
         await waitUntil { updater.phase != .downloading }

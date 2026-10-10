@@ -302,8 +302,6 @@ final class TipCenter {
     /// Key monitors that exist only while a tooltip is up: nothing listens (or wakes the app) otherwise.
     @ObservationIgnored private var monitors: [Any] = []
 
-    var isWatchingKeys: Bool { !monitors.isEmpty }
-
     func show(_ request: Request) {
         current = request
         Self.visible = self

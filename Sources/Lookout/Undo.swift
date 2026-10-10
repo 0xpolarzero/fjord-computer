@@ -23,7 +23,7 @@ final class UndoStack {
     nonisolated static let validFor: TimeInterval = 30
     static let depth = 10
 
-    private(set) var entries: [Entry] = []
+    private var entries: [Entry] = []
     /// The entry whose line is showing.
     private(set) var visibleID: Entry.ID?
     @ObservationIgnored private var timer: Task<Void, Never>?

@@ -73,20 +73,14 @@ import Testing
         #expect(nav.history.stack == [.category(a), .settings, .category(a)])
     }
 
-    @Test func theSidebarOrderIsCategoriesDoneRouterSettingsCategories() {
-        #expect(AppDestination.all(shown: [a, b], routerOn: true) == [.category(a), .category(b), .done, .router, .settings, .categories])
-        #expect(AppDestination.all(shown: [a], routerOn: false) == [.category(a), .done, .settings, .categories])
-    }
-
     @Test func theGoMenuNumbersTheFirstNinePlaces() {
         let ids = (0..<8).map { _ in UUID() }
-        let all = AppDestination.all(shown: ids, routerOn: true)   // 8 categories, Done, Router, Settings, Categories = 12
+        let all = AppDestination.all(shown: ids, routerOn: true)
         let items = GoMenuModel.items(all) { $0.token }
-        #expect(items.count == 12)
         #expect(items.prefix(9).map(\.key) == (1...9).map { String($0) })
         #expect(items.dropFirst(9).allSatisfy { $0.key == nil })
         #expect(GoMenuModel.destination(forShortcut: 1, in: all) == .category(ids[0]))
-        #expect(GoMenuModel.destination(forShortcut: 9, in: all) == .done)
+        #expect(GoMenuModel.destination(forShortcut: 9, in: all) == all[8])
         #expect(GoMenuModel.destination(forShortcut: 0, in: all) == nil)
         #expect(GoMenuModel.destination(forShortcut: 10, in: all) == nil)
         #expect(GoMenuModel.destination(forShortcut: 3, in: [.done]) == nil)

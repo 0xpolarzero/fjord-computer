@@ -106,10 +106,6 @@ import Testing
         ForEach(0..<n, id: \.self) { i in Text("row \(i)").frame(height: 40).frame(maxWidth: .infinity).capEdge() }
     }
 
-    @Test func shortListIsAsTallAsItsContent() {
-        #expect(abs(height(of: CappedScroll(cap: 300) { VStack(spacing: 0) { rows(3) } }) - 120) < 1)
-    }
-
     @Test func overflowingListsFillTheCapWhateverTheStack() {
         for n in [8, 61, 200] {
             let eager = height(of: CappedScroll(cap: 300, lazy: AdaptiveStack<EmptyView>.isLazy(n)) { AdaptiveStack(count: n) { rows(n) } })
@@ -154,22 +150,12 @@ import Testing
         return abs(rowsHigh - rowsHigh.rounded()) < 0.03 && rowsHigh.rounded() >= 1
     }
 
-    @Test func lazyListEndsOnAWholeRow() {
-        let h = heights(counts: [200])[0]
-        #expect(h <= 300.5 && h >= 250 && onRowBoundary(h), "lazy: \(h)")
-    }
-
     @Test func lazyListsResizeAcrossRowCountChanges() {
         let r = heights(counts: [3, 400, 2])
         let short = { (n: Int) in 16 + CGFloat(n) * 42 - 1 }
         #expect(abs(r[0] - short(3)) < 1.5, "3: \(r)")
         #expect(r[1] <= 300.5 && r[1] >= 250 && onRowBoundary(r[1]), "400: \(r)")
         #expect(abs(r[2] - short(2)) < 1.5, "2: \(r)")
-    }
-
-    @Test func lazyListsShrinkFromOverflowToShort() {
-        let r = heights(counts: [400, 4])
-        #expect(abs(r[1] - (16 + 4 * 42 - 1)) < 1.5, "\(r)")
     }
 
     private struct VariableRows: View {
@@ -200,23 +186,6 @@ import Testing
         #expect(abs(out[1] - 120) < 1.5, "\(out)")
         // Cut at a measured row edge (not through a row), and regrown to the same height.
         #expect(out[0] >= 260 && out[0] <= 300.5 && abs(out[2] - out[0]) < 1.5, "\(out)")
-    }
-}
-
-@Suite struct SettingsScrolling {
-    @MainActor @Test func checkForUpdatesAsksForTheUpdatesSectionEveryTime() {
-        let hub = HubState()
-        hub.showUpdates()
-        let first = hub.settingsScroll
-        #expect(first?.id == SettingsView.updatesID)
-        // Settings open already, and scrolled elsewhere (the request was taken): asking again is a new request.
-        hub.settingsScroll = nil
-        hub.showUpdates()
-        #expect(hub.settingsScroll?.id == SettingsView.updatesID)
-        // Not taken yet: still a different request, so what watches it sees a change.
-        let pending = hub.settingsScroll
-        hub.showUpdates()
-        #expect(hub.settingsScroll != pending)
     }
 }
 

@@ -210,7 +210,7 @@ enum InboxSync {
     }
 
     /// A request for several searches, each from its own cursor.
-    static func request(_ searches: [(alias: String, query: String, cursor: String?)]) -> String {
+    fileprivate static func request(_ searches: [(alias: String, query: String, cursor: String?)]) -> String {
         let body = searches.map { s in
             let after = s.cursor.map { ", after: \"\(escape($0))\"" } ?? ""
             return """
@@ -224,7 +224,7 @@ enum InboxSync {
     }
 
     /// The repos you own and have merged or open PRs in.
-    static func reposRequest(me: String) -> String {
+    fileprivate static func reposRequest(me: String) -> String {
         """
         query { viewer { repositories(first: 100, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { nameWithOwner } } }
           merged: search(query: "is:pr is:merged author:\(escape(me)) sort:updated-desc", type: ISSUE, first: 100) {
@@ -235,14 +235,14 @@ enum InboxSync {
     }
 
     /// The teams you're in, across your organizations (`org/team`). Needs the read:org scope; without it, none.
-    static func teamsRequest(me: String) -> String {
+    fileprivate static func teamsRequest(me: String) -> String {
         """
         query { viewer { organizations(first: 50) { nodes { teams(first: 100, userLogins: ["\(escape(me))"]) { nodes { combinedSlug } } } } } }
         """
     }
 
     /// `org/team` out of a teams response.
-    static func teams(_ data: [String: Any]?) -> Set<String> {
+    fileprivate static func teams(_ data: [String: Any]?) -> Set<String> {
         let orgs = nodes(dict(dict(data?["viewer"])?["organizations"]))
         return Set(orgs.flatMap { nodes($0["teams"]).compactMap { $0["combinedSlug"] as? String } })
     }

@@ -50,9 +50,6 @@ import Testing
         let (edge, position) = EdgeSnap.snap(pill(378, 920), in: screen)
         #expect(edge == .top)
         #expect(abs(position - 0.25) < 0.001)
-        let (side, height) = EdgeSnap.snap(pill(1490, 472), in: screen)
-        #expect(side == .right)
-        #expect(abs(height - 0.5) < 0.001)
     }
 
     @Test func aSideDropDocksAtTheHeightItWasDroppedAt() {

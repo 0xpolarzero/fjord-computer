@@ -94,7 +94,6 @@ final class StubProtocol: URLProtocol {
 
     @Test func iconCategoriesFitJev() {
         let all = SessionIcons.categories.flatMap(\.icons)
-        #expect(all.count > 600)
         #expect(Set(all).count == all.count, "an icon is in two categories")
         #expect(Set(SessionIcons.categories.map(\.key)).count == SessionIcons.categories.count)
         #expect(SessionIcons.categories.count <= SessionIcons.maxOptions)

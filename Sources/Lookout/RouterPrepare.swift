@@ -343,10 +343,10 @@ enum Rephrase {
         var errorDescription: String? { "Nothing to pass on: everything in the message was for the Router" }
     }
 
-    static let model = "claude-haiku-5-5"
+    private static let model = "claude-haiku-5-5"
     static let timeout: TimeInterval = 20
 
-    static let rules = """
+    private static let rules = """
     You prepare a message a user wrote to one of their Claude Code sessions, before it is delivered to that session.
     Return the message to deliver. Keep it EXACTLY as written unless one of these applies:
     (a) It addresses the target session or a router ("tell lookout to …", "ask the api session whether …", "@lookout …", \
@@ -366,13 +366,13 @@ enum Rephrase {
     <the message unchanged>}.
     """
 
-    static func arguments() -> [String] {
+    private static func arguments() -> [String] {
         ["-p", "--model", model, "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence",
          "--output-format", "json", "--system-prompt", rules]
     }
 
     /// What Haiku reads: the target, then the message.
-    static func input(message: String, title: String, project: String) -> String {
+    private static func input(message: String, title: String, project: String) -> String {
         "Target session: \"\(title)\" (project \(project))\n\nMessage:\n\(message)"
     }
 

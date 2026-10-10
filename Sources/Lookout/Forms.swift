@@ -167,8 +167,6 @@ final class FormBridge: @unchecked Sendable {
     private var watcher: FolderWatcher?
     private(set) var dir: URL?
     private var deliver: (@MainActor ([String: PendingForm]) -> Void)?
-    /// Whether a process is alive; tests stand in for it.
-    var isAlive: @Sendable (Int32) -> Bool = { FormBridge.processAlive($0) }
 
     /// Watches `dir` and hands every change of the forms to `deliver`, on the main thread.
     @MainActor
@@ -191,9 +189,8 @@ final class FormBridge: @unchecked Sendable {
     @MainActor
     func refresh() {
         guard let dir, let deliver else { return }
-        let alive = isAlive
         queue.async {
-            let forms = Self.read(dir: dir, alive: alive)
+            let forms = Self.read(dir: dir)
             DispatchQueue.main.async { MainActor.assumeIsolated { deliver(forms) } }
         }
     }
