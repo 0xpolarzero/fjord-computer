@@ -337,6 +337,29 @@ import Testing
         }
     }
 
+    /// What a close leaves for the next turn (the content out of the window, the bar told) is called off when the window is
+    /// opened again first: the bar must not be told the window closed while it is on its way in.
+    @Test func openingAgainBeforeTheCloseIsTidiedKeepsTheWindowOpen() {
+        morphing { controller, ticks in
+            var closed = 0
+            controller.onClose = { closed += 1 }
+            controller.show(.settings)
+            controller.close()
+            controller.run?.complete()
+            #expect(controller.phase == .idle && controller.window?.isVisible == false)
+            controller.show(.settings)
+            #expect(controller.phase == .opening && controller.isOpen)
+            // Every turn queued but the new opening's own bringing in: the close's tidying among them.
+            let turns = ticks.turns
+            ticks.turns = []
+            turns.dropLast().forEach { $0() }
+            #expect(closed == 0 && controller.isOpen && NSApp.activationPolicy() == .regular)
+            #expect(controller.window?.contentViewController != nil)
+            turns.last?()
+            #expect(closed == 0 && controller.window?.isVisible == true)
+        }
+    }
+
     @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
         morphing { controller, ticks in
             controller.show(.settings)

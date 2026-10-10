@@ -447,8 +447,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         lastFront = nil
         routerModel.composerFocused = false
         // The content leaves the window, which stops it: nothing ticking behind a closed window. It is kept for the next open.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.window?.isVisible != true else { return }
+        // Not if the window was opened again meanwhile (on its way in, it is not visible yet): it stays open, and the bar
+        // is not told otherwise.
+        let closed = generation
+        AppTransition.nextTurn { [weak self] in
+            guard let self, self.generation == closed, self.phase == .idle, self.pending == nil,
+                  self.window?.isVisible != true else { return }
             self.window?.contentViewController = nil
             AppPolicy.update(windowOpen: false)
             self.onClose?()
