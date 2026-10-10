@@ -308,8 +308,24 @@ private struct AutomatedMessage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("⚡ \(source)").cdsText(CDS.Transcript.text, .medium, CDS.Text.secondary)
-            Text(body_).cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
-                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            if let parts = InboxActions.fenced(body_) {
+                Text(parts.before).cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("From GitHub").cdsText((11, 14), .medium, CDS.Text.muted)
+                    Text(parts.github).cdsText((12, 17), .regular, CDS.Text.muted)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(CDS.Fill.field))
+                if !parts.after.isEmpty {
+                    Text(parts.after).cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+            } else {
+                Text(body_).cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
         }
         .padding(.horizontal, CDS.Transcript.bubblePadX).padding(.vertical, CDS.Transcript.bubblePadY)
         .frame(maxWidth: .infinity, alignment: .leading)

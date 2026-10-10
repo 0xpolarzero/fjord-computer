@@ -79,6 +79,7 @@ private struct ActionRow: View {
                 ActionTextBox(text: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }),
                               placeholder: "What to do, like “Review {url} and fix what Greptile flagged”", label: "Prompt")
                     .tip("Prompt", "The Router decides where it runs: a new session in one of the repo's local clones, or one already open. Its title, link, repo, why it is here and the last comment are added for you. {title} {url} {number} {repo} {author} are filled in.")
+                RouterWarning(strong: InboxActions.rulesMatchOthers(rules))
             case .comment(let text):
                 ActionTextBox(text: Binding(get: { text }, set: { action.kind = .comment($0) }),
                               placeholder: "The comment, like “Thanks @{author}, taking a look”", label: "Comment")
@@ -131,6 +132,24 @@ private struct ActionRow: View {
         let performer = store.actionPerformer ?? (store.persists && !Store.isDemo ? StoreActionPerformer(store: store) : nil)
         preview = await InboxActions.preview(action, category: categoryName.isEmpty ? "New category" : categoryName,
                                              thing: match.thing, facts: match.facts, performer: performer)
+    }
+}
+
+/// Under "Ask the Router": what reaches the session is written by others; stronger when the rules can match their items.
+private struct RouterWarning: View {
+    let strong: Bool
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10, weight: .semibold))
+            Text("GitHub text reaches a Claude session on your Mac").cdsText(foot12, strong ? .medium : .regular, CDS.Text.warning)
+        }
+        .foregroundStyle(CDS.Text.warning)
+        .padding(.horizontal, strong ? 8 : 0).padding(.vertical, strong ? 4 : 0)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(CDS.Text.warning.opacity(strong ? 0.16 : 0)))
+        .tip("Prompt injection", "Anyone who can write a title or comment on matching items can try to steer that session. It runs with your Claude Code permission settings, unattended. Keep the prompt narrow and the rules tight (by me, Maintainers)."
+             + (strong ? " These rules match items others write." : ""))
+        .accessibilityElement(children: .combine)
     }
 }
 
