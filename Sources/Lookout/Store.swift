@@ -353,6 +353,7 @@ final class Store {
                 self.typesafeKeyCache = key
                 self.hasTypesafeKey = !key.isEmpty
                 self.pickIcons()
+                self.typesafeKeyArrived()
             }
         }
     }

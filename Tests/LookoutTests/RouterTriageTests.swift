@@ -215,6 +215,27 @@ import Testing
         #expect(calls == 1 && s.router.cards[0].triage == nil && s.router.cards[0].kind == .done)
     }
 
+    @Test func aKeyArrivingLaterTriagesTheCardsAndLooksBack() async {
+        let a = session("a")
+        let s = InboxFixture.store([])
+        s.router.enabled = true
+        s.agents.enabled = true
+        s.claudeLink = .ok
+        s.claudeSessions = ["a": a, "b": session("b", minutes: -9)]
+        s.router.cards = [turnCard(a)]
+        s.keychainWrite = { _, _ in true }
+        // The first feeds come before the key is read: nothing to ask with, and the look back not spent.
+        s.triageTurns()
+        #expect(!s.routerTriager.rescanned)
+        var asked: [String] = []
+        s.routerTriager.reader = { _ in "Should I push to main?" }
+        s.routerTriager.asker = { _, state in asked.append(state["session"] ?? ""); return self.answers(sentences: [0.9]) }
+        #expect(s.setTypesafeKey("sk-test"))
+        await s.routerTriager.idle()
+        #expect(asked.sorted() == ["T a", "T b"] && s.routerTriager.rescanned)
+        #expect(s.router.cards.first { $0.id == "a#t2" }?.kind == .asks && s.router.cards.contains { $0.id == "b#t2" && $0.isOpen })
+    }
+
     @Test func aCardOfAnOlderTurnOrARunningSessionIsLeft() async {
         let a = session("a", turns: 3)
         let b = session("b", running: true)

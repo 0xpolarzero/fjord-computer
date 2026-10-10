@@ -573,6 +573,7 @@ extension Store {
         iconError = nil
         iconsPausedUntil = .distantPast
         pickIcons()
+        typesafeKeyArrived()
         return true
     }
 

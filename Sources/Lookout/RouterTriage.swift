@@ -413,6 +413,13 @@ extension Store {
         }
     }
 
+    /// A usable key arrived (read from the Keychain after the first feeds, or saved in Settings): the open turn cards wait
+    /// no longer for their triage, and the launch's look back is made if it wasn't for want of a key.
+    func typesafeKeyArrived() {
+        guard router.enabled, agents.enabled, claudeLink == .ok, typesafeKey?.isEmpty == false else { return }
+        triageTurns()
+    }
+
     /// Once at launch: the latest finished turn of each live session (newest first, at most `rescanLimit`) that has no card
     /// and ended on what looks like a question nobody answered. Turns you addressed, opened since or wrote after are left.
     func rescanTurns() {
