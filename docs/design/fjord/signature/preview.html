@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fjord Computer, signature preview (Naeroyfjord)</title>
+<!-- same three.js as amontlabs.com (package.json "three": "~0.186.1"); the site bundles it, here it comes from a CDN -->
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js" } }</script>
+<style>
+  :root { color-scheme: dark light; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: #101418; color: #F7F8F5; font: 12px/1.4 ui-monospace, Menlo, monospace; transition: background .5s, color .5s; }
+  body[data-theme="light"] { background: #F7F8F5; color: #101418; }
+  #stage { position: fixed; inset: 0; }
+  #ui { position: fixed; top: 14px; right: 14px; display: flex; gap: 8px; z-index: 2; }
+  #ui button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 4px 10px; cursor: pointer; opacity: .7; }
+  #ui button:hover { opacity: 1; border-color: #0F9AC3; }
+  #err { position: fixed; left: 14px; top: 14px; color: #0F9AC3; }
+</style>
+</head>
+<body data-theme="dark">
+<div id="stage"></div>
+<div id="ui"><button id="theme" type="button">light</button><button id="intro" type="button">replay intro</button></div>
+<div id="err"></div>
+<script type="module">
+  // signature.js loads its data from new URL('/signature/', location.origin): served from docs/design/fjord,
+  // that is this folder (meta.json, terrain-{hi,lo}.bin, river.bin).
+  import { mount } from './signature.js';
+  const q = new URLSearchParams(location.search);
+  let theme = q.get('theme') === 'light' ? 'light' : 'dark';
+  document.body.dataset.theme = theme;
+  const btn = document.getElementById('theme');
+  btn.textContent = theme === 'dark' ? 'light' : 'dark';
+  try {
+    const sig = await mount(document.getElementById('stage'), {
+      theme, transparent: true, source: 'data', fit: q.get('fit') || 'cover', lod: q.get('lod') || 'auto',
+      motion: q.has('static') ? 'static' : 'auto',
+    });
+    window.signature = sig;
+    btn.onclick = () => {
+      theme = theme === 'dark' ? 'light' : 'dark';
+      document.body.dataset.theme = theme; btn.textContent = theme === 'dark' ? 'light' : 'dark';
+      sig.setTheme(theme);
+    };
+    document.getElementById('intro').onclick = () => sig.replayIntro();
+  } catch (e) {
+    document.getElementById('err').textContent = String(e);
+    throw e;
+  }
+</script>
+</body>
+</html>

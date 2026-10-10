@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fjord — design review</title>
+<script>
+(()=>{const d=document.documentElement,k="fjord-theme",mq=matchMedia("(prefers-color-scheme: dark)");
+const pref=()=>localStorage.getItem(k)||"system";
+const apply=()=>{const p=pref();d.dataset.pref=p;d.dataset.theme=p==="system"?(mq.matches?"dark":"light"):p;window.dispatchEvent(new Event("themechange"))};
+window.__setTheme=v=>{localStorage.setItem(k,v);apply()};mq.addEventListener("change",apply);apply();})();
+</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js"}}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.1/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono&family=Newsreader:opsz@6..72&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#101418;--paper:#F7F8F5;--fonte:#0F9AC3;--fonte-text:#067A9C;
+--bg:var(--paper);--text:var(--ink);--secondary:#5C636A;--line:#DCDFD9;--panel:#EDEFEA;--link:var(--fonte-text);
+--needs:#B26A00;--needs-wash:#FBEBD0;--fail:#B4392B;--fail-wash:#F8E1DD;
+--sans:"Geist",ui-sans-serif,system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,monospace;--serif:"Newsreader",Georgia,serif;
+--max:1312px;--gutter:clamp(16px,3vw,32px);--ease:cubic-bezier(.2,.7,.2,1)}
+[data-theme=dark]{--bg:#101418;--text:#F7F8F5;--secondary:#A3AAB0;--line:#2A3138;--panel:#171C21;--link:var(--fonte);
+--needs:#F2B33D;--needs-wash:#2B2414;--fail:#EC8577;--fail-wash:#2D1B19}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg);color:var(--text);font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased;transition:background .3s var(--ease),color .3s var(--ease)}
+#live{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:0;transition:opacity 1.4s ease}
+#live.is-live{opacity:1}
+#dim{position:fixed;inset:0;z-index:0;pointer-events:none;background:var(--bg);opacity:var(--dim,0)}
+#live canvas{display:block;width:100%;height:100%}
+main,header.top{position:relative;z-index:1}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 var(--gutter)}
+header.top{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(8px)}
+header.top .wrap{display:flex;justify-content:space-between;align-items:center;height:64px}
+.logo svg{height:22px;width:auto;display:block}
+.word{fill:var(--text)}
+.tsw{display:flex;gap:2px;border:1px solid var(--line);border-radius:999px;padding:2px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(6px)}
+.tsw button{all:unset;cursor:pointer;width:28px;height:24px;border-radius:999px;display:grid;place-items:center;color:var(--secondary)}
+.tsw button[aria-checked=true]{background:var(--panel);color:var(--text)}
+.hero{height:calc(100vh - 64px);min-height:560px;display:flex;align-items:flex-end;padding-bottom:56px}
+.hero .wrap{width:100%}
+.hero h1{font-weight:500;font-size:clamp(88px,15vw,220px);line-height:.86;letter-spacing:-.055em}
+.hero p{font-size:clamp(22px,2.4vw,32px);letter-spacing:-.02em;margin-top:18px}
+.hero .meta{margin-top:16px}
+.meta,.lbl{font-family:var(--mono);font-size:12px;color:var(--secondary)}
+.lbl{display:block;margin-bottom:20px}
+section{padding:160px 0 0}
+section:first-of-type{padding-top:120px}
+.sec{display:grid;grid-template-columns:240px minmax(0,1fr);gap:32px;border-top:1px solid var(--text);padding-top:20px}
+h2{font-weight:500;font-size:32px;line-height:1.15;letter-spacing:-.04em;max-width:760px}
+.lead{color:var(--secondary);max-width:620px;margin-top:12px}
+.rows{margin-top:40px;border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;padding:14px 0;border-bottom:1px solid var(--line)}
+.row b{font-weight:500}
+.row span{color:var(--secondary)}
+.row em{font-style:normal;color:var(--text)}
+code{font-family:var(--mono);font-size:13px}
+.ed{font-family:var(--serif);font-size:clamp(24px,2.4vw,32px);line-height:1.3;letter-spacing:-.01em}
+.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:40px}
+.cap{display:flex;justify-content:space-between;margin-top:10px}
+img.shot{width:100%;display:block;border-radius:4px;border:1px solid var(--line)}
+.sw{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:40px}
+.sw div{border:1px solid var(--line);border-radius:4px;height:96px;padding:10px;display:flex;flex-direction:column;justify-content:flex-end;font-family:var(--mono);font-size:11px}
+footer{padding:160px 0 48px;position:relative;z-index:1}
+a{color:var(--link);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+@media (max-width:900px){.sec,.row{grid-template-columns:1fr}.pair{grid-template-columns:1fr}.sw{grid-template-columns:repeat(3,1fr)}}
+
+/* app mockup, in the theme of the page */
+.app{border:1px solid var(--line);border-radius:4px;overflow:hidden;display:grid;grid-template-columns:200px minmax(0,1fr);height:420px;background:var(--bg);font-size:13px}
+.app .sb{background:var(--panel);border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column}
+.app .sb .h{font-family:var(--mono);font-size:11px;color:var(--secondary);padding:6px 10px}
+.app .it{display:flex;justify-content:space-between;padding:6px 10px;border-radius:4px}
+.app .it.on{background:var(--bg)}
+.app .it i{font-style:normal;font-family:var(--mono);font-size:12px;color:var(--secondary)}
+.app .it i.n{color:var(--needs)}
+.app .sep{height:1px;background:var(--line);margin:8px 10px}
+.app .ct{padding:16px 22px;overflow:hidden}
+.app .tb{display:flex;gap:10px;align-items:baseline;padding-bottom:12px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.app .tb b{font-weight:500;font-size:14px}
+.ir{padding:10px 0;border-bottom:1px solid var(--line)}
+.ir .t{display:flex;justify-content:space-between}
+.ir .m{font-family:var(--mono);font-size:11px;color:var(--secondary);margin-top:3px}
+.tg{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--secondary);border:1px solid var(--line);border-radius:3px;padding:0 5px;margin:5px 4px 0 0}
+.tg.f{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 40%,transparent)}
+.card{border:1px solid var(--line);border-left:2px solid var(--needs);border-radius:0;padding:12px 14px;margin-top:10px}
+.card .q{font-family:var(--serif);font-size:18px;line-height:1.3;margin:6px 0 10px}
+.op{display:flex;gap:8px}
+.op span{border:1px solid var(--line);border-radius:4px;padding:5px 10px}
+.op span.on{border-color:var(--text)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;vertical-align:1px}
+</style>
+</head>
+<body>
+<div id="live" aria-hidden="true"></div><div id="dim" aria-hidden="true"></div>
+
+<header class="top"><div class="wrap">
+  <a class="logo" href="https://www.amontlabs.com/" aria-label="amont"><svg viewBox="0 0 3316 747" role="img" aria-label="amont"><g transform="translate(40,697)"><path class="word" d="M224.0 12C307.0 12 377.0 -26 404.0 -82C412.0 -20 448.0 3 509.0 3C525.0 3 541.0 2 548.0 0V-84H529.0C509.0 -84 501.0 -92 501.0 -118V-325C501.0 -463 424.0 -544 280.0 -544C154.0 -544 71.0 -478 51.0 -372L160.0 -365C174.0 -423 212.0 -454 280.0 -454C356.0 -454 395.0 -413 395.0 -331L212.0 -296C95.0 -273 42.0 -224 42.0 -133C42.0 -41 113.0 12 224.0 12ZM241.0 -72C184.0 -72 152.0 -97 152.0 -143C152.0 -184 175.0 -209 239.0 -221L395.0 -251V-217C395.0 -132 337.0 -72 241.0 -72ZM606.0 0H712.0V-312C712.0 -401 755.0 -455 823.0 -455C894.0 -455 922.0 -402 922.0 -312V0H1023.0V-312C1023.0 -402 1066.0 -455 1133.0 -455C1201.0 -455 1234.0 -408 1234.0 -316V0H1340.0V-342C1340.0 -472 1276.0 -544 1164.0 -544C1088.0 -544 1034.0 -505 1010.0 -434C987.0 -503 932.0 -544 853.0 -544C786.0 -544 731.0 -506 705.0 -441L703.0 -532H606.0ZM1650.0 12C1802.0 12 1902.0 -97 1902.0 -266C1902.0 -435 1802.0 -544 1650.0 -544C1498.0 -544 1398.0 -435 1398.0 -266C1398.0 -97 1498.0 12 1650.0 12ZM1650.0 -80C1560.0 -80 1508.0 -149 1508.0 -266C1508.0 -383 1560.0 -452 1650.0 -452C1740.0 -452 1792.0 -383 1792.0 -266C1792.0 -149 1740.0 -80 1650.0 -80ZM1969.0 0H2075.0V-310C2075.0 -404 2126.0 -455 2201.0 -455C2275.0 -455 2304.0 -404 2304.0 -310V0H2410.0V-342C2410.0 -458 2349.0 -544 2230.0 -544C2157.0 -544 2096.0 -512 2068.0 -439L2066.0 -532H1969.0ZM2665.0 0H2764.0V-87H2688.0C2644.0 -87 2623.0 -102 2623.0 -152V-445H2764.0V-532H2623.0V-657H2517.0V-532H2436.0V-445H2517.0V-144C2517.0 -44 2564.0 0 2665.0 0Z"/><g transform="translate(2836.0,-657) scale(4.0)"><path d="M50 0 C53.55 0 55.58 2.94 57 5 C69 22.33 81.67 39.83 95 57.5 C95.49 58.15 95.36 59.07 94.71 59.56 C94.06 60.05 93.2 59.87 92.65 59.27 C78.61 43.73 64.39 30.31 50 19 C35.61 30.31 21.39 43.73 7.35 59.27 C6.8 59.87 5.94 60.05 5.29 59.56 C4.64 59.07 4.51 58.15 5 57.5 C18.33 39.83 31 22.33 43 5 C44.42 2.94 46.45 0 50 0 Z" fill="#0F9AC3"/></g></g></svg></a>
+  <div class="tsw" role="radiogroup" aria-label="Theme">
+    <button role="radio" data-v="system" aria-label="System theme"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.25" stroke="currentColor" stroke-width="1.25"/><path d="M8 2.75a5.25 5.25 0 0 1 0 10.5z" fill="currentColor"/></svg></button>
+    <button role="radio" data-v="light" aria-label="Light theme"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="4" stroke="currentColor" stroke-width="1.25"/></svg></button>
+    <button role="radio" data-v="dark" aria-label="Dark theme"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10.2 2.4a5.7 5.7 0 1 0 3.4 8.7A4.6 4.6 0 0 1 10.2 2.4z" fill="currentColor"/></svg></button>
+  </div>
+</div></header>
+
+<main>
+<div class="hero"><div class="wrap">
+  <h1>Fjord</h1>
+  <p>The power without the storm.</p>
+  <div class="meta">Design review · v0.2 · 10 Oct 2026</div>
+</div></div>
+
+<section><div class="wrap sec">
+  <span class="lbl">01 Story</span>
+  <div>
+    <p class="ed">Amont is the upstream side of a river. A fjord is where it reaches the sea: deep water, made still.</p>
+    <div class="rows">
+      <div class="row"><b>Product</b><span>Fjord Computer, an Amont Labs product. Tools inside: <em>Triage</em> (GitHub inbox and CI) and <em>Router</em> (one chat over your Claude Code sessions). Later: Diff, Sweep.</span></div>
+      <div class="row"><b>Headline</b><span><em>The power without the storm.</em> Agents make you faster; Fjord keeps it calm.</span></div>
+      <div class="row"><b>Domains</b><span>fjord.computer, fjordcomputer.com (unregistered on 10 Oct). Trademark check against Accenture's FJORD marks before launch.</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section><div class="wrap sec">
+  <span class="lbl">02 System</span>
+  <div>
+    <h2>The studio's system, unchanged.</h2>
+    <p class="lead">From <code>amont/brand</code>: two themes, one accent, Geist and Newsreader. Fjord adds what a developer tool needs: state colours.</p>
+    <div class="sw">
+      <div style="background:#F7F8F5;color:#101418">paper<br>#F7F8F5</div>
+      <div style="background:#101418;color:#F7F8F5">ink<br>#101418</div>
+      <div style="background:var(--panel)">panel</div>
+      <div style="background:#0F9AC3;color:#F7F8F5;border-color:#0F9AC3">fonte<br>#0F9AC3</div>
+      <div style="background:rgba(63,181,127,.14);color:#2E9E6B">passing</div>
+      <div style="background:var(--needs-wash);color:var(--needs)">needs you</div>
+      <div style="background:var(--fail-wash);color:var(--fail)">failing</div>
+    </div>
+    <div class="rows">
+      <div class="row"><b>Name</b><span>Set in Geist 500, tracking −4%, like every studio product. No product glyph: the studio's mark is amont^, and products are names. The app icon comes from the fjord render (03).</span></div>
+      <div class="row"><b>Type</b><span>Geist for the interface, Geist Mono for refs, times and counts, Newsreader for questions and quoted comments. All three ship in the app, replacing Anthropic Sans read from Claude's bundle.</span></div>
+      <div class="row"><b>Colour</b><span>Fonte for selection, links and live work. Green, amber and red only for state (passing, needs you, failing). Projects keep their dots; categories lose their own hues.</span></div>
+      <div class="row"><b>Shape and motion</b><span>4 px radius, hairline rules, the studio curve <code>cubic-bezier(.2,.7,.2,1)</code>, no overshoot.</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section><div class="wrap sec">
+  <span class="lbl">03 Image</span>
+  <div>
+    <h2>A real fjord, in the studio's renderer.</h2>
+    <p class="lead">The background of this page: Nærøyfjord from open elevation data, baked with the scripts behind amontlabs.com, drawn live by the same <code>signature.js</code>. The meltwater river runs into the fjord.</p>
+  </div>
+</div></section>
+
+<section><div class="wrap sec">
+  <span class="lbl">04 App</span>
+  <div>
+    <h2>The app, at full density.</h2>
+    <p class="lead">Today's screens and data, redrawn in the studio system. Switch the theme to see both.</p>
+
+    <div class="screen"><div class="ui">
+      <aside class="side">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="find"><i class="ti ti-search"></i><span>Search everything</span><kbd>⌘K</kbd></div>
+        <div class="grp"><span>Triage</span><span>⌃⌥L</span></div>
+        <div class="nav"><i class="ti ti-bell"></i><b>Needs you</b><span class="c w">7</span></div>
+        <div class="nav on"><i class="ti ti-git-pull-request"></i><b>Contributions</b><span class="c">3</span></div>
+        <div class="nav"><i class="ti ti-eye"></i><b>Reviews for you</b><span class="c w">2</span></div>
+        <div class="nav"><i class="ti ti-circle-dashed-check"></i><b>CI</b><span class="c f">2 failing</span></div>
+        <div class="nav"><i class="ti ti-robot"></i><b>Bot chatter</b><span class="c">12</span></div>
+        <div class="nav"><i class="ti ti-archive"></i><b>Done</b><span class="c"></span></div>
+        <div class="grp"><span>Router</span><span class="live"><i class="pulse"></i>2</span></div>
+        <div class="nav"><i class="ti ti-route"></i><b>All sessions</b><span class="c w">3</span></div>
+        <div class="sess"><i class="pd" style="background:#3FB57F"></i><span>lookout · tests 3/7</span><span class="mono" style="font-size:10.5px;color:var(--u-mute)">12m</span></div>
+        <div class="sess"><i class="pd" style="background:#9D8CF2"></i><span>microsandbox · review</span><span class="mono" style="font-size:10.5px;color:var(--u-mute)">3m</span></div>
+        <div class="sess"><i class="pd" style="background:#E879B9"></i><span style="color:var(--u-warn)">lcu · needs you</span><span class="mono" style="font-size:10.5px;color:var(--u-mute)">2m</span></div>
+        <div class="grp"><span>Tools</span></div>
+        <div class="nav"><i class="ti ti-git-compare"></i><b>Diff</b><span class="soon">soon</span></div>
+        <div class="nav"><i class="ti ti-eraser"></i><b>Sweep</b><span class="soon">soon</span></div>
+        <div class="foot">
+          <div class="rate"><span>Synced 12s ago</span><span>4,812 / 5,000</span></div>
+          <div class="bar"><i style="width:96%"></i></div>
+          <div class="me"><span class="av" style="background:#0F9AC3">0x</span><span style="flex:1">0xpolarzero</span><i class="ti ti-settings"></i></div>
+        </div>
+      </aside>
+      <div class="main">
+        <div class="top"><i class="ti ti-layout-sidebar"></i><i class="ti ti-chevron-left"></i><i class="ti ti-chevron-right" style="opacity:.4"></i>
+          <span class="crumb">Triage / <b>Contributions</b></span><span class="mono" style="font-size:11px;color:var(--u-mute)">3 unread of 4</span>
+          <span class="sp"></span><span class="live"><i class="pulse"></i>watching 14 repos</span><span class="btn"><i class="ti ti-adjustments-horizontal"></i>Rules</span></div>
+        <div class="body" style="grid-template-columns:540px minmax(0,1fr)">
+          <div class="list">
+            <div class="lh"><div class="seg"><span class="on">All</span><span>Unread</span><span>Mine</span></div><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">Latest ↓</span></div>
+            <div class="gh"><span>Needs you</span><span>3</span></div>
+            <div class="it sel"><i class="unread"></i><span class="av" style="background:#C2733F">AK</span>
+              <div style="min-width:0"><div class="t">std.Io: add vectored reads to File</div>
+                <div class="meta"><span>zig#21877</span><span>vectored-io → master</span><span class="add">+184</span><span class="del">−12</span></div>
+                <div class="chips"><span class="chip f"><i class="ti ti-git-pull-request-closed"></i>changes requested</span><span class="chip">1 unresolved</span><span class="chip">Greptile 3/5</span><span class="chip a"><i class="ti ti-bolt"></i>queued</span></div></div>
+              <div class="right"><span>3m</span><span class="mx"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="r"></i><i class="x"></i></span><span><i class="ti ti-message"></i> 14</span></div></div>
+            <div class="it"><i class="unread"></i><span class="av" style="background:#5B7FD6">TK</span>
+              <div style="min-width:0"><div class="t">Add GitHub Enterprise host setting</div>
+                <div class="meta"><span>lookout#15</span><span>ghe-host → main</span><span class="add">+96</span><span class="del">−8</span></div>
+                <div class="chips"><span class="chip">2 unresolved</span><span class="chip">Greptile 4/5</span><span class="chip a"><i class="ti ti-bolt"></i>session started 2m ago</span></div></div>
+              <div class="right"><span>12m</span><span class="mx"><i></i><i></i><i></i><i></i><i></i><i></i></span><span><i class="ti ti-message"></i> 6</span></div></div>
+            <div class="it"><i class="unread"></i><span class="av" style="background:#3E9B78">AL</span>
+              <div style="min-width:0"><div class="t">Respect trailing comma config in collection literals</div>
+                <div class="meta"><span>swift-format#1042</span><span>trailing-commas → main</span><span class="add">+41</span><span class="del">−3</span></div>
+                <div class="chips"><span class="chip o"><i class="ti ti-check"></i>approved by @allevato</span><span class="chip a"><i class="ti ti-bolt"></i>asked the Router</span></div></div>
+              <div class="right"><span>18m</span><span class="mx"><i></i><i></i><i></i><i></i></span><span><i class="ti ti-message"></i> 3</span></div></div>
+            <div class="gh"><span>Earlier</span><span>3</span></div>
+            <div class="it read"><span class="av" style="background:#101418;border:1px solid var(--u-line)">0x</span>
+              <div style="min-width:0"><div class="t">Bump the Swift tools version</div>
+                <div class="meta"><span>lcu#31</span><span>swift-6.2 → main</span><span class="add">+2</span><span class="del">−2</span></div>
+                <div class="chips"><span class="chip f"><i class="ti ti-git-merge"></i>has conflicts</span><span class="chip f"><i class="ti ti-bolt"></i>failed: the Router is off</span></div></div>
+              <div class="right"><span>4h</span><span class="mx"><i class="x"></i><i></i><i></i></span></div></div>
+            <div class="it read"><span class="av" style="background:#8A6FD1">MH</span>
+              <div style="min-width:0"><div class="t">Sandbox: cap guest memory at the host's limit</div>
+                <div class="meta"><span>microsandbox#208</span><span>mem-cap → main</span><span class="add">+57</span><span class="del">−9</span></div>
+                <div class="chips"><span class="chip o"><i class="ti ti-git-merge"></i>merged</span><span class="chip">addressed</span></div></div>
+              <div class="right"><span>6h</span><span class="mx"><i></i><i></i><i></i><i></i><i></i></span></div></div>
+            <div class="it read"><span class="av" style="background:#D08A3A">JK</span>
+              <div style="min-width:0"><div class="t">Docs: the hook's permission model</div>
+                <div class="meta"><span>lcu#28</span><span>issue</span></div>
+                <div class="chips"><span class="chip">resolved</span><span class="chip">you replied</span></div></div>
+              <div class="right"><span>1d</span></div></div>
+          </div>
+          <div class="det">
+            <div class="dh"><span class="state"><i class="ti ti-git-pull-request"></i>Open</span>
+              <div class="dt">std.Io: add vectored reads to File</div>
+              <div class="meta" style="margin:0"><span>ziglang/zig #21877</span><span>andrewrk wants to merge 3 commits</span></div></div>
+            <div class="tabs"><span class="on">Activity<i>14</i></span><span>Checks<i>12</i></span><span>Files<i>6</i></span></div>
+            <div class="db">
+              <div class="blk"><div class="bh"><i class="ti ti-message-2"></i><b>andrewrk</b><span style="color:var(--u-mute)">review comment · lib/std/Io/File.zig:214</span><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">3m</span></div>
+                <div class="code"><div><span class="ln">212</span><span> </span><span>pub fn readv(file: File, iovecs: []const posix.iovec) !usize {</span></div><div class="m"><span class="ln">213</span><span>−</span><span>    var buf = try allocator.dupe(u8, iovecs[0].base[0..len]);</span></div><div class="p"><span class="ln">213</span><span>+</span><span>    return posix.readv(file.handle, iovecs);</span></div></div>
+                <div class="say">“This should take the buffer by slice instead, otherwise we copy twice on the hot path.”</div></div>
+              <div class="blk"><div class="bh"><i class="ti ti-circle-dashed-check"></i><b>Checks</b><span style="color:var(--u-mute)">10 of 12 passing</span><span class="segbar"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="r"></i><i class="x"></i></span></div>
+                <div class="ck"><i class="ti ti-circle-x fl"></i><span><span class="n">x86_64-windows-debug</span><div class="mono" style="font-size:11px;color:var(--u-fail)">test-std: 1 failed · Io.File.readv</div></span><span class="d">3m 48s</span></div>
+                <div class="ck"><i class="ti ti-loader-2 wr"></i><span><span class="n">wasm32-wasi-release</span><div class="prog"><i></i></div></span><span class="d">2m 10s</span></div>
+                <div class="ck"><i class="ti ti-circle-check ok"></i><span class="n">aarch64-macos-release</span><span class="d">6m 03s</span></div>
+                <div class="ck"><i class="ti ti-circle-check ok"></i><span class="n">x86_64-linux-debug · +8 more</span><span class="d">4m 12s</span></div></div>
+              <div class="blk"><div class="bh"><i class="ti ti-timeline"></i><b>Since your last visit</b><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">4 events</span></div>
+                <div class="ck"><i class="ti ti-git-commit" style="color:var(--u-mute)"></i><span class="n">pushed 2 commits <span style="color:var(--u-mute)">a3f9c21 · e81b07d</span></span><span class="d">11m</span></div>
+                <div class="ck"><i class="ti ti-sparkles" style="color:var(--u-mute)"></i><span class="n">greptile-apps reviewed <span style="color:var(--u-mute)">3/5 · 2 comments</span></span><span class="d">9m</span></div>
+                <div class="ck"><i class="ti ti-git-pull-request-closed fl"></i><span class="n">andrewrk requested changes</span><span class="d">3m</span></div>
+                <div class="ck"><i class="ti ti-bolt ac"></i><span class="n">rule queued: start a session in <span style="color:var(--u-mute)">~/code/zig</span></span><span class="d">3m</span></div></div>
+              <div class="why"><i class="ti ti-filter"></i>Contributions · a review comment after your last commit</div>
+            </div>
+            <div class="acts"><span class="btn p">Open<kbd>↵</kbd></span><span class="btn"><i class="ti ti-route"></i>Ask the Router<kbd>⌘↵</kbd></span><span class="btn">Reply<kbd>R</kbd></span><span class="sp"></span><span class="btn">Done<kbd>⌫</kbd></span></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="now"><img src="shots/window-category.png" alt="Contributions today"><span class="meta">Today: <code>--window-shots category</code></span></div>
+
+    <div class="screen"><div class="ui">
+      <aside class="side">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="find"><i class="ti ti-search"></i><span>Search everything</span><kbd>⌘K</kbd></div>
+        <div class="grp"><span>Triage</span><span>⌃⌥L</span></div>
+        <div class="nav"><i class="ti ti-bell"></i><b>Needs you</b><span class="c w">7</span></div>
+        <div class="nav"><i class="ti ti-git-pull-request"></i><b>Contributions</b><span class="c">3</span></div>
+        <div class="nav"><i class="ti ti-eye"></i><b>Reviews for you</b><span class="c w">2</span></div>
+        <div class="nav"><i class="ti ti-circle-dashed-check"></i><b>CI</b><span class="c f">2 failing</span></div>
+        <div class="grp"><span>Router</span><span class="live"><i class="pulse"></i>2</span></div>
+        <div class="nav on"><i class="ti ti-route"></i><b>All sessions</b><span class="c w">3</span></div>
+        <div class="sess"><i class="pd" style="background:#3FB57F"></i><span>lookout · tests 3/7</span></div>
+        <div class="sess"><i class="pd" style="background:#9D8CF2"></i><span>microsandbox · review</span></div>
+        <div class="sess"><i class="pd" style="background:#E879B9"></i><span style="color:var(--u-warn)">lcu · needs you</span></div>
+        <div class="grp"><span>Tools</span></div>
+        <div class="nav"><i class="ti ti-git-compare"></i><b>Diff</b><span class="soon">soon</span></div>
+        <div class="nav"><i class="ti ti-eraser"></i><b>Sweep</b><span class="soon">soon</span></div>
+        <div class="foot">
+          <div class="rate"><span>Hook · plugin signed</span><span class="ok">●</span></div>
+          <div class="me"><span class="av" style="background:#0F9AC3">0x</span><span style="flex:1">0xpolarzero</span><i class="ti ti-settings"></i></div>
+        </div>
+      </aside>
+      <div class="main">
+        <div class="top"><i class="ti ti-layout-sidebar"></i><i class="ti ti-chevron-left"></i><i class="ti ti-chevron-right" style="opacity:.4"></i>
+          <span class="crumb">Router / <b>LCU JavaScript sandbox on Linux</b></span>
+          <span class="sp"></span><span class="live" style="color:var(--u-warn)">● 3 need you</span><span class="live"><i class="pulse"></i>2 working</span><span class="btn">Open in Claude<kbd>O</kbd></span></div>
+        <div class="body" style="grid-template-columns:300px minmax(0,1fr)">
+          <div class="list sl">
+            <div class="gh"><span>Needs you</span><span>3</span></div>
+            <div class="it sel"><div style="min-width:0"><div class="t">LCU JavaScript sandbox on Linux</div><div class="meta"><span class="kind" style="color:var(--u-merge)">plan</span><span>microsandbox</span></div></div><div class="right"><span>9m</span></div></div>
+            <div class="it"><div style="min-width:0"><div class="t">LCU update notifications</div><div class="meta"><span class="kind wr">question</span><span>lcu</span></div></div><div class="right"><span>2m</span></div></div>
+            <div class="it"><div style="min-width:0"><div class="t">Calculator display reading</div><div class="meta"><span class="kind fl">stuck</span><span>lcu-research · VPN is down</span></div></div><div class="right"><span>6m</span></div></div>
+            <div class="gh"><span>Working</span><span>2</span></div>
+            <div class="it"><div style="min-width:0"><div class="t">Agent completion notifications</div><div class="meta"><i class="pulse"></i><span>lookout · tests 3/7 · 2 agents</span></div><div class="prog" style="margin-top:6px"><i style="background:var(--u-acc)"></i></div></div><div class="right"><span>12m</span></div></div>
+            <div class="it"><div style="min-width:0"><div class="t">CI failure diagnosis</div><div class="meta"><i class="pulse"></i><span>microsandbox · quiet 3 min</span></div></div><div class="right"><span>6m</span></div></div>
+            <div class="gh"><span>Done</span><span>1</span></div>
+            <div class="it read"><div style="min-width:0"><div class="t">Repository ownership transfer</div><div class="meta"><span>passed on by the Router</span></div></div><div class="right"><span>1h</span></div></div>
+          </div>
+          <div class="conv">
+            <div class="cv">
+              <div class="blk"><div class="bh"><i class="ti ti-history"></i><b>Decisions in this session</b><span style="color:var(--u-mute)">3 earlier</span><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute)">show all <i class="ti ti-chevron-down"></i></span></div>
+                <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto auto"><i class="ti ti-circle-check ok"></i><span>Answered <em class="mono" style="font-style:normal;color:var(--u-sec);font-size:11px">which runtime?</em> → Firecracker, not gVisor</span><span class="k">you · 1d</span><i class="ti ti-arrow-up-right" style="color:var(--u-mute)"></i></div>
+                <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto auto"><i class="ti ti-route ac"></i><span>Passed on “keep the VM warm between scripts”</span><span class="k">Router · 3h</span><i class="ti ti-arrow-up-right" style="color:var(--u-mute)"></i></div>
+                <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto auto"><i class="ti ti-arrow-back-up" style="color:var(--u-warn)"></i><span>Sent the first plan back: “no root in the guest”</span><span class="k">you · 2h</span><i class="ti ti-arrow-up-right" style="color:var(--u-mute)"></i></div></div>
+              <div class="msg"><span class="av" style="background:#9D8CF2">MS</span><div><div class="who"><b>microsandbox</b> · Claude · plan mode · 9m</div>
+                <div class="agent">The sandbox can run in a Firecracker microVM on Linux. Here's the plan; nothing is written until you approve.</div></div></div>
+              <div class="blk" style="margin-left:32px"><div class="bh"><span class="kind" style="color:var(--u-merge)">Plan</span><b>Firecracker runner for Linux</b><span class="sp"></span><span class="mono" style="font-size:11px"><span class="add">+412</span> <span class="del">−38</span> · 7 files</span></div>
+                <div class="step"><span class="k">1</span><span>Boot a minimal guest from the shared rootfs <code>crates/vm/src/firecracker.rs</code></span><span class="k">new</span></div>
+                <div class="step"><span class="k">2</span><span>Mount the project read-only over virtio-fs <code>crates/vm/src/mounts.rs</code></span><span class="k">edit</span></div>
+                <div class="step"><span class="k">3</span><span>Route the JS runtime through the VM's vsock <code>crates/js/src/runtime.rs</code></span><span class="k">edit</span></div>
+                <div class="step"><span class="k">4</span><span>Fall back to the process sandbox when KVM is absent</span><span class="k">edit</span></div>
+                <div class="step"><span class="k">5</span><span>Integration test: 200 scripts, cold boot under 150 ms</span><span class="k">test</span></div>
+                <div class="opts"><span class="btn p">Approve<kbd>⌘↵</kbd></span><span class="btn">Keep planning<kbd>K</kbd></span><span class="sp"></span><span class="mono" style="font-size:11px;color:var(--u-mute);align-self:center">plan v2 · <span style="text-decoration:underline;text-underline-offset:3px">compare with v1</span></span></div></div>
+              <div class="msg"><span class="av" style="background:#3FB57F">LO</span><div style="min-width:0"><div class="who"><b>lookout</b> · Agent completion notifications · running</div>
+                <div class="blk"><div class="log"><div class="cmd">$ swift test --filter PillDragTests</div><div><span class="ok">✓</span> 48 tests passed <span style="color:var(--u-mute)">(12.4 s)</span></div><div class="cmd">$ swift test --filter RouterTests</div><div><span class="wr">◌</span> suite 3 of 7 · RouterFormsTests <span class="caret"></span></div></div>
+                                    <div class="step" style="grid-template-columns:20px minmax(0,1fr) auto"><i class="ti ti-subtask ac"></i><span>write-tests</span><span class="k wr">running 42s</span></div></div></div></div>
+            </div>
+            <div class="comp"><div style="display:flex;gap:8px;align-items:center"><span class="pill"><i class="ti ti-folder"></i>microsandbox</span><span>approve it, but keep the guest image under 200 MB</span><span class="caret" style="background:var(--u-text);width:1.5px"></span></div>
+              <div style="display:flex;gap:10px;align-items:center;margin-top:10px;color:var(--u-mute);font-size:11.5px"><span><i class="ti ti-at"></i> project</span><span><i class="ti ti-paperclip"></i></span><span class="sp"></span><span class="mono">passes your words on as they are</span><span class="btn p">Send<kbd>⌘↵</kbd></span></div></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="now"><img src="shots/window-router.png" alt="Router today"><span class="meta">Today: <code>--window-shots router</code></span></div>
+  </div>
+</div></section>
+
+<section><div class="wrap sec">
+  <span class="lbl">05 Decide</span>
+  <div>
+    <div class="rows" style="margin-top:0">
+      <div class="row"><b>1</b><span>Follow the studio system as is (themes, fonte, type), with amber and red as the only additions.</span></div>
+      <div class="row"><b>2</b><span>No product glyph; app icon from the fjord render.</span></div>
+      <div class="row"><b>3</b><span>The screens in 04: dense and technical (checks, diffs, logs, subagents), with colour reserved for state.</span></div>
+      <div class="row"><b>4</b><span>Nærøyfjord as the image.</span></div>
+    </div>
+  </div>
+</div></section>
+</main>
+
+<footer><div class="wrap meta">Sources: <a href="https://www.amontlabs.com/">amontlabs.com</a>, <code>amont/brand/README.md</code>, <a href="https://silo.amontlabs.com/">silo.amontlabs.com</a>, <a href="https://linear.app/now/behind-the-latest-design-refresh">Linear's calmer interface</a>, <a href="https://tsdr.uspto.gov/#caseNumber=86898262&caseType=SERIAL_NO&searchType=statusSearch">USPTO 86898262</a>. Terrain: AWS Terrain Tiles.</div></footer>
+
+<script>
+for(const b of document.querySelectorAll('.tsw button'))b.onclick=()=>window.__setTheme(b.dataset.v);
+const sync=()=>{for(const b of document.querySelectorAll('.tsw button'))b.setAttribute('aria-checked',b.dataset.v===document.documentElement.dataset.pref)};
+window.addEventListener('themechange',sync);sync();
+const shot=new URLSearchParams(location.search).get('shot');
+if(shot!==null){const sc=document.querySelectorAll('.screen')[+shot];document.body.replaceChildren(sc);document.documentElement.style.background='transparent';sc.style.cssText='margin:0;border-radius:0;box-shadow:none;width:1280px';if(new URLSearchParams(location.search).get('theme'))__setTheme(new URLSearchParams(location.search).get('theme'))}
+const fit=()=>{for(const sc of document.querySelectorAll('.screen'))sc.style.setProperty('--k',sc.clientWidth/1280)};addEventListener('resize',fit);new ResizeObserver(fit).observe(document.body);fit();
+const dim=()=>document.documentElement.style.setProperty('--dim',Math.min(.84,scrollY/innerHeight*.9).toFixed(3));addEventListener('scroll',dim,{passive:true});dim();
+</script>
+<script type="module">
+// Background: the fjord, in the studio renderer (signature/). Loaded when its data exists.
+try{const m=await import('./signature/fjord-bg.js');m.mount(document.getElementById('live'))}catch(e){console.info('fjord background not available yet',e.message)}
+</script>
+</body>
+</html>

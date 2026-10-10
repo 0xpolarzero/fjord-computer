@@ -1,0 +1,56 @@
+{
+ "camera": {
+  "target": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "az": 235.0,
+  "pitch": 46.0,
+  "dist": 24000.0,
+  "fk": 1.8,
+  "tx": 0.56,
+  "ty": 0.5,
+  "W0": 4800,
+  "H0": 3200,
+  "drift": [
+   2.2,
+   1.2
+  ]
+ },
+ "box": [
+  10015.0,
+  2217.0,
+  10005.0
+ ],
+ "counts": {
+  "hi": 190000,
+  "lo": 64162
+ },
+ "source": [
+  1857.8702724566756,
+  2076.0283203125,
+  2918.512535335738
+ ],
+ "river": {
+  "samples": 512,
+  "channels": 32,
+  "particles": 25000,
+  "length": 5078.983548325737
+ },
+ "vex": 1.35,
+ "place": {
+  "name": "Naeroyfjord, Sogn, Norway",
+  "source_latlon": [
+   60.9057,
+   6.9392
+  ],
+  "target_latlon": [
+   60.932,
+   6.905
+  ],
+  "river_channels": 3,
+  "fjord_channels": 29,
+  "dem": "AWS Terrarium z14"
+ }
+}
