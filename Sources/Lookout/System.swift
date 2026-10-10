@@ -433,8 +433,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         globals.start()
         globalShortcuts = globals
         if CommandLine.arguments.contains("--open") { toggleWindow() }
-        if CommandLine.arguments.contains(Lifecycle.flag) { Lifecycle.start(store) }
+        if CommandLine.arguments.contains(Lifecycle.flag) {
+            Lifecycle.start(store)
+        } else {
+            // The window's content built once at idle, out of sight, so the first open only brings it in. Not under
+            // `--lifecycle`, whose idle measurement wants nothing done after launch.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window] in
+                window?.prepare()
+            }
+        }
     }
+
+    /// How long after launch the window's content is built (`AppWindowController.prepare`): past the store's first load
+    /// and the bar's first draw.
+    static let prepareDelay: TimeInterval = 2
 
     /// Opens the app window on `destination` (the bar leaves the edge), or on a Router card.
     private func showWindow(_ destination: AppDestination?, card: String? = nil) {

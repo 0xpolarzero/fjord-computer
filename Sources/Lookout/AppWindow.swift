@@ -145,6 +145,24 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         reportFront()
     }
 
+    /// The window and its content made ahead of a first open, at idle, so that open only brings them in (see `bringIn`): the
+    /// window is not ordered in, the app's policy and the bar are not told, and the content is built and laid out at the
+    /// window's size, then taken out of it again, where it stands still as after a close. A content that was never in a
+    /// window would not: laid out, it runs its body and appearing and redraws on every change of the store behind it. No-op
+    /// once the content exists or while the window is open or on its way. No close is involved, so nothing a close leaves
+    /// for later (see `windowWillClose`) is either.
+    func prepare() {
+        guard content == nil, phase == .idle, pending == nil, window?.isVisible != true else { return }
+        settle()
+        let window = self.window ?? makeWindow()
+        self.window = window
+        let content = makeContent(size: window.contentRect(forFrameRect: window.frame).size)
+        self.content = content
+        window.contentViewController = content
+        content.view.layoutSubtreeIfNeeded()
+        window.contentViewController = nil
+    }
+
     /// What shows the window: its content (built once, kept across closes), the app regular and active, the window in front
     /// with the keyboard. The heavy part of an opening, which waits until its morph is on screen.
     private func bringIn(_ window: NSWindow) {

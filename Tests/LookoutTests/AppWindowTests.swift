@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Lookout
 
@@ -157,6 +158,75 @@ import Testing
         #expect(window.window?.contentViewController != nil && window.window?.contentViewController !== content)
         window.close()
         await waitUntil { closed == 2 }
+    }
+
+    /// Prepared at idle after launch, the window and its content are made out of sight: nothing is ordered in, the window is
+    /// not open or in front, the app stays an accessory; the first open then brings in that content rather than making it.
+    @Test func aPreparedContentIsMadeOutOfSightAndTheFirstOpenUsesIt() async throws {
+        let (window, _) = controller()
+        var fronts = 0, closed = 0
+        window.onFront = { _ in fronts += 1 }
+        window.onClose = { closed += 1 }
+        let policy = NSApp.activationPolicy()
+        window.prepare()
+        let content = try #require(window.content)
+        #expect(window.window?.isVisible == false && !window.isOpen && !window.isFront && fronts == 0)
+        #expect(window.window?.contentViewController == nil && content.view.window == nil)
+        #expect(NSApp.activationPolicy() == policy)
+        #expect(!NSApp.windows.contains { $0.isVisible && $0 === window.window })
+        // Twice is once.
+        window.prepare()
+        #expect(window.content === content)
+        // Nothing a close leaves for later comes of it: the bar is not told the window closed.
+        await drainMainQueue()
+        #expect(closed == 0)
+        window.show(.router)
+        away(window)
+        #expect(window.isOpen && window.window?.contentViewController === content)
+        window.close()
+        await waitUntil { closed == 1 }
+    }
+
+    /// Prepared on the categories page, the page out of sight leaves no undo history to take ⌘Z, and opening on it has a
+    /// fresh one.
+    @Test func aPreparedCategoriesPageRegistersItsHistoryOnlyOnceOpen() async throws {
+        let (window, store) = controller()
+        store.suggestions = ["octo/repo"]
+        var closed = 0
+        window.onClose = { closed += 1 }
+        window.navigator.go(.categories)
+        window.prepare()
+        await drainMainQueue()
+        #expect(store.categoryHistory == nil)
+        window.show(.categories)
+        away(window)
+        await waitUntil { store.categoryHistory != nil }
+        #expect(store.categoryHistory?.canUndo == false)
+        window.close()
+        await waitUntil { closed == 1 }
+    }
+
+    /// Why `prepare` builds the content in the window and takes it out again: once it has been in a window, a hosting
+    /// controller out of one stands still (no body runs as the store behind it changes).
+    @Test func contentTakenOutOfTheWindowStandsStill() async {
+        let model = ProbeModel(), count = ProbeCount()
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: -5000, width: 400, height: 300), styleMask: [.titled],
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let content = NSHostingController(rootView: ProbeView(model: model, count: count))
+        content.sizingOptions = []
+        content.view.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+        window.contentViewController = content
+        content.view.layoutSubtreeIfNeeded()
+        window.contentViewController = nil
+        #expect(count.bodies >= 1 && !window.isVisible)
+        let built = count.bodies
+        for _ in 0..<10 {
+            model.n += 1
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(count.bodies == built)
+        withExtendedLifetime((content, window)) {}
     }
 
     @Test func aPlaceThatIsGoneOpensOnTheFirstCategory() async {
@@ -512,5 +582,18 @@ import Testing
             #expect(controller.phase == .opening && run.startPose?.rect == now.rect && controller.isOpen)
             #expect(ticks.blocks.isEmpty)
         }
+    }
+}
+
+/// A view that counts its body runs, over a store it reads.
+@Observable @MainActor private final class ProbeModel { var n = 0 }
+@MainActor private final class ProbeCount { var bodies = 0 }
+
+private struct ProbeView: View {
+    let model: ProbeModel
+    let count: ProbeCount
+    var body: some View {
+        count.bodies += 1
+        return Text("\(model.n)").frame(width: 200, height: 100)
     }
 }
