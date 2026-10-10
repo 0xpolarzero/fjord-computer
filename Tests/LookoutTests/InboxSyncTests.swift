@@ -532,6 +532,28 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(InboxSync.keepingRequestTimes(fetched, from: gone).reviewRequests.isEmpty)
     }
 
+    @Test func anAssignmentIsRatedByWhenItWasMadeSoAssignedAgainIsNew() throws {
+        #expect(InboxSync.fragments.contains("ASSIGNED_EVENT") && InboxSync.fragments.contains("assignees(first: 10)"))
+        let events: [[String: Any]] = [
+            ["createdAt": "2026-10-02T10:00:00Z", "assignee": ["login": "Me"]],
+            ["createdAt": "2026-10-03T10:00:00Z", "assignee": ["login": "gone"]],
+        ]
+        let first = try #require(InboxSync.thing(node(["assignees": ["nodes": [["login": "Me"]]], "reviewRequests": ["nodes": []],
+                                                        "assignEvents": ["nodes": events]])))
+        #expect(first.assignedAt == ["me": try #require(iso("2026-10-02T10:00:00Z"))])
+        let context = InboxContext(me: "me")
+        let stamp = InboxEngine.importanceStamp(first, context: context)
+        #expect(stamp == "assigned:\(Int(try #require(iso("2026-10-02T10:00:00Z")).timeIntervalSince1970))")
+        // Taken off and assigned again: another stamp, so Jev's rating of the first doesn't count for it.
+        let again = try #require(InboxSync.thing(node(["assignees": ["nodes": [["login": "Me"]]], "reviewRequests": ["nodes": []],
+                                                        "assignEvents": ["nodes": [["createdAt": "2026-10-08T10:00:00Z",
+                                                                                     "assignee": ["login": "Me"]]]]])))
+        #expect(InboxEngine.importanceStamp(again, context: context) != stamp)
+        // Still assigned, its event past the ones fetched: the time is kept.
+        let later = try #require(InboxSync.thing(node(["assignees": ["nodes": [["login": "Me"]]], "reviewRequests": ["nodes": []]])))
+        #expect(InboxEngine.importanceStamp(InboxSync.keepingRequestTimes(later, from: first), context: context) == stamp)
+    }
+
     @Test func behindBaseAndTheHeadCommitAreRead() throws {
         let t = try #require(InboxSync.thing(node()))
         #expect(t.behindBase && t.headSha == "abc")

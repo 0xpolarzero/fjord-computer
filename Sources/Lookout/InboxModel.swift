@@ -429,6 +429,8 @@ struct Thing: Codable, Hashable, Identifiable {
     var status: ThingStatus = .open
     var labels: [String] = []
     var assignees: [String] = []
+    /// When each current assignee (lowercased) was assigned, the latest `AssignedEvent` for them, when GitHub said.
+    var assignedAt: [String: Date]?
     /// Logins, and `org/team` for teams.
     var requestedReviewers: [String] = []
     /// Logins @-mentioned in the body or any comment, lowercased.

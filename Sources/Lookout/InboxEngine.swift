@@ -552,7 +552,9 @@ enum InboxEngine {
             }.max()
             if let at { return "requested:\(Int(at.timeIntervalSince1970))" }
         }
-        return thing.assignees.contains { normalize($0) == r.me } ? "assigned" : nil
+        guard thing.assignees.contains(where: { normalize($0) == r.me }) else { return nil }
+        // By when you were assigned: taken off and assigned again is a new thing to rate.
+        return thing.assignedAt?.first { normalize($0.key) == r.me }.map { "assigned:\(Int($0.value.timeIntervalSince1970))" } ?? "assigned"
     }
 
     /// Jev's rating of what is asked of you now; nil when nothing is, or it wasn't rated (or wasn't sure).

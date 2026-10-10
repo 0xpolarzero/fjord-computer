@@ -208,6 +208,7 @@ enum InboxSync {
 
     private static let person = "author { login __typename avatarUrl } authorAssociation"
     private static let personNode = "login __typename avatarUrl"
+    private static let assignEvents = "assignEvents: timelineItems(itemTypes: [ASSIGNED_EVENT], last: 20) { nodes { ... on AssignedEvent { createdAt assignee { ... on User { login } } } } }"
 
     static let fragments = """
     fragment C on Comment { id createdAt body authorAssociation author { \(personNode) } }
@@ -216,7 +217,8 @@ enum InboxSync {
       repository { nameWithOwner }
       \(person)
       labels(first: 10) { nodes { name } }
-      assignees(first: 5) { nodes { login } }
+      assignees(first: 10) { nodes { login } }
+      \(assignEvents)
       reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
       requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 50) { nodes { ... on ReviewRequestedEvent {
         createdAt requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } } }
@@ -233,7 +235,8 @@ enum InboxSync {
       repository { nameWithOwner }
       \(person)
       labels(first: 10) { nodes { name } }
-      assignees(first: 5) { nodes { login } }
+      assignees(first: 10) { nodes { login } }
+      \(assignEvents)
       comments(last: 10) { nodes { ...C } }
     }
     """
@@ -358,6 +361,14 @@ enum InboxSync {
         thing.author = person(node["author"], association: node["authorAssociation"])
         thing.labels = nodes(node["labels"]).compactMap { $0["name"] as? String }
         thing.assignees = nodes(node["assignees"]).compactMap { $0["login"] as? String }
+        // When each current assignee was assigned: the latest event for them.
+        var assigned: [String: Date] = [:]
+        for event in nodes(node["assignEvents"]) {
+            guard let who = (dict(event["assignee"])?["login"] as? String)?.lowercased(), let at = date(event["createdAt"]),
+                  thing.assignees.contains(where: { $0.lowercased() == who }) else { continue }
+            if assigned[who].map({ $0 < at }) ?? true { assigned[who] = at }
+        }
+        thing.assignedAt = assigned.isEmpty ? nil : assigned
         var mentioned = mentions(body)
 
         var comments: [ThingComment] = []
@@ -487,11 +498,16 @@ enum InboxSync {
         return now < resetsAt
     }
 
-    /// A fetched thing with the times its requests were made kept from before, for those still pending whose event is past
-    /// the ones fetched: a request's time is its identity (its facts' keys, what Jev rated), and must not move.
+    /// A fetched thing with the times its requests were made (and its assignees assigned) kept from before, for those still
+    /// pending whose event is past the ones fetched: that time is its identity (its facts' keys, what Jev rated), and must
+    /// not move.
     static func keepingRequestTimes(_ thing: Thing, from old: Thing?) -> Thing {
-        guard let old, thing.kind == .pr else { return thing }
+        guard let old, thing.kind != .workflow else { return thing }
         var thing = thing
+        for who in thing.assignees.map({ $0.lowercased() }) where thing.assignedAt?[who] == nil
+            && old.assignees.contains(where: { $0.lowercased() == who }) {
+            if let before = old.assignedAt?[who] { thing.assignedAt = (thing.assignedAt ?? [:]).merging([who: before]) { a, _ in a } }
+        }
         let known = Set(thing.reviewRequests.map { $0.reviewer.lowercased() })
         for who in thing.requestedReviewers where !known.contains(who.lowercased())
             && old.requestedReviewers.contains(where: { $0.caseInsensitiveCompare(who) == .orderedSame }) {
