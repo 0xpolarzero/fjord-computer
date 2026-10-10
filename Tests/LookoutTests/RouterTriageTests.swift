@@ -288,6 +288,28 @@ import Testing
         #expect(counter.calls == 2 && s.router.cards.map(\.id) == ["b#w1"])
     }
 
+    @Test func aHandledTurnWhoseCardWasPrunedIsNotMadeACardAgain() async {
+        let (s, counter) = store(sessions: [session("a")]) { _, _ in self.answers(sentences: [0.9]) }
+        var state = RouterState()
+        state.cards = [RouterCard(id: "a#t2", sessionID: "a", kind: .asks, title: "T a", folder: nil, text: "", createdAt: Date(timeIntervalSince1970: 1),
+                                  addressedAt: Date(), addressedBy: .you)]
+            + (0..<RouterFeed.maxCards).map { RouterCard(id: "z\($0)#t1", sessionID: "z\($0)", kind: .done, title: "", folder: nil, text: "",
+                                                         createdAt: Date(), addressedAt: Date(), addressedBy: .you) }
+        RouterFeed.prune(&state)
+        #expect(!state.cards.contains { $0.id == "a#t2" } && state.handledTurns["a"] == 2)
+        state.enabled = true
+        s.router = try! JSONDecoder().decode(RouterState.self, from: JSONEncoder().encode(state))
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(counter.calls == 0 && !s.router.cards.contains { $0.sessionID == "a" })
+        // Its next turn is looked back at as usual.
+        s.claudeSessions["a"]?.completedTurns = 3
+        s.routerTriager.rescanned = false
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(counter.calls == 1 && s.router.cards.contains { $0.id == "a#t3" && $0.isOpen })
+    }
+
     @Test func theLookBackSkipsTurnsThatDontLookLikeTheyAsk() async {
         let (s, counter) = store(sessions: [session("a")], message: "All done. Tests pass.") { _, _ in self.answers() }
         s.triageTurns()

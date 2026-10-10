@@ -42,6 +42,9 @@ struct RouterState: Codable, Equatable {
     /// choice over that.
     var autoContinue = false
     var autoContinueSessions: [String: Bool] = [:]
+    /// By session, the latest turn whose card was handled and then pruned away (`RouterFeed.prune`): the launch's look back
+    /// never makes such a turn a card again, though its card is gone.
+    var handledTurns: [String: Int] = [:]
 
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
@@ -95,7 +98,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions, handledTurns
     }
 
     func encode(to encoder: Encoder) throws {
@@ -117,6 +120,7 @@ struct RouterState: Codable, Equatable {
         try c.encodeIfPresent(zonesShare, forKey: .zonesShare)
         try c.encode(autoContinue, forKey: .autoContinue)
         try c.encode(autoContinueSessions, forKey: .autoContinueSessions)
+        try c.encode(handledTurns, forKey: .handledTurns)
     }
 
     init(from decoder: Decoder) throws {
@@ -140,6 +144,7 @@ struct RouterState: Codable, Equatable {
         zonesShare = try? c.decodeIfPresent(Double.self, forKey: .zonesShare)
         autoContinue = (try? c.decodeIfPresent(Bool.self, forKey: .autoContinue)) ?? false
         autoContinueSessions = (try? c.decodeIfPresent([String: Bool].self, forKey: .autoContinueSessions)) ?? [:]
+        handledTurns = (try? c.decodeIfPresent([String: Int].self, forKey: .handledTurns)) ?? [:]
     }
 }
 
@@ -543,6 +548,7 @@ enum RouterFeed {
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
         state.autoContinueSessions = state.autoContinueSessions.filter { live[$0.key] != nil }
+        state.handledTurns = state.handledTurns.filter { live[$0.key] != nil }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
         state.lookoutStarted = state.lookoutStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
         prune(&state)
@@ -661,6 +667,7 @@ enum RouterFeed {
     }
 
     /// Keeps the file small: the oldest addressed cards go first, then the oldest open ones; the changes keep the latest.
+    /// A handled turn's card that goes leaves its turn number behind (`handledTurns`).
     static func prune(_ state: inout RouterState) {
         if state.cards.count > maxCards {
             var excess = state.cards.count - maxCards
@@ -671,6 +678,11 @@ enum RouterFeed {
             if excess > 0 {
                 drop.formUnion(state.cards.enumerated().filter { $0.element.isOpen }
                     .sorted { $0.element.createdAt < $1.element.createdAt }.prefix(excess).map(\.offset))
+            }
+            for i in drop where !state.cards[i].isOpen && state.cards[i].kind.isTurn {
+                let card = state.cards[i]
+                guard let range = card.id.range(of: "#t", options: .backwards), let turn = Int(card.id[range.upperBound...]) else { continue }
+                state.handledTurns[card.sessionID] = max(state.handledTurns[card.sessionID] ?? 0, turn)
             }
             state.cards = state.cards.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
         }

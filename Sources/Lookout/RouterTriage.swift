@@ -439,6 +439,7 @@ extension Store {
         return !session.isArchived && !session.running && session.completedTurns > 0
             && !agents.mutedFolders.contains(session.folderKey) && (claudeTasks[session.id] ?? []).isEmpty
             && !router.cards.contains(where: { $0.id == id || ($0.sessionID == session.id && $0.isOpen) })
+            && session.completedTurns > router.handledTurns[session.id] ?? 0
             && router.pendingTurns[session.id] == nil && router.waits[session.id] == nil
             && (session.lastFocused ?? .distantPast) < session.lastActivity
     }
