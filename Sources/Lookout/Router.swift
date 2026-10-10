@@ -127,6 +127,11 @@ struct RouterCard: Codable, Identifiable, Hashable {
     var turnMessage: Int64?
     /// Set when an inbox action started the session this is about.
     var origin: SessionOrigin?
+    /// The questions of a form still unanswered after your messages (the form had `total`), so the card says "2 of 3 left".
+    var left: [String]?
+    var total: Int?
+    /// Your message that resolved the card, when Jev judged it did.
+    var addressedNote: String?
 
     /// What a message (ms) must come after to be a reply to this card.
     var replyAfter: Int64 { turnMessage ?? createdMs }
@@ -154,7 +159,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionID, kind, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin
+        case id, sessionID, kind, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote
     }
 
     /// Files from before `createdMs` have `createdAt` (a date) instead.
@@ -176,6 +181,9 @@ struct RouterCard: Codable, Identifiable, Hashable {
         toolUseID = try c.decodeIfPresent(String.self, forKey: .toolUseID)
         turnMessage = try? c.decodeIfPresent(Int64.self, forKey: .turnMessage)
         origin = try? c.decodeIfPresent(SessionOrigin.self, forKey: .origin)
+        left = try? c.decodeIfPresent([String].self, forKey: .left)
+        total = try? c.decodeIfPresent(Int.self, forKey: .total)
+        addressedNote = try? c.decodeIfPresent(String.self, forKey: .addressedNote)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -192,6 +200,9 @@ struct RouterCard: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(toolUseID, forKey: .toolUseID)
         try c.encodeIfPresent(turnMessage, forKey: .turnMessage)
         try c.encodeIfPresent(origin, forKey: .origin)
+        try c.encodeIfPresent(left, forKey: .left)
+        try c.encodeIfPresent(total, forKey: .total)
+        try c.encodeIfPresent(addressedNote, forKey: .addressedNote)
     }
 
     /// The wait a question or plan card was made for (ms since 1970), from its id.

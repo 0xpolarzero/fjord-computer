@@ -171,6 +171,8 @@ import Testing
         let dir = TempDir()
         let s = store(dir)
         let agent = RouterAgent(store: s)
+        // Jev finds the message resolves whatever is open.
+        agent.tools.chooser = { _, _, _, _ in JevClient.Choice(choice: "resolved", confidence: 1, probabilities: ["resolved": 1]) }
         agent.tools.rephrase = { message, _, _ in Prepared(text: message, original: message, rephrased: false) }
         agent.tools.beginTurn("Use Postgres\nand ship")
         #expect(await agent.tools.call("prepare", ["session": "Lookout dev"])?.isError == false)
@@ -193,6 +195,7 @@ import Testing
         // The peer name isn't the session's title: Claude Code's registry says which session it is.
         await settle { s.router.chat[0].sessionID != nil }
         #expect(s.router.chat[0].sessionID == "local_a")
+        await settle { s.router.cards.first { $0.id == "local_a#t1" }?.isOpen == false }
         #expect(s.router.cards.first { $0.id == "local_a#t1" }?.addressedBy == .router)
         #expect(s.router.cards.first { $0.id == "local_b#t1" }?.isOpen == true)
 
@@ -206,6 +209,8 @@ import Testing
         let dir = TempDir()
         let s = store(dir)
         let agent = RouterAgent(store: s)
+        // Jev finds the message resolves whatever is open.
+        agent.tools.chooser = { _, _, _, _ in JevClient.Choice(choice: "resolved", confidence: 1, probabilities: ["resolved": 1]) }
         var resolved: [String: String?] = [:]
         agent.onPeerResolved = { name, session in resolved[name] = session }
         // "Docs" is a title but no peer's name; "Twin" is two peers.
@@ -227,6 +232,7 @@ import Testing
         await settle { resolved.keys.contains("Twin [local_c]") }
         #expect(resolved["Twin [local_c]"] == .some("local_c"))
         #expect(s.router.chat.last { $0.role == .receipt }?.sessionID == "local_c")
+        await settle { s.router.cards.first { $0.id == "local_c#t1" }?.isOpen == false }
         #expect(s.router.cards.first { $0.id == "local_c#t1" }?.addressedBy == .router)
     }
 
@@ -512,6 +518,8 @@ import Testing
         let dir = TempDir()
         let s = store(dir)
         let agent = RouterAgent(store: s)
+        // Jev finds the message resolves whatever is open.
+        agent.tools.chooser = { _, _, _, _ in JevClient.Choice(choice: "resolved", confidence: 1, probabilities: ["resolved": 1]) }
         let sent: [RouterStream.Event] = [.toolUse(id: "t1", name: "SendMessage", input: ["to": "Lookout dev", "message": "hi"]),
                                           .toolResult(id: "t1", isError: false, text: "Sent")]
         // Reset before the registry is read: the old message addresses nothing.

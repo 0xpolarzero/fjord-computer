@@ -799,11 +799,11 @@ struct RouterContext: Equatable {
                             self.patch(line) { $0.sessionID = session }
                             if let logged { self.resolveDecision(logged, session: session) }
                             if let action { store.noteActionSession(session, forMessage: action) }
-                            var state = store.router
-                            RouterFeed.address(&state, session, .router, Date()) {
-                                eligible[$0.id] == store.cardRevisions[$0.id, default: 0]
+                            let tools = self.tools
+                            let text = receipt.text
+                            Task { @MainActor in
+                                await store.judgeCards(session: session, message: text, eligible: eligible, chooser: tools.chooser)
                             }
-                            if state != store.router { store.router = state }
                         }
                     }
                 }

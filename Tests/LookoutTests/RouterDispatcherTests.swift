@@ -102,9 +102,9 @@ import Testing
         #expect(entry?.done == [.sent(to: "peer-local_a", text: "body-local_a", original: "orig")])
         #expect(entry?.outcome == .done && entry?.links.sessions == ["local_a"] && entry?.links.cards == ["local_a#w1"])
         #expect(d.progress.isEmpty)
-        // Your message is in the chat as yours, and the session's card is addressed by the Router's message.
+        // Your message is in the chat as yours; sending it doesn't address the card (Jev decides, and there is no key here).
         #expect(s.router.chat.last?.role == .you && s.router.chat.last?.replyTo == "local_a#w1")
-        #expect(s.router.cards[0].addressedBy == .router)
+        #expect(s.router.cards[0].isOpen)
     }
 
     @Test func aReplyOnAQuestionCardThatGivesTheAnswerAnswersTheForm() {

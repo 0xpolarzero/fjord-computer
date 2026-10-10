@@ -38,6 +38,8 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case answered(card: String)
         /// The Router asked you which of these.
         case asked([String])
+        /// A card your message resolved, by Jev's judgement (its title, and what you wrote).
+        case resolved(card: String, message: String)
         case failed(String)
     }
 
@@ -109,6 +111,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             case .changed(let id): "changed Lookout (\(id.uuidString.prefix(8)))"
             case .answered(let card): "answered \(card)"
             case .asked(let options): "asked which: " + options.joined(separator: " / ")
+            case .resolved(let card, let message): "addressed \(card) by your message: \(Self.clip(message, 80))"
             case .failed(let reason): "failed: \(reason)"
             }
         }
@@ -129,6 +132,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .changed: return "changed Lookout" + more
         case .answered: return "answered" + more
         case .asked: return "asked you" + more
+        case .resolved: return "addressed a card" + more
         case .failed: return "failed" + more
         }
     }
@@ -142,6 +146,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .changed: return "slider.horizontal.3"
         case .answered: return "checkmark"
         case .asked: return "questionmark.bubble"
+        case .resolved: return "checkmark"
         case .failed: return "exclamationmark.triangle"
         case nil: return "text.bubble"
         }

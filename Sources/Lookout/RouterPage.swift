@@ -226,7 +226,10 @@ private struct HistoryCardLine: View {
 
     private var open: Bool { model.expanded.contains(card.id) }
     private var canReopen: Bool { card.addressedBy != .superseded && card.addressedBy != .gone }
-    private var how: String { card.addressedBy?.label ?? "Addressed" }
+    private var how: String {
+        if let note = card.addressedNote { return "addressed by your message: \(RouterDecision.clip(note, 60))" }
+        return card.addressedBy?.label ?? "Addressed"
+    }
     private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
 
     var body: some View {
@@ -738,6 +741,11 @@ private struct NeedsCard: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(expanded ? .isSelected : [])
                 .accessibilityHint(expanded ? "" : "Shows it in full")
+            if let left = card.left, let total = card.total {
+                Text("\(left.count) of \(total) left").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    .padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
+                    .padding(.leading, wide ? 28 : 0)
+            }
             if let origin = card.origin {
                 OriginTag(origin: origin).padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
                     .padding(.leading, wide ? 28 : 0)

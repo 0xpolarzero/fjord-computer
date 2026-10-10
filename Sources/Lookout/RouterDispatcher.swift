@@ -319,9 +319,9 @@ struct RouterAskBack: Identifiable, Equatable {
         try await effects.send(job.tools, delivery)
         note(job, .sent(to: delivery.to, text: delivery.body, original: delivery.rephrased ? delivery.original : nil),
              session: session, card: card)
-        var state = store.router
-        RouterFeed.address(&state, session, .router, Date()) { eligible[$0.id] == store.cardRevisions[$0.id, default: 0] }
-        if state != store.router { store.router = state }
+        // Which of the session's open cards the message resolves is Jev's call; none are addressed just for being sent to.
+        stage(job, "checking its cards")
+        await store.judgeCards(session: session, message: job.text, eligible: eligible, chooser: job.tools.chooser, decision: job.id)
     }
 
     /// Starts a session in a project with your words as its first message.
