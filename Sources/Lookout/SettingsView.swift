@@ -44,6 +44,17 @@ struct SettingsView: View {
             .onAppear { Task { scroll(proxy, animated: false) } }
             .onChange(of: hub.settingsScroll) { scroll(proxy, animated: true) }
         }
+        // The page is kept while the window is closed: what the system holds is read again when it is back, and a pasted
+        // secret that wasn't saved doesn't wait behind a closed window.
+        .onAppear {
+            launchAtLogin = LaunchAtLogin.isEnabled
+            accessibilityTrusted = AXIsProcessTrusted()
+        }
+        .onDisappear {
+            token = ""
+            tokenError = nil
+            typesafeKey = ""
+        }
     }
 
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -420,10 +431,11 @@ struct SettingsView: View {
             }
             SettingsDivider()
             SettingsRow("Launch at login", description: launchError, descriptionColor: CDS.Text.danger) {
-                SettingsSwitch("Launch at login", isOn: $launchAtLogin)
-            }
-            .onChange(of: launchAtLogin) { _, on in
-                launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
+                // Your switch changes the login item; the page reading it again from the system (back after a close) doesn't.
+                SettingsSwitch("Launch at login", isOn: Binding(get: { launchAtLogin }, set: { on in
+                    launchAtLogin = on
+                    launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
+                }))
             }
             SettingsDivider()
             SettingsRow("Center the bar on its edge") {

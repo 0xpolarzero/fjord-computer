@@ -72,8 +72,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
 
     var isOpen: Bool { window?.isVisible == true }
-    /// The frame at the last close: the content goes with the window, and putting it back would shrink it.
-    private var closedFrame: NSRect?
+    /// The window's content, kept while the window is closed: out of the window it stands still (no body runs, no clock,
+    /// timeline or animation ticks, its tasks are cancelled), and back in it picks up where it was, its scroll positions and
+    /// the rest of its state kept, its appearing (`onAppear`, `.task`, `onChange(initial:)`) run again as on a first open.
+    private var content: NSViewController?
     /// Whether the window has the keyboard (no banner for the Router then: you are looking at the cards).
     var isKey: Bool { window?.isKeyWindow == true }
 
@@ -89,10 +91,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let window = self.window ?? makeWindow()
         self.window = window
         if window.contentViewController == nil {
-            // Setting the content sizes the window to the content's own minimum: put back the frame it had.
-            let frame = closedFrame ?? window.frame
-            window.contentViewController = makeContent()
-            window.setFrame(frame, display: false)
+            // The window takes its content's size: content kept from a close still has the window's, new content is given it.
+            let content = self.content ?? makeContent(size: window.contentRect(forFrameRect: window.frame).size)
+            self.content = content
+            window.contentViewController = content
         }
         // A window on its way out comes back from where it is; one on its way in just goes on.
         let reversing = phase == .closing && run != nil
@@ -291,12 +293,15 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// Keeps the selection on a place that exists.
     private func settle() { navigator.settle(shown: shownIDs, routerOn: store.routerOn) }
 
-    private func makeContent() -> NSViewController {
+    /// `size`: the window's content size, so that setting the content keeps the window as it is (left alone, the content
+    /// would size it to its own minimum, too small to see).
+    private func makeContent(size: NSSize) -> NSViewController {
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
                                checksClaudeCode: checksClaudeCode)
         let controller = NSHostingController(rootView: root)
         // The window sizes the content, not the other way round.
         controller.sizingOptions = []
+        controller.view.frame = NSRect(origin: .zero, size: size)
         return controller
     }
 
@@ -348,8 +353,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         observers = []
         lastFront = nil
         routerModel.composerFocused = false
-        closedFrame = window?.frame
-        // The content goes with the window: no view, nothing ticking behind a closed window.
+        // The content leaves the window, which stops it: nothing ticking behind a closed window. It is kept for the next open.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window?.isVisible != true else { return }
             self.window?.contentViewController = nil

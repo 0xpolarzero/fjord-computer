@@ -49,8 +49,8 @@ import Testing
         await waitUntil { !window.isOpen }
     }
 
-    /// Opened again after a close, the window has its size back (its content goes on close, and coming back would size it
-    /// to the content's minimum: a window too small to see).
+    /// Opened again after a close, the window has its size back (its content leaves it on close, and coming back must not
+    /// size it to the content's minimum: a window too small to see).
     @Test func openingAgainKeepsTheWindowsSize() async {
         let (window, _) = controller()
         var closed = 0
@@ -63,6 +63,25 @@ import Testing
         window.show(.settings)
         #expect(window.window?.frame.size == size)
         away(window)
+        window.close()
+        await waitUntil { closed == 2 }
+    }
+
+    /// Closed, the window lets go of its content, which stands still out of it, and keeps it for the next open: the same
+    /// content comes back, as it was left, without being made again.
+    @Test func closingKeepsTheContentOutOfTheWindowForTheNextOpen() async throws {
+        let (window, _) = controller()
+        var closed = 0
+        window.onClose = { closed += 1 }
+        window.show(.router)
+        away(window)
+        let content = try #require(window.window?.contentViewController)
+        window.close()
+        await waitUntil { closed == 1 }
+        #expect(window.window?.contentViewController == nil && content.view.window == nil)
+        window.show(.router)
+        away(window)
+        #expect(window.window?.contentViewController === content)
         window.close()
         await waitUntil { closed == 2 }
     }
@@ -110,6 +129,16 @@ import Testing
         await waitUntil { window.hub.settingsScroll == nil }
         #expect(window.hub.settingsScroll == nil)
         window.showUpdates()
+        #expect(window.hub.settingsScroll?.id == SettingsView.updatesID)
+        await waitUntil { window.hub.settingsScroll == nil }
+        #expect(window.hub.settingsScroll == nil)
+        // Closed on Settings and opened again by the menu: the page kept from the close takes it as it comes back.
+        var closed = false
+        window.onClose = { closed = true }
+        window.close()
+        await waitUntil { closed }
+        window.showUpdates()
+        away(window)
         #expect(window.hub.settingsScroll?.id == SettingsView.updatesID)
         await waitUntil { window.hub.settingsScroll == nil }
         #expect(window.hub.settingsScroll == nil)
