@@ -576,35 +576,92 @@ enum InboxSync {
 
     // MARK: - Workflows
 
-    /// The repo and branch each workflow rule watches; branches nil is the repo's default.
+    /// Repos an owner's wildcard (`owner/*`, Anyone's at) stands for in a workflow rule, at most.
+    static let reposPerOwner = 10
+
+    /// Owners (lowercased) whose repos workflow rules ask for with a wildcard: `ownerRepos` of `workflowTargets`.
+    static func workflowOwners(categories: [InboxCategory], groups: [InboxGroup]) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for category in categories {
+            for rule in category.rules where rule.scope.isWorkflow {
+                for ref in rule.scope.in?.include ?? [] {
+                    var owners: [String] = []
+                    switch ref {
+                    case .owner(let owner): owners = [owner]
+                    case .group(let id):
+                        owners = (groups.first { $0.id == id && $0.kind == .repos }?.members ?? []).filter { $0.hasSuffix("/*") }
+                            .map { String($0.dropLast(2)) }
+                    default: break
+                    }
+                    for owner in owners where !owner.isEmpty && seen.insert(owner.lowercased()).inserted { out.append(owner.lowercased()) }
+                }
+            }
+        }
+        return out
+    }
+
+    /// The names a workflow rule's `on` or `named` gives, without blanks: nil (the default branch, every workflow) when
+    /// none is left, which is what an empty slot says.
+    static func given(_ names: [String]?) -> [String]? {
+        let kept = (names ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return kept.isEmpty ? nil : kept
+    }
+
+    /// The repo and branch each workflow rule watches; branches nil is the repo's default. An owner's wildcard is the repos
+    /// `ownerRepos` has for it (by owner, lowercased).
     static func workflowTargets(categories: [InboxCategory], groups: [InboxGroup], owned: Set<String>,
-                                contributed: Set<String>) -> [(repo: String, branch: String?)] {
+                                contributed: Set<String>, ownerRepos: [String: [String]] = [:]) -> [(repo: String, branch: String?)] {
         var out: [(repo: String, branch: String?)] = []
         var seen = Set<String>()
+        func members(_ id: UUID) -> [String] { groups.first { $0.id == id && $0.kind == .repos }?.members ?? [] }
+        func ownerOf(_ wildcard: String) -> String { String(wildcard.dropLast(2)).lowercased() }
         for category in categories {
             for rule in category.rules where rule.scope.isWorkflow {
                 var repos: [String] = []
                 for ref in rule.scope.in?.include ?? [] {
                     switch ref {
                     case .repo(let name): repos.append(name)
-                    case .group(let id): repos += (groups.first { $0.id == id && $0.kind == .repos }?.members ?? []).filter { !$0.hasSuffix("/*") }
+                    case .group(let id):
+                        for member in members(id) {
+                            if member.hasSuffix("/*") { repos += ownerRepos[ownerOf(member)] ?? [] } else { repos.append(member) }
+                        }
                     case .owned: repos += owned.sorted()
                     case .contributed: repos += contributed.sorted()
-                    case .owner, .involved: break
+                    case .owner(let owner): repos += ownerRepos[owner.lowercased()] ?? []
+                    case .involved: break
                     }
                 }
-                let excluded = Set((rule.scope.in?.except ?? []).compactMap { ref -> String? in
-                    if case .repo(let name) = ref { return name.lowercased() }
-                    return nil
-                })
-                for repo in repos where repo.contains("/") && !excluded.contains(repo.lowercased()) {
-                    for branch in (rule.scope.on.map { $0.map { Optional($0) } } ?? [String?.none]) where seen.insert("\(repo.lowercased())@\(branch ?? "")").inserted {
+                var excluded = Set<String>(), excludedOwners = Set<String>()
+                for ref in rule.scope.in?.except ?? [] {
+                    switch ref {
+                    case .repo(let name): excluded.insert(name.lowercased())
+                    case .owner(let owner): excludedOwners.insert(owner.lowercased())
+                    case .group(let id):
+                        for member in members(id) {
+                            if member.hasSuffix("/*") { excludedOwners.insert(ownerOf(member)) } else { excluded.insert(member.lowercased()) }
+                        }
+                    default: break
+                    }
+                }
+                let branches = given(rule.scope.on).map { $0.map { Optional($0) } } ?? [String?.none]
+                for repo in repos where repo.contains("/") && !excluded.contains(repo.lowercased())
+                    && !excludedOwners.contains(String(repo.lowercased().prefix { $0 != "/" })) {
+                    for branch in branches where seen.insert("\(repo.lowercased())@\(branch ?? "")").inserted {
                         out.append((repo, branch))
                     }
                 }
             }
         }
         return Array(out.prefix(maxWorkflows))
+    }
+
+    /// The repos of each owner (aliased `o0`, `o1`…), most recently pushed first, archived ones left out.
+    fileprivate static func ownerReposRequest(_ owners: [String]) -> String {
+        let body = owners.enumerated().map { i, owner in
+            "o\(i): repositoryOwner(login: \"\(escape(owner))\") { repositories(first: \(reposPerOwner), isArchived: false, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { nameWithOwner } } }"
+        }
+        return "query { \(body.joined(separator: "\n")) }"
     }
 }
 
@@ -619,6 +676,9 @@ struct InboxSyncState {
     /// The searches run since launch: until all have, a thing no search is known to have found (kept from the last
     /// session) stays.
     var ranSinceLaunch: Set<String> = []
+    /// The repos of owners workflow rules name with a wildcard (by owner, lowercased), and when they were asked.
+    var ownerRepos: [String: [String]] = [:]
+    var ownerReposAt: [String: Date] = [:]
 }
 
 // MARK: - Repos that moved
@@ -746,8 +806,9 @@ extension Store {
         let plan = InboxSync.searchPlan(categories: categories, groups: groups, me: me, contributed: contributedRepos,
                                         myTeams: myTeams, cursor: inboxSyncState.searchCursor)
         let searches = plan.searches
+        await resolveOwnerRepos(InboxSync.workflowOwners(categories: categories, groups: groups))
         let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
-                                                contributed: contributedRepos)
+                                                contributed: contributedRepos, ownerRepos: inboxSyncState.ownerRepos)
         guard !searches.isEmpty || !targets.isEmpty else {
             if !things.isEmpty { things = [:] }
             inboxError = nil
@@ -960,6 +1021,19 @@ extension Store {
         let all = contributedRepos.union(merged)
         if all != contributedRepos { contributedRepos = all }
         reposResolvedAt = Date()
+    }
+
+    /// The repos of owners workflow rules name with a wildcard, asked once a day per owner. A failure leaves what was known
+    /// (and is asked again with the next refresh); an owner GitHub doesn't know has none.
+    func resolveOwnerRepos(_ owners: [String], now: Date = Date()) async {
+        let due = owners.filter { owner in inboxSyncState.ownerReposAt[owner].map { now.timeIntervalSince($0) > 86400 } ?? true }
+        guard !due.isEmpty, let json = try? await gh.graphql(InboxSync.ownerReposRequest(due)),
+              let data = json["data"] as? [String: Any] else { return }
+        for (i, owner) in due.enumerated() {
+            let repos = ((data["o\(i)"] as? [String: Any])?["repositories"] as? [String: Any])?["nodes"] as? [Any] ?? []
+            inboxSyncState.ownerRepos[owner] = repos.compactMap { ($0 as? [String: Any])?["nameWithOwner"] as? String }
+            inboxSyncState.ownerReposAt[owner] = now
+        }
     }
 
     /// The teams you're in, asked again in a day. A failure (offline, GitHub's trouble) leaves what was known and is asked

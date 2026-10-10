@@ -310,8 +310,9 @@ enum InboxEngine {
         switch thing.kind {
         case .workflow:
             // The fetched thing already carries its branch (the default one unless the rule says otherwise).
-            if let on = scope.on, let branch = thing.branch, !on.contains(branch) { return false }
-            if let named = scope.named {
+            // An empty `on` or `named` is the slot's default: the default branch, every workflow.
+            if let on = InboxSync.given(scope.on), let branch = thing.branch, !on.contains(branch) { return false }
+            if let named = InboxSync.given(scope.named) {
                 guard let name = thing.workflowName?.lowercased(), named.contains(where: { $0.lowercased() == name })
                 else { return false }
             }

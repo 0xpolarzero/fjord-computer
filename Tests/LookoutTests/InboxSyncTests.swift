@@ -215,6 +215,17 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(t.map { "\($0.repo)@\($0.branch ?? "")" } == ["o/r@main", "o/r@dev"])
         let none = InboxSync.workflowTargets(categories: [InboxStore.ci], groups: [], owned: [], contributed: [])
         #expect(none.isEmpty)
+        // Wildcards are their owner's repos, as known; an empty `on` (or blank names in it) is the default branch.
+        let group = InboxGroup(name: "G", kind: .repos, members: ["b/*"])
+        let wild = rule(Scope(kinds: [.workflow], in: Pick(include: [.owner("A"), .group(group.id)], except: [.repo("a/skip")]), on: ["", " "]))
+        let owners = InboxSync.workflowOwners(categories: [wild], groups: [group])
+        #expect(owners == ["a", "b"])
+        let found = InboxSync.workflowTargets(categories: [wild], groups: [group], owned: [], contributed: [],
+                                              ownerRepos: ["a": ["a/one", "a/skip"], "b": ["b/two"]])
+        #expect(found.map { "\($0.repo)@\($0.branch ?? "")" } == ["a/one@", "b/two@"])
+        let notB = rule(Scope(kinds: [.workflow], in: Pick(include: [.owner("a"), .owner("b")], except: [.owner("B")])))
+        #expect(InboxSync.workflowTargets(categories: [notB], groups: [], owned: [], contributed: [],
+                                          ownerRepos: ["a": ["a/one"], "b": ["b/two"]]).map(\.repo) == ["a/one"])
     }
 }
 
@@ -504,6 +515,8 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
             case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            // The repos of an owner a rule names with a wildcard.
+            case "/graphql": return .init(200, #"{"data":{"o0":{"repositories":{"nodes":[{"nameWithOwner":"a/x"}]}}}}"#)
             default: return .init(404, #"{"message":"unrouted"}"#)
             }
         }
@@ -537,6 +550,15 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         state.failing.insert(12)
         await s.syncInbox()
         #expect(s.count(ci) == 3 && posted == ["inbox:workflow:a/x:13@main", "inbox:workflow:a/x:12@main"])
+    }
+
+    @Test func anOwnersWildcardIsItsReposAndEmptySlotsAreTheirDefaults() async {
+        let (s, ci) = store(State()) { _ in }
+        // `on` and `named` added and left empty: the default branch, every workflow.
+        s.categories[0].rules[0].scope = Scope(kinds: [.workflow], in: Pick(include: [.owner("A")]), on: [], named: [" "])
+        await s.syncInbox()
+        #expect(s.inboxSyncState.ownerRepos == ["a": ["a/x"]])
+        #expect(s.entries(in: ci).map(\.id).sorted() == ["workflow:a/x:11@main", "workflow:a/x:12@main"])
     }
 
     @Test func aRuleCanNameTheWorkflowsItWants() async {
