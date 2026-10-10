@@ -87,10 +87,12 @@ enum Demo {
                 rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])), match: .any,
                              conditions: [.asksMe, .importance(.high)], createdAt: now.addingTimeInterval(-60 * 86400))]), at: 0)
         case .sections:
-            // Two sections: GitHub's, and CI (its failures) in a section of its own.
+            // Two sections: GitHub's, and CI (its failures) in a section of its own, folded.
             agents(store, now)
             let builds = store.createSection(name: "Builds")
             for c in store.categories where c.isCI { store.moveCategory(c.id, toSection: builds.id) }
+            // Folded: its icon alone, CI's failures on it.
+            store.toggleCollapsed(builds.id)
         case .hiddenCategory:
             // Bot chatter hidden: collecting, with no icon in the bar and no tab.
             agents(store, now)

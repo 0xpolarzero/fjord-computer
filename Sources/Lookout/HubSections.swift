@@ -19,10 +19,15 @@ extension LookoutHub {
         InboxCell(vertical: !edge.isHorizontal) { openApp(firstDestination) }
     }
 
-    /// A section's icon at the top of its well: a click opens its first category.
+    /// A section's icon at the top of its well: a click folds its categories into it (their counts added up on it) or
+    /// unfolds them. Hovering it peeks its first category with something new.
     func sectionCell(_ section: CategorySection, _ part: BarSection) -> some View {
-        SectionCell(section: section, vertical: !edge.isHorizontal) {
-            openApp(part.categories.first.map { .category($0.id) } ?? firstDestination)
+        SectionCell(section: section, badge: store.sectionBadge(part), vertical: !edge.isHorizontal) {
+            withAnimation(Theme.Motion.hover) { store.toggleCollapsed(section.id) }
+        }
+        .onHover { over in
+            guard over, let first = part.categories.first(where: { store.badge($0) > 0 }) ?? part.categories.first else { return }
+            hub.tab = .category(first.id)
         }
     }
 

@@ -368,6 +368,10 @@ extension Claude {
     private(set) var attempted: [String: String] = [:]
     /// The launch's look back at the sessions' latest turns has been made.
     var rescanned = false
+    /// Stuck turns whose banner waits for Jev's triage (`Store.announceRouterCards`).
+    var heldBanners: Set<String> = []
+    /// How long a stuck turn's banner waits for the triage at most.
+    var bannerWait: Duration = .seconds(20)
     /// Waiting cards whose session is being told its wait is over (never saved: a send cut short by quitting is not one).
     var telling: Set<String> = []
     /// The GitHub repos each folder's git remotes name (`Store.gitRepos`), read once; tests fill it in.
@@ -423,6 +427,30 @@ extension Store {
         return (i, session)
     }
 
+    /// Announces new cards (banners: RouterAttention.swift decides). A stuck turn Jev is about to triage waits for him, a
+    /// little at most: he may find it going in circles, said once per streak, or rate how urgent it is.
+    func announceRouterCards(_ fresh: [RouterCard]) {
+        var now: [RouterCard] = []
+        for card in fresh {
+            guard triageAsker != nil, card.kind == .stuck, card.triage == nil, let (_, session) = currentTurnCard(card.id),
+                  !session.running, routerTriager.heldBanners.insert(card.id).inserted else { now.append(card); continue }
+            let wait = routerTriager.bannerWait
+            Task { [weak self] in
+                try? await Task.sleep(for: wait)
+                self?.releaseBanner(card.id)
+            }
+        }
+        if !now.isEmpty { onNewRouterCards?(now) }
+    }
+
+    /// A stuck turn's banner held for its triage, which didn't come in time (or came to nothing): announced as the card is
+    /// now, if it still needs you and isn't its circles streak again.
+    private func releaseBanner(_ id: String) {
+        guard routerTriager.heldBanners.remove(id) != nil, let card = router.cards.first(where: { $0.id == id }), card.isOpen,
+              card.kind.needsYou, !RouterCircles.again(card, in: router.cards) else { return }
+        onNewRouterCards?([card])
+    }
+
     /// Triages each open turn card that has none yet (one call per card; never again for the same text), and once after
     /// launch looks back at the sessions' latest turns (`rescanTurns`).
     func triageTurns() {
@@ -474,7 +502,10 @@ extension Store {
         guard let ask = triageAsker, routerTriager.begin(id) else { return }
         Task { [weak self] in
             guard let self else { return }
-            defer { self.routerTriager.end(id) }
+            defer {
+                self.routerTriager.end(id)
+                self.releaseBanner(id)
+            }
             let message = await self.finalMessage(session)
             let source = message.map(RouterTriage.hash) ?? ""
             guard self.routerTriager.firstAsk(id, source: source), let message else { return }
@@ -503,8 +534,8 @@ extension Store {
     }
 
     /// The triage on its card, which takes the kind it says. A card that needs you is announced as a new one would be: one
-    /// that needs you only now, and one that came with no banner (away, at the urgency it had untriaged), weighed again
-    /// now that Jev rated it. Never twice: RouterAttention keeps which had theirs.
+    /// that needs you only now, one whose banner waited for this, and one that came with no banner (away, at the urgency
+    /// it had untriaged), weighed again now that Jev rated it. Never twice: RouterAttention keeps which had theirs.
     func applyTriage(_ triage: RouterTriage, to id: String) {
         guard let (i, session) = currentTurnCard(id) else { return }
         var state = router
@@ -512,11 +543,12 @@ extension Store {
         let blocked = session.summary?.blocked ?? (before.kind == .stuck)
         state.cards[i].triage = triage
         state.cards[i].kind = RouterTriage.kind(blocked: blocked, triage: triage)
-        guard state != router else { return }
+        let held = routerTriager.heldBanners.remove(id) != nil
+        guard state != router || held else { return }
         router = state
         let card = state.cards[i]
         // Going in circles is said once per streak: not again while its turns keep at it.
-        if card.kind.needsYou, !before.kind.needsYou || !routerAttention.delivered.contains(id),
+        if card.kind.needsYou, held || !before.kind.needsYou || !routerAttention.delivered.contains(id),
            !RouterCircles.again(card, in: state.cards) {
             onNewRouterCards?([card])
         }
