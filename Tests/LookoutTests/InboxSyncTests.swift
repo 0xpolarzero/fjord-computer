@@ -329,6 +329,43 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(!InboxSync.waitsForPoints(remaining: 500, resetsAt: now.addingTimeInterval(60), manual: false, now: now))
     }
 
+    @Test func anAnswerGivenInPartKeepsWhatItLeftOutAndSaysSo() async {
+        final class Phase: @unchecked Sendable { var partial = false }
+        let phase = Phase()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { _ in
+            let other = node(["id": "PR_2", "number": 13, "url": "https://github.com/o/r/pull/13"])
+            var reply: [String: Any] = ["data": ["rateLimit": ["cost": 1, "remaining": 4000],
+                                                  "s0": ["pageInfo": ["hasNextPage": false], "nodes": [node(), other]]]]
+            if phase.partial {
+                // #12 without its comments, #13 not at all: GitHub's errors say where.
+                reply = ["data": ["rateLimit": ["cost": 1, "remaining": 4000],
+                                  "s0": ["pageInfo": ["hasNextPage": false], "nodes": [node(["comments": NSNull()]), NSNull()]]],
+                         "errors": [["message": "Something went wrong", "path": ["s0", "nodes", 0, "comments"]],
+                                    ["message": "Something went wrong", "path": ["s0", "nodes", 1]]]]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        var category = InboxCategory(name: "Mine", symbol: "star", color: .blue)
+        category.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])), conditions: [.lastComment(by: Pick())])]
+        s.categories = [category]
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.identifier) }
+        await s.syncInbox()
+        #expect(s.things.keys.sorted() == ["pr:o/r#12", "pr:o/r#13"] && s.inboxError == nil)
+        phase.partial = true
+        await s.syncInbox()
+        #expect(s.inboxError == "Something went wrong")
+        #expect(s.things.keys.sorted() == ["pr:o/r#12", "pr:o/r#13"])
+        #expect(s.things["pr:o/r#12"]?.comments.map(\.id) == ["c1", "r2"])
+        // Whole again: nothing is new.
+        phase.partial = false
+        await s.syncInbox()
+        #expect(s.inboxError == nil && posted.isEmpty)
+    }
+
     @Test func marksOfThingsGoneForAMonthAreForgotten() {
         let (s, _) = store(Log())
         s.marks = ["pr:o/r#9": EntryMarks(seen: ["x"])]

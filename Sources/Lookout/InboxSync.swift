@@ -653,8 +653,12 @@ extension Store {
 
         var found: [String: Thing] = [:]
         var searchFailure: String?
+        var fetched = Fetched()
         if !searches.isEmpty {
-            do { for thing in try await fetchThings(searches) { found[thing.id] = thing } } catch {
+            do {
+                fetched = try await fetchThings(searches)
+                for thing in fetched.things { found[thing.id] = thing }
+            } catch {
                 searchFailure = error.localizedDescription
             }
         }
@@ -681,10 +685,17 @@ extension Store {
                 if let t = queue.next() { add(t) }
             }
         }
-        inboxError = searchFailure ?? workflowFailure
+        inboxError = searchFailure ?? fetched.error ?? workflowFailure
         // A search that failed can't say what is gone: the things stay as they were.
         guard searchFailure == nil else { return }
         var next = found
+        // Nor can an answer GitHub gave in part: what it left out stays, and so does a thing it gave without some of its
+        // parts (its comments, its threads), which would otherwise lose facts and announce them again when they come back.
+        if fetched.error != nil {
+            for (id, old) in things where old.kind != .workflow && (next[id] == nil || fetched.partial.contains(id)) {
+                next[id] = old
+            }
+        }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
@@ -695,9 +706,20 @@ extension Store {
         announceInbox()
     }
 
-    /// Searches, a page at a time for those with more, until the caps.
-    func fetchThings(_ searches: [String]) async throws -> [Thing] {
+    /// What searches brought: the things, those GitHub gave only in part (an error inside them), and the first error it
+    /// said, if any.
+    struct Fetched {
+        var things: [Thing] = []
+        var partial: Set<String> = []
+        var error: String?
+    }
+
+    /// Searches, a page at a time for those with more, until the caps. An answer with no data at all throws; one with data
+    /// and errors (a node GitHub couldn't give, a part of one) is taken for what it has, and says so.
+    func fetchThings(_ searches: [String]) async throws -> Fetched {
         var found: [String: Thing] = [:]
+        var partial = Set<String>()
+        var error: String?
         var cursors: [Int: String?] = Dictionary(uniqueKeysWithValues: searches.indices.map { ($0, String?.none) })
         var pages = 0
         while !cursors.isEmpty, pages < InboxSync.maxPages, found.count < InboxSync.maxThings {
@@ -707,15 +729,30 @@ extension Store {
             for start in stride(from: 0, to: active.count, by: InboxSync.searchesPerRequest) {
                 let batch = active[start..<min(start + InboxSync.searchesPerRequest, active.count)]
                 let json = try await gh.graphql(InboxSync.request(batch.map { ("s\($0)", searches[$0], cursors[$0] ?? nil) }))
-                let data = json["data"] as? [String: Any]
-                if data == nil {
-                    let message = ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"
-                    throw GitHubError(message: message)
+                let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+                guard let data = json["data"] as? [String: Any] else {
+                    throw GitHubError(message: (errors.first?["message"] as? String) ?? "GitHub gave no answer")
+                }
+                if let first = errors.first { error = error ?? (first["message"] as? String) ?? "GitHub gave part of an answer" }
+                // `["s0", "nodes", 3, "comments", …]`: the fourth thing of search 0 came without some of its parts.
+                var broken = Set<[String]>()
+                for e in errors {
+                    guard let path = e["path"] as? [Any], path.count > 3, let alias = path[0] as? String,
+                          let index = path[2] as? Int else { continue }
+                    broken.insert([alias, String(index)])
                 }
                 for i in batch {
-                    guard let result = data?["s\(i)"] as? [String: Any] else { continue }
-                    for node in (result["nodes"] as? [[String: Any]]) ?? [] {
-                        if let thing = InboxSync.thing(node) { found[thing.id] = thing }
+                    guard let result = data["s\(i)"] as? [String: Any] else { continue }
+                    // A node GitHub couldn't give is null: the others are still things.
+                    for (n, value) in ((result["nodes"] as? [Any]) ?? []).enumerated() {
+                        guard let node = value as? [String: Any], let thing = InboxSync.thing(node) else { continue }
+                        // Given whole by another search, it is whole.
+                        if broken.contains(["s\(i)", String(n)]) {
+                            if found[thing.id] == nil { partial.insert(thing.id); found[thing.id] = thing }
+                        } else {
+                            partial.remove(thing.id)
+                            found[thing.id] = thing
+                        }
                     }
                     let info = result["pageInfo"] as? [String: Any]
                     if info?["hasNextPage"] as? Bool == true, let end = info?["endCursor"] as? String { next[i] = end }
@@ -723,7 +760,7 @@ extension Store {
             }
             cursors = next
         }
-        return Array(found.values)
+        return Fetched(things: Array(found.values), partial: partial, error: error)
     }
 
     private func workflowThings(_ repo: String, _ requested: String?) async throws -> [Thing] {
