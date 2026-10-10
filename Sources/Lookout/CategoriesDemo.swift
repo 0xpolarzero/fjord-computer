@@ -5,7 +5,7 @@ import SwiftUI
 // groups seeded here. Each is the hub page's width, tall enough to show the whole page.
 
 enum CategoriesShot: String, CaseIterable {
-    case page, editor, actions, impossible, groups, autocomplete, single, switched, ci, draft
+    case page, editor, actions, impossible, groups, autocomplete, single, switched, ci, draft, kinds
 
     var name: String { "right-categories-\(rawValue)" }
 
@@ -21,6 +21,7 @@ enum CategoriesShot: String, CaseIterable {
         case .switched: 560
         case .ci: 520
         case .draft: 620
+        case .kinds: 520
         }
     }
 }
@@ -174,6 +175,19 @@ enum CategoriesDemo {
             store.categories.insert(InboxCategory(id: switched, name: "Builds", symbol: "hammer", color: .red, rules: [
                 Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("superradcompany/microsandbox"), .repo("libkrun/libkrun")])),
                      conditions: [.workflow([.failing])]),
+            ]), at: 0)
+            preview.editing = .existing(switched)
+        case .kinds:
+            // One rule for PRs and issues alike, in an org and the repos you own; an issue fetched there counts in its preview.
+            store.ownedRepos = ["0xpolarzero/lookout"]
+            var issue = Thing(id: "issue:superradcompany/microsandbox#77", kind: .issue, repo: "superradcompany/microsandbox", number: 77,
+                              title: "Sandboxes leak on SIGTERM", url: URL(string: "https://github.com/superradcompany/microsandbox/issues/77")!,
+                              author: Person(login: "appcypher"), createdAt: Date().addingTimeInterval(-86400), updatedAt: Date())
+            issue.comments = [ThingComment(id: "c7", author: Person(login: "toksdotdev", association: .member), at: Date(), snippet: "Repro?")]
+            store.things[issue.id] = issue
+            store.categories.insert(InboxCategory(id: switched, name: "My repos", symbol: "folder", color: .blue, rules: [
+                Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.owned, .owner("superradcompany")])),
+                     conditions: [.newComment(by: Pick(include: [.maintainers]))], createdAt: .distantPast),
             ]), at: 0)
             preview.editing = .existing(switched)
         case .switched:
