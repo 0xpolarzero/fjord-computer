@@ -41,6 +41,27 @@ import Testing
         #expect(second.inboxContext.contributedRepos == ["o/c"])
     }
 
+    @Test func aDoneOrACategoryEditIsKeptByQuittingBeforeAnyPoll() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let category = InboxFixture.category()
+
+        let first = Store()
+        first.stateFile = file
+        first.load()
+        // No poll and no `save()`: only the edits themselves, then quitting.
+        first.categories = [category]
+        first.marks = ["pr:a/one#1": EntryMarks(seen: ["greptile:3"])]
+        first.flushSave()
+
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.categories.map(\.id) == [category.id])
+        #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
+    }
+
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

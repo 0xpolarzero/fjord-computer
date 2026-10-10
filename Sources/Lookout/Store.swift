@@ -90,7 +90,6 @@ final class Store {
         didSet {
             persistedRevision &+= 1
             armSnoozeExpiry()
-            save()
         }
     }
 
@@ -101,7 +100,6 @@ final class Store {
             persistedRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
-            save()
         }
     }
     /// The Router (see Router.swift): its cards, its decision log and the changes it made.
@@ -116,7 +114,6 @@ final class Store {
                 let next = RouterPage.history(cards: router.cards, decisions: router.decisions, summaries: router.summaries)
                 if next != routerHistory { routerHistory = next }
             }
-            save()
         }
     }
     /// The Router page's history (see `RouterPage.history`), worked out when the router changes and only then: the page
@@ -218,10 +215,12 @@ final class Store {
     @ObservationIgnored private var retriedReset: Date?
     @ObservationIgnored private var sleepObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var saveTask: Task<Void, Never>?
-    @ObservationIgnored private var saveDirty = false
-    /// Bumped by every persisted property's didSet: a poll saves only if this moved.
-    @ObservationIgnored private var persistedRevision = 0
-    /// `persistedRevision` as of the last `save()`: a poll saves whatever changed since, whoever changed it.
+    /// Bumped by every persisted property's didSet, and the one place a change is saved from: a Done, a category edit or a
+    /// mark is written shortly after, poll or not.
+    @ObservationIgnored private var persistedRevision = 0 {
+        didSet { save() }
+    }
+    /// `persistedRevision` as of the last write (or load): quitting writes only if it moved since.
     @ObservationIgnored private var savedRevision = 0
     /// When the one-shot Claude timer fires (it only ever moves earlier until it does).
     @ObservationIgnored private var claudeDeadline: Date?
@@ -615,8 +614,6 @@ final class Store {
     func save() {
         // (Asked now, not when the write comes: a test that reaches the user's file is stopped where it did.)
         guard persists, !loading, file != nil else { return }
-        savedRevision = persistedRevision
-        saveDirty = true
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
@@ -632,12 +629,12 @@ final class Store {
     }
 
     private func writeSnapshot(wait: Bool) {
-        guard saveDirty, persists, !loading else {
+        guard persistedRevision != savedRevision, persists, !loading else {
             if wait { Self.writer.sync {} }
             return
         }
         guard let url = file else { return }
-        saveDirty = false
+        savedRevision = persistedRevision
         let box = SnapshotBox(state: PersistedState(settings: settings, agents: agents, router: router, categories: categories,
                                                        groups: groups, categorySections: categorySections, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
@@ -882,7 +879,6 @@ final class Store {
                     sleeper?.cancel()
                 }
             }
-            if persistedRevision != savedRevision { save() }
             if refreshQueued {
                 refreshQueued = false
                 Task { await pollAll() }

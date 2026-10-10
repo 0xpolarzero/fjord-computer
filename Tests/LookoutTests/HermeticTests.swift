@@ -76,10 +76,11 @@ private final class Reached: @unchecked Sendable {
         try #require(UnderTest.isRunning)
         let reached = await Reached.during {
             let s = Store()
+            // The edit saves on its own, as `save()` does.
             s.groups = [InboxGroup(name: "Mine", kind: .repos, members: ["a/one"])]
             s.save()
         }
-        #expect(reached.count == 1 && reached[0].contains("state.json"))
+        #expect(reached.count == 2 && reached.allSatisfy { $0.contains("state.json") })
     }
 
     @Test func aStoreWithAFileOfItsOwnSavesThereAndOnlyThere() async throws {
