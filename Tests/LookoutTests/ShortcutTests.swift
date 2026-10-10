@@ -86,6 +86,32 @@ import Testing
         hotKeysAreReleasedWhileSuspended(SystemKeys())
     }
 
+    @Test func globalShortcutRunsBeforeItsMainThreadEventHandlerReturns() throws {
+        // The real Carbon callback receives a synthetic press; no key is registered with the system.
+        let carbon = CarbonHotKeys()
+        let hotKeys = HotKeys(backend: SystemKeys())
+        let store = Store()
+        store.persists = false
+        var performed: [ShortcutAction] = []
+        let globals = GlobalShortcuts(store: store, hotKeys: hotKeys) { action in
+            #expect(Thread.isMainThread)
+            performed.append(action)
+        }
+        #expect(globals.register(.togglePanel))
+        defer { hotKeys.set(ShortcutAction.togglePanel.hotKeyID, nil) }
+        var event: EventRef?
+        #expect(CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyPressed), 0,
+                            EventAttributes(kEventAttributeNone), &event) == noErr)
+        let press = try #require(event)
+        defer { ReleaseEvent(press) }
+        var id = EventHotKeyID(signature: OSType(0x4C4B4F54), id: ShortcutAction.togglePanel.hotKeyID)
+        #expect(SetEventParameter(press, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                  MemoryLayout<EventHotKeyID>.size, &id) == noErr)
+        #expect(SendEventToEventTarget(press, GetApplicationEventTarget()) == noErr)
+        #expect(performed == [.togglePanel])
+        withExtendedLifetime((carbon, globals)) {}
+    }
+
     /// Registers F18 and F19 with the real system, which another app holding one would fail: only when asked for, with
     /// `LOOKOUT_REAL_HOTKEYS=1`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOOKOUT_REAL_HOTKEYS"] != nil))

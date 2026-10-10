@@ -78,4 +78,6 @@ Releases are signed with one self-signed certificate, so macOS keeps Lookout's A
     scripts/idle-cpu.sh                                          # release build's CPU at rest and kept open, on the demo data (puts the bar on screen for minutes)
     swift test
 
+Global shortcut actions run before their callback returns. Carbon hot keys target `GetApplicationEventTarget()`, which this app dispatches through the [main-thread application event loop](https://developer.apple.com/library/archive/documentation/General/Conceptual/Devpedia-CocoaApp/MainEventLoop.html); AppKit [guarantees that local and global event monitors run on the main thread](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/MonitoringEvents/MonitoringEvents.html). [MainActor.assumeIsolated](https://developer.apple.com/documentation/swift/mainactor/assumeisolated(_:file:line:)) verifies the executor before performing the action synchronously. Mouse-button shortcuts still defer their handler to leave the CGEvent tap callback before window work.
+
 State: `~/Library/Application Support/Lookout/state.json`.
