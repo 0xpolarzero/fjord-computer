@@ -2,8 +2,10 @@ import Foundation
 
 // The Store's inbox: categories, groups, things fetched from GitHub, and what you did with them.
 enum InboxStore {
-    /// The inbox worked out once per `Store.inboxRevision`, which everything it is made of bumps (things, marks, categories
-    /// and their rules, groups, who you are, your repos and teams): what the window, the bar and the hub read on every redraw.
+    /// The inbox worked out once per `Store.inboxRevision`, which what it is made of bumps (things, marks, categories and
+    /// their rules, groups, who you are, your repos and teams), but not the clock: a rule on time passing (no activity for
+    /// some days) is checked again at the next change, not as the time comes. What the window, the bar and the hub read on
+    /// every redraw.
     struct Memo {
         var revision = -1
         var entries: [InboxEntry] = []
