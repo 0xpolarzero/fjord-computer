@@ -414,7 +414,8 @@ struct RouterAskBack: Identifiable, Equatable {
              session: session, card: card)
         // Which of the session's open cards the message resolves is Jev's call; none are addressed just for being sent to.
         stage(job, "checking its cards")
-        await store.judgeCards(session: session, message: job.text, eligible: eligible, chooser: job.tools.chooser, decision: job.id)
+        await store.judgeCards(session: session, message: job.text, eligible: eligible,
+                               asker: job.tools.chooser.map(JevClient.asker(choosing:)), decision: job.id)
     }
 
     /// Starts a session in a project with your words as its first message.

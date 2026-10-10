@@ -360,9 +360,11 @@ import Testing
         c.kind = .asks
         c.triage = RouterTriage(state: .asks, questions: ["Push to main?", "Bump the version?", "Tag it?"])
         s.router.cards = [c]
-        await s.judgeCards(session: "a", message: "yes push", eligible: s.openCardRevisions(session: "a")) { options, _, state, _ in
-            let pick = state.values.contains { $0.contains("Push to main?") } ? "answered" : "not"
-            return JevClient.Choice(choice: pick, confidence: 1, probabilities: [pick: 1])
+        await s.judgeCards(session: "a", message: "yes push", eligible: s.openCardRevisions(session: "a")) { questions, state in
+            let asked = state.values.first { $0.contains("q0:") } ?? ""
+            return questions.keys.reduce(into: [:]) { out, key in
+                out[key] = .noul(asked.contains("\(key): Push to main?") ? 0.95 : 0.05)
+            }
         }
         #expect(s.router.cards[0].isOpen && s.router.cards[0].left == ["Bump the version?", "Tag it?"] && s.router.cards[0].total == 3)
     }
