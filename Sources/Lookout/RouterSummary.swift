@@ -154,11 +154,19 @@ enum RouterSummaryContext {
             out.append("It took no steps since \(clock(since)).")
         }
 
-        let mine = cards.filter { $0.sessionID == subject.id && $0.createdAt > since }.sorted { $0.createdAt < $1.createdAt }
+        // Made since, or addressed since (however long ago it was made), with how.
+        func last(_ card: RouterCard) -> Date { max(card.createdAt, card.addressedAt ?? card.createdAt) }
+        let mine = cards.filter { $0.sessionID == subject.id && last($0) > since }.sorted { last($0) < last($1) }
         if !mine.isEmpty {
-            out.append("What it stopped on since:")
+            out.append("What it stopped on, or what became of it, since:")
             for card in mine.suffix(perSection) {
-                out.append("- \(card.kind.rawValue)\(card.isOpen ? "" : " (addressed)"): " + fence(card.text))
+                var line = "- \(card.kind.rawValue), \(clock(card.createdAt))"
+                if let at = card.addressedAt {
+                    line += ", addressed \(clock(at))" + (card.addressedBy.map { " (\(reason($0)))" } ?? "")
+                }
+                line += ": " + fence(card.text)
+                if let note = card.addressedNote { line += " Your message that resolved it: " + fence(note) }
+                out.append(line)
             }
         }
         let recent = decisions.filter { $0.at > since && $0.links.sessions.contains(subject.id) }
@@ -167,6 +175,19 @@ enum RouterSummaryContext {
             for decision in recent.suffix(perSection) { out.append("- " + fence(decision.contextLine(now: now))) }
         }
         return out.joined(separator: "\n")
+    }
+
+    /// How a card stopped being open, in words.
+    static func reason(_ addressed: RouterCard.Addressed) -> String {
+        switch addressed {
+        case .you: "you marked it"
+        case .reply: "you replied to the session"
+        case .router: "the Router messaged the session"
+        case .answered: "the question or plan was answered"
+        case .opened: "you opened the session"
+        case .superseded: "a newer card replaced it"
+        case .gone: "the session was archived or deleted"
+        }
     }
 
     /// Haiku's answer as plain text, two sentences at most.

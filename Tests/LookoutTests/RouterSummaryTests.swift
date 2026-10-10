@@ -90,6 +90,19 @@ import Testing
         #expect(quiet.contains("took no steps since") && !quiet.contains("Before the summary"))
     }
 
+    @Test func anOlderCardAddressedSinceIsReadWithHowItWasAddressed() {
+        var old = card("s1", .question, "Old", "Which badge colour?", ago: 7200, addressed: 300)
+        old.addressedBy = .reply
+        old.addressedNote = "Use amber"
+        let stale = card("s1", .done, "Stale", "Long settled.", ago: 7200, addressed: 5000)
+        let context = RouterSummaryContext.build(subject(), previous: nil, steps: [], cards: [old, stale], decisions: [], now: now)
+        #expect(context.contains("Which badge colour?") && !context.contains("Long settled."))
+        #expect(context.contains("you replied to the session") && context.contains("Use amber"))
+        let made = now.addingTimeInterval(-7200).formatted(date: .omitted, time: .shortened)
+        let addressed = now.addingTimeInterval(-300).formatted(date: .omitted, time: .shortened)
+        #expect(context.contains("question, \(made), addressed \(addressed)"))
+    }
+
     @Test func theTranscriptsStepsKeepTheirTimes() {
         let line = #"{"type":"user","timestamp":"2027-01-15T08:00:00.250Z","message":{"content":"go"}}"#
         let steps = Claude.recentTimedSteps(tail: Data(line.utf8))
