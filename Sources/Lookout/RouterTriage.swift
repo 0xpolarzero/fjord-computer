@@ -60,6 +60,8 @@ struct RouterTriage: Codable, Hashable {
     var ready: Ready?
     /// When the session was told the wait is over (by you, or on its own).
     var told: Date?
+    /// Its last turns look alike and Jev sees it repeating the same failing attempt (see RouterCircles.swift).
+    var circles = false
     /// The final message it was made from (a hash): it is asked again only when that changes.
     var source = ""
 
@@ -76,7 +78,7 @@ struct RouterTriage: Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case state, questions, urgency, unverified, work, waitingOn, watch, ready, told, source
+        case state, questions, urgency, unverified, work, waitingOn, watch, ready, told, source, circles
     }
 
     /// Each field on its own: one this version doesn't know is dropped, not the triage.
@@ -92,6 +94,7 @@ struct RouterTriage: Codable, Hashable {
         ready = try? c.decodeIfPresent(Ready.self, forKey: .ready)
         told = try? c.decodeIfPresent(Date.self, forKey: .told)
         source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
+        circles = (try? c.decodeIfPresent(Bool.self, forKey: .circles)) ?? false
     }
 
     // MARK: The card it makes
@@ -103,8 +106,8 @@ struct RouterTriage: Codable, Hashable {
         case .asks: .asks
         case .approval: .approval
         case .blocked: .stuck
-        case .waiting: blocked ? .stuck : .waiting
-        case .done, .progress, nil: blocked ? .stuck : .done
+        case .waiting: blocked || triage?.circles == true ? .stuck : .waiting
+        case .done, .progress, nil: blocked || triage?.circles == true ? .stuck : .done
         }
     }
 
@@ -330,6 +333,8 @@ extension Claude {
     var asker: Asker?
     /// A session's final message (tests); the transcript's tail otherwise.
     var reader: ((ClaudeSession) async -> String?)?
+    /// The final messages of a session's turns before its last, oldest first (tests); the transcript's tail otherwise.
+    var earlier: ((ClaudeSession) async -> [String])?
     /// Sends a session (by id) a message as it is (tests); the Router's send path otherwise (see `Store.sendVerbatim`).
     typealias Sender = (String, String) async throws -> Void
     var sender: Sender?
@@ -458,10 +463,18 @@ extension Store {
             // Looking back, only a turn that ended on what looks like an ask is worth a call.
             if rescue, candidates.isEmpty { return }
             let options = await self.waitOptions(for: session)
-            let state = RouterTriage.state(message: message, title: session.title, project: session.folderName,
+            var state = RouterTriage.state(message: message, title: session.title, project: session.folderName,
                                            summary: session.summary?.detail, candidates: candidates)
-            guard let answers = try? await ask(RouterTriage.questions(candidates: candidates, options: options), state) else { return }
-            let triage = RouterTriage.parse(answers, candidates: candidates, options: options, source: source)
+            var questions = RouterTriage.questions(candidates: candidates, options: options)
+            // More questions in the same call (RouterTriageExtras.swift); none looking back at launch.
+            let extras = rescue ? [] : await self.triageExtras(session, message: message)
+            for extra in extras {
+                questions.merge(extra.questions) { a, _ in a }
+                state.merge(extra.state) { a, _ in a }
+            }
+            guard let answers = try? await ask(questions, state) else { return }
+            var triage = RouterTriage.parse(answers, candidates: candidates, options: options, source: source)
+            for extra in extras { extra.apply(answers, &triage) }
             if rescue {
                 self.rescueTurn(session, triage: triage, message: message)
             } else {
@@ -480,7 +493,10 @@ extension Store {
         state.cards[i].kind = RouterTriage.kind(blocked: blocked, triage: triage)
         guard state != router else { return }
         router = state
-        if state.cards[i].kind.needsYou, !before.kind.needsYou { onNewRouterCards?([state.cards[i]]) }
+        // Going in circles is said once per streak: not again while its turns keep at it.
+        if state.cards[i].kind.needsYou, !before.kind.needsYou, !RouterCircles.again(state.cards[i], in: state.cards) {
+            onNewRouterCards?([state.cards[i]])
+        }
         resolveWaits()
     }
 

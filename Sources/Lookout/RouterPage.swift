@@ -1236,6 +1236,9 @@ struct TriageChips: View {
 
     var body: some View {
         if let triage {
+            if triage.circles {
+                chip("Going in circles", Theme.red, help: "Jev sees the same attempt failing again")
+            }
             if triage.unverified {
                 chip("unverified", CDS.Fill.warning, help: "It says it works without having checked (“should work”, untested)")
             }
