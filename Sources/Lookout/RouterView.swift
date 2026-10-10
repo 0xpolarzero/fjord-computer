@@ -345,14 +345,14 @@ final class RouterModel {
     }
 
     /// Picks a card, or none (the Router itself), and takes the page there: an addressed card opens in the history, the
-    /// Router row goes back down to the live zones.
-    func select(_ id: String?, store: Store) {
+    /// Router row goes back down to the live zones. A card clicked is where you see it: the page is not taken anywhere.
+    func select(_ id: String?, store: Store, reveal shows: Bool = true) {
         selection = id
         guard let id else { reveal(Self.endID, highlight: false); return }
         if let card = store.router.cards.first(where: { $0.id == id }) {
             if card.isOpen { expandedNeed = id } else { expanded.insert(id) }
         }
-        reveal(id)
+        if shows { reveal(id) }
     }
 
     /// What the page scrolls to for the bottom of the history, and the id of a working session's card.
@@ -455,8 +455,8 @@ final class RouterModel {
     func reply() { focusRequest &+= 1 }
 
     /// Reply: a "Replying to" chip for that card over the composer, which takes the keyboard. Your words are yours to write.
-    func reply(to card: String, store: Store) {
-        select(card, store: store)
+    func reply(to card: String, store: Store, reveal: Bool = true) {
+        select(card, store: store, reveal: reveal)
         replyTo = card
         focusRequest &+= 1
     }
@@ -464,11 +464,12 @@ final class RouterModel {
     /// A card's header clicked: shown in full, with the composer ready to reply to it. A resolved card already shown in full
     /// folds back; the reply stays armed.
     func tap(_ id: String, store: Store) {
-        if let card = store.router.cards.first(where: { $0.id == id }), !card.isOpen, expanded.contains(id) {
+        let card = store.router.cards.first { $0.id == id }
+        if let card, !card.isOpen, expanded.contains(id) {
             expanded.remove(id)
             return
         }
-        reply(to: id, store: store)
+        reply(to: id, store: store, reveal: card?.isOpen != false)
     }
 
     // MARK: Chips and @

@@ -754,6 +754,8 @@ import UserNotifications
         let card = store.router.cards.first { !$0.isOpen }!
         model.tap(card.id, store: store)
         #expect(model.expanded.contains(card.id) && model.replyTo == card.id)
+        // It was clicked where it is: the history isn't asked to scroll anywhere.
+        #expect(model.revealRequest == nil)
         // Clicked again it folds back; the reply stays armed.
         model.tap(card.id, store: store)
         #expect(!model.expanded.contains(card.id) && model.replyTo == card.id)

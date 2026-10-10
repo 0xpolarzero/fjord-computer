@@ -150,23 +150,45 @@ struct RouterPageView: View {
 
 // MARK: - History
 
-/// The timeline above the zones: opens at the bottom, keeps its place when something arrives above, loads lazily. A line is
-/// drawn from its own values (what it shows, whether it is open or picked, the minute), so it redraws only when one of them
-/// changes; what it shows of a session is in small views of their own, which redraw as the sessions do.
+/// The timeline above the zones: opens at the bottom and follows what arrives while you are there; scrolled up, nothing
+/// moves what you read. Only the newest lines are drawn, Show earlier draws more. A line is drawn from its own values (what
+/// it shows, whether it is open or picked, the minute), so it redraws only when one of them changes; what it shows of a
+/// session is in small views of their own, which redraw as the sessions do.
 private struct RouterHistory: View {
     let store: Store
     let model: RouterModel
     @Environment(\.routerGutter) private var gutter
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The oldest line drawn, once you scroll up or ask for earlier ones (so nothing drops off the top while you read); at the
+    /// bottom, the newest `page` lines.
+    @State private var oldest: String?
+    /// At the bottom: what arrives, and the zones growing under it, keep it there. Scrolled up, the top holds.
+    @State private var pinned = true
+    /// The content has been laid out: a scroll asked for before that waits for it.
+    @State private var laidOut = false
+    @State private var pending: HistoryScroll?
+
+    /// Lines drawn at first, and more each time Show earlier is clicked.
+    static let page = 100
 
     var body: some View {
-        let entries = store.routerHistory
+        let all = store.routerHistory
+        let entries = oldest.flatMap { id in all.firstIndex { $0.id == id } }.map { all[$0...] } ?? all.suffix(Self.page)
         let expanded = model.expanded, picked = model.selection, highlighted = model.highlighted
-        ScrollViewReader { proxy in
-            ScrollView {
-                // One clock for every age in the history, on the minute.
-                MinuteTicking { now in
+        // One clock for every age in the history, on the minute.
+        MinuteTicking { now in
+            ScrollViewReader { proxy in
+                ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        if !entries.isEmpty {
+                        if entries.count < all.count {
+                            ClaudeButton("Show earlier", variant: .ghost, size: .sm, icon: "arrow.up") {
+                                let first = entries.startIndex
+                                oldest = all[max(0, first - Self.page)].id
+                                pending = HistoryScroll(id: all[first].id, anchor: .top, animated: false)
+                            }
+                            .padding(.bottom, 6)
+                        }
+                        if !all.isEmpty {
                             Text("History").cdsText((12, 16), .medium, CDS.Text.muted)
                                 .padding(.leading, CDS.Transcript.textInset)
                                 .padding(.bottom, 12)
@@ -175,7 +197,8 @@ private struct RouterHistory: View {
                         ForEach(entries) { entry in
                             row(entry, now: now, open: expanded.contains(entry.id), marked: entry.id == picked || entry.id == highlighted)
                         }
-                        Color.clear.frame(height: 1).id(RouterModel.endID)
+                        // The bottom's margin: scrolling to it is scrolling to the very bottom.
+                        Color.clear.frame(height: 18).id(RouterModel.endID)
                     }
                     // Lines arrive, leave and change without moving; only a line opened or closed by its click animates.
                     .transaction { if !$0.historyToggle { $0.animation = nil } }
@@ -183,23 +206,55 @@ private struct RouterHistory: View {
                     .padding(.horizontal, gutter)
                     .frame(maxWidth: .infinity)
                     .padding(.top, CDS.Transcript.fade)
-                    .padding(.bottom, 18)
                 }
-            }
-            .cdsTopFade()
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: model.revealRequest, initial: false) { _, request in
-                guard let request, entries.contains(where: { $0.id == request.id }) || request.id == RouterModel.endID else { return }
-                withAnimation(Theme.Motion.hover) { proxy.scrollTo(request.id, anchor: request.id == RouterModel.endID ? .bottom : .center) }
-            }
-            // A message asked for (an action's chip): after the page is shown.
-            .onChange(of: model.messageRequest, initial: true) { _, request in
-                guard let request, let id = UUID(uuidString: request.id) else { return }
-                Task {
-                    try? await Task.sleep(for: .milliseconds(120))
-                    withAnimation(Theme.Motion.hover) { proxy.scrollTo(id.uuidString, anchor: .center) }
+                .cdsTopFade()
+                .modifier(HistoryAnchoring(pinned: $pinned, laidOut: $laidOut) {
+                    pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
+                })
+                // A card picked (clicked, or with the keys): as little scrolling as shows it whole; the Router picked: the bottom.
+                .onChange(of: model.revealRequest) { _, request in
+                    guard let request else { return }
+                    scroll(to: request.id, anchor: request.id == RouterModel.endID ? .bottom : nil, in: all, drawn: entries)
                 }
+                // A message asked for (an action's chip), the page opening on it or not.
+                .onChange(of: model.messageRequest, initial: true) { _, request in
+                    guard let request else { return }
+                    scroll(to: request.id, anchor: .center, in: all, drawn: entries)
+                }
+                // Scrolled up, the lines drawn stay; back at the bottom, only the newest are.
+                .onChange(of: pinned) { _, pinned in
+                    if pinned { oldest = nil } else if oldest == nil { oldest = entries.first?.id }
+                }
+                // A line opened by its click is on screen: at the bottom it opens upwards and stays whole; scrolled up it opens
+                // downwards, and as little scrolling as shows it whole follows.
+                .onChange(of: expanded) { old, new in
+                    guard !pinned, let id = new.subtracting(old).first, entries.contains(where: { $0.id == id }) else { return }
+                    pending = HistoryScroll(id: id, anchor: nil, animated: true)
+                }
+                .onChange(of: pending) { perform(proxy) }
+                .onChange(of: laidOut) { perform(proxy) }
             }
+        }
+    }
+
+    /// Draws enough lines for the one asked for, then scrolls to it once it is drawn and laid out.
+    private func scroll(to id: String, anchor: UnitPoint?, in all: [RouterPage.Entry], drawn: ArraySlice<RouterPage.Entry>) {
+        if id != RouterModel.endID {
+            guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+            if i < drawn.startIndex { oldest = id }
+        }
+        pending = HistoryScroll(id: id, anchor: anchor, animated: true)
+    }
+
+    private func perform(_ proxy: ScrollViewProxy) {
+        guard laidOut, let scroll = pending else { return }
+        pending = nil
+        // Going to a line leaves the bottom (until the scroll, once done, finds it there after all); going to the bottom pins.
+        pinned = scroll.id == RouterModel.endID
+        if scroll.animated, let motion = Theme.Motion.hover.resolved(reduce: reduceMotion) {
+            withAnimation(motion) { proxy.scrollTo(scroll.id, anchor: scroll.anchor) }
+        } else {
+            proxy.scrollTo(scroll.id, anchor: scroll.anchor)
         }
     }
 
@@ -212,6 +267,98 @@ private struct RouterHistory: View {
         case .overview(let overview):
             HistoryOverviewLine(overview: overview, now: now).equatable()
         }
+    }
+}
+
+/// A scroll the history was asked for; each one is new, even to the same line.
+private struct HistoryScroll: Equatable {
+    var id: String
+    var anchor: UnitPoint?
+    var animated: Bool
+    private let token = UUID()
+
+    init(id: String, anchor: UnitPoint?, animated: Bool) {
+        self.id = id
+        self.anchor = anchor
+        self.animated = animated
+    }
+}
+
+/// Opens the history at its bottom and keeps it there while you are (new lines, a line opening, the zones or the composer
+/// under it growing); scrolled up, the top holds, so nothing moves what you read. Only a scroll takes it off the bottom: yours,
+/// or one to a line asked for.
+private struct HistoryAnchoring: ViewModifier {
+    @Binding var pinned: Bool
+    @Binding var laidOut: Bool
+    /// Back to the bottom, after something other than a scroll left it short of it.
+    let stick: () -> Void
+    /// Whether a scroll is under way (yours, or an animated one asked for); kept out of the view's state, as it changes
+    /// mid-scroll and draws nothing.
+    @State private var scrolling = HistoryPin.Scrolling()
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content
+                // Every role at the bottom (opening there, the alignment), but changes of size only while pinned.
+                .defaultScrollAnchor(.bottom)
+                .defaultScrollAnchor(pinned ? .bottom : .top, for: .sizeChanges)
+                .onScrollPhaseChange { _, phase, context in
+                    scrolling.on = phase != .idle
+                    if phase == .idle { apply(.pin(HistoryPin.atBottom(context.geometry.contentSize.height,
+                                                                       visibleBottom: context.geometry.visibleRect.maxY))) }
+                }
+                .onScrollGeometryChange(for: HistoryPin.Geometry.self) {
+                    HistoryPin.Geometry(content: $0.contentSize.height, visibleBottom: $0.visibleRect.maxY)
+                } action: { _, new in
+                    if !laidOut, new.content > 0 { laidOut = true }
+                    apply(HistoryPin.next(pinned: pinned, scrolling: scrolling.on, new))
+                }
+        } else {
+            content
+                .defaultScrollAnchor(.bottom)
+                .onAppear { DispatchQueue.main.async { laidOut = true } }
+        }
+    }
+
+    private func apply(_ step: HistoryPin.Step) {
+        switch step {
+        case .stay: break
+        case .pin(let on): if pinned != on { pinned = on }
+        case .stick: stick()
+        }
+    }
+}
+
+/// When the history counts as at its bottom, and what keeps it there.
+enum HistoryPin {
+    /// How far above the bottom still counts as there.
+    static let slack: CGFloat = 24
+
+    struct Geometry: Equatable {
+        var content: CGFloat
+        var visibleBottom: CGFloat
+    }
+
+    final class Scrolling { var on = false }
+
+    enum Step: Equatable {
+        case stay
+        /// At the bottom or not, as the scroll left it.
+        case pin(Bool)
+        /// Something other than a scroll (a line arriving or opening, the space under it changing) left a pinned history
+        /// short of its bottom: back there.
+        case stick
+    }
+
+    static func atBottom(_ contentHeight: CGFloat, visibleBottom: CGFloat) -> Bool {
+        contentHeight - visibleBottom <= slack
+    }
+
+    static func next(pinned: Bool, scrolling: Bool, _ geometry: Geometry) -> Step {
+        let bottom = atBottom(geometry.content, visibleBottom: geometry.visibleBottom)
+        if scrolling { return .pin(bottom) }
+        // Pinned means right at the bottom, not merely near it.
+        return pinned && geometry.content - geometry.visibleBottom > 0.5 ? .stick : .stay
     }
 }
 
