@@ -221,6 +221,19 @@ import Testing
         #expect(state.lookoutStarted["local_a"] != nil)
     }
 
+    @Test func whatStartedASessionIsForgottenWithIt() {
+        var state = RouterState()
+        let origin = SessionOrigin(category: "Mine", thing: "o/r#1 T", actionID: "a", runID: "r")
+        state.origins = ["local_a": origin, "local_gone": origin, "local_new": origin]
+        // Just made: the app doesn't list it yet.
+        state.lookoutStarted["local_new"] = at(-10)
+        update(&state, [session(turns: 0)], now: 1)
+        #expect(state.origins.keys.sorted() == ["local_a", "local_new"])
+        // An hour on, it never came.
+        update(&state, [session(turns: 0)], now: 61)
+        #expect(state.origins.keys.sorted() == ["local_a"])
+    }
+
     @Test func lookoutStartedDecodesFromOlderState() throws {
         let data = try JSONEncoder().encode(RouterState())
         var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
