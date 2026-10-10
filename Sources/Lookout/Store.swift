@@ -657,6 +657,7 @@ final class Store {
 
     /// Writes any pending change now (quitting): one that failed before is tried again, twice if need be.
     func flushSave() {
+        flushActions()
         saveTask?.cancel()
         writeSnapshot(wait: true)
         if persistedRevision != savedRevision { writeSnapshot(wait: true) }

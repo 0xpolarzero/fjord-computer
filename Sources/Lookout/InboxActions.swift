@@ -729,6 +729,7 @@ extension Store {
                 }
             }
             if ledger != actionLedger { actionLedger = ledger }
+            if !batch.isEmpty { await actionsWritten() }
             for job in batch {
                 let result = await InboxActions.perform(job, with: performer, now: now)
                 var next = actionLedger
@@ -811,14 +812,31 @@ extension Store {
         actionLedger = ledger
     }
 
+    /// Where actions.json is written: off the main thread, one write at a time, in the order asked.
+    private static let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
+
     func saveActions() {
         guard persists, let url = actionsFile else { return }
-        let enc = JSONEncoder()
-        enc.dateEncodingStrategy = .iso8601
-        guard let data = try? enc.encode(actionLedger) else { return }
-        try? data.write(to: url, options: .atomic)
+        let ledger = ActionsBox(ledger: actionLedger)
+        Self.actionsWriter.async {
+            let enc = JSONEncoder()
+            enc.dateEncodingStrategy = .iso8601
+            guard let data = try? enc.encode(ledger.ledger) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
     }
+
+    /// Returns once every write of actions.json asked so far is on disk: a run is recorded as running before what it does
+    /// reaches outside (a relaunch then says it was interrupted rather than doing it again).
+    func actionsWritten() async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in Self.actionsWriter.async { done.resume() } }
+    }
+
+    /// The same, waiting here (quitting).
+    func flushActions() { Self.actionsWriter.sync {} }
 }
+
+private struct ActionsBox: @unchecked Sendable { let ledger: ActionLedger }
 
 // MARK: - The real performer
 
