@@ -91,21 +91,30 @@ final class RouterLiveTarget {
     @ObservationIgnored var delay: Duration = .milliseconds(600)
     static let minLength = 12
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// The words and projects Jev is being asked about, the draft's as they now are (nil while nothing is to be asked), and
+    /// the ones the prediction shown was made for.
     @ObservationIgnored private var asking: String?
+    @ObservationIgnored private var current: String?
+    @ObservationIgnored private var predicted: String?
 
     /// The draft (as it will be sent) changed, or what fixes its target did. Nothing is asked while a reply, a pinned target
-    /// or a lone @project fixes where it goes, nor for a few characters; a pick for older words stays until the new one.
+    /// or a lone @project fixes where it goes, nor for a few characters. A pick for other words goes at once; only an answer
+    /// for the draft as it is when it lands is shown.
     func update(text: String, context: RouterContext, store: Store) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let fixed = pinned != nil || RouterDispatcher.plan(text: text, context: context, store: store) != .classify
         guard store.routerOn, !Store.isDemo, !fixed, text.count >= Self.minLength else {
             cancel()
-            prediction = nil
+            clear()
             if text.isEmpty { dismissed = nil }
             return
         }
         let key = RouterDispatcher.liveKey(text, context.projects)
-        guard key != asking, prediction?.text != text else { return }
+        current = key
+        if prediction != nil, predicted != key { clear() }
+        // The pick shown is for these words: whatever was asked since is for others.
+        if prediction != nil { return cancel() }
+        guard key != asking else { return }
         task?.cancel()
         asking = key
         let delay = delay
@@ -113,15 +122,26 @@ final class RouterLiveTarget {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, let store else { return }
             let found = await store.routerDispatcher.predict(text, projects: context.projects)
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.current == key else { return }
             self.asking = nil
+            self.task = nil
             self.prediction = found.flatMap { self.prediction(from: $0, text: text, store: store) }
+            self.predicted = self.prediction == nil ? nil : key
         }
+    }
+
+    /// The prediction, if it is still for this draft and its target can still be sent to: what a click may pin.
+    func valid(text: String, context: RouterContext, store: Store) -> Prediction? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let p = prediction, predicted == RouterDispatcher.liveKey(text, context.projects), context.replyTo == nil,
+              context.target == nil, p.target != dismissed, store.routerDispatcher.eligible(p.target, store: store) else { return nil }
+        return p
     }
 
     /// Shown only when Jev is sure, as the dispatcher would send it, and not to what you waved off.
     private func prediction(from found: RouterDispatcher.Classification, text: String, store: Store) -> Prediction? {
         guard found.assisted, found.sure, let top = found.top, top.target != dismissed,
+              store.routerDispatcher.eligible(top.target, store: store),
               let option = store.routerDispatcher.option(top.target, store: store) else { return nil }
         let title = top.target.hasPrefix("new:") ? "\(option.title) · \(option.detail)" : option.title
         return Prediction(target: top.target, title: title, detail: store.routerDispatcher.describe(top.target, store: store),
@@ -140,16 +160,20 @@ final class RouterLiveTarget {
     /// Esc: the prediction goes, and stays away for this draft.
     func dismiss() {
         dismissed = prediction?.target
-        prediction = nil
+        clear()
     }
 
-    /// A demo or a shot: a pick shown with nothing behind it.
-    func preview(_ prediction: Prediction) { self.prediction = prediction }
+    /// A demo or a shot: a pick shown with nothing behind it, for its words.
+    func preview(_ prediction: Prediction) {
+        self.prediction = prediction
+        predicted = RouterDispatcher.liveKey(prediction.text, [])
+    }
 
     /// Sent or cleared: everything starts over.
     func reset() {
         cancel()
-        prediction = nil
+        clear()
+        current = nil
         pinned = nil
         pinnedTitle = nil
         dismissed = nil
@@ -159,6 +183,12 @@ final class RouterLiveTarget {
         task?.cancel()
         task = nil
         asking = nil
+    }
+
+    /// The prediction goes (it no longer holds), with nothing waved off.
+    func clear() {
+        prediction = nil
+        predicted = nil
     }
 }
 
@@ -187,7 +217,11 @@ extension RouterModel {
 
     /// The prediction clicked: a card's becomes the reply, anything else the pinned target.
     func pinPrediction(store: Store) {
-        guard let p = live.prediction else { return }
+        // Only a pick for the draft as it is, to a target still there.
+        guard let p = live.valid(text: plainDraft(store), context: context(store), store: store) else {
+            live.clear()
+            return predictTarget(store: store)
+        }
         if p.target.hasPrefix("answer:") {
             replyTo = String(p.target.dropFirst("answer:".count))
         } else {

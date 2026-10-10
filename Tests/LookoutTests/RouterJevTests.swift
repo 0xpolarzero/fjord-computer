@@ -85,9 +85,43 @@ import Testing
         let (s, model, _) = setup()
         model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "session “Update the docs” in docs",
                                  text: "x", mark: nil))
+        model.draft = "x"
         model.pinPrediction(store: s)
         #expect(model.live.pinned == "session:local_b" && model.live.pinnedTitle == "Update the docs")
         #expect(model.context(s).target == "session:local_b")
         #expect(model.removeLastChip() && model.live.pinned == nil, "Backspace at the start takes the pin off")
+    }
+
+    @Test func aPickForOtherWordsGoesAtOnceAndALateAnswerForThemIsNeverShownOrPinned() async {
+        let (s, model, _) = setup()
+        let sure = s.routerDispatcher.asker!
+        var gate: CheckedContinuation<Void, Never>?
+        var held = false
+        s.routerDispatcher.asker = { questions, state in
+            guard state["user message"]?.contains("docs") == true else { return try await sure(questions, state) }
+            held = true
+            await withCheckedContinuation { gate = $0 }
+            guard case .choice(let keys, let hints, _) = questions["route"] else { return [:] }
+            let docs = keys.first { hints[$0]?.contains("Update the docs") == true } ?? keys[0]
+            var p = Dictionary(uniqueKeysWithValues: keys.map { ($0, 0.0) })
+            p[docs] = 1
+            return ["route": .choice(.init(choice: docs, confidence: 1, probabilities: p))]
+        }
+        let a = "use sqlite for the database"
+        type(a, model, s)
+        await waitUntil(within: 2) { model.live.prediction != nil }
+        type("update the docs page for sqlite", model, s)
+        #expect(model.live.prediction == nil, "the chip goes as soon as the words change")
+        await waitUntil(within: 2) { held }
+        type(a, model, s)
+        await waitUntil(within: 2) { model.live.prediction != nil }
+        gate?.resume()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(model.live.prediction?.target == "answer:local_a#w1", "the late answer for other words isn't shown")
+
+        // Words changed under the chip (before the composer passed them on): a click pins nothing.
+        model.draft = "use sqlite for the database, but not in tests"
+        model.pinPrediction(store: s)
+        #expect(model.replyTo == nil && model.live.pinned == nil && model.live.prediction == nil)
     }
 }
