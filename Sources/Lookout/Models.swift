@@ -90,6 +90,8 @@ struct PersistedState: Codable {
     var router: RouterState?
     var categories: [InboxCategory]? = nil
     var groups: [InboxGroup]? = nil
+    /// The bar's sections; nil (a file from before them) is GitHub's alone.
+    var categorySections: [CategorySection]? = nil
     var things: [String: Thing]? = nil
     var marks: [String: EntryMarks]? = nil
     /// Per category, the rules (by id) whose matches were already noted: a category's first look, or a changed rule set,
@@ -103,7 +105,8 @@ struct PersistedState: Codable {
     var login: String? = nil
 
     init(settings: AppSettings, agents: AgentsState? = nil, router: RouterState? = nil, categories: [InboxCategory]? = nil,
-         groups: [InboxGroup]? = nil, things: [String: Thing]? = nil, marks: [String: EntryMarks]? = nil,
+         groups: [InboxGroup]? = nil, categorySections: [CategorySection]? = nil, things: [String: Thing]? = nil,
+         marks: [String: EntryMarks]? = nil,
          categoryBaselines: [UUID: Set<UUID>]? = nil, ownedRepos: Set<String>? = nil, contributedRepos: Set<String>? = nil,
          reposResolvedAt: Date? = nil, myTeams: Set<String>? = nil, login: String? = nil) {
         self.settings = settings
@@ -111,6 +114,7 @@ struct PersistedState: Codable {
         self.router = router
         self.categories = categories
         self.groups = groups
+        self.categorySections = categorySections
         self.things = things
         self.marks = marks
         self.categoryBaselines = categoryBaselines
@@ -130,6 +134,7 @@ struct PersistedState: Codable {
         router = try? c.decodeIfPresent(RouterState.self, forKey: .router)
         categories = try? c.decodeIfPresent([InboxCategory].self, forKey: .categories)
         groups = try? c.decodeIfPresent([InboxGroup].self, forKey: .groups)
+        categorySections = try? c.decodeIfPresent([CategorySection].self, forKey: .categorySections)
         things = try? c.decodeIfPresent([String: Thing].self, forKey: .things)
         marks = try? c.decodeIfPresent([String: EntryMarks].self, forKey: .marks)
         categoryBaselines = try? c.decodeIfPresent([UUID: Set<UUID>].self, forKey: .categoryBaselines)

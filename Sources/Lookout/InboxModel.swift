@@ -337,6 +337,8 @@ struct InboxCategory: Codable, Hashable, Identifiable {
     var isCI = false
     /// What it does by itself when a thing comes in (InboxActions.swift).
     var actions = ActionList()
+    /// The bar's section it is in (CategorySections.swift); nil, or one deleted since, is the first.
+    var section: UUID? = nil
 
     /// What the bar and the lists call it; a category still being named is "Untitled".
     var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : name }

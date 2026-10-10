@@ -62,6 +62,7 @@ struct CategoryEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     identity(c)
+                    CategorySectionPicker(store: store, category: draft)
                     SettingsRow("Notify", info: ("Notify", "Once when a thing comes in, and again only on something new.")) {
                         SettingsSwitch("Notify for \(c.title)", isOn: draft.notifies)
                     }
@@ -228,7 +229,7 @@ struct CategoryEditor: View {
 }
 
 /// Every symbol Lookout knows, filtered by what is typed.
-private struct SymbolPicker: View {
+struct SymbolPicker: View {
     let selection: String
     let color: CategoryColor
     let pick: (String) -> Void

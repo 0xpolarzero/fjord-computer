@@ -12,7 +12,7 @@ enum Demo {
         // Inbox and sync causes.
         case signedOut, inboxFailed, rateLimited, contributionsEmpty, botChatterEmpty, doneEmpty, firstSync, syncFault
         // An inbox longer than any list shows; a category hidden; Jev's own category on top.
-        case inboxMany, hiddenCategory, jev
+        case inboxMany, hiddenCategory, jev, sections
         // CI.
         case noCI, allPassing, manyCI, ciRunning
         // The update tile.
@@ -86,6 +86,11 @@ enum Demo {
                 symbol: "exclamationmark.bubble", color: .clay,
                 rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])), match: .any,
                              conditions: [.asksMe, .importance(.high)], createdAt: now.addingTimeInterval(-60 * 86400))]), at: 0)
+        case .sections:
+            // Two sections: GitHub's, and CI (its failures) in a section of its own.
+            agents(store, now)
+            let builds = store.createSection(name: "Builds")
+            for c in store.categories where c.isCI { store.moveCategory(c.id, toSection: builds.id) }
         case .hiddenCategory:
             // Bot chatter hidden: collecting, with no icon in the bar and no tab.
             agents(store, now)

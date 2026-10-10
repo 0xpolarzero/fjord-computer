@@ -504,7 +504,8 @@ struct ScrollRequest: Equatable {
 
 extension Store {
     /// The categories shown in the bar and as tabs: all but the hidden ones.
-    var shownCategories: [InboxCategory] { categories.filter { !$0.hidden } }
+    /// In the bar's order: section by section (CategorySections.swift).
+    var shownCategories: [InboxCategory] { barSections.flatMap(\.categories) }
 
     /// The tab the inbox peek shows: the one picked while it is still there, else the first category shown, else Done.
     func hubTab(_ hub: HubState) -> InboxTab {

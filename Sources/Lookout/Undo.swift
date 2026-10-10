@@ -96,6 +96,7 @@ final class CategoryHistory {
     struct Snapshot: Equatable {
         var categories: [InboxCategory]
         var groups: [InboxGroup]
+        var sections: [CategorySection] = []
     }
 
     static let limit = 200
@@ -111,12 +112,12 @@ final class CategoryHistory {
     var canUndo: Bool { !undos.isEmpty }
     var canRedo: Bool { !redos.isEmpty }
 
-    init(store: Store) { current = Snapshot(categories: store.categories, groups: store.groups) }
+    init(store: Store) { current = Snapshot(categories: store.categories, groups: store.groups, sections: store.categorySections) }
 
     /// Notes what the store holds now. `field` is the text field being typed in, if any: changes in it, each within a
     /// second of the last, are one step.
     func observe(_ store: Store, field: ObjectIdentifier? = nil, now: Date = Date()) {
-        let snapshot = Snapshot(categories: store.categories, groups: store.groups)
+        let snapshot = Snapshot(categories: store.categories, groups: store.groups, sections: store.categorySections)
         guard snapshot != current else { return }
         let merges = field != nil && field == lastField && now.timeIntervalSince(lastAt) <= Self.pause && !undos.isEmpty
         if !merges {
@@ -150,7 +151,7 @@ final class CategoryHistory {
     func reset(to store: Store) {
         undos.removeAll()
         redos.removeAll()
-        current = Snapshot(categories: store.categories, groups: store.groups)
+        current = Snapshot(categories: store.categories, groups: store.groups, sections: store.categorySections)
         lastField = nil
     }
 
@@ -165,6 +166,7 @@ final class CategoryHistory {
         store.changingInbox(source) {
             store.categories = snapshot.categories
             store.groups = snapshot.groups
+            store.categorySections = snapshot.sections
         }
     }
 }

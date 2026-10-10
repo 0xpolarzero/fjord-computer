@@ -338,6 +338,8 @@ enum PlaygroundShots {
         Shot.edges("peek-done-empty", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .doneEmpty; $0.tab = "Done" },
         // A category hidden: no icon in the bar, no tab.
         Shot.edges("rest-hidden-category", on: .rightAndTop) { $0.scenario = .hiddenCategory },
+        // Two sections: two wells, each with its icon.
+        Shot.edges("rest-sections", on: .rightAndTop) { $0.scenario = .sections },
         Shot.edges("peek-hidden-category", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .hiddenCategory },
         Shot.edges("peek-inbox-many", on: .rightAndTop) { $0.section = .inbox; $0.scenario = .inboxMany },
         // Jev's category: comments that ask you, review requests it rates high or urgent.

@@ -79,6 +79,7 @@ struct CategoriesView: View {
             store.categoriesEdited()
         }
         .onChange(of: store.groups) { history.observe(store, field: CategoryHistory.typingField()) }
+        .onChange(of: store.categorySections) { history.observe(store, field: CategoryHistory.typingField()) }
         .onAppear(perform: syncHistory)
         .onDisappear {
             hub?.stepBack = nil
@@ -150,6 +151,7 @@ struct CategoriesView: View {
                         DoneRow(count: store.doneEntries.count)
                     }
                 })
+                SectionsSection(store: store)
                 GroupsSection(store: store, expanded: $expandedGroup)
             }
             .padding(.horizontal, CDS.Settings.pagePadX)
@@ -247,6 +249,14 @@ private struct CategoryRow: View {
         .contextMenu {
             Button("Edit", action: open)
             Button(category.hidden ? "Show in the bar" : "Hide from the bar") { update { $0.hidden.toggle() } }
+            if store.categorySections.count > 1 {
+                Menu("Move to section") {
+                    ForEach(store.categorySections) { section in
+                        Button(section.title) { store.moveCategory(category.id, toSection: section.id) }
+                            .disabled(store.sectionID(of: category) == section.id)
+                    }
+                }
+            }
             Divider()
             Button("Move up") { store.moveCategory(category.id, by: -1) }
                 .disabled(!store.canMoveCategory(category.id, by: -1))

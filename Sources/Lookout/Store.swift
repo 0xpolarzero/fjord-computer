@@ -15,6 +15,10 @@ final class Store {
     var groups: [InboxGroup] = [] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1; logGroups(from: oldValue) }
     }
+    /// The bar's sections, in order (CategorySections.swift); every inbox starts with GitHub's.
+    var categorySections: [CategorySection] = [.github] {
+        didSet { persistedRevision &+= 1 }
+    }
     /// Who is changing the categories and groups now, for the log (see `InboxLog`); nil is the editor.
     @ObservationIgnored var inboxSource: InboxChangeSource?
     /// Where those log lines go; the tests read them.
@@ -591,6 +595,7 @@ final class Store {
         changingInbox(.load) {
             if let c = state.categories { categories = c }
             groups = state.groups ?? []
+            categorySections = state.categorySections ?? [.github]
         }
         things = state.things ?? [:]
         marks = state.marks ?? [:]
@@ -634,7 +639,7 @@ final class Store {
         guard let url = file else { return }
         saveDirty = false
         let box = SnapshotBox(state: PersistedState(settings: settings, agents: agents, router: router, categories: categories,
-                                                       groups: groups, things: things, marks: marks,
+                                                       groups: groups, categorySections: categorySections, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
                                                        contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
                                                        myTeams: myTeams, login: login.isEmpty ? nil : login))

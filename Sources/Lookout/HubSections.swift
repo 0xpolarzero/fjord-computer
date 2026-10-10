@@ -19,9 +19,16 @@ extension LookoutHub {
         InboxCell(vertical: !edge.isHorizontal) { openApp(firstDestination) }
     }
 
-    /// One cell per category shown, in order: its symbol, and on its corner what is unread. Hovering one peeks its list.
-    @ViewBuilder var categoryCells: some View {
-        ForEach(store.shownCategories) { category in
+    /// A section's icon at the top of its well: a click opens its first category.
+    func sectionCell(_ section: CategorySection, _ part: BarSection) -> some View {
+        SectionCell(section: section, vertical: !edge.isHorizontal) {
+            openApp(part.categories.first.map { .category($0.id) } ?? firstDestination)
+        }
+    }
+
+    /// One cell per category given, in order: its symbol, and on its corner what is unread. Hovering one peeks its list.
+    @ViewBuilder func categoryCells(_ categories: [InboxCategory]) -> some View {
+        ForEach(categories) { category in
             CategoryCell(category: category, badge: store.badge(category), vertical: !edge.isHorizontal) {
                 openApp(.category(category.id))
             }
