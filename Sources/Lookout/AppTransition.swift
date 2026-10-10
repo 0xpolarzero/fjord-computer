@@ -110,9 +110,11 @@ enum AppTransition {
         /// What it shows: another place opening draws a fresh picture over it.
         var destination: AppDestination
 
-        /// Whether it can stand for `window` as it opens: the same size, at the same scale.
+        /// Whether it can stand for `window` as it opens: the same size, at the scale a picture of it would be taken at now
+        /// (the window's own, as `scale` is: a window off every screen keeps that of the last one it was on, which need not
+        /// be the main screen's).
         @MainActor func fits(_ window: NSWindow) -> Bool {
-            frame.size == window.frame.size && scale == (window.screen ?? NSScreen.main)?.backingScaleFactor
+            frame.size == window.frame.size && scale == window.backingScaleFactor
         }
     }
 
