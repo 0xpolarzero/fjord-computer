@@ -160,6 +160,26 @@ import Testing
         #expect(decision(s, c)?.done.contains { if case .failed = $0 { true } else { false } } == false)
     }
 
+    @Test func aClickedPickKeepsWhatJevMadeOfTheDraftAndIsAnExample() async {
+        let (s, d, f) = setup()
+        var calls = 0
+        d.asker = { _, _ in calls += 1; return [:] }
+        let read = RouterDispatcher.Classification(ranked: [.init(target: "new:/code/lookout", p: 0.9)], sure: true, assisted: true, scope: 3.2)
+        let a = d.submit("rework how the router stores its decisions",
+                         context: RouterContext(target: "new:/code/lookout", predicted: "new:/code/lookout", jev: read))
+        await finish(d, f, a)
+        #expect(calls == 0 && f.ranks == 0 && f.startSettings == [SessionSettings(model: "opus", effort: "high")],
+                "the task's size comes from the pick you clicked")
+        let b = d.submit("use sqlite", context: RouterContext(replyTo: "local_a#w1", predicted: "answer:local_a#w1"))
+        await finish(d, f, b)
+        #expect(decision(s, b)?.decision.confirmed == true && f.prepared == ["local_a"])
+        #expect(s.routingExamples().contains("“use sqlite” → card “Fix the login bug”"))
+        // A reply you armed yourself isn't Jev's pick.
+        let c = d.submit("use postgres", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, c)
+        #expect(decision(s, c)?.decision.confirmed == nil)
+    }
+
     @Test func wordsJevFindsPlainGoAsWrittenWithoutAHaikuRun() async {
         let (_, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]

@@ -78,12 +78,17 @@ final class RouterLiveTarget {
         var text: String
         /// What the page marks: the card's id or the working row's.
         var mark: String?
+        /// What Jev made of the draft (its task's size), for the send to use.
+        var found: RouterDispatcher.Classification? = nil
     }
 
     private(set) var prediction: Prediction?
     /// A target you fixed by clicking the prediction (a card's goes to `RouterModel.replyTo` instead).
     var pinned: String?
     var pinnedTitle: String?
+    /// The prediction you clicked: while it is still where the draft goes, the send goes with what Jev made of it and logs
+    /// his pick as confirmed.
+    var chosen: Prediction?
     /// The target you waved off for this draft: it isn't shown again, and the message doesn't go there unasked.
     private(set) var dismissed: String?
 
@@ -145,7 +150,7 @@ final class RouterLiveTarget {
               let option = store.routerDispatcher.option(top.target, store: store) else { return nil }
         let title = top.target.hasPrefix("new:") ? "\(option.title) · \(option.detail)" : option.title
         return Prediction(target: top.target, title: title, detail: store.routerDispatcher.describe(top.target, store: store),
-                          text: text, mark: Self.mark(top.target, store: store))
+                          text: text, mark: Self.mark(top.target, store: store), found: found)
     }
 
     /// The page's item for a target: the card, or the session's working row, else its open card.
@@ -176,6 +181,7 @@ final class RouterLiveTarget {
         current = nil
         pinned = nil
         pinnedTitle = nil
+        chosen = nil
         dismissed = nil
     }
 
@@ -196,7 +202,13 @@ extension RouterModel {
     /// What the draft goes with: the reply, the @projects, the target you pinned and the one you waved off.
     func context(_ store: Store) -> RouterContext {
         let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
-        return RouterContext(replyTo: reply, projects: projects, target: live.pinned, notTo: live.dismissed)
+        var context = RouterContext(replyTo: reply, projects: projects, target: live.pinned, notTo: live.dismissed)
+        // Jev's pick you clicked, while the draft still goes there (as the pinned target or the reply to its card).
+        if let chosen = live.chosen, chosen.target == live.pinned || reply.map({ "answer:\($0)" }) == chosen.target {
+            context.predicted = chosen.target
+            context.jev = chosen.found
+        }
+        return context
     }
 
     /// The draft's words as they will be sent (pills written as @name).
@@ -229,6 +241,7 @@ extension RouterModel {
             live.pinnedTitle = p.title
         }
         live.reset(keepingPin: true)
+        live.chosen = p
         focusRequest &+= 1
     }
 

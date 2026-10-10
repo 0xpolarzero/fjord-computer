@@ -69,6 +69,8 @@ import Testing
         await waitUntil(within: 2) { model.live.prediction != nil }
         model.pinPrediction(store: s)
         #expect(model.replyTo == "local_a#w1" && model.live.prediction == nil)
+        #expect(model.context(s).predicted == "answer:local_a#w1" && model.context(s).jev?.sure == true,
+                "the reply goes as Jev's pick, with what he made of it")
 
         model.replyTo = nil
         type("use sqlite for the database please", model, s)
@@ -88,7 +90,7 @@ import Testing
         model.draft = "x"
         model.pinPrediction(store: s)
         #expect(model.live.pinned == "session:local_b" && model.live.pinnedTitle == "Update the docs")
-        #expect(model.context(s).target == "session:local_b")
+        #expect(model.context(s).target == "session:local_b" && model.context(s).predicted == "session:local_b")
         #expect(model.removeLastChip() && model.live.pinned == nil, "Backspace at the start takes the pin off")
     }
 

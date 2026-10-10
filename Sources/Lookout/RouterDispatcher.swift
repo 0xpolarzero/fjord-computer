@@ -19,12 +19,19 @@ struct RouterContext: Equatable {
     var target: String?
     /// A target you dismissed: the message never goes there without asking you.
     var notTo: String?
+    /// Jev's pick you clicked (the pinned target, or `answer:<card>` for the reply), and what he made of the draft: the send
+    /// logs it as confirmed and takes the task's size from it.
+    var predicted: String?
+    var jev: RouterDispatcher.Classification?
 
-    init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil) {
+    init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
+         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil) {
         self.replyTo = replyTo
         self.projects = projects
         self.target = target
         self.notTo = notTo
+        self.predicted = predicted
+        self.jev = jev
     }
 }
 
@@ -305,17 +312,28 @@ struct RouterAskBack: Identifiable, Equatable {
     /// 1. The rules; 2. Jev; 3. a Haiku run.
     private func execute(_ job: Job) async throws {
         guard let store else { return }
+        var job = job
         switch Self.plan(text: job.text, context: job.context, store: store) {
-        case .reply(let session, let card): try await reply(job, session: session, card: card)
+        case .reply(let session, let card):
+            // The reply to a card Jev picked while you typed: you went with his pick.
+            if let card, job.context.predicted == "answer:\(card)" { confirm(job, "answer:\(card)") }
+            try await reply(job, session: session, card: card)
         case .start(let folder): try await start(job, folder: folder)
         case .route(let target):
-            store.updateDecision(job.id) {
-                $0.decision.target = describe(target, store: store)
-                $0.decision.label = Self.label(target)
-                $0.decision.confirmed = true
-            }
+            confirm(job, target)
+            if job.context.predicted == target { job.jev = job.context.jev }
             try await route(job, to: target)
         case .classify: try await classifyAndAct(job)
+        }
+    }
+
+    /// A target you fixed yourself: an example for the next ones.
+    private func confirm(_ job: Job, _ target: String) {
+        guard let store else { return }
+        store.updateDecision(job.id) {
+            $0.decision.target = describe(target, store: store)
+            $0.decision.label = Self.label(target)
+            $0.decision.confirmed = true
         }
     }
 
