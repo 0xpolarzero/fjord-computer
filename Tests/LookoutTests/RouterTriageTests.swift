@@ -250,6 +250,23 @@ import Testing
         #expect(counter.calls == 18)
     }
 
+    @Test func theLookBackMakesNoCardForWhatYouOpenedOrGotACardWhileJevWasAsked() async {
+        let (s, counter) = store(sessions: [session("a"), session("b")]) { _, _ in self.answers(sentences: [0.9]) }
+        s.routerTriager.asker = { _, state in
+            counter.calls += 1
+            // Meanwhile: you open a, and b's turn gets its card the usual way.
+            s.claudeSessions["a"]?.lastFocused = Date()
+            if state["session"] == "T b", !s.router.cards.contains(where: { $0.sessionID == "b" }) {
+                s.router.cards.append(RouterCard(id: "b#w1", sessionID: "b", kind: .question, title: "T b", folder: nil, text: "?",
+                                                 createdAt: Date()))
+            }
+            return self.answers(sentences: [0.9])
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(counter.calls == 2 && s.router.cards.map(\.id) == ["b#w1"])
+    }
+
     @Test func theLookBackSkipsTurnsThatDontLookLikeTheyAsk() async {
         let (s, counter) = store(sessions: [session("a")], message: "All done. Tests pass.") { _, _ in self.answers() }
         s.triageTurns()

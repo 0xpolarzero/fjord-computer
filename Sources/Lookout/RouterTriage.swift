@@ -416,18 +416,24 @@ extension Store {
     /// Once at launch: the latest finished turn of each live session (newest first, at most `rescanLimit`) that has no card
     /// and ended on what looks like a question nobody answered. Turns you addressed, opened since or wrote after are left.
     func rescanTurns() {
-        let muted = Set(agents.mutedFolders)
         let sessions = claudeSessions.values
-            .filter { !$0.isArchived && !$0.running && $0.completedTurns > 0 && !muted.contains($0.folderKey) && (claudeTasks[$0.id] ?? []).isEmpty }
+            .filter { !$0.isArchived && !$0.running && $0.completedTurns > 0 }
             .sorted { $0.lastActivity > $1.lastActivity }
             .prefix(RouterTriager.rescanLimit)
-        for session in sessions {
-            let id = "\(session.id)#t\(session.completedTurns)"
-            guard !router.cards.contains(where: { $0.id == id || ($0.sessionID == session.id && $0.isOpen) }),
-                  router.pendingTurns[session.id] == nil, router.waits[session.id] == nil,
-                  (session.lastFocused ?? .distantPast) < session.lastActivity else { continue }
-            triage(id, session: session, rescue: true)
+        for session in sessions where rescannable(session) {
+            triage("\(session.id)#t\(session.completedTurns)", session: session, rescue: true)
         }
+    }
+
+    /// Whether a session's latest finished turn may still get a card looking back: idle, not muted, no work left running,
+    /// no card of it or open one of the session's, nothing waiting on you in it, and not opened since it ended.
+    private func rescannable(_ session: ClaudeSession) -> Bool {
+        let id = "\(session.id)#t\(session.completedTurns)"
+        return !session.isArchived && !session.running && session.completedTurns > 0
+            && !agents.mutedFolders.contains(session.folderKey) && (claudeTasks[session.id] ?? []).isEmpty
+            && !router.cards.contains(where: { $0.id == id || ($0.sessionID == session.id && $0.isOpen) })
+            && router.pendingTurns[session.id] == nil && router.waits[session.id] == nil
+            && (session.lastFocused ?? .distantPast) < session.lastActivity
     }
 
     /// Reads the turn's final message, asks Jev once, and puts the answer on the card (`rescue`: makes the card, when the
@@ -470,10 +476,12 @@ extension Store {
         resolveWaits()
     }
 
-    /// Looking back at launch: a turn that ended asking you (or blocked) gets the card it never had.
+    /// Looking back at launch: a turn that ended asking you (or blocked) gets the card it never had, if it still may (you
+    /// may have opened the session, or written in it, while Jev was asked).
     private func rescueTurn(_ session: ClaudeSession, triage: RouterTriage, message: String) {
-        guard [.asks, .approval, .blocked].contains(triage.state), let current = claudeSessions[session.id],
-              current.completedTurns == session.completedTurns, !current.running else { return }
+        guard router.enabled, [.asks, .approval, .blocked].contains(triage.state), let current = claudeSessions[session.id],
+              current.completedTurns == session.completedTurns, current.lastUserMessage == session.lastUserMessage,
+              rescannable(current) else { return }
         var state = router
         let detail = current.summary?.detail ?? ""
         let text = detail.isEmpty ? RouterLive.firstSentences(message, count: 2, limit: 280) ?? RouterFeed.placeholder : detail
