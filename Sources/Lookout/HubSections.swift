@@ -331,6 +331,10 @@ extension LookoutHub {
             return SyncState(color: Theme.amber, text: "Inbox didn't sync", title: "GitHub didn't answer the inbox's search",
                              detail: error + "\n" + refresh)
         }
+        if let error = store.inboxReadError {
+            return SyncState(color: Theme.amber, text: "Jev can't read", title: "Jev couldn't read the inbox's new comments",
+                             detail: error + "\nAsks me, noise and importance wait for him\n" + refresh)
+        }
         if store.isSyncing {
             return SyncState(color: Theme.tertiary, text: "Checking…", title: "Checking GitHub",
                              detail: "Pull requests, issues and workflows", spinning: true)

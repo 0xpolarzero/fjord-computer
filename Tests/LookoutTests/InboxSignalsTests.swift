@@ -251,6 +251,34 @@ import Testing
         #expect(asked == 1 && s.jevGate.until > Date().addingTimeInterval(100))
     }
 
+    @Test func aKeyJevCantUseIsShownUntilHeReadsAgain() async {
+        let thing = pr(1, comments: [comment("c1", tok)])
+        let (s, calls) = store([thing])
+        let answer = s.inboxAsker
+        s.inboxAsker = { _, _ in throw JevClient.Failure.unauthorized }
+        await s.readInbox()
+        #expect(s.things["pr:a/one#1"] == thing && s.inboxReadError?.contains("didn't accept the API key") == true)
+        // Nothing is asked with the rejected key, and the inbox still says why.
+        s.inboxAsker = answer
+        await s.readInbox()
+        #expect(calls.questions.isEmpty && s.inboxReadError != nil)
+        // A new key: Jev reads, and the error goes.
+        s.jevGate.keyChanged()
+        await s.readInbox()
+        #expect(calls.questions.count == 1 && s.inboxReadError == nil && s.entries.first?.facts.map(\.key) == ["asks:c1"])
+        // Busy: said too, until a read goes through.
+        var next = s.things
+        next["pr:a/one#1"]?.comments.append(comment("c2", tok, ago: 30))
+        s.applyThings(next)
+        s.inboxAsker = { _, _ in throw JevClient.Failure.overloaded(retryAfter: nil) }
+        await s.readInbox()
+        #expect(s.inboxReadError == JevClient.Failure.overloaded(retryAfter: nil).localizedDescription)
+        // Switched off, there is nothing he should be reading.
+        s.settings.jevReadsInbox = false
+        await s.readInbox()
+        #expect(s.inboxReadError == nil)
+    }
+
     @Test func whatJevSaidForOneAccountSaysNothingForAnother() async {
         let (s, calls) = store([pr(1, comments: [comment("c1", tok)])])
         await s.readInbox()

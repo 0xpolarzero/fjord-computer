@@ -63,6 +63,9 @@ final class Store {
     @ObservationIgnored var actionsAgain = false
     /// What the last inbox refresh failed at, if it did (InboxSync.swift); the things it had stay.
     var inboxError: String?
+    /// Why Jev couldn't read the inbox's new comments and requests (InboxJev.swift): what rests on his reading (asks me,
+    /// noise, importance) stays as it was until he can.
+    var inboxReadError: String?
     /// Repos (lowercased) GitHub said don't exist, or can't be seen: their chips are red and block Save.
     var missingRepos: Set<String> = []
     /// What GitHub said of each repo named, this session (lowercased name to its canonical name).
