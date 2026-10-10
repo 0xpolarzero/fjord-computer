@@ -55,6 +55,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
 
     var isOpen: Bool { window?.isVisible == true }
+    /// The frame at the last close: the content goes with the window, and putting it back would shrink it.
+    private var closedFrame: NSRect?
     /// Whether the window has the keyboard (no banner for the Router then: you are looking at the cards).
     var isKey: Bool { window?.isKeyWindow == true }
 
@@ -70,7 +72,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         if let destination { navigator.go(destination.resolved(shown: shownIDs, routerOn: store.routerOn)) }
         let window = self.window ?? makeWindow()
         self.window = window
-        if window.contentViewController == nil { window.contentViewController = makeContent() }
+        if window.contentViewController == nil {
+            // Setting the content sizes the window to the content's own minimum: put back the frame it had.
+            let frame = closedFrame ?? window.frame
+            window.contentViewController = makeContent()
+            window.setFrame(frame, display: false)
+        }
         if !window.isVisible { moveToBarScreen(window) }
         AppPolicy.update(windowOpen: true)
         NSApp.activate(ignoringOtherApps: true)
@@ -182,6 +189,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         routerModel.composerFocused = false
+        closedFrame = window?.frame
         // The content goes with the window: no view, nothing ticking behind a closed window.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window?.isVisible != true else { return }

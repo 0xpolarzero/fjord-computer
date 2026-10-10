@@ -49,6 +49,24 @@ import Testing
         await waitUntil { !window.isOpen }
     }
 
+    /// Opened again after a close, the window has its size back (its content goes on close, and coming back would size it
+    /// to the content's minimum: a window too small to see).
+    @Test func openingAgainKeepsTheWindowsSize() async {
+        let (window, _) = controller()
+        var closed = 0
+        window.onClose = { closed += 1 }
+        window.show(.settings)
+        window.window?.setContentSize(NSSize(width: 1100, height: 700))
+        let size = window.window?.frame.size
+        window.close()
+        await waitUntil { closed == 1 }
+        window.show(.settings)
+        #expect(window.window?.frame.size == size)
+        away(window)
+        window.close()
+        await waitUntil { closed == 2 }
+    }
+
     @Test func aPlaceThatIsGoneOpensOnTheFirstCategory() async {
         let (window, store) = controller()
         window.show(.category(UUID()))
