@@ -17,6 +17,17 @@ import Testing
     private func entry(_ s: Store, _ n: Int) -> InboxEntry? { s.entries.first { $0.id == "pr:a/one#\(n)" } }
     private func isDone(_ s: Store, _ n: Int) -> Bool? { entry(s, n)?.isDone }
 
+    @Test func aSeenThingCanBeUnreadAgainWithoutNotifyingAgain() {
+        let s = store([1])
+        s.markSeen(entry(s, 1)!)
+        let keys = Set(entry(s, 1)!.facts.map(\.key))
+        s.marks["pr:a/one#1"]?.notified = keys
+        #expect(entry(s, 1)?.isUnread == false)
+        s.markUnread(entry(s, 1)!)
+        #expect(entry(s, 1)?.isUnread == true && entry(s, 1)?.isDone == false)
+        #expect(s.marks["pr:a/one#1"]?.notified == keys)
+    }
+
     @Test func undoPutsBackWhatDoneMovedAsItWas() {
         let s = store([1, 2])
         // The second was seen before; the first is still unread.

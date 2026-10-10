@@ -194,7 +194,7 @@ final class AppWindowKeys {
         if shortcut == store.shortcut(.openItem) {
             store.open(entry)
         } else if shortcut == store.shortcut(.toggleRead) {
-            if entry.isUnread { store.markSeen(entry) }
+            if entry.isUnread { store.markSeen(entry) } else if !entry.isDone { store.markUnread(entry) }
         } else if shortcut == store.shortcut(.discard) {
             let i = targets.firstIndex(of: selection) ?? 0
             // The pick moves on to the next row (the previous one at the end) as this one leaves the list.

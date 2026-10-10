@@ -59,6 +59,13 @@ extension Store {
         marks[entry.id] = m
     }
 
+    /// Unread again: what it says now counts as not seen (it isn't notified again).
+    func markUnread(_ entry: InboxEntry) {
+        guard var m = marks[entry.id] else { return }
+        m.seen.subtract(entry.facts.map(\.key))
+        marks[entry.id] = m
+    }
+
     func restore(_ entry: InboxEntry) {
         var m = marks[entry.id] ?? EntryMarks()
         m.acked.subtract(entry.facts.map(\.key))

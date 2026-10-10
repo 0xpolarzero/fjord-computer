@@ -135,7 +135,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         switch self {
         case .togglePanel: "Open Lookout window"
         case .openItem: "Open on GitHub"
-        case .toggleRead: "Mark seen"
+        case .toggleRead: "Mark seen or unread"
         case .discard: "Done / back to inbox"
         case .markAllRead: "Mark all seen"
         case .refresh: "Refresh now"

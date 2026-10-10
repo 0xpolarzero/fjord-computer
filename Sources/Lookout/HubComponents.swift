@@ -318,6 +318,10 @@ struct EntryRow: View {
                     IconButton(symbol: "checkmark", help: "Mark as seen", detail: store.shortcut(.toggleRead).display, size: size) {
                         store.markSeen(entry)
                     }
+                } else {
+                    IconButton(symbol: "circlebadge", help: "Mark as unread", detail: store.shortcut(.toggleRead).display, size: size) {
+                        store.markUnread(entry)
+                    }
                 }
                 IconButton(symbol: "xmark", help: "Done", detail: "Moves it to Done until something new happens · \(store.shortcut(.discard).display)",
                            size: size) { store.finish(entry) }
@@ -345,6 +349,7 @@ struct EntryMenu: View {
             Button("Back to inbox") { store.restore(entry) }
         } else {
             if entry.isUnread { Button("Mark as seen") { store.markSeen(entry) } }
+            else { Button("Mark as unread") { store.markUnread(entry) } }
             Button("Done") { store.finish(entry) }
         }
     }

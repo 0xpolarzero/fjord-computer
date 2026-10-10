@@ -85,7 +85,7 @@ enum LookoutTools {
         Tool(name: "explain_entry", doc: "Says why a thing is where it is: the category and rules that matched it and the facts, the other categories it would match but comes after, rules that are off until fixed, and the thing's own state (status, author, labels, checks…) for working out why it isn't somewhere.",
              fields: [.init("entry", .string("thing id, owner/repo#n, or title words"), "The thing: its id from list_inbox, `owner/repo#12`, or words of its title.")], reads: true),
         Tool(name: "mark_entries", doc: "Marks things done (acknowledges their current facts; they come back only on a new fact), seen, or puts done ones back. Give `entries` or a whole `category` (its open ones for done, its unread for seen, its done ones for restore). At most 100.\(changeNote)",
-             fields: [.init("state", .choice(["done", "seen", "restore"]), "What to mark."),
+             fields: [.init("state", .choice(["done", "seen", "unread", "restore"]), "What to mark."),
                       .init("entries", .list(.string("thing id, owner/repo#n, or title words")), "Things.", fallback: .absent),
                       .init("category", .string("id or name"), "Every matching thing of this category.", fallback: .absent)]),
         Tool(name: "get_settings", doc: "Lists the settings the Router may change, with their values and what they take. The GitHub token, the account, quitting and the Router's own switch are not among them.", fields: [], reads: true),
@@ -526,6 +526,7 @@ extension RouterTools {
             switch state {
             case "done": !$0.isDone
             case "seen": $0.isUnread
+            case "unread": !$0.isUnread && !$0.isDone
             default: $0.isDone
             }
         }
@@ -537,6 +538,7 @@ extension RouterTools {
             switch state {
             case "done": store.markDone(e)
             case "seen": store.markSeen(e)
+            case "unread": store.markUnread(e)
             default: store.restore(e)
             }
             changes.append(EntryChange(thing: e.id, before: before, after: store.marks[e.id]))
