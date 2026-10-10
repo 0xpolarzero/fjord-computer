@@ -107,6 +107,16 @@ enum AppWindowShots {
             manyNeeds(store)
             store.setZonesShare(RouterSplit.zonesBig)
         }),
+        // Jev's triage: an OK asked, a turn asking two questions, chips on the finished ones; and the sessions waiting.
+        Shot(name: "router-triage-needs", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { model, store in
+            Demo.routerTriage(store)
+            store.setZonesShare(RouterSplit.zonesBig)
+            model.expandedNeed = store.router.cards.first { $0.kind == .asks }?.id
+        }),
+        Shot(name: "router-triage-waiting", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { _, store in
+            Demo.routerTriage(store)
+            store.setZonesShare(RouterSplit.zonesBig)
+        }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
         Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),

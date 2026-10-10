@@ -269,6 +269,56 @@ enum Demo {
             progress: [running.id: "sending"])
     }
 
+    /// What Jev's triage makes of finished turns, on top of the Router's demo: a turn asking your OK, one asking two
+    /// questions, chips on the finished ones, and sessions waiting on CI and on another session (one of them ready to go on).
+    static func routerTriage(_ store: Store, now: Date = Date()) {
+        let added = [
+            (session("local_demo-release", "Release 2.4 to the App Store", "lookout", minutes: 3,
+                     detail: "The build and the release notes are ready."), "shippingbox"),
+            (session("local_demo-api", "Rate limiter for the public API", "microsandbox", minutes: 8,
+                     detail: "The limiter works; two choices are left to you."), "gauge.with.needle"),
+            (session("local_demo-docs", "Docs site redesign", "lcu", minutes: 14, detail: "The new layout is in place."), "doc.richtext"),
+            (session("local_demo-login", "Fix the login redirect", "lookout", minutes: 6,
+                     detail: "Pushed the fix; waiting for CI on the PR."), "arrow.uturn.right"),
+            (session("local_demo-schema", "Schema migration", "microsandbox", minutes: 11,
+                     detail: "Waiting for the migration session to finish."), "cylinder.split.1x2"),
+            (session("local_demo-bump", "Bump the SDK", "lcu", minutes: 20, detail: "Opened the PR; CI is running."), "arrow.up.circle"),
+        ]
+        for (session, icon) in added {
+            store.claudeSessions[session.id] = session
+            store.agents.entries.append(AgentEntry(id: session.id, seen: session.activity, focusedAt: session.lastFocused, icon: icon))
+        }
+        func card(_ session: ClaudeSession, _ triage: RouterTriage, minutes: Double) -> RouterCard {
+            var c = RouterCard(id: "\(session.id)#t\(session.completedTurns)", sessionID: session.id,
+                               kind: RouterTriage.kind(blocked: false, triage: triage), title: session.title, folder: session.folder,
+                               text: session.summary?.detail ?? "", createdAt: now.addingTimeInterval(-minutes * 60))
+            c.triage = triage
+            return c
+        }
+        let s = { (id: String) in store.claudeSessions[id]! }
+        var ready = RouterTriage(state: .waiting, urgency: 1, work: .pr, waitingOn: .ci,
+                                 watch: .init(target: .ci(thing: "pr:me/lookout#212"), label: "CI on me/lookout#212"))
+        ready.ready = .init(result: "passing", at: now.addingTimeInterval(-40))
+        store.router.cards += [
+            card(s("local_demo-release"), RouterTriage(state: .approval, questions: ["OK to publish 2.4 to the App Store and push the `v2.4.0` tag?"],
+                                                       urgency: 4, work: .committed), minutes: 3),
+            card(s("local_demo-api"), RouterTriage(state: .asks, questions: ["Should the limit be **per API key** or per IP?",
+                                                                              "Is 100 requests a minute the right default?"],
+                                                   urgency: 3, work: .uncommitted), minutes: 8),
+            card(s("local_demo-docs"), RouterTriage(state: .done, urgency: 0, unverified: true, work: .committed), minutes: 14),
+            card(s("local_demo-login"), ready, minutes: 6),
+            card(s("local_demo-schema"), RouterTriage(state: .waiting, urgency: 1, work: .none, waitingOn: .session,
+                                                      watch: .init(target: .session(id: "local_demo-lookout", turns: 4),
+                                                                   label: "session “Agent completion notifications”")), minutes: 11),
+            card(s("local_demo-bump"), RouterTriage(state: .waiting, urgency: 1, work: .pr, waitingOn: .ci), minutes: 20),
+        ]
+        store.router.autoContinueSessions["local_demo-schema"] = true
+        // The finished CI turn opened a PR, which its chip says.
+        if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-ci" && $0.isOpen }) {
+            store.router.cards[i].triage = RouterTriage(state: .done, urgency: 0, work: .pr)
+        }
+    }
+
     /// The Router changing Lookout itself: a record for each change (one taken back).
     private static func lookoutChanges(_ store: Store, _ now: Date) -> [LookoutChange] {
         let look = InboxCategory(
