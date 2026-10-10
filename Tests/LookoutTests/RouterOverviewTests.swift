@@ -89,6 +89,21 @@ import Testing
         #expect(page.history.map(\.id) == ["overview-" + early.id.uuidString, decision.id.uuidString, "overview-" + late.id.uuidString])
     }
 
+    @Test func theWorkingCardShowsTheNewestOverviewWhileSessionsWork() {
+        let row = AgentRow(session: ClaudeSession(id: "a", title: "Tests", folder: "/code/a", lastActivity: now, running: true),
+                           entry: AgentEntry(id: "a"), label: "TE")
+        let early = RouterOverview(at: now.addingTimeInterval(-100), text: "early")
+        let late = RouterOverview(at: now, text: "late")
+        let tied = RouterOverview(at: now, text: "tied, later in the log")
+        #expect(RouterPage.make(cards: [], working: [row], overviews: [late, early]).overview == late)
+        #expect(RouterPage.make(cards: [], working: [row], asks: [], history: [], overviews: [early, late, tied]).overview == tied)
+        #expect(RouterPage.make(cards: [], working: [row]).overview == nil)
+        // No Working card, no overview in it; the history keeps them all the same.
+        let idle = RouterPage.make(cards: [], working: [], overviews: [early, late])
+        #expect(idle.overview == nil)
+        #expect(idle.history.count == 2)
+    }
+
     @MainActor @Test func aClickStoresTheAnswerAndAFailureStoresNothing() async {
         let store = Store()
         store.persists = false
