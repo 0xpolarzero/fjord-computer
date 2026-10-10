@@ -430,7 +430,7 @@ import Testing
         final class Jev { var down = false; var hang = false }
         let jev = Jev()
         s.routerTriager.asker = { questions, _ in
-            if jev.down { throw JevClient.Failure(message: "down") }
+            if jev.down { throw URLError(.notConnectedToInternet) }
             while jev.hang { try await Task.sleep(for: .milliseconds(5)) }
             var a: [String: JevClient.Answer] = ["urgency": .score(2, confidence: 0.8)]
             if questions["circles"] != nil { a["circles"] = .noul(0.9) }

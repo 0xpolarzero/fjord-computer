@@ -549,11 +549,10 @@ struct RouterAskBack: Identifiable, Equatable {
         return true
     }
 
-    /// Jev's questions: the stand-in, else the routing chooser of a run's tools, else TypeSafe with your key.
+    /// Jev's questions: the stand-in, else the routing chooser of a run's tools, else TypeSafe with your key; through the
+    /// gate (`JevGate`).
     private func jev(_ tools: RouterTools?) -> JevAsker? {
-        if let asker { return asker }
-        if let chooser = tools?.chooser { return JevClient.asker(choosing: chooser) }
-        return store.flatMap(JevClient.asker)
+        store?.jevAsker(.routing, base: asker ?? tools?.chooser.map(JevClient.asker(choosing:)))
     }
 
     /// The size of a new session's task: from the routing call when there was one, else a call of its own.

@@ -6,10 +6,36 @@ struct JevClient {
     let key: String
     var endpoint = URL(string: "https://api.typesafe.ai/v1/systemone")!
     var session = Network.session
+    /// What sends a request (tests answer for TypeSafe); the session otherwise.
+    typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
+    var transport: Transport? = nil
 
-    struct Failure: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
+    /// Why a call gave nothing, by what it means for the next one (`JevGate`): a rejected key waits for a new one, a busy
+    /// TypeSafe for its Retry-After, a network failure for a while; a refused request or an odd answer is that call's alone.
+    enum Failure: LocalizedError, Equatable {
+        case unauthorized
+        /// 429; `retryAfter` in seconds, when TypeSafe said.
+        case rateLimited(retryAfter: TimeInterval?)
+        /// 529 (or 503).
+        case overloaded(retryAfter: TimeInterval?)
+        /// No answer: the network, a timeout, another status.
+        case transport(String)
+        /// Stopped, or no longer allowed (the key or the switch changed meanwhile).
+        case cancelled
+        /// 422: TypeSafe refused this request.
+        case refused(String)
+        case invalidAnswer(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unauthorized: "TypeSafe didn't accept the API key"
+            case .rateLimited, .overloaded: "TypeSafe is busy, will retry later"
+            case .transport(let why): why
+            case .cancelled: "Stopped"
+            case .refused(let body): "TypeSafe refused the request: \(body)"
+            case .invalidAnswer(let why): why
+            }
+        }
     }
 
     struct Choice {
@@ -62,20 +88,20 @@ struct JevClient {
             }
         }
         let data = try await post(["model": "jev-latest", "state": state, "questions": body])
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let answers = json["answers"] as? [String: Any] else { throw Failure(message: "Unexpected answer from TypeSafe") }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let answers = json["answers"] as? [String: Any] else { throw Failure.invalidAnswer("Unexpected answer from TypeSafe") }
         var out: [String: Answer] = [:]
         for (id, question) in questions {
-            guard let answer = answers[id] as? [String: Any] else { throw Failure(message: "TypeSafe left `\(id)` unanswered") }
+            guard let answer = answers[id] as? [String: Any] else { throw Failure.invalidAnswer("TypeSafe left `\(id)` unanswered") }
             switch question {
             case .choice:
                 out[id] = .choice(try Self.choice(answer, keys: keys[id] ?? [:]))
             case .noul:
-                guard let p = Self.unit(answer["noul"]) else { throw Failure(message: "TypeSafe's yes/no for `\(id)` is invalid") }
+                guard let p = Self.unit(answer["noul"]) else { throw Failure.invalidAnswer("TypeSafe's yes/no for `\(id)` is invalid") }
                 out[id] = .noul(p)
             case .score(let levels, _):
                 guard let value = Self.level(answer, count: levels.count), let confidence = Self.confidence(answer["confidence"]) else {
-                    throw Failure(message: "TypeSafe's score for `\(id)` is invalid")
+                    throw Failure.invalidAnswer("TypeSafe's score for `\(id)` is invalid")
                 }
                 out[id] = .score(value, confidence: confidence)
             }
@@ -86,7 +112,7 @@ struct JevClient {
     /// The best of `options` for `state`, and how sure Jev is. `hints` describes options whose name isn't enough.
     func choose(_ options: [String], hints: [String: String] = [:], for state: [String: String], instructions: String) async throws -> Choice {
         guard let choice = try await ask(["pick": .choice(options, hints: hints, instructions: instructions)], about: state)["pick"]?.choice else {
-            throw Failure(message: "Unexpected answer from TypeSafe")
+            throw Failure.invalidAnswer("Unexpected answer from TypeSafe")
         }
         return choice
     }
@@ -97,18 +123,38 @@ struct JevClient {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else {
-            let message = switch status {
-            case 401: "TypeSafe didn't accept the API key"
-            case 422: "TypeSafe refused the request: \(String(decoding: data.prefix(300), as: UTF8.self))"
-            case 429, 529: "TypeSafe is busy, will retry later"
-            default: "TypeSafe returned \(status)"
-            }
-            throw Failure(message: message)
+        let data: Data, response: URLResponse
+        do {
+            if let transport { (data, response) = try await transport(request) } else { (data, response) = try await session.data(for: request) }
+        } catch is CancellationError {
+            throw Failure.cancelled
+        } catch let error as Failure {
+            throw error
+        } catch let error as URLError where error.code == .cancelled {
+            throw Failure.cancelled
+        } catch {
+            throw Failure.transport(error.localizedDescription)
         }
-        return data
+        let http = response as? HTTPURLResponse
+        switch http?.statusCode ?? 0 {
+        case 200: return data
+        case 401, 403: throw Failure.unauthorized
+        case 422: throw Failure.refused(String(decoding: data.prefix(300), as: UTF8.self))
+        case 429: throw Failure.rateLimited(retryAfter: Self.retryAfter(http))
+        case 503, 529: throw Failure.overloaded(retryAfter: Self.retryAfter(http))
+        case let status: throw Failure.transport("TypeSafe returned \(status)")
+        }
+    }
+
+    /// Retry-After, in seconds or as an HTTP date.
+    static func retryAfter(_ response: HTTPURLResponse?, now: Date = Date()) -> TimeInterval? {
+        guard let value = response?.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespaces) else { return nil }
+        if let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 { return seconds }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.timeZone = TimeZone(identifier: "GMT")
+        format.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return format.date(from: value).map { max(0, $0.timeIntervalSince(now)) }
     }
 
     static func key(for option: String) -> String {
@@ -152,30 +198,30 @@ struct JevClient {
     }
 
     static func parse(_ data: Data, keys: [String: String]) throws -> Choice {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let pick = (json["answers"] as? [String: Any])?["pick"] as? [String: Any] else {
-            throw Failure(message: "Unexpected answer from TypeSafe")
+            throw Failure.invalidAnswer("Unexpected answer from TypeSafe")
         }
         return try choice(pick, keys: keys)
     }
 
     static func choice(_ pick: [String: Any], keys: [String: String]) throws -> Choice {
         guard let key = pick["choice"] as? String, let option = keys[key] else {
-            throw Failure(message: "Unexpected answer from TypeSafe")
+            throw Failure.invalidAnswer("Unexpected answer from TypeSafe")
         }
         // The distribution is what callers decide on: one that is missing or doesn't add up is an error, never made up.
         guard let raw = pick["probabilities"] as? [String: Any], !raw.isEmpty else {
-            throw Failure(message: "TypeSafe's answer has no probabilities")
+            throw Failure.invalidAnswer("TypeSafe's answer has no probabilities")
         }
         var probabilities: [String: Double] = [:]
         for (key, value) in raw {
-            guard let option = keys[key], let p = unit(value) else { throw Failure(message: "TypeSafe's probabilities are invalid") }
+            guard let option = keys[key], let p = unit(value) else { throw Failure.invalidAnswer("TypeSafe's probabilities are invalid") }
             probabilities[option] = p
         }
         guard (0.98...1.02).contains(probabilities.values.reduce(0, +)) else {
-            throw Failure(message: "TypeSafe's probabilities don't add up")
+            throw Failure.invalidAnswer("TypeSafe's probabilities don't add up")
         }
-        guard let confidence = confidence(pick["confidence"]) else { throw Failure(message: "TypeSafe's confidence is invalid") }
+        guard let confidence = confidence(pick["confidence"]) else { throw Failure.invalidAnswer("TypeSafe's confidence is invalid") }
         return Choice(choice: option, confidence: confidence, probabilities: probabilities)
     }
 }

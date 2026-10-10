@@ -230,12 +230,12 @@ import Testing
         await s.readInbox()
         #expect(s.things["pr:a/one#1"] == thing)
         var asked = 0
-        s.inboxAsker = { _, _ in asked += 1; throw JevClient.Failure(message: "TypeSafe is busy, will retry later") }
+        s.inboxAsker = { _, _ in asked += 1; throw JevClient.Failure.rateLimited(retryAfter: 120) }
         await s.readInbox()
         #expect(s.things["pr:a/one#1"] == thing && asked == 1)
-        // It waits before asking again.
+        // It waits as long as TypeSafe said before asking again.
         await s.readInbox()
-        #expect(asked == 1 && s.inboxJevPausedUntil > Date())
+        #expect(asked == 1 && s.jevGate.until > Date().addingTimeInterval(100))
     }
 
     @Test func whatJevSaidForOneAccountSaysNothingForAnother() async {

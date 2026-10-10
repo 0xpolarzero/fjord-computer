@@ -115,7 +115,7 @@ private final class LauncherLog {
         let log = LauncherLog()
         var asked = false
         let started = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher(store, log),
-                                                     chooser: { _, _, _, _ in asked = true; throw JevClient.Failure(message: "no") })
+                                                     chooser: { _, _, _, _ in asked = true; throw URLError(.notConnectedToInternet) })
         #expect(!asked && log.bootstraps.map(\.folder) == ["/code/r"])
         #expect(started == ActionSessionStarted(sessionID: "local_abc", project: "r"))
     }
@@ -167,7 +167,7 @@ private final class LauncherLog {
     @Test func withoutAnAnswerFromJevTheMostRecentSessionsFolderWinsElseTheFirst() async throws {
         let store = ready()
         let log = LauncherLog()
-        let failing: ActionSessions.Chooser = { _, _, _, _ in throw JevClient.Failure(message: "down") }
+        let failing: ActionSessions.Chooser = { _, _, _, _ in throw URLError(.notConnectedToInternet) }
         func session(_ id: String, _ folder: String, ago: TimeInterval) -> ClaudeSession {
             ClaudeSession(id: id, title: id, folder: folder, completedTurns: 1, lastActivity: Date().addingTimeInterval(-ago),
                           lastUserMessage: nil, summary: nil, running: false, cliID: nil)

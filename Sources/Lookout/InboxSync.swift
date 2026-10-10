@@ -863,7 +863,7 @@ extension Store {
         var posts: [(category: InboxCategory, entry: InboxEntry, fresh: [Fact])] = []
         let context = inboxContext
         // Jev reads at each refresh: a banner for a message it hasn't read yet waits for it, a refresh or two at most.
-        let jevReads = jevReadsInboxNow && Date() >= inboxJevPausedUntil
+        let jevReads = jevReadsInboxNow && jevGate.isOpen(for: typesafeKey ?? "")
         var waits: [String: Int] = [:]
         let byThing = Dictionary(all.map { ($0.thing.id, $0) }, uniquingKeysWith: { a, _ in a })
         for category in categories {

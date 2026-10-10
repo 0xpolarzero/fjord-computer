@@ -103,11 +103,7 @@ extension Store {
     /// Nothing changes without a chooser or a TypeSafe key, or when Jev fails or is unsure.
     func judgeCards(session: String, message: String, eligible: [String: Int], chooser: Claude.Chooser?,
                     decision: UUID? = nil) async {
-        let key = typesafeKey ?? ""
-        let choose: Claude.Chooser? = chooser ?? (key.isEmpty ? nil : { options, hints, state, instructions in
-            try await JevClient(key: key).choose(options, hints: hints, for: state, instructions: instructions)
-        })
-        guard choose != nil else { return }
+        guard let choose = jevChooser(.cards, base: chooser) else { return }
         let cards = router.cards.filter { $0.sessionID == session && $0.isOpen && eligible[$0.id] != nil }
         guard !cards.isEmpty else { return }
         let jobs = cards.map { ($0, pendingForm(for: $0)) }

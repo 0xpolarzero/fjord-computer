@@ -8,13 +8,6 @@ import Foundation
 typealias JevAsker = @MainActor ([String: JevClient.Question], [String: String]) async throws -> [String: JevClient.Answer]
 
 extension JevClient {
-    /// TypeSafe with your key; nil without one.
-    @MainActor
-    static func asker(_ store: Store) -> JevAsker? {
-        guard let key = store.typesafeKey, !key.isEmpty else { return nil }
-        return { questions, state in try await JevClient(key: key).ask(questions, about: state) }
-    }
-
     /// An older one-choice stand-in (`RouterTools.chooser`, `ActionSessions.Chooser`) as an asker: it answers the choices,
     /// one call each, and leaves every other question unanswered.
     static func asker(choosing choose: @escaping ([String], [String: String], [String: String], String) async throws -> Choice) -> JevAsker {

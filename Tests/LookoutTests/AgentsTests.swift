@@ -278,14 +278,14 @@ import Testing
             var said: [String] = []
             Announce.sink = { said.append($0) }
             // Settings is closed: the rejection is still said, and picking waits for a new key.
-            s.iconPickFailed(JevClient.Failure(message: "Invalid API key"))
-            #expect(said == ["Invalid API key"] && s.iconsPausedUntil == .distantFuture)
+            s.iconPickFailed(JevClient.Failure.unauthorized)
+            #expect(said == ["TypeSafe didn't accept the API key"] && s.iconsPausedUntil == .distantFuture)
             // Settings opened on it says the same line: not twice.
             Announce.say(s.iconError ?? "")
-            #expect(said == ["Invalid API key"])
+            #expect(said == ["TypeSafe didn't accept the API key"])
             // Another failure is retried later and not announced from here (Settings says it if it is open).
-            s.iconPickFailed(JevClient.Failure(message: "TypeSafe is down"))
-            #expect(said == ["Invalid API key"] && s.iconsPausedUntil < .distantFuture)
+            s.iconPickFailed(JevClient.Failure.transport("TypeSafe is down"))
+            #expect(said == ["TypeSafe didn't accept the API key"] && s.iconsPausedUntil < .distantFuture)
             // What Settings shows about a refused save is said by Settings alone, once.
             s.keychainWrite = { _, _ in false }
             #expect(!s.setTypesafeKey("sk-test"))

@@ -187,7 +187,7 @@ enum ActionSessions {
         guard store.router.enabled, store.agents.enabled else { throw fail("the Router is off") }
         guard !clones.isEmpty else { throw fail("no local clone of \(request.repo)") }
         let sized = request.model == nil && request.effort == nil && store.jevPicksSessionModels
-        let ask = launcher.asker ?? chooser.map(JevClient.asker(choosing:)) ?? JevClient.asker(store)
+        let ask = store.jevAsker(.actions, base: launcher.asker ?? chooser.map(JevClient.asker(choosing:)))
         let (folder, scope) = await pick(clones, for: request, store: store, ask: ask, sized: sized)
         let project = store.folderName(folder)
         let picked = scope.flatMap(SessionScope.settings)

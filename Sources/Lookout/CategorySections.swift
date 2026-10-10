@@ -35,9 +35,9 @@ enum SectionIcon {
     }
 
     /// Jev's pick when there is a key (the GitHub mark is never his to pick), else the local one.
-    static func pick(name: String, key: String?) async -> String? {
+    static func pick(name: String, choose: Claude.Chooser?) async -> String? {
         if name.lowercased().contains("github") { return CategorySection.githubMark }
-        if let key, !key.isEmpty, let symbol = try? await CategoryIcon.pick(name: name, key: key) { return symbol }
+        if let choose, let symbol = try? await CategoryIcon.pick(name: name, choose: choose) { return symbol }
         return CategoryIcon.local(name: name)
     }
 }
@@ -349,7 +349,7 @@ struct SectionHeaderRow: View {
         let name = section.name.trimmingCharacters(in: .whitespaces)
         guard iconAuto, name.count >= 2 else { return }
         try? await Task.sleep(for: .milliseconds(800))
-        guard !Task.isCancelled, iconAuto, let symbol = await SectionIcon.pick(name: name, key: store.typesafeKey),
+        guard !Task.isCancelled, iconAuto, let symbol = await SectionIcon.pick(name: name, choose: store.jevChooser(.categoryIcons)),
               !Task.isCancelled, iconAuto else { return }
         update { $0.symbol = symbol }
     }

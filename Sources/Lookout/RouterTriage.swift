@@ -405,10 +405,9 @@ extension Claude {
 
 extension Store {
     /// Jev for the triage: the test's, else TypeSafe's with the key; none in a demo or without a key.
-    private var triageAsker: RouterTriager.Asker? {
-        if let asker = routerTriager.asker { return asker }
-        guard !routerIsPretend, let key = typesafeKey, !key.isEmpty else { return nil }
-        return { questions, state in try await JevClient(key: key).ask(questions, about: state) }
+    private var triageAsker: JevAsker? {
+        guard routerTriager.asker != nil || !routerIsPretend else { return nil }
+        return jevAsker(.triage, base: routerTriager.asker)
     }
 
     private func finalMessage(_ session: ClaudeSession) async -> String? {

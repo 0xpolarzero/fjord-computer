@@ -17,8 +17,6 @@ enum InboxJev {
     /// A banner for a message Jev hasn't read yet waits at most this many refreshes for it (beyond the cap, or a slow
     /// round), so it can still turn out to be noise; then it shows whatever Jev said.
     static let bannerWaits = 2
-    /// A failed call waits this long before the next.
-    static let pause: TimeInterval = 600
 
     typealias Asker = ([String: JevClient.Question], [String: Any]) async throws -> [String: JevClient.Answer]
 
@@ -243,29 +241,29 @@ extension Store {
     var jevReadsInboxNow: Bool { jevReadsInbox && (inboxAsker != nil || !(typesafeKey ?? "").isEmpty) }
 
     /// Jev's reading of what is new, in one call: before the refresh announces, so noise is known before it would show a
-    /// banner. Switched off or without a key nothing is asked; a failure leaves everything as it was and waits a while.
+    /// banner. Switched off or without a key nothing is asked; a failure leaves everything as it was, and the gate
+    /// (`JevGate`) says when to ask again.
     func readInbox() async {
         guard jevReadsInbox else { return }
         let key = typesafeKey ?? ""
-        let ask: InboxJev.Asker? = inboxAsker ?? (key.isEmpty ? nil : { questions, state in
-            try await JevClient(key: key).ask(questions, about: state)
+        let generation = jevGate.generation
+        let ask: InboxJev.Asker? = inboxAsker ?? (key.isEmpty ? nil : { [client = jevClient(key)] questions, state in
+            try await client.ask(questions, about: state)
         })
-        guard let ask, Date() >= inboxJevPausedUntil else { return }
+        guard let ask, jevGate.isOpen(for: key) else { return }
         let context = inboxContext
         guard !context.me.isEmpty else { return }
         let work = InboxJev.work(things, context: context)
         guard !work.isEmpty else { return }
         let (questions, state) = InboxJev.request(work, things: things, context: context)
         do {
-            let answers = try await ask(questions, state)
+            let answers = try await throughJevGate(.inbox, generation: generation) { try await ask(questions, state) }
             // Onto the things as they are now: the refresh may have moved on while Jev answered. Signed in as someone else
             // meanwhile, the answers were about another's inbox.
             guard InboxEngine.viewer(inboxContext.me) == InboxEngine.viewer(context.me) else { return }
             var next = things
             InboxJev.apply(answers, work, for: context.me, to: &next)
             if next != things { things = next }
-        } catch {
-            inboxJevPausedUntil = Date().addingTimeInterval(InboxJev.pause)
-        }
+        } catch {}
     }
 }

@@ -241,7 +241,7 @@ import Testing
 
         var calls = 0
         s.routerTriager.reader = { _ in "Should I push?" }
-        s.routerTriager.asker = { _, _ in calls += 1; throw JevClient.Failure(message: "down") }
+        s.routerTriager.asker = { _, _ in calls += 1; throw JevClient.Failure.transport("down") }
         s.triageTurns()
         await s.routerTriager.idle()
         s.triageTurns()

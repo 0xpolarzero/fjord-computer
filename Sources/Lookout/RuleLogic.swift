@@ -692,18 +692,17 @@ enum CategoryIcon {
     static let fallback = "tray"
 
     /// A symbol for a category called `name`: Jev picks a kind of icon, then an icon of it (the sessions' way).
-    static func pick(name: String, key: String) async throws -> String {
+    static func pick(name: String, choose: Claude.Chooser) async throws -> String {
         let open = SessionIcons.open(excluding: [])
         guard !open.isEmpty else { return fallback }
         let state = ["category name": name,
                      "what it is": "a folder in a developer's GitHub inbox that collects the pull requests, issues and failing workflows that need them"]
-        let client = JevClient(key: key)
-        let kinds = try await client.choose(open.map(\.category.key),
-                                            hints: Dictionary(uniqueKeysWithValues: open.map { ($0.category.key, $0.category.about) }),
-                                            for: state, instructions: "Which kind of icon would best show what this inbox category is about?")
+        let kinds = try await choose(open.map(\.category.key),
+                                     Dictionary(uniqueKeysWithValues: open.map { ($0.category.key, $0.category.about) }),
+                                     state, "Which kind of icon would best show what this inbox category is about?")
         let options = SessionIcons.shortlist(open, probabilities: kinds.probabilities)
-        let choice = try await client.choose(options, hints: SessionIcons.hints, for: state,
-                                             instructions: "Pick the icon that best shows what this inbox category is about, so its owner can tell categories apart at a glance.")
+        let choice = try await choose(options, SessionIcons.hints, state,
+                                      "Pick the icon that best shows what this inbox category is about, so its owner can tell categories apart at a glance.")
         return choice.choice
     }
 

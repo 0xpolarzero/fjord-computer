@@ -163,8 +163,8 @@ struct CategoryEditor: View {
         guard iconAuto, name.count >= 2 else { return }
         try? await Task.sleep(for: .milliseconds(800))
         guard !Task.isCancelled, iconAuto else { return }
-        if let key = store.typesafeKey, !key.isEmpty,
-           let symbol = try? await CategoryIcon.pick(name: name, key: key) {
+        if let choose = store.jevChooser(.categoryIcons),
+           let symbol = try? await CategoryIcon.pick(name: name, choose: choose) {
             guard !Task.isCancelled, iconAuto else { return }
             draft.wrappedValue.symbol = symbol
         } else if !Task.isCancelled, iconAuto, let symbol = CategoryIcon.local(name: name) {

@@ -295,9 +295,10 @@ final class Store {
     @ObservationIgnored var iconFirstMessage: (@Sendable (String) -> String?)?
     @ObservationIgnored var iconChooser: (([String], [String: String], [String: String], String) async throws -> JevClient.Choice)?
     @ObservationIgnored var typesafeKeyCache: String?
-    /// Jev's reading of the inbox (InboxJev.swift): tests answer for TypeSafe. A failed call waits until this.
+    /// Jev's reading of the inbox (InboxJev.swift): tests answer for TypeSafe.
     @ObservationIgnored var inboxAsker: InboxJev.Asker?
-    @ObservationIgnored var inboxJevPausedUntil = Date.distantPast
+    /// What every call to Jev goes through (JevGate.swift).
+    @ObservationIgnored let jevGate = JevGate()
     /// Banners held back for Jev to read their message first, by thing id and fact key: how many refreshes each has waited.
     @ObservationIgnored var inboxBannerWaits: [String: Int] = [:]
     /// What keeps a key in the Keychain (tests answer for it).
