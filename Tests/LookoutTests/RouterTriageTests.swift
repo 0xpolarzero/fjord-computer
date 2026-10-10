@@ -81,6 +81,10 @@ import Testing
         // Unsure of the state: none, so the card stays what the app's summary made it.
         #expect(RouterTriage.parse(answers(p: 0.4), candidates: [], options: [], source: "").state == nil)
         #expect(RouterTriage.parse(answers(unverified: 0.6), candidates: [], options: [], source: "").unverified == false)
+        // Unsure how urgent: none, so the card ranks as its kind does.
+        var unsure = answers(urgency: 4)
+        unsure["urgency"] = .score(4, confidence: 0.2)
+        #expect(RouterTriage.parse(unsure, candidates: [], options: [], source: "").urgency == nil)
     }
 
     @Test func aWaitingTurnTakesWhatItWaitsOnAndTheWatchJevIsSureOf() {

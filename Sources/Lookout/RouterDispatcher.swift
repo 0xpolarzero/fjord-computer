@@ -560,7 +560,7 @@ struct RouterAskBack: Identifiable, Equatable {
     private func scope(of task: String, project: String, job: Job) async -> Double? {
         if let scope = job.jev?.scope { return scope }
         guard let ask = jev(job.tools) else { return nil }
-        return try? await ask(["scope": SessionScope.question], ["task": task, "project": project])["scope"]?.score
+        return try? await ask(["scope": SessionScope.question], ["task": task, "project": project])["scope"]?.score(sure: SessionScope.sure)
     }
 
     /// Whether your words go to a session as written, with no Haiku run: Jev is sure they need no rewording, and nothing in
@@ -728,7 +728,7 @@ extension RouterDispatcher.Effects {
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
                 return RouterDispatcher.Ranking(scored: pick.probabilities.compactMap { key, p -> RouterDispatcher.Scored? in
                     keys.firstIndex(of: key).map { RouterDispatcher.Scored(target: targets[$0].target, p: p) }
-                }, rewording: answers["rewording"]?.yes, scope: answers["scope"]?.score)
+                }, rewording: answers["rewording"]?.yes, scope: answers["scope"]?.score(sure: SessionScope.sure))
             },
             prepare: { [weak dispatcher] tools, session in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }

@@ -40,6 +40,9 @@ enum SessionScope {
         feature, a refactor or a tricky bug; deep: architecture, research or a hard problem that needs long careful thought.
         """)
 
+    /// The least confidence a size is used with: below it, the session runs on your defaults.
+    static let sure = 0.4
+
     /// The settings for Jev's score (0 for the first level to 4 for the last).
     static func settings(_ score: Double) -> SessionSettings? {
         guard score.isFinite else { return nil }

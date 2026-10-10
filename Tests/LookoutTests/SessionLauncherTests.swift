@@ -164,6 +164,21 @@ private final class LauncherLog {
         #expect(log.signedSettings.dropFirst() == [SessionSettings(model: "haiku", effort: nil), nil])
     }
 
+    @Test func aCloneOrASizeJevIsntSureOfIsNotTaken() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        let launcher = launcher(store, log)
+        // A near tie between the clones, and a size he is unsure of: the first clone (no session in either), your defaults.
+        launcher.asker = { _, _ in
+            ["clone": .choice(.init(choice: "o1", confidence: 0.3, probabilities: ["o0": 0.45, "o1": 0.55])),
+             "scope": .score(3.8, confidence: 0.2)]
+        }
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
+        #expect(log.bootstraps.map(\.folder) == ["/code/r"] && log.signedSettings == [nil])
+        #expect(!ActionSessions.clearLead(.init(choice: "o1", confidence: 1, probabilities: ["o1": 0.45, "o0": 0.3, "o2": 0.25])))
+        #expect(ActionSessions.clearLead(.init(choice: "o1", confidence: 1, probabilities: ["o1": 0.7, "o0": 0.3])))
+    }
+
     @Test func withoutAnAnswerFromJevTheMostRecentSessionsFolderWinsElseTheFirst() async throws {
         let store = ready()
         let log = LauncherLog()

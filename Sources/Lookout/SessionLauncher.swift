@@ -237,11 +237,21 @@ enum ActionSessions {
             answers = (try? await ask(questions, ["item": UntrustedFence.github.warned(UntrustedText.clean(request.summary, limit: 300)),
                                                   "action": request.category, "task": InboxActions.forJev(request.message)])) ?? [:]
         }
-        let scope = answers["scope"]?.score
+        let scope = answers["scope"]?.score(sure: SessionScope.sure)
         if clones.count == 1 { return (clones[0], scope) }
-        if let pick = answers["clone"]?.choice, let i = keys.firstIndex(of: pick.choice) { return (clones[i], scope) }
+        if let pick = answers["clone"]?.choice, clearLead(pick), let i = keys.firstIndex(of: pick.choice) { return (clones[i], scope) }
         let dated = clones.compactMap { folder in recent(folder, store: store).map { (folder, $0) } }
         return (dated.max { $0.1 < $1.1 }?.0 ?? clones[0], scope)
+    }
+
+    /// Jev's clone is taken only when he clearly prefers it: at least `cloneSure` likely, and `cloneLead` ahead of the next.
+    static let cloneSure = 0.5
+    static let cloneLead = 0.2
+
+    static func clearLead(_ pick: JevClient.Choice) -> Bool {
+        let p = pick.probabilities[pick.choice] ?? 0
+        let next = pick.probabilities.filter { $0.key != pick.choice }.values.max() ?? 0
+        return p >= cloneSure && p - next >= cloneLead
     }
 
     /// When a Claude session in `folder` last did anything.

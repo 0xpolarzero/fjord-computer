@@ -65,6 +65,8 @@ struct JevClient {
         var choice: Choice? { if case .choice(let c) = self { c } else { nil } }
         var yes: Double? { if case .noul(let p) = self { p } else { nil } }
         var score: Double? { if case .score(let s, _) = self { s } else { nil } }
+        /// The score, only when Jev is at least `sure` of it.
+        func score(sure: Double) -> Double? { if case .score(let s, let c) = self, c >= sure { s } else { nil } }
     }
 
     /// Asks every question about `state` in one call.

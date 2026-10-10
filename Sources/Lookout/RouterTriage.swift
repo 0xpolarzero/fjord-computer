@@ -301,6 +301,9 @@ struct RouterTriage: Codable, Hashable {
         return state
     }
 
+    /// The least confidence an urgency is kept with.
+    static let sureUrgency = 0.4
+
     /// The triage Jev's answers make. Only what he is sure enough of is kept.
     static func parse(_ answers: [String: JevClient.Answer], candidates: [String], options: [WaitOption], source: String) -> RouterTriage {
         var t = RouterTriage(source: source)
@@ -310,7 +313,8 @@ struct RouterTriage: Codable, Hashable {
         }
         t.state = sure("state", 0.5).flatMap(State.init)
         t.questions = candidates.indices.filter { (answers["s\($0)"]?.yes ?? 0) >= 0.6 }.map { candidates[$0] }
-        t.urgency = answers["urgency"]?.score
+        // Unsure, the card ranks as its kind does.
+        t.urgency = answers["urgency"]?.score(sure: sureUrgency)
         t.unverified = (answers["unverified"]?.yes ?? 0) >= 0.7
         t.work = sure("work", 0.6).flatMap(Work.init) ?? .unknown
         if t.state == .waiting {

@@ -221,6 +221,14 @@ import Testing
         #expect(f.startSettings.dropFirst() == [SessionSettings(model: "opus", effort: nil), nil])
     }
 
+    @Test func aSizeJevIsntSureOfLeavesTheSessionOnYourDefaults() async {
+        let (s, d, f) = setup()
+        d.asker = { _, _ in ["scope": .score(3.6, confidence: 0.3)] }
+        let a = d.submit("start a new session to rework the store", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.startSettings == [nil] && decision(s, a)?.decision.settingsBy == nil)
+    }
+
     @Test func aStartJevRoutedTakesTheSizeFromTheSameCall() async {
         let (s, d, f) = setup()
         var calls = 0
