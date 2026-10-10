@@ -103,6 +103,18 @@ import Testing
         #expect(new.count == 1 && !done.acked.contains(new[0]))
     }
 
+    @Test func theEditorOffersEveryLevelTheEngineAndTheRouterTake() {
+        // At least low is any rating Jev was sure of: offered like the others, and nothing unrated matches it.
+        #expect(RuleEditing.importances == Importance.allCases)
+        var t = pr()
+        t.assignees = ["me"]
+        #expect(keys([.importance(.low)], t) == nil)
+        t.signals = ThingSignals(importance: ImportanceSignal(level: .low, stamp: "assigned"), viewer: "me")
+        #expect(keys([.importance(.low)], t) == ["importance:low:assigned"])
+        t.signals?.importance?.level = nil
+        #expect(keys([.importance(.low)], t) == nil)
+    }
+
     @Test func theNewConditionsAreOfferedForPRsAndIssuesAndRoundTrip() throws {
         for kinds: Set<ThingKind> in [[.pr], [.issue], [.pr, .issue]] {
             let tags = InboxEngine.conditions(for: kinds).map(RuleEditing.tag)

@@ -393,7 +393,7 @@ struct ConditionRow: View {
             }
         case .importance(let level):
             MenuChip(title: level.rawValue, tone: tone, label: "Importance") {
-                ForEach(Importance.allCases.dropFirst(), id: \.self) { option in
+                ForEach(RuleEditing.importances, id: \.self) { option in
                     Toggle(option.rawValue, isOn: Binding(get: { option == level }, set: { _ in condition = .importance(option) }))
                 }
             }

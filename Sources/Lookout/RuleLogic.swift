@@ -204,6 +204,8 @@ enum RuleEditing {
     }
 
     static func noiseTitle(_ noise: Bool) -> String { noise ? "noise" : "from a person" }
+    /// Every level the importance condition can ask for; at least low is any rating Jev was sure of.
+    static let importances = Importance.allCases
 
     static func statusSet(_ c: Condition) -> Set<ThingStatus>? { if case .status(let s) = c { s } else { nil } }
     static func checkSet(_ c: Condition) -> Set<CheckState>? { if case .checks(let s) = c { s } else { nil } }
@@ -302,7 +304,7 @@ extension Condition {
         case .noise:
             "Noise: bots, and what Jev (TypeSafe, with your key) reads as automated: CI, coverage, deploy previews, dependency and lint bots. Jev's noise never shows a banner"
         case .importance:
-            "Jev (TypeSafe, with your key) rates each review request to you or your teams, and each assignment, once: from its title, size, who asks, age, labels and checks"
+            "Jev (TypeSafe, with your key) rates each review request to you or your teams, and each assignment, once: from its title, size, who asks, age, labels and checks. At least low is any rating it was sure of"
         default: nil
         }
     }
