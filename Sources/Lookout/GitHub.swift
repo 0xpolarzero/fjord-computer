@@ -41,6 +41,8 @@ struct GHWorkflowRuns: Decodable {
         let checkSuiteId: Int?
         /// The run's page on GitHub.
         var htmlUrl: URL? = nil
+        /// The run's own id (what re-running it takes).
+        var id: Int? = nil
     }
     let workflowRuns: [Run]
 }
@@ -254,6 +256,22 @@ final class GitHubClient: @unchecked Sendable {
         var rest = parts
         rest[at + 1] = "{sha}"
         return rest.joined(separator: "/")
+    }
+
+    /// A write: POST with a JSON body (or none). The answer's body, empty when GitHub gave none.
+    @discardableResult
+    func post(_ path: String, _ body: [String: Any]? = nil) async throws -> Data {
+        var (req, sent) = request(URL(string: "https://api.github.com" + path)!)
+        req.httpMethod = "POST"
+        if let body {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, resp) = try await session.data(for: req)
+        let http = resp as! HTTPURLResponse
+        trackRate(http, sent: sent)
+        try check(http, data, sent: sent)
+        return data
     }
 
     func graphql(_ query: String) async throws -> [String: Any] {

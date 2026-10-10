@@ -271,4 +271,172 @@ import Testing
             #expect(InboxEngine.problems(rule).isEmpty)
         }
     }
+
+    // MARK: Since, review requests, behind base, teams
+
+    private func rule(_ conditions: [Condition], scope: Scope? = nil, match: MatchMode = .any) -> Rule {
+        Rule(scope: scope ?? Scope(kind: .pr), match: match, conditions: conditions, createdAt: .distantPast)
+    }
+
+    private func keys(_ rule: Rule, _ thing: Thing, marks: EntryMarks? = nil, ctx: InboxContext? = nil) -> [String]? {
+        InboxEngine.facts(rule, thing, marks: marks, context: ctx ?? context())?.map(\.key)
+    }
+
+    @Test func oldSavedConditionsDecodeWithTheDefaultSince() throws {
+        let labeled = Data(#"{"newComment":{"by":{"include":[{"me":{}}],"except":[]}}}"#.utf8)
+        #expect(try JSONDecoder().decode(Condition.self, from: labeled) == .newComment(by: Pick(include: [.me])))
+        let mention = Data(#"{"mentions":{"_0":{"include":[],"except":[]}}}"#.utf8)
+        #expect(try JSONDecoder().decode(Condition.self, from: mention) == .mentions(Pick()))
+        let other = Data(#"{"noActivity":{"days":7}}"#.utf8)
+        #expect(try JSONDecoder().decode(Condition.self, from: other) == .noActivity(days: 7))
+    }
+
+    @Test func conditionsRoundTripAndOnlyANonDefaultSinceIsWritten() throws {
+        let all: [Condition] = [
+            .newComment(by: Pick(include: [.me]), since: .myLastReview), .newReview(by: Pick(), since: .myLastComment),
+            .newCommits(by: Pick()), .mentions(Pick(include: [.team("o/t"), .myTeams]), since: .myLastComment),
+            .lastComment(by: Pick()), .unresolvedThreads(startedBy: Pick(), lastReplyBy: nil), .approved(by: Pick()),
+            .changesRequested(by: Pick()), .checks([.failing]), .hasConflicts, .behindBase, .status([.draft]),
+            .labeled(Pick(include: ["x"])), .noActivity(days: 3), .greptileBelow(4), .workflow([.failing]),
+        ]
+        for c in all { #expect(try JSONDecoder().decode(Condition.self, from: JSONEncoder().encode(c)) == c) }
+        let plain = String(decoding: try JSONEncoder().encode(Condition.newComment(by: Pick())), as: UTF8.self)
+        #expect(!plain.contains("since"))
+        let rule = Rule(scope: Scope(kind: .pr), conditions: all)
+        #expect(try JSONDecoder().decode(Rule.self, from: JSONEncoder().encode(rule)) == rule)
+    }
+
+    @Test func sinceDoneCountsAfterDoneAndRuleCreation() {
+        var t = pr()
+        t.comments = [comment("c1", stranger, at: -30), comment("c2", stranger, at: -10)]
+        let r = Rule(scope: Scope(kind: .pr), conditions: [.newComment(by: Pick())], createdAt: now.addingTimeInterval(-20))
+        #expect(keys(r, t) == ["comment:c2"])
+        let marks = EntryMarks(doneAt: now.addingTimeInterval(-5))
+        #expect(keys(r, t, marks: marks) == nil)
+    }
+
+    @Test func sinceMyLastReviewCountsAfterMyLatestReviewAndNeverWithoutOne() {
+        var t = pr(by: stranger)
+        t.comments = [comment("c1", stranger, at: -300), comment("c2", stranger, at: -100), comment("c3", stranger, at: -20)]
+        let r = rule([.newComment(by: Pick(), since: .myLastReview)])
+        // I never reviewed: nothing matches, whatever was said.
+        #expect(keys(r, t) == nil)
+        t.reviews = [ThingReview(id: "r1", author: me, state: .approved, at: now.addingTimeInterval(-200)),
+                     ThingReview(id: "r2", author: stranger, state: .commented, at: now.addingTimeInterval(-50))]
+        #expect(keys(r, t) == ["comment:c2", "comment:c3"])
+        // A later review with words (a comment of mine) moves it on.
+        t.comments.append(ThingComment(id: "r3", author: me, at: now.addingTimeInterval(-60), snippet: "x", isReview: true))
+        #expect(keys(r, t) == ["comment:c3"])
+        // The reviews others wrote after mine are new reviews.
+        #expect(keys(rule([.newReview(by: Pick(), since: .myLastReview)]), t) == ["review:r2"])
+        // Done doesn't move this cutoff: what is still after my review is still there (keys stay the same).
+        #expect(keys(r, t, marks: EntryMarks(doneAt: now)) == ["comment:c3"])
+    }
+
+    @Test func sinceMyLastCommentCountsAfterMyCommentsReviewsWithTextAndReplies() {
+        var t = pr(by: stranger)
+        t.comments = [comment("c1", stranger, at: -300), comment("c2", me, at: -200), comment("c3", stranger, at: -100)]
+        let r = rule([.newComment(by: Pick(), since: .myLastComment)])
+        #expect(keys(r, t) == ["comment:c3"])
+        // A reply of mine in a thread counts.
+        var reply = thread("t1", by: stranger, last: me, reply: "r9")
+        reply.lastReplyAt = now.addingTimeInterval(-50)
+        t.threads = [reply]
+        #expect(keys(r, t) == nil)
+        // Nothing of mine at all: since the thing was created.
+        var fresh = pr(by: stranger)
+        fresh.comments = [comment("c1", stranger, at: -300)]
+        #expect(keys(r, fresh) == ["comment:c1"])
+        #expect(keys(rule([.mentions(Pick(), since: .myLastComment)]), fresh) == nil)
+    }
+
+    @Test func sinceNeedsReviewsAndIssuesHaveNone() {
+        let issue = Rule(scope: Scope(kind: .issue), conditions: [.newComment(by: Pick(), since: .myLastReview)])
+        #expect(InboxEngine.problems(issue).first?.reason == "Issues have no reviews")
+        let ok = Rule(scope: Scope(kind: .issue), conditions: [.newComment(by: Pick(), since: .myLastComment)])
+        #expect(InboxEngine.problems(ok).isEmpty)
+    }
+
+    @Test func aReviewRequestIsAFactKeyedByWhenItWasMade() {
+        var t = pr(by: stranger)
+        t.requestedReviewers = ["me"]
+        t.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now.addingTimeInterval(-500))]
+        let scope = Scope(kind: .pr, to: Pick(include: [.me]), toRoles: [.reviewRequested])
+        let r = Rule(scope: scope, createdAt: .distantPast)
+        let first = InboxEngine.facts(r, t, marks: nil, context: context())
+        #expect(first?.count == 1 && first?[0].label == "review requested")
+        // I review; the request is gone and so is the thing.
+        var reviewed = t
+        reviewed.requestedReviewers = []
+        reviewed.reviewRequests = []
+        #expect(InboxEngine.facts(r, reviewed, marks: nil, context: context()) == nil)
+        // Asked again: another request, another fact (it notifies and is not Done any more).
+        var again = t
+        again.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now.addingTimeInterval(-5))]
+        let second = InboxEngine.facts(r, again, marks: nil, context: context())
+        #expect(second?.count == 1 && second?[0].key != first?[0].key)
+        let category = InboxCategory(name: "R", symbol: "eye", color: .blue, rules: [r])
+        let done = EntryMarks(seen: Set(first!.map(\.key)), acked: Set(first!.map(\.key)))
+        #expect(InboxEngine.evaluate(things: [t], categories: [category], marks: [t.id: done], context: context()).first?.isDone == true)
+        #expect(InboxEngine.evaluate(things: [again], categories: [category], marks: [t.id: done], context: context()).first?.isDone == false)
+    }
+
+    @Test func aReviewRequestWithoutATimeFallsBackToCreation() {
+        var t = pr(by: stranger)
+        t.requestedReviewers = ["me"]
+        let r = Rule(scope: Scope(kind: .pr, to: Pick(include: [.me]), toRoles: [.reviewRequested]), createdAt: .distantPast)
+        #expect(keys(r, t) == ["requested:me:\(Int(t.createdAt.timeIntervalSince1970))"])
+        // Only assigned: still the plain open fact.
+        t.assignees = ["me"]
+        t.requestedReviewers = []
+        let assigned = Rule(scope: Scope(kind: .pr, to: Pick(include: [.me]), toRoles: [.assigned]), createdAt: .distantPast)
+        #expect(keys(assigned, t) == ["open"])
+    }
+
+    @Test func behindBaseIsKeyedByTheHeadCommit() {
+        var t = pr()
+        let r = rule([.behindBase])
+        #expect(keys(r, t) == nil)
+        t.behindBase = true
+        t.headSha = "abc"
+        #expect(keys(r, t) == ["behind:abc"])
+        t.headSha = "def"
+        #expect(keys(r, t) == ["behind:def"])
+        t.headSha = nil
+        #expect(keys(r, t) == ["behind:\(Int(t.updatedAt.timeIntervalSince1970))"])
+        let issue = Rule(scope: Scope(kind: .issue), conditions: [.behindBase])
+        #expect(InboxEngine.problems(issue).first?.reason == "Issues don't have this")
+    }
+
+    @Test func teamsMatchRequestedTeamReviewersAndMyTeams() {
+        var t = pr(by: stranger)
+        t.requestedReviewers = ["Acme/Core"]
+        t.reviewRequests = [ThingReviewRequest(reviewer: "Acme/Core", at: now.addingTimeInterval(-9))]
+        func scope(_ refs: [PersonRef]) -> Rule {
+            Rule(scope: Scope(kind: .pr, to: Pick(include: refs), toRoles: [.reviewRequested]), createdAt: .distantPast)
+        }
+        #expect(keys(scope([.team("acme/core")]), t)?.count == 1)
+        #expect(keys(scope([.team("@acme/other")]), t) == nil)
+        #expect(keys(scope([.myTeams]), t) == nil)
+        var ctx = context()
+        ctx.myTeams = ["acme/core"]
+        #expect(keys(scope([.myTeams]), t, ctx: ctx)?.count == 1)
+        let label = InboxEngine.facts(scope([.myTeams]), t, marks: nil, context: ctx)?.first?.label
+        #expect(label == "review requested from @Acme/Core")
+        // A user doesn't match a team slug.
+        #expect(keys(scope([.user("Acme")]), t) == nil)
+    }
+
+    @Test func teamsOnlyMakeSenseInToForReviewRequestsOnPRs() {
+        let byTeam = Rule(scope: Scope(kind: .pr, by: Pick(include: [.team("o/t")])))
+        #expect(InboxEngine.problems(byTeam).map(\.slot) == ["by"])
+        let assigned = Rule(scope: Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.assigned]))
+        #expect(InboxEngine.problems(assigned).map(\.slot) == ["to"])
+        let issue = Rule(scope: Scope(kind: .issue, to: Pick(include: [.team("o/t")]), toRoles: [.mentioned]))
+        #expect(InboxEngine.problems(issue).first?.reason == "Issues aren't assigned to teams")
+        let ok = Rule(scope: Scope(kind: .pr, to: Pick(include: [.me, .myTeams, .team("o/t")]), toRoles: [.reviewRequested]))
+        #expect(InboxEngine.problems(ok).isEmpty)
+        let comment = Rule(scope: Scope(kind: .pr), conditions: [.newComment(by: Pick(include: [.myTeams]))])
+        #expect(InboxEngine.problems(comment).first?.reason == "Teams don't write comments")
+    }
 }

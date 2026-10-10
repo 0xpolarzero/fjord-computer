@@ -17,7 +17,8 @@ enum InboxStore {
 
 extension Store {
     var inboxContext: InboxContext {
-        InboxContext(me: me?.login ?? "", groups: groups, ownedRepos: ownedRepos, contributedRepos: contributedRepos)
+        InboxContext(me: me?.login ?? "", groups: groups, ownedRepos: ownedRepos, contributedRepos: contributedRepos,
+                      myTeams: myTeams)
     }
 
     /// Every entry, memoized on `inboxRevision`.

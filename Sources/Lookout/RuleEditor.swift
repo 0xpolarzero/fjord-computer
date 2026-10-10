@@ -112,7 +112,7 @@ struct RuleEditor: View {
             let toMe = rule.scope.to?.include == [.me]
             let offered = roles.filter { !($0 == .reviewRequested && byMe && toMe) }
             PeopleSlot(pick: Binding(get: { rule.scope.to ?? Pick() }, set: { rule.scope.to = $0 }), store: store,
-                       tone: tone("to"), hidden: byMe ? [.me] : [])
+                       tone: tone("to"), hidden: byMe ? [.me] : [], teams: kind == .pr)
                 .slotWord(SlotWord(
                     name: "to",
                     text: picked.count == roles.count ? "to" : "to (" + picked.map(RuleEditing.roleTitle).joined(separator: ", ") + ")",
@@ -312,7 +312,11 @@ struct ConditionRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: 4) {
                 SentenceLayout(spacing: 4, lineSpacing: 4) {
-                    Word(condition.phrase, tone: tone)
+                    if let tip = condition.tip {
+                        Word(condition.phrase, tone: tone).tip("Behind base branch", tip)
+                    } else {
+                        Word(condition.phrase, tone: tone)
+                    }
                     values
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -336,6 +340,7 @@ struct ConditionRow: View {
             PeopleSlot(pick: Binding(get: { condition.people ?? Pick() }, set: { condition = condition.with(people: $0) }),
                        store: store, placeholder: "anyone", tone: tone,
                        hidden: byOnlyMe && ["approved", "changesRequested"].contains(RuleEditing.tag(condition)) ? [.me] : [])
+            sinceChip
         case .unresolvedThreads(let started, let last):
             if started != nil {
                 WordMenu(text: "started by", tone: tone) { Button("Remove “started by”") { condition = .unresolvedThreads(startedBy: nil, lastReplyBy: last) } }
@@ -382,8 +387,40 @@ struct ConditionRow: View {
                     Toggle("\(n) / 5", isOn: Binding(get: { n == score }, set: { _ in condition = .greptileBelow(n) }))
                 }
             }
-        case .hasConflicts:
+        case .hasConflicts, .behindBase:
             EmptyView()
+        }
+    }
+
+    /// Activity counts events since you marked the thing done, unless told otherwise: that default is not shown, and a
+    /// dashed "since" adds the others.
+    @ViewBuilder private var sinceChip: some View {
+        if let since = condition.since {
+            let options = RuleEditing.sinces(kind)
+            if since == .done {
+                Menu {
+                    ForEach(options.filter { $0 != .done }, id: \.self) { option in
+                        Button("since " + RuleEditing.sinceTitle(option)) { condition = condition.with(since: option) }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                        Text("since")
+                    }
+                }
+                .menuStyle(.button).buttonStyle(ChipButtonStyle(tone: .dashed)).menuIndicator(.hidden).fixedSize()
+                .tip("Since", Condition.sinceTip)
+                .accessibilityLabel("Count events since your last review or comment")
+            } else {
+                Word("since", tone: tone)
+                MenuChip(title: RuleEditing.sinceTitle(since), tone: tone, label: "Since") {
+                    ForEach(options, id: \.self) { option in
+                        Toggle(RuleEditing.sinceTitle(option), isOn: Binding(get: { option == since },
+                                                                        set: { _ in condition = condition.with(since: option) }))
+                    }
+                }
+                .tip("Since", Condition.sinceTip)
+            }
         }
     }
 }

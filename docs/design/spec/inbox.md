@@ -25,10 +25,10 @@ No conditions = every open thing in scope.
 
 ### Kinds and what they offer (menus only offer these)
 - **PRs** — slots: by · to (menu on the word: assigned / review requested / mentioned) · in.
-  Activity (new since you last marked it done): new comment by · new review by · new commits by · mentions.
+  Activity (new since you last marked it done, unless it says otherwise, see **Since**): new comment by · new review by · new commits by · mentions.
   Conversation: last comment by (Conversation tab; reviews with text count; inline threads don't) · unresolved threads started by · last reply by (both optional).
   Review (each reviewer's latest review): approved by · changes requested by.
-  Checks: checks failing / pending / passing · has conflicts.
+  Checks: checks failing / pending / passing · has conflicts · behind base branch (GitHub's mergeStateStatus BEHIND; it is only reported when the base branch's protection requires branches to be up to date, which the tooltip says). Fact key `behind:<head sha>` (the PR's updatedAt when the sha is unknown), so pushing and falling behind again is new.
   Status: is draft / ready / merged / closed · labeled · no activity for N days.
   Signals: Greptile score below N (read from `<!-- greptile_confidence_score:N -->` in the PR body; Greptile edits it each review; account is `greptile-apps[bot]`).
 - **Issues** — slots: by · to (assigned / mentioned) · in. Activity: new comment by · mentions. Conversation: last comment by. Status: is closed · labeled · no activity for N days.
@@ -37,9 +37,20 @@ No conditions = every open thing in scope.
 
 ### Values
 - People: me · @login (autocomplete; @greptile → greptile-apps[bot]) · user groups · **Maintainers** (GitHub authorAssociation OWNER/MEMBER/COLLABORATOR on that repo) · **Bots** (accounts GitHub marks as bots) · `except …`.
-- Repos: owner/repo · owner/* · user groups · **Repos I own** · **Repos I contribute to** (repos with a merged PR of yours) · **anywhere you're involved** (PRs/issues only: author, assignee, requested reviewer, mentioned, commented — GitHub's `involves:`) · `except …`.
+- Repos: owner/repo · owner/* · user groups · **Repos I own** · **Repos I contribute to** (repos with a merged or an open PR of yours; the set only grows, like before) · **anywhere you're involved** (PRs/issues only: author, assignee, requested reviewer, mentioned, commented — GitHub's `involves:`) · `except …`.
+- Teams (only in `to`, PRs, with review requested): `@org/team` (a team asked to review; typed or picked from teams seen on fetched PRs and yours) and **My teams** (every team you're in: GraphQL `viewer.organizations.teams(userLogins:[me])`, needs the read:org scope, kept like owned/contributed repos and asked again daily; without it you're in none). Search side: `team-review-requested:org/team`; a rule naming only teams, none known yet, searches nothing. Teams in `by`, in a condition's people, in an issue's `to`, or with only assigned/mentioned are flagged red.
 - Other: labels, branches, workflow names, N days, score 1–5 — autocompleted from repos in scope.
 - Groups: named people or repo lists, usable as one chip in any slot of their kind; editing a group updates every rule. Created in a Groups section or inline ("Save as group…" from selected chips).
+
+### Since (activity conditions)
+New comment, new review, new commits and mentions count events after a point, set by an optional trailing chip (a dashed `+ since` on the row when it is the default, which is not shown):
+- **since Done** (default): after the later of the rule's creation and the thing's last Done.
+- **since my last review** (PRs): after your latest review on the thing (a review of any state, or a review with text). If you never reviewed it, the condition does not match (there is no point to count from). Done and the rule's creation don't move this point; Done still holds the facts it acknowledged.
+- **since my last comment**: after your latest conversation comment, review with text, or thread reply. If you never commented, from the thing's creation.
+Fact keys are the same whatever `since` says (`comment:<id>`, `review:<id>`, `commit:<oid>`, `mention:<id>`), so a fact notifies once and Done holds it however it came. Rules saved before `since` existed have none and read as since Done. Issues have no reviews: `since my last review` is flagged there and not offered.
+
+### Review requests are facts
+`to … (review requested)` yields a fact per matching request, keyed `requested:<reviewer>:<time of the request>` (the latest `ReviewRequestedEvent` for that reviewer, from `timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 5)`; the PR's creation when none is in those five). Review again, get asked again: a new request is a new fact, so it notifies again and returns a Done thing. A rule without conditions shows this fact instead of the neutral `open`; with conditions, the request is added to the facts once the conditions match. Label: `review requested`, or `review requested from @org/team`.
 
 ### Impossible combinations
 - Never-matching values aren't offered: with `by me` → no "to me (review requested)", no "approved by me", no "changes requested by me".
@@ -59,7 +70,18 @@ No conditions = every open thing in scope.
 - **Live preview** in the editor: the rule evaluated in memory against already-fetched things, debounced; no API calls. A repo never fetched says "no history yet for owner/repo".
 
 ## Fetching
-One GraphQL search per refresh for PRs/issues covers every fact (threads + isResolved, comments, latest reviews, statusCheckRollup, mergeable, isDraft, labels, body for Greptile score, authorAssociation, author __typename Bot). Workflows via the existing REST CI code: one list of workflow runs plus the commit's checks and statuses per repo and branch gives one Thing per workflow (`workflow:owner/repo:<workflowId>@branch`, with its own state and failed jobs; external checks and statuses together are one more, `external`), so `named` filters and CI counts and notifies per failing workflow. Polled repos = repos named by rules + CI repos; `involved` uses `involves:@me` search.
+One GraphQL search per refresh for PRs/issues covers every fact (threads + isResolved, comments, latest reviews, statusCheckRollup, mergeable, mergeStateStatus, review requests and when they were made, isDraft, labels, body for Greptile score, authorAssociation, author __typename Bot). Workflows via the existing REST CI code: one list of workflow runs plus the commit's checks and statuses per repo and branch gives one Thing per workflow (`workflow:owner/repo:<workflowId>@branch`, with its own state and failed jobs; external checks and statuses together are one more, `external`), so `named` filters and CI counts and notifies per failing workflow. Polled repos = repos named by rules + CI repos; `involved` uses `involves:@me` search.
 
 ## Code map
 - `InboxModel.swift` — types (contract). `InboxEngine.swift` — pure matching. `InboxStore.swift` — Store API. `InboxSync.swift` — fetching. `CategoriesView.swift` — editor. Hub* — bar, lists.
+
+## Actions
+A category can have a **Then** list (editor, below Rules): actions it runs by itself for a thing in it. No confirmation prompts.
+- **Kinds**: *Start a Claude session* (a project folder, or the repo's local clone found by matching git remotes of the projects Claude knows; a prompt), *Comment on GitHub* (PRs and issues), *Re-run failed checks* (PR: failing workflow runs of the head commit; workflow: that workflow's latest failed run; `rerun-failed-jobs`). `{title} {url} {number} {repo} {author}` are filled in prompt and comment; a session's first message also gets the context appended (title, URL, repo#number, kind, why it is here, failing jobs, last comment).
+- **Trigger** per action: once per thing when it comes in (default; a thing that left and came back within an hour is the same visit, so a re-run that fails again isn't re-run forever), or on each new fact (one run per sync per thing, covering that sync's new facts).
+- **Never old news**: what is in the category when it is created, when its rules change in any way, or when an action is added, is taken as already handled (a baseline, kept across launches). Done things don't run.
+- **Loop guard**: facts made by you (your comments, reviews, commits, replies) never trigger, so an action's own comment can't start another. Each (category, thing, action, trigger key) runs at most once; a failure is not retried. At most 10 runs per refresh; the rest wait ("queued") for the next.
+- **Rows** show a ⚡ chip: "session started 2m ago" (opens the session), "commented" (opens the comment), "re-ran 2 jobs", "failed: <reason>" (danger), "queued". Category rows and tabs show a ⚡ when the category has actions.
+- **Try on latest match** previews the resolved prompt/comment, target and runs that would be re-run; it does nothing.
+- Runs are kept in `actions.json` beside the state file. The demo and the playground never do anything. Code: `InboxActions.swift` (planning, ledger, performer), `ActionEditor.swift`.
+- Sessions use the Router's start path (`SessionStart`: a CLI session made in the folder, imported by the Claude app with `claude://resume`, then registered as a peer the Router sees). The Router can only relay what the user types, so the prompt is the session's first turn, run headlessly by Claude Code before the import (with the permissions of your settings).

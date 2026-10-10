@@ -95,6 +95,7 @@ struct CategoryEditor: View {
                         SettingsSwitch("Notify for \(draft.name)", isOn: $draft.notifies)
                     }
                     rules
+                    ActionsEditor(actions: $draft.actions, store: store, rules: draft.rules, categoryName: draft.name)
                     if !draft.isCI, !isNew { deleteRow }
                 }
                 .padding(.horizontal, CDS.Settings.pagePadX)
@@ -248,8 +249,10 @@ struct CategoryEditor: View {
     private func leave() {
         guard !finished else { return }
         finished = true
-        _ = CategoryDrafts.shared.leave(draft, original: original, editing: editing,
-                                        categories: &store.categories, groups: store.groups)
+        let outcome = CategoryDrafts.shared.leave(draft, original: original, editing: editing,
+                                                  categories: &store.categories, groups: store.groups)
+        // What is already here is old news to the actions it brought.
+        if outcome == .saved { store.baselineActions() }
     }
 
     private func cancel() {
@@ -269,6 +272,7 @@ struct CategoryEditor: View {
         } else {
             store.categories.append(saved)
         }
+        store.baselineActions()
         close()
     }
 }

@@ -157,4 +157,47 @@ private final class RepoCalls: @unchecked Sendable {
         await s.canonicalizeSavedRepos()
         #expect(calls.all.count == first)
     }
+
+    @Test func sinceIsOnlyOnActivityAndIssuesDontOfferMyLastReview() {
+        let c = Condition.newComment(by: Pick())
+        #expect(c.since == .done)
+        #expect(c.with(since: .myLastReview) == .newComment(by: Pick(), since: .myLastReview))
+        #expect(Condition.mentions(Pick(include: [.me])).with(since: .myLastComment).since == .myLastComment)
+        #expect(Condition.hasConflicts.since == nil && Condition.hasConflicts.with(since: .myLastReview) == .hasConflicts)
+        // Changing who keeps the since; the other way round too.
+        #expect(c.with(since: .myLastComment).with(people: Pick(include: [.me])) == .newComment(by: Pick(include: [.me]), since: .myLastComment))
+        #expect(c.with(people: Pick(include: [.me])).since == .done)
+        #expect(RuleEditing.sinces(.pr) == [.done, .myLastReview, .myLastComment])
+        #expect(RuleEditing.sinces(.issue) == [.done, .myLastComment])
+    }
+
+    @Test func behindBaseIsOfferedForPRsOnlyAndSurvivesSwitchingToIssuesNever() {
+        #expect(RuleEditing.offered(.pr).contains(.behindBase) && !RuleEditing.offered(.issue).contains(.behindBase))
+        #expect(RuleEditing.group(.behindBase) == "Checks")
+        #expect(RuleEditing.behindTip.contains("branch protection"))
+        let result = RuleEditing.switchKind(Rule(scope: Scope(kind: .pr), conditions: [.behindBase, .newComment(by: Pick(), since: .myLastComment)]), to: .issue)
+        #expect(result.rule.conditions == [.newComment(by: Pick(), since: .myLastComment)] && result.dropped == ["behind base branch"])
+    }
+
+    @Test @MainActor func teamsAreTypedAndSuggestedOnlyWhereTheyAreAllowed() {
+        let s = Store()
+        s.persists = false
+        s.myTeams = ["acme/core"]
+        var t = Thing(id: "pr:a/b#1", kind: .pr, repo: "a/b", number: 1, title: "t", url: URL(string: "https://github.com/a/b/pull/1")!,
+                      createdAt: Date(), updatedAt: Date())
+        t.requestedReviewers = ["acme/ops", "bob"]
+        s.things[t.id] = t
+        let data = EditorData(store: s)
+        let withTeams = data.peopleOptions("", Pick(), teams: true).map(\.value)
+        #expect(withTeams.contains(.myTeams) && withTeams.contains(.team("acme/core")) && withTeams.contains(.team("acme/ops")))
+        let without = data.peopleOptions("", Pick()).map(\.value)
+        #expect(!without.contains(.myTeams) && !without.contains(.team("acme/core")))
+        #expect(data.peopleOptions("ops", Pick(), teams: true).map(\.value) == [.team("acme/ops")])
+        #expect(data.parsePerson("@acme/core", teams: true) == .team("acme/core"))
+        #expect(data.parsePerson("acme/core", teams: false) == nil)
+        #expect(data.parsePerson("my teams", teams: true) == .myTeams)
+        #expect(data.parsePerson("@bob", teams: true) == .user("bob"))
+        #expect(data.personTitle(.team("acme/core")) == "@acme/core" && data.personTitle(.myTeams) == "My teams")
+        #expect(data.repoTitle(.contributed) == "Repos I contribute to")
+    }
 }

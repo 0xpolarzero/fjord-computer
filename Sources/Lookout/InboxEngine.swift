@@ -52,6 +52,7 @@ enum InboxEngine {
         func flag(_ slot: String, _ reason: String) { out.append(Problem(condition: nil, slot: slot, reason: reason)) }
 
         if let p = scope.by, overlap(p) { flag("by", Self.bothReason) }
+        if let p = scope.by, hasTeam(p) { flag("by", "Teams don't author anything") }
         if let p = scope.to, overlap(p) { flag("to", Self.bothReason) }
         if let p = scope.in, overlap(p) { flag("in", Self.bothReason) }
         if kind == .workflow {
@@ -65,6 +66,10 @@ enum InboxEngine {
         }
         if let to = scope.to {
             if scope.toRoles.isEmpty { flag("to", "Pick at least one of assigned, review requested, mentioned") }
+            if hasTeam(to) {
+                if kind == .issue { flag("to", "Issues aren't assigned to teams") }
+                else if !scope.toRoles.contains(.reviewRequested) { flag("to", "Teams only come with review requested") }
+            }
             if kind == .pr, scope.toRoles == [.reviewRequested], onlyMe(scope.by), onlyMe(to) {
                 flag("to", "You can't be asked to review your own PR")
             }
@@ -77,7 +82,12 @@ enum InboxEngine {
                 continue
             }
             switch condition {
-            case .newComment(let p), .newReview(let p), .newCommits(let p), .mentions(let p), .lastComment(let p):
+            case .newComment(let p, let since), .newReview(let p, let since), .newCommits(let p, let since),
+                 .mentions(let p, let since):
+                if overlap(p) { add(bothReason) }
+                if hasTeam(p) { add("Teams don't write comments") }
+                if since == .myLastReview, kind == .issue { add("Issues have no reviews") }
+            case .lastComment(let p):
                 if overlap(p) { add(bothReason) }
             case .approved(let p), .changesRequested(let p):
                 if overlap(p) { add(bothReason) }
@@ -96,7 +106,7 @@ enum InboxEngine {
                 else if kind == .issue, s.isDisjoint(with: [.open, .closed]) { add("Issues are only open or closed") }
             case .greptileBelow(let n):
                 if n <= 1 { add("Greptile scores start at 1") }
-            case .hasConflicts, .noActivity:
+            case .hasConflicts, .behindBase, .noActivity:
                 break
             }
         }
@@ -135,7 +145,7 @@ enum InboxEngine {
              .mentions(Pick(include: [.me])),
              .lastComment(by: Pick()), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
              .approved(by: Pick()), .changesRequested(by: Pick()),
-             .checks([.failing]), .hasConflicts,
+             .checks([.failing]), .hasConflicts, .behindBase,
              .status([.draft]), .labeled(Pick()), .noActivity(days: 7),
              .greptileBelow(5)]
         case .issue:
@@ -159,12 +169,14 @@ enum InboxEngine {
         var groupRepos: [UUID: (exact: Set<String>, owners: Set<String>)] = [:]
         var owned: Set<String>
         var contributed: Set<String>
+        var myTeams: Set<String>
 
         init(_ context: InboxContext) {
             me = InboxEngine.normalize(context.me)
             now = context.now
             owned = Set(context.ownedRepos.map { $0.lowercased() })
             contributed = Set(context.contributedRepos.map { $0.lowercased() })
+            myTeams = Set(context.myTeams.map { $0.lowercased() })
             for group in context.groups {
                 switch group.kind {
                 case .people:
@@ -195,6 +207,8 @@ enum InboxEngine {
         case .group(let id): return r.groupPeople[id]?.contains(normalize(person.login)) ?? false
         case .maintainers: return person.association.isMaintainer
         case .bots: return person.isBot
+        case .team(let slug): return normalize(slug.hasPrefix("@") ? String(slug.dropFirst()) : slug) == normalize(person.login)
+        case .myTeams: return r.myTeams.contains(normalize(person.login))
         }
     }
 
@@ -266,45 +280,81 @@ enum InboxEngine {
         // Merged and closed things only match through a status condition asking for them.
         let gated = thing.kind != .workflow && (thing.status == .merged || thing.status == .closed)
         let conditions = rule.conditions
-        if conditions.isEmpty { return gated ? nil : [Fact(key: "open", label: "open")] }
 
-        let cutoff = max(rule.createdAt, marks?.doneAt ?? .distantPast)
+        let done = max(rule.createdAt, marks?.doneAt ?? .distantPast)
         func isStatus(_ c: Condition) -> Bool { if case .status = c { true } else { false } }
 
         var out: [Fact] = []
         var keys = Set<String>()
         func add(_ facts: [Fact]) { for f in facts where keys.insert(f.key).inserted { out.append(f) } }
+        // Review requests are facts with identity: a request made again after a review is a new one.
+        let requests = reviewRequestFacts(rule.scope, thing, r)
+
+        if conditions.isEmpty { return gated ? nil : requests.isEmpty ? [Fact(key: "open", label: "open")] : requests }
 
         switch rule.match {
         case .any:
             for condition in conditions where !gated || isStatus(condition) {
-                add(facts(condition, thing, cutoff: cutoff, r))
+                add(facts(condition, thing, done: done, r))
             }
-            return out.isEmpty ? nil : out
+            if out.isEmpty { return nil }
         case .all:
             if gated, !conditions.contains(where: isStatus) { return nil }
             for condition in conditions {
-                let matched = facts(condition, thing, cutoff: cutoff, r)
+                let matched = facts(condition, thing, done: done, r)
                 if matched.isEmpty { return nil }
                 add(matched)
             }
-            return out
+        }
+        add(requests)
+        return out
+    }
+
+    /// One fact per review request that put the thing in the rule's `to`, keyed by who and when it was made.
+    private static func reviewRequestFacts(_ scope: Scope, _ thing: Thing, _ r: Resolved) -> [Fact] {
+        guard thing.kind == .pr, let to = scope.to, scope.toRoles.contains(.reviewRequested) else { return [] }
+        return thing.requestedReviewers.filter { matches(to, login: $0, r) }.map { reviewer in
+            let at = thing.reviewRequests.first { $0.reviewer.caseInsensitiveCompare(reviewer) == .orderedSame }?.at ?? thing.createdAt
+            let label = reviewer.contains("/") ? "review requested from @\(reviewer)" : "review requested"
+            return Fact(key: "requested:\(reviewer.lowercased()):\(Int(at.timeIntervalSince1970))", label: label, tint: .attention)
         }
     }
 
-    private static func facts(_ condition: Condition, _ thing: Thing, cutoff: Date, _ r: Resolved) -> [Fact] {
+    /// The moment an activity condition counts events after; nil when there is none, so nothing can match.
+    private static func cutoff(_ since: Since, _ thing: Thing, done: Date, _ r: Resolved) -> Date? {
+        func mine(_ person: Person) -> Bool { !r.me.isEmpty && normalize(person.login) == r.me }
+        switch since {
+        case .done:
+            return done
+        case .myLastReview:
+            let reviews = thing.reviews.filter { mine($0.author) }.map(\.at)
+            let withText = thing.comments.filter { $0.isReview && mine($0.author) }.map(\.at)
+            return (reviews + withText).max()
+        case .myLastComment:
+            let comments = thing.comments.filter { mine($0.author) }.map(\.at)
+            let replies = thing.threads.filter { mine($0.lastReplyBy) }.map(\.lastReplyAt)
+            return (comments + replies).max() ?? thing.createdAt
+        }
+    }
+
+    private static func facts(_ condition: Condition, _ thing: Thing, done: Date, _ r: Resolved) -> [Fact] {
         guard offered(condition).contains(thing.kind) else { return [] }
+        var cutoff = done
+        if let since = condition.since {
+            guard let date = Self.cutoff(since, thing, done: done, r) else { return [] }
+            cutoff = date
+        }
         switch condition {
-        case .newComment(let by):
+        case .newComment(let by, _):
             return thing.comments.filter { !$0.isReview && $0.at > cutoff && matches(by, $0.author, r) }
                 .map { Fact(key: "comment:\($0.id)", label: "comment by @\($0.author.login)", tint: .attention) }
-        case .newReview(let by):
+        case .newReview(let by, _):
             return thing.reviews.filter { $0.at > cutoff && matches(by, $0.author, r) }
                 .map { Fact(key: "review:\($0.id)", label: "review by @\($0.author.login)", tint: .attention) }
-        case .newCommits(let by):
+        case .newCommits(let by, _):
             return thing.commits.filter { $0.at > cutoff && matches(by, login: $0.author, r) }
                 .map { Fact(key: "commit:\($0.id)", label: "commit by @\($0.author)", tint: .neutral) }
-        case .mentions(let pick):
+        case .mentions(let pick, _):
             return thing.comments.filter { c in
                 c.at > cutoff && c.mentions.contains { matches(pick, login: $0, r) }
             }.map { Fact(key: "mention:\($0.id)", label: "mentioned by @\($0.author.login)", tint: .attention) }
@@ -329,6 +379,11 @@ enum InboxEngine {
             return [Fact(key: "checks:\(state.rawValue)", label: "checks \(state.rawValue)", tint: tint(state))]
         case .hasConflicts:
             return thing.hasConflicts ? [Fact(key: "conflicts", label: "has conflicts", tint: .danger)] : []
+        case .behindBase:
+            // Keyed by the head commit: pushing (or merging the base in) and falling behind again is new.
+            guard thing.behindBase else { return [] }
+            let head = thing.headSha ?? String(Int(thing.updatedAt.timeIntervalSince1970))
+            return [Fact(key: "behind:\(head)", label: "behind base branch", tint: .attention)]
         case .status(let statuses):
             guard statuses.contains(thing.status) else { return [] }
             let label = thing.status == .open && thing.kind == .pr ? "ready for review" : thing.status.rawValue
@@ -380,6 +435,10 @@ enum InboxEngine {
         !pick.include.isEmpty && !Set(pick.include).isDisjoint(with: pick.except)
     }
 
+    private static func hasTeam(_ pick: Pick<PersonRef>) -> Bool {
+        (pick.include + pick.except).contains { if case .team = $0 { true } else { $0 == .myTeams } }
+    }
+
     /// The slot or pick names only me.
     private static func onlyMe(_ pick: Pick<PersonRef>?) -> Bool {
         guard let pick, !pick.include.isEmpty else { return false }
@@ -390,7 +449,7 @@ enum InboxEngine {
         switch condition {
         case .newComment, .mentions, .lastComment, .status, .labeled, .noActivity: [.pr, .issue]
         case .newReview, .newCommits, .unresolvedThreads, .approved, .changesRequested, .checks, .hasConflicts,
-             .greptileBelow: [.pr]
+             .behindBase, .greptileBelow: [.pr]
         case .workflow: [.workflow]
         }
     }

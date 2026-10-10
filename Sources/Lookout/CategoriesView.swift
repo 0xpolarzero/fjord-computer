@@ -117,7 +117,14 @@ private struct CategoryRow: View {
                 HStack(spacing: 10) {
                     CategoryTile(symbol: category.symbol, color: category.color)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(category.name).cdsText(body14).lineLimit(1)
+                        HStack(spacing: 5) {
+                            Text(category.name).cdsText(body14).lineLimit(1)
+                            if !category.actions.isEmpty {
+                                Image(systemName: "bolt.fill").font(.system(size: 9)).foregroundStyle(CDS.Text.muted)
+                                    .help("Does something by itself when a thing comes in")
+                                    .accessibilityLabel("Has actions")
+                            }
+                        }
                         Text(summary + (more > 0 ? "  +\(more) more" : ""))
                             .cdsText(foot12, .regular, CDS.Text.muted).lineLimit(1)
                     }

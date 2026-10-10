@@ -663,6 +663,9 @@ private struct CategoryTabLabel: View {
                 .foregroundStyle(badge > 0 || selected ? category.color.swatch : CDS.Text.muted)
             if selected { Text(category.name).lineLimit(1) }
             if badge > 0 { CountBadge(badge, tint: category.color.swatch) }
+            if !category.actions.isEmpty {
+                Image(systemName: "bolt.fill").font(.system(size: 8)).foregroundStyle(CDS.Text.muted).accessibilityHidden(true)
+            }
         }
         .font(CDS.sans(13, .medium))
         .foregroundStyle(selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted)

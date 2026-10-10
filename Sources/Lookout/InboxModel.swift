@@ -29,6 +29,10 @@ enum PersonRef: Codable, Hashable {
     case maintainers
     /// Accounts GitHub marks as bots.
     case bots
+    /// A team asked to review: `org/team` (shown `@org/team`). Only means something in `to`.
+    case team(String)
+    /// Every team you're in (resolved daily). Only means something in `to`.
+    case myTeams
 }
 
 /// Somewhere a slot names.
@@ -38,7 +42,7 @@ enum RepoRef: Codable, Hashable {
     case owner(String)
     case group(UUID)
     case owned
-    /// Repos with a merged PR of yours.
+    /// Repos with a merged or open PR of yours.
     case contributed
     /// PRs and issues only: you're the author, assignee or requested reviewer, were mentioned, or commented.
     case involved
@@ -77,14 +81,25 @@ enum ThingStatus: String, Codable, CaseIterable, Hashable {
     case open, draft, merged, closed
 }
 
-/// A fact a rule asks for. Activity conditions are events since you last marked the thing done;
-/// the others are true or not right now.
+/// What an activity condition counts events after.
+enum Since: String, Codable, CaseIterable, Hashable {
+    /// Since you last marked the thing done (or the rule was made): the default.
+    case done
+    /// After your latest review on the thing; with none, nothing matches.
+    case myLastReview
+    /// After your latest comment on the thing (a conversation comment, a review with text, a thread reply); with none,
+    /// since the thing was created.
+    case myLastComment
+}
+
+/// A fact a rule asks for. Activity conditions are events since a point (`Since`, by default you last marked the thing
+/// done); the others are true or not right now.
 enum Condition: Codable, Hashable {
     // Activity
-    case newComment(by: Pick<PersonRef>)
-    case newReview(by: Pick<PersonRef>)
-    case newCommits(by: Pick<PersonRef>)
-    case mentions(Pick<PersonRef>)
+    case newComment(by: Pick<PersonRef>, since: Since = .done)
+    case newReview(by: Pick<PersonRef>, since: Since = .done)
+    case newCommits(by: Pick<PersonRef>, since: Since = .done)
+    case mentions(Pick<PersonRef>, since: Since = .done)
     // Conversation
     /// The latest Conversation-tab comment (reviews with text count, inline threads don't).
     case lastComment(by: Pick<PersonRef>)
@@ -96,6 +111,9 @@ enum Condition: Codable, Hashable {
     // Checks
     case checks(Set<CheckState>)
     case hasConflicts
+    /// The base branch has moved on (GitHub's mergeStateStatus BEHIND; only reported when the base branch's protection
+    /// requires branches to be up to date).
+    case behindBase
     // Status
     /// PRs/issues: draft, ready (= open and not draft), merged, closed. `.open` here means ready for review.
     case status(Set<ThingStatus>)
@@ -105,6 +123,107 @@ enum Condition: Codable, Hashable {
     case greptileBelow(Int)
     // Workflows
     case workflow(Set<CheckState>)
+}
+
+// Rules saved before `since` have no such key: the activity cases are read by hand, the rest as they always were.
+extension Condition {
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    private enum ActivityKey: String, CodingKey { case by, _0, since }
+
+    private enum Activity: String { case newComment, newReview, newCommits, mentions }
+
+    /// Every case but the activity ones, encoded the way the synthesized coding always did.
+    private enum Other: Codable {
+        case lastComment(by: Pick<PersonRef>)
+        case unresolvedThreads(startedBy: Pick<PersonRef>?, lastReplyBy: Pick<PersonRef>?)
+        case approved(by: Pick<PersonRef>)
+        case changesRequested(by: Pick<PersonRef>)
+        case checks(Set<CheckState>)
+        case hasConflicts
+        case behindBase
+        case status(Set<ThingStatus>)
+        case labeled(Pick<String>)
+        case noActivity(days: Int)
+        case greptileBelow(Int)
+        case workflow(Set<CheckState>)
+
+        init?(_ c: Condition) {
+            switch c {
+            case .newComment, .newReview, .newCommits, .mentions: return nil
+            case .lastComment(let by): self = .lastComment(by: by)
+            case .unresolvedThreads(let a, let b): self = .unresolvedThreads(startedBy: a, lastReplyBy: b)
+            case .approved(let by): self = .approved(by: by)
+            case .changesRequested(let by): self = .changesRequested(by: by)
+            case .checks(let s): self = .checks(s)
+            case .hasConflicts: self = .hasConflicts
+            case .behindBase: self = .behindBase
+            case .status(let s): self = .status(s)
+            case .labeled(let p): self = .labeled(p)
+            case .noActivity(let d): self = .noActivity(days: d)
+            case .greptileBelow(let n): self = .greptileBelow(n)
+            case .workflow(let s): self = .workflow(s)
+            }
+        }
+
+        var condition: Condition {
+            switch self {
+            case .lastComment(let by): .lastComment(by: by)
+            case .unresolvedThreads(let a, let b): .unresolvedThreads(startedBy: a, lastReplyBy: b)
+            case .approved(let by): .approved(by: by)
+            case .changesRequested(let by): .changesRequested(by: by)
+            case .checks(let s): .checks(s)
+            case .hasConflicts: .hasConflicts
+            case .behindBase: .behindBase
+            case .status(let s): .status(s)
+            case .labeled(let p): .labeled(p)
+            case .noActivity(let d): .noActivity(days: d)
+            case .greptileBelow(let n): .greptileBelow(n)
+            case .workflow(let s): .workflow(s)
+            }
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let top = try decoder.container(keyedBy: AnyKey.self)
+        guard let key = top.allKeys.first, let kind = Activity(rawValue: key.stringValue) else {
+            self = try Other(from: decoder).condition
+            return
+        }
+        let c = try top.nestedContainer(keyedBy: ActivityKey.self, forKey: key)
+        // `by` for the labeled cases, `_0` for mentions.
+        let pick = try c.decodeIfPresent(Pick<PersonRef>.self, forKey: .by) ?? c.decode(Pick<PersonRef>.self, forKey: ._0)
+        let since = try c.decodeIfPresent(Since.self, forKey: .since) ?? .done
+        switch kind {
+        case .newComment: self = .newComment(by: pick, since: since)
+        case .newReview: self = .newReview(by: pick, since: since)
+        case .newCommits: self = .newCommits(by: pick, since: since)
+        case .mentions: self = .mentions(pick, since: since)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        let name: String, pick: Pick<PersonRef>, since: Since
+        let labeled: Bool
+        switch self {
+        case .newComment(let p, let s): (name, pick, since, labeled) = ("newComment", p, s, true)
+        case .newReview(let p, let s): (name, pick, since, labeled) = ("newReview", p, s, true)
+        case .newCommits(let p, let s): (name, pick, since, labeled) = ("newCommits", p, s, true)
+        case .mentions(let p, let s): (name, pick, since, labeled) = ("mentions", p, s, false)
+        default:
+            try Other(self)?.encode(to: encoder)
+            return
+        }
+        var top = encoder.container(keyedBy: AnyKey.self)
+        var c = top.nestedContainer(keyedBy: ActivityKey.self, forKey: AnyKey(stringValue: name)!)
+        try c.encode(pick, forKey: labeled ? .by : ._0)
+        if since != .done { try c.encode(since, forKey: .since) }
+    }
 }
 
 enum MatchMode: String, Codable, Hashable {
@@ -139,6 +258,8 @@ struct InboxCategory: Codable, Hashable, Identifiable {
     var hidden = false
     /// CI: the default category, whose rules only take repos.
     var isCI = false
+    /// What it does by itself when a thing comes in (InboxActions.swift).
+    var actions = ActionList()
 }
 
 struct InboxGroup: Codable, Hashable, Identifiable {
@@ -206,6 +327,13 @@ struct ThingCommit: Codable, Hashable, Identifiable {
     var at: Date
 }
 
+/// A review someone was asked for, and when: a new request after a review is a new fact.
+struct ThingReviewRequest: Codable, Hashable {
+    /// A login, or `org/team`.
+    var reviewer: String
+    var at: Date
+}
+
 /// A PR, issue or workflow as last fetched: everything the conditions read.
 struct Thing: Codable, Hashable, Identifiable {
     /// `pr:owner/repo#12`, `issue:owner/repo#3`, `workflow:owner/repo:<workflow id>@<branch>`.
@@ -219,6 +347,7 @@ struct Thing: Codable, Hashable, Identifiable {
     var status: ThingStatus = .open
     var labels: [String] = []
     var assignees: [String] = []
+    /// Logins, and `org/team` for teams.
     var requestedReviewers: [String] = []
     /// Logins @-mentioned in the body or any comment, lowercased.
     var mentioned: [String] = []
@@ -230,6 +359,12 @@ struct Thing: Codable, Hashable, Identifiable {
     var commits: [ThingCommit] = []
     var checks: CheckState?
     var hasConflicts = false
+    /// GitHub's mergeStateStatus is BEHIND.
+    var behindBase = false
+    /// The latest commit's id.
+    var headSha: String?
+    /// When each current review request was made (the latest `ReviewRequestedEvent` per reviewer).
+    var reviewRequests: [ThingReviewRequest] = []
     var greptileScore: Int?
     // Workflows
     var workflowName: String?
@@ -281,5 +416,7 @@ struct InboxContext {
     var groups: [InboxGroup] = []
     var ownedRepos: Set<String> = []
     var contributedRepos: Set<String> = []
+    /// `org/team` of every team you're in.
+    var myTeams: Set<String> = []
     var now = Date()
 }

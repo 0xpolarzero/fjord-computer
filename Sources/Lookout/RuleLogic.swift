@@ -20,7 +20,7 @@ enum RuleEditing {
             [.newComment(by: Pick()), .newReview(by: Pick()), .newCommits(by: Pick()), .mentions(Pick(include: [.me])),
              .lastComment(by: Pick()), .unresolvedThreads(startedBy: nil, lastReplyBy: nil),
              .approved(by: Pick()), .changesRequested(by: Pick()),
-             .checks([.failing]), .hasConflicts,
+             .checks([.failing]), .hasConflicts, .behindBase,
              .status([.draft]), .labeled(Pick()), .noActivity(days: 7), .greptileBelow(4)]
         case .issue:
             [.newComment(by: Pick()), .mentions(Pick(include: [.me])), .lastComment(by: Pick()),
@@ -43,6 +43,7 @@ enum RuleEditing {
         case .changesRequested: "changesRequested"
         case .checks: "checks"
         case .hasConflicts: "hasConflicts"
+        case .behindBase: "behindBase"
         case .status: "status"
         case .labeled: "labeled"
         case .noActivity: "noActivity"
@@ -57,7 +58,7 @@ enum RuleEditing {
         case .newComment, .newReview, .newCommits, .mentions: "Activity"
         case .lastComment, .unresolvedThreads: "Conversation"
         case .approved, .changesRequested: "Review"
-        case .checks, .hasConflicts: "Checks"
+        case .checks, .hasConflicts, .behindBase: "Checks"
         case .status, .labeled, .noActivity, .workflow: "Status"
         case .greptileBelow: "Signals"
         }
@@ -76,6 +77,7 @@ enum RuleEditing {
         case .changesRequested: "Changes requested by…"
         case .checks: "Checks failing, pending, passing"
         case .hasConflicts: "Has conflicts"
+        case .behindBase: "Behind base branch"
         case .status: "Is draft, ready, merged, closed"
         case .labeled: "Labeled…"
         case .noActivity: "No activity for N days"
@@ -97,6 +99,7 @@ enum RuleEditing {
         case .changesRequested: "changes requested"
         case .checks: "check states"
         case .hasConflicts: "has conflicts"
+        case .behindBase: "behind base branch"
         case .status: "status"
         case .labeled: "labels"
         case .noActivity: "no activity for N days"
@@ -116,6 +119,21 @@ enum RuleEditing {
         let list = items.count > 1 ? items.dropLast().joined(separator: ", ") + ", and " + items[items.count - 1] : items[0]
         return "Dropped for \(kind.label): \(list)"
     }
+
+    /// What `since` offers for a kind: issues have no reviews.
+    static func sinces(_ kind: ThingKind) -> [Since] {
+        kind == .issue ? [.done, .myLastComment] : Since.allCases
+    }
+
+    static func sinceTitle(_ since: Since) -> String {
+        switch since {
+        case .done: "Done"
+        case .myLastReview: "my last review"
+        case .myLastComment: "my last comment"
+        }
+    }
+
+    static let behindTip = "GitHub only says a PR is behind its base branch when the base has branch protection that requires branches to be up to date before merging"
 
     /// The roles "to" can mean for a kind.
     static func roles(_ kind: ThingKind) -> [ToRole] {
@@ -227,24 +245,47 @@ extension Pick {
 extension Condition {
     var people: Pick<PersonRef>? {
         switch self {
-        case .newComment(let p), .newReview(let p), .newCommits(let p), .mentions(let p), .lastComment(let p),
+        case .newComment(let p, _), .newReview(let p, _), .newCommits(let p, _), .mentions(let p, _), .lastComment(let p),
              .approved(let p), .changesRequested(let p): p
         default: nil
         }
     }
 
+    /// Activity conditions count events after a point; nil for the others.
+    var since: Since? {
+        switch self {
+        case .newComment(_, let s), .newReview(_, let s), .newCommits(_, let s), .mentions(_, let s): s
+        default: nil
+        }
+    }
+
+    func with(since s: Since) -> Condition {
+        switch self {
+        case .newComment(let p, _): .newComment(by: p, since: s)
+        case .newReview(let p, _): .newReview(by: p, since: s)
+        case .newCommits(let p, _): .newCommits(by: p, since: s)
+        case .mentions(let p, _): .mentions(p, since: s)
+        default: self
+        }
+    }
+
     func with(people p: Pick<PersonRef>) -> Condition {
         switch self {
-        case .newComment: .newComment(by: p)
-        case .newReview: .newReview(by: p)
-        case .newCommits: .newCommits(by: p)
-        case .mentions: .mentions(p)
+        case .newComment(_, let s): .newComment(by: p, since: s)
+        case .newReview(_, let s): .newReview(by: p, since: s)
+        case .newCommits(_, let s): .newCommits(by: p, since: s)
+        case .mentions(_, let s): .mentions(p, since: s)
         case .lastComment: .lastComment(by: p)
         case .approved: .approved(by: p)
         case .changesRequested: .changesRequested(by: p)
         default: self
         }
     }
+
+    static let sinceTip = "Done: since you last marked the thing done (or made the rule). My last review: after your latest review there; with none, nothing matches. My last comment: after your latest comment, review with text or thread reply; with none, since it was opened"
+
+    /// What hovering the condition's words says.
+    var tip: String? { self == .behindBase ? RuleEditing.behindTip : nil }
 
     /// The words before the values.
     var phrase: String {
@@ -259,6 +300,7 @@ extension Condition {
         case .changesRequested: "changes requested by"
         case .checks: "checks"
         case .hasConflicts: "has conflicts"
+        case .behindBase: "is behind base branch"
         case .status: "is"
         case .labeled: "labeled"
         case .noActivity: "no activity for"
@@ -283,6 +325,8 @@ struct EditorData {
         case .group(let id): group(id)?.name ?? "missing group"
         case .maintainers: "Maintainers"
         case .bots: "Bots"
+        case .team(let slug): "@" + slug
+        case .myTeams: "My teams"
         }
     }
 
@@ -293,6 +337,7 @@ struct EditorData {
         case .group: "person.2"
         case .maintainers: "wrench.and.screwdriver"
         case .bots: "cpu"
+        case .team, .myTeams: "person.3"
         }
     }
 
@@ -350,7 +395,7 @@ struct EditorData {
         for t in store.things.values {
             see(t.author?.login)
             t.assignees.forEach(see)
-            t.requestedReviewers.forEach(see)
+            t.requestedReviewers.filter { !$0.contains("/") }.forEach(see)
             t.comments.forEach { see($0.author.login) }
             t.reviews.forEach { see($0.author.login) }
             t.commits.forEach { see($0.author) }
@@ -392,11 +437,21 @@ struct EditorData {
 
     // MARK: Autocomplete
 
-    func peopleOptions(_ query: String, _ pick: Pick<PersonRef>) -> [SlotOption<PersonRef>] {
+    /// Teams asked to review on fetched things, and yours; `org/team`, most seen first.
+    func teams() -> [String] {
+        var counts: [String: Int] = [:]
+        for t in store.things.values { for r in t.requestedReviewers where r.contains("/") { counts[r, default: 0] += 1 } }
+        for team in store.myTeams { counts[team, default: 0] += 1 }
+        return counts.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
+    }
+
+    func peopleOptions(_ query: String, _ pick: Pick<PersonRef>, teams allowsTeams: Bool = false) -> [SlotOption<PersonRef>] {
         var q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.hasPrefix("@") { q.removeFirst() }
         var all: [PersonRef] = [.me, .maintainers, .bots]
+        if allowsTeams { all.append(.myTeams) }
         all += store.groups.filter { $0.kind == .people }.map { PersonRef.group($0.id) }
+        if allowsTeams { all += teams().map(PersonRef.team) }
         all += logins().map(PersonRef.user)
         let taken = Set(pick.include + pick.except)
         let rows = all.filter { !taken.contains($0) && (q.isEmpty || searchKeys($0).contains { $0.contains(q) }) }
@@ -450,13 +505,14 @@ struct EditorData {
         switch p {
         case .maintainers: "People with write access to the repo the thing is in"
         case .bots: "Accounts GitHub marks as bots"
+        case .myTeams: "Every team you're in: PRs asking one of them for review"
         default: nil
         }
     }
 
     private func repoTip(_ r: RepoRef) -> String? {
         switch r {
-        case .contributed: "Repos where you have merged a PR"
+        case .contributed: "Repos where you have a merged or open PR"
         case .involved: "Anywhere you are the author, an assignee or a reviewer"
         default: nil
         }
@@ -470,6 +526,18 @@ struct EditorData {
     }
 
     // MARK: Parsing what is typed
+
+    /// A team is `@org/team`, only where teams are allowed.
+    func parsePerson(_ text: String, teams: Bool) -> PersonRef? {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        if teams, t.lowercased() == "my teams" { return .myTeams }
+        let slug = t.hasPrefix("@") ? String(t.dropFirst()) : t
+        let parts = slug.split(separator: "/", omittingEmptySubsequences: false)
+        if teams, parts.count == 2, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isLetter || $0.isNumber || "-_.".contains($0) } }) {
+            return .team(slug)
+        }
+        return parsePerson(text)
+    }
 
     func parsePerson(_ text: String) -> PersonRef? {
         let t = text.trimmingCharacters(in: .whitespaces)
@@ -502,14 +570,16 @@ struct PeopleSlot: View {
     var tone: ChipTone = .neutral
     /// Values that can never match here, so are not offered.
     var hidden: Set<PersonRef> = []
+    /// `to` can name teams asked to review.
+    var teams = false
 
     var body: some View {
         let data = EditorData(store: store)
         let users = pick.include.filter { if case .user = $0 { true } else { false } }
         SlotField(pick: $pick, placeholder: placeholder, tone: tone,
                   title: data.personTitle, symbol: data.personSymbol, isBroken: data.isBroken,
-                  options: { q, p in data.peopleOptions(q, p).filter { !hidden.contains($0.value) } },
-                  parse: data.parsePerson,
+                  options: { q, p in data.peopleOptions(q, p, teams: teams).filter { !hidden.contains($0.value) } },
+                  parse: { data.parsePerson($0, teams: teams) },
                   groupable: users.count,
                   saveGroup: users.count >= 2 ? { name in
                       let members = users.compactMap { v -> String? in if case .user(let l) = v { l } else { nil } }

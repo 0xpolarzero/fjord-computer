@@ -202,6 +202,7 @@ struct EntryRow: View {
                             .foregroundStyle(CDS.Text.muted)
                             .lineLimit(1)
                         if let tag = ThingStatusTag.shows(thing.status) { ThingStatusTag(status: tag) }
+                        ForEach(store.actionChips(for: entry)) { chip in ActionChipView(chip: chip, store: store) }
                     }
                     .frame(height: Self.line)
                     if !chips.isEmpty { FactChips(facts: chips) }
@@ -1184,4 +1185,33 @@ private struct RouterCellLabel: View {
 extension String {
     /// nil for an empty string, for `??` defaults.
     var nonEmpty: String? { isEmpty ? nil : self }
+}
+
+
+/// What an action did for a thing, or that it waits: a small ⚡ chip; the session or the comment opens when it has one.
+struct ActionChipView: View {
+    let chip: InboxActions.Chip
+    let store: Store
+
+    var body: some View {
+        let (fill, ink) = FactChip.colors(chip.tint)
+        let face = HStack(spacing: 3) {
+            Image(systemName: "bolt.fill").font(.system(size: 8))
+            Text(chip.label).lineLimit(1)
+        }
+        .font(Theme.Typography.caption)
+        .foregroundStyle(ink)
+        .padding(.horizontal, 6)
+        .frame(height: CDS.Badge.height)
+        .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(fill))
+        if let target = chip.target {
+            Button { store.openActionTarget(target) } label: { face }
+                .buttonStyle(.plain)
+                .help(chip.help)
+                .accessibilityLabel("Action: \(chip.label)")
+                .accessibilityHint(chip.help)
+        } else {
+            face.help(chip.help).accessibilityLabel("Action: \(chip.label)")
+        }
+    }
 }

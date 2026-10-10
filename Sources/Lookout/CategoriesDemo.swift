@@ -5,7 +5,7 @@ import SwiftUI
 // groups seeded here. Each is the hub page's width, tall enough to show the whole page.
 
 enum CategoriesShot: String, CaseIterable {
-    case page, editor, impossible, groups, autocomplete, single, switched
+    case page, editor, actions, impossible, groups, autocomplete, single, switched
 
     var name: String { "right-categories-\(rawValue)" }
 
@@ -13,6 +13,7 @@ enum CategoriesShot: String, CaseIterable {
         switch self {
         case .page: 760
         case .editor: 780
+        case .actions: 1100
         case .impossible: 900
         case .groups: 800
         case .autocomplete: 400
@@ -36,6 +37,45 @@ enum CategoriesDemo {
     static let single = UUID(uuidString: "00000000-0000-0000-0000-0000000000B4")!
     static let switched = UUID(uuidString: "00000000-0000-0000-0000-0000000000B5")!
 
+    static let sessionAction = UUID(uuidString: "00000000-0000-0000-0000-0000000000C1")!
+    static let commentAction = UUID(uuidString: "00000000-0000-0000-0000-0000000000C2")!
+    static let rerunAction = UUID(uuidString: "00000000-0000-0000-0000-0000000000C3")!
+
+    /// Actions on a category, and what they did for some of its things (the hub's rows say it). Nothing here is done for real.
+    static func seedActions(_ store: Store, categories names: [String: [CategoryAction]]) {
+        for i in store.categories.indices {
+            if let actions = names[store.categories[i].name] { store.categories[i].actions = ActionList(actions) }
+        }
+        var ledger = ActionLedger()
+        _ = InboxActions.plan(entries: store.entries, categories: store.categories, ledger: &ledger, me: store.me?.login ?? "demo")
+        let now = Date()
+        func record(_ category: String, _ n: Int, _ action: UUID, _ state: ActionRun.State, _ detail: String, ago: TimeInterval,
+                    url: URL? = nil, session: String? = nil) {
+            guard let c = store.categories.first(where: { $0.name == category }),
+                  let e = store.entries.filter({ $0.categoryID == c.id }).sorted(by: { $0.id < $1.id })[safe: n] else { return }
+            ledger.set(ActionRun(category: c.id, thing: e.id, action: action, trigger: "enter", state: state,
+                                 at: now.addingTimeInterval(-ago), detail: detail, url: url, sessionID: session))
+        }
+        record("Contributions", 0, sessionAction, .done, "session started", ago: 130, session: "local_demo")
+        record("Contributions", 1, sessionAction, .failed, "no local clone of ziglang/zig among your projects", ago: 900)
+        record("Contributions", 2, sessionAction, .done, "session started", ago: 3 * 3600, session: "local_demo2")
+        record("Reviews for you", 0, commentAction, .done, "commented", ago: 600,
+               url: URL(string: "https://github.com/ziglang/zig/pull/1#issuecomment-1"))
+        record("CI", 0, rerunAction, .done, "re-ran 2 jobs", ago: 300)
+        // The second of the Contributions' things is waiting its turn.
+        if let c = store.categories.first(where: { $0.name == "Contributions" }),
+           let e = store.entries.filter({ $0.categoryID == c.id }).sorted(by: { $0.id < $1.id })[safe: 3] {
+            ledger.runs[ActionLedger.key(c.id, e.id, sessionAction, "enter")] = nil
+        }
+        store.actionLedger = ledger
+    }
+
+    static let demoActions: [String: [CategoryAction]] = [
+        "Contributions": [CategoryAction(id: sessionAction, kind: .session(.clone, prompt: "Address what {url} is waiting on."))],
+        "Reviews for you": [CategoryAction(id: commentAction, kind: .comment("Thanks {author}, I'll take a look today."))],
+        "CI": [CategoryAction(id: rerunAction, kind: .rerun)],
+    ]
+
     /// Demo categories and groups, over whatever the scenario put there.
     static func seed(_ store: Store) {
         let me = PersonRef.me
@@ -47,6 +87,8 @@ enum CategoriesDemo {
                     .lastComment(by: Pick(include: [.maintainers, greptile])),
                     .unresolvedThreads(startedBy: Pick(include: [.maintainers, greptile]), lastReplyBy: Pick(except: [me])),
                     .changesRequested(by: Pick(include: [.maintainers])),
+                    .newComment(by: Pick(include: [.maintainers]), since: .myLastReview),
+                    .behindBase,
                     .greptileBelow(5),
                 ]),
             ]),
@@ -59,6 +101,10 @@ enum CategoriesDemo {
                 Rule(scope: Scope(kind: .pr, by: Pick(include: [.bots]), in: Pick(include: [.contributed])), conditions: []),
             ], notifies: false, hidden: true),
         ] + InboxStore.defaultCategories
+        store.categories[0].actions = ActionList([
+            CategoryAction(id: sessionAction, kind: .session(.clone, prompt: "Address what {url} is waiting on.")),
+            CategoryAction(id: commentAction, kind: .comment("Thanks {author}, taking another look."), trigger: .eachFact),
+        ])
         // Fetched things: the preview has history for both repos.
         let now = Date()
         func thing(_ repo: String, _ n: Int, _ title: String) -> Thing {
@@ -104,6 +150,9 @@ enum CategoriesDemo {
         switch shot {
         case .page: break
         case .editor: preview.editing = .existing(mine)
+        case .actions:
+            store.categories[0].actions.items.append(CategoryAction(kind: .rerun))
+            preview.editing = .existing(mine)
         case .impossible:
             seedImpossible(store)
             preview.editing = .existing(owed)
@@ -155,4 +204,9 @@ enum CategoriesDemo {
         window.orderFrontRegardless()
         return window
     }
+}
+
+
+private extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
 }

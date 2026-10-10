@@ -34,6 +34,21 @@ final class Store {
     var contributedRepos: Set<String> = [] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
     }
+    /// The teams you're in, `org/team` (what `My teams` means), resolved with the repos.
+    var myTeams: Set<String> = [] {
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
+    }
+    /// What the categories' actions have done and what was already there when they began (InboxActions.swift); kept in its
+    /// own file next to the state.
+    var actionLedger = ActionLedger() {
+        didSet { saveActions() }
+    }
+    /// Does what actions do; nil is the real one (and nothing at all in the playground and tests).
+    @ObservationIgnored var actionPerformer: ActionPerformer?
+    @ObservationIgnored var actionsBusy = false
+    @ObservationIgnored var actionsAgain = false
+    /// Runs at most this many per refresh.
+    @ObservationIgnored var actionLimit = InboxActions.perSync
     /// What the last inbox refresh failed at, if it did (InboxSync.swift); the things it had stay.
     var inboxError: String?
     /// Repos (lowercased) GitHub said don't exist, or can't be seen: their chips are red and block Save.
@@ -47,6 +62,8 @@ final class Store {
     @ObservationIgnored var reposResolvedAt: Date? {
         didSet { persistedRevision &+= 1 }
     }
+    /// When myTeams was last resolved (this session; at most daily).
+    @ObservationIgnored var teamsResolvedAt: Date?
     /// Default branches found for workflow things, by repo.
     @ObservationIgnored var defaultBranches: [String: String] = [:]
     /// A commit's headline by repo, asked once per commit (see `ciHeadline`).
@@ -271,6 +288,9 @@ final class Store {
     /// Where the state is kept, when not in the user's own file: a test's, in a folder of its own. A test run that reaches the
     /// user's file stops (see `UnderTest`).
     @ObservationIgnored var stateFile: URL?
+
+    /// Where the state file is (its neighbours live beside it).
+    var stateFileURL: URL? { file }
 
     /// The file the state is read from and written to; nil when a test has not said where, and was stopped for it.
     private var file: URL? {
@@ -547,8 +567,10 @@ final class Store {
         categoryBaselines = state.categoryBaselines ?? [:]
         ownedRepos = state.ownedRepos ?? []
         contributedRepos = state.contributedRepos ?? []
+        myTeams = state.myTeams ?? []
         reposResolvedAt = state.reposResolvedAt
         savedRevision = persistedRevision
+        loadActions()
     }
 
     private static let writer = DispatchQueue(label: "lookout.save")
@@ -583,7 +605,8 @@ final class Store {
         let box = SnapshotBox(state: PersistedState(settings: settings, agents: agents, router: router, categories: categories,
                                                        groups: groups, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
-                                                       contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt))
+                                                       contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
+                                                       myTeams: myTeams))
         let write: @Sendable () -> Void = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601

@@ -2,15 +2,23 @@ import Foundation
 import Testing
 @testable import Lookout
 
+private func iso(_ text: String) -> Date? { try? Date.ISO8601FormatStyle().parse(text) }
+
 private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     var n: [String: Any] = [
         "__typename": "PullRequest", "id": "PR_1", "number": 12, "title": "Add sandbox", "url": "https://github.com/o/r/pull/12",
         "isDraft": false, "state": "OPEN", "merged": false, "createdAt": "2026-10-01T10:00:00Z", "updatedAt": "2026-10-09T10:00:00Z",
-        "body": "Hello @Reviewer and @org/team\n<!-- greptile_confidence_score:3 -->", "mergeable": "CONFLICTING",
+        "body": "Hello @Reviewer and @org/team\n<!-- greptile_confidence_score:3 -->", "mergeable": "CONFLICTING", "mergeStateStatus": "BEHIND",
+        "requestEvents": ["nodes": [
+            ["createdAt": "2026-10-02T10:00:00Z", "requestedReviewer": ["login": "bob"]],
+            ["createdAt": "2026-10-04T10:00:00Z", "requestedReviewer": ["login": "bob"]],
+            ["createdAt": "2026-10-03T10:00:00Z", "requestedReviewer": ["combinedSlug": "org/core"]],
+            ["createdAt": "2026-10-01T10:00:00Z", "requestedReviewer": ["login": "gone"]],
+        ]],
         "repository": ["nameWithOwner": "o/r"],
         "author": ["login": "me", "__typename": "User", "avatarUrl": "https://a/me"], "authorAssociation": "CONTRIBUTOR",
         "labels": ["nodes": [["name": "bug"]]], "assignees": ["nodes": [["login": "alice"]]],
-        "reviewRequests": ["nodes": [["requestedReviewer": ["login": "bob"]], ["requestedReviewer": ["slug": "core"]]]],
+        "reviewRequests": ["nodes": [["requestedReviewer": ["login": "bob"]], ["requestedReviewer": ["combinedSlug": "org/core"]]]],
         "comments": ["nodes": [
             ["id": "c1", "createdAt": "2026-10-05T10:00:00Z", "body": "ping @Me ```@code```", "authorAssociation": "NONE",
              "author": ["login": "greptile-apps", "__typename": "Bot", "avatarUrl": "https://a/g"]],
@@ -53,7 +61,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(t.kind == .pr && t.repo == "o/r" && t.number == 12)
         #expect(t.status == .open)
         #expect(t.author == Person(login: "me", isBot: false, association: .contributor, avatar: URL(string: "https://a/me")))
-        #expect(t.labels == ["bug"] && t.assignees == ["alice"] && t.requestedReviewers == ["bob", "core"])
+        #expect(t.labels == ["bug"] && t.assignees == ["alice"] && t.requestedReviewers == ["bob", "org/core"])
         #expect(t.greptileScore == 3)
         #expect(t.hasConflicts)
         #expect(t.checks == .failing)
@@ -183,7 +191,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         var score = 3
     }
 
-    nonisolated private static func body(_ request: URLRequest) -> String {
+    nonisolated static func body(_ request: URLRequest) -> String {
         var data = request.httpBody ?? Data()
         if data.isEmpty, let stream = request.httpBodyStream {
             stream.open()
@@ -361,5 +369,85 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         s.categories[0].rules[0].scope.named = ["lint"]
         await s.syncInbox()
         #expect(s.entries.map(\.id) == ["workflow:a/x:12@main"])
+    }
+}
+
+
+@Suite struct InboxSyncRequestsAndTeams {
+    private func rule(_ scope: Scope) -> InboxCategory {
+        InboxCategory(name: "T", symbol: "eye", color: .blue, rules: [Rule(scope: scope)])
+    }
+
+    private func searches(_ categories: [InboxCategory]) -> [String] {
+        InboxSync.searches(categories: categories, groups: [], me: "me", owned: [], contributed: [])
+    }
+
+    // MARK: Review requests, behind base, teams, contributed
+
+    @Test func reviewRequestsKeepWhenEachWasMadeAndTheLatestOfARepeatedOneWins() throws {
+        let t = try #require(InboxSync.thing(node()))
+        let at = Dictionary(uniqueKeysWithValues: t.reviewRequests.map { ($0.reviewer, $0.at) })
+        #expect(at["bob"] == iso("2026-10-04T10:00:00Z"))
+        #expect(at["org/core"] == iso("2026-10-03T10:00:00Z"))
+        // Requests no longer pending (gone) aren't kept.
+        #expect(at["gone"] == nil && t.reviewRequests.count == 2)
+    }
+
+    @Test func behindBaseAndTheHeadCommitAreRead() throws {
+        let t = try #require(InboxSync.thing(node()))
+        #expect(t.behindBase && t.headSha == "abc")
+        #expect(try #require(InboxSync.thing(node(["mergeStateStatus": "CLEAN"]))).behindBase == false)
+    }
+
+    @Test func theQueryAsksForMergeStateRequestEventsAndTeamSlugs() {
+        let q = InboxSync.request([("s0", "is:pr", nil)])
+        #expect(q.contains("mergeStateStatus") && q.contains("REVIEW_REQUESTED_EVENT") && q.contains("combinedSlug"))
+        #expect(InboxSync.reposRequest(me: "me").contains("is:pr is:open author:me"))
+        #expect(InboxSync.teamsRequest(me: "me").contains("userLogins"))
+    }
+
+    @Test func teamsAreReadFromTheOrganizationsReply() {
+        let data: [String: Any] = ["viewer": ["organizations": ["nodes": [
+            ["teams": ["nodes": [["combinedSlug": "acme/core"], ["combinedSlug": "acme/ops"]]]],
+            ["teams": ["nodes": []]],
+        ]]]]
+        #expect(InboxSync.teams(data) == ["acme/core", "acme/ops"])
+        #expect(InboxSync.teams(nil).isEmpty)
+    }
+
+    @Test func teamsInToBecomeTeamReviewRequestedQueries() {
+        let mixed = searches([rule(Scope(kind: .pr, to: Pick(include: [.me, .team("@acme/core")]), toRoles: [.reviewRequested]))])
+        #expect(mixed.count == 2)
+        #expect(mixed.contains { $0.contains("review-requested:me") } && mixed.contains { $0.contains("team-review-requested:acme/core") })
+        let mine = InboxSync.searches(categories: [rule(Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))],
+                                      groups: [], me: "me", owned: [], contributed: [], myTeams: ["a/x", "a/y"])
+        #expect(mine.count == 2 && mine.allSatisfy { $0.contains("team-review-requested:a/") })
+        // Not resolved yet (or in none): nothing to search, rather than every PR on GitHub.
+        #expect(searches([rule(Scope(kind: .pr, to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))]).isEmpty)
+        // Teams only count for review requests.
+        #expect(searches([rule(Scope(kind: .pr, to: Pick(include: [.team("a/x")]), toRoles: [.assigned]))]).isEmpty)
+    }
+
+    @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {
+        let s = Store()
+        s.persists = false
+        s.gh.session = StubbedGitHub.session { request in
+            let text = InboxSyncRefresh.body(request)
+            let data: [String: Any]
+            if text.contains("organizations") {
+                data = ["viewer": ["organizations": ["nodes": [["teams": ["nodes": [["combinedSlug": "acme/core"]]]]]]]]
+            } else {
+                data = ["viewer": ["repositories": ["nodes": [["nameWithOwner": "me/own"]]]],
+                        "merged": ["nodes": [["repository": ["nameWithOwner": "o/merged"]]]],
+                        "open": ["nodes": [["repository": ["nameWithOwner": "o/open"]]]]]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        try await s.resolveRepos(me: "me")
+        #expect(s.ownedRepos == ["me/own"] && s.contributedRepos == ["o/merged", "o/open"])
+        await s.resolveTeams(me: "me")
+        #expect(s.myTeams == ["acme/core"])
+        // The context hands both to the engine.
+        #expect(s.inboxContext.myTeams == ["acme/core"] && s.inboxContext.contributedRepos.contains("o/open"))
     }
 }

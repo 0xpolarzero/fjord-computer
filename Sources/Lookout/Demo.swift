@@ -432,6 +432,7 @@ enum Demo {
             default: break
             }
         }
+        CategoriesDemo.seedActions(store, categories: CategoriesDemo.demoActions)
     }
 
     private static func person(_ login: String, bot: Bool = false, assoc: Association = .none) -> Person {

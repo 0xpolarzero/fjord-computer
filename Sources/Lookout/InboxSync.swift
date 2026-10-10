@@ -29,12 +29,12 @@ enum InboxSync {
     /// The GitHub search queries that cover every rule's PRs and issues. What search can't say (maintainers, bots, `except`
     /// of groups) is left out, so a query may return more than the rule matches: the engine decides.
     static func searches(categories: [InboxCategory], groups: [InboxGroup], me: String, owned: Set<String>,
-                         contributed: Set<String>, now: Date = Date()) -> [String] {
+                         contributed: Set<String>, myTeams: Set<String> = [], now: Date = Date()) -> [String] {
         var out: [String] = []
         let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-Double(closedDays) * 86400)).prefix(10)
         for category in categories {
             for rule in category.rules where rule.scope.kind != .workflow {
-                let queries = searches(for: rule, groups: groups, me: me, owned: owned, contributed: contributed)
+                let queries = searches(for: rule, groups: groups, me: me, owned: owned, contributed: contributed, myTeams: myTeams)
                 for query in queries {
                     out.append(query + " is:open")
                     if asksForClosed(rule) { out.append(query + " is:closed updated:>=\(since)") }
@@ -55,11 +55,27 @@ enum InboxSync {
             case .user(let login): found.append(login.hasPrefix("@") ? String(login.dropFirst()) : login)
             case .group(let id): found += groups.first { $0.id == id && $0.kind == .people }?.members ?? []
             case .maintainers, .bots: return nil
+            // Teams are asked about by `teams(_:)`, not as logins.
+            case .team, .myTeams: break
             }
         }
         var seen = Set<String>()
         let unique = found.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
         return unique.isEmpty ? nil : unique
+    }
+
+    /// `org/team` a slot names: its teams, and yours for `My teams`.
+    static func teams(_ pick: Pick<PersonRef>?, myTeams: Set<String>) -> [String] {
+        var found: [String] = []
+        for ref in pick?.include ?? [] {
+            switch ref {
+            case .team(let slug): found.append(slug.hasPrefix("@") ? String(slug.dropFirst()) : slug)
+            case .myTeams: found += myTeams.sorted()
+            default: break
+            }
+        }
+        var seen = Set<String>()
+        return found.filter { seen.insert($0.lowercased()).inserted }
     }
 
     /// The qualifier for an author: a bot's login is `app/name` in search.
@@ -92,7 +108,8 @@ enum InboxSync {
     }
 
     /// Queries (without state) for one PR or issue rule.
-    static func searches(for rule: Rule, groups: [InboxGroup], me: String, owned: Set<String>, contributed: Set<String>) -> [String] {
+    static func searches(for rule: Rule, groups: [InboxGroup], me: String, owned: Set<String>, contributed: Set<String>,
+                         myTeams: Set<String> = []) -> [String] {
         let scope = rule.scope
         let base = (scope.kind == .pr ? "is:pr" : "is:issue") + " archived:false"
         let by = logins(scope.by, groups: groups, me: me)
@@ -105,9 +122,15 @@ enum InboxSync {
         var roles = scope.toRoles
         if scope.kind == .issue { roles.remove(.reviewRequested) }
         let to = roles.isEmpty ? nil : logins(scope.to, groups: groups, me: me)
+        let teams = scope.kind == .pr && roles.contains(.reviewRequested) ? teams(scope.to, myTeams: myTeams) : []
+        // Only teams asked for, and none known yet (not resolved, or you're in none): nothing to search for.
+        if let include = scope.to?.include, !roles.isEmpty, teams.isEmpty,
+           !include.isEmpty, include.allSatisfy({ if case .team = $0 { true } else { $0 == .myTeams } }) {
+            return []
+        }
         var toQualifiers: [String?] = [nil]
-        if let to {
-            toQualifiers = to.flatMap { login in
+        if to != nil || !teams.isEmpty {
+            toQualifiers = (to ?? []).flatMap { login in
                 roles.sorted { $0.rawValue < $1.rawValue }.map { role -> String? in
                     switch role {
                     case .assigned: "assignee:" + login
@@ -115,7 +138,7 @@ enum InboxSync {
                     case .mentioned: "mentions:" + login
                     }
                 }
-            }
+            } + teams.map { "team-review-requested:" + $0 }
         }
         var authors: [String?] = by?.map { "author:" + author($0) } ?? [nil]
         // Past the cap, the narrower slot is dropped: it over-fetches, and the engine filters.
@@ -156,12 +179,14 @@ enum InboxSync {
     static let fragments = """
     fragment C on Comment { id createdAt body authorAssociation author { \(personNode) } }
     fragment P on PullRequest {
-      id number title url isDraft state merged createdAt updatedAt body mergeable
+      id number title url isDraft state merged createdAt updatedAt body mergeable mergeStateStatus
       repository { nameWithOwner }
       \(person)
       labels(first: 10) { nodes { name } }
       assignees(first: 5) { nodes { login } }
-      reviewRequests(first: 5) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } }
+      reviewRequests(first: 5) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
+      requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 5) { nodes { ... on ReviewRequestedEvent {
+        createdAt requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } } }
       comments(last: 10) { nodes { ...C } }
       latestOpinionatedReviews(first: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
       reviews(last: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
@@ -198,13 +223,28 @@ enum InboxSync {
         return "query { rateLimit { cost remaining } \(body.joined(separator: "\n")) }\n" + fragments
     }
 
-    /// The repos you own and have merged PRs in.
+    /// The repos you own and have merged or open PRs in.
     static func reposRequest(me: String) -> String {
         """
         query { viewer { repositories(first: 100, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { nameWithOwner } } }
-          search(query: "is:pr is:merged author:\(escape(me)) sort:updated-desc", type: ISSUE, first: 100) {
+          merged: search(query: "is:pr is:merged author:\(escape(me)) sort:updated-desc", type: ISSUE, first: 100) {
+            nodes { ... on PullRequest { repository { nameWithOwner } } } }
+          open: search(query: "is:pr is:open author:\(escape(me)) sort:updated-desc", type: ISSUE, first: 100) {
             nodes { ... on PullRequest { repository { nameWithOwner } } } } }
         """
+    }
+
+    /// The teams you're in, across your organizations (`org/team`). Needs the read:org scope; without it, none.
+    static func teamsRequest(me: String) -> String {
+        """
+        query { viewer { organizations(first: 50) { nodes { teams(first: 100, userLogins: ["\(escape(me))"]) { nodes { combinedSlug } } } } } }
+        """
+    }
+
+    /// `org/team` out of a teams response.
+    static func teams(_ data: [String: Any]?) -> Set<String> {
+        let orgs = nodes(dict(dict(data?["viewer"])?["organizations"]))
+        return Set(orgs.flatMap { nodes($0["teams"]).compactMap { $0["combinedSlug"] as? String } })
     }
 
     // MARK: - Mapping
@@ -300,10 +340,19 @@ enum InboxSync {
         if isPR {
             thing.status = node["merged"] as? Bool == true ? .merged : node["state"] as? String == "CLOSED" ? .closed
                 : node["isDraft"] as? Bool == true ? .draft : .open
-            thing.requestedReviewers = nodes(node["reviewRequests"]).compactMap {
-                let r = dict($0["requestedReviewer"])
-                return r?["login"] as? String ?? r?["slug"] as? String
+            func reviewer(_ node: [String: Any]) -> String? {
+                let r = dict(node["requestedReviewer"])
+                return r?["login"] as? String ?? r?["combinedSlug"] as? String
             }
+            thing.requestedReviewers = nodes(node["reviewRequests"]).compactMap(reviewer)
+            // When each current request was made: the latest event for that reviewer.
+            var requested: [String: Date] = [:]
+            for event in nodes(node["requestEvents"]) {
+                guard let who = reviewer(event), let at = date(event["createdAt"]) else { continue }
+                if requested[who].map({ $0 < at }) ?? true { requested[who] = at }
+            }
+            thing.reviewRequests = thing.requestedReviewers.compactMap { who in requested[who].map { ThingReviewRequest(reviewer: who, at: $0) } }
+            thing.behindBase = node["mergeStateStatus"] as? String == "BEHIND"
             thing.greptileScore = greptileScore(body)
             thing.hasConflicts = node["mergeable"] as? String == "CONFLICTING"
 
@@ -359,6 +408,7 @@ enum InboxSync {
                 return ThingCommit(id: oid, author: dict(dict(c["author"])?["user"])?["login"] as? String ?? "", at: at)
             }
             thing.checks = commits.last.flatMap { checkState(dict($0["statusCheckRollup"])?["state"]) }
+            thing.headSha = commits.last?["oid"] as? String
         } else {
             thing.status = node["state"] as? String == "CLOSED" ? .closed : .open
         }
@@ -533,6 +583,8 @@ extension Store {
         let needsRepos = categories.contains { $0.rules.contains { rule in
             (rule.scope.in?.include ?? []).contains { $0 == .owned || $0 == .contributed }
         } }
+        let needsTeams = categories.contains { $0.rules.contains { $0.scope.to?.include.contains(.myTeams) == true } }
+        if needsTeams, teamsResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true { await resolveTeams(me: me) }
         if needsRepos, reposResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true {
             // A failure leaves what was known; with nothing known, the refresh waits: it would read as "nothing there".
             do { try await resolveRepos(me: me) } catch {
@@ -540,7 +592,7 @@ extension Store {
             }
         }
         let searches = InboxSync.searches(categories: categories, groups: groups, me: me, owned: ownedRepos,
-                                          contributed: contributedRepos)
+                                          contributed: contributedRepos, myTeams: myTeams)
         let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
                                                 contributed: contributedRepos)
         guard !searches.isEmpty || !targets.isEmpty else {
@@ -668,12 +720,24 @@ extension Store {
         }
         let viewer = data["viewer"] as? [String: Any]
         let owned = names((viewer?["repositories"] as? [String: Any])?["nodes"]) { $0["nameWithOwner"] as? String }
-        let merged = names((data["search"] as? [String: Any])?["nodes"]) { ($0["repository"] as? [String: Any])?["nameWithOwner"] as? String }
+        // A merged or an open PR of yours makes it a repo you contribute to.
+        let repoName: ([String: Any]) -> String? = { ($0["repository"] as? [String: Any])?["nameWithOwner"] as? String }
+        let merged = names((data["merged"] as? [String: Any])?["nodes"], repoName)
+            .union(names((data["open"] as? [String: Any])?["nodes"], repoName))
         if owned != ownedRepos { ownedRepos = owned }
         // Only grows: an older merge isn't forgotten because newer ones fill the page.
         let all = contributedRepos.union(merged)
         if all != contributedRepos { contributedRepos = all }
         reposResolvedAt = Date()
+    }
+
+    /// The teams you're in. A failure (no read:org, offline) leaves what was known; asked again in a day.
+    func resolveTeams(me: String) async {
+        teamsResolvedAt = Date()
+        guard let json = try? await gh.graphql(InboxSync.teamsRequest(me: me)),
+              let data = json["data"] as? [String: Any] else { return }
+        let teams = InboxSync.teams(data)
+        if teams != myTeams { myTeams = teams }
     }
 
     // MARK: Notifications
@@ -682,6 +746,7 @@ extension Store {
     /// evaluation (and any with rules it hasn't seen) is a baseline: what is there is noted, not announced. A fact that
     /// goes away is forgotten, so it announces again if it comes back.
     func announceInbox() {
+        defer { scheduleActions() }
         let all = entries
         var updated = marks
         var baselines = categoryBaselines
