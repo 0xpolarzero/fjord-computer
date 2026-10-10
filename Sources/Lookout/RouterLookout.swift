@@ -222,19 +222,45 @@ extension RouterTools {
         throw Failure("“\(q)” fits \(found.count) things: " + found.prefix(5).map { "\(reference($0.thing)) \($0.thing.title)" }.joined(separator: "; ") + ". Use a thing id from list_inbox.")
     }
 
-    /// The record of a change, for the card.
+    /// The record of a change, for the card. A change to what an earlier change of this turn touched joins that one's
+    /// record (one card, one `changed` in the decision); nil when the two together change nothing, and none is kept.
     @discardableResult
-    private func record(_ store: Store, _ change: LookoutChange) -> LookoutChange {
+    private func record(_ store: Store, _ change: LookoutChange) -> LookoutChange? {
         var state = store.router
+        for id in turnChanges.reversed() {
+            guard let i = state.changes.firstIndex(where: { $0.id == id }), !state.changes[i].isReverted else { continue }
+            switch state.changes[i].coalesced(with: change) {
+            case .separate:
+                continue
+            case .cancelled:
+                state.changes.remove(at: i)
+                turnChanges.removeAll { $0 == id }
+                store.router = state
+                store.dropChange(id)
+                return nil
+            case .merged(let merged):
+                let was = state.changes[i].title
+                state.changes[i] = merged
+                store.router = state
+                store.retitleChange(merged.id, from: was, to: merged.title)
+                return merged
+            }
+        }
         state.changes.append(change)
         RouterFeed.prune(&state)
         store.router = state
+        turnChanges.append(change.id)
         store.logChange(change, into: decision)
         return change
     }
 
-    private func done(_ store: Store, _ change: LookoutChange, _ extra: [String: Any] = [:]) -> String {
+    private func done(_ store: Store, _ change: LookoutChange?, _ extra: [String: Any] = [:]) -> String {
         var out = extra
+        guard let change else {
+            out["changed"] = "nothing"
+            out["note"] = "That put back what an earlier change of this turn had changed, so nothing is left to revert."
+            return Self.json(out)
+        }
         out["changed"] = change.title
         out["changeId"] = change.id.uuidString
         out["note"] = "Applied. The user has a card with Open and Revert."
@@ -314,9 +340,9 @@ extension RouterTools {
             change = LookoutChange(title: LookoutChange.title(forCategory: nil, c), patch: .category(index: at, before: nil, after: c))
         }
         store.categoriesChangedByRouter()
-        record(store, change)
+        let recorded = record(store, change)
         notes["category"] = categoryJSON(store, c)
-        return done(store, change, notes)
+        return done(store, recorded, notes)
     }
 
     func deleteCategory(_ store: Store, _ args: [String: Any]) throws -> String {
@@ -392,8 +418,8 @@ extension RouterTools {
             change = LookoutChange(title: LookoutChange.title(forGroup: nil, g), patch: .group(index: store.groups.count - 1, before: nil, after: g))
         }
         store.categoriesChangedByRouter()
-        record(store, change)
-        return done(store, change, ["group": groupJSON(store, g)])
+        let recorded = record(store, change)
+        return done(store, recorded, ["group": groupJSON(store, g)])
     }
 
     func deleteGroup(_ store: Store, _ args: [String: Any]) throws -> String {

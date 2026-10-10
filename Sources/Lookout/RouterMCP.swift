@@ -506,16 +506,20 @@ final class RouterMCPServer: @unchecked Sendable {
     /// The decision-log entry of the run this instance serves (a typed run of the dispatcher, see RouterDispatcher): its
     /// changes join that entry.
     var decision: UUID?
+    /// The records of changes this turn made, so a later change to the same thing joins its record (see `record`).
+    var turnChanges: [UUID] = []
 
     /// A turn of yours begins.
     func beginTurn(_ text: String) {
         turnText = text
+        turnChanges = []
     }
 
     /// The turn ended or was stopped: unused preparations go, runs under way are stopped, late work acts on nothing.
     func endTurn() {
         turn += 1
         turnText = nil
+        turnChanges = []
         prepared = [:]
         cancelRuns()
     }

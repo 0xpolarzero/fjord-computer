@@ -227,6 +227,23 @@ extension Store {
         }
     }
 
+    /// A change that no longer exists (it cancelled out with a later one of its run): its entry forgets it, and goes
+    /// when it was only that.
+    func dropChange(_ change: UUID) {
+        guard let i = router.decisions.firstIndex(where: { $0.links.changes.contains(change) }) else { return }
+        var entry = router.decisions[i]
+        entry.done.removeAll { $0 == .changed(change) }
+        entry.links.changes.removeAll { $0 == change }
+        if entry.done.isEmpty, entry.links.changes.isEmpty, entry.trigger == .system { router.decisions.remove(at: i) } else { router.decisions[i] = entry }
+    }
+
+    /// A change's record was merged with a later one: an entry made only for it says the new title.
+    func retitleChange(_ change: UUID, from old: String, to new: String) {
+        guard let i = router.decisions.firstIndex(where: { $0.links.changes == [change] && $0.trigger == .system }),
+              router.decisions[i].decision.intent == old else { return }
+        router.decisions[i].decision.intent = new
+    }
+
     /// After a revert: an entry whose changes are all taken back is reverted.
     func noteReverted(_ change: UUID) {
         guard let i = router.decisions.firstIndex(where: { $0.links.changes.contains(change) }) else { return }

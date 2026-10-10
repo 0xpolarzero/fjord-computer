@@ -273,6 +273,7 @@ import Testing
         let original = try #require(s.categories.last)
         let old = Date(timeIntervalSince1970: 1_000_000)
         s.categories[1].rules[0].createdAt = old
+        t.beginTurn("update")
         let out = await call(t, "update_category", ["category": ["id": original.id.uuidString, "color": "green",
                                                                  "rules": [["id": original.rules[0].id.uuidString, "scope": ["kind": "pr"]]]]])
         #expect(out.ok, "\(out.text)")
@@ -309,6 +310,7 @@ import Testing
         await call(t, "create_category", ["category": category("One", rules: [prByMe])])
         await call(t, "create_category", ["category": category("Two", rules: [prByMe])])
         let one = try #require(s.categories.first { $0.name == "One" })
+        t.beginTurn("rename it")
         await call(t, "update_category", ["category": ["id": one.id.uuidString, "name": "Uno", "color": "red"]])
         let two = try #require(s.categories.first { $0.name == "Two" })
         let renamed = try #require(changes(s).last)
@@ -331,6 +333,7 @@ import Testing
         let t = tools(s)
         await call(t, "create_category", ["category": category("Mine", rules: [prByMe])])
         let made = try #require(s.categories.last)
+        t.beginTurn("recolor it")
         await call(t, "update_category", ["category": ["id": made.id.uuidString, "color": "blue"]])
         let first = try #require(changes(s).first)
         let second = try #require(changes(s).last)
@@ -345,6 +348,109 @@ import Testing
         #expect(!s.categories.contains { $0.id == made.id })
     }
 
+    // MARK: One run, one record
+
+    @discardableResult
+    private func update(_ t: RouterTools, _ c: InboxCategory, _ fields: [String: Any]) async -> [String: Any] {
+        var category = fields
+        category["id"] = c.id.uuidString
+        return await call(t, "update_category", ["category": category]).json
+    }
+
+    @Test func creatingThenEditingInOneRunIsOneCreatedRecord() async throws {
+        let s = store()
+        let t = tools(s)
+        let run = RouterDecision(trigger: .you("make it"), decision: .init(intent: "make it"), outcome: .pending)
+        _ = s.logDecision(run)
+        t.decision = run.id
+        let first = await call(t, "create_category", ["category": category("My repos", rules: [prByMe])])
+        let made = try #require(s.categories.last)
+        let second = await update(t, made, ["rules": [["scope": ["kind": "pr"]]]])
+        #expect(second["changeId"] as? String == first.json["changeId"] as? String, "the same record")
+        #expect(changes(s).count == 1)
+        let record = try #require(changes(s).first)
+        #expect(record.title == "Created category My repos")
+        guard case .category(_, let before, let after) = record.patch else { Issue.record("not a category"); return }
+        #expect(before == nil && after == s.categories.last, "the final state")
+        let entry = try #require(s.router.decisions.first { $0.id == run.id })
+        #expect(entry.done.filter { if case .changed = $0 { true } else { false } }.count == 1 && entry.links.changes == [record.id])
+        // Taking it back removes the category.
+        let reverted = try #require(s.revertLookoutChange(record.id))
+        #expect(reverted.revertNote == "Reverted" && !s.categories.contains { $0.id == made.id })
+    }
+
+    @Test func editingTwiceInOneRunIsOneChangeFromTheFirstBeforeToTheLastAfter() async throws {
+        let s = store()
+        let t = tools(s)
+        await call(t, "create_category", ["category": category("Mine", rules: [prByMe])])
+        let original = try #require(s.categories.last)
+        t.beginTurn("two edits")
+        await update(t, original, ["color": "blue"])
+        let mid = try #require(s.categories.last)
+        await update(t, mid, ["symbol": "bell"])
+        #expect(changes(s).count == 2, "the creation (an earlier run) and one change")
+        let record = try #require(changes(s).last)
+        #expect(record.title == "Changed category Mine")
+        guard case .category(_, let before, let after) = record.patch else { Issue.record("not a category"); return }
+        #expect(before == original && after == s.categories.last)
+        s.revertLookoutChange(record.id)
+        #expect(s.categories.last == original)
+    }
+
+    @Test func creatingThenDeletingInOneRunLeavesNothing() async throws {
+        let s = store()
+        let t = tools(s)
+        let run = RouterDecision(trigger: .you("make it"), decision: .init(intent: "make it"), outcome: .pending)
+        _ = s.logDecision(run)
+        t.decision = run.id
+        await call(t, "create_category", ["category": category("Oops", rules: [prByMe])])
+        let made = try #require(s.categories.last)
+        let gone = await call(t, "delete_category", ["category": made.id.uuidString])
+        #expect(gone.ok && gone.json["changed"] as? String == "nothing")
+        #expect(changes(s).isEmpty && !s.categories.contains { $0.id == made.id })
+        let entry = try #require(s.router.decisions.first { $0.id == run.id })
+        #expect(entry.done.isEmpty && entry.links.changes.isEmpty)
+    }
+
+    @Test func editingBackToTheOriginalInOneRunLeavesNothing() async throws {
+        let s = store()
+        let t = tools(s)
+        await call(t, "create_category", ["category": category("Mine", rules: [prByMe])])
+        let original = try #require(s.categories.last)
+        t.beginTurn("flip")
+        await update(t, original, ["color": "blue"])
+        let back = await update(t, original, ["color": original.color.rawValue])
+        #expect(back["changed"] as? String == "nothing")
+        #expect(changes(s).count == 1, "only the creation of the earlier run")
+        #expect(s.categories.last == original)
+    }
+
+    @Test func editingThenDeletingInOneRunIsOneDeletedFromTheFirstBefore() async throws {
+        let s = store()
+        let t = tools(s)
+        await call(t, "create_category", ["category": category("Mine", rules: [prByMe])])
+        let original = try #require(s.categories.last)
+        t.beginTurn("edit and delete")
+        await update(t, original, ["color": "blue"])
+        await call(t, "delete_category", ["category": original.id.uuidString])
+        let record = try #require(changes(s).last)
+        #expect(changes(s).count == 2 && record.title == "Deleted category Mine")
+        s.revertLookoutChange(record.id)
+        #expect(s.categories.last == original)
+    }
+
+    @Test func changesInDifferentRunsOrToDifferentThingsStaySeparate() async throws {
+        let s = store()
+        let t = tools(s)
+        await call(t, "create_category", ["category": category("One", rules: [prByMe])])
+        await call(t, "create_category", ["category": category("Two", rules: [prByMe])])
+        #expect(changes(s).count == 2)
+        let one = try #require(s.categories.first { $0.name == "One" })
+        t.beginTurn("later")
+        await update(t, one, ["color": "blue"])
+        #expect(changes(s).count == 3)
+    }
+
     @Test func deletingAndRevertingBringsItBackWhereItWas() async throws {
         let s = store()
         let t = tools(s)
@@ -352,6 +458,7 @@ import Testing
         await call(t, "create_category", ["category": category("B", rules: [prByMe])])
         await call(t, "create_category", ["category": category("C", rules: [prByMe])])
         let b = try #require(s.categories.first { $0.name == "B" })
+        t.beginTurn("delete")
         let out = await call(t, "delete_category", ["category": "b"])
         #expect(out.ok && !s.categories.contains { $0.id == b.id })
         let card = try #require(changes(s).last)
@@ -394,12 +501,14 @@ import Testing
         let delete = await call(t, "delete_group", ["group": "Crew"])
         #expect(!delete.ok && delete.text.contains("Crew PRs") && s.groups.count == 1)
         // Members are replaced as a list; the rule follows the group.
+        t.beginTurn("members")
         let update = await call(t, "update_group", ["group": ["id": group.id.uuidString, "members": ["carol"]]])
         #expect(update.ok && s.groups[0].members == ["carol"] && s.groups[0].name == "Crew")
         s.revertLookoutChange(try #require(changes(s).last).id)
         #expect(s.groups[0].members == ["alice", "bob"])
         // Unused, it goes, and comes back.
         s.categories.removeAll { $0.name == "Crew PRs" }
+        t.beginTurn("delete it")
         #expect(await call(t, "delete_group", ["group": group.id.uuidString]).ok && s.groups.isEmpty)
         s.revertLookoutChange(try #require(changes(s).last).id)
         #expect(s.groups.first?.id == group.id)
@@ -619,6 +728,7 @@ import Testing
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.generalID))
         await call(t, "set_setting", ["key": "snooze", "value": "3h"])
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.notificationsID))
+        t.beginTurn("delete")
         await call(t, "delete_category", ["category": "Mine too"])
         #expect(try #require(changes(s).last).target(in: s) == .categories, "a category that is gone opens the page that listed it")
         await call(t, "mark_entries", ["state": "done", "entries": ["a/one#1"]])

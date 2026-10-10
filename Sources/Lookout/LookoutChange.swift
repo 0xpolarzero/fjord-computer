@@ -57,6 +57,47 @@ struct LookoutChange: Codable, Hashable, Identifiable {
         }
     }
 
+    // MARK: Coalescing
+
+    /// What a later change of one run does to an earlier one of the same run.
+    enum Coalesced {
+        /// They touch different things: both stay.
+        case separate
+        /// The two together change nothing (made, then deleted; changed, then changed back): neither is kept.
+        case cancelled
+        /// One record for both: the earlier one's before, the later one's after.
+        case merged(LookoutChange)
+    }
+
+    /// The one record that stands for `self` and then `later`, when they touch the same category, group, the order or
+    /// setting. A marks change never joins another.
+    func coalesced(with later: LookoutChange) -> Coalesced {
+        var merged = self
+        switch (patch, later.patch) {
+        case (.category(let index, let before, let middle), .category(let laterIndex, let laterBefore, let after))
+            where (middle ?? before)?.id == (laterBefore ?? after)?.id && middle != nil:
+            if before == after { return .cancelled }
+            merged.patch = .category(index: after == nil ? laterIndex : index, before: before, after: after)
+            merged.title = Self.title(forCategory: before, after)
+        case (.group(let index, let before, let middle), .group(let laterIndex, let laterBefore, let after))
+            where (middle ?? before)?.id == (laterBefore ?? after)?.id && middle != nil:
+            if before == after { return .cancelled }
+            merged.patch = .group(index: after == nil ? laterIndex : index, before: before, after: after)
+            merged.title = Self.title(forGroup: before, after)
+        case (.order(let before, _), .order(_, let after)):
+            if before == after { return .cancelled }
+            merged.patch = .order(before: before, after: after)
+            merged.title = later.title
+        case (.setting(let key, let before, _), .setting(let laterKey, _, let after)) where key == laterKey:
+            if before == after { return .cancelled }
+            merged.patch = .setting(key: key, before: before, after: after)
+            merged.title = later.title
+        default:
+            return .separate
+        }
+        return .merged(merged)
+    }
+
     // MARK: Titles
 
     static func title(forCategory before: InboxCategory?, _ after: InboxCategory?) -> String {
