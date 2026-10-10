@@ -572,6 +572,9 @@ extension Store {
         typesafeKeyCache = trimmed
         hasTypesafeKey = !trimmed.isEmpty
         jevGate.keyChanged()
+        // What is under way with the old key stops (the icon's pick starts again with the new one once it has).
+        iconTask?.cancel()
+        routerTriager.cancelAll()
         iconError = nil
         iconsPausedUntil = .distantPast
         pickIcons()
@@ -581,6 +584,7 @@ extension Store {
 
     func setIconsEnabled(_ on: Bool) {
         agents.iconsEnabled = on
+        if !on { iconTask?.cancel() }
         iconsPausedUntil = .distantPast
         pickIcons()
     }

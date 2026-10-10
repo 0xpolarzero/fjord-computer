@@ -392,8 +392,18 @@ extension Claude {
 
     fileprivate func end(_ id: String) {
         inFlight.remove(id)
+        tasks[id] = nil
         running -= 1
     }
+
+    /// The triages under way, by card: stopped when the key changes.
+    fileprivate var tasks: [String: Task<Void, Never>] = [:]
+
+    func cancelAll() {
+        for task in tasks.values { task.cancel() }
+    }
+
+    fileprivate func forget(_ id: String) { attempted[id] = nil }
 
     /// Whether this text was asked about for the card already; records it as asked if not.
     fileprivate func firstAsk(_ id: String, source: String) -> Bool {
@@ -499,11 +509,17 @@ extension Store {
     /// turn needs you).
     private func triage(_ id: String, session: ClaudeSession, rescue: Bool) {
         guard let ask = triageAsker, routerTriager.begin(id) else { return }
-        Task { [weak self] in
+        routerTriager.tasks[id] = Task { [weak self] in
             guard let self else { return }
+            // Stopped, or the key or switch changed: nothing was learned, so the text may be asked about again.
+            var stopped = false
             defer {
                 self.routerTriager.end(id)
                 self.releaseBanner(id)
+                if stopped {
+                    self.routerTriager.forget(id)
+                    self.triageTurns()
+                }
             }
             let message = await self.finalMessage(session)
             let source = message.map(RouterTriage.hash) ?? ""
@@ -521,7 +537,14 @@ extension Store {
                 questions.merge(extra.questions) { a, _ in a }
                 state.merge(extra.state) { a, _ in a }
             }
-            guard let answers = try? await ask(questions, state) else { return }
+            let answers: [String: JevClient.Answer]
+            do {
+                try Task.checkCancellation()
+                answers = try await ask(questions, state)
+            } catch {
+                stopped = error is CancellationError || error as? JevClient.Failure == .cancelled
+                return
+            }
             var triage = RouterTriage.parse(answers, candidates: candidates, options: options, source: source)
             for extra in extras { extra.apply(answers, &triage) }
             if rescue {

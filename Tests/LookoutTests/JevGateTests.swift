@@ -125,4 +125,65 @@ import Testing
         await #expect(throws: JevClient.Failure.cancelled) { try await off?([:], [:]) }
         #expect(!asked && s.jevAsker(.triage, base: { _, _ in [:] }) == nil)
     }
+
+    /// Lets a read go on once opened (from any thread).
+    final class Latch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var isOpen = false
+        var open: Bool {
+            get { lock.lock(); defer { lock.unlock() }; return isOpen }
+            set { lock.lock(); isOpen = newValue; lock.unlock() }
+        }
+        func wait() async { while !open { try? await Task.sleep(for: .milliseconds(2)) } }
+    }
+
+    @Test func aTriageUnderWayWhenTheKeyChangesAsksNothingWithTheOldOneAndIsAskedAgain() async {
+        let s = store()
+        s.routerTriager.rescanned = true
+        let a = ClaudeSession(id: "a", title: "T a", folder: "/code/a", completedTurns: 2, lastActivity: Date().addingTimeInterval(-300), cliID: "cli-a")
+        s.claudeSessions = ["a": a]
+        s.router.cards = [RouterCard(id: "a#t2", sessionID: "a", kind: .done, title: "T a", folder: "/code/a", text: "Pushed", createdAt: Date())]
+        let latch = Latch()
+        s.routerTriager.reader = { _ in await latch.wait(); return "All done. Should I push to main?" }
+        var calls = 0
+        s.routerTriager.asker = { _, _ in
+            calls += 1
+            return ["state": .choice(JevClient.Choice(choice: "asks", confidence: 0.9, probabilities: ["asks": 0.9, "done": 0.1]))]
+        }
+        s.triageTurns()
+        // The key changes while the turn's final message is read.
+        #expect(s.setTypesafeKey("sk-new"))
+        latch.open = true
+        for _ in 0..<200 where s.router.cards[0].triage == nil { try? await Task.sleep(for: .milliseconds(5)) }
+        await s.routerTriager.idle()
+        #expect(calls == 1 && s.router.cards[0].triage?.state == .asks)
+    }
+
+    @Test func anIconUnderWayAsksNothingOnceIconsAreOffOrTheKeyChanged() async throws {
+        let s = store()
+        s.agents.iconsEnabled = true
+        s.agents.enabledAt = Date().addingTimeInterval(-3600)
+        s.ingest([ClaudeSession(id: "a", title: "Fix the login", folder: "/code/app", completedTurns: 1, lastActivity: Date(), cliID: "cli-a")],
+                 appUnread: [], claudeFrontmost: false, now: Date())
+        let latch = Latch()
+        s.iconFirstMessage = { _ in while !latch.open { Thread.sleep(forTimeInterval: 0.002) }; return "Fix the login form" }
+        var asked = 0
+        s.iconChooser = { options, _, _, _ in asked += 1; return .init(choice: options[0], confidence: 1, probabilities: [options[0]: 1]) }
+        s.pickIcons()
+        let first = try #require(s.iconTask)
+        // Icons turned off while the transcript is read: nothing is asked.
+        s.setIconsEnabled(false)
+        latch.open = true
+        await first.value
+        #expect(asked == 0 && s.agents.entries.first?.icon == nil)
+        // On again, and the key changes while it is read: the old pick asks nothing, the new one does.
+        latch.open = false
+        s.setIconsEnabled(true)
+        let second = try #require(s.iconTask)
+        #expect(s.setTypesafeKey("sk-new"))
+        latch.open = true
+        await second.value
+        while let task = s.iconTask { await task.value }
+        #expect(asked == 2 && s.agents.entries.first?.icon != nil)
+    }
 }
