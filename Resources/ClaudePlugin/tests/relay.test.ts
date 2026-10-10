@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { fromBase64, hmac, keyId, macInput, parse } from '../hooks/register.ts'
+import { CAPABILITIES, fromBase64, hmac, keyId, macInput, parse } from '../hooks/register.ts'
 
 // The vector Lookout's Swift tests check too (ClaudePluginTests): the same key, fields and body give the same MAC and
 // the same wire text.
@@ -44,6 +44,7 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     queued: [] as string[],
     written: {} as Record<string, string>,
     key: KEY as string | undefined,
+    inbox: {} as Record<string, string>,
     registry: { '4242.json': { pid: 4242, sessionId: TARGET, startedAt: 111 } } as Record<string, Record<string, unknown> | string>,
   }
   mock.store(on, store)
@@ -55,18 +56,31 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
       return { value: `${w.key}\n` }
     }
     if (e.path.endsWith('/config.json')) {
-      return { value: JSON.stringify({ keyPath: '/lookout/relay.key', presenceDir: '/presence', sessionsDir: '/sessions' }) }
+      return { value: JSON.stringify({ keyPath: '/lookout/relay.key', presenceDir: '/presence', sessionsDir: '/sessions', inboxDir: '/inbox' }) }
+    }
+    if (e.path.startsWith('/inbox/')) {
+      const text = w.inbox[e.path.slice('/inbox/'.length)]
+      if (text === undefined) throw new Error(`no such file: ${e.path}`)
+      return { value: text }
     }
     const name = e.path.replace('/sessions/', '')
     const entry = w.registry[name]
     if (entry !== undefined) return { value: typeof entry === 'string' ? entry : JSON.stringify(entry) }
     throw new Error(`no such file: ${e.path}`)
   })
-  on('fs.list', () => ({
+  on('fs.list', (_$, e) => {
+    if (e.path === `/inbox/${w.sessionId}`) {
+      const names = Object.keys(w.inbox).filter((k) => k.startsWith(`${w.sessionId}/`)).map((k) => k.slice(w.sessionId.length + 1))
+      return { value: names.map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }
+    }
+    if (e.path.startsWith('/inbox')) throw new Error('no such directory')
+    return {
     value: Object.keys(w.registry).map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })),
-  }))
+  }
+  })
   on('fs.write', ($, e) => {
     w.written[e.path] = e.text
+    if (e.path.startsWith('/inbox/')) w.inbox[e.path.slice('/inbox/'.length)] = e.text
     return { value: undefined }
   })
   on('prompt.submit', ($, e) => {
@@ -204,6 +218,7 @@ describe('presence', () => {
     await $.session.start({ cwd: '/code/app', surface: null, isInteractive: false })
     expect(JSON.parse(w.written[`/presence/${TARGET}`])).toMatchObject(live(TARGET, 4242, 111))
     expect(JSON.parse(w.written[`/presence/${TARGET}`]).activation).toEqual(expect.any(String))
+    expect(JSON.parse(w.written[`/presence/${TARGET}`]).capabilities).toEqual(CAPABILITIES)
     await $.session.end({ reason: 'other', sessionId: TARGET, resume: { id: TARGET } })
     expect(JSON.parse(w.written[`/presence/${TARGET}`])).toEqual({ state: 'ended' })
   })
@@ -267,5 +282,89 @@ describe('presence', () => {
 describe('key ids', () => {
   test('are the first 16 hex digits of the key’s SHA-256', async () => {
     expect(await keyId(KEY)).toBe(KEY_ID)
+  })
+})
+
+describe('the inbox', () => {
+  // The plugin looks every half second, off the clock: the first look starts the session, then the clock moves on.
+  const started = new WeakSet<object>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const look = async ($: any, w: ReturnType<typeof world>) => {
+    if (!started.has(w)) {
+      started.add(w)
+      await $.session.start({ cwd: '/code/app', surface: null, isInteractive: false })
+    }
+    await w.clock.advance(500)
+  }
+  const ack = (name: string) => `/inbox/${TARGET}/${name}.ack`
+
+  test('a signed file is submitted as the person’s own words and acked', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await settle()
+    expect(w.submitted).toEqual([{ text: BODY, asUser: true }])
+    expect(w.written[ack(NONCE)]).toBe('ok\n')
+  })
+
+  test('is taken once: an acked file is not looked at again, a re-written one is a replay', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await look($, w)
+    delete w.inbox[`${TARGET}/${NONCE}.ack`]
+    await look($, w)
+    await settle()
+    expect(w.submitted.length).toBe(1)
+    expect(w.written[ack(NONCE)]).toBe('refused: already delivered\n')
+  })
+
+  test('a file taken over the peer channel first is refused as a replay', async ($, on) => {
+    const w = world(on)
+    await receive($, envelope(WIRE))
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await settle()
+    expect(w.submitted.length).toBe(1)
+    expect(w.written[ack(NONCE)]).toBe('refused: already delivered\n')
+  })
+
+  const refused: [string, () => Promise<string>, string, number?][] = [
+    ['a bad MAC', async () => WIRE.replace(MAC, '0'.repeat(64)), 'bad signature'],
+    ['another key', async () => sign(BODY, { key: '00'.repeat(32) }), 'bad signature'],
+    ['another session', async () => sign(BODY, { target: 'cli-other' }), 'addressed to another session'],
+    ['a stale message', async () => WIRE, 'stale', TS + 11 * 60 * 1000],
+    ['no header', async () => BODY, 'unsigned'],
+  ]
+  for (const [name, make, reason, now] of refused) {
+    test(`refuses ${name}`, async ($, on) => {
+      const w = world(on, { now })
+      w.inbox[`${TARGET}/${NONCE}.msg`] = await make()
+      await look($, w)
+      await settle()
+      expect(w.submitted).toEqual([])
+      expect(w.written[ack(NONCE)]).toBe(`refused: ${reason}\n`)
+    })
+  }
+
+  test('looks only at its own session’s folder and at .msg files', async ($, on) => {
+    const w = world(on)
+    w.inbox[`cli-other/${NONCE}.msg`] = WIRE
+    w.inbox[`${TARGET}/.${NONCE}.tmp`] = WIRE
+    await look($, w)
+    await settle()
+    expect(w.submitted).toEqual([])
+    expect(Object.keys(w.written).filter((k) => k.startsWith('/inbox/'))).toEqual([])
+  })
+
+  test('a session with no folder is quiet', async ($, on) => {
+    const w = world(on)
+    w.sessionId = 'cli-none'
+    await look($, w)
+    expect(w.submitted).toEqual([])
+  })
+
+  test('presence names the capability', () => {
+    expect(CAPABILITIES).toEqual(['inbox-v1'])
   })
 })

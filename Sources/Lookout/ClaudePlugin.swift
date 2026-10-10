@@ -36,8 +36,10 @@ enum ClaudePlugin {
         let fm = FileManager.default
         try fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try fm.createDirectory(at: presence, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let inbox = RelayInbox.root(besidePresence: presence)
+        try fm.createDirectory(at: inbox, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let config = try JSONSerialization.data(withJSONObject: ["keyPath": key.path, "presenceDir": presence.path,
-                                                                 "sessionsDir": registry.path],
+                                                                 "sessionsDir": registry.path, "inboxDir": inbox.path],
                                                 options: [.sortedKeys, .withoutEscapingSlashes])
         let files: [(String, Data)] = [
             (".claude-plugin/plugin.json", Data(pluginJSON(version: version).utf8)),
@@ -93,7 +95,13 @@ enum ClaudePlugin {
         var keyId: String?
         /// When the plugin last renewed it (ms since 1970).
         var renewedAt: Int64?
+        /// What this copy of the plugin can do (`inbox-v1`: it takes signed messages from its inbox folder). Absent in an
+        /// older plugin, which Lookout reaches over the peer channel instead.
+        var capabilities: [String]?
     }
+
+    /// The plugin takes signed messages from `relay/<session id>/` (see `RelayInbox`).
+    static let inboxCapability = "inbox-v1"
 
     /// How long a presence lasts without being renewed: the plugin renews it every 10 s.
     static let lease: TimeInterval = 30
@@ -109,10 +117,16 @@ enum ClaudePlugin {
     /// plugin: one not renewed within `lease` of `now` is a plugin gone without a word (disabled and reloaded away).
     static func sessions(in presence: URL, registry: [Int32: [ClaudePeers.Registered]], keyID: String?, now: Date = leaseNow,
                          alive: (Int32) -> Bool = FormBridge.processAlive) -> Set<String> {
-        guard let keyID else { return [] }
+        Set(live(in: presence, registry: registry, keyID: keyID, now: now, alive: alive).keys)
+    }
+
+    /// `sessions(in:registry:keyID:now:alive:)` with each session's presence, so what the plugin there can do is known too.
+    static func live(in presence: URL, registry: [Int32: [ClaudePeers.Registered]], keyID: String?, now: Date = leaseNow,
+                     alive: (Int32) -> Bool = FormBridge.processAlive) -> [String: Presence] {
+        guard let keyID else { return [:] }
         let nowMs = now.timeIntervalSince1970 * 1000, leaseMs = lease * 1000
         let files = (try? FileManager.default.contentsOfDirectory(at: presence, includingPropertiesForKeys: nil)) ?? []
-        return Set(files.compactMap { url in
+        return Dictionary(files.compactMap { url -> (String, Presence)? in
             guard !url.lastPathComponent.hasPrefix("."), let data = try? Data(contentsOf: url),
                   let file = try? JSONDecoder().decode(Presence.self, from: data), file.state == "live", file.keyId == keyID,
                   // In Double: a file's value at either end of Int64 must not trap the subtraction.
@@ -120,8 +134,8 @@ enum ClaudePlugin {
                   let id = file.sessionId, id == url.lastPathComponent, let pid = file.pid, alive(pid),
                   registry[pid]?.contains(where: { $0.sessionID == id && $0.startedAt == file.startedAt }) == true
             else { return nil }
-            return id
-        })
+            return (id, file)
+        }, uniquingKeysWith: { a, _ in a })
     }
 
     // MARK: Sources (the same as Resources/ClaudePlugin; see ClaudePluginTests)
@@ -140,6 +154,13 @@ import type { EngineInterface, Register } from 'claude-code'
 //   ⟦lookout v1 <target session id> <nonce> <ms since 1970> <hex HMAC-SHA256>⟧\n<base64 body>
 // The MAC covers the UTF-8 bytes of "v1\n<target>\n<nonce>\n<ms>\n" followed by the body's own UTF-8 bytes.
 //
+// Two ways in, one check. The peer channel (`session.receive`) is the original way and stays as the fallback for a Lookout
+// that can't reach this plugin directly. The inbox is the direct way, with no model in between: Lookout writes the very
+// same signed text to `<inboxDir>/<session id>/<nonce>.msg` (atomically: a dot-file renamed into place), the plugin polls
+// that folder every half second, runs the same check, and answers with `<nonce>.ack` beside it ("ok", or "refused: why").
+// Lookout reads the ack and deletes both files; the plugin has no way to delete, and needs none.
+// Presence files list `capabilities`, so a Lookout knows which way a session can be reached.
+//
 // Lookout writes this file; edits are overwritten.
 
 const HEADER = /(?:^|\n)⟦lookout v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧\n/
@@ -147,6 +168,8 @@ const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const CLOSE = '</cross-session-message>'
 const WINDOW_MS = 10 * 60 * 1000
 const NONCE = 'nonce.'
+export const CAPABILITIES = ['inbox-v1']
+const POLL_MS = 500
 const ACTIVATION = crypto.randomUUID()
 
 const enc = new TextEncoder()
@@ -227,7 +250,7 @@ const exclusive = <T>(work: () => Promise<T>): Promise<T> => {
 
 /** Where Lookout keeps the key and the presence files, and Claude Code its registry of processes, as absolute paths (a
  * hooks module can't read the environment). */
-type Config = { keyPath?: string; presenceDir?: string; sessionsDir?: string }
+type Config = { keyPath?: string; presenceDir?: string; sessionsDir?: string; inboxDir?: string }
 
 async function config($: EngineInterface) {
   return JSON.parse(await $.fs.read(`${$.plugin.root}/config.json`)) as Config
@@ -276,7 +299,7 @@ async function mark($: EngineInterface) {
     await $.fs.write(`${marked.presenceDir}/${marked.sessionId}`, `${JSON.stringify({ state: 'ended' })}\n`)
   }
   const renewedAt = await $.clock.now()
-  const presence = { state: 'live', sessionId, pid: own.pid, startedAt: own.startedAt, keyId: id, renewedAt, activation: ACTIVATION }
+  const presence = { state: 'live', sessionId, pid: own.pid, startedAt: own.startedAt, keyId: id, renewedAt, activation: ACTIVATION, capabilities: CAPABILITIES }
   await $.fs.write(`${presenceDir}/${sessionId}`, `${JSON.stringify(presence)}\n`)
   marked = { sessionId, presenceDir, keyId: id, pid: own.pid, startedAt: own.startedAt }
 }
@@ -287,37 +310,81 @@ async function unmark($: EngineInterface) {
   marked = undefined
 }
 
+/** Checks a signed text the way both ways in must, and submits it as the person's own words. `unsigned` means it isn't
+ * Lookout's at all (the peer channel then passes it on); anything else is a refusal with its reason. */
+export async function accept($: EngineInterface, text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const signed = parse(text)
+  if (!signed) return { ok: false, reason: 'unsigned' }
+  const { keyPath } = await config($)
+  if (!keyPath) return { ok: false, reason: 'no key configured' }
+  const key = (await $.fs.read(keyPath)).trim()
+  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body))
+  const now = await $.clock.now()
+  const ts = Number(signed.ts)
+  if (!same(expected, signed.mac)) return { ok: false, reason: 'bad signature' }
+  if (signed.target !== (await $.session.id())) return { ok: false, reason: 'addressed to another session' }
+  if (!(Math.abs(now - ts) < WINDOW_MS)) return { ok: false, reason: 'stale' }
+  // A leading byte-order mark is part of what was written: the decoder drops one, so exactly one is put back.
+  let decoded: string
+  try {
+    decoded = new TextDecoder('utf-8', { fatal: true }).decode(signed.body)
+  } catch {
+    return { ok: false, reason: 'not UTF-8' }
+  }
+  const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
+  const body = bom ? `\uFEFF${decoded}` : decoded
+  // Each nonce is a key of its own in the store (it outlives reloads and restarts), kept while its message's time is
+  // inside the window: past it the message is refused as stale anyway.
+  const claimed = await exclusive(async () => {
+    if ((await $.store.get(NONCE + signed.nonce)) !== undefined) return false
+    await $.store.set(NONCE + signed.nonce, ts)
+    for (const name of await $.store.keys()) {
+      if (!name.startsWith(NONCE)) continue
+      const at = Number(await $.store.get(name))
+      if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
+    }
+    return true
+  })
+  if (!claimed) return { ok: false, reason: 'already delivered' }
+  void $.prompt.submit({ text: body, asUser: true })
+  return { ok: true }
+}
+
+/** When the look in progress began (0: none). A look that hangs is given up on after `POLL_STUCK_MS`, so one stuck call can't
+ * silence the inbox for good; two looks at once never happen otherwise (each message gets exactly one ack). */
+let pollingSince = 0
+const POLL_STUCK_MS = 5000
+
+/** One look at this session's inbox: every message without an ack is checked, submitted or refused, and answered. */
+export async function poll($: EngineInterface) {
+  const began = await $.clock.now()
+  if (pollingSince && Math.abs(began - pollingSince) < POLL_STUCK_MS) return
+  pollingSince = began
+  try {
+    const { inboxDir } = await config($)
+    if (!inboxDir) return
+    const dir = `${inboxDir}/${await $.session.id()}`
+    const names = new Set((await $.fs.list(dir)).map((entry) => entry.name))
+    for (const name of [...names].sort()) {
+      if (!name.endsWith('.msg') || names.has(`${name.slice(0, -4)}.ack`)) continue
+      const text = await $.fs.read(`${dir}/${name}`).catch(() => undefined)
+      if (text === undefined) continue
+      const outcome = await accept($, text).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
+      await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? 'ok\n' : `refused: ${outcome.reason}\n`)
+    }
+  } catch {
+    // No folder yet (nothing was ever sent here), or it can't be read: nothing to do until the next look.
+  } finally {
+    if (pollingSince === began) pollingSince = 0
+  }
+}
+
+let timer: { cancel: () => void } | undefined
+
 export const register: Register = (on) => {
   on('session.receive', async ($, e, next) => {
-    const signed = parse(e.text)
-    if (!signed) return next(e)
-    const { keyPath } = await config($)
-    if (!keyPath) return next(e)
-    const key = (await $.fs.read(keyPath)).trim()
-    const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body))
-    const now = await $.clock.now()
-    const ts = Number(signed.ts)
-    if (!same(expected, signed.mac) || signed.target !== (await $.session.id()) || !(Math.abs(now - ts) < WINDOW_MS)) {
-      return next(e)
-    }
-    // A leading byte-order mark is part of what was written: the decoder drops one, so exactly one is put back.
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(signed.body)
-    const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
-    const text = bom ? `\uFEFF${decoded}` : decoded
-    // Each nonce is a key of its own in the store (it outlives reloads and restarts), kept while its message's time is
-    // inside the window: past it the message is refused as stale anyway.
-    const claimed = await exclusive(async () => {
-      if ((await $.store.get(NONCE + signed.nonce)) !== undefined) return false
-      await $.store.set(NONCE + signed.nonce, ts)
-      for (const name of await $.store.keys()) {
-        if (!name.startsWith(NONCE)) continue
-        const at = Number(await $.store.get(name))
-        if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
-      }
-      return true
-    })
-    if (!claimed) return next(e)
-    void $.prompt.submit({ text, asUser: true })
+    const outcome = await accept($, e.text)
+    if (!outcome.ok) return next(e)
     return { consumed: 'relayed by Lookout as the person’s own message' }
   }).catch(($, e, next) => next(e))
 
@@ -325,6 +392,8 @@ export const register: Register = (on) => {
     await mark($).catch(() => undefined)
     // The registry may not list the process yet, and a /clear changes the session's id: looked at again now and then.
     $.clock.every(10_000, () => void mark($).catch(() => undefined))
+    timer?.cancel()
+    timer = $.clock.every(POLL_MS, () => void poll($))
     return next(e)
   })
   on('turn.start', async ($, e, next) => {
@@ -655,6 +724,136 @@ extension ClaudePlugin {
         guard let data = try? Data(contentsOf: config), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dir = obj["sessionsDir"] as? String else { return [] }
         return sessions(in: presence, registry: ClaudePeers.registry(dir: URL(fileURLWithPath: dir, isDirectory: true)))
+    }
+}
+
+extension ClaudePlugin {
+    /// The sessions whose plugin takes messages from its inbox (`RelayInbox`), a subset of `sessions`: a plugin of an older
+    /// version doesn't say so in its presence file, and is reached over the peer channel. Reads files: call it off the main
+    /// thread.
+    static func inboxSessions(in presence: URL, registry: [Int32: [ClaudePeers.Registered]], keyID: String?, now: Date = leaseNow,
+                              alive: (Int32) -> Bool = FormBridge.processAlive) -> Set<String> {
+        Set(live(in: presence, registry: registry, keyID: keyID, now: now, alive: alive)
+            .filter { $0.value.capabilities?.contains(inboxCapability) == true }.keys)
+    }
+}
+
+// MARK: - The direct way: an inbox per session
+
+/// Delivery with no model: the signed text (the very text the peer channel would carry, so the plugin checks it the same way)
+/// is written to `relay/<session id>/<nonce>.msg` under Application Support, atomically, and the plugin in that session, which
+/// looks every half second, verifies it, submits it as the person's own words and answers with `<nonce>.ack` ("ok", or
+/// "refused: why"). Lookout reads the ack and removes both files (the plugin cannot delete). A session whose plugin doesn't
+/// answer in time is left to the peer channel; the nonce is the same, so if the plugin gets to it after all, whichever
+/// arrives second is refused as a replay.
+struct RelayInbox: Sendable {
+    var root: URL
+    /// How long the plugin has to answer.
+    var timeout: TimeInterval = RelayInbox.wait
+
+    enum Failure: Error, Equatable, LocalizedError {
+        /// The plugin didn't answer in time: the message is withdrawn, and may go another way.
+        case unanswered
+        /// The plugin (or the check before writing) refused it: another way would be refused too.
+        case refused(String)
+        var errorDescription: String? {
+            switch self {
+            case .unanswered: "The session's plugin didn't pick the message up"
+            case .refused(let why): "The session's plugin refused the message: \(why)"
+            }
+        }
+    }
+
+    /// `relay/` beside the presence folder, in Lookout's Application Support.
+    static func root(besidePresence presence: URL) -> URL {
+        presence.deletingLastPathComponent().appendingPathComponent("relay", isDirectory: true)
+    }
+
+    /// How long the plugin has to answer: it looks every 0.5 s, so this is a dozen looks.
+    static let wait: TimeInterval = 6
+    /// Files older than this are leftovers (a crash between writing and reading the ack): removed on the next delivery.
+    static let leftover: TimeInterval = 15 * 60
+
+    /// The target and the nonce in a signed text's header line.
+    static func header(of text: String) -> (target: String, nonce: String)? {
+        guard let line = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first,
+              line.hasPrefix("⟦lookout v1 "), line.hasSuffix("⟧") else { return nil }
+        let fields = line.dropFirst("⟦lookout v1 ".count).dropLast().split(separator: " ")
+        guard fields.count == 4 else { return nil }
+        return (String(fields[0]), String(fields[1]))
+    }
+
+    private static func safe(_ name: String) -> Bool {
+        !name.isEmpty && name.count <= 128 && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+    }
+
+    func folder(for session: String) -> URL { root.appendingPathComponent(session, isDirectory: true) }
+
+    /// Writes `text` for `session` and waits for the plugin's answer. Throws `unanswered` when there's none within `timeout`
+    /// (the message is withdrawn first), `refused` when the plugin says no.
+    func deliver(_ text: String, to session: String, interval: TimeInterval = 0.03) async throws {
+        guard let header = Self.header(of: text), header.target == session, Self.safe(session), Self.safe(header.nonce) else {
+            throw Failure.refused("not a message signed for this session")
+        }
+        let dir = folder(for: session)
+        let message = dir.appendingPathComponent("\(header.nonce).msg"), ack = dir.appendingPathComponent("\(header.nonce).ack")
+        let fm = FileManager.default
+        try await OffMain.run { Swift.Result { try Self.sweep(dir); try PrivateFile.write(Data(text.utf8), to: message) } }.get()
+        func withdraw() { try? fm.removeItem(at: message); try? fm.removeItem(at: ack) }
+        func answer() -> String? {
+            guard let data = try? Data(contentsOf: ack), let text = String(data: data, encoding: .utf8) else { return nil }
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func outcome(_ reply: String) throws {
+            withdraw()
+            if reply == "ok" { return }
+            throw Failure.refused(reply.hasPrefix("refused: ") ? String(reply.dropFirst("refused: ".count)) : reply)
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        do {
+            while Date() < deadline {
+                if let reply = answer() { return try outcome(reply) }
+                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            }
+        } catch is CancellationError {
+            withdraw()
+            throw CancellationError()
+        }
+        // Withdrawn, then looked at once more: an answer that came as the file went counts.
+        try? fm.removeItem(at: message)
+        if let reply = answer() { return try outcome(reply) }
+        withdraw()
+        throw Failure.unanswered
+    }
+
+    /// Removes what's left of earlier deliveries in `dir` (older than `leftover`), and makes the folder private.
+    private static func sweep(_ dir: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let old = Date().addingTimeInterval(-leftover)
+        for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < old { try? fm.removeItem(at: url) }
+        }
+    }
+}
+
+extension RouterPaths {
+    /// The folder of per-session inboxes (`RelayInbox`), beside the plugin's presence folder.
+    var relay: URL { RelayInbox.root(besidePresence: pluginSessions) }
+}
+
+extension Store {
+    /// The inbox to deliver to `cli` through, when that session's plugin takes messages that way (it says so in its presence
+    /// file, under the key held now); nil sends them over the peer channel.
+    func relayInbox(for cli: String) async -> RelayInbox? {
+        guard let paths = routerFiles, let keyID = relayKeyCache?.keyID else { return nil }
+        let capable = await OffMain.run {
+            ClaudePlugin.inboxSessions(in: paths.pluginSessions,
+                                       registry: ClaudePeers.registry(dir: paths.claudeDir.appendingPathComponent("sessions", isDirectory: true)),
+                                       keyID: keyID).contains(cli)
+        }
+        return capable ? RelayInbox(root: paths.relay) : nil
     }
 }
 

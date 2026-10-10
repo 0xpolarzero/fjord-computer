@@ -461,6 +461,98 @@ import Testing
         withExtendedLifetime(f) {}
     }
 
+    /// A plugin in a task: waits for the message in the inbox, answers.
+    private func fakePlugin(_ inbox: RelayInbox, session: String, nonce: String, answer: String) -> Task<String?, Never> {
+        Task.detached {
+            let folder = inbox.folder(for: session)
+            for _ in 0..<300 {
+                if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
+                    try? Data((answer + "\n").utf8).write(to: folder.appendingPathComponent("\(nonce).ack"))
+                    return text
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            return nil
+        }
+    }
+
+    @Test func aPluginWithAnInboxTakesTheMessageWithNoProcessAndThroughTheSameGate() async throws {
+        let dir = TempDir()
+        let (s, _, f) = setup()
+        let signed = RelaySigner.sign(body: "hello", target: "cli-a", key: "k1")
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        let inbox = RelayInbox(root: dir.path("relay"))
+        let tools = RouterTools(store: s)
+        tools.beginTurn("hello")
+        tools.prepared["cli-a"] = Prepared(text: signed, original: "hello", rephrased: false)
+        let plugin = fakePlugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
+        // No binary exists: a process would fail.
+        try await RouterSender.send(binary: "/nonexistent/claude", cwd: dir.url, to: "cli-a", text: signed, tools: tools, inbox: inbox)
+        #expect(await plugin.value == signed)
+        #expect(tools.prepared["cli-a"] == nil)
+        // The gate holds: other words than the prepared ones are not written.
+        tools.prepared["cli-a"] = Prepared(text: signed, original: "hello", rephrased: false)
+        await #expect(throws: (any Error).self) {
+            try await RouterSender.send(binary: "/nonexistent/claude", cwd: dir.url, to: "cli-a",
+                                        text: RelaySigner.sign(body: "other", target: "cli-a", key: "k1"), tools: tools, inbox: inbox)
+        }
+        // Not prepared: not written.
+        let bare = RouterTools(store: s)
+        bare.beginTurn("hello")
+        await #expect(throws: (any Error).self) {
+            try await RouterSender.send(binary: "/nonexistent/claude", cwd: dir.url, to: "cli-a", text: signed, tools: bare, inbox: inbox)
+        }
+        withExtendedLifetime(f) {}
+    }
+
+    @Test func aPluginRefusalFailsTheSendWithItsReason() async throws {
+        let dir = TempDir()
+        let (s, _, f) = setup()
+        let signed = RelaySigner.sign(body: "hello", target: "cli-a", key: "k1")
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        let inbox = RelayInbox(root: dir.path("relay"))
+        let tools = RouterTools(store: s)
+        tools.beginTurn("hello")
+        tools.prepared["cli-a"] = Prepared(text: signed, original: "hello", rephrased: false)
+        _ = fakePlugin(inbox, session: "cli-a", nonce: nonce, answer: "refused: stale")
+        do {
+            try await RouterSender.send(binary: "/nonexistent/claude", cwd: dir.url, to: "cli-a", text: signed, tools: tools, inbox: inbox)
+            Issue.record("a refused message counted as sent")
+        } catch {
+            #expect(error.localizedDescription.contains("stale"), "\(error.localizedDescription)")
+        }
+        withExtendedLifetime(f) {}
+    }
+
+    @Test func aPluginThatDoesNotAnswerFallsBackToSendMessageWithTheGateIntact() async throws {
+        let dir = TempDir()
+        let (s, _, f) = setup()
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 0.2
+        let tools = RouterTools(store: s)
+        tools.beginTurn("hello")
+        let signed = RelaySigner.sign(body: "hello", target: "Docs", key: "k1")
+        tools.prepared["Docs"] = Prepared(text: signed, original: "hello", rephrased: false)
+        let input = String(decoding: try JSONSerialization.data(withJSONObject: ["to": "Docs", "message": signed]), as: UTF8.self)
+        let script = dir.path("claude")
+        let body = """
+        #!/bin/bash
+        read -r first
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"SendMessage","input":\(input)}]}}'
+        echo '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"SendMessage","input":\(input)}}'
+        read -r answer
+        echo "$answer" > "$(dirname "$0")/answer.txt"
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"{\\"success\\":true}"}]}}'
+        echo '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+        """
+        try Data(body.utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        try await RouterSender.send(binary: script.path, cwd: dir.url, to: "Docs", text: signed, tools: tools, timeout: 30, inbox: inbox)
+        let answer = try String(contentsOf: dir.path("answer.txt"), encoding: .utf8)
+        #expect(answer.contains("\"allow\""))
+        withExtendedLifetime(f) {}
+    }
+
     @Test func aDeliveryTheGateRefusesIsNotSent() async throws {
         let dir = TempDir()
         let (s, _, f) = setup()
@@ -487,7 +579,7 @@ import Testing
         let dir = TempDir()
         let (s, _, f) = setup()
         let script = dir.path("claude")
-        try Data("#!/bin/bash\nread -r x\nsleep 30\n".utf8).write(to: script)
+        try Data("#!/bin/bash\nread -r x\nexec sleep 30\n".utf8).write(to: script)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         let tools = RouterTools(store: s)
         tools.beginTurn("hello")

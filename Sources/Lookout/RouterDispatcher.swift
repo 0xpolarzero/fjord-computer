@@ -561,7 +561,8 @@ extension RouterDispatcher.Effects {
                     throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
                 }
                 try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                try await RouterSender.send(binary: binary, cwd: home, to: delivery.to, text: delivery.text, tools: tools)
+                try await RouterSender.send(binary: binary, cwd: home, to: delivery.to, text: delivery.text, tools: tools,
+                                            inbox: await store.relayInbox(for: delivery.to))
             },
             answer: { [weak dispatcher] tools, card, answers in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }

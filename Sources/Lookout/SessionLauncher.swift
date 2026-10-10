@@ -140,7 +140,8 @@ extension SessionLauncher.Effects {
                 tools.beginTurn(prepared.original)
                 tools.prepared[peer] = prepared
                 defer { tools.endTurn() }
-                try await RouterSender.send(binary: binary, cwd: home, to: peer, text: prepared.text, tools: tools)
+                try await RouterSender.send(binary: binary, cwd: home, to: peer, text: prepared.text, tools: tools,
+                                            inbox: await store.relayInbox(for: peer))
             })
     }
 }

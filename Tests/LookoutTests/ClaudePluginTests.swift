@@ -135,7 +135,9 @@ enum PluginFixture {
         let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(".claude-plugin/plugin.json"))) as? [String: Any]
         #expect(manifest?["version"] as? String == "1.0.0-rabc" && manifest?["name"] as? String == "lookout")
         let config = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("config.json"))) as? [String: String]
-        #expect(config == ["keyPath": keyFile.path, "presenceDir": presence.path, "sessionsDir": dir.path("sessions").path])
+        #expect(config == ["keyPath": keyFile.path, "presenceDir": presence.path, "sessionsDir": dir.path("sessions").path,
+                           "inboxDir": dir.path("relay").path])
+        #expect(mode(dir.path("relay")) == 0o700)
         // Writing the folder makes no key; the key is made once, readable by the person alone, never in the folder.
         #expect(ClaudePlugin.key(at: keyFile) == nil)
         let key = try ClaudePlugin.ensureKey(at: keyFile)
@@ -602,5 +604,109 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         await s.routerHookWork?.value
         #expect(s.routerPluginStatus == .notInstalled)
         #expect(s.routerPluginError?.contains("boom: plugin marketplace add") == true)
+    }
+}
+
+/// The direct way: a signed text written to a session's inbox, answered by the plugin's ack.
+@Suite struct RelayInboxTests {
+    private let key = "k1"
+
+    private func presence(_ dir: TempDir, _ cli: String, capabilities: [String]?) throws {
+        var obj: [String: Any] = ["state": "live", "sessionId": cli, "pid": 100, "startedAt": 5, "keyId": ClaudePlugin.keyID(of: key),
+                                  "activation": "a", "renewedAt": Int64(ClaudePlugin.leaseNow.timeIntervalSince1970 * 1000)]
+        if let capabilities { obj["capabilities"] = capabilities }
+        try JSONSerialization.data(withJSONObject: obj).write(to: dir.path(cli))
+    }
+
+    /// What the plugin does, in a task: waits for the message, answers.
+    private func plugin(_ inbox: RelayInbox, session: String, nonce: String, answer: String?) -> Task<String?, Never> {
+        Task.detached {
+            let folder = inbox.folder(for: session)
+            for _ in 0..<200 {
+                if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
+                    if let answer { try? Data((answer + "\n").utf8).write(to: folder.appendingPathComponent("\(nonce).ack")) }
+                    return text
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            return nil
+        }
+    }
+
+    @Test func onlyAPluginThatSaysSoIsReachedDirectly() throws {
+        let dir = TempDir()
+        try presence(dir, "cli-new", capabilities: ["inbox-v1"])
+        try presence(dir, "cli-old", capabilities: nil)
+        try presence(dir, "cli-other", capabilities: ["something-else"])
+        // One process per session, as the registry has it.
+        let reg: [Int32: [ClaudePeers.Registered]] = [100: ["cli-new", "cli-old", "cli-other"].map { ClaudePeers.Registered(sessionID: $0, startedAt: 5) }]
+        let id = ClaudePlugin.keyID(of: key)
+        #expect(ClaudePlugin.inboxSessions(in: dir.url, registry: reg, keyID: id) { _ in true } == ["cli-new"])
+        #expect(ClaudePlugin.sessions(in: dir.url, registry: reg, keyID: id) { _ in true } == ["cli-new", "cli-old", "cli-other"])
+        // Another key: none.
+        #expect(ClaudePlugin.inboxSessions(in: dir.url, registry: reg, keyID: "other") { _ in true }.isEmpty)
+    }
+
+    @Test func theSignedTextIsWrittenExactlyAndAnOkAckCompletes() async throws {
+        let dir = TempDir()
+        let inbox = RelayInbox(root: dir.path("relay"))
+        let signed = RelaySigner.sign(body: "Use Postgres\nand ship ⟦é⟧", target: "cli-a", key: key)
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
+        try await inbox.deliver(signed, to: "cli-a")
+        #expect(await fake.value == signed)
+        // Both files are gone after; the folder is private.
+        let folder = inbox.folder(for: "cli-a")
+        #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(nonce).msg").path))
+        #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(nonce).ack").path))
+        let attrs = try FileManager.default.attributesOfItem(atPath: folder.path)
+        #expect((attrs[.posixPermissions] as? Int) == 0o700)
+    }
+
+    @Test func aRefusalIsReportedAndNotRetriedElsewhere() async throws {
+        let dir = TempDir()
+        let inbox = RelayInbox(root: dir.path("relay"))
+        let signed = RelaySigner.sign(body: "hi", target: "cli-a", key: key)
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "refused: bad signature")
+        await #expect(throws: RelayInbox.Failure.refused("bad signature")) { try await inbox.deliver(signed, to: "cli-a") }
+        _ = await fake.value
+        #expect(!FileManager.default.fileExists(atPath: inbox.folder(for: "cli-a").appendingPathComponent("\(nonce).msg").path))
+    }
+
+    @Test func noAnswerWithdrawsTheMessage() async throws {
+        let dir = TempDir()
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 0.2
+        let signed = RelaySigner.sign(body: "hi", target: "cli-a", key: key)
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        await #expect(throws: RelayInbox.Failure.unanswered) { try await inbox.deliver(signed, to: "cli-a") }
+        #expect(!FileManager.default.fileExists(atPath: inbox.folder(for: "cli-a").appendingPathComponent("\(nonce).msg").path))
+    }
+
+    @Test func aTextForAnotherSessionOrWithoutAHeaderIsNeverWritten() async throws {
+        let dir = TempDir()
+        let inbox = RelayInbox(root: dir.path("relay"))
+        let signed = RelaySigner.sign(body: "hi", target: "cli-a", key: key)
+        await #expect(throws: (any Error).self) { try await inbox.deliver(signed, to: "cli-b") }
+        await #expect(throws: (any Error).self) { try await inbox.deliver("plain words", to: "cli-a") }
+        // A session id that is a path is not a folder.
+        let sneaky = RelaySigner.sign(body: "hi", target: "../x", key: key)
+        await #expect(throws: (any Error).self) { try await inbox.deliver(sneaky, to: "../x") }
+        #expect(!FileManager.default.fileExists(atPath: inbox.root.path))
+    }
+
+    @Test func leftoversAreSweptOnTheNextDelivery() async throws {
+        let dir = TempDir()
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 0.1
+        let folder = inbox.folder(for: "cli-a")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let old = folder.appendingPathComponent("old.ack"), fresh = folder.appendingPathComponent("fresh.ack")
+        try Data("ok".utf8).write(to: old)
+        try Data("ok".utf8).write(to: fresh)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: old.path)
+        _ = try? await inbox.deliver(RelaySigner.sign(body: "hi", target: "cli-a", key: key), to: "cli-a")
+        #expect(!FileManager.default.fileExists(atPath: old.path) && FileManager.default.fileExists(atPath: fresh.path))
     }
 }

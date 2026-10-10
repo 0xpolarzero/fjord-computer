@@ -243,8 +243,26 @@ enum RouterSender {
     }
 
     /// Sends `text` to `to` through `tools`' gate. Throws why it wasn't delivered.
+    ///
+    /// With an `inbox` (the target's plugin takes messages directly, see `RelayInbox`) the signed text goes there, with no
+    /// Claude Code process and no model, behind the same gate: only exactly the prepared text, once. A refusal by the plugin
+    /// fails the send (the peer channel would be refused the same way); a plugin that doesn't answer in time leaves the
+    /// message to the process below, the gate's approval given back first.
     @MainActor
-    static func send(binary: String, cwd: URL, to: String, text: String, tools: RouterTools, timeout: TimeInterval = 45) async throws {
+    static func send(binary: String, cwd: URL, to: String, text: String, tools: RouterTools, timeout: TimeInterval = 45,
+                     inbox: RelayInbox? = nil) async throws {
+        if let inbox {
+            let ready = tools.prepared[to]
+            if let refusal = tools.approveSend(["to": to, "message": text], otherFields: []) { throw RouterTools.Failure(refusal) }
+            do {
+                try await inbox.deliver(text, to: to)
+                return
+            } catch RelayInbox.Failure.unanswered {
+                tools.prepared[to] = ready
+            } catch let failure as RelayInbox.Failure {
+                throw RouterTools.Failure(failure.localizedDescription)
+            }
+        }
         signal(SIGPIPE, SIG_IGN)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)

@@ -11,6 +11,13 @@ import type { EngineInterface, Register } from 'claude-code'
 //   ⟦lookout v1 <target session id> <nonce> <ms since 1970> <hex HMAC-SHA256>⟧\n<base64 body>
 // The MAC covers the UTF-8 bytes of "v1\n<target>\n<nonce>\n<ms>\n" followed by the body's own UTF-8 bytes.
 //
+// Two ways in, one check. The peer channel (`session.receive`) is the original way and stays as the fallback for a Lookout
+// that can't reach this plugin directly. The inbox is the direct way, with no model in between: Lookout writes the very
+// same signed text to `<inboxDir>/<session id>/<nonce>.msg` (atomically: a dot-file renamed into place), the plugin polls
+// that folder every half second, runs the same check, and answers with `<nonce>.ack` beside it ("ok", or "refused: why").
+// Lookout reads the ack and deletes both files; the plugin has no way to delete, and needs none.
+// Presence files list `capabilities`, so a Lookout knows which way a session can be reached.
+//
 // Lookout writes this file; edits are overwritten.
 
 const HEADER = /(?:^|\n)⟦lookout v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧\n/
@@ -18,6 +25,8 @@ const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const CLOSE = '</cross-session-message>'
 const WINDOW_MS = 10 * 60 * 1000
 const NONCE = 'nonce.'
+export const CAPABILITIES = ['inbox-v1']
+const POLL_MS = 500
 const ACTIVATION = crypto.randomUUID()
 
 const enc = new TextEncoder()
@@ -98,7 +107,7 @@ const exclusive = <T>(work: () => Promise<T>): Promise<T> => {
 
 /** Where Lookout keeps the key and the presence files, and Claude Code its registry of processes, as absolute paths (a
  * hooks module can't read the environment). */
-type Config = { keyPath?: string; presenceDir?: string; sessionsDir?: string }
+type Config = { keyPath?: string; presenceDir?: string; sessionsDir?: string; inboxDir?: string }
 
 async function config($: EngineInterface) {
   return JSON.parse(await $.fs.read(`${$.plugin.root}/config.json`)) as Config
@@ -147,7 +156,7 @@ async function mark($: EngineInterface) {
     await $.fs.write(`${marked.presenceDir}/${marked.sessionId}`, `${JSON.stringify({ state: 'ended' })}\n`)
   }
   const renewedAt = await $.clock.now()
-  const presence = { state: 'live', sessionId, pid: own.pid, startedAt: own.startedAt, keyId: id, renewedAt, activation: ACTIVATION }
+  const presence = { state: 'live', sessionId, pid: own.pid, startedAt: own.startedAt, keyId: id, renewedAt, activation: ACTIVATION, capabilities: CAPABILITIES }
   await $.fs.write(`${presenceDir}/${sessionId}`, `${JSON.stringify(presence)}\n`)
   marked = { sessionId, presenceDir, keyId: id, pid: own.pid, startedAt: own.startedAt }
 }
@@ -158,37 +167,81 @@ async function unmark($: EngineInterface) {
   marked = undefined
 }
 
+/** Checks a signed text the way both ways in must, and submits it as the person's own words. `unsigned` means it isn't
+ * Lookout's at all (the peer channel then passes it on); anything else is a refusal with its reason. */
+export async function accept($: EngineInterface, text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const signed = parse(text)
+  if (!signed) return { ok: false, reason: 'unsigned' }
+  const { keyPath } = await config($)
+  if (!keyPath) return { ok: false, reason: 'no key configured' }
+  const key = (await $.fs.read(keyPath)).trim()
+  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body))
+  const now = await $.clock.now()
+  const ts = Number(signed.ts)
+  if (!same(expected, signed.mac)) return { ok: false, reason: 'bad signature' }
+  if (signed.target !== (await $.session.id())) return { ok: false, reason: 'addressed to another session' }
+  if (!(Math.abs(now - ts) < WINDOW_MS)) return { ok: false, reason: 'stale' }
+  // A leading byte-order mark is part of what was written: the decoder drops one, so exactly one is put back.
+  let decoded: string
+  try {
+    decoded = new TextDecoder('utf-8', { fatal: true }).decode(signed.body)
+  } catch {
+    return { ok: false, reason: 'not UTF-8' }
+  }
+  const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
+  const body = bom ? `\uFEFF${decoded}` : decoded
+  // Each nonce is a key of its own in the store (it outlives reloads and restarts), kept while its message's time is
+  // inside the window: past it the message is refused as stale anyway.
+  const claimed = await exclusive(async () => {
+    if ((await $.store.get(NONCE + signed.nonce)) !== undefined) return false
+    await $.store.set(NONCE + signed.nonce, ts)
+    for (const name of await $.store.keys()) {
+      if (!name.startsWith(NONCE)) continue
+      const at = Number(await $.store.get(name))
+      if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
+    }
+    return true
+  })
+  if (!claimed) return { ok: false, reason: 'already delivered' }
+  void $.prompt.submit({ text: body, asUser: true })
+  return { ok: true }
+}
+
+/** When the look in progress began (0: none). A look that hangs is given up on after `POLL_STUCK_MS`, so one stuck call can't
+ * silence the inbox for good; two looks at once never happen otherwise (each message gets exactly one ack). */
+let pollingSince = 0
+const POLL_STUCK_MS = 5000
+
+/** One look at this session's inbox: every message without an ack is checked, submitted or refused, and answered. */
+export async function poll($: EngineInterface) {
+  const began = await $.clock.now()
+  if (pollingSince && Math.abs(began - pollingSince) < POLL_STUCK_MS) return
+  pollingSince = began
+  try {
+    const { inboxDir } = await config($)
+    if (!inboxDir) return
+    const dir = `${inboxDir}/${await $.session.id()}`
+    const names = new Set((await $.fs.list(dir)).map((entry) => entry.name))
+    for (const name of [...names].sort()) {
+      if (!name.endsWith('.msg') || names.has(`${name.slice(0, -4)}.ack`)) continue
+      const text = await $.fs.read(`${dir}/${name}`).catch(() => undefined)
+      if (text === undefined) continue
+      const outcome = await accept($, text).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
+      await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? 'ok\n' : `refused: ${outcome.reason}\n`)
+    }
+  } catch {
+    // No folder yet (nothing was ever sent here), or it can't be read: nothing to do until the next look.
+  } finally {
+    if (pollingSince === began) pollingSince = 0
+  }
+}
+
+let timer: { cancel: () => void } | undefined
+
 export const register: Register = (on) => {
   on('session.receive', async ($, e, next) => {
-    const signed = parse(e.text)
-    if (!signed) return next(e)
-    const { keyPath } = await config($)
-    if (!keyPath) return next(e)
-    const key = (await $.fs.read(keyPath)).trim()
-    const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body))
-    const now = await $.clock.now()
-    const ts = Number(signed.ts)
-    if (!same(expected, signed.mac) || signed.target !== (await $.session.id()) || !(Math.abs(now - ts) < WINDOW_MS)) {
-      return next(e)
-    }
-    // A leading byte-order mark is part of what was written: the decoder drops one, so exactly one is put back.
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(signed.body)
-    const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
-    const text = bom ? `\uFEFF${decoded}` : decoded
-    // Each nonce is a key of its own in the store (it outlives reloads and restarts), kept while its message's time is
-    // inside the window: past it the message is refused as stale anyway.
-    const claimed = await exclusive(async () => {
-      if ((await $.store.get(NONCE + signed.nonce)) !== undefined) return false
-      await $.store.set(NONCE + signed.nonce, ts)
-      for (const name of await $.store.keys()) {
-        if (!name.startsWith(NONCE)) continue
-        const at = Number(await $.store.get(name))
-        if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
-      }
-      return true
-    })
-    if (!claimed) return next(e)
-    void $.prompt.submit({ text, asUser: true })
+    const outcome = await accept($, e.text)
+    if (!outcome.ok) return next(e)
     return { consumed: 'relayed by Lookout as the person’s own message' }
   }).catch(($, e, next) => next(e))
 
@@ -196,6 +249,8 @@ export const register: Register = (on) => {
     await mark($).catch(() => undefined)
     // The registry may not list the process yet, and a /clear changes the session's id: looked at again now and then.
     $.clock.every(10_000, () => void mark($).catch(() => undefined))
+    timer?.cancel()
+    timer = $.clock.every(POLL_MS, () => void poll($))
     return next(e)
   })
   on('turn.start', async ($, e, next) => {
