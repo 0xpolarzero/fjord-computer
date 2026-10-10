@@ -59,6 +59,8 @@ enum AppTransition {
 
     /// Whether `window` has the keyboard (its buttons in colour). Replaceable, so a test can have a key window.
     static var isKey: (NSWindow) -> Bool = { $0.isKeyWindow }
+    /// Whether `window` is in the Dock. Replaceable, as `isKey` (a window under test does not minimize at once).
+    static var isMiniaturized: (NSWindow) -> Bool = { $0.isMiniaturized }
 
     /// The window's own corner radius (macOS 26's are larger than before), so nothing changes when the real window takes over.
     static func cornerRadius(of window: NSWindow) -> CGFloat {

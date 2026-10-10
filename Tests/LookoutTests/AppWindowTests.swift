@@ -447,7 +447,8 @@ import Testing
     /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on. A window under
     /// test never has the keyboard (the test runner is not the active app): `AppTransition.isKey` may say otherwise.
     private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
-        let saved = (AppTransition.enabled, AppTransition.nextFrame, AppTransition.nextTurn, AppTransition.isKey)
+        let saved = (AppTransition.enabled, AppTransition.nextFrame, AppTransition.nextTurn, AppTransition.isKey,
+                     AppTransition.isMiniaturized)
         let ticks = Ticks()
         AppTransition.enabled = true
         AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
@@ -457,6 +458,7 @@ import Testing
             AppTransition.nextFrame = saved.1
             AppTransition.nextTurn = saved.2
             AppTransition.isKey = saved.3
+            AppTransition.isMiniaturized = saved.4
         }
         _ = NSApplication.shared
         let store = Store()
@@ -596,6 +598,27 @@ import Testing
             #expect(controller.phase == .opening && controller.run === run && run.image === started)
             run.complete()
             #expect(run.image != nil && run.image !== started)
+        }
+    }
+
+    /// Minimized on its way in, then closed by a toggle, the window turned round by another toggle opens again: the close's
+    /// end does not close it after all.
+    @Test func aCloseOfAWindowMinimizedOnItsWayInTurnsRound() {
+        morphing { controller, ticks in
+            controller.show(.settings)
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            guard let window = controller.window else { return #expect(Bool(false), "no window") }
+            // ⌘M: a window under test does not minimize at once.
+            AppTransition.isMiniaturized = { $0 === window }
+            controller.close()
+            guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
+            #expect(controller.phase == .closing)
+            controller.show(.settings)
+            #expect(controller.phase == .opening && controller.isOpen)
+            closing.complete()
+            ticks.turns.forEach { $0() }
+            #expect(controller.phase != .closing && controller.isOpen)
         }
     }
 

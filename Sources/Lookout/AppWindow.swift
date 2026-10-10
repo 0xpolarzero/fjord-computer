@@ -121,10 +121,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         if let destination { navigator.go(destination.resolved(shown: shownIDs, routerOn: store.routerOn)) }
         let window = self.window ?? makeWindow()
         self.window = window
-        // A window on its way out comes back from where it is; one on its way in just goes on.
+        // A window on its way out comes back from where it is (minimized on its way in included: its close's end would close
+        // it otherwise); one on its way in just goes on.
         let reversing = phase == .closing && run != nil
         let arriving = phase == .opening
-        let opening = !arriving && (reversing || !window.isVisible) && !window.isMiniaturized && AppTransition.enabled
+        let opening = !arriving && (reversing || (!window.isVisible && !AppTransition.isMiniaturized(window)))
+            && AppTransition.enabled
         if !window.isVisible && !reversing && !arriving { moveToBarScreen(window) }
         // The bar as it is now, before whoever called us hides it.
         let morph = opening && !reversing && !AppTransition.reduceMotion ? bar() : nil
