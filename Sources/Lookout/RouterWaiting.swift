@@ -60,10 +60,20 @@ enum RouterWaits {
 }
 
 extension Store {
+    /// The GitHub repos (`owner/repo`, lowercased) a folder's git remotes name, read once per folder, off the main thread.
+    func gitRepos(of folder: String?) async -> Set<String> {
+        guard let folder, !folder.isEmpty else { return [] }
+        if let known = routerTriager.repos[folder] { return known }
+        let repos = await Task.detached(priority: .utility) { Set(LocalClones.remotes(of: folder)) }.value
+        routerTriager.repos[folder] = repos
+        return repos
+    }
+
     /// What a session's turn might be waiting on that Lookout can watch: the other live sessions (working ones first), and
-    /// the checks still running on the inbox's PRs and workflows in a repo named like the session's folder. Each under a
-    /// plain key for Jev.
-    func waitOptions(for session: ClaudeSession) -> [RouterTriage.WaitOption] {
+    /// the checks still running on the inbox's PRs and workflows of the very repo the session's folder is a clone of (its
+    /// git remotes, owner and name: another owner's repo of the same name is not it). Each under a plain key for Jev.
+    func waitOptions(for session: ClaudeSession) async -> [RouterTriage.WaitOption] {
+        let repos = await gitRepos(of: session.folder)
         let others = claudeSessions.values.filter { !$0.isArchived && $0.id != session.id }
             .sorted { a, b in a.running != b.running ? a.running : a.lastActivity > b.lastActivity }
             .prefix(10)
@@ -73,10 +83,8 @@ extension Store {
                                     watch: .init(target: .session(id: other.id, turns: other.completedTurns),
                                                  label: "session “\(RouterDecision.clip(other.title, 50))”"))
         }
-        let name = session.folderName.lowercased()
         let ci = things.values.filter { thing in
-            thing.checks == .pending && (thing.kind == .pr || thing.kind == .workflow)
-                && thing.repo.split(separator: "/").last.map { $0.lowercased() == name } == true
+            thing.checks == .pending && (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
         }.sorted { $0.updatedAt > $1.updatedAt }.prefix(6)
         options += ci.enumerated().map { i, thing in
             RouterTriage.WaitOption(key: "c\(i)", hint: "\(RouterWaits.ciLabel(thing)): \(thing.title), checks running",

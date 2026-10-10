@@ -346,6 +346,8 @@ extension Claude {
     var rescanned = false
     /// Waiting cards whose session is being told its wait is over (never saved: a send cut short by quitting is not one).
     var telling: Set<String> = []
+    /// The GitHub repos each folder's git remotes name (`Store.gitRepos`), read once; tests fill it in.
+    var repos: [String: Set<String>] = [:]
     private var running = 0
 
     /// Waits until no triage is under way (tests).
@@ -441,7 +443,7 @@ extension Store {
             let candidates = RouterTriage.candidates(RouterTriage.sentences(message))
             // Looking back, only a turn that ended on what looks like an ask is worth a call.
             if rescue, candidates.isEmpty { return }
-            let options = self.waitOptions(for: session)
+            let options = await self.waitOptions(for: session)
             let state = RouterTriage.state(message: message, title: session.title, project: session.folderName,
                                            summary: session.summary?.detail, candidates: candidates)
             guard let answers = try? await ask(RouterTriage.questions(candidates: candidates, options: options), state) else { return }
