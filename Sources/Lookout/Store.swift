@@ -76,6 +76,8 @@ final class Store {
     }
     /// When myTeams was last resolved (this session; at most daily).
     @ObservationIgnored var teamsResolvedAt: Date?
+    /// What the inbox's refreshes keep between them (InboxSync.swift).
+    @ObservationIgnored var inboxSyncState = InboxSyncState()
     /// Default branches found for workflow things, by repo.
     @ObservationIgnored var defaultBranches: [String: String] = [:]
     /// A commit's headline by repo, asked once per commit (see `ciHeadline`).

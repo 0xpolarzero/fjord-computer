@@ -78,6 +78,15 @@ enum InboxSync {
         jevReads || categories.contains { $0.rules.contains { $0.scope.to?.include.contains(.myTeams) == true } }
     }
 
+    /// How soon the teams are asked again after looking them up failed.
+    static let teamsRetry: TimeInterval = 15 * 60
+
+    /// Teams are looked up once a day, and a failed look again after `teamsRetry`.
+    static func teamsDue(resolvedAt: Date?, failedAt: Date?, now: Date = Date()) -> Bool {
+        if let failedAt, now.timeIntervalSince(failedAt) < teamsRetry { return false }
+        return resolvedAt.map { now.timeIntervalSince($0) > 86400 } ?? true
+    }
+
     /// `org/team` a slot names: its teams, and yours for `My teams`.
     static func teams(_ pick: Pick<PersonRef>?, myTeams: Set<String>) -> [String] {
         var found: [String] = []
@@ -574,6 +583,12 @@ enum InboxSync {
     }
 }
 
+/// What the inbox's refreshes keep between them this session (InboxSync.swift): all of it about the account signed in.
+struct InboxSyncState {
+    /// When looking your teams up last failed: asked again after `InboxSync.teamsRetry`, not a day.
+    var teamsFailedAt: Date?
+}
+
 // MARK: - Repos that moved
 
 extension Store {
@@ -681,7 +696,15 @@ extension Store {
             (rule.scope.in?.include ?? []).contains { $0 == .owned || $0 == .contributed }
         } }
         let needsTeams = InboxSync.needsTeams(categories: categories, jevReads: jevReadsInboxNow)
-        if needsTeams, teamsResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true { await resolveTeams(me: me) }
+        if needsTeams, InboxSync.teamsDue(resolvedAt: teamsResolvedAt, failedAt: inboxSyncState.teamsFailedAt) {
+            // With no teams known, rules naming My teams would search nothing and empty: the refresh says so and waits.
+            if let failure = await resolveTeams(me: me), myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
+                inboxError = "Your teams couldn't be looked up: " + failure
+                return
+            }
+        } else if inboxSyncState.teamsFailedAt != nil, myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
+            return
+        }
         if needsRepos, reposResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true {
             // A failure leaves what was known; with nothing known, the refresh waits: it would read as "nothing there".
             do { try await resolveRepos(me: me) } catch {
@@ -871,13 +894,25 @@ extension Store {
         reposResolvedAt = Date()
     }
 
-    /// The teams you're in. A failure (no read:org, offline) leaves what was known; asked again in a day.
-    func resolveTeams(me: String) async {
+    /// The teams you're in, asked again in a day. A failure (offline, GitHub's trouble) leaves what was known and is asked
+    /// again sooner (`InboxSync.teamsRetry`); without read:org GitHub answers with none, which is an answer. What went wrong,
+    /// if it did.
+    @discardableResult
+    func resolveTeams(me: String) async -> String? {
+        let json: [String: Any]
+        do { json = try await gh.graphql(InboxSync.teamsRequest(me: me)) } catch {
+            inboxSyncState.teamsFailedAt = Date()
+            return error.localizedDescription
+        }
+        guard let data = json["data"] as? [String: Any] else {
+            inboxSyncState.teamsFailedAt = Date()
+            return ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"
+        }
         teamsResolvedAt = Date()
-        guard let json = try? await gh.graphql(InboxSync.teamsRequest(me: me)),
-              let data = json["data"] as? [String: Any] else { return }
+        inboxSyncState.teamsFailedAt = nil
         let teams = InboxSync.teams(data)
         if teams != myTeams { myTeams = teams }
+        return nil
     }
 
     // MARK: Notifications

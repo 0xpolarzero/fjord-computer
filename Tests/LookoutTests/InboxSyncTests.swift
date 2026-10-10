@@ -598,6 +598,42 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.myTeams == ["acme/core"])
     }
 
+    @Test @MainActor func aFailedTeamsLookupIsSaidKeepsTheThingsAndIsAskedAgainSoon() async throws {
+        final class Box: @unchecked Sendable { var fails = true; var teamAsks = 0; var searches = 0 }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [InboxCategory(name: "Team", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested]))])]
+        s.settings.jevReadsInbox = false
+        s.gh.session = StubbedGitHub.session { request in
+            if InboxSyncRefresh.body(request).contains("organizations") {
+                box.teamAsks += 1
+                if box.fails { return StubbedGitHub.Reply(502, #"{"message":"Server Error"}"#) }
+                let data = ["viewer": ["organizations": ["nodes": [["teams": ["nodes": [["combinedSlug": "acme/core"]]]]]]]]
+                return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+            }
+            box.searches += 1
+            let data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000], "s0": ["pageInfo": ["hasNextPage": false], "nodes": [node()]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        let kept = try #require(InboxSync.thing(node()))
+        s.things = [kept.id: kept]
+        await s.syncInbox()
+        #expect(s.inboxError?.contains("teams") == true && s.things.keys.sorted() == [kept.id])
+        #expect(s.teamsResolvedAt == nil && box.searches == 0)
+        // Not asked again at every poll, and the things still stay.
+        await s.syncInbox()
+        #expect(box.teamAsks == 1 && s.things.keys.sorted() == [kept.id] && s.inboxError != nil)
+        // A quarter of an hour later it is.
+        s.inboxSyncState.teamsFailedAt = Date().addingTimeInterval(-InboxSync.teamsRetry - 1)
+        box.fails = false
+        await s.syncInbox()
+        #expect(box.teamAsks == 2 && s.myTeams == ["acme/core"] && box.searches == 1 && s.inboxError == nil)
+        #expect(s.inboxSyncState.teamsFailedAt == nil && s.teamsResolvedAt != nil)
+    }
+
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {
         let s = Store()
         s.persists = false
