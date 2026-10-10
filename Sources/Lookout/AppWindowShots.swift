@@ -66,6 +66,10 @@ enum AppWindowShots {
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let d = store.router.decisions.first(where: { !$0.links.changes.isEmpty }) { model.expanded.insert(d.id.uuidString) }
         }),
+        Shot(name: "router-overview-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
+            store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
+            if let overview = store.router.overviews.last { model.expanded.insert(RouterPage.Entry.overview(overview).id) }
+        }),
         Shot(name: "router-replying-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let card = store.routerPage.history.last(where: { if case .card = $0 { true } else { false } }) {

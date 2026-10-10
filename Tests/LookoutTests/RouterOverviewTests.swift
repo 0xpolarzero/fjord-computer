@@ -104,6 +104,16 @@ import Testing
         #expect(idle.history.count == 2)
     }
 
+    @MainActor @Test func anOverviewInTheHistoryOpensAndFoldsLikeAnyLine() {
+        let overview = RouterOverview(at: now, text: "A long overview that the history line clips until it is opened.")
+        let id = RouterPage.Entry.overview(overview).id
+        let model = RouterModel()
+        model.toggleExpanded(id)
+        #expect(model.expanded.contains(id))
+        model.toggleExpanded(id)
+        #expect(!model.expanded.contains(id))
+    }
+
     @MainActor @Test func aClickStoresTheAnswerAndAFailureStoresNothing() async {
         let store = Store()
         store.persists = false

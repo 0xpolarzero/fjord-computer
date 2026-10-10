@@ -290,7 +290,7 @@ private struct RouterHistory: View {
         case .decision(let decision):
             HistoryDecisionLine(decision: decision, now: now, open: open, store: store, model: model).equatable()
         case .overview(let overview):
-            HistoryOverviewLine(overview: overview, now: now).equatable()
+            HistoryOverviewLine(overview: overview, now: now, open: open, model: model).equatable()
         }
     }
 }
@@ -404,32 +404,53 @@ private extension Transaction {
     withTransaction(transaction, change)
 }
 
-/// An overview in the history: one line (icon, the text, when); the whole text on hover.
+/// An overview in the history: one line (icon, the text, when), opening to show the whole text.
 private struct HistoryOverviewLine: View, Equatable {
     let overview: RouterOverview
     let now: Date
+    let open: Bool
+    let model: RouterModel
     @State private var hovered = false
+    @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.overview == b.overview && a.now == b.now }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.overview == b.overview && a.now == b.now && a.open == b.open }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "text.alignleft").font(.system(size: 10, weight: .medium))
-                .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
-            Text(overview.text).cdsText(CDS.Transcript.text, .regular, hovered ? CDS.Text.secondary : CDS.Text.muted)
-                .lineLimit(1).truncationMode(.tail).layoutPriority(1)
-            Spacer(minLength: 8)
-            Text(shortAgo(overview.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                toggleHistoryLine(reduceMotion: reduceMotion) { model.toggleExpanded(RouterPage.Entry.overview(overview).id) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles").font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
+                    Text(overview.text).cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
+                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    StatusCaret(hot: hovered, open: open)
+                    Spacer(minLength: 8)
+                    Text(shortAgo(overview.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                }
+                .padding(.horizontal, CDS.Transcript.statusPad)
+                .frame(height: CDS.Transcript.statusRow)
+                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                    .fill(hovered ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+                .overlay {
+                    RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                        .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .onHover { hovered = $0 }
+            .accessibilityLabel("Overview")
+            .accessibilityValue("\(overview.text), \(AgentRow.spokenAge(now.timeIntervalSince(overview.at))) ago, \(open ? "expanded" : "collapsed")")
+
+            if open {
+                CDSProse(text: overview.text, color: CDS.Text.primary, inset: false).historyDetails()
+            }
         }
-        .padding(.horizontal, CDS.Transcript.statusPad)
-        .frame(height: CDS.Transcript.statusRow)
-        .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-            .fill(hovered ? CDS.Fill.ghostHover : .clear))
-        .onHover { hovered = $0 }
-        .help(overview.text)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Overview")
-        .accessibilityValue("\(overview.text), \(AgentRow.spokenAge(now.timeIntervalSince(overview.at))) ago")
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -491,9 +512,7 @@ private struct HistoryDecisionLine: View, Equatable {
     }
 
     private func toggle() {
-        toggleHistoryLine(reduceMotion: reduceMotion) {
-            if open { model.expanded.remove(key) } else { model.expanded.insert(key) }
-        }
+        toggleHistoryLine(reduceMotion: reduceMotion) { model.toggleExpanded(key) }
     }
 }
 

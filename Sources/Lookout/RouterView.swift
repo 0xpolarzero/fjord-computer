@@ -367,6 +367,11 @@ final class RouterModel {
     var expandedNeed: String?
     /// Addressed cards and runs opened out in the history.
     var expanded: Set<String> = []
+
+    /// A history line (a run, an overview) opened out, or folded back.
+    func toggleExpanded(_ id: String) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
+    }
     @ObservationIgnored private var highlightTask: Task<Void, Never>?
 
     func reveal(_ id: String, highlight: Bool = true) {
