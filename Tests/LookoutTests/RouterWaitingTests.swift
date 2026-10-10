@@ -225,6 +225,26 @@ import Testing
         #expect(await s.waitOptions(for: s.claudeSessions["a"]!).map(\.key) == ["s0"])
     }
 
+    @Test func whatFinishedAfterTheWaitingTurnEndedStillEndsTheWait() async {
+        // The waiting turn ended a minute ago; since then, b finished its turn and the CI went green, before the options
+        // were read.
+        var done = ci(.passing)
+        done.updatedAt = Date()
+        var old = ci(.failing)
+        old.id = "pr:o/app#7"
+        old.updatedAt = Date().addingTimeInterval(-3600)
+        let (s, _) = store(watch: ciWatch, things: [done, old])
+        s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-60)
+        s.claudeSessions["b"]?.running = false
+        let options = await s.waitOptions(for: s.claudeSessions["a"]!)
+        #expect(options.map(\.key) == ["s0", "c0"])
+        #expect(options[0].watch.target == .session(id: "b", turns: 4) && options[1].watch.target == .ci(thing: "pr:o/app#1"))
+        #expect(options.allSatisfy { RouterWaits.result($0.watch, sessions: s.claudeSessions, things: s.things) != nil })
+        // One whose latest turn ended before ours is watched for its next.
+        s.claudeSessions["b"]?.lastActivity = Date().addingTimeInterval(-600)
+        #expect(await s.waitOptions(for: s.claudeSessions["a"]!)[0].watch.target == .session(id: "b", turns: 5))
+    }
+
     @Test func aFoldersReposAreItsGitRemotesOwnerAndName() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lk-remotes-\(UUID().uuidString)/app")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git"), withIntermediateDirectories: true)

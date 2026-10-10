@@ -72,22 +72,30 @@ extension Store {
     /// What a session's turn might be waiting on that Lookout can watch: the other live sessions (working ones first), and
     /// the checks still running on the inbox's PRs and workflows of the very repo the session's folder is a clone of (its
     /// git remotes, owner and name: another owner's repo of the same name is not it). Each under a plain key for Jev.
+    /// What finished after the waiting turn ended (`session.lastActivity`) still counts, though it was over by the time
+    /// the options were read: a session whose latest turn ended since is watched from the turn before it (so it is done
+    /// already), and CI whose checks changed since is offered done.
     func waitOptions(for session: ClaudeSession) async -> [RouterTriage.WaitOption] {
+        let since = session.lastActivity
         let repos = await gitRepos(of: session.folder)
         let others = claudeSessions.values.filter { !$0.isArchived && $0.id != session.id }
             .sorted { a, b in a.running != b.running ? a.running : a.lastActivity > b.lastActivity }
             .prefix(10)
         var options = others.enumerated().map { i, other in
-            RouterTriage.WaitOption(key: "s\(i)",
-                                    hint: "The Claude session “\(other.title)” in \(other.folderName)" + (other.running ? ", working now" : ""),
-                                    watch: .init(target: .session(id: other.id, turns: other.completedTurns),
-                                                 label: "session “\(RouterDecision.clip(other.title, 50))”"))
+            let finishedSince = !other.running && other.completedTurns > 0 && other.lastActivity > since
+            return RouterTriage.WaitOption(key: "s\(i)",
+                                           hint: "The Claude session “\(other.title)” in \(other.folderName)"
+                                               + (other.running ? ", working now" : finishedSince ? ", finished a turn since" : ""),
+                                           watch: .init(target: .session(id: other.id, turns: other.completedTurns - (finishedSince ? 1 : 0)),
+                                                        label: "session “\(RouterDecision.clip(other.title, 50))”"))
         }
         let ci = things.values.filter { thing in
-            thing.checks == .pending && (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
+            (thing.checks == .pending || (thing.checks != nil && thing.updatedAt > since))
+                && (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
         }.sorted { $0.updatedAt > $1.updatedAt }.prefix(6)
         options += ci.enumerated().map { i, thing in
-            RouterTriage.WaitOption(key: "c\(i)", hint: "\(RouterWaits.ciLabel(thing)): \(thing.title), checks running",
+            RouterTriage.WaitOption(key: "c\(i)", hint: "\(RouterWaits.ciLabel(thing)): \(thing.title), "
+                                        + (thing.checks == .pending ? "checks running" : "checks finished since"),
                                     watch: .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing),
                                                  ref: RouterWaits.ref(thing)))
         }
