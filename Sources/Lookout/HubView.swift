@@ -212,6 +212,8 @@ struct LookoutHub: View {
             VStack(spacing: 0) { categoryCells }.frame(width: Self.cell)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inboxCellsHeight = $0 }
         }
+        // Down from the bar's top as far as the well is in from its sides, so the well sits inset all round.
+        .padding(.top, 3)
         .frame(width: Self.cell)
         .background(alignment: .top) {
             if !store.shownCategories.isEmpty {
@@ -219,7 +221,7 @@ struct LookoutHub: View {
                     .fill(CDS.Fill.ghostSelected)
                     .frame(width: Self.cell - 8, height: inboxMarkHeight + inboxCellsHeight + 2)
                     .frame(width: Self.cell)
-                    .padding(.top, 1)
+                    .padding(.top, 4)
             }
         }
         .modifier(probe(.inbox))
