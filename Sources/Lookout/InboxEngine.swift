@@ -432,8 +432,9 @@ enum InboxEngine {
                     : Fact(key: "person:\($0.id)", label: "comment by @\($0.author.login)", tint: .attention)
             }
         case .importance(let least):
-            guard let level = importance(thing, r), level >= least else { return [] }
-            return [Fact(key: "importance:\(level.rawValue)", label: level == .urgent ? "urgent" : "\(level.rawValue) importance",
+            guard let level = importance(thing, r), level >= least, let stamp = importanceStamp(thing, r) else { return [] }
+            // Keyed by what was rated too: a new request after Done on an old one is new.
+            return [Fact(key: "importance:\(level.rawValue):\(stamp)", label: level == .urgent ? "urgent" : "\(level.rawValue) importance",
                          tint: level == .urgent ? .danger : level == .high ? .attention : .neutral)]
         case .workflow(let states):
             guard let state = thing.checks, states.contains(state) else { return [] }

@@ -67,13 +67,13 @@ import Testing
         let stamp = InboxEngine.importanceStamp(t, context: context)
         #expect(stamp == "requested:\(Int(asked.timeIntervalSince1970))")
         t.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: stamp!))
-        #expect(keys([.importance(.high)], t) == ["importance:urgent"])
+        #expect(keys([.importance(.high)], t) == ["importance:urgent:\(stamp!)"])
         let entries = InboxEngine.evaluate(things: [t], categories: [InboxCategory(name: "R", symbol: "eye", color: .blue,
             rules: [Rule(scope: Scope(kinds: [.pr]), createdAt: .distantPast)])], marks: [:], context: context)
         #expect(entries.first?.importance == .urgent)
         t.signals?.importance?.level = .normal
         #expect(keys([.importance(.high)], t) == nil)
-        #expect(keys([.importance(.normal)], t) == ["importance:normal"])
+        #expect(keys([.importance(.normal)], t) == ["importance:normal:\(stamp!)"])
         // Asked again: the old rating is for the old request.
         t.reviewRequests = [ThingReviewRequest(reviewer: "acme/core", at: now)]
         #expect(keys([.importance(.low)], t) == nil)
@@ -84,6 +84,22 @@ import Testing
         issue.kind = .issue
         issue.assignees = ["Me"]
         #expect(InboxEngine.importanceStamp(issue, context: context) == "assigned")
+    }
+
+    @Test func aNewRequestAfterDoneOnAnOldOneIsNewEvenRatedTheSame() {
+        var t = pr()
+        t.requestedReviewers = ["me"]
+        t.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now.addingTimeInterval(-6000))]
+        t.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: InboxEngine.importanceStamp(t, context: context)!))
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.importance(.high)], createdAt: .distantPast)
+        let old = InboxEngine.facts(rule, t, marks: nil, context: context)!.map(\.key)
+        let done = EntryMarks(acked: Set(old), doneAt: now.addingTimeInterval(-3000))
+        // Asked again, and Jev rates the new request urgent too: not the fact Done acknowledged.
+        t.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now.addingTimeInterval(-100))]
+        let stamp = InboxEngine.importanceStamp(t, context: context)!
+        t.signals?.importance = ImportanceSignal(level: .urgent, stamp: stamp)
+        let new = InboxEngine.facts(rule, t, marks: done, context: context)!.map(\.key)
+        #expect(new.count == 1 && !done.acked.contains(new[0]))
     }
 
     @Test func theNewConditionsAreOfferedForPRsAndIssuesAndRoundTrip() throws {
@@ -220,7 +236,8 @@ import Testing
         #expect(Set(calls.questions[0].keys) == ["t1_importance"])
         let rated = (calls.states[0]["asked of you"] as? [String: [String: Any]])?["t1"]
         #expect(rated?["size"] as? String == "+120 −4 in 3 files" && rated?["asks"] as? String == "your review, asked 1 hours ago")
-        #expect(s.entries.first?.importance == .urgent && s.entries.first?.facts.map(\.key) == ["importance:urgent"])
+        #expect(s.entries.first?.importance == .urgent && s.entries.first?.facts.map(\.key)
+            == ["importance:urgent:requested:\(Int(t.reviewRequests[0].at.timeIntervalSince1970))"])
         await s.readInbox()
         #expect(calls.questions.count == 1)
     }
