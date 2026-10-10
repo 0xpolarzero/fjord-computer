@@ -28,6 +28,9 @@ struct LookoutChange: Codable, Hashable, Identifiable {
     var revertedAt: Date?
     /// What the revert said ("Reverted (later edits to it were undone too)").
     var revertNote: String?
+    /// Why it waits for your Apply: made by the Router but not applied (`LookoutGate`). Nil once applied, or for one that
+    /// applied at once.
+    var pending: String?
 
     enum Patch: Codable, Hashable {
         /// `before` nil: made; `after` nil: deleted. `index`: where it was (or is).
@@ -277,7 +280,8 @@ extension Store {
     }
 
     private func revertingLookoutChange(_ id: UUID, now: Date) -> LookoutChange? {
-        guard let message = router.changes.firstIndex(where: { $0.id == id }), !router.changes[message].isReverted else { return nil }
+        guard let message = router.changes.firstIndex(where: { $0.id == id }), !router.changes[message].isReverted,
+              router.changes[message].pending == nil else { return nil }
         var change = router.changes[message]
         var edited = false
         switch change.patch {

@@ -59,7 +59,7 @@ enum LookoutTools {
     }
 
     private static let categoryRef = JSONShape.Field("category", .string("id or name"), "A category's id or name.")
-    private static let changeNote = " The change applies at once and the user gets a card in the history with its before and after, an Open button and a Revert button: don't repeat it back."
+    private static let changeNote = " The change applies at once and the user gets a card in the history with its before and after, an Open button and a Revert button: don't repeat it back. Some changes wait for the user instead (an action that runs by itself, what a category with actions runs on, a deletion, many things marked, a setting the message didn't name): the answer says so, and nothing is applied until they click Apply."
 
     static let tools: [Tool] = [
         Tool(name: "list_categories", doc: "Lists Lookout's inbox categories in priority order (a thing is in the first one a rule matches), each with its rules as JSON (the form create_category and update_category take), a plain-words summary of each rule, its actions and how many open and unread things it holds. Also says how many things are done.", fields: [], reads: true),
@@ -231,8 +231,10 @@ extension RouterTools {
     @discardableResult
     private func record(_ store: Store, _ change: LookoutChange) -> LookoutChange? {
         var state = store.router
-        for id in turnChanges.reversed() {
-            guard let i = state.changes.firstIndex(where: { $0.id == id }), !state.changes[i].isReverted else { continue }
+        // A change that waits for the user stands alone: nothing joins it, and it joins nothing.
+        for id in turnChanges.reversed() where change.pending == nil {
+            guard let i = state.changes.firstIndex(where: { $0.id == id }), !state.changes[i].isReverted,
+                  state.changes[i].pending == nil else { continue }
             switch state.changes[i].coalesced(with: change) {
             case .separate:
                 continue
@@ -265,10 +267,46 @@ extension RouterTools {
             out["note"] = "That put back what an earlier change of this turn had changed, so nothing is left to revert."
             return Self.json(out)
         }
-        out["changed"] = change.title
         out["changeId"] = change.id.uuidString
+        if let pending = change.pending {
+            out["changed"] = "nothing yet"
+            out["waiting"] = change.title
+            out["note"] = "Not applied: \(pending). The user has a card with Apply and Discard; say in your reply that it waits for them."
+            return Self.json(out)
+        }
+        out["changed"] = change.title
         out["note"] = "Applied. The user has a card with Open and Revert."
         return Self.json(out)
+    }
+
+    /// A change the Router makes: applied by `apply` (which gives the record, as it came out) and recorded, unless the gate
+    /// holds it for the user (`LookoutGate`): then nothing is applied, and the record waits for their Apply.
+    private func commit(_ store: Store, _ change: LookoutChange, apply: () throws -> LookoutChange) throws -> LookoutChange? {
+        if !undoesThisTurn(store, change),
+           let reason = LookoutGate.reason(change, request: turnText ?? "", categories: store.categories) {
+            var waiting = change
+            waiting.pending = reason
+            return record(store, waiting)
+        }
+        return record(store, try apply())
+    }
+
+    /// Whether a deletion takes away what this turn made (and applied): nothing that was there before goes.
+    private func undoesThisTurn(_ store: Store, _ change: LookoutChange) -> Bool {
+        let made: (LookoutChange.Patch) -> UUID? = {
+            switch $0 {
+            case .category(_, nil, let after?): after.id
+            case .group(_, nil, let after?): after.id
+            default: nil
+            }
+        }
+        let gone: UUID?
+        switch change.patch {
+        case .category(_, let before?, nil): gone = before.id
+        case .group(_, let before?, nil): gone = before.id
+        default: return false
+        }
+        return store.router.changes.contains { turnChanges.contains($0.id) && $0.pending == nil && !$0.isReverted && made($0.patch) == gone }
     }
 
     // MARK: Categories
@@ -346,15 +384,12 @@ extension RouterTools {
         if let old {
             guard let index = store.categories.firstIndex(where: { $0.id == old.id }) else { throw Failure("The category is gone") }
             guard c != old else { return Self.json(["changed": "nothing", "note": "It already is that."]) }
-            store.categories[index] = c
             change = LookoutChange(title: LookoutChange.title(forCategory: old, c), patch: .category(index: index, before: old, after: c))
         } else {
             let at = min(max((checkedInput["at"] as? Int) ?? store.categories.count, 0), store.categories.count)
-            store.categories.insert(c, at: at)
             change = LookoutChange(title: LookoutChange.title(forCategory: nil, c), patch: .category(index: at, before: nil, after: c))
         }
-        store.categoriesChangedByRouter()
-        let recorded = record(store, change)
+        let recorded = try commit(store, change) { try store.applyPatch(change.patch); return change }
         notes["category"] = categoryJSON(store, c)
         return done(store, recorded, notes)
     }
@@ -362,9 +397,8 @@ extension RouterTools {
     func deleteCategory(_ store: Store, _ args: [String: Any]) throws -> String {
         let c = try category(store, Self.string(try checked("delete_category", args), "category"))
         guard let index = store.categories.firstIndex(where: { $0.id == c.id }) else { throw Failure("The category is gone") }
-        store.categories.remove(at: index)
-        store.categoriesChangedByRouter()
-        return done(store, record(store, LookoutChange(title: LookoutChange.title(forCategory: c, nil), patch: .category(index: index, before: c, after: nil))))
+        let change = LookoutChange(title: LookoutChange.title(forCategory: c, nil), patch: .category(index: index, before: c, after: nil))
+        return done(store, try commit(store, change) { try store.applyPatch(change.patch); return change })
     }
 
     func reorderCategories(_ store: Store, _ args: [String: Any]) throws -> String {
@@ -377,10 +411,9 @@ extension RouterTools {
         }
         let before = store.categories.map(\.id)
         guard before != wanted else { return Self.json(["changed": "nothing", "note": "They already are in that order."]) }
-        store.categories = Store.ordered(store.categories, by: wanted)
-        store.categoriesChangedByRouter()
-        return done(store, record(store, LookoutChange(title: "Reordered categories", patch: .order(before: before, after: wanted))),
-                    ["order": store.categories.map(\.title)])
+        let change = LookoutChange(title: "Reordered categories", patch: .order(before: before, after: wanted))
+        let recorded = try commit(store, change) { try store.applyPatch(change.patch); return change }
+        return done(store, recorded, ["order": store.categories.map(\.title)])
     }
 
     // MARK: Groups
@@ -424,14 +457,11 @@ extension RouterTools {
         if let old {
             guard let index = store.groups.firstIndex(where: { $0.id == old.id }) else { throw Failure("The group is gone") }
             guard g != old else { return Self.json(["changed": "nothing", "note": "It already is that."]) }
-            store.groups[index] = g
             change = LookoutChange(title: LookoutChange.title(forGroup: old, g), patch: .group(index: index, before: old, after: g))
         } else {
-            store.groups.append(g)
-            change = LookoutChange(title: LookoutChange.title(forGroup: nil, g), patch: .group(index: store.groups.count - 1, before: nil, after: g))
+            change = LookoutChange(title: LookoutChange.title(forGroup: nil, g), patch: .group(index: store.groups.count, before: nil, after: g))
         }
-        store.categoriesChangedByRouter()
-        let recorded = record(store, change)
+        let recorded = try commit(store, change) { try store.applyPatch(change.patch); return change }
         return done(store, recorded, ["group": groupJSON(store, g)])
     }
 
@@ -440,9 +470,8 @@ extension RouterTools {
         let users = LookoutValidate.users(of: g.id, in: store)
         guard users.isEmpty else { throw Failure("“\(g.name)” is used by \(users.joined(separator: ", ")): take it out of their rules first") }
         guard let index = store.groups.firstIndex(where: { $0.id == g.id }) else { throw Failure("The group is gone") }
-        store.groups.remove(at: index)
-        store.categoriesChangedByRouter()
-        return done(store, record(store, LookoutChange(title: LookoutChange.title(forGroup: g, nil), patch: .group(index: index, before: g, after: nil))))
+        let change = LookoutChange(title: LookoutChange.title(forGroup: g, nil), patch: .group(index: index, before: g, after: nil))
+        return done(store, try commit(store, change) { try store.applyPatch(change.patch); return change })
     }
 
     // MARK: Inbox
@@ -545,8 +574,11 @@ extension RouterTools {
         }
         let n = changes.count
         let title = state == "restore" ? "Restored \(n)" : "Marked \(n) \(state)"
-        return done(store, record(store, LookoutChange(title: title, patch: .marks(state: state, changes))),
-                    ["things": wanted.prefix(10).map { reference($0.thing) }])
+        let change = LookoutChange(title: title, patch: .marks(state: state, changes))
+        // Worked out by marking them: a change that waits puts the marks back as they were.
+        let recorded = try commit(store, change) { change }
+        if recorded?.pending != nil { for item in changes { store.marks[item.thing] = item.before } }
+        return done(store, recorded, ["things": wanted.prefix(10).map { reference($0.thing) }])
     }
 
     // MARK: Settings
@@ -571,10 +603,13 @@ extension RouterTools {
         do { after = try setting.parse(raw, Date()) } catch { throw Failure("`value` for \(key) \(error.localizedDescription)") }
         let before = setting.read(store)
         guard before != after else { return Self.json(["changed": "nothing", "note": "\(key) already is \(setting.display(after))."]) }
-        do { try setting.apply(store, after) } catch { throw Failure("Couldn't change \(key): \(error.localizedDescription)") }
-        let now = setting.read(store)
-        let change = LookoutChange(title: setting.title(after: now, word: raw as? String), patch: .setting(key: key, before: before, after: now))
-        return done(store, record(store, change), ["setting": key, "value": setting.display(now)])
+        let asked = LookoutChange(title: setting.title(after: after, word: raw as? String), patch: .setting(key: key, before: before, after: after))
+        let recorded = try commit(store, asked) {
+            do { try setting.apply(store, after) } catch { throw Failure("Couldn't change \(key): \(error.localizedDescription)") }
+            let now = setting.read(store)
+            return LookoutChange(title: setting.title(after: now, word: raw as? String), patch: .setting(key: key, before: before, after: now))
+        }
+        return done(store, recorded, ["setting": key, "value": setting.display(recorded?.pending == nil ? setting.read(store) : after)])
     }
 
     // MARK: Known values

@@ -119,7 +119,8 @@ enum RouterRun {
             You change Lookout itself (its inbox categories, groups, inbox and settings) as the user asks. Read before you \
             change (the category's JSON, list_known for repos and people) and change what was asked, no more. A change applies \
             at once and the user gets a card with Open and Revert, so don't repeat it back; if one is refused, say the reason \
-            in a line. Add a category's actions only when asked, and never a GitHub comment on your own. If nothing needs \
+            in a line. Some changes wait for the user's Apply instead (the tool's answer says so): say in a line that it waits \
+            for them. Add a category's actions only when asked, and never a GitHub comment on your own. If nothing needs \
             changing, `done` is "nothing changed".
             """
         case .question:

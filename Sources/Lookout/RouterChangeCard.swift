@@ -20,6 +20,7 @@ struct ChangeCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            waiting
             Rectangle().fill(CDS.border).frame(height: 1).padding(.horizontal, -(CDS.Transcript.cardPadX - 1))
             preview
                 .padding(.horizontal, CDS.Density.compact.pad.xs)
@@ -34,7 +35,8 @@ struct ChangeCard: View {
         }
         .padding(.trailing, CDS.Transcript.textStop(width))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(reverted ? "\(change.title). \(change.revertNote ?? "Reverted")" : change.title)
+        .accessibilityLabel(reverted ? "\(change.title). \(change.revertNote ?? "Reverted")"
+                            : change.pending.map { "\(change.title). Not applied yet: \($0)" } ?? change.title)
     }
 
     // MARK: Header
@@ -50,6 +52,9 @@ struct ChangeCard: View {
             if reverted {
                 Text(change.revertNote ?? "Reverted").cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
                     .lineLimit(2).multilineTextAlignment(.trailing)
+            } else if change.isPending {
+                ClaudeButton("Discard", variant: .ghost, size: .sm) { store.discardLookoutChange(change.id) }
+                ClaudeButton("Apply", variant: .primary, size: .sm) { store.applyLookoutChange(change.id) }
             } else {
                 ClaudeButton("Open", variant: .ghost, size: .sm) { openChange(change) }
                 ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertLookoutChange(change.id) }
@@ -57,6 +62,16 @@ struct ChangeCard: View {
         }
         .padding(.horizontal, CDS.Density.compact.pad.xs)
         .frame(minHeight: 36)
+    }
+
+    /// Why a change waits for you, under its line: nothing of it is applied until Apply.
+    @ViewBuilder private var waiting: some View {
+        if let why = change.pending, change.isPending {
+            Text("Not applied yet: \(why).")
+                .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
+                .padding(.horizontal, CDS.Density.compact.pad.xs).padding(.bottom, CDS.Density.compact.pad.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     @ViewBuilder private var icon: some View {

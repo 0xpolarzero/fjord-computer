@@ -319,7 +319,9 @@ import Testing
         #expect(!bad.ok && bad.text.contains("CI category only has workflow rules"))
         #expect(await call(t, "update_category", ["category": ["id": ci.id.uuidString, "isCI": false]]).ok == false)
         let delete = await call(t, "delete_category", ["category": ci.id.uuidString])
-        #expect(delete.ok && s.categories.isEmpty)
+        #expect(delete.ok && delete.json["waiting"] as? String == "Deleted category Pipelines" && s.categories.count == 1)
+        s.applyLookoutChange(try #require(changes(s).last).id)
+        #expect(s.categories.isEmpty)
         // And the tool says so.
         let doc = try #require(LookoutTools.tools.first { $0.name == "delete_category" }?.doc)
         #expect(doc.contains("the CI category too") && !doc.contains("can't be deleted"))
@@ -453,11 +455,16 @@ import Testing
         let original = try #require(s.categories.last)
         t.beginTurn("edit and delete")
         await update(t, original, ["color": "blue"])
+        let edited = try #require(s.categories.last)
         await call(t, "delete_category", ["category": original.id.uuidString])
+        // The deletion waits for Apply, on a card of its own: nothing joins a waiting change.
         let record = try #require(changes(s).last)
-        #expect(changes(s).count == 2 && record.title == "Deleted category Mine")
+        #expect(changes(s).count == 3 && record.title == "Deleted category Mine" && record.isPending)
+        #expect(s.categories.last == edited)
+        s.applyLookoutChange(record.id)
+        #expect(!s.categories.contains { $0.id == original.id })
         s.revertLookoutChange(record.id)
-        #expect(s.categories.last == original)
+        #expect(s.categories.last == edited)
     }
 
     @Test func changesInDifferentRunsOrToDifferentThingsStaySeparate() async throws {
@@ -481,9 +488,10 @@ import Testing
         let b = try #require(s.categories.first { $0.name == "B" })
         t.beginTurn("delete")
         let out = await call(t, "delete_category", ["category": "b"])
-        #expect(out.ok && !s.categories.contains { $0.id == b.id })
         let card = try #require(changes(s).last)
-        #expect(card.title == "Deleted category B")
+        #expect(out.ok && card.title == "Deleted category B" && card.isPending)
+        s.applyLookoutChange(card.id)
+        #expect(!s.categories.contains { $0.id == b.id })
         s.revertLookoutChange(card.id)
         #expect(s.categories.map(\.name) == ["CI", "A", "B", "C"] && s.categories[2] == b)
     }
@@ -530,7 +538,9 @@ import Testing
         // Unused, it goes, and comes back.
         s.categories.removeAll { $0.name == "Crew PRs" }
         t.beginTurn("delete it")
-        #expect(await call(t, "delete_group", ["group": group.id.uuidString]).ok && s.groups.isEmpty)
+        #expect(await call(t, "delete_group", ["group": group.id.uuidString]).ok && s.groups.count == 1)
+        s.applyLookoutChange(try #require(changes(s).last).id)
+        #expect(s.groups.isEmpty)
         s.revertLookoutChange(try #require(changes(s).last).id)
         #expect(s.groups.first?.id == group.id)
     }
@@ -550,6 +560,7 @@ import Testing
         }
         #expect(s.router.enabled && s.settings.notifications)
 
+        t.beginTurn("turn off notifications, snooze for an hour, check every 2 minutes and center the bar")
         let off = await call(t, "set_setting", ["key": "notifications", "value": false])
         #expect(off.ok && !s.settings.notifications && changes(s).last?.title == "Turned off desktop notifications")
         #expect(await call(t, "set_setting", ["key": "notifications", "value": "no"]).ok == false)
@@ -577,11 +588,14 @@ import Testing
         let saved = LookoutSetting.launchAtLogin
         LookoutSetting.launchAtLogin = ({ login }, { login = $0 })
         defer { LookoutSetting.launchAtLogin = saved }
-        let t = tools(s)
+        let t = tools(s, turn: "launch at login, and pick icons for sessions")
         #expect(await call(t, "set_setting", ["key": "launchAtLogin", "value": true]).ok && login)
         s.revertLookoutChange(try #require(changes(s).last).id)
         #expect(!login)
-        #expect(await call(t, "set_setting", ["key": "sessionIcons", "value": true]).ok && s.agents.iconsEnabled)
+        // Session titles go to TypeSafe: that waits for Apply, asked or not.
+        #expect(await call(t, "set_setting", ["key": "sessionIcons", "value": true]).ok && !s.agents.iconsEnabled)
+        s.applyLookoutChange(try #require(changes(s).last).id)
+        #expect(s.agents.iconsEnabled)
         LookoutSetting.launchAtLogin = ({ login }, { _ in throw CocoaError(.userCancelled) })
         let failed = await call(t, "set_setting", ["key": "launchAtLogin", "value": true])
         #expect(!failed.ok && failed.text.contains("Couldn't change launchAtLogin"))
@@ -626,7 +640,7 @@ import Testing
 
     @Test func markingDoneSeenAndRestoreIsOneCardThatRevertsExactly() async throws {
         let s = inboxStore()
-        let t = tools(s)
+        let t = tools(s, turn: "mark them seen, then done")
         let seenBefore = s.marks
         let seen = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
         #expect(seen.ok && changes(s).last?.title == "Marked 1 seen")
@@ -698,6 +712,8 @@ import Testing
         let s = store()
         let t = tools(s)
         await call(t, "create_category", ["category": category("Mine", rules: [prByMe], extra: ["actions": [["kind": ["askRouter": ["prompt": "look"]]]]])])
+        s.applyLookoutChange(try #require(changes(s).first).id)
+        t.beginTurn("snooze 30 minutes")
         await call(t, "set_setting", ["key": "snooze", "value": "30m"])
         s.revertLookoutChange(try #require(changes(s).first).id)
         let encoder = JSONEncoder()
@@ -711,6 +727,77 @@ import Testing
         if case .category(_, _, let made?) = after[0].patch, case .category(_, _, let original?) = before[0].patch {
             #expect(made.rules.map(\.id) == original.rules.map(\.id) && made.actions.items.map(\.kind) == original.actions.items.map(\.kind))
         } else { Issue.record("the category isn't in the record") }
+    }
+
+    @Test func whatReachesOutsideTakesAwayOrWasNotAskedWaitsForApply() async throws {
+        let s = inboxStore()
+        let mine = try #require(s.categories.first { $0.name == "Mine" })
+        // A run for a rename, steered by what it read: the rename applies; what it wasn't asked for waits, and nothing of it is applied.
+        let t = tools(s, turn: "rename Mine to Reviews")
+        let renamed = await update(t, mine, ["name": "Reviews"])
+        #expect(renamed["changed"] as? String == "Renamed category Mine to Reviews" && s.categories[1].name == "Reviews")
+        let off = await call(t, "set_setting", ["key": "notifications", "value": false])
+        #expect(off.ok && off.json["changed"] as? String == "nothing yet" && s.settings.notifications)
+        #expect((off.json["note"] as? String)?.contains("Apply") == true)
+        let comment = await update(t, s.categories[1], ["actions": [["kind": ["comment": ["_0": "LGTM"]]]]])
+        #expect(comment["waiting"] as? String == "Changed category Reviews" && s.categories[1].actions.isEmpty)
+        let card = try #require(changes(s).last)
+        #expect(card.isPending && card.pending?.contains("runs by itself") == true)
+        // Not revertible before it is applied; Discard lets it go, and Apply then does nothing.
+        #expect(s.revertLookoutChange(card.id) == nil)
+        s.discardLookoutChange(card.id)
+        #expect(s.applyLookoutChange(card.id) == nil && s.categories[1].actions.isEmpty)
+        #expect(try #require(changes(s).last).isDiscarded)
+        // Applied, it is what it would have been, and Revert takes it back.
+        let again = await update(t, s.categories[1], ["actions": [["kind": ["comment": ["_0": "LGTM"]]]]])
+        let waiting = try #require(changes(s).last)
+        #expect(again["waiting"] != nil && waiting.isPending)
+        s.applyLookoutChange(waiting.id)
+        #expect(s.categories[1].actions.items.count == 1 && !waiting.isReverted)
+        // What a category with actions runs on waits too, and so does marking many at once.
+        let rules = await update(t, s.categories[1], ["rules": [prByMe]])
+        #expect(rules["waiting"] != nil && s.categories[1].rules == mine.rules)
+        t.beginTurn("mark them done")
+        for n in 4...9 { s.things["pr:a/one#\(n)"] = InboxFixture.pr(n, greptile: 1) }
+        let many = await call(t, "mark_entries", ["state": "done", "category": "Reviews"])
+        #expect(many.json["waiting"] != nil && s.doneEntries.isEmpty)
+        // A waiting change is saved as one, and an older record reads as applied.
+        let back = try JSONDecoder().decode(LookoutChange.self, from: JSONEncoder().encode(try #require(changes(s).last)))
+        #expect(back.isPending)
+        var old = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(card)) as? [String: Any])
+        old["pending"] = nil
+        #expect(try JSONDecoder().decode(LookoutChange.self, from: JSONSerialization.data(withJSONObject: old)).pending == nil)
+    }
+
+    @Test func theGateSaysWhatWaitsAndWhy() {
+        let ci = InboxStore.ci
+        var acting = InboxFixture.category()
+        acting.actions = ActionList([CategoryAction.make(.comment("hi"))])
+        let group = InboxGroup(name: "Crew", kind: .people, members: ["a"])
+        var using = acting
+        using.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.group(group.id)])))]
+        func reason(_ patch: LookoutChange.Patch, _ request: String = "do it", _ categories: [InboxCategory] = []) -> String? {
+            LookoutGate.reason(LookoutChange(title: "x", patch: patch), request: request, categories: categories)
+        }
+        #expect(reason(.category(index: 0, before: ci, after: nil), "delete it") != nil)
+        #expect(reason(.category(index: 0, before: nil, after: acting)) != nil)
+        #expect(reason(.category(index: 0, before: acting, after: { var c = acting; c.name = "B"; return c }())) == nil)
+        #expect(reason(.group(index: 0, before: group, after: nil)) != nil)
+        var more = group
+        more.members.append("mallory")
+        #expect(reason(.group(index: 0, before: group, after: more), "add mallory", [using]) != nil)
+        #expect(reason(.group(index: 0, before: group, after: more), "add mallory", [acting]) == nil)
+        #expect(reason(.order(before: [ci.id, acting.id], after: [acting.id, ci.id]), "move it up", [ci, acting]) != nil)
+        #expect(reason(.order(before: [ci.id, acting.id], after: [acting.id, ci.id]), "move it up", [ci]) == nil)
+        #expect(reason(.setting(key: "notifications", before: .on(true), after: .on(false))) != nil)
+        #expect(reason(.setting(key: "notifications", before: .on(true), after: .on(false)), "mute the banners") == nil)
+        #expect(reason(.setting(key: "sessionIcons", before: .on(false), after: .on(true)), "turn on session icons") != nil)
+        #expect(reason(.setting(key: "sessionIcons", before: .on(true), after: .on(false)), "turn off session icons") == nil)
+        let few = (1...2).map { EntryChange(thing: "t\($0)", before: nil, after: nil) }
+        #expect(reason(.marks(state: "done", few), "mark those done") == nil)
+        #expect(reason(.marks(state: "done", few), "rename it") != nil)
+        let many = (1...(LookoutGate.manyMarks + 1)).map { EntryChange(thing: "t\($0)", before: nil, after: nil) }
+        #expect(reason(.marks(state: "done", many), "mark everything done") != nil)
     }
 
     @Test func aCardPreviewReadsLikeTheEditorsSentence() async throws {
@@ -749,8 +836,9 @@ import Testing
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.generalID))
         await call(t, "set_setting", ["key": "snooze", "value": "3h"])
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.notificationsID))
-        t.beginTurn("delete")
+        t.beginTurn("delete it and mark it done")
         await call(t, "delete_category", ["category": "Mine too"])
+        s.applyLookoutChange(try #require(changes(s).last).id)
         #expect(try #require(changes(s).last).target(in: s) == .categories, "a category that is gone opens the page that listed it")
         await call(t, "mark_entries", ["state": "done", "entries": ["a/one#1"]])
         #expect(try #require(changes(s).last).target(in: s) == .entry(thing: "pr:a/one#1", category: s.categories[1].id, done: true))
