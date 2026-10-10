@@ -28,12 +28,14 @@ import Testing
         away(window)
         #expect(window.isOpen && window.navigator.selection == .settings)
         // A regular app while the window is open: a Dock icon and ⌘-Tab.
-        #expect(NSApp.activationPolicy() == .regular)
+        // (Wanted only: a test run never applies it, or its helper would land in the Dock.)
+        #expect(AppPolicy.current == .regular)
+        #expect(NSApp.activationPolicy() != .regular)
         window.close()
         await waitUntil { closed == 1 }
         #expect(!window.isOpen && closed == 1)
         // The bar only again: no Dock icon.
-        #expect(NSApp.activationPolicy() == .accessory)
+        #expect(AppPolicy.current == .accessory)
     }
 
     @Test func showingWithoutAPlaceOpensWhereItWasLeft() async {

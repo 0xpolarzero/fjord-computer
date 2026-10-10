@@ -8,10 +8,21 @@ import SwiftUI
 /// Lookout is a regular app (Dock icon, ⌘-Tab, menu bar).
 @MainActor
 enum AppPolicy {
+    /// The policy the app wants now. A test run keeps it to itself: applied, every test that opens the window would put
+    /// its test helper in the Dock and take the focus, and with test runs side by side the Dock fills with them.
+    private(set) static var current: NSApplication.ActivationPolicy = .accessory
+
     /// Regular while `windowOpen`, else accessory (the bar only).
     static func update(windowOpen: Bool) {
-        let policy: NSApplication.ActivationPolicy = windowOpen ? .regular : .accessory
-        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
+        current = windowOpen ? .regular : .accessory
+        guard !UnderTest.isRunning else { return }
+        if NSApp.activationPolicy() != current { NSApp.setActivationPolicy(current) }
+    }
+
+    /// Lookout to the front, unless this is a test run (which must not take the focus from whoever is at the Mac).
+    static func activate() {
+        guard !UnderTest.isRunning else { return }
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
@@ -105,7 +116,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             window.ignoresMouseEvents = true
         }
         AppPolicy.update(windowOpen: true)
-        NSApp.activate(ignoringOtherApps: true)
+        AppPolicy.activate()
         window.makeKeyAndOrderFront(nil)
         if opening { startOpening(window, bar: morph, reversing: reversing) }
         watchKeys()
