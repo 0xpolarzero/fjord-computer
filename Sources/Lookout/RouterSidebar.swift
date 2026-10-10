@@ -16,7 +16,10 @@ struct RouterSidebar: View {
         let (needs, done, earlier) = model.sections(store)
         let working = store.allAgentRows.filter { $0.group == .working }
         // Searching also finds any session, listed or not, to open in Claude.
-        let found = query.trimmingCharacters(in: .whitespaces).isEmpty ? [] : Array(store.searchSessions(query).prefix(8))
+        // Only the matches the sections above don't already show.
+        let shown = Set((needs + done + earlier).map(\.sessionID) + working.map(\.id))
+        let found = query.trimmingCharacters(in: .whitespaces).isEmpty ? []
+            : Array(store.searchSessions(query).filter { !shown.contains($0.id) }.prefix(8))
         var sections: [(String, [AnyView])] = []
         if !needs.isEmpty { sections.append(("Needs you", needs.map { cardRow($0) })) }
         if !done.isEmpty { sections.append(("Done", done.map { cardRow($0) })) }
@@ -87,10 +90,13 @@ struct RouterSidebar: View {
         }, openInClaude: { store.openAgent(card.sessionID) }))
     }
 
-    /// A session row clicked: its newest card is picked and armed for a reply; one with no card opens in Claude.
+    /// A session row clicked: its newest card is picked and armed for a reply; a working one with no card is shown in Working; any other opens in Claude.
     private func pick(_ row: AgentRow) {
         if let card = store.routerCards.first(where: { $0.sessionID == row.id }) {
             model.reply(to: card.id, store: store)
+        } else if store.routerWorkingRows.contains(where: { $0.id == row.id }) {
+            // It is on the page, in Working: the page goes there.
+            model.reveal(RouterModel.workingID(row.id))
         } else {
             store.openAgent(row.id)
         }

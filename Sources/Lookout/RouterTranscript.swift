@@ -1,79 +1,10 @@
 import SwiftUI
 
-// The Router's transcripts as Claude's Code tab draws its own (docs/design/spec/transcript.md, compact density, text
+// The Router's messages as Claude's Code tab draws its own (docs/design/spec/transcript.md, compact density, text
 // 14/20): your words in the user bubble, the Router's as assistant prose, what it sent as a collapsed TurnStatus line,
 // a session's reply as a summary card, an error as the danger banner, and the clay working mark while it works.
 
 // MARK: - Transcript
-
-/// A card's side of things: what the session said, the form or plan it waits on, what it left running, then what you, the
-/// Router and the session said about it since.
-struct CardTranscript: View {
-    let store: Store
-    @Bindable var model: RouterModel
-    let card: RouterCard
-    @State private var width = CDS.Transcript.measure
-
-    var body: some View {
-        let form = store.pendingForm(for: card)
-        let tasks = store.allAgentRows.first(where: { $0.id == card.sessionID })?.tasks ?? []
-        let chat = store.router.chat.filter { $0.sessionID == card.sessionID || $0.replyTo == card.id }
-        VStack(alignment: .leading, spacing: 0) {
-            // The card's own turn: its text, its form, what it left running (AssistantMessage blocks, 16 apart).
-            VStack(alignment: .leading, spacing: CDS.Transcript.blockGap) {
-                // With a form open, the form says it (the card's text is its question or the plan's title).
-                if form == nil || !card.isOpen {
-                    CDSProse(text: card.text, color: card.kind == .stuck ? CDS.Text.danger : CDS.Text.primary)
-                }
-                if let form, card.isOpen {
-                    if form.isPlan { CodePlanCard(form: form, card: card.id, store: store, model: model) }
-                    else { CodeFormCard(form: form, card: card.id, store: store, model: model) }
-                }
-                if !tasks.isEmpty {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(tasks) { task in
-                            TurnStatusRow(label: task.title, meta: task.activity?.text, leading: true)
-                        }
-                    }
-                }
-                if let by = card.addressedBy { TurnStatusRow(label: by.label) }
-            }
-            ForEach(Array(chat.enumerated()), id: \.element.id) { i, message in
-                CodeMessage(message: message, store: store)
-                    .padding(.top, CodeMessage.gap(before: message, after: i == 0 ? nil : chat[i - 1].role, first: false))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        .environment(\.cdsColumnWidth, width)
-    }
-}
-
-/// The Router's own conversation.
-struct RouterTranscript: View {
-    let store: Store
-    @State private var width = CDS.Transcript.measure
-
-    var body: some View {
-        let chat = store.router.chat
-        let agent = store.routerAgent
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(chat.enumerated()), id: \.element.id) { i, message in
-                CodeMessage(message: message, store: store)
-                    .padding(.top, CodeMessage.gap(before: message, after: i == 0 ? nil : chat[i - 1].role, first: i == 0))
-                    .id(message.id)
-            }
-            if agent.phase == .working || agent.phase == .starting {
-                WorkingStatus(label: agent.phase == .starting ? "Starting" : "Working")
-                    .padding(.top, chat.isEmpty ? 0
-                             : chat.last?.role == .you ? CDS.Transcript.userTurnBottom : CDS.Transcript.itemGap)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        .environment(\.cdsColumnWidth, width)
-    }
-}
 
 /// A line of the conversation as the Code tab shows it.
 struct CodeMessage: View {
@@ -338,7 +269,7 @@ private struct AutomatedMessage: View {
 // MARK: - TurnStatus
 
 /// The caret after a status label: 12 box, a ≈4 × 7 glyph, muted (secondary on hover or open), a quarter turn open.
-private struct StatusCaret: View {
+struct StatusCaret: View {
     let hot: Bool
     let open: Bool
 
@@ -513,7 +444,7 @@ private struct DangerBanner: View {
 // MARK: - Working
 
 /// §7: the clay mark in its 20 box, then the label in muted with the sheen passing over it.
-private struct WorkingStatus: View {
+struct WorkingStatus: View {
     let label: String
 
     var body: some View {
@@ -549,15 +480,16 @@ struct WorkingMark: View {
 }
 
 /// §7's shimmer: muted text, a sheen one text-width wide sweeping across in 3 s (held 15% at either end).
-private struct ShimmerText: View {
+struct ShimmerText: View {
     let text: String
+    var role: (CGFloat, CGFloat) = CDS.Transcript.text
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.animation(paused: reduceMotion)) { context in
             let c = reduceMotion ? -1 : Self.centre(context.date.timeIntervalSinceReferenceDate)
             Text(text)
-                .cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
+                .cdsText(role, .regular, CDS.Text.muted)
                 .foregroundStyle(LinearGradient(
                     stops: [.init(color: CDS.Text.muted, location: 0), .init(color: CDS.Transcript.shimmerPeak, location: 0.5),
                             .init(color: CDS.Text.muted, location: 1)],

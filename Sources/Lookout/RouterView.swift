@@ -348,9 +348,62 @@ final class RouterModel {
         selection = next
     }
 
-    /// Picks a card, or none (the Router's own chat).
+    /// Picks a card, or none (the Router itself), and takes the page there: an addressed card opens in the history, the
+    /// Router row goes back down to the live zones.
     func select(_ id: String?, store: Store) {
         selection = id
+        guard let id else { reveal(Self.endID, highlight: false); return }
+        if let card = store.router.cards.first(where: { $0.id == id }) {
+            if card.isOpen { expandedNeed = id } else { expanded.insert(id) }
+        }
+        reveal(id)
+    }
+
+    /// What the page scrolls to for the bottom of the history, and the id of a working session's card.
+    static let endID = "end"
+    static func workingID(_ session: String) -> String { "working#" + session }
+
+    /// Asks the page to scroll to an item (a card, a message, a working session's card) and, for a moment, to mark it.
+    var revealRequest: ScrollRequest?
+    /// The item marked for a moment after it was scrolled to.
+    var highlighted: String?
+    /// The card of Needs you shown in full (see `RouterPage.openNeed`); the others are summary rows.
+    var expandedNeed: String?
+    /// Addressed cards opened out in the history.
+    var expanded: Set<String> = []
+    @ObservationIgnored private var highlightTask: Task<Void, Never>?
+
+    func reveal(_ id: String, highlight: Bool = true) {
+        revealRequest = ScrollRequest(id: id, seq: (revealRequest?.seq ?? 0) + 1)
+        guard highlight else { return }
+        highlighted = id
+        highlightTask?.cancel()
+        highlightTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.8))
+            if !Task.isCancelled { self?.highlighted = nil }
+        }
+    }
+
+    /// A card's Mark handled: it goes to the history at once (no timed undo: Reopen is there). The pick moves to the next
+    /// open card if it was on this one.
+    func address(_ id: String, store: Store) {
+        reconcile(store: store)
+        guard let card = store.router.cards.first(where: { $0.id == id }), card.isOpen else { return }
+        let open = cards(store).filter(\.isOpen).map(\.id)
+        let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
+        store.setCardAddressed(id, true)
+        Announce.say("Addressed")
+        if selection == id { selection = next }
+    }
+
+    /// Reopen on a history line: the card is back in Needs you and the page goes to it.
+    func reopen(_ id: String, store: Store) {
+        guard let card = store.router.cards.first(where: { $0.id == id }), !card.isOpen,
+              card.addressedBy != .superseded, card.addressedBy != .gone else { return }
+        store.setCardAddressed(id, false)
+        expanded.remove(id)
+        Announce.say("Open again")
+        select(id, store: store)
     }
 
     /// ↑↓: the next card up or down, the first (or last) when none is picked.

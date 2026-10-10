@@ -628,4 +628,111 @@ import UserNotifications
         let globals = ShortcutAction.allCases.filter(\.isGlobal)
         #expect(Set(globals.map(\.hotKeyID)).count == globals.count)
     }
+
+    // MARK: The page
+
+    @Test func thePageGroupsAndOrdersItsThreeZones() {
+        let store = demo()
+        let page = store.routerPage
+        // Needs you: blockers first, then finished turns, newest first in each; only open cards.
+        #expect(!page.needs.isEmpty && page.needs.allSatisfy(\.isOpen))
+        let kinds = page.needs.map { $0.kind == .done }
+        #expect(kinds == kinds.sorted { !$0 && $1 })
+        let blockers = page.needs.filter { $0.kind != .done }
+        #expect(blockers.map(\.createdAt) == blockers.map(\.createdAt).sorted(by: >))
+        // Working: the sessions running on their own, none of them stopped on you.
+        #expect(Set(page.working.map(\.id)) == Set(store.routerWorkingRows.map(\.id)))
+        #expect(!page.working.isEmpty && page.working.allSatisfy { !$0.waitsForYou })
+        // History: oldest first, addressed cards and messages together, no open card.
+        #expect(page.history.map(\.date) == page.history.map(\.date).sorted())
+        let cardLines = page.history.compactMap { entry -> RouterCard? in if case .card(let c) = entry { c } else { nil } }
+        #expect(!cardLines.isEmpty && cardLines.allSatisfy { !$0.isOpen })
+        #expect(page.history.count == store.router.chat.count + store.router.cards.filter { !$0.isOpen }.count)
+        // The sidebar's order is the page's: the keys walk Needs you the way it is shown.
+        let (needs, done, _) = RouterModel().sections(store)
+        #expect(page.needs.map(\.id) == (needs + done).map(\.id))
+    }
+
+    @Test func anAddressedCardGoesToTheHistoryAndReopensIntoNeedsYou() {
+        let store = demo()
+        let model = RouterModel()
+        let card = store.routerPage.needs[0]
+        let before = store.routerPage
+        model.address(card.id, store: store)
+        let after = store.routerPage
+        #expect(!after.needs.contains { $0.id == card.id })
+        #expect(after.history.contains { $0.id == card.id })
+        #expect(after.history.count == before.history.count + 1)
+        // Its line sits at the time it was addressed, after the older entries.
+        #expect(after.history.last { $0.id == card.id }?.date == store.router.cards.first { $0.id == card.id }?.addressedAt)
+        model.reopen(card.id, store: store)
+        let back = store.routerPage
+        #expect(back.needs.contains { $0.id == card.id })
+        #expect(!back.history.contains { $0.id == card.id })
+        // Reopening picks it and opens nothing in the history.
+        #expect(model.selection == card.id && !model.expanded.contains(card.id))
+    }
+
+    @Test func aSupersededCardIsNotReopened() {
+        let store = demo()
+        let model = RouterModel()
+        let card = store.router.cards.first { $0.addressedBy == .answered }!
+        store.router.cards[store.router.cards.firstIndex { $0.id == card.id }!].addressedBy = .superseded
+        model.reopen(card.id, store: store)
+        #expect(store.router.cards.first { $0.id == card.id }?.isOpen == false)
+    }
+
+    @Test func aWorkingSessionThatNeedsYouMovesToNeedsYou() {
+        let store = demo()
+        let id = "local_demo-lookout"
+        var page = store.routerPage
+        #expect(page.working.contains { $0.id == id } && !page.needs.contains { $0.sessionID == id })
+        // It stops on a question: the feed makes its card, and it leaves Working.
+        let at = Date()
+        store.claudeActivity[id] = ClaudeActivity(text: "Which branch?", since: at, waitsForYou: true, tool: "AskUserQuestion",
+                                                 toolUseID: "toolu_x")
+        store.router.cards.append(RouterCard(id: "\(id)#w\(RouterFeed.Stamp.ms(at))", sessionID: id, kind: .question,
+                                             title: "Agent completion notifications", folder: nil, text: "Which branch?", createdAt: at))
+        page = store.routerPage
+        #expect(!page.working.contains { $0.id == id })
+        #expect(page.needs.first?.sessionID == id, "the newest blocker is first")
+        // A turn that ends leaves Working too.
+        let other = "local_demo-ci"
+        #expect(store.routerPage.working.contains { $0.id == other })
+        store.claudeTasks[other] = []
+        #expect(!store.routerPage.working.contains { $0.id == other })
+    }
+
+    @Test func selectingAnAddressedCardOpensItInTheHistoryAndAsksThePageToScroll() {
+        let store = demo()
+        let model = RouterModel()
+        let card = store.router.cards.first { !$0.isOpen }!
+        model.select(card.id, store: store)
+        #expect(model.expanded.contains(card.id) && model.revealRequest?.id == card.id && model.highlighted == card.id)
+        model.select(nil, store: store)
+        #expect(model.revealRequest?.id == RouterModel.endID)
+    }
+
+    @Test func oneNeedsYouCardIsOpenAtATimeTheAskedForOneElseTheNewest() {
+        let store = demo()
+        let page = store.routerPage
+        #expect(page.openNeed(preferred: nil) == page.needs.first?.id)
+        let other = page.needs[2].id
+        #expect(page.openNeed(preferred: other) == other)
+        #expect(page.openNeed(preferred: "gone") == page.needs.first?.id, "a card that left falls back to the newest")
+        // Picking a card in the list (or with the arrows) opens it on the page.
+        let model = RouterModel()
+        model.select(other, store: store)
+        #expect(model.expandedNeed == other)
+    }
+
+    @Test func theSidebarsSessionsSectionLeavesOutWhatIsAlreadyListed() {
+        let store = demo()
+        let model = RouterModel()
+        model.search = "update"
+        let (needs, done, earlier) = model.sections(store)
+        let shown = Set((needs + done + earlier).map(\.sessionID))
+        #expect(!shown.isEmpty)
+        #expect(store.searchSessions("update").contains { shown.contains($0.id) }, "the demo's match is a listed card too")
+    }
 }
