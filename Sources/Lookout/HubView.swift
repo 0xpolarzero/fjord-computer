@@ -775,7 +775,7 @@ struct LookoutHub: View {
         .modifier(probe(.inbox))
         // The Router, just before the sessions it works on: its cell and counts; kept open, what is running too.
         if store.routerOn {
-            sectionDivider
+            sectionDivider.padding(.vertical, 6)
             VStack(alignment: side, spacing: 0) {
                 row(cell: { routerCell }, detail: { routerHeader })
                 if showsDetail && !shrunk(.router) {
@@ -926,7 +926,7 @@ struct LookoutHub: View {
             .frame(maxHeight: .infinity)
             .modifier(probe(.inbox))
             if store.routerOn {
-                stripDivider
+                stripDivider.padding(.horizontal, 6)
                 HStack(spacing: 8) {
                     routerCell
                     // On a narrow screen, only the cell: its column under the strip goes too (the window has the cards).
