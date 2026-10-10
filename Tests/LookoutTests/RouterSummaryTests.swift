@@ -49,7 +49,8 @@ import Testing
         var linked = RouterDecision(at: now.addingTimeInterval(-90), trigger: .you("tell it to rebase"), done: [.answered(card: "x")])
         linked.links.sessions = ["s1"]
         let decisions = [linked, RouterDecision(at: now.addingTimeInterval(-80), trigger: .you("unrelated message"))]
-        let context = RouterSummaryContext.build(subject(), previous: previous, steps: ["You: fix it", "Step: Running swift test"],
+        let context = RouterSummaryContext.build(subject(), previous: previous, steps: [.init(at: nil, text: "You: fix it"),
+                                                                                          .init(at: nil, text: "Step: Running swift test")],
                                                  cards: cards, decisions: decisions, now: now)
         #expect(context.contains("Notifications (project lookout)"))
         #expect(context.contains("It was calm."))
@@ -67,6 +68,33 @@ import Testing
         let context = RouterSummaryContext.build(subject(), previous: nil, steps: [], cards: cards, decisions: [], now: now)
         #expect(context.contains("no previous summary"))
         #expect(context.contains("Did a thing.") && !context.contains("Did another."))
+    }
+
+    @Test func onlyTheStepsSinceThePreviousSummaryAreReadWithTheirTimes() {
+        let steps: [Claude.TranscriptStep] = [
+            .init(at: now.addingTimeInterval(-3 * 3600), text: "Step: Hours ago"),
+            .init(at: now.addingTimeInterval(-900), text: "Step: Before the summary"),
+            .init(at: now.addingTimeInterval(-300), text: "Step: Since the summary"),
+        ]
+        let previous = RouterSummary(at: now.addingTimeInterval(-600), text: "It was calm.", sessionID: "s1")
+        let repeated = RouterSummaryContext.build(subject(), previous: previous, steps: steps, cards: [], decisions: [], now: now)
+        #expect(repeated.contains("Since the summary") && !repeated.contains("Before the summary") && !repeated.contains("Hours ago"))
+        let clock = now.addingTimeInterval(-300).formatted(date: .omitted, time: .shortened)
+        #expect(repeated.contains("- \(clock) <session-content"))
+        // The first summary describes the last hour: steps hours old stay out of it.
+        let first = RouterSummaryContext.build(subject(), previous: nil, steps: steps, cards: [], decisions: [], now: now)
+        #expect(first.contains("Before the summary") && !first.contains("Hours ago"))
+        // Nothing since: it says so rather than repeating old steps.
+        let quiet = RouterSummaryContext.build(subject(), previous: previous, steps: Array(steps.prefix(2)), cards: [], decisions: [],
+                                               now: now)
+        #expect(quiet.contains("took no steps since") && !quiet.contains("Before the summary"))
+    }
+
+    @Test func theTranscriptsStepsKeepTheirTimes() {
+        let line = #"{"type":"user","timestamp":"2027-01-15T08:00:00.250Z","message":{"content":"go"}}"#
+        let steps = Claude.recentTimedSteps(tail: Data(line.utf8))
+        #expect(steps.map(\.text) == ["You: go"])
+        #expect(steps.first?.at.map { abs($0.timeIntervalSince1970 - 1_800_000_000.25) < 0.01 } == true)
     }
 
     @Test func theTranscriptsLatestStepsAreItsWordsYoursAndItsTools() {

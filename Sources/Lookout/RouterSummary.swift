@@ -126,7 +126,7 @@ enum RouterSummaryContext {
     private static func clock(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
 
     /// What the one Haiku call reads: the session, its previous summary, its latest steps, and what happened to it since.
-    static func build(_ subject: Subject, previous: RouterSummary?, steps: [String], cards: [RouterCard],
+    static func build(_ subject: Subject, previous: RouterSummary?, steps: [Claude.TranscriptStep], cards: [RouterCard],
                       decisions: [RouterDecision], now: Date) -> String {
         let since = previous?.at ?? now.addingTimeInterval(-firstWindow)
         var out: [String] = []
@@ -145,9 +145,13 @@ enum RouterSummaryContext {
             out.append("Left running:")
             for task in subject.running.prefix(perSection) { out.append("- " + fence(task)) }
         }
-        if !steps.isEmpty {
-            out.append("Its latest steps, oldest first:")
-            for step in steps.suffix(Self.steps) { out.append("- " + fence(step)) }
+        // Only the steps since the previous summary (or within the hour): older ones are what that summary told already.
+        let fresh = steps.filter { $0.at.map { $0 > since } ?? true }
+        if !fresh.isEmpty {
+            out.append("Its steps since \(clock(since)), oldest first:")
+            for step in fresh.suffix(Self.steps) { out.append("- " + (step.at.map { clock($0) + " " } ?? "") + fence(step.text)) }
+        } else if !steps.isEmpty {
+            out.append("It took no steps since \(clock(since)).")
         }
 
         let mine = cards.filter { $0.sessionID == subject.id && $0.createdAt > since }.sorted { $0.createdAt < $1.createdAt }
@@ -179,7 +183,20 @@ extension Claude {
     /// A transcript's latest steps, oldest first: your messages, the agent's words, and the tools it ran (as the rows describe
     /// them); tool results and Claude Code's own notes are left out.
     static func recentSteps(tail: Data, count: Int = RouterSummaryContext.steps) -> [String] {
-        var steps: [String] = []
+        recentTimedSteps(tail: tail, count: count).map(\.text)
+    }
+
+    /// A transcript step and when it was written (nil when the line doesn't say).
+    struct TranscriptStep: Equatable, Sendable {
+        var at: Date?
+        var text: String
+    }
+
+    private static let stepTime = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+
+    /// `recentSteps` with each step's time, so a summary reads only those since its previous one.
+    static func recentTimedSteps(tail: Data, count: Int = RouterSummaryContext.steps) -> [TranscriptStep] {
+        var steps: [TranscriptStep] = []
         func clip(_ text: String) -> String? {
             let flat = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             return flat.isEmpty ? nil : RouterDecision.clip(flat, 300)
@@ -189,16 +206,20 @@ extension Claude {
                   let type = obj["type"] as? String, type == "assistant" || type == "user", obj["isMeta"] as? Bool != true
             else { continue }
             let content = (obj["message"] as? [String: Any])?["content"]
+            let at = (obj["timestamp"] as? String).flatMap { try? Date($0, strategy: stepTime) }
             if let text = content as? String {
-                if type == "user", let text = clip(text) { steps.append("You: " + text) }
+                if type == "user", let text = clip(text) { steps.append(.init(at: at, text: "You: " + text)) }
                 continue
             }
             for part in (content as? [[String: Any]] ?? []).reversed() where steps.count < count {
                 switch part["type"] as? String {
                 case "text":
-                    if let text = (part["text"] as? String).flatMap(clip) { steps.append((type == "user" ? "You: " : "Claude: ") + text) }
+                    if let text = (part["text"] as? String).flatMap(clip) {
+                        steps.append(.init(at: at, text: (type == "user" ? "You: " : "Claude: ") + text))
+                    }
                 case "tool_use" where type == "assistant":
-                    steps.append("Step: " + describe(tool: part["name"] as? String ?? "", input: part["input"] as? [String: Any] ?? [:]))
+                    steps.append(.init(at: at, text: "Step: " + describe(tool: part["name"] as? String ?? "",
+                                                                         input: part["input"] as? [String: Any] ?? [:])))
                 default: break
                 }
             }
@@ -307,7 +328,7 @@ extension Store {
                 let cli = row.session.cliID
                 let reader = store.activityReader
                 let steps = await Task.detached(priority: .utility) {
-                    cli.flatMap { reader.transcript($0) }.map { Claude.recentSteps(tail: Claude.tail(of: $0)) } ?? []
+                    cli.flatMap { reader.transcript($0) }.map { Claude.recentTimedSteps(tail: Claude.tail(of: $0)) } ?? []
                 }.value
                 let context = RouterSummaryContext.build(subject, previous: store.router.summaries.last { $0.sessionID == id },
                                                          steps: steps, cards: store.router.cards, decisions: store.router.decisions,
