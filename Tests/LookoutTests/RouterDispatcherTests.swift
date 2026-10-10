@@ -824,6 +824,70 @@ import Testing
         withExtendedLifetime(f) {}
     }
 
+    /// What the send is for may be over by the time it would go (a wait handled, auto-continue turned off): every gate asks
+    /// again, after every wait, so nothing goes then, by the inbox or by the process it falls back to.
+    @Test func aSendWhoseReasonIsGoneMeanwhileGoesByNoGate() async throws {
+        final class Reason { var gone = false; var asked = 0 }
+        let dir = TempDir()
+        let (s, _, f) = setup()
+        let signed = RelaySigner.sign(body: "hello", target: "cli-a", key: "k1")
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        // Gone once the approval let it through, before the inbox's write.
+        let reason = Reason()
+        let tools = RouterTools(store: s)
+        tools.beginTurn("hello")
+        tools.prepared["cli-a"] = Prepared(text: signed, original: "hello", rephrased: false)
+        tools.deliveryCheck = {
+            reason.asked += 1
+            defer { reason.gone = true }
+            return reason.gone ? "Not sent: it no longer waits for this" : nil
+        }
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 0.3
+        let plugin = fakePlugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
+        do {
+            try await RouterSender.send(binary: "/nonexistent/claude", cwd: dir.url, to: "cli-a", text: signed, tools: tools, inbox: inbox)
+            Issue.record("sent after its reason was gone")
+        } catch {
+            #expect(error.localizedDescription.contains("no longer waits"), "\(error.localizedDescription)")
+        }
+        plugin.cancel()
+        let seen = await plugin.value
+        #expect(reason.asked == 2 && seen == nil)
+        #expect(!FileManager.default.fileExists(atPath: inbox.folder(for: "cli-a").appendingPathComponent("\(nonce).msg").path))
+
+        // The plugin doesn't answer, so the process would take it: gone by its permission, it is denied.
+        let docs = RelaySigner.sign(body: "hello", target: "Docs", key: "k1")
+        let fallback = RouterTools(store: s)
+        fallback.beginTurn("hello")
+        fallback.prepared["Docs"] = Prepared(text: docs, original: "hello", rephrased: false)
+        let late = Reason()
+        fallback.deliveryCheck = {
+            late.asked += 1
+            return late.asked > 2 ? "Not sent: it no longer waits for this" : nil
+        }
+        let input = String(decoding: try JSONSerialization.data(withJSONObject: ["to": "Docs", "message": docs]), as: UTF8.self)
+        let script = dir.path("claude")
+        let body = """
+        #!/bin/bash
+        read -r first
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"SendMessage","input":\(input)}]}}'
+        echo '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"SendMessage","input":\(input)}}'
+        read -r answer
+        echo "$answer" > "$(dirname "$0")/answer.txt"
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"refused"}]}}'
+        echo '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+        """
+        try Data(body.utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        await #expect(throws: (any Error).self) {
+            try await RouterSender.send(binary: script.path, cwd: dir.url, to: "Docs", text: docs, tools: fallback, timeout: 30, inbox: inbox)
+        }
+        let answer = try String(contentsOf: dir.path("answer.txt"), encoding: .utf8)
+        #expect(late.asked == 3 && !answer.contains("\"allow\"") && answer.contains("no longer waits"))
+        withExtendedLifetime(f) {}
+    }
+
     /// The live bug: callers hold the peer's name ("fix the tests"), the plugin's inbox is the CLI session id the text is
     /// signed for. The delivery must go to the folder of the signed target, not of the name.
     @Test func aPeerNamedDeliveryGoesToTheInboxOfTheSessionTheTextIsSignedFor() async throws {

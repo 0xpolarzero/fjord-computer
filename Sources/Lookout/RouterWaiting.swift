@@ -210,14 +210,18 @@ extension Store {
     }
 
     /// The Router's send path with the words as they are (no rephrasing): prepared and signed for the session's plugin, then
-    /// through the gate, which lets only exactly this text go, once. `check` runs right before it is delivered, after the
-    /// preparing, and stops it by throwing.
+    /// through the gate, which lets only exactly this text go, once. `check` stops it by throwing: run after the preparing,
+    /// and again at each of the gate's own (the approval, right before the inbox's write, the fallback's permission), after
+    /// every wait, so a wait handled or auto-continue turned off meanwhile sends nothing.
     static func sendVerbatim(store: Store, check: @escaping @MainActor () throws -> Void) -> RouterTriager.Sender {
         { [weak store] session, text in
             guard let store else { throw RouterTools.Failure("Lookout isn't ready") }
             let tools = RouterTools(store: store)
             tools.claudePath = { [weak store] in store?.routerStatus.claudeCode?.path }
             tools.rephrase = { message, _, _ in Prepared(text: message, original: message, rephrased: false) }
+            tools.deliveryCheck = {
+                do { try check(); return nil } catch { return error.localizedDescription }
+            }
             tools.beginTurn(text)
             defer { tools.endTurn() }
             let answer = try await tools.prepare(store, session: session, ticket: tools.ticket())

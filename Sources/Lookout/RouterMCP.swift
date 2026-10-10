@@ -496,6 +496,9 @@ final class RouterMCPServer: @unchecked Sendable {
     /// The messages `prepare` (and `start_session`) made, by the `to` they're for: the next SendMessage there must carry
     /// exactly that text.
     var prepared: [String: Prepared] = [:]
+    /// Why a send may no longer go, asked at each of its gates right before it is let through (the approval, the inbox's
+    /// write, the fallback process's permission): a reason stops it. Nil for the Router's own turns.
+    var deliveryCheck: (@MainActor () -> String?)?
     /// Haiku's rephrasing (message, title, project); tests answer for it.
     var rephrase: ((String, String, String) async throws -> Prepared)?
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
@@ -1010,6 +1013,8 @@ final class RouterMCPServer: @unchecked Sendable {
         guard turnText != nil else { return "Only the user's messages are sent" }
         // Switched off, and the switch not seen yet: nothing goes, nothing is used up.
         guard let store, store.router.enabled, store.agents.enabled else { return "The Router is off" }
+        // What the send was for may be over by now (a wait handled, the session going on, auto-continue turned off).
+        if let refusal = deliveryCheck?() { return refusal }
         guard otherFields.isEmpty else { return "Unexpected fields: \(otherFields.joined(separator: ", ")). Send only `to` and `message`" }
         // What Claude Code adds itself (a preview, the kind of recipient) is checked against the message; nothing else.
         let known: Set<String> = ["to", "message", "summary", "content", "type", "recipient", "recipient_kind"]

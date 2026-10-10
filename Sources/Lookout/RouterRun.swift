@@ -257,7 +257,7 @@ enum RouterSender {
             if let refusal = tools.approveSend(["to": to, "message": text], otherFields: []) { throw RouterTools.Failure(refusal) }
             do {
                 // The inbox is the session's, by the CLI session id the text is signed for: `to` is the name the peer channel knows it by.
-                return try await inbox.deliver(text, to: RelayInbox.header(of: text)?.target ?? to)
+                return try await inbox.deliver(text, to: RelayInbox.header(of: text)?.target ?? to, gate: tools.deliveryCheck)
             } catch RelayInbox.Failure.unanswered {
                 tools.prepared[to] = ready
             } catch let failure as RelayInbox.Failure {
