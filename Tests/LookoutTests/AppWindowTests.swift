@@ -655,6 +655,43 @@ import Testing
         }
     }
 
+    /// Another place asked for as the opening hands over: its fresh picture fades in over the last before the overlay lets
+    /// go of it, rather than snapping to the end of its fade.
+    @Test func theHandoffWaitsForAPictureStillFadingIn() {
+        morphing { controller, ticks in
+            controller.show(.settings)
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            guard let run = controller.run else { return #expect(Bool(false), "no morph") }
+            run.complete()
+            #expect(ticks.blocks.count == 1)
+            AppTransition.isKey = { _ in true }
+            controller.show(.done)
+            ticks.turns.forEach { $0() }
+            #expect(run.isFadingPicture)
+            ticks.blocks.removeFirst()()
+            ticks.blocks.removeFirst()()
+            #expect(!run.handedOver && run.isFadingPicture && !run.ended)
+        }
+    }
+
+    /// Closed while its fresh picture fades in, the window's overlay carries the fade on as it shrinks, rather than snapping
+    /// to the new picture.
+    @Test func aCloseCarriesOnAPictureStillFadingIn() {
+        morphing { controller, ticks in
+            AppTransition.isKey = { _ in true }
+            controller.show(.settings)
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            guard let run = controller.run else { return #expect(Bool(false), "no morph") }
+            #expect(run.isFadingPicture)
+            controller.close()
+            #expect(controller.phase == .closing && controller.run === run && run.isFadingPicture)
+            controller.show(.settings)
+            #expect(controller.phase == .opening && run.isFadingPicture)
+        }
+    }
+
     /// Minimized on its way in, then closed by a toggle, the window turned round by another toggle opens again: the close's
     /// end does not close it after all.
     @Test func aCloseOfAWindowMinimizedOnItsWayInTurnsRound() {

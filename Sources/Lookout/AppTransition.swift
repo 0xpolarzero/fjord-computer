@@ -189,6 +189,10 @@ enum AppTransition {
         /// The opening has handed over: its picture is gone and the real window's live pixels show (the overlay's shadow
         /// may still be fading). Nothing is left to turn round: a close starts from the window as it is.
         private(set) var handedOver = false
+        /// When the fresh picture fading in over the last is in (media time): the overlay lets go of it no sooner.
+        private var fadeEnds: CFTimeInterval = 0
+        /// A fresh picture is still fading in over the last.
+        var isFadingPicture: Bool { windowLayer.animation(forKey: kCATransition) != nil }
 
         fileprivate init(window: NSWindow, image: CGImage?, imageIsKey: Bool, screen: NSScreen, bar: BarMorph?,
                          radius: CGFloat) {
@@ -259,11 +263,13 @@ enum AppTransition {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             windowLayer.removeAnimation(forKey: kCATransition)
+            fadeEnds = 0
             if crossFade {
                 let fade = CATransition()
                 fade.type = .fade
                 fade.duration = AppTransition.pictureFade
                 windowLayer.add(fade, forKey: kCATransition)
+                fadeEnds = CACurrentMediaTime() + AppTransition.pictureFade * Double(AppTransition.slowdown)
             }
             windowLayer.contents = image
             CATransaction.commit()
@@ -387,7 +393,7 @@ enum AppTransition {
             settlesAt = CACurrentMediaTime() + AppTransition.reducedDuration * Double(AppTransition.slowdown)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            for layer in [container, shadow, windowLayer, barLayer] { layer.removeAllAnimations() }
+            removeMotion()
             containers(set: end)
             let a = CABasicAnimation(keyPath: "opacity")
             a.fromValue = from.container
@@ -433,7 +439,7 @@ enum AppTransition {
             let start = CACurrentMediaTime()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            for layer in [container, shadow, windowLayer, barLayer] { layer.removeAllAnimations() }
+            removeMotion()
             containers(set: end)
             func add(_ layer: CALayer, _ key: String, _ a: Any, _ b: Any) {
                 let s = CASpringAnimation(keyPath: key)
@@ -488,6 +494,13 @@ enum AppTransition {
             }
         }
 
+        /// Every animation of the layers taken off but a fresh picture fading in over the last, which carries on under the
+        /// new motion (cut, it would snap to its end).
+        private func removeMotion() {
+            for layer in [container, shadow, barLayer] { layer.removeAllAnimations() }
+            for key in windowLayer.animationKeys() ?? [] where key != kCATransition { windowLayer.removeAnimation(forKey: key) }
+        }
+
         private func finishAnimation(_ mine: Int) {
             guard mine == token, !ended, let done = completion else { return }
             completion = nil
@@ -500,6 +513,7 @@ enum AppTransition {
             completion = nil
             token += 1
             settlesAt = 0
+            fadeEnds = 0
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for layer in [container, shadow, windowLayer, barLayer] { layer.removeAllAnimations() }
@@ -515,8 +529,6 @@ enum AppTransition {
         func handoff(reveal: @escaping () -> Void, finished: @escaping () -> Void) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            // The overlay must be the window's exact picture: a fresh one still fading in is there at once.
-            windowLayer.removeAnimation(forKey: kCATransition)
             reveal()
             CATransaction.commit()
             CATransaction.flush()
@@ -526,15 +538,21 @@ enum AppTransition {
             AppTransition.nextFrame(screen) { [weak self] in
                 AppTransition.nextFrame(screen) { [weak self] in
                     guard let self, !self.ended, self.token == mine else { return }
-                    // Started ahead of the spring's end: the overlay starts going only once it is still.
-                    let settling = self.settlesAt - CACurrentMediaTime()
-                    guard settling > 0 else { return self.letGo(mine, finished: finished) }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + settling) { [weak self] in
-                        MainActor.assumeIsolated {
-                            guard let self, !self.ended, self.token == mine else { return }
-                            self.letGo(mine, finished: finished)
-                        }
-                    }
+                    self.letGoWhenStill(mine, finished: finished)
+                }
+            }
+        }
+
+        /// Lets go once the spring is still (the handoff starts ahead of its end) and the overlay shows the window's exact
+        /// picture: a fresh one still fading in over the last (taken late, or asked for since) is let finish, rather than
+        /// snapping to its end as the picture goes.
+        private func letGoWhenStill(_ mine: Int, finished: @escaping () -> Void) {
+            let wait = max(settlesAt, fadeEnds) - CACurrentMediaTime()
+            guard wait > 0 else { return letGo(mine, finished: finished) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.ended, self.token == mine else { return }
+                    self.letGoWhenStill(mine, finished: finished)
                 }
             }
         }
