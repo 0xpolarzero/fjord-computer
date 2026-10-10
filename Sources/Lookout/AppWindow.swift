@@ -425,7 +425,7 @@ struct AppRootView: View {
                         .frame(height: CDS.TitleBar.header)
                 }
         }
-        .frame(minWidth: 1000, minHeight: 600)
+        .frame(minWidth: 640, minHeight: 600)
         .foregroundStyle(Theme.text)
         .environment(\.colorScheme, .dark)
         .tipSpace()

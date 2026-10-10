@@ -180,12 +180,8 @@ enum CDS {
         static let sessionGap: CGFloat = 1.5
         /// From a group's last row to the next label (MEASURED 11, less the row's own 1.5).
         static let sectionGap: CGFloat = 9.5
-        static let newCircle: CGFloat = 18
-        static let newCircleFill = hex(0x2C2C2A)
         /// Claude's 16pt Anthropicons glyph (wght 533) drawn as an SF Symbol: the point size whose ink matches it.
         static let symbol: CGFloat = 13
-        /// The New circle's 13pt "Add" glyph at 700, as an SF Symbol.
-        static let newGlyph: CGFloat = 10
         /// The 0.5pt white-10% right edge.
         static let edge: CGFloat = 0.5
     }

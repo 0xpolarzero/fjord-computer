@@ -9,6 +9,8 @@ struct RouterCodeView: View {
     @Bindable var model: RouterModel
     var close: () -> Void = {}
     var checksClaudeCode = true
+    /// Inside the app window the detail area sets the size (and the window's top is the window's job); alone it has its own.
+    var embedded = false
 
     static let sidebarWidth: CGFloat = CDS.Sidebar.width
     static let column: CGFloat = 768
@@ -27,7 +29,7 @@ struct RouterCodeView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(CDS.Surface.s1)
         }
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: embedded ? 0 : 760, minHeight: embedded ? 0 : 520)
         .foregroundStyle(Theme.text)
         .environment(\.colorScheme, .dark)
         .tipSpace()

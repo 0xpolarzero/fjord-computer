@@ -43,13 +43,7 @@ struct RouterSidebar: View {
                 search
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        // §2.4: the New row, then the nav rows (here the Router's own chat).
-                        NewRow(title: "New session") {
-                            model.select(nil, store: store)
-                            model.draft = "Start a session in @"
-                            model.reply()
-                        }
-                        .padding(.bottom, M.navGap)
+                        // §2.4: the nav rows (here the Router's own chat).
                         NavRow(symbol: "bubble.left", title: "Router", on: model.selection == nil) {
                             model.select(nil, store: store)
                         }
@@ -197,24 +191,6 @@ struct SidebarRowButton<Leading: View>: View {
         .onHover { hovered = $0 }
         .accessibilityLabel(title)
         .accessibilityAddTraits(on ? .isSelected : [])
-    }
-}
-
-/// §2.4: the New row, its 18pt #2c2c2a circle holding a 13pt + at weight 700 (secondary, primary on hover; the circle turns
-/// muted 25% on hover).
-private struct NewRow: View {
-    let title: String
-    let action: () -> Void
-    typealias M = CDS.Sidebar
-
-    var body: some View {
-        SidebarRowButton(title: title, on: false, action: action) { hovered in
-            Image(systemName: "plus")
-                .font(.system(size: M.newGlyph, weight: .bold))
-                .foregroundStyle(hovered ? CDS.Text.primary : CDS.Text.secondary)
-                .frame(width: M.newCircle, height: M.newCircle)
-                .background(Circle().fill(hovered ? CDS.Text.muted.opacity(0.25) : CDS.Sidebar.newCircleFill))
-        }
     }
 }
 

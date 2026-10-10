@@ -187,7 +187,7 @@ struct AppContent: View {
             case .category(let id): InboxListView(store: store, tab: .category(id), hub: hub, search: search, leadingInset: leadingInset).id(id)
             case .done: InboxListView(store: store, tab: .done, hub: hub, search: search, leadingInset: leadingInset).id("done")
             case .router:
-                RouterCodeView(store: store, model: routerModel, checksClaudeCode: checksClaudeCode)
+                RouterCodeView(store: store, model: routerModel, checksClaudeCode: checksClaudeCode, embedded: true)
             case .settings:
                 AppPage(title: "Settings", leadingInset: leadingInset, trailing: { EmptyView() }) {
                     column { SettingsView(store: store, hub: hub) }
@@ -200,6 +200,7 @@ struct AppContent: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(CDS.Surface.s1)
+        .clipped()
     }
 
     /// Settings and the categories were made for a narrow panel: a readable column, centred.
