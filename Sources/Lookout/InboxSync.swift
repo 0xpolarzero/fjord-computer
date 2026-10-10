@@ -1120,15 +1120,17 @@ extension Store {
             }
             if baseline { baselines[category.id] = ruleIDs }
         }
-        // Facts that are gone: forgotten, for a thing that is still fetched (events only once the thing no longer has them).
+        // Facts that are gone: forgotten, for a thing that is still fetched (events only once the thing no longer has them),
+        // whether notified, acknowledged or seen.
         for (id, thing) in things {
-            guard var m = updated[id], !m.notified.isEmpty || !m.acked.isEmpty else { continue }
+            guard var m = updated[id], !m.notified.isEmpty || !m.acked.isEmpty || !m.seen.isEmpty else { continue }
             let current = Set(byThing[id]?.facts.map(\.key) ?? [])
             let kept = { (key: String) in current.contains(key) || InboxSync.isEvent(key, of: thing) }
-            let notified = m.notified.filter(kept), acked = m.acked.filter(kept)
-            if notified != m.notified || acked != m.acked {
+            let notified = m.notified.filter(kept), acked = m.acked.filter(kept), seen = m.seen.filter(kept)
+            if notified != m.notified || acked != m.acked || seen != m.seen {
                 m.notified = notified
                 m.acked = acked
+                m.seen = seen
                 updated[id] = m
             }
         }

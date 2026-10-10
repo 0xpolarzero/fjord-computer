@@ -94,6 +94,24 @@ import Testing
         #expect(model.removeLastChip() && model.live.pinned == nil, "Backspace at the start takes the pin off")
     }
 
+    @Test func aPinnedDraftEditedSinceKeepsItsTargetButNotWhatJevMadeOfIt() {
+        let (s, model, _) = setup()
+        let read = RouterDispatcher.Classification(ranked: [.init(target: "session:local_b", p: 0.9)], sure: true, assisted: true,
+                                                   rewording: 0.02, scope: 4)
+        model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "session “Update the docs” in docs",
+                                 text: "fix the typo", mark: nil, found: read))
+        model.draft = "fix the typo"
+        model.pinPrediction(store: s)
+        #expect(model.context(s).jev == read)
+        model.draft = "fix the typo, then rewrite the whole docs site in another framework"
+        #expect(model.context(s).target == "session:local_b" && model.context(s).predicted == "session:local_b")
+        #expect(model.context(s).jev == nil, "its size and rewording were for other words")
+        // A project tagged since: the same.
+        model.draft = "fix the typo"
+        model.tokens = ["/code/docs"]
+        #expect(model.context(s).jev == nil)
+    }
+
     @Test func aPickForOtherWordsGoesAtOnceAndALateAnswerForThemIsNeverShownOrPinned() async {
         let (s, model, _) = setup()
         let sure = s.routerDispatcher.asker!

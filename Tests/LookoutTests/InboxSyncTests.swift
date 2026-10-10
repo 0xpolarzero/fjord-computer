@@ -471,6 +471,16 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.things["pr:o/r#0"] == nil && s.things.count == 16)
     }
 
+    @Test func seenFactsThatAreGoneAreForgottenAsNotifiedAndAckedOnesAre() throws {
+        let s = InboxFixture.store([InboxFixture.pr(1)])
+        let entry = try #require(s.entries(in: s.categories[0].id).first)
+        let current = Set(entry.facts.map(\.key))
+        #expect(!current.isEmpty)
+        s.marks[entry.id] = EntryMarks(seen: current.union(["checks:failing", "comment:gone"]))
+        s.announceInbox()
+        #expect(s.marks[entry.id]?.seen == current)
+    }
+
     @Test func marksOfThingsGoneForAMonthAreForgotten() {
         let (s, _) = store(Log())
         s.marks = ["pr:o/r#9": EntryMarks(seen: ["x"])]

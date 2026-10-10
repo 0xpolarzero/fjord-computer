@@ -37,6 +37,28 @@ final class FakePerformer: ActionPerformer {
     func clones(of repo: String) -> [String] { cloneFolders[repo] ?? [] }
 }
 
+/// A performer that looks at actions.json on disk as each session is started.
+@MainActor
+final class DiskCheckingPerformer: ActionPerformer {
+    let inner = FakePerformer()
+    let file: URL
+    /// Per session started: whether the file had a run in progress then.
+    var runningOnDisk: [Bool] = []
+    init(file: URL) { self.file = file }
+
+    func startSession(_ request: ActionSessionRequest) async throws -> ActionSessionStarted {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let ledger = try? dec.decode(ActionLedger.self, from: Data(contentsOf: file))
+        runningOnDisk.append(ledger?.runs.values.contains { $0.state == .running } ?? false)
+        return try await inner.startSession(request)
+    }
+    func comment(repo: String, number: Int, body: String) async throws -> URL? { try await inner.comment(repo: repo, number: number, body: body) }
+    func failedRuns(for thing: Thing) async throws -> [FailedRun] { try await inner.failedRuns(for: thing) }
+    func rerun(repo: String, run: FailedRun) async throws -> Int { try await inner.rerun(repo: repo, run: run) }
+    func clones(of repo: String) -> [String] { inner.clones(of: repo) }
+}
+
 @MainActor
 @Suite(.serialized) struct InboxActionsTests {
     private let session = CategoryAction.make(.askRouter(prompt: "Look at {title} by {author} ({repo}#{number}) {url}"))
@@ -52,6 +74,28 @@ final class FakePerformer: ActionPerformer {
     }
 
     private func add(_ store: Store, _ thing: Thing) { store.things[thing.id] = thing }
+
+    @Test func aRunIsOnDiskAsRunningBeforeItReachesOutAndTheLedgerIsWrittenByQuitting() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, _) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        let file = try #require(store.actionsFile)
+        let checker = DiskCheckingPerformer(file: file)
+        store.actionPerformer = checker
+        await store.runActions()
+        add(store, InboxFixture.pr(3))
+        await store.runActions()
+        #expect(checker.runningOnDisk == [true])
+        // What it did is on disk once quitting has written it.
+        store.flushSave()
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let saved = try dec.decode(ActionLedger.self, from: Data(contentsOf: file))
+        #expect(saved.runs.values.contains { $0.thing == "pr:a/one#3" && $0.state == .done })
+    }
 
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])

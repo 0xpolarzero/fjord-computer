@@ -13,6 +13,9 @@ import Testing
         var scope: Double?
         var rankError: Error?
         var ranks = 0
+        /// Holds the next routing call until the test lets it go.
+        var holdRank = false
+        var rankHeld: CheckedContinuation<Void, Never>?
         var prepared: [String] = []
         /// Per prepare: whether the words went as written (no Haiku run).
         var verbatim: [Bool] = []
@@ -39,6 +42,7 @@ import Testing
             d.effects = RouterDispatcher.Effects(
                 rank: { [unowned self] _, _, _, _ in
                     ranks += 1
+                    if holdRank { await withCheckedContinuation { rankHeld = $0 } }
                     if let rankError { throw rankError }
                     return RouterDispatcher.Ranking(scored: ranked, rewording: rewording, scope: scope)
                 },
@@ -102,6 +106,23 @@ import Testing
     private func decision(_ s: Store, _ id: UUID?) -> RouterDecision? { s.router.decisions.first { $0.id == id } }
 
     // MARK: Jev while you type
+
+    @Test func aDraftSentWhileJevIsStillAskedAboutItWaitsForThatAnswer() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
+        f.holdRank = true
+        // The composer's ask, stopped as the draft is sent: the call itself goes on.
+        let typing = Task { await d.predict("add a changelog entry for this", projects: []) }
+        await waitUntil { f.rankHeld != nil }
+        typing.cancel()
+        let a = d.submit("add a changelog entry for this")
+        f.holdRank = false
+        f.rankHeld?.resume()
+        await finish(d, f, a)
+        #expect(f.ranks == 1 && f.prepared == ["local_b"], "one routing call for the draft and its send")
+        // It was never shown: sending it isn't going with Jev's pick.
+        #expect(decision(s, a)?.decision.confirmed == nil)
+    }
 
     @Test func aDraftJevRoutedWhileTypingIsSentWithoutAskingAgainUnlessItChanged() async {
         let (s, d, f) = setup()

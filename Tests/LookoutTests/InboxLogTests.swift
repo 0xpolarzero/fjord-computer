@@ -42,7 +42,9 @@ import Testing
         var draft = CategoriesView.newDraft(after: s.categories)
         draft.name = "Reviews"
         #expect(s.createCategory(draft, history: history))
-        #expect(lines() == [created(draft, at: s.categories.count - 1)])
+        // Creating one also writes down the section of those that had none (the tree's order is kept that way).
+        let made = lines()
+        #expect(made.filter { !$0.hasSuffix(": section by newCategoryButton") } == [created(draft, at: s.categories.count - 1)])
 
         s.categories[s.categories.count - 1].notifies = false
         history.observe(s)

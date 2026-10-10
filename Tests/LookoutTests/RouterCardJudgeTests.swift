@@ -29,8 +29,12 @@ import Testing
         return s
     }
 
+    /// Jev's time is a test's: a busy run of the whole suite may hold the main actor well past the app's ten seconds.
+    static let patient: Duration = .seconds(600)
+
     private func judge(_ s: Store, session: String = "a", message: String = "use sqlite", asker: JevAsker?) async {
-        await s.judgeCards(session: session, message: message, eligible: s.openCardRevisions(session: session), asker: asker)
+        await s.judgeCards(session: session, message: message, eligible: s.openCardRevisions(session: session), asker: asker,
+                           timeout: Self.patient)
     }
 
     @Test func resolvedAddressesTheCardWithYourMessage() async {
@@ -166,11 +170,11 @@ import Testing
     @Test func aCardThatChangedMeanwhileIsLeftAlone() async {
         let s = store([card("a#w1", "a")])
         let eligible = s.openCardRevisions(session: "a")
-        await s.judgeCards(session: "a", message: "m", eligible: eligible) { _, _ in
+        await s.judgeCards(session: "a", message: "m", eligible: eligible, asker: { _, _ in
             s.setCardAddressed("a#w1", true)
             s.setCardAddressed("a#w1", false)
             return self.choice("resolved")
-        }
+        }, timeout: Self.patient)
         #expect(s.router.cards[0].isOpen)
     }
 
@@ -183,7 +187,8 @@ import Testing
     @Test func aResolvedCardIsLoggedInTheRunsDoneItems() async {
         let s = store([card("a#w1", "a")])
         let id = s.logDecision(RouterDecision(trigger: .you("use sqlite"), outcome: .pending))
-        await s.judgeCards(session: "a", message: "use sqlite", eligible: s.openCardRevisions(session: "a"), asker: { _, _ in self.choice("resolved") }, decision: id)
+        await s.judgeCards(session: "a", message: "use sqlite", eligible: s.openCardRevisions(session: "a"), asker: { _, _ in self.choice("resolved") }, decision: id,
+                           timeout: Self.patient)
         #expect(s.router.decisions.first { $0.id == id }?.done == [.resolved(card: "T a#w1", message: "use sqlite")])
     }
 }

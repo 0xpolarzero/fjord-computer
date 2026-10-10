@@ -105,6 +105,7 @@ enum InboxLog {
         if a.notifies != b.notifies { out.append("notifies \(b.notifies)") }
         if a.hidden != b.hidden { out.append("hidden \(b.hidden)") }
         if a.actions != b.actions { out.append("actions") }
+        if a.section != b.section { out.append("section") }
         if out.isEmpty { out.append("other") }
         return out
     }

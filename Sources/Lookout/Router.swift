@@ -570,6 +570,9 @@ enum RouterFeed {
         state.handledTurns = state.handledTurns.filter { live[$0.key] != nil }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
         state.lookoutStarted = state.lookoutStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
+        // What started a session goes with it, past the same hour (a session is noted as Lookout's before its origin is):
+        // its cards keep their own copy.
+        state.origins = state.origins.filter { live[$0.key] != nil || state.lookoutStarted[$0.key] != nil }
         prune(&state)
     }
 
