@@ -52,11 +52,10 @@ struct RouterComposer: View {
         .motion(Theme.Motion.fade, value: suggestions.map(\.folder))
         .onAppear { if on { requestFocus() } }
         .onChange(of: model.focusRequest) { requestFocus() }
-        .onChange(of: focused) { _, now in
-            model.composerFocused = now
-            if now { DispatchQueue.main.async { typePendingKeys() } }
+        .onDisappear {
+            focused = false
+            model.composerFocused = false
         }
-        .onDisappear { model.composerFocused = false }
         // The @ suggestions follow the caret, wherever it is in the text.
         .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { note in
             // Only the composer's own editor, while it edits: in its window, where its field is (not another window's, nor a
@@ -128,8 +127,12 @@ struct RouterComposer: View {
         let limit = min(C.maxHeight, windowHeight > 0 ? windowHeight * C.maxHeightShare : C.maxHeight)
         let lines = max(1, Int((limit - 2 * C.pad - (C.row - 20)) / 20))
         let placeholder = model.replyTo == nil ? "Tell the Router what to pass on, or ask" : "Reply, or tell the Router"
-        return MentionField(store: store, model: model, maxHeight: CGFloat(lines) * 20, editable: on, focusTick: focusTick) {
-            focused = $0
+        // Told on every change of the text view's first responder, not on a change of `focused`: the kept composer given the
+        // keyboard again after a close may still read focused, and the model must hear it has the keyboard again.
+        return MentionField(store: store, model: model, maxHeight: CGFloat(lines) * 20, editable: on, focusTick: focusTick) { now in
+            focused = now
+            model.composerFocused = now
+            if now { DispatchQueue.main.async { typePendingKeys() } }
         }
         .frame(minHeight: 20)
         .background(alignment: .topLeading) {

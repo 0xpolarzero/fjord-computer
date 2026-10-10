@@ -139,6 +139,40 @@ import Testing
         await waitUntil { closed == 2 }
     }
 
+    /// The composer kept from a close, given the keyboard again when the window opens, says so: Return sends again rather
+    /// than starting a new line.
+    @Test func theKeptComposerSaysItHasTheKeyboardAgainAfterReopening() async throws {
+        let (window, _) = controller()
+        var closed = 0
+        window.onClose = { closed += 1 }
+        func fields(_ view: NSView) -> [MentionTextView] { (view as? MentionTextView).map { [$0] } ?? [] + view.subviews.flatMap(fields) }
+        func focus() async throws {
+            let host = try #require(window.window?.contentView)
+            await waitUntil { !fields(host).isEmpty }
+            await drainMainQueue()
+            let field = fields(host).first
+            await waitUntil {
+                if window.window?.firstResponder !== field, let field { window.window?.makeFirstResponder(field) }
+                return window.window?.firstResponder === field
+            }
+        }
+        window.show(.router)
+        away(window)
+        try await focus()
+        await waitUntil { window.routerModel.composerFocused }
+        #expect(window.routerModel.composerFocused)
+        window.close()
+        await waitUntil { closed == 1 }
+        #expect(!window.routerModel.composerFocused)
+        window.show(.router)
+        away(window)
+        try await focus()
+        await waitUntil { window.routerModel.composerFocused }
+        #expect(window.routerModel.composerFocused)
+        window.close()
+        await waitUntil { closed == 2 }
+    }
+
     /// Short of memory, a closed window lets go of the content it kept, and the next open makes it again; an open one keeps it.
     @Test func memoryPressureReleasesTheContentKeptWhileClosed() async throws {
         let (window, _) = controller()
