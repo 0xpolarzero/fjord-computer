@@ -129,6 +129,8 @@ enum AppTransition {
             overlay.level = NSWindow.Level(rawValue: max(window.level.rawValue, NSWindow.Level.floating.rawValue) + 1)
             overlay.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
             overlay.animationBehavior = .none
+            // A test run's overlay covers no screen (its layers are laid out on `screen` all the same).
+            if UnderTest.isRunning { overlay.setFrameOrigin(UnderTest.away) }
             let host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
             root.frame = host.bounds
             root.speed = 1 / AppTransition.slowdown

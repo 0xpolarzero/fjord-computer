@@ -254,8 +254,8 @@ import UserNotifications
         let model = RouterModel()
         let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
             .frame(width: 1100, height: 720))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .titled, backing: .buffered,
-                              defer: false)
+        let window = AwayWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .titled, backing: .buffered,
+                                defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
@@ -294,8 +294,8 @@ import UserNotifications
         #expect(model.caret == 7 && model.suggestions(store).first?.name == "microsandbox")
         // Other text views moving their caret (another window's, one elsewhere in this window, even holding the same text)
         // leave the composer's alone.
-        let other = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 100), styleMask: .titled, backing: .buffered,
-                             defer: false)
+        let other = AwayWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 100), styleMask: .titled, backing: .buffered,
+                               defer: false)
         other.isReleasedWhenClosed = false
         defer { other.close() }
         let elsewhere = NSTextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))

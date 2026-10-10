@@ -108,7 +108,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // A window on its way out comes back from where it is; one on its way in just goes on.
         let reversing = phase == .closing && run != nil
         let opening = (reversing || !window.isVisible) && !window.isMiniaturized && AppTransition.enabled
-        if !window.isVisible && !reversing { moveToBarScreen(window) }
+        if !window.isVisible && !reversing {
+            if UnderTest.isRunning { window.setFrameOrigin(UnderTest.away) } else { moveToBarScreen(window) }
+        }
         // The bar as it is now, before whoever called us hides it.
         let morph = opening && !reversing && !AppTransition.reduceMotion ? bar() : nil
         if opening {
@@ -312,9 +314,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: NSSize(width: 1180, height: 760)),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: true)
+        let window = AwayWindow(contentRect: NSRect(origin: .zero, size: NSSize(width: 1180, height: 760)),
+                                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                backing: .buffered, defer: true)
         Self.style(window)
         window.delegate = self
         if !window.setFrameUsingName(Self.autosave) { window.center() }
