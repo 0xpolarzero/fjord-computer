@@ -7,12 +7,13 @@ enum InboxStore {
         var entries: [InboxEntry] = []
     }
 
-    /// Done is always there and isn't a category; CI is the one default.
-    static let defaultCategories: [InboxCategory] = [
-        InboxCategory(name: "CI", symbol: "xmark.seal", color: .red,
-                      rules: [Rule(scope: Scope(kinds: [.workflow], in: Pick()), conditions: [.workflow([.failing])])],
-                      isCI: true),
-    ]
+    /// Done is always there and isn't a category. CI is built in and starts with no rule (you say which repos' checks it
+    /// watches); My repos starts with the PRs and issues in the repos you own.
+    static let defaultCategories: [InboxCategory] = [ci, myRepos]
+
+    static let ci = InboxCategory(name: "CI", symbol: "xmark.seal", color: .red, rules: [], isCI: true)
+    static let myRepos = InboxCategory(name: "My repos", symbol: "folder", color: .blue,
+                                       rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.owned])))], notifies: false)
 }
 
 extension Store {

@@ -197,7 +197,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         let c = rule(Scope(kinds: [.workflow], in: Pick(include: [.repo("o/r"), .owned], except: [.repo("me/own")]), on: ["main", "dev"]))
         let t = InboxSync.workflowTargets(categories: [c], groups: [], owned: ["me/own"], contributed: [])
         #expect(t.map { "\($0.repo)@\($0.branch ?? "")" } == ["o/r@main", "o/r@dev"])
-        let none = InboxSync.workflowTargets(categories: InboxStore.defaultCategories, groups: [], owned: [], contributed: [])
+        let none = InboxSync.workflowTargets(categories: [InboxStore.ci], groups: [], owned: [], contributed: [])
         #expect(none.isEmpty)
     }
 }
@@ -350,7 +350,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             default: return .init(404, #"{"message":"unrouted"}"#)
             }
         }
-        var ci = InboxStore.defaultCategories[0]
+        var ci = InboxStore.ci
         ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/x")])), conditions: [.workflow([.failing])],
                          createdAt: .distantPast)]
         s.categories = [ci]

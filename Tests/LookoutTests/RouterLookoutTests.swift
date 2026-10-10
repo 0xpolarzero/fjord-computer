@@ -11,7 +11,7 @@ import Testing
     /// A store with the default CI category (and "Mine", which holds PRs with a low Greptile score, when asked).
     private func store(things: [Thing] = [], mine: Bool = false) -> Store {
         let s = InboxFixture.store(things)
-        s.categories = InboxStore.defaultCategories + (mine ? [InboxFixture.category()] : [])
+        s.categories = [InboxStore.ci] + (mine ? [InboxFixture.category()] : [])
         s.router.enabled = true
         s.agents.enabled = true
         return s

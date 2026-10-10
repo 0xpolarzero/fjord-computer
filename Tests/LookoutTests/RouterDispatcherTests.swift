@@ -74,7 +74,7 @@ import Testing
 
     private func setup() -> (Store, RouterDispatcher, Fakes) {
         let s = InboxFixture.store([])
-        s.categories = InboxStore.defaultCategories
+        s.categories = [InboxStore.ci]
         s.router.enabled = true
         s.agents.enabled = true
         s.claudeSessions = [

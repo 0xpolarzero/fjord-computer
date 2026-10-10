@@ -321,7 +321,7 @@ enum Demo {
             rules: [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.involved])), match: .any,
                          conditions: [.newComment(by: Pick(include: [.bots]))], createdAt: longAgo)],
             notifies: false)
-        var ci = InboxStore.defaultCategories[0]
+        var ci = InboxStore.ci
         ci.id = id(4)
         ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: ciRepos.map { .repo($0) })), conditions: [.workflow([.failing])],
                          createdAt: longAgo)]

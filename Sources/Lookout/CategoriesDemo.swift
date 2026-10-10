@@ -103,7 +103,7 @@ enum CategoriesDemo {
             InboxCategory(name: "Dependabot", symbol: "shippingbox", color: .gray, rules: [
                 Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.bots]), in: Pick(include: [.contributed])), conditions: []),
             ], notifies: false, hidden: true),
-        ] + InboxStore.defaultCategories
+        ] + [InboxStore.ci]
         store.categories[0].actions = ActionList([
             CategoryAction(id: sessionAction, kind: .askRouter(prompt: "Address what {url} is waiting on.")),
             CategoryAction(id: commentAction, kind: .comment("Thanks {author}, taking another look."), trigger: .eachFact),

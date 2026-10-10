@@ -58,8 +58,8 @@ import Testing
         store.load()
         #expect(store.settings.pollInterval == 30 && !store.settings.notifications)
         #expect(store.things.isEmpty && store.marks.isEmpty && store.groups.isEmpty)
-        // The default category stands.
-        #expect(store.categories.map(\.isCI) == [true])
+        // The default categories stand.
+        #expect(store.categories.map(\.name) == ["CI", "My repos"])
     }
 
     @Test func aPartThatNoLongerDecodesIsLostAlone() throws {
@@ -71,7 +71,7 @@ import Testing
         store.stateFile = file
         store.load()
         #expect(store.settings.pollInterval == 45)
-        #expect(store.categories.map(\.isCI) == [true])
+        #expect(store.categories.map(\.name) == ["CI", "My repos"])
     }
 
     // MARK: Notification clicks

@@ -16,7 +16,7 @@ import Testing
     }
 
     @Test func theCIBadgeCountsFailingWorkflowsNotRepos() {
-        var ci = InboxStore.defaultCategories[0]
+        var ci = InboxStore.ci
         ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/one"), .repo("b/two")])),
                          conditions: [.workflow([.failing])], createdAt: .distantPast)]
         // Two failing workflows in one repo, one passing, one running, one failing in another repo.

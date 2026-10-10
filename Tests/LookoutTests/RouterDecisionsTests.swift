@@ -34,7 +34,7 @@ import Testing
 
     @Test func revertingAChangeSettlesItsDecision() async throws {
         let s = store()
-        s.categories = InboxStore.defaultCategories
+        s.categories = [InboxStore.ci]
         let t = RouterTools(store: s)
         t.beginTurn("make one")
         let out = await t.call("create_category", ["category": ["name": "Mine", "symbol": "eye", "color": "amber", "rules": [[String: Any]]()]])
