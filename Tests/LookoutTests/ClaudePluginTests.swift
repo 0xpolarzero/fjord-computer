@@ -696,11 +696,13 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         try JSONSerialization.data(withJSONObject: obj).write(to: dir.path(cli))
     }
 
-    /// What the plugin does, in a task: waits for the message, answers.
+    /// What the plugin does, in a task: waits for the message (until it is there, with the suite's watchdog, not a guess
+    /// at how long a loaded machine takes), answers.
     private func plugin(_ inbox: RelayInbox, session: String, nonce: String, answer: String?) -> Task<String?, Never> {
         Task.detached {
             let folder = inbox.folder(for: session)
-            for _ in 0..<200 {
+            let deadline = Date().addingTimeInterval(60)
+            while Date() < deadline {
                 if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
                     if let answer { try? Data((answer + "\n").utf8).write(to: folder.appendingPathComponent("\(nonce).ack")) }
                     return text
@@ -737,7 +739,8 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
 
     @Test func theSignedTextIsWrittenExactlyAndAnOkAckCompletes() async throws {
         let dir = TempDir()
-        let inbox = RelayInbox(root: dir.path("relay"))
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
         let signed = RelaySigner.sign(body: "Use Postgres\nand ship ⟦é⟧", target: "cli-a", key: key)
         let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
         let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
@@ -753,7 +756,8 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
 
     @Test func aRefusalIsReportedAndNotRetriedElsewhere() async throws {
         let dir = TempDir()
-        let inbox = RelayInbox(root: dir.path("relay"))
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
         let signed = RelaySigner.sign(body: "hi", target: "cli-a", key: key)
         let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
         let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "refused: bad signature")
