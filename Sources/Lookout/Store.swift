@@ -288,6 +288,9 @@ final class Store {
     @ObservationIgnored var iconFirstMessage: (@Sendable (String) -> String?)?
     @ObservationIgnored var iconChooser: (([String], [String: String], [String: String], String) async throws -> JevClient.Choice)?
     @ObservationIgnored var typesafeKeyCache: String?
+    /// Jev's reading of the inbox (InboxJev.swift): tests answer for TypeSafe. A failed call waits until this.
+    @ObservationIgnored var inboxAsker: InboxJev.Asker?
+    @ObservationIgnored var inboxJevPausedUntil = Date.distantPast
     /// What keeps a key in the Keychain (tests answer for it).
     @ObservationIgnored var keychainWrite: ((String, String) -> Bool)?
     @ObservationIgnored private var transcriptWatcher: FolderWatcher?

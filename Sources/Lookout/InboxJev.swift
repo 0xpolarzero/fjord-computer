@@ -1,0 +1,226 @@
+import Foundation
+
+// Jev's reading of the inbox (TypeSafe, with the user's key): each new message (comment, review's words, thread reply) is
+// read once, for whether it asks you something and whether it is noise; each review request to you (or a team of yours) and
+// each assignment is rated once. One call a refresh, every question in it, a few at most; what Jev isn't sure of is kept as
+// unsure (never a fact) and not asked again. Without a key, or when TypeSafe fails, nothing changes.
+enum InboxJev {
+    /// Messages read and things rated in one call at most; the rest wait for the next refresh, newest first.
+    static let maxMessages = 12
+    static let maxRatings = 6
+    /// Messages older than this aren't read: they were there before anything Jev could change.
+    static let horizon: TimeInterval = 14 * 86400
+    /// A yes is at least this likely, a no at most 1 minus it; between, Jev isn't sure.
+    static let sure = 0.75
+    /// A rating whose confidence is lower is no rating.
+    static let sureScore = 0.4
+    /// A failed call waits this long before the next.
+    static let pause: TimeInterval = 600
+
+    typealias Asker = ([String: JevClient.Question], [String: Any]) async throws -> [String: JevClient.Answer]
+
+    struct Work: Equatable {
+        struct Read: Equatable {
+            var thing: String
+            var message: InboxEngine.Message
+            /// Only people are asked whether they ask you something; bots only whether they are noise.
+            var asks: Bool { !message.author.isBot }
+        }
+        struct Rating: Equatable {
+            var thing: String
+            var stamp: String
+        }
+        var reads: [Read] = []
+        var ratings: [Rating] = []
+        var isEmpty: Bool { reads.isEmpty && ratings.isEmpty }
+    }
+
+    /// What is new since the last round: messages not read yet (not yours, open things, recent), and review requests or
+    /// assignments not rated for what they are now.
+    static func work(_ things: [String: Thing], context: InboxContext) -> Work {
+        let me = context.me.lowercased()
+        var reads: [Work.Read] = []
+        var ratings: [(Work.Rating, Date)] = []
+        for thing in things.values where thing.kind != .workflow && (thing.status == .open || thing.status == .draft) {
+            let judged = thing.signals?.messages ?? [:]
+            for m in InboxEngine.messages(thing) where judged[m.id] == nil && m.author.login.lowercased() != me
+                && context.now.timeIntervalSince(m.at) < horizon {
+                reads.append(Work.Read(thing: thing.id, message: m))
+            }
+            if let stamp = InboxEngine.importanceStamp(thing, context: context), thing.signals?.importance?.stamp != stamp {
+                ratings.append((Work.Rating(thing: thing.id, stamp: stamp), thing.updatedAt))
+            }
+        }
+        return Work(reads: Array(reads.sorted { ($0.message.at, $0.message.id) > ($1.message.at, $1.message.id) }.prefix(maxMessages)),
+                    ratings: ratings.sorted { ($0.1, $0.0.thing) > ($1.1, $1.0.thing) }.prefix(maxRatings).map(\.0))
+    }
+
+    /// The call: one state with every message (`m1`…) and every thing to rate (`t1`…), and the questions about each.
+    static func request(_ work: Work, things: [String: Thing], context: InboxContext) -> (questions: [String: JevClient.Question], state: [String: Any]) {
+        let me = "@" + context.me
+        var questions: [String: JevClient.Question] = [:]
+        var messages: [String: Any] = [:]
+        for (i, read) in work.reads.enumerated() {
+            guard let thing = things[read.thing] else { continue }
+            let id = "m\(i + 1)"
+            messages[id] = messageState(read.message, in: thing, context: context)
+            if read.asks {
+                questions[id + "_asks"] = .noul(
+                    instructions: "Message \(id): does it ask \(me) something, or need their answer, decision or action (a question to them, a request to review or change something, a blocker only they can clear)?",
+                    yes: "It asks \(me) to answer or act", no: "It informs, thanks, agrees, or asks someone else")
+            }
+            questions[id + "_noise"] = .noul(
+                instructions: "Message \(id): is it automated output nobody needs to read (CI or coverage reports, deploy previews, dependency update notes, lint or bot boilerplate)? A person's words, or a code review with findings even from a bot, are not.",
+                yes: "Automated noise", no: "Words for a person to read")
+        }
+        var rated: [String: Any] = [:]
+        for (i, rating) in work.ratings.enumerated() {
+            guard let thing = things[rating.thing] else { continue }
+            let id = "t\(i + 1)"
+            rated[id] = thingState(thing, context: context)
+            questions[id + "_importance"] = .score(levels: Importance.allCases.map(\.rawValue),
+                instructions: "How important is it that \(me) acts on \(id) soon, compared with the rest of a busy developer's inbox?")
+        }
+        var state: [String: Any] = ["you": me]
+        if !messages.isEmpty { state["messages"] = messages }
+        if !rated.isEmpty { state["asked of you"] = rated }
+        return (questions, state)
+    }
+
+    /// The answers, onto `things`: every message asked is read (unsure included), every thing asked is rated.
+    static func apply(_ answers: [String: JevClient.Answer], _ work: Work, to things: inout [String: Thing]) {
+        func verdict(_ key: String) -> Bool? {
+            guard let p = answers[key]?.yes else { return nil }
+            return p >= sure ? true : p <= 1 - sure ? false : nil
+        }
+        for (i, read) in work.reads.enumerated() where things[read.thing] != nil {
+            let id = "m\(i + 1)"
+            var signals = things[read.thing]?.signals ?? ThingSignals()
+            signals.messages[read.message.id] = MessageSignal(asksMe: read.asks ? verdict(id + "_asks") : nil, noise: verdict(id + "_noise"))
+            things[read.thing]?.signals = signals
+        }
+        for (i, rating) in work.ratings.enumerated() where things[rating.thing] != nil {
+            var level: Importance?
+            if case .score(let score, let confidence)? = answers["t\(i + 1)_importance"], confidence >= sureScore {
+                let index = min(max(Int(score.rounded()), 0), Importance.allCases.count - 1)
+                level = Importance.allCases[index]
+            }
+            var signals = things[rating.thing]?.signals ?? ThingSignals()
+            signals.importance = ImportanceSignal(level: level, stamp: rating.stamp)
+            things[rating.thing]?.signals = signals
+        }
+    }
+
+    /// A refreshed thing keeps what Jev said of the messages it still has, and its rating.
+    static func carry(_ old: ThingSignals?, into thing: inout Thing) {
+        guard var signals = old, thing.kind != .workflow else { return }
+        let ids = Set(InboxEngine.messages(thing).map(\.id))
+        signals.messages = signals.messages.filter { ids.contains($0.key) }
+        thing.signals = signals.messages.isEmpty && signals.importance == nil ? nil : signals
+    }
+
+    /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).
+    static func isQuiet(_ fact: Fact, _ thing: Thing) -> Bool {
+        let parts = fact.key.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return false }
+        switch parts[0] {
+        case "noise": return true
+        case "comment", "review", "mention", "last", "person": return thing.signals?.messages[parts[1]]?.noise == true
+        case "thread": return thing.signals?.messages[String(parts[1].split(separator: ":").last ?? "")]?.noise == true
+        default: return false
+        }
+    }
+
+    // MARK: What Jev reads
+
+    private static func who(_ p: Person) -> String {
+        var notes: [String] = []
+        if p.isBot { notes.append("bot") }
+        if p.association.isMaintainer { notes.append("maintainer") }
+        return "@" + p.login + (notes.isEmpty ? "" : " (" + notes.joined(separator: ", ") + ")")
+    }
+
+    private static func name(_ thing: Thing) -> String {
+        "\(thing.kind == .pr ? "PR" : "issue") \(thing.repo)#\(thing.number ?? 0): \(thing.title)"
+    }
+
+    private static func age(_ date: Date, _ now: Date) -> String {
+        let hours = Int(max(now.timeIntervalSince(date), 0) / 3600)
+        return hours < 1 ? "less than an hour" : hours < 48 ? "\(hours) hours" : "\(hours / 24) days"
+    }
+
+    /// Your part in a thing, in words: "author, requested reviewer".
+    private static func role(_ thing: Thing, _ context: InboxContext) -> String {
+        let me = context.me.lowercased()
+        let teams = Set(context.myTeams.map { $0.lowercased() })
+        var roles: [String] = []
+        if thing.author?.login.lowercased() == me { roles.append("author") }
+        if thing.requestedReviewers.contains(where: { $0.lowercased() == me }) { roles.append("requested reviewer") }
+        if thing.requestedReviewers.contains(where: { teams.contains($0.lowercased()) }) { roles.append("in a requested team") }
+        if thing.assignees.contains(where: { $0.lowercased() == me }) { roles.append("assignee") }
+        if thing.reviews.contains(where: { $0.author.login.lowercased() == me }) { roles.append("reviewed it") }
+        if thing.comments.contains(where: { $0.author.login.lowercased() == me }) { roles.append("commented") }
+        if thing.mentioned.contains(me) { roles.append("mentioned") }
+        return roles.isEmpty ? "not involved" : roles.joined(separator: ", ")
+    }
+
+    private static func messageState(_ m: InboxEngine.Message, in thing: Thing, context: InboxContext) -> [String: Any] {
+        let all = InboxEngine.messages(thing)
+        let before = all.last { $0.at < m.at && $0.path == m.path }
+        var out: [String: Any] = [
+            "on": name(thing), "your part": role(thing, context), "from": who(m.author),
+            "kind": m.path.map { $0.isEmpty ? "reply in a review thread" : "reply in a review thread on \($0)" } ?? (m.isReview ? "review" : "comment"),
+            "text": m.text, "mentions you": m.text.lowercased().contains("@" + context.me.lowercased()) ? "yes" : "no",
+        ]
+        if let before { out["just before, \(who(before.author))"] = String(before.text.prefix(200)) }
+        return out
+    }
+
+    private static func thingState(_ thing: Thing, context: InboxContext) -> [String: Any] {
+        let me = context.me.lowercased()
+        let teams = Set(context.myTeams.map { $0.lowercased() })
+        var asks = thing.requestedReviewers.contains { $0.lowercased() == me } ? "your review"
+            : thing.requestedReviewers.first { teams.contains($0.lowercased()) }.map { "a review from your team @\($0)" } ?? "assigned to you"
+        if let request = thing.reviewRequests.first(where: { $0.reviewer.lowercased() == me || teams.contains($0.reviewer.lowercased()) }) {
+            asks += ", asked \(age(request.at, context.now)) ago"
+        }
+        var out: [String: Any] = [
+            "what": name(thing), "asks": asks, "opened": age(thing.createdAt, context.now) + " ago",
+            "by": thing.author.map(who) ?? "unknown",
+        ]
+        if thing.status == .draft { out["draft"] = "yes" }
+        if !thing.labels.isEmpty { out["labels"] = thing.labels.joined(separator: ", ") }
+        if let checks = thing.checks { out["checks"] = checks.rawValue }
+        if let add = thing.additions, let del = thing.deletions {
+            out["size"] = "+\(add) −\(del)" + (thing.changedFiles.map { " in \($0) files" } ?? "")
+        }
+        if let last = InboxEngine.messages(thing).last { out["latest message"] = who(last.author) + ": " + String(last.text.prefix(200)) }
+        return out
+    }
+}
+
+extension Store {
+    /// Jev's reading of what is new, in one call: before the refresh announces, so noise is known before it would show a
+    /// banner. Without a key nothing is asked; a failure leaves everything as it was and waits a while.
+    func readInbox() async {
+        let key = typesafeKey ?? ""
+        let ask: InboxJev.Asker? = inboxAsker ?? (key.isEmpty ? nil : { questions, state in
+            try await JevClient(key: key).ask(questions, about: state)
+        })
+        guard let ask, Date() >= inboxJevPausedUntil else { return }
+        let context = inboxContext
+        guard !context.me.isEmpty else { return }
+        let work = InboxJev.work(things, context: context)
+        guard !work.isEmpty else { return }
+        let (questions, state) = InboxJev.request(work, things: things, context: context)
+        do {
+            let answers = try await ask(questions, state)
+            // Onto the things as they are now: the refresh may have moved on while Jev answered.
+            var next = things
+            InboxJev.apply(answers, work, to: &next)
+            if next != things { things = next }
+        } catch {
+            inboxJevPausedUntil = Date().addingTimeInterval(InboxJev.pause)
+        }
+    }
+}

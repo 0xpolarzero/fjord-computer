@@ -115,3 +115,137 @@ import Testing
         #expect(words.summary(rule) == "PRs and issues · when any of: a comment asks me; new comment is from a person; rated at least high")
     }
 }
+
+/// Jev's one call a refresh: what it asks, what it keeps, and what it changes.
+@MainActor
+@Suite struct InboxSignalsJev {
+    final class Calls {
+        var questions: [[String: JevClient.Question]] = []
+        var states: [[String: Any]] = []
+    }
+
+    let now = Date()
+    let tok = Person(login: "tok", association: .member)
+    let bot = Person(login: "netlify[bot]", isBot: true)
+
+    private func pr(_ n: Int, comments: [ThingComment]) -> Thing {
+        var t = InboxFixture.pr(n, by: tok, greptile: nil, updated: now)
+        t.comments = comments
+        return t
+    }
+
+    private func comment(_ id: String, _ author: Person, ago: TimeInterval = 60) -> ThingComment {
+        ThingComment(id: id, author: author, at: now.addingTimeInterval(-ago), snippet: "Could you take a look at \(id)?")
+    }
+
+    /// A store whose asker answers every yes/no with `yes` and every score with `score`, and records each call.
+    private func store(_ things: [Thing], yes: Double = 0.9, score: Double = 2, conditions: [Condition] = [.asksMe]) -> (Store, Calls) {
+        let category = InboxCategory(name: "Mine", symbol: "star", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr, .issue]), conditions: conditions, createdAt: .distantPast)])
+        let s = InboxFixture.store(things, category: category)
+        let calls = Calls()
+        s.inboxAsker = { questions, state in
+            calls.questions.append(questions)
+            calls.states.append(state)
+            return questions.mapValues { q in
+                if case .score = q { return .score(score, confidence: 0.8) }
+                return .noul(yes)
+            }
+        }
+        return (s, calls)
+    }
+
+    @Test func oneCallReadsEachNewMessageOnceAndNeverAgain() async {
+        let mine = ThingComment(id: "c0", author: Person(login: "me"), at: now.addingTimeInterval(-500), snippet: "Done")
+        let (s, calls) = store([pr(1, comments: [mine, comment("c1", tok), comment("c2", bot, ago: 120)])])
+        await s.readInbox()
+        #expect(calls.questions.count == 1)
+        // Mine isn't read; a bot is only asked whether it is noise.
+        #expect(Set(calls.questions[0].keys) == ["m1_asks", "m1_noise", "m2_noise"])
+        #expect((calls.states[0]["messages"] as? [String: Any])?.count == 2)
+        let signals = s.things["pr:a/one#1"]?.signals?.messages
+        #expect(signals?["c1"] == MessageSignal(asksMe: true, noise: true) && signals?["c2"] == MessageSignal(asksMe: nil, noise: true))
+        // Asked once: nothing new, no call.
+        await s.readInbox()
+        #expect(calls.questions.count == 1)
+        // A refresh keeps what was read; only the new comment is asked about.
+        var next = s.things
+        next["pr:a/one#1"]?.signals = nil
+        next["pr:a/one#1"]?.comments.append(comment("c3", tok, ago: 10))
+        s.applyThings(next)
+        #expect(s.things["pr:a/one#1"]?.signals?.messages["c1"] != nil)
+        await s.readInbox()
+        #expect(calls.questions.count == 2 && Set(calls.questions[1].keys) == ["m1_asks", "m1_noise"])
+        #expect(s.entries.first?.facts.map(\.key) == ["asks:c1", "asks:c3"])
+    }
+
+    @Test func unsureIsReadButNoFactAndTheCapWaitsForTheNextRound() async {
+        let many = (1...(InboxJev.maxMessages + 3)).map { comment("c\($0)", tok, ago: Double($0) * 60) }
+        let (s, calls) = store([pr(1, comments: many)], yes: 0.5)
+        await s.readInbox()
+        #expect(calls.questions[0].count == InboxJev.maxMessages * 2)
+        #expect(s.things["pr:a/one#1"]?.signals?.messages.count == InboxJev.maxMessages)
+        // Newest first: the oldest three wait.
+        #expect(s.things["pr:a/one#1"]?.signals?.messages["c\(InboxJev.maxMessages + 1)"] == nil)
+        #expect(s.entries.isEmpty)
+        await s.readInbox()
+        #expect(calls.questions.count == 2 && calls.questions[1].count == 6)
+        await s.readInbox()
+        #expect(calls.questions.count == 2)
+    }
+
+    @Test func withoutJevOrWhenItFailsNothingChanges() async {
+        let thing = pr(1, comments: [comment("c1", tok)])
+        let s = InboxFixture.store([thing])
+        await s.readInbox()
+        #expect(s.things["pr:a/one#1"] == thing)
+        var asked = 0
+        s.inboxAsker = { _, _ in asked += 1; throw JevClient.Failure(message: "TypeSafe is busy, will retry later") }
+        await s.readInbox()
+        #expect(s.things["pr:a/one#1"] == thing && asked == 1)
+        // It waits before asking again.
+        await s.readInbox()
+        #expect(asked == 1 && s.inboxJevPausedUntil > Date())
+    }
+
+    @Test func aReviewRequestIsRatedOnceForEachRequest() async {
+        var t = pr(1, comments: [])
+        t.requestedReviewers = ["me"]
+        t.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now.addingTimeInterval(-3600))]
+        t.additions = 120
+        t.deletions = 4
+        t.changedFiles = 3
+        let (s, calls) = store([t], score: 2.6, conditions: [.importance(.high)])
+        await s.readInbox()
+        #expect(Set(calls.questions[0].keys) == ["t1_importance"])
+        let rated = (calls.states[0]["asked of you"] as? [String: [String: Any]])?["t1"]
+        #expect(rated?["size"] as? String == "+120 −4 in 3 files" && rated?["asks"] as? String == "your review, asked 1 hours ago")
+        #expect(s.entries.first?.importance == .urgent && s.entries.first?.facts.map(\.key) == ["importance:urgent"])
+        await s.readInbox()
+        #expect(calls.questions.count == 1)
+    }
+
+    @Test func noiseIsNotedButNeverAnnounced() async {
+        let (s, calls) = store([pr(1, comments: []), pr(2, comments: [])], yes: 0.9, conditions: [.newComment(by: Pick())])
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.identifier) }
+        s.announceInbox()
+        // A comment Jev reads as noise on #1, one it reads as a person's on #2.
+        s.inboxAsker = { questions, _ in
+            calls.questions.append(questions)
+            return questions.mapValues { _ in .noul(0.95) }
+        }
+        var next = s.things
+        next["pr:a/one#1"]?.comments = [comment("n1", Person(login: "ci-reporter"))]
+        s.applyThings(next)
+        await s.readInbox()
+        s.inboxAsker = { questions, _ in questions.mapValues { _ in .noul(0.05) } }
+        next = s.things
+        next["pr:a/one#2"]?.comments = [comment("p1", tok)]
+        s.applyThings(next)
+        await s.readInbox()
+        s.announceInbox()
+        #expect(posted == ["inbox:pr:a/one#2"])
+        #expect(s.marks["pr:a/one#1"]?.notified == ["comment:n1"])
+    }
+}

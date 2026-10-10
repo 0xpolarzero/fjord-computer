@@ -206,7 +206,7 @@ enum InboxSync {
     static let fragments = """
     fragment C on Comment { id createdAt body authorAssociation author { \(personNode) } }
     fragment P on PullRequest {
-      id number title url isDraft state merged createdAt updatedAt body mergeable mergeStateStatus
+      id number title url isDraft state merged createdAt updatedAt body mergeable mergeStateStatus additions deletions changedFiles
       repository { nameWithOwner }
       \(person)
       labels(first: 10) { nodes { name } }
@@ -382,6 +382,9 @@ enum InboxSync {
             thing.behindBase = node["mergeStateStatus"] as? String == "BEHIND"
             thing.greptileScore = greptileScore(body)
             thing.hasConflicts = node["mergeable"] as? String == "CONFLICTING"
+            thing.additions = node["additions"] as? Int
+            thing.deletions = node["deletions"] as? Int
+            thing.changedFiles = node["changedFiles"] as? Int
 
             // Each reviewer's latest opinion; a review that only commented stands for reviewers with no opinion.
             var reviews: [ThingReview] = []
@@ -672,6 +675,7 @@ extension Store {
             next.merge(kept) { a, _ in a }
         }
         applyThings(next)
+        await readInbox()
         announceInbox()
     }
 
@@ -719,8 +723,10 @@ extension Store {
         return InboxSync.workflowThings(repo: repo, branch: branch, status: status)
     }
 
-    /// Replaces the things in one assignment, and forgets marks of things gone for a month.
+    /// Replaces the things in one assignment, keeping what Jev said of them, and forgets marks of things gone for a month.
     func applyThings(_ next: [String: Thing], now: Date = Date()) {
+        var next = next
+        for id in next.keys { InboxJev.carry(things[id]?.signals, into: &next[id]!) }
         if next != things { things = next }
         for id in next.keys { goneSince[id] = nil }
         var forget: [String] = []
@@ -789,7 +795,9 @@ extension Store {
                 guard !fresh.isEmpty else { continue }
                 m.notified.formUnion(fresh.map(\.key))
                 updated[entry.id] = m
-                if !silent, !entry.isDone { posts.append((category, entry, fresh)) }
+                // Noise is noted, never announced.
+                let loud = fresh.filter { !InboxJev.isQuiet($0, entry.thing) }
+                if !silent, !entry.isDone, !loud.isEmpty { posts.append((category, entry, loud)) }
             }
             if baseline { baselines[category.id] = ruleIDs }
         }
