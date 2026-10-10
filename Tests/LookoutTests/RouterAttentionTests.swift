@@ -105,4 +105,28 @@ import Testing
         #expect(s.routerAttention.strip?.line([]) == "1 in your inbox")
         #expect(posted().last?.hasPrefix(Notifier.summaryPrefix) == true)
     }
+
+    @Test func aTrivialTurnIsLeftOutOfWhatCameAndJevIsAskedInTheSameCall() async {
+        let s = InboxFixture.store([])
+        s.router.enabled = true
+        s.routerTriager.rescanned = true
+        s.claudeSessions = ["a": ClaudeSession(id: "a", title: "Typo", folder: "/code/a", completedTurns: 1, lastActivity: Date(), cliID: "cli-a")]
+        s.router.cards = [RouterCard(id: "a#t1", sessionID: "a", kind: .done, title: "Typo", folder: "/code/a", text: "Fixed", createdAt: Date())]
+        s.routerTriager.reader = { _ in "Fixed the typo." }
+        s.routerTriager.earlier = { _ in [] }
+        var calls = 0
+        s.routerTriager.asker = { questions, _ in
+            calls += 1
+            #expect(questions["trivial"] != nil)
+            return ["trivial": .noul(0.9)]
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(calls == 1 && s.router.cards[0].triage?.trivial == true && s.router.cards[0].kind == .done)
+        var other = RouterCard(id: "b#t1", sessionID: "b", kind: .done, title: "B", folder: nil, text: "", createdAt: Date())
+        other.triage = RouterTriage(state: .done)
+        let strip = AwayStrip(since: Date(), cards: ["a#t1", "b#t1"])
+        #expect(strip.line(s.router.cards + [other]) == "1 finished")
+        #expect(AwayStrip(since: Date(), cards: ["a#t1"]).line(s.router.cards) == nil)
+    }
 }

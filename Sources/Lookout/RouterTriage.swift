@@ -62,6 +62,8 @@ struct RouterTriage: Codable, Hashable {
     var told: Date?
     /// Its last turns look alike and Jev sees it repeating the same failing attempt (see RouterCircles.swift).
     var circles = false
+    /// A trivial turn (a short reply, a small step): not worth telling you about when you're back (see RouterAttention.swift).
+    var trivial = false
     /// The final message it was made from (a hash): it is asked again only when that changes.
     var source = ""
 
@@ -78,7 +80,7 @@ struct RouterTriage: Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case state, questions, urgency, unverified, work, waitingOn, watch, ready, told, source, circles
+        case state, questions, urgency, unverified, work, waitingOn, watch, ready, told, source, circles, trivial
     }
 
     /// Each field on its own: one this version doesn't know is dropped, not the triage.
@@ -95,6 +97,7 @@ struct RouterTriage: Codable, Hashable {
         told = try? c.decodeIfPresent(Date.self, forKey: .told)
         source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
         circles = (try? c.decodeIfPresent(Bool.self, forKey: .circles)) ?? false
+        trivial = (try? c.decodeIfPresent(Bool.self, forKey: .trivial)) ?? false
     }
 
     // MARK: The card it makes

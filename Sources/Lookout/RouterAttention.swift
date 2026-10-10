@@ -17,13 +17,13 @@ struct AwayStrip: Equatable {
     var inbox = 0
 
     /// Its cards still open, by what they are: those that need you (Needs you's order), those ready to continue, those that
-    /// finished, each part most urgent first.
+    /// finished (a trivial turn left out), each part most urgent first.
     func items(_ all: [RouterCard]) -> (needs: [RouterCard], ready: [RouterCard], finished: [RouterCard]) {
         let ids = Set(cards)
         let open = all.filter { $0.isOpen && ids.contains($0.id) }
         return (open.filter(\.kind.needsYou).sorted(by: RouterPage.ranked),
                 open.filter { $0.kind == .waiting && $0.triage?.ready != nil }.sorted(by: RouterPage.ranked),
-                open.filter { $0.kind == .done }.sorted(by: RouterPage.ranked))
+                open.filter { $0.kind == .done && $0.triage?.trivial != true }.sorted(by: RouterPage.ranked))
     }
 
     func listed(_ all: [RouterCard]) -> [RouterCard] {
@@ -102,6 +102,12 @@ struct AwayStrip: Equatable {
         heldInbox += 1
         return false
     }
+
+    /// Asked in every triage call: is the turn too slight to tell you about when you're back? Sure of it (p ≥ 0.8), its
+    /// card isn't in the summary nor the strip (it stays in Needs you's Done as ever).
+    static let trivialExtra = TriageExtra(
+        questions: ["trivial": .noul(instructions: "Is this turn trivial: a short reply, an acknowledgment or a small step, with nothing in it the user would want to look at?")],
+        apply: { answers, triage in triage.trivial = (answers["trivial"]?.yes ?? 0) >= 0.8 })
 
     private func hold(_ id: String) {
         if !heldCards.contains(id) { heldCards.append(id) }
