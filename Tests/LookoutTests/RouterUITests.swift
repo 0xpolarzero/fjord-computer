@@ -637,6 +637,29 @@ import UserNotifications
         #expect(page.needs.map(\.id) == (needs + done).map(\.id))
     }
 
+    @Test func theHistoryIsWorkedOutOnlyWhenWhatItIsMadeOfChanges() {
+        let store = demo()
+        #expect(store.routerHistory == RouterPage.history(cards: store.router.cards, decisions: store.router.decisions,
+                                                         overviews: store.router.overviews))
+        #expect(Set(store.routerHistory.map(\.id)).count == store.routerHistory.count)
+        var notified = false
+        withObservationTracking { _ = store.routerHistory } onChange: { notified = true }
+        // A session's stamp, a wait, an open card's text: the history (and the views drawing it) are left alone.
+        store.router.seen["local_demo-lookout"] = "a new stamp"
+        store.router.waits["local_demo-lookout"] = 42
+        let open = store.router.cards.firstIndex(where: \.isOpen)!
+        store.router.cards[open].text = "Edited"
+        #expect(!notified)
+        store.logDecision(RouterDecision(at: Date(), trigger: .you("one more"), outcome: .done))
+        #expect(notified && store.routerHistory.last?.id == store.router.decisions.last?.id.uuidString)
+    }
+
+    @Test func aDuplicatedIdIsOneLineOfTheHistory() {
+        let decision = RouterDecision(at: Date(), trigger: .you("twice"), outcome: .done)
+        let history = RouterPage.history(cards: [], decisions: [decision, decision], overviews: [])
+        #expect(history.map(\.id) == [decision.id.uuidString])
+    }
+
     @Test func anAddressedCardGoesToTheHistoryAndReopensIntoNeedsYou() {
         let store = demo()
         let model = RouterModel()

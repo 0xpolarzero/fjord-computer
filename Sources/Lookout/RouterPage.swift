@@ -52,16 +52,27 @@ struct RouterPage: Equatable {
 
     static func make(cards: [RouterCard], working: [AgentRow],
                      decisions: [RouterDecision] = [], overviews: [RouterOverview] = [], asks: [RouterAskBack] = []) -> RouterPage {
+        make(cards: cards, working: working, asks: asks, history: history(cards: cards, decisions: decisions, overviews: overviews))
+    }
+
+    /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`).
+    static func make(cards: [RouterCard], working: [AgentRow], asks: [RouterAskBack], history: [Entry]) -> RouterPage {
         let open = cards.filter(\.isOpen).sorted(by: newestFirst)
         var page = RouterPage()
         page.needs = open.filter { $0.kind != .done } + open.filter { $0.kind == .done }
         page.working = working
         page.asks = asks
-        let entries = decisions.map(Entry.decision) + overviews.map(Entry.overview) + cards.filter { !$0.isOpen }.map(Entry.card)
-        page.history = entries.enumerated().sorted { a, b in
-            a.element.date != b.element.date ? a.element.date < b.element.date : a.offset < b.offset
-        }.map(\.element)
+        page.history = history
         return page
+    }
+
+    /// The history, oldest first (ties keep the runs, then the overviews, then the cards, in their order); one line per id.
+    static func history(cards: [RouterCard], decisions: [RouterDecision], overviews: [RouterOverview]) -> [Entry] {
+        let entries = decisions.map(Entry.decision) + overviews.map(Entry.overview) + cards.filter { !$0.isOpen }.map(Entry.card)
+        var seen = Set<String>()
+        return entries.enumerated().sorted { a, b in
+            a.element.date != b.element.date ? a.element.date < b.element.date : a.offset < b.offset
+        }.map(\.element).filter { seen.insert($0.id).inserted }
     }
 
     private static func newestFirst(_ a: RouterCard, _ b: RouterCard) -> Bool {
@@ -72,8 +83,12 @@ struct RouterPage: Equatable {
 extension Store {
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
-        .make(cards: router.cards, working: routerWorkingRows, decisions: router.decisions,
-              overviews: router.overviews, asks: routerDispatcher.askBacks)
+        .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory)
+    }
+
+    /// The page's zones alone: what the live part of the page redraws on, without the history.
+    var routerZones: RouterPage {
+        .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [])
     }
 }
 
@@ -99,13 +114,13 @@ struct RouterPageView: View {
     private var spring: Animation? { Theme.Motion.spring.resolved(reduce: reduceMotion) }
 
     var body: some View {
-        let page = store.routerPage
+        let page = store.routerZones
         // A session moving between the zones is the same card travelling, unless it has one in both.
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let bothZones = Set(page.working.map(\.id))
         let travelling = Set(once).subtracting(bothZones)
         VStack(spacing: 0) {
-            RouterHistory(store: store, model: model, page: page)
+            RouterHistory(store: store, model: model)
             VStack(spacing: 0) {
                 routerStatus
                 RouterZones(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
@@ -139,11 +154,10 @@ struct RouterPageView: View {
 private struct RouterHistory: View {
     let store: Store
     @Bindable var model: RouterModel
-    let page: RouterPage
     @Environment(\.routerGutter) private var gutter
 
     var body: some View {
-        let entries = page.history
+        let entries = store.routerHistory
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {

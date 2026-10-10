@@ -102,9 +102,18 @@ final class Store {
             routerRevision &+= 1
             persistedRevision &+= 1
             if oldValue.cards != router.cards { countCardChanges(from: oldValue.cards) }
+            // Worked out again only if what it is made of changed: a session's stamps or an open card changing leave it (and
+            // what draws it) alone.
+            if oldValue.decisions != router.decisions || oldValue.overviews != router.overviews || oldValue.cards != router.cards {
+                let next = RouterPage.history(cards: router.cards, decisions: router.decisions, overviews: router.overviews)
+                if next != routerHistory { routerHistory = next }
+            }
             save()
         }
     }
+    /// The Router page's history (see `RouterPage.history`), worked out when the router changes and only then: the page
+    /// reads it on every redraw.
+    private(set) var routerHistory: [RouterPage.Entry] = []
     /// Bumped on every change to `router`: a cheap memo/animation key.
     private(set) var routerRevision = 0
     /// How many times each card has changed (see `countCardChanges`).
