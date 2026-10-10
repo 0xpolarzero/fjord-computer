@@ -775,6 +775,20 @@ private struct CardGlyph: View {
     }
 }
 
+/// An open card's session glyph, or with `room` only the room it takes; nothing once the session is gone. A view of its own
+/// for the same reason.
+private struct CardLead: View {
+    let store: Store
+    let sessionID: String
+    var room = false
+
+    var body: some View {
+        if let session = store.sessionRow(sessionID) {
+            if room { Color.clear.frame(width: 20, height: 1) } else { SessionGlyph(row: session, size: 20, dot: false) }
+        }
+    }
+}
+
 /// A card's session menu, in a view of its own for the same reason.
 private struct CardSessionMenu: View {
     let store: Store
@@ -972,7 +986,8 @@ private struct RouterZones: View {
                                                         removal: .scaleFade(0.97, reduce: reduceMotion)))
                         }
                         ForEach(page.needs) { card in
-                            CardView(store: store, model: model, card: card, expanded: card.id == open, formCap: formCap)
+                            CardView(store: store, model: model, card: card, expanded: card.id == open,
+                                     form: store.pendingForm(for: card), project: store.routerProject(card), formCap: formCap)
                                 .id(card.id)
                                 .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
                                 .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
@@ -1360,14 +1375,21 @@ struct OriginTag: View {
 
 // MARK: - Card
 
+/// A card's project as it shows: its folder's name and colour (`Store.routerProject`).
+typealias RouterProject = (name: String, color: Color?)
+
 /// An open card in Needs you, warm and solid: a summary row (icon, title, kind, a line of what it asks, project, time) and,
 /// for the one shown in full, its form or plan to answer in place, or its text and Mark handled. Clicking its header shows it
 /// in full with the composer ready to reply to it; hovering it shows Open in Claude. (Addressed, it is a `HistoryCardLine`.)
-private struct CardView: View {
+struct CardView: View {
     let store: Store
     @Bindable var model: RouterModel
     let card: RouterCard
     let expanded: Bool
+    /// Its form or plan held by the hook, and its project, looked up by the zones: the card reads nothing store-wide
+    /// itself (its session's glyph is a `CardLead` of its own), so another session's activity doesn't redraw it.
+    let form: PendingForm?
+    let project: RouterProject
     /// The tallest an open form or plan gets before it scrolls inside.
     var formCap: CGFloat = 400
     @State private var hovered = false
@@ -1380,11 +1402,21 @@ private struct CardView: View {
     private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
     private var when: Date { card.createdAt }
 
-    /// What the card asks, on one line: the first question still open, else its text.
+    /// What the card asks, on one line: the first question still open, else its text (parsed once per text).
     private var excerpt: AttributedString {
-        if let first = openQuestions.first { return RouterText.inline(first) }
+        if let first = openQuestions.first { return Self.inline(first) }
         let flat = card.text.split(whereSeparator: \.isNewline).map { $0.drop { "#-* ".contains($0) } }.joined(separator: " ")
-        return RouterText.inline(flat)
+        return Self.inline(flat)
+    }
+
+    private final class Parsed { let text: AttributedString; init(_ text: AttributedString) { self.text = text } }
+    @MainActor private static let parsed: NSCache<NSString, Parsed> = { let c = NSCache<NSString, Parsed>(); c.countLimit = 200; return c }()
+
+    static func inline(_ text: String) -> AttributedString {
+        if let hit = parsed.object(forKey: text as NSString) { return hit.text }
+        let out = RouterText.inline(text)
+        parsed.setObject(Parsed(out), forKey: text as NSString)
+        return out
     }
 
     /// The questions Jev found in the turn's final message that your messages haven't answered.
@@ -1421,8 +1453,6 @@ private struct CardView: View {
     // MARK: Open
 
     private var open: some View {
-        let project = store.routerProject(card)
-        let form = store.pendingForm(for: card)
         let warm = card.kind == .approval ? RouterTriage.approvalTint : CDS.Fill.warning
         return VStack(alignment: .leading, spacing: 0) {
             header { summary(project: project) }
@@ -1457,17 +1487,16 @@ private struct CardView: View {
     }
 
     /// Who, what kind, what it asks and when: one line when there is room, else two.
-    private func summary(project: (name: String, color: Color?)) -> some View {
-        let glyph = store.sessionRow(card.sessionID)
+    private func summary(project: RouterProject) -> some View {
         let title = Text(card.title).cdsText((14, 20), .semibold, CDS.Text.primary).lineLimit(1)
         let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
         // A form has its own buttons: Mark handled sits in the header beside it.
-        let handle = expanded && wide && store.pendingForm(for: card) != nil
+        let handle = expanded && wide && form != nil
         return VStack(alignment: .leading, spacing: 1) {
             if wide {
                 HStack(spacing: 8) {
-                    lead(glyph)
+                    lead
                     title.layoutPriority(2)
                     KindTag(kind: card.kind)
                     TriageChips(triage: card.triage)
@@ -1480,11 +1509,12 @@ private struct CardView: View {
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; hoverOpen }
-                    HStack(spacing: 8) { lead(glyph); title; KindTag(kind: card.kind); Spacer(minLength: 4); age; hoverOpen }
-                    HStack(spacing: 8) { lead(glyph); title; Spacer(minLength: 4); age; hoverOpen }
+                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; hoverOpen }
+                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); age; hoverOpen }
+                    HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; hoverOpen }
                 }
-                if !expanded { ask.padding(.leading, glyph == nil ? 0 : 28) }
+                // Under the title, past the glyph's room when it has one.
+                if !expanded { HStack(spacing: 8) { CardLead(store: store, sessionID: card.sessionID, room: true); ask } }
             }
         }
         .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, wide ? 6 : expanded ? 8 : 6)
@@ -1502,11 +1532,9 @@ private struct CardView: View {
         }
     }
 
-    @ViewBuilder private func lead(_ session: AgentRow?) -> some View {
-        if let session { SessionGlyph(row: session, size: 20, dot: false) }
-    }
+    private var lead: some View { CardLead(store: store, sessionID: card.sessionID) }
 
-    private func projectLabel(_ project: (name: String, color: Color?)) -> some View {
+    private func projectLabel(_ project: RouterProject) -> some View {
         ProjectLabel(name: project.name, color: project.color)
             .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).fixedSize()
     }
