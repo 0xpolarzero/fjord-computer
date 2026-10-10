@@ -39,9 +39,13 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private var lastFront: Bool?
     private var observers: [NSObjectProtocol] = []
     /// What a morph in progress is, so a new `show` or `close` can take it over.
-    private var run: AppTransition.Run?
+    private(set) var run: AppTransition.Run?
     private var generation = 0
-    private var closing = false
+
+    /// Where the window is in its morph. The bar's presence is not told of the window's comings and goings meanwhile (the
+    /// window is out of sight on purpose), and is told what they came to once it is over.
+    enum Phase { case idle, opening, closing }
+    private(set) var phase = Phase.idle
     private(set) var window: NSWindow?
     private let checksClaudeCode: Bool
     /// The rows' picked state, Settings' scroll requests and the category editor's step back, shared by the destinations.
@@ -91,75 +95,117 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             window.contentViewController = makeContent()
             window.setFrame(frame, display: false)
         }
-        cancelTransition(window)
-        let opening = !window.isVisible && !window.isMiniaturized && AppTransition.enabled
-        if !window.isVisible { moveToBarScreen(window) }
+        // A window on its way out comes back from where it is; one on its way in just goes on.
+        let reversing = phase == .closing && run != nil
+        let opening = (reversing || !window.isVisible) && !window.isMiniaturized && AppTransition.enabled
+        if !window.isVisible && !reversing { moveToBarScreen(window) }
         // The bar as it is now, before whoever called us hides it.
-        let morph = opening && !AppTransition.reduceMotion ? bar() : nil
-        if opening { window.alphaValue = 0 }
+        let morph = opening && !reversing && !AppTransition.reduceMotion ? bar() : nil
+        if opening {
+            window.alphaValue = 0
+            window.ignoresMouseEvents = true
+        }
         AppPolicy.update(windowOpen: true)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        if opening {
-            generation += 1
-            let mine = generation
-            let reveal = { [weak self, weak window] in
-                guard let self, let window, self.generation == mine else { return }
-                window.alphaValue = 1
-            }
-            if AppTransition.reduceMotion {
-                AppTransition.fade(window, in: true, done: reveal)
-            } else if let morph {
-                run = AppTransition.open(window, from: morph, done: reveal)
-            } else {
-                reveal()
-            }
-        }
+        if opening { startOpening(window, bar: morph, reversing: reversing) }
         watchKeys()
         watchFront()
         reportFront()
     }
 
-    func close() { window?.performClose(nil) }
-
-    /// Closing morphs the window into the bar (the real window waits, invisible, until it is done), then really closes.
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard AppTransition.enabled, !closing, isFront else { return true }
-        closing = true
+    /// The window opens: the overlay grows out of the bar's cell (or picks up from where a close had got to) while the real
+    /// window waits at its frame, invisible; then the real window takes over under the overlay.
+    private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
+        phase = .opening
         generation += 1
         let mine = generation
-        let finish = { [weak self, weak sender] in
-            guard let self, let sender, self.generation == mine else { return }
-            self.run = nil
-            self.closing = false
-            sender.alphaValue = 1
-            sender.ignoresMouseEvents = false
-            sender.close()
-        }
-        sender.ignoresMouseEvents = true
-        if AppTransition.reduceMotion {
-            onClosing?()
-            AppTransition.fade(sender, in: false, done: finish)
-        } else if let morph = bar(), let image = AppTransition.snapshot(of: sender) {
-            sender.alphaValue = 0
-            onClosing?()
-            run = AppTransition.close(sender, image: image, into: morph, done: finish)
+        let current: AppTransition.Run?
+        if reversing, let run {
+            run.refresh(window)
+            current = run
         } else {
-            finish()
+            run?.end()
+            current = AppTransition.makeRun(for: window, bar: bar)
+        }
+        run = current
+        guard let current else {
+            reveal(window)
+            finishOpening(mine)
+            return
+        }
+        current.open(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak window] in
+            guard let self, let window, self.generation == mine else { return }
+            current.handoff(reveal: { self.reveal(window) }, finished: { self.finishOpening(mine) })
+        }
+    }
+
+    /// The real window, shown (under the overlay), with the keyboard.
+    private func reveal(_ window: NSWindow) {
+        window.alphaValue = 1
+        window.ignoresMouseEvents = false
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func finishOpening(_ mine: Int) {
+        guard generation == mine else { return }
+        run = nil
+        phase = .idle
+        reportFront()
+    }
+
+    func close() { window?.performClose(nil) }
+
+    /// Closing morphs the window into the bar: an overlay takes the window's place first, then the real window goes and the
+    /// overlay shrinks into the bar's cell, then it really closes.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard AppTransition.enabled, phase != .closing, phase == .opening || isFront else { return phase != .closing }
+        let interrupting = phase == .opening
+        phase = .closing
+        generation += 1
+        let mine = generation
+        sender.ignoresMouseEvents = true
+        let existing = interrupting ? run : nil
+        let current: AppTransition.Run?
+        if let existing {
+            current = existing
+        } else {
+            run?.end()
+            current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar())
+        }
+        guard let current else {
+            finishClosing(sender, mine)
             return false
+        }
+        run = current
+        let start = { [weak self, weak sender] in
+            guard let self, let sender, self.generation == mine else { return }
+            sender.orderOut(nil)
+            self.onClosing?()
+            current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
+                guard let self, let sender, self.generation == mine else { return }
+                self.finishClosing(sender, mine)
+            }
+        }
+        if interrupting {
+            start()
+        } else {
+            // The overlay shows the window before the real one goes: no frame without either.
+            current.present()
+            AppTransition.nextFrame(sender.screen, start)
         }
         return false
     }
 
-    /// Takes over a morph in progress: the window is as it should be, and the overlay is gone.
-    private func cancelTransition(_ window: NSWindow) {
-        guard run != nil || closing || window.alphaValue != 1 else { return }
-        generation += 1
+    private func finishClosing(_ window: NSWindow, _ mine: Int) {
+        guard generation == mine else { return }
         run?.end()
         run = nil
-        closing = false
+        phase = .idle
+        window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false
+        window.close()
     }
 
     /// Whether the window is in front of the user: the app is active and the window is on screen and not covered.
@@ -172,6 +218,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     /// Tells `onFront` when that changes. `active` is passed by the notifications that know it before `NSApp` does.
     func reportFront(active: Bool = NSApp.isActive) {
+        guard phase == .idle else { return }
         let front = isFront(active: active)
         guard front != lastFront else { return }
         lastFront = front

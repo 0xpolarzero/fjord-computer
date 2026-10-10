@@ -362,7 +362,8 @@ final class HubController {
         applyBar()
     }
 
-    /// The bar's picture and place, for the window to grow out of or shrink into.
+    /// The bar's picture and place, and the cell it grows out of (the one under the pointer, else the one last used, else the
+    /// GitHub mark's), for the window to grow out of or shrink into.
     var morph: BarMorph? {
         guard layout.frame != .zero else { return nil }
         let frame = hubScreenFrame
@@ -372,8 +373,28 @@ final class HubController {
             image = NSImage(size: layout.frame.size)
             image?.addRepresentation(rep)
         }
-        return BarMorph(frame: frame, snapshot: image)
+        let tile = CDS.Tile.size + 4
+        let mouse = NSEvent.mouseLocation
+        var along: CGFloat?
+        if frame.insetBy(dx: -2, dy: -2).contains(mouse) {
+            along = ui.edge.isHorizontal ? mouse.x : mouse.y
+        } else if let last = lastCellAlong, (ui.edge.isHorizontal ? frame.minX...frame.maxX : frame.minY...frame.maxY).contains(last) {
+            along = last
+        }
+        lastCellAlong = along
+        let cell: NSRect
+        if ui.edge.isHorizontal {
+            let x = min(max(along ?? frame.minX + LookoutHub.inset + 1 + LookoutHub.cell / 2, frame.minX + tile / 2), frame.maxX - tile / 2)
+            cell = NSRect(x: x - tile / 2, y: frame.midY - tile / 2, width: tile, height: tile)
+        } else {
+            let y = min(max(along ?? frame.maxY - LookoutHub.cell / 2 - 2, frame.minY + tile / 2), frame.maxY - tile / 2)
+            cell = NSRect(x: frame.midX - tile / 2, y: y - tile / 2, width: tile, height: tile)
+        }
+        return BarMorph(frame: frame, snapshot: image, cell: cell)
     }
+
+    /// Where along the bar the window last opened from, for it to close back into.
+    private var lastCellAlong: CGFloat?
 
     /// Puts the bar where `barAway` says: off the edge (faded out) or on it (faded in).
     private func applyBar() {

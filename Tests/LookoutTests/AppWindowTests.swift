@@ -214,4 +214,62 @@ import Testing
         await waitUntil { closed == 1 }
         #expect(closed == 1 && closing == 0 && asked == 0 && !controller.isOpen)
     }
+
+    private final class Ticks { var blocks: [@MainActor () -> Void] = [] }
+
+    /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on.
+    private func morphing(_ body: (AppWindowController, Ticks) -> Void) {
+        let saved = (AppTransition.enabled, AppTransition.nextFrame)
+        let ticks = Ticks()
+        AppTransition.enabled = true
+        AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
+        defer {
+            AppTransition.enabled = saved.0
+            AppTransition.nextFrame = saved.1
+        }
+        _ = NSApplication.shared
+        let store = Store()
+        store.persists = false
+        Demo.populate(store, .router)
+        let window = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
+        window.bar = { BarMorph(frame: NSRect(x: 1400, y: 300, width: 46, height: 300)) }
+        body(window, ticks)
+        window.run?.end()
+        window.close()
+    }
+
+    @Test func theRealWindowIsShownBeforeTheOverlayGoes() {
+        morphing { controller, ticks in
+            controller.show(.settings)
+            guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+            // Waiting at its frame, invisible, while the overlay grows out of the bar.
+            #expect(controller.phase == .opening && window.alphaValue == 0 && run.overlay.isVisible)
+            run.complete()
+            // At the end: the real window is in under the overlay at once, and the overlay stays until two refreshes later.
+            #expect(window.alphaValue == 1 && run.overlay.isVisible && !run.ended)
+            #expect(ticks.blocks.count == 1)
+            ticks.blocks.removeFirst()()
+            #expect(window.alphaValue == 1 && run.overlay.isVisible && ticks.blocks.count == 1)
+            ticks.blocks.removeFirst()()
+            #expect(window.alphaValue == 1 && !run.ended)
+        }
+    }
+
+    @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
+        morphing { controller, ticks in
+            controller.show(.settings)
+            guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+            let before = run.pose
+            controller.close()
+            #expect(controller.phase == .closing && controller.run === run)
+            #expect(run.startPose?.rect == before.rect && run.startPose?.radius == before.radius)
+            // The real window is out of the way and the overlay carries the close.
+            #expect(!window.isVisible && run.overlay.isVisible)
+            // Opening again turns it round from there.
+            let now = run.pose
+            controller.show(.settings)
+            #expect(controller.phase == .opening && run.startPose?.rect == now.rect)
+            #expect(ticks.blocks.isEmpty)
+        }
+    }
 }
