@@ -5,7 +5,7 @@ import SwiftUI
 // groups seeded here. Each is the hub page's width, tall enough to show the whole page.
 
 enum CategoriesShot: String, CaseIterable {
-    case page, editor, actions, impossible, groups, autocomplete, single, switched, ci
+    case page, editor, actions, impossible, groups, autocomplete, single, switched, ci, draft
 
     var name: String { "right-categories-\(rawValue)" }
 
@@ -20,6 +20,7 @@ enum CategoriesShot: String, CaseIterable {
         case .single: 520
         case .switched: 560
         case .ci: 520
+        case .draft: 620
         }
     }
 }
@@ -150,6 +151,10 @@ enum CategoriesDemo {
         let me = PersonRef.me
         switch shot {
         case .page: break
+        case .draft:
+            // New category, before Create: a draft with nothing typed yet (Create waits for a name).
+            preview.draft = CategoriesView.newDraft(after: store.categories)
+            preview.editing = .new
         case .editor: preview.editing = .existing(mine)
         case .actions:
             store.categories[0].actions.items.append(CategoryAction(kind: .rerun))

@@ -6,10 +6,14 @@ private let foot12: (CGFloat, CGFloat) = (12, 16)
 /// What to open first: the editor of a category, or a group unfolded (shots, and the New category button).
 enum CategoryEditing: Hashable {
     case existing(UUID)
+    /// A category being made by New category: a draft, nowhere in the store until Create.
+    case new
 }
 
 struct CategoriesPreview {
     var editing: CategoryEditing?
+    /// The draft New category opens on (with `editing` `.new`).
+    var draft: InboxCategory?
     var expandedGroup: UUID?
     var notice: String?
 }
@@ -22,8 +26,8 @@ struct CategoriesView: View {
     @State private var dropTarget: UUID?
     /// Every edit applies at once; this is what takes them back.
     @State private var history: CategoryHistory
-    /// A category just made by New category, until it is edited: leaving it untouched makes nothing.
-    @State private var fresh: InboxCategory?
+    /// What New category opened: not in the store (not listed, matched or saved) until Create; leaving drops it.
+    @State private var draft: InboxCategory?
     private let notice: String?
     /// The hub's state, when shown in it: an open editor takes Esc and the back button (back to the list) first.
     private let hub: HubState?
@@ -34,14 +38,17 @@ struct CategoriesView: View {
         _history = State(initialValue: CategoryHistory(store: store))
         notice = preview?.notice
         _editing = State(initialValue: preview?.editing)
+        _draft = State(initialValue: preview?.draft)
         _expandedGroup = State(initialValue: preview?.expandedGroup)
     }
 
     var body: some View {
         Group {
-            if let editing {
-                CategoryEditor(store: store, editing: editing, history: history, isNew: fresh?.id == editingID,
-                               firstRuleNotice: notice) { self.editing = nil }
+            if editing == .new, let made = Binding($draft) {
+                CategoryEditor(store: store, editing: .new, history: history, draft: made, create: commitDraft) { self.editing = nil }
+                    .id(CategoryEditing.new)
+            } else if let editing, editing != .new {
+                CategoryEditor(store: store, editing: editing, history: history, firstRuleNotice: notice) { self.editing = nil }
                     .id(editing)
             } else {
                 list
@@ -49,7 +56,11 @@ struct CategoriesView: View {
         }
         .onChange(of: editing != nil, initial: true) { _, open in
             syncStepBack(open)
-            if !open { dropUntouched() }
+        }
+        // Leaving the draft (back, Esc, another category asked for) leaves nothing behind.
+        .onChange(of: editing == .new) { _, drafting in
+            if !drafting { draft = nil }
+            syncHistory()
         }
         // A Router change's Open button asked for a category's editor or a group.
         .onChange(of: hub?.categoryRequest, initial: true) { _, request in
@@ -68,30 +79,40 @@ struct CategoriesView: View {
             store.categoriesEdited()
         }
         .onChange(of: store.groups) { history.observe(store, field: CategoryHistory.typingField()) }
-        .onAppear { store.categoryHistory = history }
+        .onAppear(perform: syncHistory)
         .onDisappear {
             hub?.stepBack = nil
             if store.categoryHistory === history { store.categoryHistory = nil }
         }
     }
 
-    private var editingID: UUID? { if case .existing(let id) = editing { id } else { nil } }
-
-    /// New category made, nothing typed or changed: leaving it leaves nothing behind.
-    private func dropUntouched() {
-        guard let fresh else { return }
-        self.fresh = nil
-        if store.categories.first(where: { $0.id == fresh.id }) == fresh { history.discardCreation(of: fresh.id, in: store) }
+    /// The page's history takes ⌘Z, except while a draft is open: its fields keep their own (the draft is no step of the page).
+    private func syncHistory() {
+        if editing == .new {
+            if store.categoryHistory === history { store.categoryHistory = nil }
+        } else {
+            store.categoryHistory = history
+        }
     }
 
+    /// New category: the editor on a draft. Nothing is made until Create.
     private func create() {
-        let used = Set(store.categories.map(\.color))
+        draft = Self.newDraft(after: store.categories)
+        editing = .new
+    }
+
+    /// What New category starts from: no name, the first colour not yet used, one rule (every PR for you).
+    static func newDraft(after categories: [InboxCategory]) -> InboxCategory {
+        let used = Set(categories.map(\.color))
         let color = CategoryColor.allCases.first { !used.contains($0) && $0 != .gray } ?? .blue
-        let category = InboxCategory(name: "", symbol: CategoryIcon.fallback, color: color, rules: [Rule(scope: Scope(kind: .pr))])
-        store.categories.append(category)
-        history.observe(store)
-        fresh = category
-        editing = .existing(category.id)
+        return InboxCategory(name: "", symbol: CategoryIcon.fallback, color: color, rules: [Rule(scope: Scope(kind: .pr))])
+    }
+
+    /// Create: the draft goes in, one step of the page's history, and the page is back on the list.
+    private func commitDraft() {
+        guard let made = draft, store.createCategory(made, history: history) else { return }
+        draft = nil
+        editing = nil
     }
 
     /// Registers the editor's step back with the hub while one is open (back to the list: there is nothing to save).
@@ -144,6 +165,21 @@ struct CategoriesView: View {
         guard let dragged, let from = store.categories.firstIndex(where: { $0.id.uuidString == dragged }),
               let to = store.categories.firstIndex(where: { $0.id == id }), from != to else { return false }
         store.moveCategory(from: IndexSet(integer: from), to: from < to ? to + 1 : to)
+        return true
+    }
+}
+
+extension Store {
+    /// New category's Create: `draft` goes in at the end, named (trimmed) and its rules new from now, as one step of `history`.
+    /// False, and nothing made, without a name.
+    @discardableResult
+    func createCategory(_ draft: InboxCategory, history: CategoryHistory?, now: Date = Date()) -> Bool {
+        var made = draft
+        made.name = made.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !made.name.isEmpty else { return false }
+        for i in made.rules.indices { made.rules[i].createdAt = now }
+        categories.append(made)
+        history?.observe(self)
         return true
     }
 }

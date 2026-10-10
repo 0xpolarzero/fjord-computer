@@ -82,13 +82,40 @@ import Testing
         #expect(history.redo(store) && store.categories[0].name == "Typed")
     }
 
-    @Test func aNewCategoryLeftUntouchedLeavesNothing() {
+    @Test func newCategoryIsADraftUntilCreateAndCreateNeedsAName() {
         let (store, history) = setup()
-        let made = InboxCategory(name: "", symbol: "star", color: .red, rules: [Rule(scope: Scope(kind: .pr))])
-        store.categories.append(made)
-        history.observe(store)
-        history.discardCreation(of: made.id, in: store)
-        #expect(store.categories.count == 1 && !history.canUndo && !history.canRedo)
+        let before = store.categories
+        var draft = CategoriesView.newDraft(after: store.categories)
+        #expect(draft.name.isEmpty && draft.symbol == CategoryIcon.fallback && draft.rules.count == 1)
+        #expect(store.categories == before)
+
+        // Nameless (or only spaces): nothing is made, nothing to undo.
+        #expect(!store.createCategory(draft, history: history))
+        draft.name = "   "
+        #expect(!store.createCategory(draft, history: history))
+        #expect(store.categories == before && !history.canUndo)
+
+        // Named: it goes in at the end, trimmed, its rules new from Create, as one step.
+        draft.name = "  Reviews "
+        let at = Date().addingTimeInterval(60)
+        #expect(store.createCategory(draft, history: history, now: at))
+        #expect(store.categories.map(\.name) == before.map(\.name) + ["Reviews"])
+        #expect(store.categories.last?.id == draft.id && store.categories.last?.rules.first?.createdAt == at)
+        #expect(history.undo(store) && store.categories == before && !history.canUndo)
+        #expect(history.redo(store) && store.categories.last?.name == "Reviews")
+    }
+
+    @Test func theDraftEditorShowsCreateAndLeavesTheStoreAlone() async throws {
+        let store = InboxFixture.store([InboxFixture.pr(1)])
+        let before = store.categories
+        let draft = CategoriesView.newDraft(after: store.categories)
+        let tree = try await AccessibilityTree.render(
+            CategoriesView(store: store, preview: CategoriesPreview(editing: .new, draft: draft)).tipSpace(),
+            ready: { $0.all.contains { $0.role == "AXButton" && $0.label == "Create" } })
+        let buttons = tree.all.filter { $0.role == "AXButton" }.map(\.label)
+        #expect(buttons.contains("Create") && !buttons.contains("Undo") && !buttons.contains("Delete category"))
+        #expect(tree.all.contains { $0.role == "AXTextField" && $0.label == "Category name" })
+        #expect(store.categories == before)
     }
 
     @Test func aRuleWithAnImpossibleChipIsOffUntilFixed() {

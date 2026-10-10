@@ -154,14 +154,6 @@ final class CategoryHistory {
         lastField = nil
     }
 
-    /// Takes back the step that just made `id`'s category, when nothing came after it (a new category left untouched).
-    func discardCreation(of id: UUID, in store: Store) {
-        flush(store)
-        guard let previous = undos.last, !previous.categories.contains(where: { $0.id == id }) else { return }
-        undos.removeLast()
-        apply(previous, to: store)
-    }
-
     /// An edit the page has not yet been told about counts as the step it belongs to.
     private func flush(_ store: Store) {
         observe(store, field: lastField, now: lastAt)

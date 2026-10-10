@@ -4,13 +4,18 @@ private let body14 = CDS.Density.comfortable.body
 private let foot12: (CGFloat, CGFloat) = (12, 16)
 
 /// One category: its name, icon (Jev picks it from the name), colour, notifications and rules. Every change is made in the
-/// store as it happens; the page's history (undo and redo, in the header) takes it back.
+/// store as it happens; the page's history (undo and redo, in the header) takes it back. A new one (New category) is a draft
+/// outside the store: nothing is made until Create, and leaving drops it.
 struct CategoryEditor: View {
     let store: Store
     let editing: CategoryEditing
     let history: CategoryHistory
-    let isNew: Bool
+    /// New category's draft, edited here until Create; nil for a category in the store.
+    let newDraft: Binding<InboxCategory>?
+    /// Puts the draft in the store.
+    let create: () -> Void
     let close: () -> Void
+    private var isNew: Bool { newDraft != nil }
     /// A note under the first rule, as after a switch of kind (shots).
     var firstRuleNotice: String?
     /// Jev may still choose the icon: until you pick one yourself (and for a category that already has its own).
@@ -19,29 +24,31 @@ struct CategoryEditor: View {
     @State private var confirmingDelete = false
     @FocusState private var nameFocused: Bool
 
-    init(store: Store, editing: CategoryEditing, history: CategoryHistory, isNew: Bool = false, firstRuleNotice: String? = nil,
-         close: @escaping () -> Void) {
+    init(store: Store, editing: CategoryEditing, history: CategoryHistory, draft: Binding<InboxCategory>? = nil,
+         create: @escaping () -> Void = {}, firstRuleNotice: String? = nil, close: @escaping () -> Void) {
         self.firstRuleNotice = firstRuleNotice
         self.store = store
         self.editing = editing
         self.history = history
-        self.isNew = isNew
+        newDraft = draft
+        self.create = create
         self.close = close
-        _iconAuto = State(initialValue: isNew)
+        _iconAuto = State(initialValue: draft != nil)
     }
 
     private var id: UUID { if case .existing(let id) = editing { id } else { UUID() } }
     private var index: Int? { store.categories.firstIndex { $0.id == id } }
 
-    /// The category in the store, edited in place.
+    /// The category in the store, edited in place (or the new one's draft).
     private var draft: Binding<InboxCategory> {
+        if let newDraft { return newDraft }
         let id = id
         return Binding(get: { store.categories.first { $0.id == id } ?? InboxCategory(id: id, name: "", symbol: "", color: .gray) },
                        set: { if let i = store.categories.firstIndex(where: { $0.id == id }) { store.categories[i] = $0 } })
     }
 
     var body: some View {
-        if let current = index.map({ store.categories[$0] }) {
+        if let current = newDraft?.wrappedValue ?? index.map({ store.categories[$0] }) {
             content(current)
         } else {
             // Gone (deleted, or undone): back to the list.
@@ -83,16 +90,30 @@ struct CategoryEditor: View {
             .accessibilityLabel("Back to categories")
             .padding(.leading, -10)
             Spacer(minLength: 8)
-            IconButton(symbol: "arrow.uturn.backward", help: "Undo", label: "Undo", size: 24,
-                       tint: history.canUndo ? CDS.Text.secondary : CDS.Text.muted) { _ = history.undo(store) }
-                .disabled(!history.canUndo)
-            IconButton(symbol: "arrow.uturn.forward", help: "Redo", label: "Redo", size: 24,
-                       tint: history.canRedo ? CDS.Text.secondary : CDS.Text.muted) { _ = history.redo(store) }
-                .disabled(!history.canRedo)
+            if isNew { createButton } else { undoRedo }
         }
         .padding(.horizontal, CDS.Settings.pagePadX)
         .padding(.top, CDS.Settings.pageTop + 4)
         .padding(.bottom, 10)
+    }
+
+    /// Whether Create can make it: it needs a name.
+    private var canCreate: Bool { !draft.wrappedValue.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private var createButton: some View {
+        Button("Create", action: create)
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(!canCreate)
+            .tip(canCreate ? "Create category" : "Name it first")
+    }
+
+    @ViewBuilder private var undoRedo: some View {
+        IconButton(symbol: "arrow.uturn.backward", help: "Undo", label: "Undo", size: 24,
+                   tint: history.canUndo ? CDS.Text.secondary : CDS.Text.muted) { _ = history.undo(store) }
+            .disabled(!history.canUndo)
+        IconButton(symbol: "arrow.uturn.forward", help: "Redo", label: "Redo", size: 24,
+                   tint: history.canRedo ? CDS.Text.secondary : CDS.Text.muted) { _ = history.redo(store) }
+            .disabled(!history.canRedo)
     }
 
     // MARK: Name, icon, colour
@@ -114,6 +135,7 @@ struct CategoryEditor: View {
                 TextField("", text: draft.name)
                     .cdsPlaceholder("Name, like Reviews or Mine", shown: c.name.isEmpty)
                     .focused($nameFocused)
+                    .onSubmit { if isNew, canCreate { create() } }
                     .cdsField(focused: nameFocused)
                     .accessibilityLabel("Category name")
             }
