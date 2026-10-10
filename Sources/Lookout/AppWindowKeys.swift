@@ -101,7 +101,7 @@ final class AppWindowKeys {
         // The categories keep their own history of edits, also while a field has the keyboard. (By the character, as Done's
         // undo is, so it is the Z key on any layout.)
         if navigator.selection == .categories {
-            guard Self.isUndo(event, flags), let history = store.categoryHistory else { return false }
+            guard Self.isUndo(event, flags), let history = store.categoryHistory, !history.drafting else { return false }
             if editing { window?.makeFirstResponder(nil) }
             if flags == .command { history.undo(store) } else { history.redo(store) }
             return true

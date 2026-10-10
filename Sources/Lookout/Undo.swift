@@ -111,6 +111,8 @@ final class CategoryHistory {
 
     var canUndo: Bool { !undos.isEmpty }
     var canRedo: Bool { !redos.isEmpty }
+    /// New category's draft is open: ⌘Z is its fields', not the page's.
+    @ObservationIgnored var drafting = false
 
     init(store: Store) { current = Snapshot(categories: store.categories, groups: store.groups, sections: store.categorySections) }
 

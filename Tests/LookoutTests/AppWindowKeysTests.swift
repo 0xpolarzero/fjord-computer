@@ -191,6 +191,27 @@ import Testing
         #expect(!r.keys.key(key(kVK_ANSI_Z, "z", .command)))
     }
 
+    @Test func whileADraftIsOpenItsFieldsKeepUndoAndARouterChangeIsNoStep() {
+        let r = rig()
+        let history = CategoryHistory(store: r.store)
+        r.store.categoryHistory = history
+        r.navigator.go(.categories)
+        r.store.categories[0].name = "Renamed"
+        history.observe(r.store)
+        history.drafting = true
+        // The draft's name field (or anything else of the draft) keeps ⌘Z: the page's step stays.
+        #expect(!r.keys.key(key(kVK_ANSI_Z, "z", .command), responder: NSTextView()))
+        #expect(!r.keys.key(key(kVK_ANSI_Z, "z", .command)))
+        #expect(r.store.categories[0].name == "Renamed")
+        // The Router renames it meanwhile: the history, still the store's, takes it as the start, not as a step.
+        r.store.categories[0].name = "By the Router"
+        r.store.categoriesChangedByRouter()
+        history.observe(r.store)
+        #expect(!history.canUndo)
+        history.drafting = false
+        #expect(r.keys.key(key(kVK_ANSI_Z, "z", .command)) && r.store.categories[0].name == "By the Router")
+    }
+
     @Test func aFieldKeepsItsOwnUndoOnTheInboxButNotOnTheCategories() {
         let r = rig()
         let field = NSTextView()

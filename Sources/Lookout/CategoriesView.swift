@@ -89,13 +89,11 @@ struct CategoriesView: View {
         }
     }
 
-    /// The page's history takes ⌘Z, except while a draft is open: its fields keep their own (the draft is no step of the page).
+    /// The page's history stays the store's while a draft is open, so a Router change made then still clears its steps; but
+    /// ⌘Z isn't its then: the draft's fields keep their own (the draft is no step of the page).
     private func syncHistory() {
-        if editing == .new {
-            if store.categoryHistory === history { store.categoryHistory = nil }
-        } else {
-            store.categoryHistory = history
-        }
+        history.drafting = editing == .new
+        store.categoryHistory = history
     }
 
     /// New category: the editor on a draft, in `section` (the first when nil). Nothing is made until Create.
