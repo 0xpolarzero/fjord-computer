@@ -314,7 +314,8 @@ final class RouterModel {
     /// The cards the keys walk, in the order the page shows them: what needs you (see `RouterPage.ranked`), then the
     /// finished turns, both open; then the latest addressed ones (Earlier). Sessions waiting are with the working ones.
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
-        let open = store.router.cards.filter { $0.isOpen && $0.kind != .waiting }.sorted(by: RouterPage.ranked)
+        // Only what the page shows: a finished turn whose session still runs things isn't there yet.
+        let open = store.routerShownCards.filter { $0.isOpen && $0.kind != .waiting }.sorted(by: RouterPage.ranked)
         // `routerCards` has the addressed ones newest first.
         let earlier = store.routerCards.filter { !$0.isOpen }.prefix(Self.earlierLimit)
         return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, Array(earlier))

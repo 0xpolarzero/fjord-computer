@@ -114,7 +114,7 @@ enum RouterBanners {
         store.onNewRouterCards = { cards in post(cards, store: store, windowIsKey: windowIsKey()) }
         store.routerTriager.onReady = { card in postReady(card, store: store, windowIsKey: windowIsKey()) }
         store.routerAttention.onBack = { strip in postBack(strip, store: store, windowIsKey: windowIsKey()) }
-        store.routerAttention.start { [weak store] in store?.router.cards ?? [] }
+        store.routerAttention.start { [weak store] in store?.routerShownCards ?? [] }
         let previous = store.notifier.onOpen
         store.notifier.onOpen = { id, url in
             if id.hasPrefix(prefix) { open(String(id.dropFirst(prefix.count))) } else { previous?(id, url) }
@@ -145,8 +145,8 @@ enum RouterBanners {
 
     /// Back after being away: one banner for what came meanwhile, opening on the most urgent of it.
     static func postBack(_ strip: AwayStrip, store: Store, windowIsKey: Bool) {
-        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(store.router.cards) else { return }
-        let first = strip.listed(store.router.cards).first
+        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(store.routerShownCards) else { return }
+        let first = strip.listed(store.routerShownCards).first
         store.notifier.post(id: first.map { prefix + $0.id } ?? Notifier.summaryPrefix + UUID().uuidString,
                             title: "While you were away", subtitle: "", body: line, quiet: false)
     }

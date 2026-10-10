@@ -65,9 +65,8 @@ struct RouterPage: Equatable {
                      summaries: [RouterSummary] = []) -> RouterPage {
         let open = cards.filter(\.isOpen)
         var page = RouterPage()
-        // A turn isn't done while its session still has subagents or commands running: it shows as working until they end.
-        let running = Set(working.filter { !$0.tasks.isEmpty }.map(\.id))
-        page.needs = open.filter { $0.kind != .waiting && !($0.kind == .done && running.contains($0.sessionID)) }.sorted(by: ranked)
+        let tasks = Dictionary(working.map { ($0.id, $0.tasks) }, uniquingKeysWith: +)
+        page.needs = open.filter { $0.kind != .waiting && shows($0, tasks: tasks) }.sorted(by: ranked)
         // A session that is working again shows as working.
         let busy = Set(working.map(\.id))
         page.waiting = open.filter { $0.kind == .waiting && !busy.contains($0.sessionID) }.sorted(by: newestFirst)
@@ -76,6 +75,13 @@ struct RouterPage: Equatable {
         page.history = history
         page.summaries = latest(summaries, working: working)
         return page
+    }
+
+    /// Whether a card is on the page (and so the keys, the pick and the away strip have it): a turn isn't done while its
+    /// session still has subagents or commands running (`tasks`, by session, as the Working rows have them), it shows as
+    /// working until they end.
+    static func shows(_ card: RouterCard, tasks: [String: [ClaudeTask]]) -> Bool {
+        !(card.isOpen && card.kind == .done && !(tasks[card.sessionID] ?? []).isEmpty)
     }
 
     /// Under each working session's row: its newest summary (the last of those at the same time). A session no longer working
@@ -123,6 +129,15 @@ extension Store {
     var routerPage: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory,
               summaries: router.summaries)
+    }
+
+    /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
+    var routerTasks: [String: [ClaudeTask]] { claudeTasks.filter { claudeSessions[$0.key]?.running != true } }
+
+    /// The Router's cards less those the page doesn't show (`RouterPage.shows`): what the keys and the away strip go by.
+    var routerShownCards: [RouterCard] {
+        let tasks = routerTasks
+        return router.cards.filter { RouterPage.shows($0, tasks: tasks) }
     }
 
     /// The page's zones alone: what the live part of the page redraws on, without the history.

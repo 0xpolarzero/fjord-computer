@@ -56,6 +56,7 @@ import UserNotifications
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
+        reopenTransfer(store)
         // What needs you, then the finished turns, then Earlier: not the newest first, which puts a finished turn second.
         let (needs, done, earlier) = model.sections(store)
         let listed = (needs + done + earlier).map(\.id)
@@ -70,6 +71,41 @@ import UserNotifications
         // At the bottom it stays there; ↑ walks back the same way.
         #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == listed.last)
         #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed[listed.count - 2])
+    }
+
+    /// The demo's finished turn whose session is idle, open again: its only open one is from a session still running things.
+    private func reopenTransfer(_ store: Store) {
+        guard let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-transfer" && $0.kind == .done }) else { return }
+        store.router.cards[i].addressedAt = nil
+        store.router.cards[i].addressedBy = nil
+    }
+
+    @Test func aFinishedTurnNotShownWhileItsSessionRunsThingsIsNotWalkedPickedNorCounted() {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        let hidden = store.openRouterCards.first { $0.sessionID == "local_demo-ci" && $0.kind == .done }!
+        #expect(!(store.claudeTasks["local_demo-ci"] ?? []).isEmpty)
+        #expect(!store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(!model.cards(store).contains { $0.id == hidden.id })
+        // The arrows never land on it, a pick on it moves off, and Return and Space can't reach it.
+        for _ in 0...model.cards(store).count {
+            #expect(keys.key(key(kVK_DownArrow), responder: nil))
+            #expect(model.selection != hidden.id)
+        }
+        model.selection = hidden.id
+        model.reconcile(store: store)
+        #expect(model.selection != hidden.id)
+        #expect(keys.key(key(kVK_Return, "\r"), responder: nil) && model.replyTo != hidden.id)
+        // Away, it isn't said to have finished, nor counted.
+        #expect(AwayStrip(since: Date(), cards: [hidden.id]).line(store.routerShownCards) == nil)
+        #expect(store.routerCounts.done == 0)
+        // Once what it ran ends, it is everywhere.
+        store.claudeTasks["local_demo-ci"] = nil
+        #expect(store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(model.cards(store).contains { $0.id == hidden.id })
+        #expect(AwayStrip(since: Date(), cards: [hidden.id]).line(store.routerShownCards) == "1 finished")
+        #expect(store.routerCounts.done == 1)
     }
 
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
@@ -171,7 +207,7 @@ import UserNotifications
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
-        let card = store.openRouterCards[1]
+        let card = model.cards(store).filter(\.isOpen)[1]
         model.select(card.id, store: store)
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil))
         #expect(model.replyTo == card.id)

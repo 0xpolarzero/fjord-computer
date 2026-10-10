@@ -184,8 +184,8 @@ struct AwayStripView: View {
 
     var body: some View {
         let attention = store.routerAttention
-        if let strip = attention.strip, let line = strip.line(store.router.cards) {
-            let listed = strip.listed(store.router.cards)
+        if let strip = attention.strip, let line = strip.line(store.routerShownCards) {
+            let listed = strip.listed(store.routerShownCards)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Image(systemName: "moon.zzz").font(.system(size: 11, weight: .medium)).foregroundStyle(CDS.Text.muted)
