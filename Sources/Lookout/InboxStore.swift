@@ -9,6 +9,11 @@ enum InboxStore {
         /// When time alone changes what matches: the next `no activity` threshold a thing crosses.
         var expires: Date?
         var entries: [InboxEntry] = []
+        /// Each category's open entries in the order they show, its unread count, and Done's entries: what the bar and the
+        /// lists read on every redraw, grouped once with `entries`.
+        var open: [UUID: [InboxEntry]] = [:]
+        var unread: [UUID: Int] = [:]
+        var done: [InboxEntry] = []
     }
 
     /// Done is always there and isn't a category. A new inbox starts with My repos: the PRs and issues in the repos you own.
@@ -30,35 +35,39 @@ extension Store {
 
     /// Every entry, memoized on `inboxRevision` and whether Jev's reading counts, until a thing crosses a `no activity`
     /// threshold.
-    var entries: [InboxEntry] {
+    var entries: [InboxEntry] { inboxEvaluated.entries }
+
+    /// The memo, evaluated again when it is out of date.
+    private var inboxEvaluated: InboxStore.Memo {
         if inboxMemo.revision == inboxRevision, inboxMemo.jev == jevReadsInbox, inboxMemo.expires.map({ Date() < $0 }) ?? true {
-            return inboxMemo.entries
+            return inboxMemo
         }
         let context = inboxContext
         let all = Array(things.values)
         let result = InboxEngine.evaluate(things: all, categories: categories, marks: marks, context: context)
-        inboxMemo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals,
-                                    expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
-                                    entries: result)
-        return result
+        var memo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals,
+                                   expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
+                                   entries: result)
+        // Open: what Jev rates more important first (unrated counts as normal), then newest first. Done: most recently done first.
+        func rank(_ e: InboxEntry) -> Int { (e.importance ?? .normal).rank }
+        memo.open = Dictionary(grouping: result.filter { !$0.isDone }, by: \.categoryID).mapValues {
+            $0.sorted { rank($0) != rank($1) ? rank($0) > rank($1) : $0.thing.updatedAt > $1.thing.updatedAt }
+        }
+        memo.unread = memo.open.mapValues { $0.filter(\.isUnread).count }
+        memo.done = result.filter(\.isDone).sorted { (marks[$0.id]?.doneAt ?? .distantPast) > (marks[$1.id]?.doneAt ?? .distantPast) }
+        inboxMemo = memo
+        return memo
     }
 
     /// Open entries of a category, what Jev rates more important first (unrated counts as normal), then newest first.
-    func entries(in category: UUID) -> [InboxEntry] {
-        func rank(_ e: InboxEntry) -> Int { (e.importance ?? .normal).rank }
-        return entries.filter { $0.categoryID == category && !$0.isDone }.sorted {
-            rank($0) != rank($1) ? rank($0) > rank($1) : $0.thing.updatedAt > $1.thing.updatedAt
-        }
-    }
+    func entries(in category: UUID) -> [InboxEntry] { inboxEvaluated.open[category] ?? [] }
 
     /// Done entries, most recently done first.
-    var doneEntries: [InboxEntry] {
-        entries.filter(\.isDone).sorted { (marks[$0.id]?.doneAt ?? .distantPast) > (marks[$1.id]?.doneAt ?? .distantPast) }
-    }
+    var doneEntries: [InboxEntry] { inboxEvaluated.done }
 
     /// The bar's number for a category: its open entries.
     func count(_ category: UUID) -> Int { entries(in: category).count }
-    func unreadCount(_ category: UUID) -> Int { entries(in: category).filter(\.isUnread).count }
+    func unreadCount(_ category: UUID) -> Int { inboxEvaluated.unread[category] ?? 0 }
 
     func markDone(_ entry: InboxEntry) {
         var m = marks[entry.id] ?? EntryMarks()
