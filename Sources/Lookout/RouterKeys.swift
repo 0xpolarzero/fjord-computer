@@ -123,6 +123,8 @@ enum RouterBanners {
 
     static func post(_ cards: [RouterCard], store: Store, windowIsKey: Bool) {
         // What can wait waits (RouterAttention.swift).
+        // Turned off meanwhile (a triage that came back after, say): nothing.
+        guard store.router.enabled else { return }
         let now = store.routerAttention.admit(cards)
         guard !windowIsKey, store.settings.notifications, !store.isSnoozed else { return }
         for card in now {
@@ -137,7 +139,7 @@ enum RouterBanners {
 
     /// A waiting session's wait is over: it is ready to continue.
     static func postReady(_ card: RouterCard, store: Store, windowIsKey: Bool) {
-        guard store.routerAttention.admitReady(card), !windowIsKey, store.settings.notifications, !store.isSnoozed, let triage = card.triage,
+        guard store.router.enabled, store.routerAttention.admitReady(card), !windowIsKey, store.settings.notifications, !store.isSnoozed, let triage = card.triage,
               let message = RouterWaits.message(triage) else { return }
         store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "Ready to continue · \(store.routerProject(card).name)",
                             body: message, quiet: false)

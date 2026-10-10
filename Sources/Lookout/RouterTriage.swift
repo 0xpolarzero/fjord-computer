@@ -405,6 +405,13 @@ extension Claude {
 
     fileprivate func forget(_ id: String) { attempted[id] = nil }
 
+    /// The Router was turned off: the triages under way are stopped (asked again once it is on), and no banner held for
+    /// one comes.
+    func turnedOff() {
+        cancelAll()
+        heldBanners = []
+    }
+
     /// Whether this text was asked about for the card already; records it as asked if not.
     fileprivate func firstAsk(_ id: String, source: String) -> Bool {
         guard attempted[id] != source else { return false }
@@ -455,7 +462,7 @@ extension Store {
     /// A stuck turn's banner held for its triage, which didn't come in time (or came to nothing): announced as the card is
     /// now, if it still needs you and isn't its circles streak again.
     private func releaseBanner(_ id: String) {
-        guard routerTriager.heldBanners.remove(id) != nil, let card = router.cards.first(where: { $0.id == id }), card.isOpen,
+        guard routerTriager.heldBanners.remove(id) != nil, router.enabled, let card = router.cards.first(where: { $0.id == id }), card.isOpen,
               card.kind.needsYou, !RouterCircles.again(card, in: router.cards) else { return }
         onNewRouterCards?([card])
     }
@@ -559,7 +566,7 @@ extension Store {
     /// that needs you only now, one whose banner waited for this, and one that came with no banner (away, at the urgency
     /// it had untriaged), weighed again now that Jev rated it. Never twice: RouterAttention keeps which had theirs.
     func applyTriage(_ triage: RouterTriage, to id: String) {
-        guard let (i, session) = currentTurnCard(id) else { return }
+        guard router.enabled, let (i, session) = currentTurnCard(id) else { return }
         var state = router
         let before = state.cards[i]
         let blocked = session.summary?.blocked ?? (before.kind == .stuck)

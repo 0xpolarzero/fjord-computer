@@ -16,6 +16,7 @@ import Testing
 
     private func store() -> (Store, Idle, () -> [String]) {
         let s = InboxFixture.store([])
+        s.router.enabled = true
         s.settings.notifications = true
         let idle = Idle()
         s.routerAttention.idleSeconds = { idle.seconds }

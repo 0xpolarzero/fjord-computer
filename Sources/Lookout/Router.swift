@@ -828,6 +828,8 @@ extension Store {
             routerReconcilePending = true
         }
         router = state
+        // Off: a triage under way comes to nothing, and no banner held for one comes.
+        if !on { routerTriager.turnedOff() }
         applyRouterSwitch(install: true)
         if on {
             feedRouter(now: now)

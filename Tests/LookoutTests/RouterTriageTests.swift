@@ -229,6 +229,46 @@ import Testing
         #expect(counter.calls == 1)
     }
 
+    @Test func turningTheRouterOffDropsATriageUnderWayAndItsBanner() async {
+        final class Gate { var release: CheckedContinuation<Void, Never>?; var asked = 0 }
+        let a = session("a")
+        let gate = Gate()
+        let (s, _) = store(sessions: [a]) { _, _ in self.answers(state: "approval", sentences: [0.95]) }
+        let answer = s.routerTriager.asker!
+        s.routerTriager.asker = { questions, state in
+            gate.asked += 1
+            if gate.asked == 1 { await withCheckedContinuation { gate.release = $0 } }
+            return try await answer(questions, state)
+        }
+        s.routerTriager.rescanned = true
+        s.router.cards = [turnCard(a)]
+        s.settings.notifications = true
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.identifier) }
+        var announced: [String] = []
+        s.onNewRouterCards = { [weak s] in
+            announced += $0.map(\.id)
+            if let s { RouterBanners.post($0, store: s, windowIsKey: false) }
+        }
+        s.triageTurns()
+        while gate.release == nil { await Task.yield() }
+        // Off while Jev answers: his answer changes nothing and says nothing.
+        s.setRouterEnabled(false)
+        gate.release?.resume()
+        await s.routerTriager.idle()
+        #expect(s.router.cards[0].triage == nil && s.router.cards[0].kind == .done && announced.isEmpty)
+        // Nor does a banner go while it is off.
+        var asks = s.router.cards[0]
+        asks.kind = .approval
+        RouterBanners.post([asks], store: s, windowIsKey: false)
+        #expect(posted.isEmpty)
+        // On again: the card is asked about anew.
+        s.router.enabled = true
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(gate.asked == 2 && s.router.cards[0].kind == .approval && announced == ["a#t2"] && posted == [RouterBanners.prefix + "a#t2"])
+    }
+
     @Test func noKeyNoCallAndAFailureLeavesTheCardAsItWasWithoutRetrying() async {
         let a = session("a")
         let s = InboxFixture.store([])
