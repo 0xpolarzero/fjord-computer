@@ -60,12 +60,14 @@ struct RouterPage: Equatable {
              summaries: summaries)
     }
 
-    /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`).
+    /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`). `tasks`: what
+    /// sessions whose turn is over still run (`Store.routerTasks`, the map the keys and the counts go by too, a muted
+    /// project's sessions with the rest); without it, the Working rows'.
     static func make(cards: [RouterCard], working: [AgentRow], asks: [RouterAskBack], history: [Entry],
-                     summaries: [RouterSummary] = []) -> RouterPage {
+                     summaries: [RouterSummary] = [], tasks: [String: [ClaudeTask]]? = nil) -> RouterPage {
         let open = cards.filter(\.isOpen)
         var page = RouterPage()
-        let tasks = Dictionary(working.map { ($0.id, $0.tasks) }, uniquingKeysWith: +)
+        let tasks = tasks ?? Dictionary(working.map { ($0.id, $0.tasks) }, uniquingKeysWith: +)
         page.needs = open.filter { $0.kind != .waiting && shows($0, tasks: tasks) }.sorted(by: ranked)
         // A session that is working again shows as working.
         let busy = Set(working.map(\.id))
@@ -128,7 +130,7 @@ extension Store {
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory,
-              summaries: router.summaries)
+              summaries: router.summaries, tasks: routerTasks)
     }
 
     /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
@@ -143,7 +145,7 @@ extension Store {
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],
-              summaries: router.summaries)
+              summaries: router.summaries, tasks: routerTasks)
     }
 }
 

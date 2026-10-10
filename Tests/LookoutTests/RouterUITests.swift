@@ -120,6 +120,22 @@ import UserNotifications
         #expect(store.routerCounts.done == 1)
     }
 
+    @Test func mutingAProjectWhoseFinishedSessionStillRunsThingsKeepsItsCardHiddenOnThePageAsForTheKeys() {
+        let store = demo()
+        let model = RouterModel()
+        let hidden = store.openRouterCards.first { $0.sessionID == "local_demo-ci" && $0.kind == .done }!
+        store.setFolderMuted(store.claudeSessions["local_demo-ci"]!.folderKey, true)
+        // Its Working row goes with the mute; what it runs doesn't, and the page goes by that as the keys and counts do.
+        #expect(!store.routerWorkingRows.contains { $0.id == "local_demo-ci" })
+        #expect(!store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(!store.routerZones.needs.contains { $0.id == hidden.id })
+        #expect(!model.cards(store).contains { $0.id == hidden.id })
+        #expect(store.routerCounts.done == 0)
+        store.claudeTasks["local_demo-ci"] = nil
+        #expect(store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(model.cards(store).contains { $0.id == hidden.id })
+    }
+
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
         let store = demo()
         let model = RouterModel()
