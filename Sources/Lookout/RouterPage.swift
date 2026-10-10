@@ -150,36 +150,39 @@ struct RouterPageView: View {
 
 // MARK: - History
 
-/// The timeline above the zones: opens at the bottom, keeps its place when something arrives above, loads lazily.
+/// The timeline above the zones: opens at the bottom, keeps its place when something arrives above, loads lazily. A line is
+/// drawn from its own values (what it shows, whether it is open or picked, the minute), so it redraws only when one of them
+/// changes; what it shows of a session is in small views of their own, which redraw as the sessions do.
 private struct RouterHistory: View {
     let store: Store
-    @Bindable var model: RouterModel
+    let model: RouterModel
     @Environment(\.routerGutter) private var gutter
 
     var body: some View {
         let entries = store.routerHistory
+        let expanded = model.expanded, picked = model.selection, highlighted = model.highlighted
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if !entries.isEmpty {
-                        Text("History").cdsText((12, 16), .medium, CDS.Text.muted)
-                            .padding(.leading, CDS.Transcript.textInset)
-                            .padding(.bottom, 14)
-                            .accessibilityAddTraits(.isHeader)
+                // One clock for every age in the history, on the minute.
+                MinuteTicking { now in
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        if !entries.isEmpty {
+                            Text("History").cdsText((12, 16), .medium, CDS.Text.muted)
+                                .padding(.leading, CDS.Transcript.textInset)
+                                .padding(.bottom, 12)
+                                .accessibilityAddTraits(.isHeader)
+                        }
+                        ForEach(entries) { entry in
+                            row(entry, now: now, open: expanded.contains(entry.id), marked: entry.id == picked || entry.id == highlighted)
+                        }
+                        Color.clear.frame(height: 1).id(RouterModel.endID)
                     }
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { i, entry in
-                        row(entry)
-                            // A line sits close to its neighbours.
-                            .padding(.top, i == 0 ? 0 : 2)
-                            .id(entry.id)
-                    }
-                    Color.clear.frame(height: 1).id(RouterModel.endID)
+                    .frame(maxWidth: CDS.Transcript.measure, alignment: .leading)
+                    .padding(.horizontal, gutter)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, CDS.Transcript.fade)
+                    .padding(.bottom, 18)
                 }
-                .frame(maxWidth: CDS.Transcript.measure, alignment: .leading)
-                .padding(.horizontal, gutter)
-                .frame(maxWidth: .infinity)
-                .padding(.top, CDS.Transcript.fade)
-                .padding(.bottom, 20)
             }
             .cdsTopFade()
             .defaultScrollAnchor(.bottom)
@@ -198,22 +201,25 @@ private struct RouterHistory: View {
         }
     }
 
-    @ViewBuilder private func row(_ entry: RouterPage.Entry) -> some View {
+    @ViewBuilder private func row(_ entry: RouterPage.Entry, now: Date, open: Bool, marked: Bool) -> some View {
         switch entry {
         case .card(let card):
-            CardView(store: store, model: model, card: card, expanded: model.expanded.contains(card.id))
+            HistoryCardLine(card: card, now: now, open: open, marked: marked, store: store, model: model).equatable()
         case .decision(let decision):
-            HistoryDecisionLine(store: store, model: model, decision: decision)
+            HistoryDecisionLine(decision: decision, now: now, open: open, store: store, model: model).equatable()
         case .overview(let overview):
-            HistoryOverviewLine(overview: overview)
+            HistoryOverviewLine(overview: overview, now: now).equatable()
         }
     }
 }
 
 /// An overview in the history: one line (icon, the text, when); the whole text on hover.
-private struct HistoryOverviewLine: View {
+private struct HistoryOverviewLine: View, Equatable {
     let overview: RouterOverview
+    let now: Date
     @State private var hovered = false
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.overview == b.overview && a.now == b.now }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -222,7 +228,7 @@ private struct HistoryOverviewLine: View {
             Text(overview.text).cdsText(CDS.Transcript.text, .regular, hovered ? CDS.Text.secondary : CDS.Text.muted)
                 .lineLimit(1).truncationMode(.tail).layoutPriority(1)
             Spacer(minLength: 8)
-            Text(shortAgo(overview.at)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+            Text(shortAgo(overview.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
         }
         .padding(.horizontal, CDS.Transcript.statusPad)
         .frame(height: CDS.Transcript.statusRow)
@@ -232,28 +238,33 @@ private struct HistoryOverviewLine: View {
         .help(overview.text)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Overview")
-        .accessibilityValue("\(overview.text), \(AgentRow.spokenAge(Date().timeIntervalSince(overview.at))) ago")
+        .accessibilityValue("\(overview.text), \(AgentRow.spokenAge(now.timeIntervalSince(overview.at))) ago")
     }
 }
 
 /// A run in the history: one line (icon, what set it off, what was done, when), opening to show the trigger, what was done and
 /// its links (the session, the change with its Revert).
-private struct HistoryDecisionLine: View {
-    let store: Store
-    @Bindable var model: RouterModel
+private struct HistoryDecisionLine: View, Equatable {
     let decision: RouterDecision
+    let now: Date
+    let open: Bool
+    let store: Store
+    let model: RouterModel
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.decision == b.decision && a.now == b.now && a.open == b.open }
+
     private var key: String { decision.id.uuidString }
-    private var open: Bool { model.expanded.contains(key) }
-    /// While a typed run is under way, how far it is (classifying, sending…); else how it ended.
+    /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
+    /// the dispatcher.
     private var status: String {
         decision.outcome == .pending ? store.routerDispatcher.progress[decision.id].map { $0 + "…" } ?? decision.summary : decision.summary
     }
 
     var body: some View {
+        let status = status
         VStack(alignment: .leading, spacing: 0) {
             Button { toggle() } label: {
                 HStack(spacing: 8) {
@@ -265,7 +276,7 @@ private struct HistoryDecisionLine: View {
                     Text("· \(status)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
-                    Text(shortAgo(decision.at)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                    Text(shortAgo(decision.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
                 }
                 .padding(.horizontal, CDS.Transcript.statusPad)
                 .frame(height: CDS.Transcript.statusRow)
@@ -283,13 +294,24 @@ private struct HistoryDecisionLine: View {
             .accessibilityLabel(decision.triggerText)
             .accessibilityValue("\(status), \(open ? "expanded" : "collapsed")")
 
-            if open { details.transition(.opacity) }
+            if open { DecisionDetails(decision: decision, store: store) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity)
     }
 
-    private var details: some View {
+    private func toggle() {
+        withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) {
+            if open { model.expanded.remove(key) } else { model.expanded.insert(key) }
+        }
+    }
+}
+
+/// An open run's details: what set it off, its reply, what was done, its changes and its sessions.
+private struct DecisionDetails: View {
+    let decision: RouterDecision
+    let store: Store
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             CDSProse(text: decision.triggerText, color: CDS.Text.secondary, inset: false)
             if let reply = decision.reply { CDSProse(text: reply, color: CDS.Text.primary, inset: false) }
@@ -311,17 +333,165 @@ private struct HistoryDecisionLine: View {
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).fill(CDS.Fill.field))
-        .overlay { RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
-        .padding(.top, 6).padding(.bottom, 4)
+        .historyDetails()
+    }
+}
+
+/// An addressed card in the history: a dim line (its session's glyph, title, how it was addressed, when) opening to its kind,
+/// project and text, and Reopen. Clicking it shows it in full with the composer ready to reply to it; hovering it shows
+/// Open in Claude in the time's place.
+private struct HistoryCardLine: View, Equatable {
+    let card: RouterCard
+    let now: Date
+    let open: Bool
+    let marked: Bool
+    let store: Store
+    let model: RouterModel
+    @State private var hovered = false
+    @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.card == b.card && a.now == b.now && a.open == b.open && a.marked == b.marked
     }
 
-    private func toggle() {
-        withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) {
-            if open { model.expanded.remove(key) } else { model.expanded.insert(key) }
+    private var when: Date { card.addressedAt ?? card.createdAt }
+    private var how: String {
+        if let note = card.addressedNote { return "addressed by your message: \(RouterDecision.clip(note, 60))" }
+        return card.addressedBy?.label ?? "Addressed"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) { model.tap(card.id, store: store) }
+            } label: {
+                HStack(spacing: 8) {
+                    CardGlyph(store: store, sessionID: card.sessionID, symbol: card.kind.symbol)
+                    Text(card.title).cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
+                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    Text("· \(how)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    StatusCaret(hot: hovered, open: open)
+                    Spacer(minLength: 8)
+                    // Open in Claude takes the time's place on hover, so the line lines up with the runs around it.
+                    Text(shortAgo(when, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                        .opacity(hovered ? 0 : 1)
+                        .overlay(alignment: .trailing) {
+                            HoverOpen(title: card.title, shown: hovered) { store.openAgent(card.sessionID) }
+                        }
+                }
+                .padding(.horizontal, CDS.Transcript.statusPad)
+                .frame(height: CDS.Transcript.statusRow)
+                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+                .overlay {
+                    RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                        .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .accessibilityLabel("\(card.kind.label): \(card.title)")
+            .accessibilityValue("\(how), \(AgentRow.spokenAge(now.timeIntervalSince(when))) ago, \(open ? "expanded" : "collapsed")")
+            .accessibilityAddTraits(open ? .isSelected : [])
+            .accessibilityHint("Shows it in full and replies to it")
+            .accessibilityAction(named: "Open in Claude") { store.openAgent(card.sessionID) }
+            .accessibilityAction(named: "Reopen") { model.reopen(card.id, store: store) }
+
+            if open { CardDetails(card: card, store: store, model: model) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover { hovered = $0 }
+        .contextMenu { CardSessionMenu(store: store, sessionID: card.sessionID) }
+    }
+}
+
+/// An open history card's details: its kind, project and origin, its text, and Reopen.
+private struct CardDetails: View {
+    let card: RouterCard
+    let store: Store
+    let model: RouterModel
+
+    var body: some View {
+        let project = store.routerProject(card)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                KindTag(kind: card.kind)
+                ProjectLabel(name: project.name, color: project.color)
+                    .cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                if let origin = card.origin { OriginTag(origin: origin) }
+            }
+            CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
+            if card.addressedBy != .superseded && card.addressedBy != .gone {
+                ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
+                    model.reopen(card.id, store: store)
+                }
+            }
+        }
+        .historyDetails()
+    }
+}
+
+/// A history card's session glyph, dimmed; its kind's symbol once the session is gone. A view of its own: the sessions it
+/// reads change all the time, and only it redraws for them.
+private struct CardGlyph: View {
+    let store: Store
+    let sessionID: String
+    let symbol: String
+
+    var body: some View {
+        if let session = store.sessionRow(sessionID) {
+            SessionGlyph(row: session, size: 16, dot: false).opacity(0.7)
+        } else {
+            Image(systemName: symbol).font(.system(size: 10, weight: .medium))
+                .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
+        }
+    }
+}
+
+/// A card's session menu, in a view of its own for the same reason.
+private struct CardSessionMenu: View {
+    let store: Store
+    let sessionID: String
+
+    var body: some View {
+        if let session = store.sessionRow(sessionID) { SessionMenu(row: session, store: store) }
+    }
+}
+
+/// Open in Claude, shown while its card is hovered; its room is kept so nothing moves.
+private struct HoverOpen: View {
+    let title: String
+    let shown: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up.right.square").font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CDS.Text.secondary)
+                .frame(width: 22, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(CDS.Fill.ghostHover))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open in Claude")
+        .accessibilityLabel("Open \(title) in Claude")
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(shown)
+        .animation(.easeOut(duration: 0.12), value: shown)
+        .accessibilityHidden(!shown)
+    }
+}
+
+private extension View {
+    /// An open history line's box under it.
+    func historyDetails() -> some View {
+        padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).fill(CDS.Fill.field))
+            .overlay { RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
+            .padding(.top, 6).padding(.bottom, 4)
     }
 }
 
@@ -608,10 +778,9 @@ struct OriginTag: View {
 
 // MARK: - Card
 
-/// A card, the same in Needs you and in the history. Open, it is warm and solid: a summary row (icon, title, kind, a line of
-/// what it asks, project, time) and, for the one shown in full, its form or plan to answer in place, or its text and Mark
-/// handled. Resolved, it is a dim line (icon, title, how it was addressed, when) opening to its text and Reopen. Clicking
-/// its header shows it in full with the composer ready to reply to it; hovering it shows Open in Claude.
+/// An open card in Needs you, warm and solid: a summary row (icon, title, kind, a line of what it asks, project, time) and,
+/// for the one shown in full, its form or plan to answer in place, or its text and Mark handled. Clicking its header shows it
+/// in full with the composer ready to reply to it; hovering it shows Open in Claude. (Addressed, it is a `HistoryCardLine`.)
 private struct CardView: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -627,12 +796,7 @@ private struct CardView: View {
     /// Wide enough for an open card's summary on one line.
     private var wide: Bool { columnWidth >= 620 }
     private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
-    private var canReopen: Bool { card.addressedBy != .superseded && card.addressedBy != .gone }
-    private var how: String {
-        if let note = card.addressedNote { return "addressed by your message: \(RouterDecision.clip(note, 60))" }
-        return card.addressedBy?.label ?? "Addressed"
-    }
-    private var when: Date { card.isOpen ? card.createdAt : card.addressedAt ?? card.createdAt }
+    private var when: Date { card.createdAt }
 
     /// What the card asks, on one line.
     private var excerpt: AttributedString {
@@ -641,9 +805,9 @@ private struct CardView: View {
     }
 
     var body: some View {
-        Group { if card.isOpen { open } else { resolved } }
+        open
             .onHover { hovered = $0 }
-            .contextMenu { if let s = store.sessionRow(card.sessionID) { SessionMenu(row: s, store: store) } }
+            .contextMenu { CardSessionMenu(store: store, sessionID: card.sessionID) }
     }
 
     /// The header: clicking it shows the card in full and arms the reply.
@@ -654,35 +818,15 @@ private struct CardView: View {
             .buttonStyle(.plain)
             .focused($focused)
             .accessibilityLabel("\(card.kind.label): \(card.title)")
-            .accessibilityValue(card.isOpen
-                ? (expanded ? "expanded" : "collapsed")
-                : "\(how), \(AgentRow.spokenAge(Date().timeIntervalSince(when))) ago, \(expanded ? "expanded" : "collapsed")")
+            .accessibilityValue(expanded ? "expanded" : "collapsed")
             .accessibilityAddTraits(expanded ? .isSelected : [])
             .accessibilityHint("Shows it in full and replies to it")
             .accessibilityAction(named: "Open in Claude") { openInClaude() }
     }
 
-    /// Open in Claude, shown while the card is hovered; its room is kept so nothing moves.
-    private var hoverOpen: some View {
-        Button { openInClaude() } label: {
-            Image(systemName: "arrow.up.right.square").font(.system(size: 12, weight: .medium))
-                .foregroundStyle(CDS.Text.secondary)
-                .frame(width: 22, height: 22)
-                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(CDS.Fill.ghostHover))
-                .contentShape(Rectangle())
-        }
-            .buttonStyle(.plain)
-            .help("Open in Claude")
-            .accessibilityLabel("Open \(card.title) in Claude")
-            .opacity(hovered ? 1 : 0)
-            .allowsHitTesting(hovered)
-            .animation(.easeOut(duration: 0.12), value: hovered)
-            .accessibilityHidden(!hovered)
-    }
+    private var hoverOpen: some View { HoverOpen(title: card.title, shown: hovered) { openInClaude() } }
 
-    private func openInClaude() {
-        if card.isOpen { model.open(card.id, store: store) } else { store.openAgent(card.sessionID) }
-    }
+    private func openInClaude() { model.open(card.id, store: store) }
 
     // MARK: Open
 
@@ -792,68 +936,6 @@ private struct CardView: View {
         } else {
             CDSProse(text: card.text, color: card.kind == .stuck ? CDS.Text.danger : CDS.Text.primary, inset: false)
         }
-    }
-
-    // MARK: Resolved
-
-    private var resolved: some View {
-        let project = store.routerProject(card)
-        return VStack(alignment: .leading, spacing: 0) {
-            header {
-                HStack(spacing: 8) {
-                    if let session = store.sessionRow(card.sessionID) {
-                        SessionGlyph(row: session, size: 16, dot: false).opacity(0.7)
-                    } else {
-                        Image(systemName: card.kind.symbol).font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
-                    }
-                    Text(card.title).cdsText(CDS.Transcript.text, .regular, hovered || expanded ? CDS.Text.secondary : CDS.Text.muted)
-                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
-                    Text("· \(how)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
-                    StatusCaret(hot: hovered, open: expanded)
-                    Spacer(minLength: 8)
-                    // Open in Claude takes the time's place on hover, so the line lines up with the runs around it.
-                    Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
-                        .opacity(hovered ? 0 : 1)
-                        .overlay(alignment: .trailing) { hoverOpen }
-                }
-                .padding(.horizontal, CDS.Transcript.statusPad)
-                .frame(height: CDS.Transcript.statusRow)
-                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
-                .contentShape(Rectangle())
-                .overlay {
-                    RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                        .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
-                }
-            }
-            .accessibilityAction(named: "Reopen") { model.reopen(card.id, store: store) }
-
-            if expanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        KindTag(kind: card.kind)
-                        ProjectLabel(name: project.name, color: project.color)
-                            .cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
-                        if let origin = card.origin { OriginTag(origin: origin) }
-                    }
-                    CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
-                    if canReopen {
-                        ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
-                            model.reopen(card.id, store: store)
-                        }
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).fill(CDS.Fill.field))
-                .overlay { RoundedRectangle(cornerRadius: CDS.Transcript.stepCardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
-                .padding(.top, 6).padding(.bottom, 4)
-                .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity)
     }
 }
 
