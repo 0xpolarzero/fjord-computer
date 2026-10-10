@@ -160,6 +160,34 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: other.path).contains { $0.hasPrefix("state.json.bak-") })
     }
 
+    @Test func oneElementThatNoLongerDecodesIsLostAloneNotItsWholeList() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let good = InboxFixture.category()
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try enc.encode(value), as: UTF8.self) }
+        let summary = RouterSummary(at: Date(timeIntervalSince1970: 1_800_000_000), text: "all good")
+        try Data("""
+        {"settings": {"pollInterval": 60, "notifications": true},
+         "categories": [\(try json(good)), {"name": 5}],
+         "groups": [{"name": "broken"}, \(try json(InboxGroup(name: "Friends", kind: .people, members: ["octo"])))],
+         "things": {"pr:a/one#1": \(try json(InboxFixture.pr(1))), "pr:a/one#2": {"id": 2}},
+         "marks": {"pr:a/one#1": {"seen": ["k"]}, "pr:a/one#2": {"seen": 5}},
+         "router": {"overviews": [\(try json(summary)), {"at": 5}], "decisions": [{"at": 5}], "changes": [{"nope": true}]}}
+        """.utf8).write(to: file)
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        #expect(store.categories.map(\.id) == [good.id])
+        #expect(store.groups.map(\.name) == ["Friends"])
+        #expect(store.things.keys.sorted() == ["pr:a/one#1"] && store.marks.keys.sorted() == ["pr:a/one#1"])
+        #expect(store.router.summaries == [summary])
+        // What was lost is kept aside, in the file as it was.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).contains { $0.hasPrefix("state.json.bak-") })
+    }
+
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

@@ -129,11 +129,12 @@ struct RouterState: Codable, Equatable {
         enabledAt = try? c.decodeIfPresent(Date.self, forKey: .enabledAt)
         // Card by card: one this version can't read is left out, not every card.
         cards = ((try? c.decodeIfPresent([Lossy<RouterCard>].self, forKey: .cards)) ?? []).compactMap(\.value)
-        changes = (try? c.decodeIfPresent([LookoutChange].self, forKey: .changes)) ?? []
+        // The same for the changes, decisions and summaries.
+        changes = ((try? c.decodeIfPresent([Lossy<LookoutChange>].self, forKey: .changes)) ?? []).compactMap(\.value)
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
         if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
-        decisions = (try? c.decodeIfPresent([RouterDecision].self, forKey: .decisions)) ?? []
-        summaries = (try? c.decodeIfPresent([RouterSummary].self, forKey: .summaries)) ?? []
+        decisions = ((try? c.decodeIfPresent([Lossy<RouterDecision>].self, forKey: .decisions)) ?? []).compactMap(\.value)
+        summaries = ((try? c.decodeIfPresent([Lossy<RouterSummary>].self, forKey: .summaries)) ?? []).compactMap(\.value)
         seen = (try? c.decodeIfPresent([String: String].self, forKey: .seen)) ?? [:]
         waits = (try? c.decodeIfPresent([String: Int64].self, forKey: .waits)) ?? [:]
         waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]

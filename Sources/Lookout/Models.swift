@@ -145,14 +145,28 @@ struct PersistedState: Codable {
                 return nil
             }
         }
+        // Element by element: one this build can't read is lost alone, not the whole list (and the file is kept aside).
+        func each<T: Decodable>(_ key: CodingKeys) -> [T]? {
+            guard let all: [Lossy<T>] = part(key) else { return nil }
+            let read = all.compactMap(\.value)
+            if read.count < all.count { dropped.append("\(all.count - read.count) of \(key.stringValue)") }
+            // None read at all: as if there were none (the default categories, GitHub's section).
+            return read.isEmpty && !all.isEmpty ? nil : read
+        }
+        func eachByKey<T: Decodable>(_ key: CodingKeys) -> [String: T]? {
+            guard let all: [String: Lossy<T>] = part(key) else { return nil }
+            let read = all.compactMapValues(\.value)
+            if read.count < all.count { dropped.append("\(all.count - read.count) of \(key.stringValue)") }
+            return read
+        }
         settings = part(.settings) ?? AppSettings()
         agents = part(.agents)
         router = part(.router)
-        categories = part(.categories)
-        groups = part(.groups)
-        categorySections = part(.categorySections)
-        things = part(.things)
-        marks = part(.marks)
+        categories = each(.categories)
+        groups = each(.groups)
+        categorySections = each(.categorySections)
+        things = eachByKey(.things)
+        marks = eachByKey(.marks)
         categoryBaselines = part(.categoryBaselines)
         ownedRepos = part(.ownedRepos)
         contributedRepos = part(.contributedRepos)
