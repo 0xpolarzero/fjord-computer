@@ -156,7 +156,7 @@ extension SessionLauncher.Effects {
                 tools.prepared[peer] = prepared
                 defer { tools.endTurn() }
                 return try await RouterSender.send(binary: binary, cwd: home, to: peer, text: prepared.text, tools: tools,
-                                                   inbox: await store.relayInbox(for: peer))
+                                                   inbox: await store.relayInbox(forSigned: prepared.text))
             })
     }
 }

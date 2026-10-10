@@ -616,6 +616,25 @@ import Testing
         withExtendedLifetime(f) {}
     }
 
+    /// The live bug: callers hold the peer's name ("fix the tests"), the plugin's inbox is the CLI session id the text is
+    /// signed for. The delivery must go to the folder of the signed target, not of the name.
+    @Test func aPeerNamedDeliveryGoesToTheInboxOfTheSessionTheTextIsSignedFor() async throws {
+        let dir = TempDir()
+        let (s, _, f) = setup()
+        let cli = "5e2e5d8c-a1af-4b40-b288-3657cdb175cf"
+        let signed = RelaySigner.sign(body: "hello", target: cli, key: "k1")
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        let inbox = RelayInbox(root: dir.path("relay"))
+        let tools = RouterTools(store: s)
+        tools.beginTurn("hello")
+        tools.prepared["reply with exactly the word pong"] = Prepared(text: signed, original: "hello", rephrased: false)
+        let plugin = fakePlugin(inbox, session: cli, nonce: nonce, answer: "ok")
+        try await RouterSender.send(binary: "/nonexistent/claude", cwd: dir.url, to: "reply with exactly the word pong", text: signed,
+                                    tools: tools, inbox: inbox)
+        #expect(await plugin.value == signed)
+        withExtendedLifetime(f) {}
+    }
+
     @Test func aDeliveryTheGateRefusesIsNotSent() async throws {
         let dir = TempDir()
         let (s, _, f) = setup()

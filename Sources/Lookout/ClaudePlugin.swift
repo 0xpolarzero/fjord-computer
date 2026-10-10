@@ -955,6 +955,13 @@ extension Store {
         return capable ? RelayInbox(root: paths.relay) : nil
     }
 
+    /// The inbox for a signed text, by the session it is signed for (its CLI session id): callers hold the peer's name, which
+    /// is not the id the plugin's presence and inbox folder go by.
+    func relayInbox(forSigned text: String) async -> RelayInbox? {
+        guard let target = RelayInbox.header(of: text)?.target else { return nil }
+        return await relayInbox(for: target)
+    }
+
     /// Whether `cli`'s plugin applies a model and an effort carried in a message (it says `settings-v1`, under the key held
     /// now). An older plugin doesn't: nothing with settings is sent to it.
     func supportsSettings(_ cli: String) async -> Bool {

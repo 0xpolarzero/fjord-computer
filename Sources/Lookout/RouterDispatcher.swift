@@ -589,7 +589,7 @@ extension RouterDispatcher.Effects {
                 }
                 try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                 return try await RouterSender.send(binary: binary, cwd: home, to: delivery.to, text: delivery.text, tools: tools,
-                                                   inbox: await store.relayInbox(for: delivery.to))
+                                                   inbox: await store.relayInbox(forSigned: delivery.text))
             },
             answer: { [weak dispatcher] tools, card, answers in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }

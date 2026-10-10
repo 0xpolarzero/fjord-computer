@@ -723,6 +723,30 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         #expect(ClaudePlugin.inboxSessions(in: dir.url, registry: reg, keyID: id) { _ in true } == ["cli-v1", "cli-v2"])
     }
 
+    /// The shape of a real presence file (a desktop session, the CLI id as file name and `sessionId`; Claude Code's registry
+    /// has the same id with the desktop one in `hostSessionId`), as `live` must read it.
+    @Test func aRealDesktopSessionPresenceIsLiveWithItsCapabilities() throws {
+        let dir = TempDir()
+        let cli = "5e2e5d8c-a1af-4b40-b288-3657cdb175cf"
+        let json = """
+        {"state":"live","sessionId":"\(cli)","pid":18278,"startedAt":1791657930802,"keyId":"\(ClaudePlugin.keyID(of: key))",\
+        "renewedAt":\(Int64(ClaudePlugin.leaseNow.timeIntervalSince1970 * 1000)),"activation":"5fe4adb1-2fb4-44ff-9d77-f7e32f17b64d",\
+        "capabilities":["inbox-v1","settings-v1"]}
+        """
+        try Data(json.utf8).write(to: dir.path(cli))
+        let reg: [Int32: [ClaudePeers.Registered]] = [18278: [.init(sessionID: cli, startedAt: 1791657930802)]]
+        let id = ClaudePlugin.keyID(of: key)
+        #expect(ClaudePlugin.inboxSessions(in: dir.url, registry: reg, keyID: id) { _ in true } == [cli])
+        #expect(ClaudePlugin.sessions(with: ClaudePlugin.settingsCapability, in: dir.url, registry: reg, keyID: id) { _ in true } == [cli])
+        // A peer's name is not a session id: it finds nothing.
+        #expect(!ClaudePlugin.inboxSessions(in: dir.url, registry: reg, keyID: id) { _ in true }.contains("reply with exactly the word pong"))
+    }
+
+    @Test func aSignedTextNamesTheSessionItsInboxIsFoundBy() {
+        let cli = "5e2e5d8c-a1af-4b40-b288-3657cdb175cf"
+        #expect(RelayInbox.header(of: RelaySigner.sign(body: "hi", target: cli, key: key))?.target == cli)
+    }
+
     @Test func onlyAPluginThatSaysSoIsReachedDirectly() throws {
         let dir = TempDir()
         try presence(dir, "cli-new", capabilities: ["inbox-v1"])
