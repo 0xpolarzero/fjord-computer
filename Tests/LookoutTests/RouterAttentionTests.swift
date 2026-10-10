@@ -172,6 +172,36 @@ import Testing
         #expect(posted().last?.hasPrefix(Notifier.summaryPrefix) == true)
     }
 
+    @Test func awayAnInboxBatchIsOnlyOfWhatMayInterruptAndTheRestIsCounted() {
+        let (s, idle, posted) = store()
+        let me = s.inboxContext.me
+        let levels: [Importance] = [.low, .low, .low, .low, .low, .urgent]
+        func things(greptile: Int) -> [String: Thing] {
+            Dictionary(uniqueKeysWithValues: levels.enumerated().map { i, level in
+                var t = InboxFixture.pr(i + 1, greptile: greptile)
+                t.assignees = [me]
+                t.signals = ThingSignals(importance: ImportanceSignal(level: level, stamp: InboxEngine.importanceStamp(t, context: s.inboxContext) ?? "?"),
+                                         viewer: InboxEngine.viewer(me))
+                return (t.id, t)
+            })
+        }
+        s.things = things(greptile: 4)
+        s.announceInbox()
+        #expect(posted().isEmpty)
+        // Away, six new: the five rated low wait (no batch of them), the urgent one comes on its own.
+        idle.seconds = 900
+        s.things = things(greptile: 3)
+        s.announceInbox()
+        #expect(posted() == [Store.inboxNotificationPrefix + "pr:a/one#6"])
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(s.routerAttention.strip?.line([]) == "5 in your inbox")
+        // Here, more than four at once is one banner, as before.
+        s.things = things(greptile: 2)
+        s.announceInbox()
+        #expect(posted().count == 3 && posted().last?.hasPrefix(Notifier.summaryPrefix) == true)
+    }
+
     @Test func aTrivialTurnIsLeftOutOfWhatCameAndJevIsAskedInTheSameCall() async {
         let s = InboxFixture.store([])
         s.router.enabled = true

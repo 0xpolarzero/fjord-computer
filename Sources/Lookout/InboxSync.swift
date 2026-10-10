@@ -885,6 +885,11 @@ extension Store {
         baselines = baselines.filter { id, _ in categories.contains { $0.id == id } }
         if baselines != categoryBaselines { categoryBaselines = baselines }
         if updated != marks { marks = updated }
+        // Away, each post goes by Jev's rating as its own banner would (RouterAttention.swift), before any batch is made:
+        // the rest is counted for when you're back, and a batch is only of what may interrupt you.
+        if settings.notifications, !isSnoozed {
+            posts = posts.filter { routerAttention.admitInbox(InboxEngine.importance(things[$0.entry.thing.id] ?? $0.entry.thing, context: context)) }
+        }
         guard !posts.isEmpty else { return }
         if posts.count > 4 {
             let names = Set(posts.map(\.category.title)).sorted()
