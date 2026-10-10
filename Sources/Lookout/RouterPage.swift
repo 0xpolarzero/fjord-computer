@@ -796,6 +796,7 @@ private struct RouterZones: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !page.working.isEmpty || !page.waiting.isEmpty { working }
+            AwayStripView(store: store, model: model)
             needs
         }
         .padding(.horizontal, gutter)

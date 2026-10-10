@@ -1,0 +1,108 @@
+import Foundation
+import Testing
+@testable import Lookout
+
+/// Fewer, better-timed banners: what can wait waits; away, only what can't wait comes, and one summary when you're back.
+@MainActor
+@Suite(.serialized) struct RouterAttentionTests {
+    final class Idle { var seconds: TimeInterval = 0 }
+
+    private func card(_ id: String, _ kind: RouterCard.Kind, urgency: Double? = nil, minutes: Double = 0) -> RouterCard {
+        var c = RouterCard(id: id, sessionID: id, kind: kind, title: "T \(id)", folder: "/code/\(id)", text: "x",
+                           createdAt: Date().addingTimeInterval(minutes * 60))
+        if let urgency { c.triage = RouterTriage(state: .asks, urgency: urgency) }
+        return c
+    }
+
+    private func store() -> (Store, Idle, () -> [String]) {
+        let s = InboxFixture.store([])
+        s.settings.notifications = true
+        let idle = Idle()
+        s.routerAttention.idleSeconds = { idle.seconds }
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.identifier) }
+        s.routerAttention.cards = { [weak s] in s?.router.cards ?? [] }
+        s.routerAttention.onBack = { [weak s] strip in if let s { RouterBanners.postBack(strip, store: s, windowIsKey: false) } }
+        return (s, idle, { posted })
+    }
+
+    @Test func whatStopsASessionOrIsSoonBannersAndTheRestWaits() {
+        #expect(RouterAttention.bannerNow(card("q", .question), away: false))
+        #expect(RouterAttention.bannerNow(card("p", .plan), away: false))
+        #expect(RouterAttention.bannerNow(card("ok", .approval, urgency: 0), away: false))
+        #expect(RouterAttention.bannerNow(card("s", .stuck), away: false))
+        #expect(RouterAttention.bannerNow(card("soon", .asks, urgency: 3), away: false))
+        #expect(RouterAttention.bannerNow(card("unrated", .asks), away: false))
+        #expect(!RouterAttention.bannerNow(card("later", .asks, urgency: 1.4), away: false))
+        #expect(!RouterAttention.bannerNow(card("d", .done), away: false))
+        #expect(!RouterAttention.bannerNow(card("w", .waiting), away: false))
+        // Away: only what can't wait (a session stopped mid-turn counts as blocking now).
+        #expect(RouterAttention.bannerNow(card("q", .question), away: true))
+        #expect(RouterAttention.bannerNow(card("now", .asks, urgency: 4), away: true))
+        #expect(!RouterAttention.bannerNow(card("ok", .approval, urgency: 1), away: true))
+        #expect(!RouterAttention.bannerNow(card("s", .stuck), away: true))
+    }
+
+    @Test func awayTheLowUrgencyWaitsAndComingBackSaysWhatCameOnce() {
+        let (s, idle, posted) = store()
+        let ask = card("ask", .asks, urgency: 1, minutes: -3)
+        let urgent = card("urgent", .asks, urgency: 4, minutes: -2)
+        let done = card("done", .done, minutes: -1)
+        var ready = card("ready", .waiting)
+        ready.triage = RouterTriage(state: .waiting, waitingOn: .ci)
+        ready.triage?.ready = .init(result: "passing", at: Date())
+        s.router.cards = [ask, urgent, done, ready]
+
+        idle.seconds = 400
+        RouterBanners.post([ask, urgent, done], store: s, windowIsKey: false)
+        RouterBanners.postReady(ready, store: s, windowIsKey: false)
+        #expect(posted() == [RouterBanners.prefix + "urgent"])
+        #expect(s.routerAttention.awaySince != nil && s.routerAttention.strip == nil)
+        // Still away: nothing more.
+        s.routerAttention.refresh()
+        #expect(posted().count == 1)
+
+        idle.seconds = 2
+        s.routerAttention.refresh()
+        let strip = s.routerAttention.strip
+        #expect(strip?.line(s.router.cards) == "2 need you, 1 finished, 1 ready to continue")
+        #expect(strip?.listed(s.router.cards).map(\.id) == ["urgent", "ask", "ready", "done"])
+        // One summary, opening on the most urgent.
+        #expect(posted() == [RouterBanners.prefix + "urgent", RouterBanners.prefix + "urgent"])
+        s.routerAttention.refresh()
+        #expect(posted().count == 2)
+        // Handled since: it leaves the strip; dismissed, the strip is gone.
+        s.setCardAddressed("urgent", true)
+        #expect(strip?.line(s.router.cards) == "1 needs you, 1 finished, 1 ready to continue")
+        s.routerAttention.dismissStrip()
+        #expect(s.routerAttention.strip == nil)
+    }
+
+    @Test func aLockedScreenIsAwayAndNothingCameMeansNoSummary() {
+        let (s, _, posted) = store()
+        s.routerAttention.locked = true
+        #expect(s.routerAttention.refresh())
+        s.routerAttention.locked = false
+        #expect(!s.routerAttention.refresh())
+        #expect(s.routerAttention.strip == nil && posted().isEmpty)
+    }
+
+    @Test func awayTheInboxBannersOnlyWhatJevRatesHigh() {
+        var low = InboxFixture.pr(1, repo: "o/r")
+        low.signals = ThingSignals(importance: ImportanceSignal(level: .low, stamp: "x"))
+        var high = InboxFixture.pr(2, repo: "o/r")
+        high.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: "x"))
+        let (s, idle, posted) = store()
+        s.things = [low.id: low, high.id: high]
+        s.notify(id: Store.inboxNotificationPrefix + low.id, title: "", subtitle: "", body: "", quiet: false)
+        #expect(posted().count == 1)
+        idle.seconds = 900
+        s.notify(id: Store.inboxNotificationPrefix + low.id, title: "", subtitle: "", body: "", quiet: false)
+        s.notify(id: Store.inboxNotificationPrefix + high.id, title: "", subtitle: "", body: "", quiet: false)
+        #expect(posted() == [Store.inboxNotificationPrefix + low.id, Store.inboxNotificationPrefix + high.id])
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(s.routerAttention.strip?.line([]) == "1 in your inbox")
+        #expect(posted().last?.hasPrefix(Notifier.summaryPrefix) == true)
+    }
+}

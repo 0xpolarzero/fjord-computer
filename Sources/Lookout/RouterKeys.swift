@@ -101,9 +101,9 @@ final class RouterKeys {
     }
 }
 
-/// A banner for each new card that needs you (a question, a plan, a turn that asks you or is stuck) and for a waiting session
-/// ready to continue, unless notifications are off or snoozed or the app window is open on the Router. Clicking it opens the
-/// window on that card.
+/// A banner for each new card that needs you and can't wait (a question, a plan, an OK asked, a stuck turn, a turn asking you
+/// something soon: RouterAttention.swift decides) and for a waiting session ready to continue, unless notifications are off
+/// or snoozed or the app window is open on the Router. Clicking it opens the window on that card.
 @MainActor
 enum RouterBanners {
     /// Banner ids: the card's, after this.
@@ -113,6 +113,8 @@ enum RouterBanners {
     static func attach(store: Store, windowIsKey: @escaping () -> Bool, open: @escaping (String) -> Void) {
         store.onNewRouterCards = { cards in post(cards, store: store, windowIsKey: windowIsKey()) }
         store.routerTriager.onReady = { card in postReady(card, store: store, windowIsKey: windowIsKey()) }
+        store.routerAttention.onBack = { strip in postBack(strip, store: store, windowIsKey: windowIsKey()) }
+        store.routerAttention.start { [weak store] in store?.router.cards ?? [] }
         let previous = store.notifier.onOpen
         store.notifier.onOpen = { id, url in
             if id.hasPrefix(prefix) { open(String(id.dropFirst(prefix.count))) } else { previous?(id, url) }
@@ -120,8 +122,10 @@ enum RouterBanners {
     }
 
     static func post(_ cards: [RouterCard], store: Store, windowIsKey: Bool) {
+        // What can wait waits (RouterAttention.swift).
+        let now = store.routerAttention.admit(cards)
         guard !windowIsKey, store.settings.notifications, !store.isSnoozed else { return }
-        for card in cards where card.kind.needsYou {
+        for card in now {
             let project = store.routerProject(card).name
             // A turn that asks you says what, as it asked it.
             let asked = card.triage?.questions ?? []
@@ -132,9 +136,17 @@ enum RouterBanners {
 
     /// A waiting session's wait is over: it is ready to continue.
     static func postReady(_ card: RouterCard, store: Store, windowIsKey: Bool) {
-        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let triage = card.triage,
+        guard store.routerAttention.admitReady(card), !windowIsKey, store.settings.notifications, !store.isSnoozed, let triage = card.triage,
               let message = RouterWaits.message(triage) else { return }
         store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "Ready to continue · \(store.routerProject(card).name)",
                             body: message, quiet: false)
+    }
+
+    /// Back after being away: one banner for what came meanwhile, opening on the most urgent of it.
+    static func postBack(_ strip: AwayStrip, store: Store, windowIsKey: Bool) {
+        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(store.router.cards) else { return }
+        let first = strip.listed(store.router.cards).first
+        store.notifier.post(id: first.map { prefix + $0.id } ?? Notifier.summaryPrefix + UUID().uuidString,
+                            title: "While you were away", subtitle: "", body: line, quiet: false)
     }
 }

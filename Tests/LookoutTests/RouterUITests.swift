@@ -585,7 +585,8 @@ import UserNotifications
         RouterBanners.post(cards, store: store, windowIsKey: true)
         #expect(posted.isEmpty)
         RouterBanners.post(cards, store: store, windowIsKey: false)
-        #expect(posted.sorted() == cards.filter(\.kind.needsYou).map { RouterBanners.prefix + $0.id }.sorted())
+        #expect(posted.sorted() == cards.filter { RouterAttention.bannerNow($0, away: false) }.map { RouterBanners.prefix + $0.id }.sorted())
+        #expect(!posted.isEmpty)
         posted = []
         store.settings.snoozeUntil = Date().addingTimeInterval(600)
         RouterBanners.post(cards, store: store, windowIsKey: false)

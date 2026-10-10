@@ -238,6 +238,8 @@ final class Store {
     @ObservationIgnored var onNewRouterCards: (([RouterCard]) -> Void)?
     /// What finished turns ended on, by Jev (see RouterTriage.swift).
     @ObservationIgnored let routerTriager = RouterTriager()
+    /// What decides whether something interrupts you, and what came while you were away (see RouterAttention.swift).
+    @ObservationIgnored let routerAttention = RouterAttention()
     /// Whether the Claude app is in front (tests answer for it).
     @ObservationIgnored var claudeIsFrontmost: () -> Bool = { Claude.isFrontmost }
     /// The Router was just switched on: its open cards are settled against how things are now at the next feed.
@@ -990,6 +992,9 @@ final class Store {
 
     func notify(id: String, title: String, subtitle: String, body: String, quiet: Bool, url: URL? = nil) {
         guard settings.notifications, !isSnoozed else { return }
+        // Away, a thing's banner comes only if Jev rates it high or urgent; the others are counted for when you're back.
+        if id.hasPrefix(Self.inboxNotificationPrefix),
+           !routerAttention.admitInbox(things[String(id.dropFirst(Self.inboxNotificationPrefix.count))]?.signals?.importance?.level) { return }
         notifier.post(id: id, title: title, subtitle: subtitle, body: body, quiet: quiet, url: url)
     }
 
