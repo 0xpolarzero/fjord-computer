@@ -174,8 +174,23 @@ enum Condition: Codable, Hashable {
     case noActivity(days: Int)
     // Signals
     case greptileBelow(Int)
+    /// Jev read a comment, review or thread reply (not yours) since you last answered there or marked it done, and it asks
+    /// you something.
+    case asksMe
+    /// A new comment (not yours) is noise (`true`: bots, and what Jev reads as automated) or from a person (`false`).
+    case noise(Bool)
+    /// Jev rates the review request or assignment at least this important.
+    case importance(Importance)
     // Workflows
     case workflow(Set<CheckState>)
+}
+
+/// How much a review request or an assignment matters, as Jev rates it (InboxJev.swift).
+enum Importance: String, Codable, CaseIterable, Comparable, Hashable {
+    case low, normal, high, urgent
+
+    var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+    static func < (a: Importance, b: Importance) -> Bool { a.rank < b.rank }
 }
 
 // Rules saved before `since` have no such key: the activity cases are read by hand, the rest as they always were.
@@ -204,6 +219,9 @@ extension Condition {
         case labeled(Pick<String>)
         case noActivity(days: Int)
         case greptileBelow(Int)
+        case asksMe
+        case noise(Bool)
+        case importance(Importance)
         case workflow(Set<CheckState>)
 
         init?(_ c: Condition) {
@@ -220,6 +238,9 @@ extension Condition {
             case .labeled(let p): self = .labeled(p)
             case .noActivity(let d): self = .noActivity(days: d)
             case .greptileBelow(let n): self = .greptileBelow(n)
+            case .asksMe: self = .asksMe
+            case .noise(let b): self = .noise(b)
+            case .importance(let i): self = .importance(i)
             case .workflow(let s): self = .workflow(s)
             }
         }
@@ -237,6 +258,9 @@ extension Condition {
             case .labeled(let p): .labeled(p)
             case .noActivity(let d): .noActivity(days: d)
             case .greptileBelow(let n): .greptileBelow(n)
+            case .asksMe: .asksMe
+            case .noise(let b): .noise(b)
+            case .importance(let i): .importance(i)
             case .workflow(let s): .workflow(s)
             }
         }
@@ -426,6 +450,32 @@ struct Thing: Codable, Hashable, Identifiable {
     var workflowName: String?
     var branch: String?
     var failingJobs: [String] = []
+    /// PRs: the size of the change, when GitHub said.
+    var additions: Int?
+    var deletions: Int?
+    var changedFiles: Int?
+    /// What Jev made of it (InboxJev.swift), kept across refreshes; nil before it was asked anything.
+    var signals: ThingSignals?
+}
+
+/// Jev's verdicts on a thing, each asked once for what it was judged on.
+struct ThingSignals: Codable, Hashable {
+    /// By comment, review or thread reply id: every message Jev read.
+    var messages: [String: MessageSignal] = [:]
+    var importance: ImportanceSignal?
+}
+
+/// What Jev said of one message; nil where it wasn't sure.
+struct MessageSignal: Codable, Hashable {
+    var asksMe: Bool?
+    var noise: Bool?
+}
+
+struct ImportanceSignal: Codable, Hashable {
+    /// Nil: Jev wasn't sure.
+    var level: Importance?
+    /// What it was rated on (the request or assignment and the head commit): a new one is rated again.
+    var stamp: String
 }
 
 // MARK: - What the engine says
@@ -452,6 +502,8 @@ struct InboxEntry: Hashable, Identifiable {
     var isDone: Bool
     /// Some fact not seen yet.
     var isUnread: Bool
+    /// Jev's rating of what it asks of you (a review request, an assignment), when it rated it.
+    var importance: Importance?
     var id: String { thing.id }
 }
 

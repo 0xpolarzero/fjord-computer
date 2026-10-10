@@ -501,6 +501,7 @@ extension RouterTools {
         ]
         if let author = thing.author { out["author"] = author.login + (author.isBot ? " (bot)" : "") + ", " + author.association.rawValue }
         if let checks = thing.checks { out["checks"] = checks.rawValue }
+        if let importance = entry?.importance { out["importanceByJev"] = importance.rawValue }
         if let home { out["matched"] = home }
         if !also.isEmpty { out["alsoMatchesButComesAfter"] = also }
         if !off.isEmpty { out["rulesOffUntilFixed"] = off }

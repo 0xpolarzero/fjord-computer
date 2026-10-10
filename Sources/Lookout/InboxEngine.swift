@@ -33,7 +33,8 @@ enum InboxEngine {
                 let acked = m?.acked ?? []
                 let seen = m?.seen ?? []
                 entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: union,
-                                          isDone: keys.isSubset(of: acked), isUnread: !keys.isSubset(of: seen)))
+                                          isDone: keys.isSubset(of: acked), isUnread: !keys.isSubset(of: seen),
+                                          importance: importance(thing, resolved)))
                 break
             }
         }
@@ -118,7 +119,7 @@ enum InboxEngine {
                 else if !kinds.contains(.pr), s.isDisjoint(with: [.open, .closed]) { add("Issues are only open or closed") }
             case .greptileBelow(let n):
                 if n <= 1 { add("Greptile scores start at 1") }
-            case .hasConflicts, .behindBase, .noActivity:
+            case .hasConflicts, .behindBase, .noActivity, .asksMe, .noise, .importance:
                 break
             }
         }
@@ -166,11 +167,12 @@ enum InboxEngine {
              .approved(by: Pick()), .changesRequested(by: Pick()),
              .checks([.failing]), .hasConflicts, .behindBase,
              .status([.draft]), .labeled(Pick()), .noActivity(days: 7),
-             .greptileBelow(5)]
+             .greptileBelow(5), .asksMe, .noise(true), .importance(.high)]
         case .issue:
             [.newComment(by: Pick()), .mentions(Pick(include: [.me])),
              .lastComment(by: Pick()),
-             .status([.closed]), .labeled(Pick()), .noActivity(days: 7)]
+             .status([.closed]), .labeled(Pick()), .noActivity(days: 7),
+             .asksMe, .noise(true), .importance(.high)]
         case .workflow:
             [.workflow([.failing])]
         }
@@ -418,6 +420,21 @@ enum InboxEngine {
         case .greptileBelow(let n):
             guard let score = thing.greptileScore, score < n else { return [] }
             return [Fact(key: "greptile:\(score)", label: "Greptile \(score)/5", tint: .attention)]
+        case .asksMe:
+            // Answering there is what stops a question asking: only what came after your latest word, and after Done.
+            let after = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast)
+            return messages(thing).filter { m in
+                m.at > after && !isMe(m.author, r) && thing.signals?.messages[m.id]?.asksMe == true
+            }.map { Fact(key: "asks:\($0.id)", label: "Asks you", tint: .attention) }
+        case .noise(let wanted):
+            return messages(thing).filter { m in m.at > cutoff && !isMe(m.author, r) && isNoise(m, thing) == wanted }.map {
+                wanted ? Fact(key: "noise:\($0.id)", label: "noise from @\($0.author.login)")
+                    : Fact(key: "person:\($0.id)", label: "comment by @\($0.author.login)", tint: .attention)
+            }
+        case .importance(let least):
+            guard let level = importance(thing, r), level >= least else { return [] }
+            return [Fact(key: "importance:\(level.rawValue)", label: level == .urgent ? "urgent" : "\(level.rawValue) importance",
+                         tint: level == .urgent ? .danger : level == .high ? .attention : .neutral)]
         case .workflow(let states):
             guard let state = thing.checks, states.contains(state) else { return [] }
             // The state alone is the key: a failure notifies once, until it goes green and fails again.
@@ -425,6 +442,58 @@ enum InboxEngine {
             if state == .failing, !thing.failingJobs.isEmpty { label += ": " + thing.failingJobs.joined(separator: ", ") }
             return [Fact(key: "workflow:\(state.rawValue)", label: label, tint: tint(state))]
         }
+    }
+
+    // MARK: - Jev's signals
+
+    /// A comment, a review's words or a thread's latest reply: what Jev reads, and what `asksMe` and `noise` are about.
+    struct Message: Hashable {
+        var id: String
+        var author: Person
+        var at: Date
+        var text: String
+        var isReview = false
+        /// A thread's file, for a reply in one.
+        var path: String?
+    }
+
+    /// Every message of a thing, oldest first.
+    static func messages(_ thing: Thing) -> [Message] {
+        let comments = thing.comments.map { Message(id: $0.id, author: $0.author, at: $0.at, text: $0.snippet, isReview: $0.isReview) }
+        let replies = thing.threads.map {
+            Message(id: $0.lastReplyID, author: $0.lastReplyBy, at: $0.lastReplyAt, text: $0.snippet, path: $0.path)
+        }
+        return (comments + replies).sorted { $0.at < $1.at }
+    }
+
+    /// Noise: what Jev said of it once it read it (nil when it wasn't sure); before that, whether a bot wrote it.
+    static func isNoise(_ m: Message, _ thing: Thing) -> Bool? {
+        guard let signal = thing.signals?.messages[m.id] else { return m.author.isBot }
+        return signal.noise
+    }
+
+    private static func isMe(_ person: Person, _ r: Resolved) -> Bool { !r.me.isEmpty && normalize(person.login) == r.me }
+
+    /// What an importance rating is for: the review request (to you or a team of yours) by when it was made, else your
+    /// assignment. Nil when it is neither, or not open.
+    static func importanceStamp(_ thing: Thing, context: InboxContext) -> String? { importanceStamp(thing, Resolved(context)) }
+
+    private static func importanceStamp(_ thing: Thing, _ r: Resolved) -> String? {
+        guard thing.kind != .workflow, thing.status == .open || thing.status == .draft, !r.me.isEmpty else { return nil }
+        if thing.kind == .pr {
+            let mine = thing.requestedReviewers.filter { normalize($0) == r.me || r.myTeams.contains(normalize($0)) }
+            let at = mine.map { who in
+                thing.reviewRequests.first { $0.reviewer.caseInsensitiveCompare(who) == .orderedSame }?.at ?? thing.createdAt
+            }.max()
+            if let at { return "requested:\(Int(at.timeIntervalSince1970))" }
+        }
+        return thing.assignees.contains { normalize($0) == r.me } ? "assigned" : nil
+    }
+
+    /// Jev's rating of what is asked of you now; nil when nothing is, or it wasn't rated (or wasn't sure).
+    private static func importance(_ thing: Thing, _ r: Resolved) -> Importance? {
+        guard let signal = thing.signals?.importance, let stamp = importanceStamp(thing, r), signal.stamp == stamp else { return nil }
+        return signal.level
     }
 
     private static func tint(_ state: CheckState) -> FactTint {
@@ -464,7 +533,7 @@ enum InboxEngine {
 
     private static func offered(_ condition: Condition) -> Set<ThingKind> {
         switch condition {
-        case .newComment, .mentions, .lastComment, .status, .labeled, .noActivity: [.pr, .issue]
+        case .newComment, .mentions, .lastComment, .status, .labeled, .noActivity, .asksMe, .noise, .importance: [.pr, .issue]
         case .newReview, .newCommits, .unresolvedThreads, .approved, .changesRequested, .checks, .hasConflicts,
              .behindBase, .greptileBelow: [.pr]
         case .workflow: [.workflow]

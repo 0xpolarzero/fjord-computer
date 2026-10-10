@@ -311,7 +311,7 @@ struct ConditionRow: View {
             HStack(alignment: .top, spacing: 4) {
                 SentenceLayout(spacing: 4, lineSpacing: 4) {
                     if let tip = condition.tip {
-                        Word(condition.phrase, tone: tone).tip("Behind base branch", tip)
+                        Word(condition.phrase, tone: tone).tip(RuleEditing.menuTitle(condition), tip)
                     } else {
                         Word(condition.phrase, tone: tone)
                     }
@@ -385,7 +385,19 @@ struct ConditionRow: View {
                     Toggle("\(n) / 5", isOn: Binding(get: { n == score }, set: { _ in condition = .greptileBelow(n) }))
                 }
             }
-        case .hasConflicts, .behindBase:
+        case .noise(let noise):
+            MenuChip(title: RuleEditing.noiseTitle(noise), tone: tone, label: "Noise or a person") {
+                ForEach([true, false], id: \.self) { option in
+                    Toggle(RuleEditing.noiseTitle(option), isOn: Binding(get: { option == noise }, set: { _ in condition = .noise(option) }))
+                }
+            }
+        case .importance(let level):
+            MenuChip(title: level.rawValue, tone: tone, label: "Importance") {
+                ForEach(Importance.allCases.dropFirst(), id: \.self) { option in
+                    Toggle(option.rawValue, isOn: Binding(get: { option == level }, set: { _ in condition = .importance(option) }))
+                }
+            }
+        case .hasConflicts, .behindBase, .asksMe:
             EmptyView()
         }
     }
