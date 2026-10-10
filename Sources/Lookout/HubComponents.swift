@@ -577,11 +577,17 @@ extension Store {
         categories[i].hidden = hidden
     }
 
-    /// Drags `id` to where `target` is among the categories.
+    /// Drags `id` to where `target` is among the categories, into its section (CategorySections.swift).
     func moveCategory(_ id: UUID, onto target: UUID) {
         guard id != target, let from = categories.firstIndex(where: { $0.id == id }),
               let to = categories.firstIndex(where: { $0.id == target }) else { return }
-        moveCategory(from: IndexSet(integer: from), to: from < to ? to + 1 : to)
+        var list = categories
+        let section = sectionID(of: list[to])
+        var moving = list.remove(at: from)
+        if section != nil { moving.section = section }
+        // Down: after the target (now one place up); up: before it. Either way, its place.
+        list.insert(moving, at: to)
+        categories = treeOrdered(list)
     }
 
     /// One place up (-1) or down (+1) among `among` (every category by default; the bar's tabs pass the shown ones).

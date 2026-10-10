@@ -101,7 +101,7 @@ extension Store {
         return made
     }
 
-    /// Deletes a section; its categories go to the first one left (or to none).
+    /// Deletes a section; its categories go to the first one left (or to none), at its end.
     func deleteSection(_ id: UUID) {
         guard let i = categorySections.firstIndex(where: { $0.id == id }) else { return }
         // Theirs is gone: they go to the first left. The others keep theirs, even if that was the first by default.
@@ -111,29 +111,71 @@ extension Store {
             c.section = sectionID(of: c) == id ? rest : sectionID(of: c)
             return c
         }
-        if next != categories { categories = next }
         categorySections.remove(at: i)
+        let ordered = treeOrdered(next)
+        if ordered != categories { categories = ordered }
     }
 
+    /// Into `section`, at its end.
     func moveCategory(_ id: UUID, toSection section: UUID) {
         guard let i = categories.firstIndex(where: { $0.id == id }), sectionID(of: categories[i]) != section else { return }
-        categories[i].section = section
+        var list = categories
+        var moving = list.remove(at: i)
+        moving.section = section
+        list.append(moving)
+        categories = treeOrdered(list)
+    }
+
+    /// Into `section`, at its top (a category dropped on the section's header).
+    func moveCategory(_ id: UUID, toTopOf section: UUID) {
+        guard let i = categories.firstIndex(where: { $0.id == id }) else { return }
+        var list = categories
+        var moving = list.remove(at: i)
+        moving.section = section
+        let first = list.firstIndex { sectionID(of: $0) == section } ?? list.endIndex
+        list.insert(moving, at: first)
+        let ordered = treeOrdered(list)
+        if ordered != categories { categories = ordered }
     }
 
     func moveSection(_ id: UUID, by step: Int) {
         guard let i = categorySections.firstIndex(where: { $0.id == id }), categorySections.indices.contains(i + step) else { return }
-        pinSections()
-        categorySections.swapAt(i, i + step)
+        moveSection(id, onto: categorySections[i + step].id)
     }
 
-    /// Writes down each category's section, so one that was in the first by default stays where it is when the first changes.
-    private func pinSections() {
-        let pinned = categories.map { c -> InboxCategory in
+    /// Drags a section, its categories with it, to where `target` is.
+    func moveSection(_ id: UUID, onto target: UUID) {
+        guard id != target, let from = categorySections.firstIndex(where: { $0.id == id }),
+              let to = categorySections.firstIndex(where: { $0.id == target }) else { return }
+        // Each category's section written down first: one in the first by default stays where it is.
+        let pinned = pinnedSections(categories)
+        var sections = categorySections
+        sections.insert(sections.remove(at: from), at: to)
+        categorySections = sections
+        let ordered = treeOrdered(pinned)
+        if ordered != categories { categories = ordered }
+    }
+
+    /// `list` in the page's tree order: section by section, each keeping its categories' order. Which category a thing goes
+    /// to is the first, from the top, so the tree reads as it matches.
+    func treeOrdered(_ list: [InboxCategory]) -> [InboxCategory] {
+        guard !categorySections.isEmpty else { return list }
+        let rank = Dictionary(uniqueKeysWithValues: categorySections.enumerated().map { ($1.id, $0) })
+        return pinnedSections(list).enumerated()
+            .sorted { a, b in
+                let ra = a.element.section.flatMap { rank[$0] } ?? 0, rb = b.element.section.flatMap { rank[$0] } ?? 0
+                return ra != rb ? ra < rb : a.offset < b.offset
+            }
+            .map(\.element)
+    }
+
+    /// Each category's section written down (a category in none, or in one gone, is in the first).
+    private func pinnedSections(_ list: [InboxCategory]) -> [InboxCategory] {
+        list.map { c in
             var c = c
             c.section = sectionID(of: c)
             return c
         }
-        if pinned != categories { categories = pinned }
     }
 }
 
@@ -171,54 +213,26 @@ private struct SectionCellLabel: View {
 
 // MARK: - The categories page's sections
 
-/// The categories page's Sections: one row per section (its icon, its name to edit, how many categories it holds), and New
-/// section. A category's own editor (and its row's menu) says which section it is in.
-struct SectionsSection: View {
-    let store: Store
-    @State private var focus: UUID?
-
-    var body: some View {
-        SettingsSection("Sections",
-                        info: ("Sections", "Each is a well in the bar: its icon, then its categories. A category goes in one from its editor or its menu."),
-                        action: {
-            Button {
-                focus = store.createSection(name: "").id
-            } label: {
-                HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("New section") }
-            }
-            .buttonStyle(SettingsButtonStyle(size: .sm))
-            .accessibilityLabel("New section")
-        }, content: {
-            if store.categorySections.isEmpty {
-                SettingsNest {
-                    Text("No sections: the bar shows the categories alone.")
-                        .cdsText((12, 16), .regular, CDS.Text.muted).padding(.vertical, 10)
-                }
-            } else {
-                SettingsNest {
-                    ForEach(Array(store.categorySections.enumerated()), id: \.element.id) { i, section in
-                        if i > 0 { SettingsDivider() }
-                        SectionRow(store: store, section: section, focusing: $focus)
-                    }
-                }
-            }
-        })
-    }
-}
-
-private struct SectionRow: View {
+/// A section in the categories page's tree: its icon, its name to edit, and delete. Its categories sit under it; dragging it
+/// moves them with it.
+struct SectionHeaderRow: View {
     let store: Store
     let section: CategorySection
+    /// Something dragged over it: a category goes to its top, a section takes its place.
+    let dropping: Bool
     @State private var picking = false
     @State private var renamed = false
+    @State private var hovered = false
+    @State private var editingName = false
     @FocusState private var focused: Bool
     @Binding var focusing: UUID?
     /// Its icon follows its name until you choose one.
     private var iconAuto: Bool { section.iconChosen != true }
 
-    init(store: Store, section: CategorySection, focusing: Binding<UUID?>) {
+    init(store: Store, section: CategorySection, dropping: Bool, focusing: Binding<UUID?>) {
         self.store = store
         self.section = section
+        self.dropping = dropping
         _focusing = focusing
     }
 
@@ -230,7 +244,7 @@ private struct SectionRow: View {
         let count = store.categories.filter { store.sectionID(of: $0) == section.id }.count
         let index = store.categorySections.firstIndex { $0.id == section.id } ?? 0
         HStack(spacing: 10) {
-            Button { picking = true } label: { SectionTile(symbol: section.symbol) }
+            Button { picking = true } label: { SectionTile(symbol: section.symbol, size: 22) }
                 .buttonStyle(.plain)
                 .tip("Icon", "Picked from the name; click to choose another")
                 .accessibilityLabel("Icon of \(section.title). Choose another")
@@ -240,22 +254,41 @@ private struct SectionRow: View {
                         picking = false
                     }
                 }
-            TextField("", text: name)
-                .textFieldStyle(.plain)
-                .cdsText(CDS.Density.comfortable.body)
-                .cdsPlaceholder("Name, like GitHub or Work", shown: section.name.isEmpty)
-                .focused($focused)
-                .accessibilityLabel("Section name")
+            // Its name is text until clicked (a field first would take the page's focus as it opens); a new one starts in it.
+            if editingName {
+                TextField("", text: name)
+                    .textFieldStyle(.plain)
+                    .cdsText(CDS.Density.comfortable.body, .semibold)
+                    .cdsPlaceholder("Name, like GitHub or Work", shown: section.name.isEmpty)
+                    .focused($focused)
+                    .onSubmit { editingName = false }
+                    .onChange(of: focused) { _, now in if !now { editingName = false } }
+                    .accessibilityLabel("Section name")
+            } else {
+                Text(section.title).cdsText(CDS.Density.comfortable.body, .semibold)
+                    .foregroundStyle(section.name.isEmpty ? CDS.Text.muted : CDS.Text.primary)
+                    .lineLimit(1)
+                    .onTapGesture { beginEditing() }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Rename")
+                    .accessibilityAction { beginEditing() }
+            }
             Spacer(minLength: 8)
-            Text(plural(count, "category", "categories")).cdsText((12, 16), .regular, CDS.Text.muted).fixedSize()
             IconButton(symbol: "trash", help: count > 0 ? "Delete: its categories go to the first section left" : "Delete",
                        label: "Delete \(section.title)", size: 24, tint: CDS.Text.muted) {
                 store.deleteSection(section.id)
             }
+            .opacity(hovered || focused ? 1 : 0)
         }
-        .padding(.vertical, 8)
-        .frame(minHeight: 44)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 6)
+        .frame(minHeight: 40)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(dropping ? CDS.Fill.ghostSelected : .clear))
+        .padding(.horizontal, -6)
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
         .contextMenu {
+            Button("Rename") { beginEditing() }
             Button("Move up") { store.moveSection(section.id, by: -1) }.disabled(index == 0)
             Button("Move down") { store.moveSection(section.id, by: 1) }.disabled(index == store.categorySections.count - 1)
             Divider()
@@ -267,8 +300,13 @@ private struct SectionRow: View {
         .onChange(of: section.name) { renamed = true }
         .task(id: section.name) { if renamed { await pickIcon() } }
         .onAppear {
-            if focusing == section.id { focused = true; focusing = nil }
+            if focusing == section.id { focusing = nil; beginEditing() }
         }
+    }
+
+    private func beginEditing() {
+        editingName = true
+        DispatchQueue.main.async { focused = true }
     }
 
     private func update(_ change: (inout CategorySection) -> Void) {

@@ -5,6 +5,13 @@ import Testing
 /// The bar's sections: every inbox starts with GitHub's holding every category; a category in none, or in one deleted, is
 /// in the first; the bar and the shown order go section by section.
 @MainActor @Suite struct CategorySections {
+    /// A store that never saves (a test must not reach the saved state).
+    private func quiet() -> Store {
+        let store = Store()
+        store.persists = false
+        return store
+    }
+
     private func category(_ name: String, section: UUID? = nil, hidden: Bool = false) -> InboxCategory {
         var c = InboxCategory(name: name, symbol: "tray", color: .blue)
         c.section = section
@@ -13,7 +20,7 @@ import Testing
     }
 
     @Test func everyInboxStartsWithGitHubsSectionHoldingEveryCategory() {
-        let store = Store()
+        let store = quiet()
         store.categories = [category("Mine"), category("Reviews")]
         #expect(store.categorySections == [.github])
         #expect(store.barSections.map(\.section) == [.github])
@@ -21,7 +28,7 @@ import Testing
     }
 
     @Test func theBarAndTheShownOrderGoSectionBySection() {
-        let store = Store()
+        let store = quiet()
         let work = store.createSection(name: "Work")
         store.categories = [category("CI", section: work.id), category("Mine"), category("Hidden", section: work.id, hidden: true),
                             category("Reviews")]
@@ -32,14 +39,14 @@ import Testing
     }
 
     @Test func aSectionWithNothingShownHasNoWell() {
-        let store = Store()
+        let store = quiet()
         _ = store.createSection(name: "Empty")
         store.categories = [category("Mine")]
         #expect(store.barSections.map(\.section?.name) == ["GitHub"])
     }
 
     @Test func deletingASectionMovesItsCategoriesToTheFirstLeft() {
-        let store = Store()
+        let store = quiet()
         let work = store.createSection(name: "Work")
         store.categories = [category("Mine"), category("CI", section: work.id)]
         store.deleteSection(work.id)
@@ -52,7 +59,7 @@ import Testing
     }
 
     @Test func reorderingSectionsKeepsEachCategoryWhereItWas() {
-        let store = Store()
+        let store = quiet()
         let work = store.createSection(name: "Work")
         store.categories = [category("Mine"), category("CI", section: work.id)]
         store.moveSection(work.id, by: -1)
@@ -60,10 +67,33 @@ import Testing
         #expect(store.barSections.map { $0.categories.map(\.name) } == [["CI"], ["Mine"]])
     }
 
+    @Test func draggingACategoryOntoAnotherTakesItsPlaceInItsSection() {
+        let store = quiet()
+        let work = store.createSection(name: "Work")
+        store.categories = [category("Mine"), category("Reviews"), category("CI", section: work.id), category("Deps", section: work.id)]
+        // Onto Deps, in Work: Mine takes its place there; the list reads as the tree, top to bottom.
+        store.moveCategory(store.categories[0].id, onto: store.categories[3].id)
+        #expect(store.barSections.map { $0.categories.map(\.name) } == [["Reviews"], ["CI", "Deps", "Mine"]])
+        #expect(store.categories.map(\.name) == ["Reviews", "CI", "Deps", "Mine"])
+        // Onto a section's header: its top.
+        let deps = store.categories.first { $0.name == "Deps" }!.id
+        store.moveCategory(deps, toTopOf: CategorySection.github.id)
+        #expect(store.categories.map(\.name) == ["Deps", "Reviews", "CI", "Mine"])
+    }
+
+    @Test func draggingASectionMovesItsCategoriesWithIt() {
+        let store = quiet()
+        let work = store.createSection(name: "Work")
+        store.categories = [category("Mine"), category("CI", section: work.id)]
+        store.moveSection(work.id, onto: CategorySection.github.id)
+        #expect(store.categorySections.map(\.name) == ["Work", "GitHub"])
+        #expect(store.categories.map(\.name) == ["CI", "Mine"])
+    }
+
     @Test func aSectionsIconComesFromItsName() {
         #expect(SectionIcon.local(name: "My GitHub") == CategorySection.githubMark)
         #expect(SectionIcon.local(name: "Reviews") == "eye")
-        #expect(Store().createSection(name: "Builds").symbol == "hammer")
+        #expect(quiet().createSection(name: "Builds").symbol == "hammer")
     }
 
     @Test func aFileFromBeforeSectionsLoadsWithGitHubsAlone() throws {
@@ -77,7 +107,7 @@ import Testing
     }
 
     @Test func movingACategoryToASectionIsOneUndoStep() {
-        let store = Store()
+        let store = quiet()
         let work = store.createSection(name: "Work")
         store.categories = [category("Mine")]
         let history = CategoryHistory(store: store)
