@@ -42,6 +42,18 @@ struct ClaudeActivity: Hashable {
     var tool: String? = nil
     /// That call's id in the transcript: what ties a card to the form Lookout's hook holds for the same call.
     var toolUseID: String? = nil
+    /// The session's task list as its last TodoWrite left it.
+    var todo: Todo? = nil
+    /// The agent's latest words between tool calls in this turn (the last assistant text block, trimmed); at a turn's end,
+    /// its final message.
+    var narration: String? = nil
+
+    struct Todo: Hashable {
+        var done: Int
+        var total: Int
+        /// The in-progress item, in the present tense (its `activeForm`).
+        var active: String?
+    }
 }
 
 /// A subagent or shell command a session started in the background, still running.
@@ -220,29 +232,62 @@ enum Claude {
 
     private static let iso = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
-    /// The last step in a transcript: the tool being run, or thinking between steps.
+    /// The last step in a transcript: the tool being run, or thinking between steps; with the session's task list and the
+    /// agent's latest narration, found in the same tail (only the lines that can hold them are parsed).
     static func activity(tail: Data) -> ClaudeActivity? {
         let lines = tail.split(separator: UInt8(ascii: "\n")).reversed()
+        var result: ClaudeActivity?
+        var narration: String?
+        var narrating = true
+        var todo: ClaudeActivity.Todo?
+        let todoMark = Data("TodoWrite".utf8)
         for line in lines {
-            guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+            let raw = Data(line)
+            let hasTodo = todo == nil && raw.range(of: todoMark) != nil
+            guard result == nil || narrating || hasTodo else { continue }
+            guard let obj = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
                   let type = obj["type"] as? String, type == "assistant" || type == "user" else { continue }
-            let since = (obj["timestamp"] as? String).flatMap { try? Date($0, strategy: Self.iso) } ?? Date()
             let content = (obj["message"] as? [String: Any])?["content"]
             let parts = content as? [[String: Any]] ?? []
-            if type == "assistant" {
-                if let tool = parts.last(where: { $0["type"] as? String == "tool_use" }) {
-                    let name = tool["name"] as? String ?? ""
-                    let waits = ["AskUserQuestion", "ExitPlanMode"].contains(name)
-                    return ClaudeActivity(text: describe(tool: name, input: tool["input"] as? [String: Any] ?? [:]),
-                                          since: since, waitsForYou: waits, tool: waits ? name : nil,
-                                          toolUseID: waits ? tool["id"] as? String : nil)
+            if result == nil {
+                let since = (obj["timestamp"] as? String).flatMap { try? Date($0, strategy: Self.iso) } ?? Date()
+                if type == "assistant" {
+                    if let tool = parts.last(where: { $0["type"] as? String == "tool_use" }) {
+                        let name = tool["name"] as? String ?? ""
+                        let waits = ["AskUserQuestion", "ExitPlanMode"].contains(name)
+                        result = ClaudeActivity(text: describe(tool: name, input: tool["input"] as? [String: Any] ?? [:]),
+                                                since: since, waitsForYou: waits, tool: waits ? name : nil,
+                                                toolUseID: waits ? tool["id"] as? String : nil)
+                    } else {
+                        result = ClaudeActivity(text: parts.contains { $0["type"] as? String == "text" } ? "Writing" : "Thinking", since: since)
+                    }
+                } else {
+                    // A tool's result, or your message: the model is working out the next step.
+                    result = ClaudeActivity(text: "Thinking", since: since)
                 }
-                return ClaudeActivity(text: parts.contains { $0["type"] as? String == "text" } ? "Writing" : "Thinking", since: since)
             }
-            // A tool's result, or your message: the model is working out the next step.
-            return ClaudeActivity(text: "Thinking", since: since)
+            if narrating {
+                if type == "assistant", let text = parts.last(where: { $0["type"] as? String == "text" })?["text"] as? String {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { narration = String(trimmed.prefix(600)); narrating = false }
+                } else if type == "user", content is String || parts.contains(where: { $0["type"] as? String == "text" }) {
+                    // Your message begins this turn: nothing before it is its narration.
+                    narrating = false
+                }
+            }
+            if todo == nil, type == "assistant",
+               let tool = parts.last(where: { $0["type"] as? String == "tool_use" && $0["name"] as? String == "TodoWrite" }),
+               let items = (tool["input"] as? [String: Any])?["todos"] as? [[String: Any]] {
+                let done = items.filter { $0["status"] as? String == "completed" }.count
+                let active = items.first { $0["status"] as? String == "in_progress" }
+                    .flatMap { ($0["activeForm"] as? String) ?? ($0["content"] as? String) }
+                todo = ClaudeActivity.Todo(done: done, total: items.count, active: active)
+            }
+            if !narrating, todo != nil { break }
         }
-        return nil
+        result?.narration = narration
+        result?.todo = todo
+        return result
     }
 
     static func describe(tool name: String, input: [String: Any]) -> String {

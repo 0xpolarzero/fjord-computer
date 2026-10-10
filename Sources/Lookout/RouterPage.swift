@@ -533,13 +533,17 @@ private struct WorkingCard: View {
 
     var body: some View {
         let start = Store.workingStart(row)
-        let doing = row.session.running ? row.activity?.text ?? "Working" : (row.tasksText ?? "Working")
+        let current = row.session.running ? row.activity?.text ?? "Working" : (row.tasksText ?? "Working")
+        // The line composed from its task list and narration, when there is one; the raw step otherwise.
+        let explained = store.liveExplanation(row)
+        let doing = explained ?? current
         let marked = model.highlighted == RouterModel.workingID(row.id)
         Button { store.openAgent(row.id) } label: {
             HStack(spacing: 8) {
                 SessionGlyph(row: row, size: 18, dot: false)
                 Text(row.session.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
                 ShimmerText(text: doing, role: (12, 16)).truncationMode(.tail).layoutPriority(0)
+                    .help(RouterLive.tooltip(title: row.session.title, activity: row.activity, tasks: row.tasks))
                 Spacer(minLength: 4)
                 if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
                 if let start {

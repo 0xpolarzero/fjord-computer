@@ -235,7 +235,7 @@ extension RouterMessage {
 /// Turns reads of the sessions into cards. Pure: the same reads give the same cards, so the rules are tested here.
 enum RouterFeed {
     /// What a turn card says until the app writes the turn's summary.
-    private static let placeholder = "Finished its turn"
+    static let placeholder = "Finished its turn"
     static let maxCards = 300
     static let maxChat = 500
 
@@ -574,6 +574,7 @@ extension Store {
         RouterFeed.update(&state, sessions: Array(claudeSessions.values), activity: claudeActivity,
                           muted: Set(agents.mutedFolders), viewing: viewingNow, forms: forms, tasks: claudeTasks,
                           inventory: claudeTaskInventory, now: now)
+        applyTurnSummaries(&state)
         guard state != router else { return }
         let known = Set(router.cards.map(\.id))
         router = state

@@ -551,7 +551,9 @@ enum Demo {
         ]
         let hidden = session("local_demo-storage", "Sandbox storage directory customization", "microsandbox", minutes: 2900,
                              detail: "Storage path is configurable through the CLI and the env.")
-        sessions(store, now, listed, activity: ["local_demo-lookout": ClaudeActivity(text: "Running swift test", since: now.addingTimeInterval(-20))],
+        sessions(store, now, listed, activity: ["local_demo-lookout": ClaudeActivity(
+                    text: "Running swift test", since: now.addingTimeInterval(-20),
+                    todo: .init(done: 3, total: 7, active: "Running the test suite"))],
                  tasks: ["local_demo-ci": [
                     ClaudeTask(id: "a1", kind: .agent, title: "Review the sandbox changes", since: now.addingTimeInterval(-190),
                                activity: ClaudeActivity(text: "Reading sandbox.rs", since: now.addingTimeInterval(-5))),
