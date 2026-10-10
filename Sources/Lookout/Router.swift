@@ -127,7 +127,8 @@ struct RouterState: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? false
         enabledAt = try? c.decodeIfPresent(Date.self, forKey: .enabledAt)
-        cards = (try? c.decodeIfPresent([RouterCard].self, forKey: .cards)) ?? []
+        // Card by card: one this version can't read is left out, not every card.
+        cards = ((try? c.decodeIfPresent([Lossy<RouterCard>].self, forKey: .cards)) ?? []).compactMap(\.value)
         changes = (try? c.decodeIfPresent([LookoutChange].self, forKey: .changes)) ?? []
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
         if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
@@ -146,6 +147,12 @@ struct RouterState: Codable, Equatable {
         autoContinueSessions = (try? c.decodeIfPresent([String: Bool].self, forKey: .autoContinueSessions)) ?? [:]
         handledTurns = (try? c.decodeIfPresent([String: Int].self, forKey: .handledTurns)) ?? [:]
     }
+}
+
+/// An element of a saved array read on its own: nil when it can't be, so one bad element doesn't take the rest with it.
+struct Lossy<Value: Decodable>: Decodable {
+    var value: Value?
+    init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
 }
 
 /// Where a session came from when an inbox action started it: the category, the thing, the action and its run.
@@ -181,6 +188,15 @@ struct RouterCard: Codable, Identifiable, Hashable {
 
         /// Made when a turn ends (the others while one waits).
         var isTurn: Bool { self != .question && self != .plan }
+        /// The kind a build from before the triage reads instead (it knew only question, plan, done and stuck): saved as
+        /// `kind`, with this one beside it as `kindDetail`, so going back to such a build keeps the cards.
+        var legacy: Kind {
+            switch self {
+            case .question, .plan, .done, .stuck: self
+            case .asks, .approval: .stuck
+            case .waiting: .done
+            }
+        }
         /// Counted as needing you (amber); `done` is only news, and a session `waiting` is still on its way.
         var needsYou: Bool { self != .done && self != .waiting }
         /// Needs you's order: an OK asked first, then what stops a session on a question, then a stuck one, then news.
@@ -266,7 +282,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionID, kind, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage
+        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage
     }
 
     /// Files from before `createdMs` have `createdAt` (a date) instead.
@@ -274,7 +290,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         sessionID = try c.decode(String.self, forKey: .sessionID)
-        kind = try c.decode(Kind.self, forKey: .kind)
+        // The precise kind when this version knows it, else the older builds' one.
+        kind = try (try? c.decodeIfPresent(Kind.self, forKey: .kindDetail)) ?? c.decode(Kind.self, forKey: .kind)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         folder = try c.decodeIfPresent(String.self, forKey: .folder)
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
@@ -298,7 +315,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(sessionID, forKey: .sessionID)
-        try c.encode(kind, forKey: .kind)
+        try c.encode(kind.legacy, forKey: .kind)
+        if kind.legacy != kind { try c.encode(kind, forKey: .kindDetail) }
         try c.encode(title, forKey: .title)
         try c.encodeIfPresent(folder, forKey: .folder)
         try c.encode(text, forKey: .text)

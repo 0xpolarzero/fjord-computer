@@ -352,6 +352,24 @@ import Testing
         let back = try JSONDecoder().decode(RouterState.self, from: JSONEncoder().encode(s))
         #expect(back.cards == s.cards && back.autoContinue && back.autoContinueSessions == ["a": false])
 
+        // The new kinds are saved as one an older build reads (question, plan, done, stuck), the precise one beside it.
+        enum OldKind: String, Decodable { case question, plan, done, stuck }
+        struct OldCard: Decodable { var id: String; var kind: OldKind }
+        struct OldState: Decodable { var cards: [OldCard] }
+        var all = RouterState()
+        all.cards = [RouterCard.Kind.question, .plan, .done, .stuck, .asks, .approval, .waiting].map {
+            RouterCard(id: "a#\($0.rawValue)", sessionID: "a", kind: $0, title: "T", folder: nil, text: "x", createdAt: Date())
+        }
+        let data = try JSONEncoder().encode(all)
+        let older = try JSONDecoder().decode(OldState.self, from: data)
+        #expect(older.cards.map(\.kind) == [.question, .plan, .done, .stuck, .stuck, .stuck, .done])
+        #expect(try JSONDecoder().decode(RouterState.self, from: data).cards.map(\.kind) == all.cards.map(\.kind))
+        // A card this version can't read is left out, not the others; a kind it doesn't know falls back to the older one.
+        let mixed = #"{"cards":[{"id":"a#t1","sessionID":"a","kind":"pondering","createdMs":1},{"id":"b#t1","sessionID":"b","kind":"done","createdMs":1},"#
+            + #"{"id":"c#t1","sessionID":"c","kind":"stuck","kindDetail":"someday","createdMs":1}]}"#
+        let kept = try JSONDecoder().decode(RouterState.self, from: Data(mixed.utf8)).cards
+        #expect(kept.map(\.id) == ["b#t1", "c#t1"] && kept.map(\.kind) == [.done, .stuck])
+
         // A field this version doesn't know drops that field, not the triage or the card.
         let newer = #"{"id":"a#t1","sessionID":"a","kind":"asks","text":"x","createdMs":1,"triage":{"state":"pondering","work":"pr","questions":["Q?"]}}"#
         let card = try JSONDecoder().decode(RouterCard.self, from: Data(newer.utf8))
