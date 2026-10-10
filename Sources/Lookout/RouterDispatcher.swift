@@ -350,6 +350,7 @@ struct RouterAskBack: Identifiable, Equatable {
             }
             return
         }
+        if let session = delivery.session { store.noteLookoutStarted(session) }
         stage(job, "sending")
         let ack = try await effects.send(job.tools, delivery)
         if let settings {

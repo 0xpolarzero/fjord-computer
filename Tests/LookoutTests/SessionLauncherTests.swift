@@ -68,6 +68,7 @@ private final class LauncherLog {
         #expect(log.signed.map(\.cli) == ["abc"])
         #expect(log.sent.count == 1 && log.sent[0].peer == "peer-abc")
         #expect(log.sent[0].prepared.text == "SIGNED:Do it" && log.sent[0].prepared.body == "Do it")
+        #expect(store.router.lookoutStarted["local_abc"] != nil)
     }
 
     @Test func aValueTheCLIDoesNotTakeIsDroppedAndTheDefaultsOmitTheFlags() async throws {

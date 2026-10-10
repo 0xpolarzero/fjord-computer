@@ -31,6 +31,10 @@ struct RouterState: Codable, Equatable {
     var pendingTurns: [String: PendingTurn] = [:]
     /// What started a session the Router made for an inbox action, by session (its cards say so).
     var origins: [String: SessionOrigin] = [:]
+    /// Sessions Lookout started (the Router, or an inbox action), by session → when. The app imports and shows such a session
+    /// on its own, so "viewed" and "read" mean nothing for it: its cards come at once, until you write in it yourself from
+    /// the app (a message no run of Lookout's sent: see `RouterFeed.update`), after which the usual rules apply.
+    var lookoutStarted: [String: Date] = [:]
 
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
@@ -84,7 +88,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, overviews, seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits
+        case enabled, enabledAt, cards, changes, chat, decisions, overviews, seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted
     }
 
     func encode(to encoder: Encoder) throws {
@@ -102,6 +106,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(pendingTurns, forKey: .pendingTurns)
         try c.encode(origins, forKey: .origins)
         try c.encode(heldWaits, forKey: .heldWaits)
+        try c.encode(lookoutStarted, forKey: .lookoutStarted)
     }
 
     init(from decoder: Decoder) throws {
@@ -121,6 +126,7 @@ struct RouterState: Codable, Equatable {
         pendingTurns = (try? c.decodeIfPresent([String: PendingTurn].self, forKey: .pendingTurns)) ?? [:]
         origins = (try? c.decodeIfPresent([String: SessionOrigin].self, forKey: .origins)) ?? [:]
         heldWaits = (try? c.decodeIfPresent([String: HeldWait].self, forKey: .heldWaits)) ?? [:]
+        lookoutStarted = (try? c.decodeIfPresent([String: Date].self, forKey: .lookoutStarted)) ?? [:]
     }
 }
 
@@ -381,6 +387,14 @@ enum RouterFeed {
             }
             if let current { ongoing = current.ms }
 
+            // A session Lookout started is yours to read only once you've written in it from the app: a message that none of
+            // Lookout's runs on it sent. Until then the app showing it (it brings it to the front itself) means nothing.
+            if let before, state.lookoutStarted[id] != nil, stamp.message != before.message, let message = stamp.message,
+               !lookoutSent(state, id, atMs: message) {
+                state.lookoutStarted[id] = nil
+            }
+            let watching = id == viewing && state.lookoutStarted[id] == nil
+
             // First sight: only what it is now, so turning the Router on doesn't bring the backlog.
             if let before {
                 // What addresses the cards there are, before any new one is made (a new one is newer than all of it).
@@ -395,15 +409,15 @@ enum RouterFeed {
                 }
 
                 // No card for what you watched happen in the app, nor for muted projects.
-                let quiet = id == viewing || muted.contains(session.folderKey)
+                let quiet = watching || muted.contains(session.folderKey)
                 if session.completedTurns > before.turns {
                     // A newer turn: one still waiting is past (the usual rules apply to this one). It waits too, until it
                     // can be told whether it left work running (decided below, at once when it can be). One that ended
                     // while you look at the session is held, not dropped: see below.
                     state.pendingTurns[id] = muted.contains(session.folderKey) ? nil
-                        : RouterState.PendingTurn(turns: session.completedTurns, message: stamp.message, held: id == viewing)
+                        : RouterState.PendingTurn(turns: session.completedTurns, message: stamp.message, held: watching)
                 }
-                if let current, current.ms != previous, id == viewing, !muted.contains(session.folderKey) {
+                if let current, current.ms != previous, watching, !muted.contains(session.folderKey) {
                     state.heldWaits[id] = RouterState.HeldWait(ms: current.ms, toolUseID: current.toolUseID, kind: current.kind, text: current.text)
                 }
                 if let current, current.ms != previous, !quiet {
@@ -416,7 +430,7 @@ enum RouterFeed {
             if let held = state.heldWaits[id] {
                 if ongoing != held.ms || muted.contains(session.folderKey) {
                     state.heldWaits[id] = nil
-                } else if id != viewing {
+                } else if !watching {
                     state.heldWaits[id] = nil
                     add(&state, RouterCard(id: "\(id)#w\(held.ms)", sessionID: id, kind: held.kind, title: session.title,
                                            folder: session.folder, text: held.text, createdAt: now, toolUseID: held.toolUseID), now)
@@ -431,7 +445,7 @@ enum RouterFeed {
                 } else if !session.running, inventory?.contains(id) ?? true, !busy {
                     if muted.contains(session.folderKey) {
                         state.pendingTurns[id] = nil
-                    } else if id == viewing {
+                    } else if watching {
                         // Being looked at: no card now. If you leave without having read it, it comes then.
                         state.pendingTurns[id]?.held = true
                         state.pendingTurns[id]?.leftMs = nil
@@ -487,7 +501,21 @@ enum RouterFeed {
         state.formSeen = state.formSeen.filter { live[$0.key] != nil }
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
+        // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
+        state.lookoutStarted = state.lookoutStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
         prune(&state)
+    }
+
+    /// Whether a run of Lookout's on the session sent the user message at `ms`: one that was started shortly before it
+    /// (delivering takes up to a minute or two) and is linked to the session.
+    private static func lookoutSent(_ state: RouterState, _ session: String, atMs ms: Int64) -> Bool {
+        // The session's own first message goes out as soon as it is made, before any run links it.
+        if let made = state.lookoutStarted[session], Stamp.ms(made) - 5_000 <= ms, ms <= Stamp.ms(made) + 300_000 { return true }
+        return state.decisions.contains { entry in
+            guard entry.links.sessions.contains(session) else { return false }
+            let started = Stamp.ms(entry.at)
+            return started - 5_000 <= ms && ms <= started + 300_000
+        }
     }
 
     /// The card of a finished turn, with the app's summary as it is now (or the placeholder until it's written).

@@ -82,6 +82,7 @@ final class SessionLauncher {
         }
         let title = SessionStart.cleanTitle(title)
         let started = try await effects.bootstrap(folder, title)
+        store.noteLookoutStarted(started.sessionID)
         try await effects.pluginReady(started.cliID)
         let requested = SessionSettings(model: model, effort: effort)
         // Only a plugin that says it takes settings is sent them; an older one gets the plain message.
@@ -237,6 +238,12 @@ enum ActionSessions {
 }
 
 extension Store {
+    /// Marks a session as started by Lookout: its cards are never held for the app showing it (see `RouterState.lookoutStarted`).
+    func noteLookoutStarted(_ session: String, at date: Date = Date()) {
+        guard router.lookoutStarted[session] == nil else { return }
+        router.lookoutStarted[session] = date
+    }
+
     /// Tags a session with what started it; its cards (open or not yet made) say so.
     func noteOrigin(_ origin: SessionOrigin, for session: String) {
         var state = router

@@ -173,6 +173,54 @@ import Testing
         #expect(state.cards.count == 1)
     }
 
+    @Test func aSessionLookoutStartedIsCardedAtOnceEvenWhileTheAppShowsIt() {
+        var state = seen([session(turns: 0)])
+        state.lookoutStarted["local_a"] = at(-10)
+        update(&state, [session(turns: 1, running: true)], viewing: "local_a", now: 1)
+        update(&state, [session(turns: 1)], viewing: "local_a", unread: [], now: 2)
+        #expect(state.cards.map(\.id) == ["local_a#t1"])
+        #expect(state.pendingTurns.isEmpty)
+        #expect(state.lookoutStarted["local_a"] != nil)
+    }
+
+    @Test func aQuestionInASessionLookoutStartedIsCardedWhileTheAppShowsIt() {
+        var state = seen([session(turns: 0, running: true)])
+        state.lookoutStarted["local_a"] = at(-10)
+        update(&state, [session(turns: 0, running: true)], activity: ["local_a": question(1)], viewing: "local_a", now: 1)
+        #expect(state.cards.map(\.kind) == [.question])
+        #expect(state.heldWaits.isEmpty)
+    }
+
+    @Test func onceYouWriteInASessionLookoutStartedTheUsualRulesApply() {
+        var state = seen([session(turns: 1)])
+        state.lookoutStarted["local_a"] = at(-10)
+        // A message of yours, well after the start and none of Lookout's runs sent it.
+        update(&state, [session(turns: 1, message: 20)], viewing: "local_a", now: 21)
+        #expect(state.lookoutStarted["local_a"] == nil)
+        update(&state, [session(turns: 2, message: 20)], viewing: "local_a", unread: [], now: 22)
+        #expect(state.cards.isEmpty)
+        update(&state, [session(turns: 2, message: 20)], unread: [], now: 100)
+        #expect(state.cards.isEmpty)
+    }
+
+    @Test func aMessageLookoutSentIsNotYouWritingInTheSession() {
+        var state = seen([session(turns: 1)])
+        state.lookoutStarted["local_a"] = at(-10)
+        var run = RouterDecision(at: at(19.5), trigger: .system)
+        run.add(.sent(to: "x", text: "hi", original: nil), session: "local_a")
+        state.decisions = [run]
+        update(&state, [session(turns: 1, message: 20)], viewing: "local_a", now: 21)
+        #expect(state.lookoutStarted["local_a"] != nil)
+    }
+
+    @Test func lookoutStartedDecodesFromOlderState() throws {
+        let data = try JSONEncoder().encode(RouterState())
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json["lookoutStarted"] = nil
+        let state = try JSONDecoder().decode(RouterState.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(state.lookoutStarted.isEmpty)
+    }
+
     @Test func aTurnEndedWhileTheAppIsNotInFrontIsCarded() {
         var state = seen([session(turns: 1)])
         update(&state, [session(turns: 2)], viewing: nil, unread: [], now: 1)
