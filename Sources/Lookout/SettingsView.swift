@@ -5,6 +5,8 @@ import ApplicationServices
 /// label, a muted description and a control on the trailing edge, split by faint lines and never boxed; lists in a nest
 /// card. Straight on the island's black.
 struct SettingsView: View {
+    /// The account's picture in the GitHub section (warmed at that size when the hub opens).
+    static let accountAvatar: CGFloat = 32
     @Bindable var store: Store
     let hub: HubState
     @Environment(\.accessibilityReduceMotion) private var reduce
@@ -72,7 +74,7 @@ struct SettingsView: View {
         SettingsSection("GitHub") {
             // The row's `leading` slot: the avatar, 12 before the text.
             HStack(spacing: 12) {
-                Avatar(url: store.me?.avatarUrl, size: 32)
+                Avatar(url: store.me?.avatarUrl, size: Self.accountAvatar)
                 SettingsRow(store.me.map { "@\($0.login)" } ?? "Not connected",
                             description: store.unreachable ? "Couldn't reach GitHub"
                                 : store.tokenSource.map { "Token from \($0.rawValue)" } ?? (store.authError ?? ""),

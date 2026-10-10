@@ -222,6 +222,27 @@ import Testing
 
 @MainActor
 @Suite struct BarState {
+    /// The rows' avatars are warmed at the URL a row asks for: the latest actor's, at a row's size; and the account's at
+    /// Settings' size.
+    @Test func theAvatarsWarmedAreTheOnesTheRowsShow() {
+        let store = Store()
+        store.persists = false
+        Demo.populate(store, .router)
+        let warmed = store.avatarsToWarm()
+        let shown = Set(store.shownCategories.flatMap { store.entries(in: .category($0.id)) }
+            .filter { $0.thing.kind != .workflow }
+            .compactMap { Avatar.sizedURL($0.thing.latestActor?.avatar, size: EntryRow.avatar) })
+        let account = Avatar.sizedURL(store.me?.avatarUrl, size: SettingsView.accountAvatar)
+        #expect(!warmed.isEmpty && warmed.count <= 61 && Set(warmed).count == warmed.count)
+        #expect(warmed.contains { shown.contains($0) })
+        #expect(warmed.allSatisfy { shown.contains($0) || $0 == account })
+        // The tab the inbox opens on comes first.
+        let first = store.entries(in: store.tabNeedingYou).filter { $0.thing.kind != .workflow }
+            .compactMap { Avatar.sizedURL($0.thing.latestActor?.avatar, size: EntryRow.avatar) }
+        if let lead = first.first { #expect(warmed.first == lead) }
+        #expect(store.avatarsToWarm(limit: 1).filter { $0 != account }.count <= 1)
+    }
+
     @Test func aPeekWaitsForThePointerToSettleThenSwitchesAtOnce() async {
         let hub = HubState()
         hub.enter(.inbox)

@@ -405,6 +405,7 @@ final class HubController {
     /// Puts the bar where `barAway` says: off the edge (faded out) or on it (faded in).
     private func applyBar() {
         let away = barAway
+        let leaving = away && away != barApplied
         if away != barApplied {
             barApplied = away
             hub.barHidden = away
@@ -425,7 +426,12 @@ final class HubController {
                 syncTrigger()
             }
         }
-        reportOpen()
+        // Leaving for the window: the store's refresh and the avatars' fetches wait for the turn after the morph started.
+        if leaving {
+            DispatchQueue.main.async { [weak self] in self?.reportOpen() }
+        } else {
+            reportOpen()
+        }
     }
 
     private func fadeOut() {
@@ -475,14 +481,7 @@ final class HubController {
         guard open != reportedOpen else { return }
         reportedOpen = open
         store.setHubOpen(open)
-        if open {
-            // Every author in the inbox (not just the newest items: the view may list another filter), and the
-            // account's own picture in Settings.
-            var urls = Array(Set(store.things.values.compactMap { $0.author?.avatar })).prefix(60)
-                .compactMap { Avatar.sizedURL($0, size: 22) }
-            if let me = Avatar.sizedURL(store.me?.avatarUrl, size: 30) { urls.append(me) }
-            ImageCache.shared.prefetch(urls)
-        }
+        if open { ImageCache.shared.prefetch(store.avatarsToWarm()) }
     }
 
     // MARK: Dragging to another edge
@@ -566,4 +565,24 @@ struct BarPresence: Equatable {
     mutating func opened(_ open: Bool) { windowOpen = open; windowFront = open }
     /// The open window came to the front or went out of sight.
     mutating func front(_ front: Bool) { if windowOpen { windowFront = front } }
+}
+
+extension Store {
+    /// The pictures the rows are about to show, at the URLs they ask for (the latest actor's, at a row's size): the tab
+    /// the inbox opens on first, then the other categories in order, at most `limit`; and the account's, at Settings' size.
+    func avatarsToWarm(limit: Int = 60) -> [URL] {
+        var seen = Set<URL>()
+        var urls: [URL] = []
+        let tabs = [tabNeedingYou] + shownCategories.map { InboxTab.category($0.id) }
+        scan: for tab in tabs {
+            for entry in entries(in: tab) where entry.thing.kind != .workflow {
+                guard let url = Avatar.sizedURL(entry.thing.latestActor?.avatar, size: EntryRow.avatar),
+                      seen.insert(url).inserted else { continue }
+                urls.append(url)
+                if urls.count >= limit { break scan }
+            }
+        }
+        if let account = Avatar.sizedURL(me?.avatarUrl, size: SettingsView.accountAvatar) { urls.append(account) }
+        return urls
+    }
 }

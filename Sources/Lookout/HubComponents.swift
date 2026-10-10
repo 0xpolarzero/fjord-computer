@@ -158,6 +158,19 @@ extension CappedScroll {
     }
 }
 
+extension Thing {
+    /// Who acted last on it: the latest of the comments, reviews and thread replies; the author when nothing has happened.
+    /// The face a row shows, and so the avatar to warm before rows show (`Store.avatarsToWarm`).
+    var latestActor: Person? {
+        var latest: (Person, Date)?
+        func consider(_ p: Person, _ at: Date) { if latest == nil || at > latest!.1 { latest = (p, at) } }
+        for c in comments { consider(c.author, c.at) }
+        for r in reviews { consider(r.author, r.at) }
+        for t in threads { consider(t.lastReplyBy, t.lastReplyAt) }
+        return latest?.0 ?? author
+    }
+}
+
 /// A thing in the inbox on three short lines, as Claude's two-line rows (search-tabs-avatars.md §5.1) with a third for the
 /// facts: 13/16 title over a 12/16 muted `repo#number · @author`, over the facts as compact chips; Claude's Avatar (sm, 20) in a
 /// 24 slot, the unread dot cut into its corner (a workflow has its state's glyph instead); its actions (Claude's 24pt row
@@ -240,15 +253,7 @@ struct EntryRow: View {
         return out
     }
 
-    /// Who acted last on it: the latest of the comments, reviews and thread replies; the author when nothing has happened.
-    private var actor: Person? {
-        var latest: (Person, Date)?
-        func consider(_ p: Person, _ at: Date) { if latest == nil || at > latest!.1 { latest = (p, at) } }
-        for c in thing.comments { consider(c.author, c.at) }
-        for r in thing.reviews { consider(r.author, r.at) }
-        for t in thing.threads { consider(t.lastReplyBy, t.lastReplyAt) }
-        return latest?.0 ?? thing.author
-    }
+    private var actor: Person? { thing.latestActor }
 
     private func subtitle(_ actor: Person?) -> String {
         let name = String(thing.repo.split(separator: "/").last ?? "")
