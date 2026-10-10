@@ -174,6 +174,8 @@ struct RouterAskBack: Identifiable, Equatable {
     static let liveFor: TimeInterval = 120
     /// Those still being asked, by the same key: a send of the same words waits for the answer instead of asking again.
     @ObservationIgnored private var livePending: [String: (id: UUID, task: Task<Classification?, Never>)] = [:]
+    /// Moves on each correction or dismissal (`forgetLive`): an answer asked for before it is neither kept nor used.
+    @ObservationIgnored private var liveGeneration = 0
 
     init(store: Store) {
         self.store = store
@@ -523,12 +525,15 @@ struct RouterAskBack: Identifiable, Equatable {
         let history = store.recentDecisions(10)
         // Its own task: a draft that changes, or is sent, doesn't stop it, so the send can take its answer.
         let id = UUID()
+        let generation = liveGeneration
         let pending = Task { [weak self] () -> Classification? in
             guard let self else { return nil }
             defer { if self.livePending[key]?.id == id { self.livePending[key] = nil } }
             // Switched off meanwhile ("Let Jev read what you type"): nothing more goes, and what came is dropped.
             guard self.store?.jevAllows(.drafts) == true, let ranking = try? await self.effects.rank(tools, text, projects, history),
                   self.store?.jevAllows(.drafts) == true else { return nil }
+            // Read before a correction or a dismissal: routed as it was then, so it goes.
+            guard self.liveGeneration == generation else { return nil }
             var found = Classification(ranking)
             found.live = true
             self.liveCache = self.liveCache.filter { Date().timeIntervalSince($0.value.at) < Self.liveFor }
@@ -557,6 +562,7 @@ struct RouterAskBack: Identifiable, Equatable {
     func forgetLive() {
         liveCache = [:]
         livePending = [:]
+        liveGeneration &+= 1
     }
 
     /// Whether a target can still be sent to: an open card, a session not archived, a known project, or an intent.

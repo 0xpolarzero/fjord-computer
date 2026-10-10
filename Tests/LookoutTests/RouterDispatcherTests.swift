@@ -124,6 +124,23 @@ import Testing
         #expect(decision(s, a)?.decision.confirmed == nil)
     }
 
+    @Test func aPickStillBeingAskedWhenYouCorrectOneIsNeitherKeptNorUsed() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
+        f.holdRank = true
+        let typing = Task { await d.predict("add a changelog entry for this", projects: []) }
+        await waitUntil { f.rankHeld != nil }
+        // A correction (or a dismissal) while it is asked: how you route changed.
+        d.forgetLive()
+        f.holdRank = false
+        f.rankHeld?.resume()
+        #expect(await typing.value == nil)
+        let a = d.submit("add a changelog entry for this")
+        await finish(d, f, a)
+        #expect(f.ranks == 2, "the send asks again, with the correction in the history")
+        _ = s
+    }
+
     @Test func aDraftJevRoutedWhileTypingIsSentWithoutAskingAgainUnlessItChanged() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
