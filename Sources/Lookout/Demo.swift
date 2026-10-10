@@ -194,6 +194,9 @@ enum Demo {
             card(lcu, .question, question, minutes: 2),
         ]
         state.cards[state.cards.count - 1].toolUseID = "toolu_demo_lcu"
+        let fromAction = SessionOrigin(category: "Contributing", thing: "lcu#41 Update notifications", actionID: "a", runID: "r")
+        if let i = state.cards.firstIndex(where: { $0.sessionID == "local_demo-calc" }) { state.cards[i].origin = fromAction }
+        state.cards[state.cards.count - 1].origin = fromAction
         if let i = state.cards.firstIndex(where: { $0.sessionID == linux }) { state.cards[i].toolUseID = "toolu_demo_linux" }
         // The question is the wait the session is on now, so its form shows on its card.
         state.waits[lcu] = state.cards.last?.waitMs

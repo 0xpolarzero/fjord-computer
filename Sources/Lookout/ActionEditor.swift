@@ -78,7 +78,23 @@ private struct ActionRow: View {
             case .askRouter(let prompt):
                 ActionTextBox(text: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }),
                               placeholder: "What to do, like “Review {url} and fix what Greptile flagged”", label: "Prompt")
-                    .tip("Prompt", "The Router decides where it runs: a new session in one of the repo's local clones, or one already open. Its title, link, repo, why it is here and the last comment are added for you. {title} {url} {number} {repo} {author} are filled in.")
+                    .tip("Prompt", "The Router starts a new session in a local clone of the repo (Jev picks when there are several; no clone, no session). Its title, link, repo, why it is here and the last comment are added for you. {title} {url} {number} {repo} {author} are filled in.")
+                HStack(spacing: 8) {
+                    MenuChip(title: "Model: " + (action.model?.capitalized ?? "Default"), label: "Model") {
+                        Toggle("Default", isOn: Binding(get: { action.model == nil }, set: { _ in action.model = nil }))
+                        ForEach(ActionSettings.models, id: \.self) { model in
+                            Toggle(model.capitalized, isOn: Binding(get: { action.model == model }, set: { _ in action.model = model }))
+                        }
+                    }
+                    .tip("Model", "The model of the session it starts. Default is the one in your Claude Code settings.")
+                    MenuChip(title: "Effort: " + (action.effort ?? "Default"), label: "Effort") {
+                        Toggle("Default", isOn: Binding(get: { action.effort == nil }, set: { _ in action.effort = nil }))
+                        ForEach(ActionSettings.efforts, id: \.self) { effort in
+                            Toggle(effort, isOn: Binding(get: { action.effort == effort }, set: { _ in action.effort = effort }))
+                        }
+                    }
+                    .tip("Effort", "How hard the session it starts thinks. Default is the one in your Claude Code settings.")
+                }
                 RouterWarning(strong: InboxActions.rulesMatchOthers(rules))
             case .comment(let text):
                 ActionTextBox(text: Binding(get: { text }, set: { action.kind = .comment($0) }),

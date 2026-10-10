@@ -14,7 +14,7 @@ enum ActionTrigger: String, Codable, Hashable {
 }
 
 enum ActionKind: Codable, Hashable {
-    /// Hands the thing to the Router with this prompt; the Router decides where it runs (a new session, or one open).
+    /// Starts a session in a local clone of the thing's repo with this prompt (the Router does it, with no model).
     case askRouter(prompt: String)
     case comment(String)
     /// Re-run the failed jobs of the failing workflow runs.
@@ -58,6 +58,9 @@ struct CategoryAction: Codable, Hashable, Identifiable {
     var id = UUID()
     var kind: ActionKind
     var trigger: ActionTrigger = .enter
+    /// For "Ask the Router": the model and effort of the session it starts (`ActionSettings`); nil is your Claude Code default.
+    var model: String?
+    var effort: String?
 
     var title: String {
         switch kind {
@@ -122,7 +125,7 @@ struct ActionRun: Codable, Hashable {
     var url: URL?
     /// The Claude app's id of the session the Router started for it.
     var sessionID: String?
-    /// The message left in the Router's chat (an Ask the Router).
+    /// The message left in the Router's chat (an Ask the Router before sessions were started directly).
     var message: UUID?
 }
 
@@ -352,6 +355,11 @@ enum InboxActions {
         }
     }
 
+    /// The new session's title: its reference and what it is about, in one short line.
+    static func sessionTitle(_ thing: Thing) -> String {
+        SessionStart.cleanTitle(reference(thing) + " " + inline(thing.title))
+    }
+
     static func reference(_ thing: Thing) -> String {
         switch thing.kind {
         case .workflow: "\(thing.repo) · \(thing.workflowName ?? "workflow") on \(thing.branch ?? "its branch")"
@@ -359,16 +367,11 @@ enum InboxActions {
         }
     }
 
-    /// What the Router is told: "⚡ <Category>: your prompt", then the event's context and the folders it may pick from.
-    static func routerMessage(_ text: String, category: String, thing: Thing, facts: [Fact], folders: [String]) -> String {
-        var lines = ["Context, from the “\(category)” category of the Lookout inbox:",
+    /// What the session is told first: "⚡ <Category>: your prompt", then the event's context, the GitHub content fenced.
+    static func routerMessage(_ text: String, category: String, thing: Thing, facts: [Fact]) -> String {
+        let lines = ["Context, from the “\(category)” category of the Lookout inbox:",
                      "- URL: \(thing.url.absoluteString)",
                      "- \(thing.kind == .pr ? "Pull request" : thing.kind == .issue ? "Issue" : "Workflow"): \(neutralized(reference(thing)))"]
-        if folders.isEmpty {
-            lines.append("- Local clones of \(thing.repo): none found among the projects Claude knows")
-        } else {
-            lines.append("- Local clones of \(thing.repo), to choose from: " + folders.map { "`\($0)`" }.joined(separator: ", "))
-        }
         var github = ["- Title: \(thing.title)"]
         if !facts.isEmpty { github.append("- Why it is here: " + facts.map(\.label).joined(separator: " · ")) }
         if thing.kind == .workflow, !thing.failingJobs.isEmpty { github.append("- Failing jobs: " + thing.failingJobs.joined(separator: ", ")) }
@@ -458,11 +461,9 @@ struct FailedRun: Equatable {
 /// What actions do in the world. The Store has the real one; tests and the playground have their own (or none).
 @MainActor
 protocol ActionPerformer: AnyObject {
-    /// Leaves `message` in the Router's chat as coming from `source` (a category) and hands it to the Router, started if it
-    /// isn't running; the message's id. Throws when the Router is off.
-    func askRouter(_ message: String, source: String) async throws -> UUID
-    /// The same, saying which action of which thing asked (for the Router's decision log).
-    func askRouter(_ message: String, source: String, thing: String, action: UUID) async throws -> UUID
+    /// Starts a session for an "Ask the Router" action, with no model: in the repo's local clone (Jev picks among several),
+    /// tagged with where it came from, and logged in the Router's history. Throws why it couldn't.
+    func startSession(_ request: ActionSessionRequest) async throws -> ActionSessionStarted
     /// Posts a comment; its page when GitHub says.
     func comment(repo: String, number: Int, body: String) async throws -> URL?
     /// The failed runs that re-running would take, for a PR's head commit or a workflow thing.
@@ -473,10 +474,31 @@ protocol ActionPerformer: AnyObject {
     func clones(of repo: String) -> [String]
 }
 
-extension ActionPerformer {
-    func askRouter(_ message: String, source: String, thing: String, action: UUID) async throws -> UUID {
-        try await askRouter(message, source: source)
-    }
+/// What an "Ask the Router" action wants started.
+struct ActionSessionRequest: Equatable {
+    var category: String
+    var categoryID: UUID
+    /// The thing's id and its reference (`owner/repo#12`) with its title, as the session's origin says it.
+    var thingID: String
+    var reference: String
+    var repo: String
+    var action: UUID
+    /// The session's first message: the prompt, filled in, and the fenced GitHub content.
+    var message: String
+    /// The session's title: one short line.
+    var title: String
+    var model: String?
+    var effort: String?
+    /// The state a decision in the history is about: context for choosing among clones.
+    var summary: String
+    var run = UUID()
+}
+
+struct ActionSessionStarted: Equatable {
+    /// The Claude app's id of the new session.
+    var sessionID: String
+    /// The project (folder name) it runs in.
+    var project: String
 }
 
 struct ActionFailure: LocalizedError {
@@ -495,11 +517,16 @@ extension InboxActions {
         do {
             switch job.action.kind {
             case .askRouter(let text):
-                let message = routerMessage(text, category: job.category.name, thing: thing, facts: job.facts,
-                                            folders: performer.clones(of: thing.repo))
-                run.message = try await performer.askRouter(message, source: job.category.name, thing: reference(thing),
-                                                             action: job.action.id)
-                run.detail = "asked the Router"
+                let message = routerMessage(text, category: job.category.name, thing: thing, facts: job.facts)
+                let request = ActionSessionRequest(
+                    category: job.category.name, categoryID: job.category.id, thingID: thing.id, reference: reference(thing),
+                    repo: thing.repo, action: job.action.id, message: message, title: sessionTitle(thing),
+                    model: ActionSettings.clean(job.action.model, in: ActionSettings.models),
+                    effort: ActionSettings.clean(job.action.effort, in: ActionSettings.efforts),
+                    summary: "\(reference(thing)): \(inline(thing.title))")
+                let started = try await performer.startSession(request)
+                run.sessionID = started.sessionID
+                run.detail = "started a session in \(started.project)"
             case .comment(let text):
                 guard let number = thing.number, thing.kind != .workflow else { throw ActionFailure("only PRs and issues take comments") }
                 let body = substitute(text, thing: thing).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -530,8 +557,12 @@ extension InboxActions {
         switch action.kind {
         case .askRouter(let text):
             let folders = performer?.clones(of: thing.repo) ?? []
-            lines.append("Asks the Router, which decides where it runs. Message:")
-            lines.append(routerMessage(text, category: category, thing: thing, facts: facts, folders: folders))
+            lines.append(folders.isEmpty ? "No local clone of \(thing.repo) among the projects Claude knows: this would fail."
+                         : folders.count == 1 ? "Starts a session in \(folders[0]). First message:"
+                         : "Starts a session in one of \(folders.count) local clones (picked when it runs). First message:")
+            let model = ActionSettings.clean(action.model, in: ActionSettings.models), effort = ActionSettings.clean(action.effort, in: ActionSettings.efforts)
+            if model != nil || effort != nil { lines.append("With " + [model.map { "model \($0)" }, effort.map { "effort \($0)" }].compactMap { $0 }.joined(separator: ", ") + ".") }
+            lines.append(routerMessage(text, category: category, thing: thing, facts: facts))
         case .comment(let text):
             let body = substitute(text, thing: thing)
             lines.append("Comments on \(reference(thing)):")
@@ -733,16 +764,13 @@ final class StoreActionPerformer: ActionPerformer {
 
     func clones(of repo: String) -> [String] { LocalClones.findAll(repo, in: store.knownFolders) }
 
-    func askRouter(_ message: String, source: String) async throws -> UUID {
-        try await askRouter(message, source: source, thing: "", action: UUID())
-    }
+    /// Stands in for the launcher and Jev (tests); the real ones otherwise.
+    var launcher: SessionLauncher?
+    var chooser: ActionSessions.Chooser?
 
-    func askRouter(_ message: String, source: String, thing: String, action: UUID) async throws -> UUID {
-        let trigger = RouterDecision.Trigger.action(category: source, thing: thing, actionID: action.uuidString, runID: nil)
-        guard let id = store.routerAgent.sendAutomated(message, source: source, trigger: trigger) else {
-            throw ActionFailure("the Router is off")
-        }
-        return id
+    func startSession(_ request: ActionSessionRequest) async throws -> ActionSessionStarted {
+        try await ActionSessions.start(request, store: store, clones: clones(of: request.repo),
+                                       launcher: launcher ?? SessionLauncher(store: store), chooser: chooser)
     }
 
     func comment(repo: String, number: Int, body: String) async throws -> URL? {

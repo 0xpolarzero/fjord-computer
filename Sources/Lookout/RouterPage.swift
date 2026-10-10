@@ -272,6 +272,7 @@ private struct HistoryCardLine: View {
                         KindTag(kind: card.kind)
                         ProjectLabel(name: project.name, color: project.color)
                             .cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                        if let origin = card.origin { OriginTag(origin: origin) }
                     }
                     CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
                     HStack(spacing: 6) {
@@ -688,6 +689,18 @@ private struct WorkingCard: View {
     }
 }
 
+// MARK: - Origin
+
+/// "⚡ from <category> · <thing>": the session was started by an inbox action.
+struct OriginTag: View {
+    let origin: SessionOrigin
+
+    var body: some View {
+        Text(origin.label).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
+            .accessibilityLabel("Started by an action: \(origin.category), \(origin.thing)")
+    }
+}
+
 // MARK: - Needs-you card
 
 /// A card that needs you, warm and solid: a summary row (icon, title, kind, a line of what it asks, project, time), and,
@@ -725,6 +738,10 @@ private struct NeedsCard: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(expanded ? .isSelected : [])
                 .accessibilityHint(expanded ? "" : "Shows it in full")
+            if let origin = card.origin {
+                OriginTag(origin: origin).padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
+                    .padding(.leading, wide ? 28 : 0)
+            }
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
                     body(form: form)

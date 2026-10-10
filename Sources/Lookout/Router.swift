@@ -30,6 +30,8 @@ struct RouterState: Codable, Equatable {
     /// Turns that ended while the session still had subagents or commands running (see `RouterFeed.update`): carded once
     /// those are done, by session.
     var pendingTurns: [String: PendingTurn] = [:]
+    /// What started a session the Router made for an inbox action, by session (its cards say so).
+    var origins: [String: SessionOrigin] = [:]
 
     struct PendingTurn: Codable, Equatable {
         /// The turn's number (`completedTurns`).
@@ -54,7 +56,20 @@ struct RouterState: Codable, Equatable {
         waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]
         formSeen = (try? c.decodeIfPresent([String: Int64].self, forKey: .formSeen)) ?? [:]
         pendingTurns = (try? c.decodeIfPresent([String: PendingTurn].self, forKey: .pendingTurns)) ?? [:]
+        origins = (try? c.decodeIfPresent([String: SessionOrigin].self, forKey: .origins)) ?? [:]
     }
+}
+
+/// Where a session came from when an inbox action started it: the category, the thing, the action and its run.
+struct SessionOrigin: Codable, Equatable, Hashable {
+    var category: String
+    /// The thing's reference and title, in a line.
+    var thing: String
+    var actionID: String
+    var runID: String
+
+    /// "⚡ from <category> · <thing>": on the session's cards and rows.
+    var label: String { "⚡ from \(category) · \(thing)" }
 }
 
 /// Something a session wants from you, open until it is addressed.
@@ -110,6 +125,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
     /// For a turn card made once the turn could be told done (see `RouterFeed.update`): your last message when the turn
     /// ended (ms). A later one is a reply to it, however late the card was made.
     var turnMessage: Int64?
+    /// Set when an inbox action started the session this is about.
+    var origin: SessionOrigin?
 
     /// What a message (ms) must come after to be a reply to this card.
     var replyAfter: Int64 { turnMessage ?? createdMs }
@@ -137,7 +154,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionID, kind, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage
+        case id, sessionID, kind, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin
     }
 
     /// Files from before `createdMs` have `createdAt` (a date) instead.
@@ -158,6 +175,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
         addressedBy = try c.decodeIfPresent(Addressed.self, forKey: .addressedBy)
         toolUseID = try c.decodeIfPresent(String.self, forKey: .toolUseID)
         turnMessage = try? c.decodeIfPresent(Int64.self, forKey: .turnMessage)
+        origin = try? c.decodeIfPresent(SessionOrigin.self, forKey: .origin)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -173,6 +191,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(addressedBy, forKey: .addressedBy)
         try c.encodeIfPresent(toolUseID, forKey: .toolUseID)
         try c.encodeIfPresent(turnMessage, forKey: .turnMessage)
+        try c.encodeIfPresent(origin, forKey: .origin)
     }
 
     /// The wait a question or plan card was made for (ms since 1970), from its id.
@@ -495,6 +514,8 @@ enum RouterFeed {
     private static func add(_ state: inout RouterState, _ card: RouterCard, _ now: Date) {
         guard !state.cards.contains(where: { $0.id == card.id }) else { return }
         address(&state, card.sessionID, .superseded, now)
+        var card = card
+        if card.origin == nil { card.origin = state.origins[card.sessionID] }
         state.cards.append(card)
     }
 
