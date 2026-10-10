@@ -131,6 +131,35 @@ import Testing
         #expect(f.prepared == ["local_b"] && d.askBacks.map(\.id) == [b!], "asked, not sent")
     }
 
+    @Test func aCorrectionOrAGoneTargetIsNotRoutedFromWhatWasReadWhileTyping() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let text = "add a changelog entry for this"
+        _ = await d.predict(text, projects: [])
+        // Waved off, sent, and the ask corrected to the other session.
+        let a = d.submit(text, context: RouterContext(notTo: "session:local_b"))
+        await finish(d, f, a)
+        #expect(f.ranks == 1 && d.askBacks.map(\.id) == [a!])
+        f.finished = []
+        d.pick(a!, target: "session:local_a")
+        await finish(d, f, a)
+        f.ranked = [.init(target: "session:local_a", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let b = d.submit(text)
+        await finish(d, f, b)
+        #expect(f.ranks == 2 && f.prepared == ["local_a", "local_a"], "asked again, and sent where you corrected it to")
+
+        // A card read while typing that is gone by the send is asked about again, not failed on.
+        f.ranked = [.init(target: "answer:local_a#w1", p: 0.95), .init(target: "unclear", p: 0.05)]
+        _ = await d.predict("use sqlite for the database", projects: [])
+        #expect(f.ranks == 3)
+        s.router.cards = []
+        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let c = d.submit("use sqlite for the database")
+        await finish(d, f, c)
+        #expect(f.ranks == 4 && f.prepared.last == "local_b")
+        #expect(decision(s, c)?.done.contains { if case .failed = $0 { true } else { false } } == false)
+    }
+
     @Test func wordsJevFindsPlainGoAsWrittenWithoutAHaikuRun() async {
         let (_, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]

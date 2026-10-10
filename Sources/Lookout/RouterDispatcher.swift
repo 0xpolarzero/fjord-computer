@@ -219,6 +219,8 @@ struct RouterAskBack: Identifiable, Equatable {
         let ask = askBacks.remove(at: i)
         let chosen = describe(target, store: store)
         let corrected = target != ask.suggestion
+        // What Jev read while you typed no longer holds against your correction.
+        if corrected { forgetLive() }
         store.updateDecision(id) {
             $0.decision.target = chosen
             if corrected { $0.outcome = .corrected(from: ask.suggestion.map { describe($0, store: store) } ?? "no clear target", to: chosen) }
@@ -235,6 +237,7 @@ struct RouterAskBack: Identifiable, Equatable {
     func dismiss(_ id: UUID) {
         guard let store, let i = askBacks.firstIndex(where: { $0.id == id }) else { return }
         askBacks.remove(at: i)
+        forgetLive()
         store.updateDecision(id) {
             $0.reply = "Dismissed: nothing was sent."
             $0.outcome = .done
@@ -468,8 +471,11 @@ struct RouterAskBack: Identifiable, Equatable {
         let history = store.recentDecisions(10, excluding: job.id)
         var found = await classify(job, projects: narrowed, history: history)
         try Task.checkCancellation()
-        // Where you waved Jev's pick off isn't gone to without asking you.
-        if let notTo = job.context.notTo, found.top?.target == notTo { found.sure = false }
+        // Where you waved Jev's pick off isn't gone to without asking you, and his pick for these words is asked again.
+        if let notTo = job.context.notTo, found.top?.target == notTo {
+            found.sure = false
+            liveCache[Self.liveKey(job.text, narrowed)] = nil
+        }
         store.updateDecision(job.id) {
             $0.decision.label = found.top.map { Self.label($0.target) }
             $0.decision.confidence = found.top?.p
@@ -504,9 +510,25 @@ struct RouterAskBack: Identifiable, Equatable {
         ([text.trimmingCharacters(in: .whitespacesAndNewlines)] + projects).joined(separator: "\u{1}")
     }
 
+    /// A pick kept from while you typed, while it is fresh and its target is still there to go to.
     private func live(_ key: String) -> Classification? {
         guard let hit = liveCache[key], Date().timeIntervalSince(hit.at) < Self.liveFor else { return nil }
+        guard let store, hit.found.top.map({ eligible($0.target, store: store) }) ?? true else {
+            liveCache[key] = nil
+            return nil
+        }
         return hit.found
+    }
+
+    /// Your corrections and dismissals change how messages are routed: picks made before them are asked again.
+    func forgetLive() { liveCache = [:] }
+
+    /// Whether a target can still be sent to: an open card, a session not archived, a known project, or an intent.
+    func eligible(_ target: String, store: Store) -> Bool {
+        if target.hasPrefix("answer:") { return store.openRouterCards.contains { $0.id == String(target.dropFirst(7)) } }
+        if target.hasPrefix("session:") { return store.claudeSessions[String(target.dropFirst(8))].map { !$0.isArchived } ?? false }
+        if target.hasPrefix("new:") { return store.knownFolders.contains(String(target.dropFirst(4))) }
+        return true
     }
 
     /// Jev's questions: the stand-in, else the routing chooser of a run's tools, else TypeSafe with your key.
