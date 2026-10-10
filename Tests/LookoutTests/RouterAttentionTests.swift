@@ -87,22 +87,30 @@ import Testing
         #expect(s.routerAttention.strip == nil && posted().isEmpty)
     }
 
-    @Test func awayTheInboxBannersOnlyWhatJevRatesHigh() {
-        var low = InboxFixture.pr(1, repo: "o/r")
-        low.signals = ThingSignals(importance: ImportanceSignal(level: .low, stamp: "x"))
-        var high = InboxFixture.pr(2, repo: "o/r")
-        high.signals = ThingSignals(importance: ImportanceSignal(level: .urgent, stamp: "x"))
+    @Test func awayTheInboxBannersOnlyWhatJevRatesHighForYou() {
         let (s, idle, posted) = store()
-        s.things = [low.id: low, high.id: high]
-        s.notify(id: Store.inboxNotificationPrefix + low.id, title: "", subtitle: "", body: "", quiet: false)
+        let me = s.inboxContext.me
+        func rated(_ n: Int, _ level: Importance, viewer: String? = nil) -> Thing {
+            var t = InboxFixture.pr(n, repo: "o/r")
+            t.kind = .issue
+            t.assignees = [me]
+            t.signals = ThingSignals(importance: ImportanceSignal(level: level, stamp: InboxEngine.importanceStamp(t, context: s.inboxContext) ?? "?"),
+                                     viewer: viewer ?? InboxEngine.viewer(me))
+            return t
+        }
+        let low = rated(1, .low), high = rated(2, .urgent), elses = rated(3, .urgent, viewer: "someone-else")
+        s.things = [low.id: low, high.id: high, elses.id: elses]
+        #expect(InboxEngine.importance(high, context: s.inboxContext) == .urgent)
+        let id = { (t: Thing) in Store.inboxNotificationPrefix + t.id }
+        s.notify(id: id(low), title: "", subtitle: "", body: "", quiet: false)
         #expect(posted().count == 1)
         idle.seconds = 900
-        s.notify(id: Store.inboxNotificationPrefix + low.id, title: "", subtitle: "", body: "", quiet: false)
-        s.notify(id: Store.inboxNotificationPrefix + high.id, title: "", subtitle: "", body: "", quiet: false)
-        #expect(posted() == [Store.inboxNotificationPrefix + low.id, Store.inboxNotificationPrefix + high.id])
+        // Away: the urgent one comes; the low one, and one rated for someone else, wait.
+        for t in [low, high, elses] { s.notify(id: id(t), title: "", subtitle: "", body: "", quiet: false) }
+        #expect(posted() == [id(low), id(high)])
         idle.seconds = 0
         s.routerAttention.refresh()
-        #expect(s.routerAttention.strip?.line([]) == "1 in your inbox")
+        #expect(s.routerAttention.strip?.line([]) == "2 in your inbox")
         #expect(posted().last?.hasPrefix(Notifier.summaryPrefix) == true)
     }
 

@@ -506,6 +506,8 @@ enum InboxEngine {
     /// What an importance rating is for: the review request (to you or a team of yours) by when it was made, else your
     /// assignment. Nil when it is neither, or not open.
     static func importanceStamp(_ thing: Thing, context: InboxContext) -> String? { importanceStamp(thing, Resolved(context)) }
+    /// Jev's rating of what is asked of you now, as the inbox counts it (for you, Jev's reading on, the request it rated).
+    static func importance(_ thing: Thing, context: InboxContext) -> Importance? { importance(thing, Resolved(context)) }
 
     private static func importanceStamp(_ thing: Thing, _ r: Resolved) -> String? {
         guard thing.kind != .workflow, thing.status == .open || thing.status == .draft, !r.me.isEmpty else { return nil }

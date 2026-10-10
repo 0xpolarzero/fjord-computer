@@ -993,8 +993,11 @@ final class Store {
     func notify(id: String, title: String, subtitle: String, body: String, quiet: Bool, url: URL? = nil) {
         guard settings.notifications, !isSnoozed else { return }
         // Away, a thing's banner comes only if Jev rates it high or urgent; the others are counted for when you're back.
-        if id.hasPrefix(Self.inboxNotificationPrefix),
-           !routerAttention.admitInbox(things[String(id.dropFirst(Self.inboxNotificationPrefix.count))]?.signals?.importance?.level) { return }
+        if id.hasPrefix(Self.inboxNotificationPrefix) {
+            let thing = things[String(id.dropFirst(Self.inboxNotificationPrefix.count))]
+            let importance = thing.flatMap { InboxEngine.importance($0, context: inboxContext) }
+            if !routerAttention.admitInbox(importance) { return }
+        }
         notifier.post(id: id, title: title, subtitle: subtitle, body: body, quiet: quiet, url: url)
     }
 
