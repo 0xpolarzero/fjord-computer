@@ -241,17 +241,22 @@ import Testing
         #expect(closed == 1 && closing == 0 && asked == 0 && !controller.isOpen)
     }
 
-    private final class Ticks { var blocks: [@MainActor () -> Void] = [] }
+    private final class Ticks {
+        var blocks: [@MainActor () -> Void] = []
+        var turns: [@MainActor () -> Void] = []
+    }
 
     /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on.
     private func morphing(_ body: (AppWindowController, Ticks) -> Void) {
-        let saved = (AppTransition.enabled, AppTransition.nextFrame)
+        let saved = (AppTransition.enabled, AppTransition.nextFrame, AppTransition.nextTurn)
         let ticks = Ticks()
         AppTransition.enabled = true
         AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
+        AppTransition.nextTurn = { block in ticks.turns.append(block) }
         defer {
             AppTransition.enabled = saved.0
             AppTransition.nextFrame = saved.1
+            AppTransition.nextTurn = saved.2
         }
         _ = NSApplication.shared
         let store = Store()
@@ -281,20 +286,38 @@ import Testing
         }
     }
 
+    @Test func theMorphMovesBeforeTheWindowIsBuilt() {
+        morphing { controller, ticks in
+            controller.show(.settings)
+            guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+            // The overlay is on screen at once, on the window's bare surface; the window and its content come a turn later,
+            // and it counts as open meanwhile (a toggle closes it).
+            #expect(run.overlay.isVisible && run.image == nil && controller.isOpen)
+            #expect(!window.isVisible && window.contentViewController == nil)
+            #expect(ticks.turns.count == 1)
+            ticks.turns.removeFirst()()
+            #expect(window.isVisible && window.alphaValue == 0 && window.contentViewController != nil)
+            // The picture is there before the real window takes over.
+            run.complete()
+            #expect(run.image != nil && window.alphaValue == 1 && run.overlay.isVisible)
+        }
+    }
+
     @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
         morphing { controller, ticks in
             controller.show(.settings)
             guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
             let before = run.pose
             controller.close()
-            #expect(controller.phase == .closing && controller.run === run)
+            // On its way out it counts as closed: a toggle opens it again.
+            #expect(controller.phase == .closing && controller.run === run && !controller.isOpen)
             #expect(run.startPose?.rect == before.rect && run.startPose?.radius == before.radius)
             // The real window is out of the way and the overlay carries the close.
             #expect(!window.isVisible && run.overlay.isVisible)
             // Opening again turns it round from there.
             let now = run.pose
             controller.show(.settings)
-            #expect(controller.phase == .opening && run.startPose?.rect == now.rect)
+            #expect(controller.phase == .opening && run.startPose?.rect == now.rect && controller.isOpen)
             #expect(ticks.blocks.isEmpty)
         }
     }

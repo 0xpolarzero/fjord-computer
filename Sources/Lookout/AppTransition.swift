@@ -7,6 +7,10 @@ import QuartzCore
 // real window waits, invisible, at its frame. At the end of an opening the real window is shown under the identical
 // overlay, which goes only once it has been composited, so nothing pops. Reduce Motion gets a short cross-fade of the
 // overlay, and a test run no animation at all.
+//
+// An opening moves first and draws after: the morph starts on the picture kept from the last close (or the window's bare
+// surface), with nothing captured, and is on screen before the window's content is built; a fresh picture replaces it a
+// turn later, and is in place before the real window takes over.
 
 /// Where the bar is, for the morph to start from or end at.
 struct BarMorph {
@@ -32,6 +36,8 @@ enum AppTransition {
     /// The bar's own fade-in on a close (the morph's overlay shrinks over it).
     static let duration: TimeInterval = 0.38
     static let reducedDuration: TimeInterval = 0.15
+    /// A fresh picture fading in over another (or over the bare surface) during an opening.
+    static let pictureFade: TimeInterval = 0.12
     static let curve = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
     /// A window's corner radius when the system does not say.
     static let fallbackRadius: CGFloat = 16
@@ -46,6 +52,10 @@ enum AppTransition {
 
     /// Runs `block` on the screen's next refresh. Replaceable, so a test can step the frames itself.
     static var nextFrame: (NSScreen?, @escaping @MainActor () -> Void) -> Void = { screen, block in FrameTick.next(on: screen, block) }
+    /// Runs `block` on the main queue's next turn (after the current one has committed). Replaceable, as `nextFrame`.
+    static var nextTurn: (@escaping @MainActor () -> Void) -> Void = { block in
+        DispatchQueue.main.async { MainActor.assumeIsolated { block() } }
+    }
 
     /// The window's own corner radius (macOS 26's are larger than before), so nothing changes when the real window takes over.
     static func cornerRadius(of window: NSWindow) -> CGFloat {
@@ -68,10 +78,56 @@ enum AppTransition {
         return rep.cgImage
     }
 
-    /// An overlay for `window` (laid out at its frame), ready to show; nil when there is nothing to draw.
+    /// An overlay for `window` (laid out at its frame) on the window's picture as it is now, ready to show; nil when there
+    /// is nothing to draw.
     static func makeRun(for window: NSWindow, bar: BarMorph?) -> Run? {
         guard let image = snapshot(of: window), let screen = window.screen ?? NSScreen.main else { return nil }
-        return Run(window: window, image: image, screen: screen, bar: bar, radius: cornerRadius(of: window))
+        return Run(window: window, image: image, imageIsKey: window.isKeyWindow, screen: screen, bar: bar,
+                   radius: cornerRadius(of: window))
+    }
+
+    /// An overlay for `window` with nothing captured: on `image` (a picture kept from before), else on the window's bare
+    /// surface until `refresh` brings one.
+    static func makeRun(for window: NSWindow, image: CGImage?, bar: BarMorph?) -> Run? {
+        guard let screen = window.screen ?? NSScreen.main else { return nil }
+        // A picture kept was taken at a close, with the window key.
+        return Run(window: window, image: image, imageIsKey: image != nil, screen: screen, bar: bar,
+                   radius: cornerRadius(of: window))
+    }
+
+    /// The window's picture at its last close, taken while it had the keyboard (its buttons in colour, as the real window
+    /// shows them once it is key): the next opening starts on it. Only one taken at a close will do: a picture taken out
+    /// of sight has the grey buttons of a window in the background.
+    struct Picture {
+        var image: CGImage
+        var frame: NSRect
+        var scale: CGFloat
+        /// What it shows: another place opening draws a fresh picture over it.
+        var destination: AppDestination
+
+        /// Whether it can stand for `window` as it opens: the same size, at the same scale.
+        @MainActor func fits(_ window: NSWindow) -> Bool {
+            frame.size == window.frame.size && scale == (window.screen ?? NSScreen.main)?.backingScaleFactor
+        }
+    }
+
+    /// The overlay, kept from one morph to the next (a screen-sized window is not free to make); made again for another
+    /// screen.
+    private static var sharedOverlay: NSWindow?
+
+    fileprivate static func overlay(on screen: NSScreen) -> NSWindow {
+        if let sharedOverlay, sharedOverlay.frame == screen.frame { return sharedOverlay }
+        sharedOverlay?.orderOut(nil)
+        let overlay = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        overlay.isOpaque = false
+        overlay.backgroundColor = .clear
+        overlay.hasShadow = false
+        overlay.ignoresMouseEvents = true
+        overlay.isReleasedWhenClosed = false
+        overlay.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        overlay.animationBehavior = .none
+        sharedOverlay = overlay
+        return overlay
     }
 
     /// Where the layers are, and how they look.
@@ -88,8 +144,8 @@ enum AppTransition {
     struct Spring {
         var stiffness: CGFloat
         var damping: CGFloat
-        /// Critically damped: no overshoot to see.
-        static let opening = Spring(stiffness: 340, damping: 36.8)
+        /// Critically damped: no overshoot to see. Stiff, so the window is there soon (settled in 0.4 s).
+        static let opening = Spring(stiffness: 600, damping: 49)
         static let closing = Spring(stiffness: 400, damping: 40)
     }
 
@@ -98,6 +154,7 @@ enum AppTransition {
     final class Run {
         let overlay: NSWindow
         private let screen: NSScreen
+        private let host: NSView
         private let root = CALayer()
         private let shadow = CALayer()
         private let container = CALayer()
@@ -112,24 +169,26 @@ enum AppTransition {
         private(set) var startPose: Pose?
         private var token = 0
         private var completion: (() -> Void)?
+        /// The window's picture shown, if any yet.
+        private(set) var image: CGImage?
+        /// Whether that picture was taken while the window had the keyboard (its buttons as the real window will show them).
+        private(set) var imageIsKey: Bool
+        /// When the animation under way has settled (media time): the overlay does not go before.
+        private var settlesAt: CFTimeInterval = 0
 
-        fileprivate init(window: NSWindow, image: CGImage, screen: NSScreen, bar: BarMorph?, radius: CGFloat) {
+        fileprivate init(window: NSWindow, image: CGImage?, imageIsKey: Bool, screen: NSScreen, bar: BarMorph?,
+                         radius: CGFloat) {
             self.screen = screen
             self.bar = bar
+            self.image = image
+            self.imageIsKey = imageIsKey
             windowFrame = window.frame
             windowRadius = radius
-            let scale = window.backingScaleFactor
-            overlay = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            overlay.isOpaque = false
-            overlay.backgroundColor = .clear
-            overlay.hasShadow = false
-            overlay.ignoresMouseEvents = true
-            overlay.isReleasedWhenClosed = false
+            let scale = screen.backingScaleFactor
+            overlay = AppTransition.overlay(on: screen)
             // Above the window, and above the bar (floating) which fades in or out beneath.
             overlay.level = NSWindow.Level(rawValue: max(window.level.rawValue, NSWindow.Level.floating.rawValue) + 1)
-            overlay.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-            overlay.animationBehavior = .none
-            let host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
             root.frame = host.bounds
             root.speed = 1 / AppTransition.slowdown
             host.layer = root
@@ -177,11 +236,21 @@ enum AppTransition {
             overlay.orderFrontRegardless()
         }
 
-        /// A newer picture of the window (the content changed since): the same frame.
-        func refresh(_ window: NSWindow) {
+        /// A newer picture of the window (it was built, or its content changed since): the same frame. `crossFade`: the
+        /// picture shown is another (none, or another place's), so the new one fades in over it rather than popping in.
+        func refresh(_ window: NSWindow, crossFade: Bool = false) {
             guard let image = AppTransition.snapshot(of: window) else { return }
+            self.image = image
+            imageIsKey = window.isKeyWindow
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            windowLayer.removeAnimation(forKey: kCATransition)
+            if crossFade {
+                let fade = CATransition()
+                fade.type = .fade
+                fade.duration = AppTransition.pictureFade
+                windowLayer.add(fade, forKey: kCATransition)
+            }
             windowLayer.contents = image
             CATransaction.commit()
         }
@@ -246,21 +315,33 @@ enum AppTransition {
             show()
         }
 
-        private var showing: Bool { overlay.isVisible && container.opacity > 0 }
+        /// On screen: shown, or on its way to hidden (a close under way).
+        private var showing: Bool {
+            overlay.isVisible && (container.opacity > 0 || !(container.animationKeys() ?? []).isEmpty)
+        }
 
         /// Grows from where the overlay is now (or the bar's cell, when it was not showing) to the window. `done` runs once
         /// it is there (not if another animation takes over first).
         func open(reduced: Bool, done: @escaping () -> Void) {
             let wasShowing = showing
             show()
+            // Not showing: the start is set here, and taken as it is (its layers are not on screen yet, so they have no
+            // presentation to read it from).
             guard !reduced, let cell = cellPose else {
-                if !wasShowing { apply(Pose(rect: windowFrame, radius: windowRadius, window: 1, bar: 0, shadow: 1, container: 0)) }
-                fade(to: 1, done: done)
+                let hidden = Pose(rect: windowFrame, radius: windowRadius, window: 1, bar: 0, shadow: 1, container: 0)
+                if !wasShowing { apply(hidden) }
+                fade(to: 1, from: wasShowing ? nil : hidden, done: done)
                 return
             }
             if !wasShowing { apply(cell) }
-            play(to: windowPose, spring: .opening, opacities: .opening, done: done)
+            // The handoff starts two refreshes before the spring settles: the real window is composited by then, and the
+            // overlay over it stays until it has.
+            play(to: windowPose, from: wasShowing ? nil : cell, spring: .opening, opacities: .opening, lead: 2 * frameDuration,
+                 done: done)
         }
+
+        /// One refresh of the overlay's screen.
+        private var frameDuration: TimeInterval { 1 / Double(max(screen.maximumFramesPerSecond, 60)) }
 
         /// Shrinks from where the overlay is now to the bar's cell.
         func close(reduced: Bool, done: @escaping () -> Void) {
@@ -274,12 +355,12 @@ enum AppTransition {
             end.bar = 0
             end.shadow = 0
             end.container = 0
-            play(to: end, spring: .closing, opacities: .closing, done: done)
+            play(to: end, spring: .closing, opacities: .closing, lead: 0, done: done)
         }
 
-        /// A cross-fade of the overlay alone, at the window's frame.
-        private func fade(to opacity: Float, done: @escaping () -> Void) {
-            var from = pose
+        /// A cross-fade of the overlay alone, at the window's frame, from `start` (else from where it is now).
+        private func fade(to opacity: Float, from start: Pose? = nil, done: @escaping () -> Void) {
+            var from = start ?? pose
             from.rect = windowFrame
             var end = windowPose
             end.container = opacity
@@ -287,6 +368,7 @@ enum AppTransition {
             let mine = token
             startPose = from
             completion = done
+            settlesAt = CACurrentMediaTime() + AppTransition.reducedDuration * Double(AppTransition.slowdown)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for layer in [container, shadow, windowLayer, barLayer] { layer.removeAllAnimations() }
@@ -307,6 +389,8 @@ enum AppTransition {
                 MainActor.assumeIsolated { self?.finishAnimation(mine) }
             }
             CATransaction.commit()
+            // Called within the turn's own transaction: on screen now, before whatever else the turn does.
+            CATransaction.flush()
         }
 
         /// When each layer's opacity moves, as fractions of the spring's duration: (start, length).
@@ -319,14 +403,18 @@ enum AppTransition {
             static let closing = Opacities(bar: (0, 0.3), window: (0.1, 0.4), shadow: (0, 0.45), container: (0.45, 0.4))
         }
 
-        private func play(to end: Pose, spring: Spring, opacities: Opacities, done: @escaping () -> Void) {
-            let from = pose
+        /// From `start` (else from where the layers are now). `lead`: how long before the spring settles `done` runs.
+        private func play(to end: Pose, from start: Pose? = nil, spring: Spring, opacities: Opacities, lead: TimeInterval,
+                          done: @escaping () -> Void) {
+            let from = start ?? pose
             token += 1
             let mine = token
             startPose = from
             completion = done
             let fromRect = local(from.rect)
             let toRect = local(end.rect)
+            // Every animation starts at this one time: fades timed against the spring stay where they belong on it.
+            let start = CACurrentMediaTime()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for layer in [container, shadow, windowLayer, barLayer] { layer.removeAllAnimations() }
@@ -340,6 +428,8 @@ enum AppTransition {
                 s.fromValue = a
                 s.toValue = b
                 s.duration = s.settlingDuration
+                s.beginTime = layer.convertTime(start, from: nil)
+                s.fillMode = .backwards
                 layer.add(s, forKey: key)
             }
             let total = CASpringAnimation(keyPath: "x")
@@ -361,7 +451,7 @@ enum AppTransition {
                 o.fromValue = a
                 o.toValue = b
                 o.duration = length * window.1
-                o.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + length * window.0
+                o.beginTime = layer.convertTime(start, from: nil) + length * window.0
                 o.fillMode = .backwards
                 o.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 layer.add(o, forKey: key)
@@ -370,11 +460,16 @@ enum AppTransition {
             fadeLayer(windowLayer, "opacity", from.window, end.window, opacities.window)
             fadeLayer(shadow, "shadowOpacity", from.shadow * from.container, end.shadow * end.container, opacities.shadow)
             fadeLayer(container, "opacity", from.container, end.container, opacities.container)
-            // The completion rides on the spring that ends last.
-            CATransaction.setCompletionBlock { [weak self] in
+            CATransaction.commit()
+            // Called within the turn's own transaction: on screen now, before whatever else the turn does.
+            CATransaction.flush()
+            // The layers run at 1/slowdown; `lead` is in real refreshes.
+            let real = length * Double(AppTransition.slowdown)
+            settlesAt = start + real
+            let wait = max(0, real - lead - (CACurrentMediaTime() - start))
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                 MainActor.assumeIsolated { self?.finishAnimation(mine) }
             }
-            CATransaction.commit()
         }
 
         private func finishAnimation(_ mine: Int) {
@@ -388,6 +483,7 @@ enum AppTransition {
             guard let done = completion else { return }
             completion = nil
             token += 1
+            settlesAt = 0
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for layer in [container, shadow, windowLayer, barLayer] { layer.removeAllAnimations() }
@@ -403,6 +499,8 @@ enum AppTransition {
         func handoff(reveal: @escaping () -> Void, finished: @escaping () -> Void) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            // The overlay must be the window's exact picture: a fresh one still fading in is there at once.
+            windowLayer.removeAnimation(forKey: kCATransition)
             reveal()
             CATransaction.commit()
             CATransaction.flush()
@@ -412,22 +510,46 @@ enum AppTransition {
             AppTransition.nextFrame(screen) { [weak self] in
                 AppTransition.nextFrame(screen) { [weak self] in
                     guard let self, !self.ended, self.token == mine else { return }
-                    CATransaction.begin()
-                    CATransaction.setDisableActions(true)
-                    self.shadow.shadowOpacity = 0
-                    let fade = CABasicAnimation(keyPath: "shadowOpacity")
-                    fade.fromValue = 1
-                    fade.toValue = 0
-                    fade.duration = 0.1
-                    self.shadow.add(fade, forKey: "handoff")
-                    CATransaction.commit()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    // Started ahead of the spring's end: the overlay starts going only once it is still.
+                    let settling = self.settlesAt - CACurrentMediaTime()
+                    guard settling > 0 else { return self.letGo(mine, finished: finished) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + settling) { [weak self] in
                         MainActor.assumeIsolated {
-                            guard let self, self.token == mine else { return }
-                            self.end()
-                            finished()
+                            guard let self, !self.ended, self.token == mine else { return }
+                            self.letGo(mine, finished: finished)
                         }
                     }
+                }
+            }
+        }
+
+        /// The window's picture goes at once (the real window under it has the same pixels, and its own are live), the
+        /// overlay's shadow gives way to the window's own, then the overlay goes.
+        private func letGo(_ mine: Int, finished: @escaping () -> Void) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            container.opacity = 0
+            // A layer's shadow is drawn under its shape too: only what lies outside the window may show now.
+            let mask = CAShapeLayer()
+            mask.frame = shadow.bounds
+            let around = CGMutablePath()
+            around.addRect(shadow.bounds.insetBy(dx: -200, dy: -200))
+            around.addPath(Self.path(shadow.bounds.size, container.cornerRadius))
+            mask.path = around
+            mask.fillRule = .evenOdd
+            shadow.mask = mask
+            shadow.shadowOpacity = 0
+            let fade = CABasicAnimation(keyPath: "shadowOpacity")
+            fade.fromValue = 1
+            fade.toValue = 0
+            fade.duration = 0.1
+            shadow.add(fade, forKey: "handoff")
+            CATransaction.commit()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.token == mine else { return }
+                    self.end()
+                    finished()
                 }
             }
         }
@@ -437,7 +559,10 @@ enum AppTransition {
             ended = true
             completion = nil
             token += 1
+            // The overlay is shared: a newer morph may have it already.
+            guard overlay.contentView === host else { return }
             overlay.orderOut(nil)
+            overlay.contentView = nil
         }
     }
 }
