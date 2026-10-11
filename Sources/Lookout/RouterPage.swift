@@ -149,6 +149,13 @@ extension Store {
         return openRouterCards.filter { RouterPage.shows($0, tasks: tasks) }
     }
 
+    /// The open cards as the page has them, Needs you then the sessions waiting: what the bar's panel lists. Not a finished
+    /// turn whose session still runs work, nor a wait whose session is working again.
+    var routerPanelCards: [RouterCard] {
+        let page = routerZones
+        return page.needs + page.waiting
+    }
+
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],

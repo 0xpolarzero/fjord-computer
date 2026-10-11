@@ -221,7 +221,7 @@ enum RouterText {
 }
 
 /// A card on two short lines, for the bar's panel: the session and its age, then the kind, the project and the text.
-/// Clicking it opens its session in Claude (and picks it in the window).
+/// Clicking it opens the Router on it.
 struct RouterCardLine: View {
     let card: RouterCard
     let store: Store
@@ -264,7 +264,7 @@ struct RouterCardLine: View {
         .contextMenu { if let session = store.sessionRow(card.sessionID) { SessionMenu(row: session, store: store) } }
         .accessibilityLabel("\(card.kind.label): \(card.title)")
         .accessibilityValue("\(project.name), \(card.text), \(AgentRow.spokenAge(Date().timeIntervalSince(card.createdAt))) ago")
-        .accessibilityHint("Opens it in Claude")
+        .accessibilityHint("Opens it in the Router")
     }
 }
 
@@ -550,8 +550,7 @@ final class RouterModel {
         live.reset()
     }
 
-    /// A card clicked: its session opens in Claude first (a finished turn is addressed by that, and goes up to the history),
-    /// then the card is picked as it now is, so the pick stays on it.
+    /// A card clicked: its session opens in Claude, and the card is picked (it stays open).
     func open(_ id: String, store: Store) {
         store.openCard(id)
         select(id, store: store)

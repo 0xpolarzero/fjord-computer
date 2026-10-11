@@ -218,10 +218,10 @@ extension LookoutHub {
             .accessibilityAction { openApp(.router) }
     }
 
-    /// A card clicked on the bar: its session opens in Claude, and it is the one picked in the Router.
+    /// A card clicked on the bar: the Router opens on it. Its session isn't opened, and the card stays open.
     func openRouterCard(_ id: String) {
-        store.openCard(id)
         pickRouterCard(id)
+        openApp(.router)
     }
 
     var routerStatusParts: [(String, Color)] {
@@ -237,7 +237,7 @@ extension LookoutHub {
 
     /// The Router in its panel: the header, the latest open cards, then the status line and the way to the window.
     @ViewBuilder var peekRouter: some View {
-        let cards = store.openRouterCards
+        let cards = store.routerPanelCards
         routerHeader.frame(height: Self.peekLine)
         if cards.isEmpty {
             Text("Nothing needs you").font(Theme.Typography.body).foregroundStyle(Theme.tertiary)

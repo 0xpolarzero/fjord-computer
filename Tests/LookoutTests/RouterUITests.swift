@@ -540,14 +540,14 @@ import UserNotifications
         #expect(!anchor.owns(beside))
     }
 
-    @Test func aClickedFinishedCardIsOpenedThenStaysPicked() {
+    @Test func aClickedFinishedCardIsOpenedAndStaysOpenAndPicked() {
         let store = demo()
         let model = RouterModel()
-        let done = store.openRouterCards.first { $0.kind == .done }!
+        let done = store.routerShownOpenCards.first { $0.kind.isTurn && $0.kind != .waiting }!
         model.open(done.id, store: store)
         model.reconcile(store: store)
-        // Opening addressed it (down to Earlier); the pick stayed on it.
-        #expect(store.router.cards.first { $0.id == done.id }?.isOpen == false)
+        // Opening its session addresses nothing; the pick is on it.
+        #expect(store.router.cards.first { $0.id == done.id }?.isOpen == true)
         #expect(model.selection == done.id)
     }
 

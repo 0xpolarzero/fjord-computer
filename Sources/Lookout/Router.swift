@@ -252,7 +252,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
         case router
         /// The question or plan stopped waiting (answered here, in the app, anywhere).
         case answered
-        /// You opened the session after a turn card.
+        /// You opened the session after a turn card (older builds: opening no longer addresses a card).
         case opened
         /// A newer card for the same session.
         case superseded
@@ -499,9 +499,6 @@ enum RouterFeed {
                 if stamp.message != before.message, let message = stamp.message {
                     address(&state, id, .reply, now) { message > $0.replyAfter }
                 }
-                if stamp.focus != before.focus, let focused = stamp.focus {
-                    address(&state, id, .opened, now) { $0.kind.isTurn && focused > $0.createdMs }
-                }
                 if let previous, ongoing != previous {
                     address(&state, id, .answered, now) { !$0.kind.isTurn }
                 }
@@ -674,8 +671,6 @@ enum RouterFeed {
                     by = .reply
                 } else if !card.kind.isTurn, change.turns {
                     by = .answered
-                } else if card.kind.isTurn, let focused = stamp.focus, focused > card.createdMs {
-                    by = .opened
                 } else if !card.kind.isTurn, let ms = card.waitMs,
                           state.waits[session.id] != ms
                             || waitEnded(state, session, ms: ms, toolUseID: card.toolUseID, activity: activity[session.id], forms: forms) {
@@ -856,14 +851,11 @@ extension Store {
         router = state
     }
 
-    /// Opens the card's session in Claude; a finished turn has then been seen.
-    func openCard(_ id: String, now: Date = Date()) {
+    /// Opens the card's session in Claude. The card stays open: looking at a session addresses nothing, only marking it
+    /// by hand or acting on it does.
+    func openCard(_ id: String) {
         guard let card = router.cards.first(where: { $0.id == id }) else { return }
         openAgent(card.sessionID)
-        guard card.isOpen, card.kind.isTurn else { return }
-        var state = router
-        RouterFeed.address(&state, card.sessionID, .opened, now) { $0.id == id }
-        router = state
     }
 
     /// Every open card of a session (the Router sent it a message, say).

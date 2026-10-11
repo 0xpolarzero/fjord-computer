@@ -119,8 +119,8 @@ import Testing
         s.interceptOpen = { opened.append($0) }
         s.openCard("local_a#t2")
         #expect(opened.count == 1 && opened.first?.contains("Session local_a") == true)
-        #expect(s.router.cards.first { $0.id == "local_a#t2" }?.addressedBy == .opened)
-        #expect(s.openRouterCards.isEmpty)
+        // Opening it addresses nothing.
+        #expect(s.openRouterCards.map(\.id) == ["local_a#t2"])
     }
 
     @Test func routerCountsMatchFilteringAcrossKindsAndOutstandingWork() {
@@ -386,12 +386,11 @@ import Testing
         s.feedRouter(now: now.addingTimeInterval(1))
         #expect(s.openRouterCards.count == 2)
         s.setRouterEnabled(false)
-        // Off: you open a in the app; b's turn stays unseen.
+        // Off: you open a in the app (which addresses nothing); b's turn stays unseen.
         s.ingest([session("local_a", turns: 2, focused: 1), session("local_b", turns: 2)], appUnread: [], claudeFrontmost: false, now: now)
         s.setRouterEnabled(true, now: now.addingTimeInterval(120))
         await s.routerHookWork?.value
-        #expect(s.openRouterCards.map(\.id) == ["local_b#t2"])
-        #expect(s.router.cards.first { $0.id == "local_a#t2" }?.addressedBy == .opened)
+        #expect(s.openRouterCards.count == 2)
     }
 
     @Test func aFormGoingAwayAnswersItsCard() async throws {

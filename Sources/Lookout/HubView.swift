@@ -19,7 +19,7 @@ extension EnvironmentValues {
     @Entry var openRouter: (String?) -> Void = { _ in }
     /// Opens the app window on the Router, scrolled to a message of its conversation (an inbox action's).
     @Entry var openRouterMessage: (UUID) -> Void = { _ in }
-    /// Picks a card in the Router (window open or not), after a click on it elsewhere opened its session.
+    /// Picks a card in the Router (window open or not): a click on it in the bar's panel, before the window opens on the Router.
     @Entry var pickRouterCard: (String) -> Void = { _ in }
 }
 

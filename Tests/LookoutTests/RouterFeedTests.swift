@@ -127,13 +127,12 @@ import Testing
         #expect(state.cards[0].addressedBy == .reply)
     }
 
-    @Test func openingTheSessionAddressesATurnButNotAWait() {
+    @Test func openingTheSessionAddressesNothing() {
         var state = seen([session(turns: 1), session("local_b", running: true)])
         update(&state, [session(turns: 2), session("local_b", running: true)], activity: ["local_b": question(1)], now: 1)
         update(&state, [session(turns: 2, focused: 2), session("local_b", focused: 2, running: true)],
                activity: ["local_b": question(1)], now: 2)
-        #expect(state.cards.first { $0.sessionID == "local_a" }?.addressedBy == .opened)
-        #expect(state.cards.first { $0.sessionID == "local_b" }?.isOpen == true)
+        #expect(state.cards.filter(\.isOpen).count == 2)
     }
 
     @Test func anArchivedOrDeletedSessionsCardsAreGone() {
@@ -283,11 +282,11 @@ import Testing
     @Test func aCardReopenedByHandStaysOpen() {
         var state = seen([session(turns: 1)])
         update(&state, [session(turns: 2)], now: 1)
-        update(&state, [session(turns: 2, focused: 2)], now: 2)
-        #expect(state.cards[0].addressedBy == .opened)
+        update(&state, [session(turns: 2, message: 2)], now: 2)
+        #expect(state.cards[0].addressedBy == .reply)
         state.cards[0].addressedAt = nil
         state.cards[0].addressedBy = nil
-        update(&state, [session(turns: 2, focused: 2)], now: 3)
+        update(&state, [session(turns: 2, message: 2)], now: 3)
         #expect(state.cards[0].isOpen)
     }
 
@@ -462,18 +461,18 @@ import Testing
                activity: ["local_d": question(1), "local_e": question(1), "local_f": question(1, call: "toolu_f")],
                forms: ["local_f": ["toolu_f"]], now: 1)
         #expect(state.cards.filter(\.isOpen).count == 6)
-        // While it was off: you replied in a, opened b, c was archived, d's question was answered; e still waits; f went
+        // While it was off: you replied in a, opened b (which addresses nothing), c was archived, d's question was answered; e still waits; f went
         // idle (two hours on) but its form is still held.
         let now = [session(turns: 2, message: 5, running: true), session("local_b", turns: 2, focused: 5),
                    session("local_d", running: true), session("local_e", running: true), session("local_f", summary: nil, running: false)]
         let activity = ["local_d": ClaudeActivity(text: "Thinking", since: at(5)), "local_e": question(1)]
         RouterFeed.reconcile(&state, sessions: now, activity: activity, forms: ["local_f": ["toolu_f"]], now: at(200))
         let by = Dictionary(uniqueKeysWithValues: state.cards.map { ($0.sessionID, $0.addressedBy) })
-        #expect(by["local_a"] == .reply && by["local_b"] == .opened && by["local_c"] == .gone && by["local_d"] == .answered)
+        #expect(by["local_a"] == .reply && by["local_b"] == RouterCard.Addressed?.none && by["local_c"] == .gone && by["local_d"] == .answered)
         #expect(by["local_e"] == RouterCard.Addressed?.none && by["local_f"] == RouterCard.Addressed?.none)
         // The next update sees every session afresh and keeps the surviving waits, carding nothing twice.
         update(&state, now, activity: activity, forms: ["local_f": ["toolu_f"]], now: 201)
-        #expect(state.cards.filter(\.isOpen).map(\.sessionID).sorted() == ["local_e", "local_f"])
+        #expect(state.cards.filter(\.isOpen).map(\.sessionID).sorted() == ["local_b", "local_e", "local_f"])
         #expect(state.cards.count == 6)
     }
 
@@ -513,13 +512,13 @@ import Testing
         dec.dateDecodingStrategy = .iso8601
         state = try dec.decode(RouterState.self, from: enc.encode(state))
         #expect(state.cards[0].createdMs == RouterFeed.Stamp.ms(made))
-        // 0.5 s later, in the same second: a reply in a, an open of b.
+        // 0.5 s later, in the same second: a reply in a, an open of b (which addresses nothing).
         var a = session(turns: 2)
         a.lastUserMessage = made.addingTimeInterval(0.5)
         var b = session("local_b", turns: 2)
         b.lastFocused = made.addingTimeInterval(0.5)
         RouterFeed.update(&state, sessions: [a, b], activity: [:], muted: [], viewing: nil, now: made.addingTimeInterval(0.6))
-        #expect(state.cards.map(\.addressedBy) == [.reply, .opened])
+        #expect(state.cards.map(\.addressedBy) == [.reply, nil])
 
         // A message just before a card (one with nothing else to go by), in the same second, is not a reply to it.
         let question = RouterCard(id: "local_a#w1", sessionID: "local_a", kind: .question, title: "", folder: nil, text: "",
