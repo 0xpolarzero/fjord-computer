@@ -812,6 +812,31 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         #expect(!FileManager.default.fileExists(atPath: inbox.root.path))
     }
 
+    @MainActor
+    @Test func theMessageIsWrittenAsideAndPutWhereThePluginLooksOnlyAsTheGateLetsItGo() async throws {
+        let dir = TempDir()
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 0.1
+        let folder = inbox.folder(for: "cli-a")
+        let signed = RelaySigner.sign(body: "hi", target: "cli-a", key: key)
+        var seen: [String] = []
+        await #expect(throws: RelayInbox.Failure.refused("Stopped")) {
+            try await inbox.deliver(signed, to: "cli-a") {
+                seen = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+                return "Stopped"
+            }
+        }
+        // Written already when the gate was asked, but not as a message; refused, nothing is left.
+        #expect(seen.count == 1 && seen[0].hasSuffix(".tmp"))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+        // Let through: it is put in place, as the plugin reads it.
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
+        let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
+        try await inbox.deliver(signed, to: "cli-a") { nil }
+        #expect(await fake.value == signed)
+    }
+
     @Test func leftoversAreSweptOnTheNextDelivery() async throws {
         let dir = TempDir()
         var inbox = RelayInbox(root: dir.path("relay"))
