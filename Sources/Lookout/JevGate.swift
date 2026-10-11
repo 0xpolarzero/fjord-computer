@@ -46,6 +46,8 @@ enum JevUse {
     private(set) var failures = 0
     /// Counts the pauses failures put in: a call that worked doesn't lift one put in after it was let through.
     private(set) var pauses = 0
+    /// The cards judged at once, whatever message they were judged for (`Store.judgeCards`).
+    let cardSlots = JevSlots(CardJudge.concurrency)
 
     /// Throws why no call may go now with `key`.
     func admit(key: String) throws {
@@ -97,6 +99,23 @@ enum JevUse {
         until = max(until, now().addingTimeInterval(seconds))
         paused = failure
         pauses &+= 1
+    }
+}
+
+/// At most `count` at once: the others wait their turn, first come first served.
+@MainActor final class JevSlots {
+    private var free: Int
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(_ count: Int) { free = count }
+
+    func acquire() async {
+        if free > 0 { free -= 1; return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func release() {
+        if waiting.isEmpty { free += 1 } else { waiting.removeFirst().resume() }
     }
 }
 

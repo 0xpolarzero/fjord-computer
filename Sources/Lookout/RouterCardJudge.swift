@@ -112,7 +112,7 @@ extension Store {
     }
 
     /// Judges the session's cards that were open (and unchanged since) when `message` was sent to it, and acts on the verdicts:
-    /// one call per card, `CardJudge.concurrency` at a time. Nothing changes without a stand-in or a TypeSafe key, or when Jev
+    /// one call per card, `CardJudge.concurrency` at a time across all messages. Nothing changes without a stand-in or a TypeSafe key, or when Jev
     /// fails or is unsure.
     func judgeCards(session: String, message: String, eligible: [String: Int], asker: JevAsker?,
                     decision: UUID? = nil, timeout: Duration = CardJudge.timeout) async {
@@ -120,18 +120,20 @@ extension Store {
         let generation = jevGate.generation
         let cards = router.cards.filter { $0.sessionID == session && $0.isOpen && eligible[$0.id] != nil }
         guard !cards.isEmpty else { return }
-        var jobs = cards.map { ($0, pendingForm(for: $0)) }[...]
+        // One budget for every message's cards: two messages sent at once still judge `CardJudge.concurrency` cards at a time.
+        let slots = jevGate.cardSlots
         let verdicts = await withTaskGroup(of: (String, CardJudge.Verdict).self) { group in
-            func next() {
-                guard let (card, form) = jobs.popFirst() else { return }
-                group.addTask { (card.id, await CardJudge.judge(card, form: form, message: message, ask: ask, timeout: timeout)) }
+            for card in cards {
+                let form = pendingForm(for: card)
+                group.addTask {
+                    await slots.acquire()
+                    let verdict = await CardJudge.judge(card, form: form, message: message, ask: ask, timeout: timeout)
+                    await slots.release()
+                    return (card.id, verdict)
+                }
             }
-            for _ in 0..<CardJudge.concurrency { next() }
             var all: [String: CardJudge.Verdict] = [:]
-            for await (id, verdict) in group {
-                all[id] = verdict
-                next()
-            }
+            for await (id, verdict) in group { all[id] = verdict }
             return all
         }
         // A verdict that came back before the key changed, the Router went off or the judging was stopped acts on nothing.

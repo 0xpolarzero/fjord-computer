@@ -196,6 +196,28 @@ import Testing
         }
     }
 
+    @Test func twoMessagesJudgeNoMoreCardsAtOnceThanOne() async {
+        let s = store([card("a#w1", "a"), card("a#w2", "a"), card("b#w1", "b"), card("b#w2", "b")])
+        var asking = 0, most = 0, asked = 0
+        var open = false
+        let asker: JevAsker = { _, _ in
+            asking += 1; asked += 1
+            most = max(most, asking)
+            while !open { await Task.yield() }
+            asking -= 1
+            return self.choice("not")
+        }
+        let a = Task { await judge(s, session: "a", asker: asker) }
+        let b = Task { await judge(s, session: "b", asker: asker) }
+        while asked < CardJudge.concurrency { await Task.yield() }
+        for _ in 0..<200 { await Task.yield() }
+        #expect(most == CardJudge.concurrency && asked == CardJudge.concurrency)
+        open = true
+        await a.value
+        await b.value
+        #expect(asked == 4 && most == CardJudge.concurrency)
+    }
+
     @Test func explicitActionsStillAddressWithoutJev() {
         let s = store([card("a#w1", "a")])
         s.setCardAddressed("a#w1", true)
