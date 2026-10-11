@@ -617,6 +617,8 @@ import Testing
         #expect(task("@lookout fix the tests with opus, low effort") == "fix the tests")
         #expect(task("please start a session in the lookout project, with xhigh effort: bump the version") == "bump the version")
         #expect(task("fix the tests") == "fix the tests")
+        // Code alone keeps the indentation of its first line.
+        #expect(task("\n    guard let x else { return }\n    print(x)\n") == "    guard let x else { return }\n    print(x)")
         #expect(task("write about opus the band") == "write about opus the band")
         #expect(task("@router.js is broken, fix it") == "@router.js is broken, fix it")
         // Only the project's own name is a tag: a decorator is the task's.
@@ -642,7 +644,7 @@ import Testing
         let fenced = "start a session to fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```"
         #expect(SessionStart.task(from: fenced) == "fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```")
         #expect(SessionStart.task(from: "fix the label: label = \"high effort\"") == "fix the label: label = \"high effort\"")
-        #expect(SessionStart.task(from: "    let mode = \"with opus\" // high effort") == "let mode = \"with opus\" // high effort")
+        #expect(SessionStart.task(from: "    let mode = \"with opus\" // high effort") == "    let mode = \"with opus\" // high effort")
         #expect(SessionStart.task(from: "Rename the flag. It is set with opus, low effort today")
                 == "Rename the flag. It is set with opus, low effort today")
         // In the request's own sentence, as before.

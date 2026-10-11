@@ -532,7 +532,9 @@ enum SessionStart {
             t = head + t[end...]
             if started || SessionSettings.parse(envelope(text)) != nil { tidy() }
         }
-        let task = t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
+        var task = t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
+        // Nothing taken out: the words as written, the first line's indentation kept (code).
+        if task == masked.trimmingCharacters(in: .whitespacesAndNewlines) { task = RouterModel.sendable(masked) }
         return String(task.map { c in c.unicodeScalars.first.flatMap { pilled[$0] } ?? String(c) }.joined())
     }
 

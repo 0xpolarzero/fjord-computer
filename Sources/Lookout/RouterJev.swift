@@ -255,10 +255,10 @@ extension RouterModel {
 
     /// `text` without the blank lines it starts with or the whitespace it ends with; the rest (the first line's indentation)
     /// as written. Empty when it is only whitespace.
-    static func sendable(_ text: String) -> String { sendableCut(text).text }
+    nonisolated static func sendable(_ text: String) -> String { sendableCut(text).text }
 
     /// `sendable`, and how many characters were cut from the start.
-    static func sendableCut(_ text: String) -> (text: String, lead: Int) {
+    nonisolated static func sendableCut(_ text: String) -> (text: String, lead: Int) {
         guard let first = text.firstIndex(where: { !$0.isWhitespace }) else { return ("", 0) }
         let lineStart = text[..<first].lastIndex(where: \.isNewline).map(text.index(after:)) ?? text.startIndex
         var out = String(text[lineStart...])
