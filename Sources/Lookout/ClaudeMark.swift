@@ -17,8 +17,9 @@ enum ClaudeMark {
     static let openSymbol = "lookout.open-in-claude"
 }
 
-/// Open in Claude, the same everywhere: Claude's spark with an arrow out of its top right corner (the spark cut away
-/// under it, so the two read apart at any size). Drawn in the foreground style, like a symbol.
+/// Open in Claude, the same everywhere: Claude's spark with an arrow at its top right corner. The spark is round, so a
+/// spark in the bottom left two thirds leaves that corner free for the arrow: they never touch, and nothing is masked.
+/// Drawn in the foreground style, like a symbol.
 struct OpenInClaudeGlyph: View {
     /// The box it fills, as a symbol's point size.
     var size: CGFloat = 13
@@ -27,23 +28,16 @@ struct OpenInClaudeGlyph: View {
     private static let inked: CGFloat = 50.0 / 72
 
     var body: some View {
-        let mark = size * 0.8, arrow = size * 0.42
-        ZStack {
+        let mark = size * 0.7, arrow = size * 0.42
+        ZStack(alignment: .bottomLeading) {
+            Color.clear
+            // The image is larger than the spark by its padding: drawn that much larger, centred on the spark's box.
             spark
                 .frame(width: mark / Self.inked, height: mark / Self.inked)
-                .position(x: mark / 2, y: size - mark / 2)
-                .mask {
-                    // The spark less a round notch where the arrow goes.
-                    Rectangle()
-                        .overlay {
-                            Circle().frame(width: arrow * 1.45, height: arrow * 1.45)
-                                .position(x: size - arrow / 2 + 0.5, y: arrow / 2 - 0.5)
-                                .blendMode(.destinationOut)
-                        }
-                        .compositingGroup()
-                }
+                .frame(width: mark, height: mark)
+        }
+        .overlay(alignment: .topTrailing) {
             Image(systemName: "arrow.up.right").font(.system(size: arrow, weight: .bold))
-                .position(x: size - arrow / 2 + 0.5, y: arrow / 2 - 0.5)
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
