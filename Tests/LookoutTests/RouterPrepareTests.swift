@@ -47,6 +47,15 @@ import Testing
         #expect(throws: Addressing.NothingLeft.self) { try edit("@router what needs me?") }
     }
 
+    @Test func aPastedBodyKeepsItsOwnTrailingCommaAndSemicolon() {
+        let one = "@lookout start a session to explain why this returns a tuple:\n    return value,"
+        #expect(SessionStart.task(from: one, pills: [0..<8], projects: ["lookout"]) == "explain why this returns a tuple:\n    return value,")
+        let two = "start a session to fix this;\nlet x = 1;"
+        #expect(SessionStart.task(from: two) == "fix this;\nlet x = 1;")
+        // A comma left where a settings clause was cut from the end of the request still goes.
+        #expect(SessionStart.task(from: "start a session to fix the tests with opus,") == "fix the tests")
+    }
+
     @Test func aPillInCodeIsTheCodesTextAndNeverTakenOut() throws {
         // A project named "cache": the decorator of an indented or fenced method is the code's, pill or not.
         for message in ["    @cache\n    def f(self):\n        return 1", "```\n@cache\ndef f(): pass\n```", "`@cache` it"] {

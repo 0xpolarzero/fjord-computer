@@ -749,6 +749,8 @@ enum SessionStart {
         let end = t.index(t.startIndex, offsetBy: min(left, t.count))
         var head = String(t[..<end])
         let cuts = trailingSettings(head).filter { asked.insert(setting(Substring($0.words))).inserted }.map(\.cut)
+        // Only where a settings clause was cut from the very end of the text is a comma or semicolon left there the request's.
+        let endsAtCut = !cuts.isEmpty && end == t.endIndex
         for r in cuts.reversed() {
             let at = head.distance(from: head.startIndex, to: r.lowerBound)
             head.removeSubrange(r)
@@ -757,8 +759,10 @@ enum SessionStart {
         t = head + t[end...]
         if started || !asked.isEmpty { tidy() }
         // What is left starts after the request's line breaks: the first line of code under it keeps its indentation.
-        var task = RouterModel.sendable(String(t.drop(while: { $0 == " " || $0 == "\t" || $0 == "," || $0 == ";" })))
-        while let last = task.last, last == "," || last == ";" || last.isWhitespace { task.removeLast() }
+        // Commas and semicolons go only at a boundary where the request or a settings clause was taken out; the task's own
+        // punctuation (a pasted line's trailing comma) stays as written.
+        var task = RouterModel.sendable(String(t.drop(while: { $0 == " " || $0 == "\t" })))
+        while let last = task.last, last.isWhitespace || (endsAtCut || task.isEmpty) && (last == "," || last == ";") { task.removeLast() }
         // Nothing taken out: the words as written, the first line's indentation kept (code).
         if task == masked.trimmingCharacters(in: .whitespacesAndNewlines) { task = body }
         return String(task.map { c in c.unicodeScalars.first.flatMap { pilled[$0] } ?? String(c) }.joined())
