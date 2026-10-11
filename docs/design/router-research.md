@@ -145,6 +145,14 @@ Episodes rather than single messages: a board, then submits, card changes, picks
 - **Sources:** 501 real episodes (942 submits) on your real timelines; 180 scripted contracts plus 60 metamorphic
   siblings (the shipped Router passes every contract, 0 wrong sends); 763 written episodes (Claude 350 and GPT 350
   from 1,050 packets; Gemini still writing through `agy`, slowly).
+- **Realism audit (v2/build/audit_realism.py): written messages are easy to tell from yours.** A logistic regression
+  on simple features and character n-grams separates written first messages from real ones at AUC 0.90 (folds by
+  session-day; GPT 0.88, Gemini 0.90, Claude 0.92; rewrites 0.80, goals 0.94). Give-aways: a lowercase first letter,
+  "Lookout" in the text, more French, a closing period; yours have more "I", "you", "we", "and", code and "...".
+  Written episodes go to the same session 26% of the time against your 52%, and their switches reach deeper into the
+  board (median rank 4 against 2). Reweighting by length × question × destination fixes length and questions but not
+  that gap. **Decision:** the headline is real moments alone (`real_only` in every scored report); written and scripted
+  episodes count in the stress mix and their own slices, as coverage of flows your history lacks.
 - **Written episodes are not typical traffic:** messages shorter than yours (p90 30–39 words against 73), fewer
   questions, more session switches (about 40% same against your 51%), and writers mark asking unnecessary about 80% of
   the time. They are kept for coverage of flows, weighted to the real mix, and never used for gold on asking.

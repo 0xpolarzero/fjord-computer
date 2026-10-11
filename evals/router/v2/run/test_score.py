@@ -50,6 +50,13 @@ class LossTests(unittest.TestCase):
         scored = episode_score(result)
         self.assertEqual((scored["submits"], scored["wrong"], scored["loss"]), (1, 0, 0))
 
+    def test_a_mixed_run_reports_real_moments_alone(self):
+        results = [episode("r", "g1", [submit(target="session:b")], source="real-moment"),
+                   episode("w", "g2", [submit()], source="goal")]
+        report = evaluate(results, bootstrap=0)
+        self.assertEqual(report["real_only"]["counts"]["submits"], 1)
+        self.assertEqual(report["real_only"]["counts"]["wrong"], 1)
+
     def test_missing_ask_has_two_actual_escape_clicks_and_no_duplicate_base_loss(self):
         result = episode("e", "g", [submit("ask", None), {"kind": "pick", "clicks": 2}])
         scored = episode_score(result)

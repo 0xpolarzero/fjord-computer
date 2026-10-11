@@ -280,6 +280,14 @@ def evaluate(results: Iterable[dict[str, Any]], bootstrap: int = 2000, seed: int
     for cost in (10, 25, 100):
         cost_stats = [episode_score(result, wrong_cost=cost) for result in results]
         report["sensitivity"][str(cost)] = _summary(results, cost_stats, bootstrap, seed, weights_by_mix)
+    # The headline: your real moments alone. A classifier tells written messages from yours at AUC 0.90 and written
+    # episodes go to the same session half as often as you do (v2/build/audit_realism.py), so a mix that includes them
+    # describes written traffic; they count in the stress mix and their own slices.
+    real = [index for index, result in enumerate(results) if _source(result) == "real-moment"]
+    if real and len(real) < len(results):
+        subset = [results[index] for index in real]
+        report["real_only"] = _summary(subset, [stats[index] for index in real], bootstrap, seed,
+                                       {"natural": [1.0] * len(subset), "stress": episode_weights(subset, "stress")})
     return report
 
 
