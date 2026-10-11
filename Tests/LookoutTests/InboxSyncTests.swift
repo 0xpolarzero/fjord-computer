@@ -522,6 +522,55 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.things["pr:o/r#0"] == nil && s.things.count == 16)
     }
 
+    @Test func aSearchGitHubDidntAnswerHasntRunAndWhatItFoundStaysUntilItDoes() async {
+        final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var failing: Set<Int> = [] }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [InboxCategory(name: "People", symbol: "star", color: .blue, rules: (0..<17).map {
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u\($0)")])))
+        })]
+        let pattern = try! NSRegularExpression(pattern: #"(s\d+): search\(query: \"[^"]*author:u(\d+) "#)
+        s.gh.session = StubbedGitHub.session { request in
+            let body = try JSONSerialization.jsonObject(with: Data(InboxSyncRefresh.body(request).utf8)) as? [String: Any]
+            let text = body?["query"] as? String ?? ""
+            var data: [String: Any] = [:]
+            var errors: [[String: Any]] = []
+            for m in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let part = { (i: Int) in String(text[Range(m.range(at: i), in: text)!]) }
+                let n = Int(part(2))!
+                box.asked.append("u\(n)")
+                if box.failing.contains(n) {
+                    data[part(1)] = NSNull()
+                    errors.append(["path": [part(1)], "message": "Something went wrong"])
+                    continue
+                }
+                let found = box.hidden.contains(n) ? [] : [node(["id": "PR_\(n)", "number": n, "url": "https://github.com/o/r/pull/\(n)"])]
+                data[part(1)] = ["pageInfo": ["hasNextPage": false], "nodes": found]
+            }
+            let reply: [String: Any] = errors.isEmpty ? ["data": data] : ["data": data, "errors": errors]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(s.things.count == 16 && s.things["pr:o/r#14"] != nil)
+        // u14's search fails in its turn: what it found stays, as one GitHub didn't answer.
+        box.failing = [14]
+        box.asked = []
+        await s.syncInbox()
+        #expect(box.asked.contains("u14") && s.things["pr:o/r#14"] != nil)
+        // Its turn passes without it: it still hasn't run, so what it found still stays.
+        box.failing = []
+        box.asked = []
+        await s.syncInbox()
+        #expect(!box.asked.contains("u14") && s.things["pr:o/r#14"] != nil)
+        // It runs and doesn't find it: gone.
+        box.hidden = [14]
+        box.asked = []
+        await s.syncInbox()
+        #expect(box.asked.contains("u14") && s.things["pr:o/r#14"] == nil)
+    }
+
     @Test func seenFactsThatAreGoneAreForgottenAsNotifiedAndAckedOnesAre() throws {
         let s = InboxFixture.store([InboxFixture.pr(1)])
         let entry = try #require(s.entries(in: s.categories[0].id).first)

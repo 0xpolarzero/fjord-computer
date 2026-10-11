@@ -927,8 +927,12 @@ extension Store {
                 next[id] = old
             }
         }
-        // Past the cap the searches take turns: what those not run this time found stays until they run.
-        if !searchesKept { next.merge(keepingUnvisited(fetched, ran: searches, all: plan.all)) { a, _ in a } }
+        // Past the cap the searches take turns: what those not run this time found stays until they run. One GitHub didn't
+        // answer whole hasn't run: what it found stays, and is still its own, until it does.
+        if !searchesKept {
+            let ran = searches.filter { !fetched.failed.contains($0) }
+            next.merge(keepingUnvisited(fetched, ran: ran, all: plan.all)) { a, _ in a }
+        }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
@@ -952,6 +956,8 @@ extension Store {
         var error: String?
         /// By thing, the searches that returned it.
         var foundBy: [String: Set<String>] = [:]
+        /// The searches GitHub didn't answer whole (a page of one null, a node of it it couldn't give): they haven't run.
+        var failed: Set<String> = []
     }
 
     /// Searches, a page at a time for those with more, until the caps: what a round asks for is shared out of the things
@@ -962,6 +968,7 @@ extension Store {
         var partial = Set<String>()
         var error: String?
         var foundBy: [String: Set<String>] = [:]
+        var failed = Set<String>()
         var cursors: [Int: String?] = Dictionary(uniqueKeysWithValues: searches.indices.map { ($0, String?.none) })
         var pages = 0
         while !cursors.isEmpty, pages < InboxSync.maxPages, found.count < InboxSync.maxThings {
@@ -981,13 +988,16 @@ extension Store {
                 if let first = errors.first { error = error ?? (first["message"] as? String) ?? "GitHub gave part of an answer" }
                 // `["s0", "nodes", 3, "comments", …]`: the fourth thing of search 0 came without some of its parts.
                 var broken = Set<[String]>()
+                // `["s0"]` or `["s0", "nodes", 3]`: search 0, or its fourth thing, didn't come at all.
+                var missing = Set<String>()
                 for e in errors {
-                    guard let path = e["path"] as? [Any], path.count > 3, let alias = path[0] as? String,
-                          let index = path[2] as? Int else { continue }
+                    guard let path = e["path"] as? [Any], let alias = path.first as? String else { continue }
+                    guard path.count > 3, let index = path[2] as? Int else { missing.insert(alias); continue }
                     broken.insert([alias, String(index)])
                 }
                 for i in batch {
-                    guard let result = data["s\(i)"] as? [String: Any] else { continue }
+                    if missing.contains("s\(i)") { failed.insert(searches[i]) }
+                    guard let result = data["s\(i)"] as? [String: Any] else { failed.insert(searches[i]); continue }
                     // A node GitHub couldn't give is null: the others are still things.
                     for (n, value) in ((result["nodes"] as? [Any]) ?? []).enumerated() {
                         guard let node = value as? [String: Any], let thing = InboxSync.thing(node) else { continue }
@@ -1006,7 +1016,7 @@ extension Store {
             }
             cursors = next
         }
-        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy)
+        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy, failed: failed)
     }
 
     /// Notes which searches found what, and gives back the things this refresh didn't find that a search it didn't run
