@@ -558,8 +558,26 @@ enum InboxSync {
         thing.reviewRequests.first { $0.reviewer.caseInsensitiveCompare(reviewer) == .orderedSame }?.at ?? thing.createdAt
     }
 
-    /// Whether a fact's key is an event the thing still has (a comment, a review, a commit, a thread's reply, a pending
-    /// request by when it was made), rather than a state that comes and goes (checks, a label, a score, conflicts).
+    /// Whether what an importance rating was for (`InboxEngine.importanceStamp`) is still open on the thing: the review
+    /// request made then, or the assignment made then (or any, for one GitHub gave no time for).
+    static func isCurrent(stamp: String, of thing: Thing) -> Bool {
+        guard thing.kind != .workflow, thing.status == .open || thing.status == .draft else { return false }
+        if stamp == "assigned" { return !thing.assignees.isEmpty }
+        let parts = stamp.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let at = Int(parts[1]) else { return false }
+        switch parts[0] {
+        case "requested":
+            return thing.kind == .pr && thing.requestedReviewers.contains { Int(requestTime($0, of: thing).timeIntervalSince1970) == at }
+        case "assigned":
+            let assignees = Set(thing.assignees.map { $0.lowercased() })
+            return thing.assignedAt?.contains { assignees.contains($0.key.lowercased()) && Int($0.value.timeIntervalSince1970) == at } ?? false
+        default:
+            return false
+        }
+    }
+
+    /// Whether a fact's key is an event the thing still has (a comment, a review, a commit, an unresolved thread's reply, a
+    /// pending request by when it was made, Jev's rating of what is still asked of you), rather than a state that comes and goes (checks, a label, a score, conflicts).
     static func isEvent(_ key: String, of thing: Thing) -> Bool {
         let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return false }
@@ -574,6 +592,11 @@ enum InboxSync {
         case "thread":
             // Unresolved is part of it: resolved, it is gone, and reopened later it is new again.
             return thing.threads.contains { !$0.isResolved && "\($0.id):\($0.lastReplyID)" == id }
+        case "importance":
+            // Jev's rating of a request or assignment: kept while that request or assignment is the one asked of you now,
+            // so turning his reading off and on again doesn't make it new.
+            let stamp = id.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+            return isCurrent(stamp: stamp, of: thing)
         case "requested":
             // The request as it is now, who and when: a review then a new request is a new one, the old one gone.
             return thing.requestedReviewers.contains { "\($0.lowercased()):\(Int(requestTime($0, of: thing).timeIntervalSince1970))" == id }

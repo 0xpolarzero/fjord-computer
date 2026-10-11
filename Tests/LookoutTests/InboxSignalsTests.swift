@@ -343,6 +343,32 @@ import Testing
         #expect(s.entries.isEmpty)
     }
 
+    @Test func turningJevsReadingOffAndOnAgainDoesNotMakeARatedRequestNew() async {
+        var t = pr(1, comments: [])
+        t.requestedReviewers = ["me"]
+        t.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now.addingTimeInterval(-3600))]
+        let (s, _) = store([t], score: 2.6, conditions: [.importance(.high)])
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.identifier) }
+        await s.readInbox()
+        s.announceInbox()
+        s.markDone(s.entries[0])
+        let key = "importance:urgent:requested:\(Int(t.reviewRequests[0].at.timeIntervalSince1970))"
+        #expect(s.marks["pr:a/one#1"]?.notified.contains(key) == true)
+        s.settings.jevReadsInbox = false
+        s.announceInbox()
+        #expect(s.marks["pr:a/one#1"]?.acked.contains(key) == true)
+        s.settings.jevReadsInbox = true
+        for _ in 0..<3 { s.announceInbox() }
+        #expect(posted.isEmpty && s.entries.first?.isDone == true)
+        // A new request is rated again, and its old rating's marks go.
+        var next = s.things
+        next["pr:a/one#1"]?.reviewRequests = [ThingReviewRequest(reviewer: "me", at: now)]
+        s.applyThings(next)
+        s.announceInbox()
+        #expect(s.marks["pr:a/one#1"]?.acked.contains(key) != true)
+    }
+
     @Test func aReviewRequestIsRatedOnceForEachRequest() async {
         var t = pr(1, comments: [])
         t.requestedReviewers = ["me"]
