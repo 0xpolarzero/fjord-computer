@@ -30,6 +30,23 @@ def units(episodes):
     return out
 
 
+def unit_of(e, episodes):
+    group_of = {x["id"]: x["group"] for x in episodes}
+    base = e.get("base") or (e.get("provenance") or {}).get("base")
+    return group_of.get(base, e["group"])
+
+
+def by_frozen(episodes, assignment):
+    """The frozen split: the groups were placed before the labels existed, so dev work never sees a sealed group. A
+    group that is new since then goes to dev."""
+    group_of = {x["id"]: x["group"] for x in episodes}
+    parts = {"dev": [], "calib": [], "sealed": []}
+    for e in episodes:
+        base = e.get("base") or (e.get("provenance") or {}).get("base")
+        parts[assignment.get(group_of.get(base, e["group"]), "dev")].append(e)
+    return parts
+
+
 def family(e):
     return (e.get("tags") or {}).get("primary") or e.get("family")
 
@@ -78,10 +95,19 @@ def main():
     parser.add_argument("--inputs", nargs="*", default=[str(V2 / "data/episodes/labelled/*.jsonl")])
     parser.add_argument("--seed", type=int, default=20261011)
     parser.add_argument("--dry-run", action="store_true", help="print the counts, write nothing")
+    parser.add_argument("--freeze", action="store_true",
+                        help="record which split each group is in (v2/data/episodes/groups.json); later runs reuse it")
     args = parser.parse_args()
     episodes = [json.loads(line) for pattern in args.inputs for path in sorted(glob.glob(pattern))
                 for line in open(path) if line.strip()]
-    parts = split(episodes, args.seed)
+    frozen = V2 / "data/episodes/groups.json"
+    if frozen.exists() and not args.freeze:
+        parts = by_frozen(episodes, json.loads(frozen.read_text()))
+    else:
+        parts = split(episodes, args.seed)
+        if args.freeze:
+            frozen.write_text(json.dumps({g: name for name, members in parts.items()
+                                          for g in sorted({unit_of(e, episodes) for e in members})}, indent=0))
     report = {}
     for name, members in parts.items():
         if not args.dry_run:
