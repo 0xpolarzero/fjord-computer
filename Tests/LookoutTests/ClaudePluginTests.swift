@@ -313,6 +313,11 @@ enum PluginFixture {
         #expect(SessionSettings.parse("start a session, effort max: fix it") == SessionSettings(model: nil, effort: "max"))
         #expect(SessionSettings.parse("write about opus the band") == nil)
         #expect(SessionSettings.parse("fix the thing") == nil)
+        // A negation in the task doesn't reach a settings clause set apart from it.
+        let both = SessionSettings(model: "opus", effort: "high")
+        #expect(SessionSettings.parse("start a session in lookout to fix login without changing the UI (with opus, high effort)") == both)
+        #expect(SessionSettings.parse("fix login without changing the UI - with opus, high effort") == both)
+        #expect(SessionSettings.parse("fix login without changing the UI \u{2014} with opus, high effort") == both)
     }
 
     @Test func theAckSaysWhatWasApplied() {

@@ -320,8 +320,9 @@ struct SessionSettings: Equatable, Sendable {
     /// A setting at `at` is said not to be wanted: a word of negation (`SessionStart.negations`) comes before it in its
     /// own clause, since a comma, a semicolon, a sentence's end, a line break or "but", "instead", "rather" ("don't use opus", "fix it
     /// without using opus").
-    static func negated(_ text: String, before at: String.Index) -> Bool {
-        let start = text[..<at].lastIndex(where: { ",;.!?\n\r".contains($0) }).map(text.index(after:)) ?? text.startIndex
+    static func negated(_ text: String, before at: String.Index, from floor: String.Index? = nil) -> Bool {
+        var start = text[..<at].lastIndex(where: { ",;.!?\n\r".contains($0) }).map(text.index(after:)) ?? text.startIndex
+        if let floor, floor > start { start = floor }
         let keep = CharacterSet.punctuationCharacters.subtracting(CharacterSet(charactersIn: "'’"))
         let words = text[start..<at].lowercased().split(whereSeparator: \.isWhitespace)
             .map { $0.trimmingCharacters(in: keep).replacingOccurrences(of: "’", with: "'") }

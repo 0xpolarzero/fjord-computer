@@ -649,7 +649,7 @@ enum SessionStart {
             var found: [(cut: Range<String.Index>, item: Range<String.Index>)] = []
             for im in one.matches(in: text, range: m.range) {
                 guard let join = Range(im.range(at: 1), in: text), let item = Range(im.range(at: 2), in: text) else { continue }
-                guard !SessionSettings.negated(text, before: item.lowerBound) else { found = []; break }
+                guard !SessionSettings.negated(text, before: item.lowerBound, from: whole.lowerBound) else { found = []; break }
                 found.append((found.isEmpty ? whole.lowerBound..<item.upperBound : join.lowerBound..<item.upperBound, item))
             }
             // A clause in parentheses goes with its closing one.
