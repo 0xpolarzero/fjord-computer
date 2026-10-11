@@ -196,6 +196,40 @@ import Testing
         await waitUntil { closed == 2 }
     }
 
+    /// Short of memory before the launch's preparing comes, the window prepares nothing: the content it would build is
+    /// what the pressure asked to let go of. Once memory is back, it prepares again.
+    @Test func memoryPressureBeforeThePreparingSkipsIt() {
+        let (window, _) = controller()
+        window.memoryPressure(elevated: true)
+        window.prepare()
+        #expect(window.content == nil)
+        window.memoryPressure(elevated: false)
+        window.prepare()
+        #expect(window.content != nil)
+    }
+
+    /// Short of memory while the window is open (its content in it, so nothing is let go then), closing it afterwards keeps
+    /// neither its content nor a picture for the next open, until memory is back.
+    @Test func memoryPressureWhileOpenLetsGoOfTheContentOnClose() async throws {
+        let (window, _) = controller()
+        var closed = 0
+        window.onClose = { closed += 1 }
+        window.show(.settings)
+        away(window)
+        let content = try #require(window.content)
+        window.memoryPressure(elevated: true)
+        #expect(window.content === content)
+        window.close()
+        await waitUntil { closed == 1 }
+        #expect(window.content == nil && window.window?.contentViewController == nil && !window.keepsPicture)
+        window.memoryPressure(elevated: false)
+        window.show(.settings)
+        away(window)
+        window.close()
+        await waitUntil { closed == 2 }
+        #expect(window.content != nil)
+    }
+
     /// Prepared at idle after launch, the window and its content are made out of sight: nothing is ordered in, the window is
     /// not open or in front, the app stays an accessory; the first open then brings in that content rather than making it.
     @Test func aPreparedContentIsMadeOutOfSightAndTheFirstOpenUsesIt() async throws {
@@ -563,6 +597,30 @@ import Testing
         ticks.blocks.removeFirst()()
         controller.close()
         ticks.blocks.removeFirst()()
+    }
+
+    /// Short of memory as a morphing close is under way, its picture is not kept for the next open, and the content the
+    /// close's tidying takes out of the window goes with it (it was still in the window as the pressure came).
+    @Test func memoryPressureJustBeforeTheCloseIsTidiedLetsGoOfTheContent() {
+        morphing { controller, ticks in
+            openAndStartClosing(controller, ticks, on: .settings)
+            controller.run?.complete()
+            #expect(controller.keepsPicture && controller.window?.contentViewController != nil)
+            controller.memoryPressure(elevated: true)
+            #expect(!controller.keepsPicture && controller.content != nil)
+            ticks.turns.forEach { $0() }
+            #expect(controller.window?.contentViewController == nil && controller.content == nil)
+        }
+    }
+
+    /// Short of memory while open, a morphing close keeps no picture for the next open.
+    @Test func memoryPressureWhileOpenKeepsNoPictureOnAMorphingClose() {
+        morphing { controller, ticks in
+            controller.memoryPressure(elevated: true)
+            openAndStartClosing(controller, ticks, on: .settings)
+            #expect(controller.phase == .closing && !controller.keepsPicture)
+            controller.memoryPressure(elevated: false)
+        }
     }
 
     /// A close turned round by a banner's click on another card of the same place shows that card, not the picture of the

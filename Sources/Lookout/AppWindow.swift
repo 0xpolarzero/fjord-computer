@@ -86,24 +86,42 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         Self.watchMemory()
     }
 
-    /// The system short of memory: the window made last lets go of what it keeps only to open faster (see `releaseKept`).
+    /// The system short of memory: the window made last lets go of what it keeps only to open faster (see `releaseKept`),
+    /// and keeps nothing more until memory is back (see `memoryShort`).
     private static var memoryWatch: DispatchSourceMemoryPressure?
 
     private static func watchMemory() {
         guard memoryWatch == nil else { return }
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
-        source.setEventHandler { MainActor.assumeIsolated { active?.releaseKept() } }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
+        source.setEventHandler {
+            let event = source.data
+            MainActor.assumeIsolated { active?.memoryPressure(elevated: !event.contains(.normal)) }
+        }
         source.resume()
         memoryWatch = source
     }
 
+    /// Whether the system is short of memory (a warning or a critical pressure, until it says normal again): the window
+    /// prepares nothing, keeps no picture at a close, and lets go of its content once a close has taken it out.
+    private(set) var memoryShort = false
+
+    /// The system's memory pressure went up (`elevated`) or back to normal.
+    func memoryPressure(elevated: Bool) {
+        memoryShort = elevated
+        if elevated { releaseKept() }
+    }
+
     /// Lets go of the picture kept from the last close and, while the window is closed, of its content (a window's worth
-    /// of views, and the picture some 15 MB): the next opening makes them again, as a first one does.
+    /// of views, and the picture some 15 MB): the next opening makes them again, as a first one does. Content still in the
+    /// window stays (a close under way takes it out a turn later, and lets go of it then while memory is short).
     func releaseKept() {
         closedPicture = nil
         guard phase == .idle, pending == nil, window?.isVisible != true, window?.contentViewController == nil else { return }
         content = nil
     }
+
+    /// Whether a picture from the last close is kept for the next opening.
+    var keepsPicture: Bool { closedPicture != nil }
 
     /// Open, or on its way in (its morph plays before the window itself is in); one on its way out is closed already (a
     /// toggle opens it again).
@@ -168,7 +186,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// once the content exists or while the window is open or on its way. No close is involved, so nothing a close leaves
     /// for later (see `windowWillClose`) is either.
     func prepare() {
-        guard content == nil, phase == .idle, pending == nil, window?.isVisible != true else { return }
+        guard content == nil, phase == .idle, pending == nil, window?.isVisible != true, !memoryShort else { return }
         settle()
         let window = self.window ?? makeWindow()
         self.window = window
@@ -342,8 +360,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         run = current
         // Kept for the next opening to start on, when it was taken with the window key, of the place it shows (an opening
-        // cut short may still show the place it started on).
-        if let image = current.image, current.imageIsKey, let place = current.shows {
+        // cut short may still show the place it started on), unless memory is short.
+        if !memoryShort, let image = current.image, current.imageIsKey, let place = current.shows {
             closedPicture = AppTransition.Picture(image: image, frame: sender.frame, scale: sender.backingScaleFactor,
                                                   destination: place)
         }
@@ -543,6 +561,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             guard let self, self.generation == closed, self.phase == .idle, self.pending == nil,
                   self.window?.isVisible != true else { return }
             self.window?.contentViewController = nil
+            // Short of memory: not kept either (it was still in the window as the pressure came).
+            if self.memoryShort { self.releaseKept() }
             AppPolicy.update(windowOpen: false)
             self.onClose?()
         }
