@@ -472,6 +472,11 @@ struct Thing: Codable, Hashable, Identifiable {
     var behindBase = false
     /// The latest commit's id.
     var headSha: String?
+    /// Which execution of its CI it shows (`ci:`…): a PR's checks on its head commit by their ids (a rerun's are new ones),
+    /// a workflow's run and attempt. Nil when unknown (an older file).
+    var ciRun: String?
+    /// A check is still running, though the outcome may already say failing: the CI as a whole isn't done.
+    var ciRunning = false
     /// When each current review request was made (the latest `ReviewRequestedEvent` per reviewer).
     var reviewRequests: [ThingReviewRequest] = []
     var greptileScore: Int?
@@ -517,6 +522,8 @@ extension Thing {
         hasConflicts = try c.decodeIfPresent(Bool.self, forKey: .hasConflicts) ?? false
         behindBase = try c.decodeIfPresent(Bool.self, forKey: .behindBase) ?? false
         headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
+        ciRun = try c.decodeIfPresent(String.self, forKey: .ciRun)
+        ciRunning = try c.decodeIfPresent(Bool.self, forKey: .ciRunning) ?? false
         reviewRequests = try c.decodeIfPresent([ThingReviewRequest].self, forKey: .reviewRequests) ?? []
         greptileScore = try c.decodeIfPresent(Int.self, forKey: .greptileScore)
         workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName)

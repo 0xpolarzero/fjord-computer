@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // Fetching for the inbox: what the categories' rules ask for, as GitHub search queries; one GraphQL shape that returns
@@ -290,6 +291,8 @@ enum InboxSync {
       reviews(last: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
       reviewThreads(first: \(threadsFirst)) { \(threadFields) }
       commits(last: 5) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
+      head: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 50) { totalCount nodes {
+        __typename ... on CheckRun { databaseId status } ... on StatusContext { context state createdAt } } } } } } }
     }
     fragment I on Issue {
       id number title url state createdAt updatedAt body
@@ -451,6 +454,28 @@ enum InboxSync {
         }
     }
 
+    /// Which execution of a commit's checks GitHub shows, and whether any of them still runs: the check runs by id (a rerun
+    /// makes new ones; one finishing keeps its own) and the statuses by context and when last posted. Only the first page is
+    /// read: more than that counts in the identity by number.
+    static func ciExecution(sha: String, contexts: [String: Any]) -> (run: String, running: Bool) {
+        var ids: [String] = []
+        var running = false
+        let seen = nodes(contexts)
+        for c in seen {
+            if let id = c["databaseId"] as? Int {
+                ids.append("c\(id)")
+                running = running || c["status"] as? String != "COMPLETED"
+            } else if let context = c["context"] as? String {
+                ids.append("s\(context)@\(c["createdAt"] as? String ?? "")")
+                running = running || checkState(c["state"]) == .pending
+            }
+        }
+        let total = contexts["totalCount"] as? Int ?? seen.count
+        let digest = SHA256.hash(data: Data(ids.sorted().joined(separator: "\n").utf8)).prefix(12)
+            .map { String(format: "%02x", $0) }.joined()
+        return ("ci:\(sha):\(digest)" + (total > seen.count ? "+\(total)" : ""), running)
+    }
+
     /// A search node (a PR or an issue) as a Thing; nil when it lacks what a Thing needs.
     static func thing(_ node: [String: Any]) -> Thing? {
         guard let kindName = node["__typename"] as? String, kindName == "PullRequest" || kindName == "Issue",
@@ -550,6 +575,12 @@ enum InboxSync {
             }
             thing.checks = commits.last.flatMap { checkState(dict($0["statusCheckRollup"])?["state"]) }
             thing.headSha = commits.last?["oid"] as? String
+            if let head = nodes(node["head"]).first.flatMap({ dict($0["commit"]) }),
+               let rollup = dict(head["statusCheckRollup"]), let contexts = dict(rollup["contexts"]) {
+                let execution = ciExecution(sha: head["oid"] as? String ?? "", contexts: contexts)
+                thing.ciRun = execution.run
+                thing.ciRunning = execution.running || checkState(rollup["state"]) == .pending
+            }
         } else {
             thing.status = node["state"] as? String == "CLOSED" ? .closed : .open
         }

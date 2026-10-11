@@ -19,7 +19,8 @@ enum RouterWaits {
             if let counted = watch.turnsAtWork, session.completedTurns <= counted, session.summary == nil { return nil }
             return session.summary?.blocked == true ? "it stopped, blocked" : "it finished its turn"
         case .ci(let id):
-            guard let thing = things[id] else { return nil }
+            // Done only once all of it is: a failure while other checks still run isn't its outcome yet.
+            guard let thing = things[id], !thing.ciRunning else { return nil }
             switch thing.checks {
             case .passing: return "passing"
             case .failing:
@@ -30,10 +31,12 @@ enum RouterWaits {
         }
     }
 
-    /// Which run of the CI the thing shows: a workflow's last update (a rerun is a new one), a PR's head commit; nil for a
-    /// session, or when unknown.
+    /// Which run of the CI the thing shows: its execution as GitHub identifies it (`Thing.ciRun`: a rerun is a new one,
+    /// another check of the same run finishing isn't); else, as an older file has it, a workflow's last update, a PR's head
+    /// commit; nil for a session, or when unknown.
     static func run(_ watch: RouterTriage.Watch, things: [String: Thing]) -> String? {
         guard case .ci(let id) = watch.target, let thing = things[id] else { return nil }
+        if let execution = thing.ciRun { return execution }
         if thing.kind == .workflow { return "\(thing.updatedAt.timeIntervalSince1970)" }
         return thing.headSha
     }
@@ -212,9 +215,10 @@ extension Store {
             if let was = card.triage?.ready {
                 guard card.triage?.told == nil, case .ci(let id) = watch.target, things[id] != nil else { continue }
                 // The same outcome of another run (a rerun that failed again) is ready again; an older card's, with no run
-                // kept, only learns which run it is.
-                guard result != was.result || (was.run != nil && run != nil && run != was.run) else {
-                    if was.run == nil, run != nil { state.cards[i].triage?.ready?.run = run }
+                // kept or one told the older way (not GitHub's ids), only learns which run it is.
+                let comparable = was.run != nil && run != nil && was.run?.hasPrefix("ci:") == run?.hasPrefix("ci:")
+                guard result != was.result || (comparable && run != was.run) else {
+                    if !comparable, run != nil { state.cards[i].triage?.ready?.run = run }
                     continue
                 }
                 state.cards[i].triage?.ready = result.map { .init(result: $0, at: now, run: run) }

@@ -55,6 +55,31 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
 }
 
 @Suite struct InboxSyncMapping {
+    @Test func aPRsCIExecutionIsItsChecksIds() throws {
+        func head(_ runs: [(Int, String)], statuses: [(String, String, String)] = [], rollup: String = "FAILURE") -> [String: Any] {
+            let contexts: [[String: Any]] = runs.map { ["__typename": "CheckRun", "databaseId": $0.0, "status": $0.1] }
+                + statuses.map { ["__typename": "StatusContext", "context": $0.0, "state": $0.1, "createdAt": $0.2] }
+            return ["head": ["nodes": [["commit": ["oid": "abc", "statusCheckRollup": [
+                "state": rollup, "contexts": ["totalCount": contexts.count, "nodes": contexts]]]]]]]
+        }
+        let failing = try #require(InboxSync.thing(node(head([(1, "COMPLETED"), (2, "IN_PROGRESS")]))))
+        // The rollup already says failing; another check still runs.
+        #expect(failing.checks == .failing && failing.ciRunning)
+        let done = try #require(InboxSync.thing(node(head([(2, "COMPLETED"), (1, "COMPLETED")]))))
+        // The same run, all of it finished: the same execution.
+        #expect(!done.ciRunning && done.ciRun == failing.ciRun && done.ciRun?.hasPrefix("ci:abc:") == true)
+        // Rerun: new check runs on the same commit.
+        let rerun = try #require(InboxSync.thing(node(head([(3, "COMPLETED"), (4, "COMPLETED")]))))
+        #expect(rerun.ciRun != done.ciRun)
+        // A status still pending runs; posted again, it is another execution.
+        let pending = try #require(InboxSync.thing(node(head([(1, "COMPLETED")], statuses: [("ci/ext", "PENDING", "2026-10-08T11:00:00Z")]))))
+        #expect(pending.ciRunning)
+        let posted = try #require(InboxSync.thing(node(head([(1, "COMPLETED")], statuses: [("ci/ext", "FAILURE", "2026-10-08T12:00:00Z")]))))
+        #expect(!posted.ciRunning && posted.ciRun != pending.ciRun)
+        // No head read (an older answer): unknown.
+        #expect(try #require(InboxSync.thing(node())).ciRun == nil)
+    }
+
     @Test func aPullRequestBecomesAThing() throws {
         let t = try #require(InboxSync.thing(node()))
         #expect(t.id == "pr:o/r#12")

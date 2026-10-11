@@ -388,6 +388,59 @@ import Testing
         #expect(ready == 2)
     }
 
+    @Test func aPRRerunThatFailsTheSameWayIsReadyAgain() {
+        var pr = ci(.failing)
+        pr.headSha = "h1"
+        pr.ciRun = "ci:h1:aaa"
+        let (s, _) = store(watch: ciWatch, things: [pr])
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        let first = Date(timeIntervalSince1970: 1_000)
+        s.resolveWaits(now: first)
+        #expect(ready == 1)
+        // Rerun on the same head commit, failing the same way between polls: its checks are new ones.
+        s.things[pr.id]?.ciRun = "ci:h1:bbb"
+        s.resolveWaits(now: first.addingTimeInterval(600))
+        #expect(ready == 2 && s.router.cards[0].triage?.ready?.run == "ci:h1:bbb")
+        s.resolveWaits(now: first.addingTimeInterval(700))
+        #expect(ready == 2)
+    }
+
+    @Test func aPRWhoseOtherChecksStillRunIsntReadyAndTheirFinishingSaysItOnce() {
+        var pr = ci(.failing)
+        pr.headSha = "h1"
+        pr.ciRun = "ci:h1:aaa"
+        pr.ciRunning = true
+        let (s, _) = store(watch: ciWatch, things: [pr])
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        let first = Date(timeIntervalSince1970: 1_000)
+        // One check failed, others of the same run still going: not its outcome yet.
+        s.resolveWaits(now: first)
+        #expect(ready == 0 && s.router.cards[0].triage?.ready == nil)
+        // The last of them finishes: ready once, and a later refresh of the same run says nothing more.
+        s.things[pr.id]?.ciRunning = false
+        s.things[pr.id]?.updatedAt = pr.updatedAt.addingTimeInterval(60)
+        s.resolveWaits(now: first.addingTimeInterval(60))
+        #expect(ready == 1)
+        s.things[pr.id]?.updatedAt = pr.updatedAt.addingTimeInterval(120)
+        s.resolveWaits(now: first.addingTimeInterval(120))
+        #expect(ready == 1)
+    }
+
+    @Test func aCardReadyTheOlderWayOnlyLearnsTheRun() {
+        var pr = ci(.failing)
+        pr.headSha = "h1"
+        let (s, _) = store(watch: ciWatch, things: [pr])
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        s.resolveWaits(now: Date(timeIntervalSince1970: 1_000))
+        #expect(ready == 1 && s.router.cards[0].triage?.ready?.run == "h1")
+        s.things[pr.id]?.ciRun = "ci:h1:aaa"
+        s.resolveWaits(now: Date(timeIntervalSince1970: 1_100))
+        #expect(ready == 1 && s.router.cards[0].triage?.ready?.run == "ci:h1:aaa")
+    }
+
     @Test func aWaitItsMessageDidntNameIsNeverContinuedOnItsOwn() async {
         var unnamed = ciWatch
         unnamed.named = false
