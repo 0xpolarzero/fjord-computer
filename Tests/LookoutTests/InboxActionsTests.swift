@@ -444,6 +444,32 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.comments.map(\.body).sorted() == ["fact", "high"])
     }
 
+    @Test func aRatingStillAwaitedIsRememberedAcrossARestart() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var pr = InboxFixture.pr(1, by: Person(login: "tok"), greptile: nil)
+        pr.requestedReviewers = ["me"]
+        let high = CategoryAction.make(.comment("high"))
+        var mine = InboxFixture.category()
+        mine.rules[0].conditions.append(.importance(.high))
+        mine.actions = ActionList([high])
+        let store = InboxFixture.store([pr], category: mine)
+        let performer = FakePerformer()
+        store.actionPerformer = performer
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        // Taken in before Jev rated it; Lookout quits and opens again before his rating comes.
+        await store.runActions()
+        store.flushSave()
+        #expect(store.actionLedger.awaitedRatings?.isEmpty == false)
+        store.loadActions()
+        let stamp = InboxEngine.importanceStamp(store.things["pr:a/one#1"]!, context: store.inboxContext)!
+        store.things["pr:a/one#1"]?.signals = ThingSignals(importance: ImportanceSignal(level: .high, stamp: stamp), viewer: "me")
+        await store.runActions()
+        #expect(performer.comments.isEmpty)
+    }
+
     @Test func anActionAddedLaterBaselinesOnlyItself() async {
         let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
         await store.runActions()

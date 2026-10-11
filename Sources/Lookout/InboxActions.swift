@@ -1345,7 +1345,9 @@ private struct LossyLedger: Decodable {
     var ledger = ActionLedger()
     var lost: [String] = []
 
-    private enum CodingKeys: String, CodingKey { case baselines, runs }
+    private enum CodingKeys: String, CodingKey {
+        case baselines, runs, restoredReviews, restoredReviewIDs, restoredBefore, awaitedRatings
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1359,6 +1361,21 @@ private struct LossyLedger: Decodable {
             if ledger.runs.count < all.count { lost.append("\(all.count - ledger.runs.count) of runs") }
         } catch {
             lost.append("runs")
+        }
+        // What is still to come (reviews back, ratings awaited) is kept across a restart: without it, what was there is new.
+        do { ledger.restoredReviews = try c.decodeIfPresent(Set<String>.self, forKey: .restoredReviews) } catch {
+            lost.append("restoredReviews")
+        }
+        do { ledger.restoredReviewIDs = try c.decodeIfPresent([String: Set<String>].self, forKey: .restoredReviewIDs) } catch {
+            lost.append("restoredReviewIDs")
+        }
+        do { ledger.restoredBefore = try c.decodeIfPresent([String: [UUID: Set<String>]].self, forKey: .restoredBefore) } catch {
+            lost.append("restoredBefore")
+        }
+        do {
+            ledger.awaitedRatings = try c.decodeIfPresent([UUID: [String: ActionLedger.AwaitedRating]].self, forKey: .awaitedRatings)
+        } catch {
+            lost.append("awaitedRatings")
         }
     }
 }
