@@ -20,7 +20,7 @@ struct RouterCodeView: View {
             .background(CDS.Surface.s1)
         .frame(minWidth: embedded ? 0 : 760, minHeight: embedded ? 0 : 520)
         .foregroundStyle(Theme.text)
-        .environment(\.colorScheme, .dark)
+        .modifier(Brand.Scheme())
         // Inside the app window, the window's tip space draws the tips: a second one would only measure the page again.
         .tipSpace(!embedded)
         .task { if checksClaudeCode { await model.checkClaudeCode(store) } }
