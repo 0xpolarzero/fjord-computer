@@ -48,6 +48,32 @@ import Testing
         #expect(s.entries(in: all).map(\.id) == ["pr:a/one#1"])
     }
 
+    @Test func aStateGoneSinceDoneIsNewWhenItComesBack() {
+        var thing = InboxFixture.pr(2)
+        thing.hasConflicts = true
+        thing.checks = .failing
+        let broken = InboxCategory(name: "Broken", symbol: "xmark", color: .red,
+                                   rules: [Rule(scope: Scope(kinds: [.pr]), match: .any, conditions: [.hasConflicts, .checks([.failing])],
+                                                createdAt: .distantPast)])
+        let s = InboxFixture.store([thing], category: broken)
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.content.body) }
+        s.announceInbox()
+        s.markDone(s.entries[0])
+        // The conflicts are resolved, the checks still fail: still Done, without the conflicts.
+        thing.hasConflicts = false
+        s.things[thing.id] = thing
+        s.announceInbox()
+        #expect(s.doneEntries.first?.facts.map(\.key) == ["checks:failing"])
+        #expect(s.marks[thing.id]?.acked.contains("conflicts") == false)
+        // They come back: that is new.
+        thing.hasConflicts = true
+        s.things[thing.id] = thing
+        s.announceInbox()
+        #expect(s.entries(in: broken.id).map(\.id) == [thing.id])
+        #expect(posted == ["has conflicts"])
+    }
+
     @Test func doneMarksSavedBeforeRoutingWasKeptReadAsBefore() throws {
         let old = #"{"seen":["a"],"acked":["a"],"notified":[],"doneAt":0}"#
         let marks = try JSONDecoder().decode(EntryMarks.self, from: Data(old.utf8))

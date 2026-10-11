@@ -34,15 +34,22 @@ enum InboxEngine {
                 let seen = m?.seen ?? []
                 // Done here and nothing new since: it stays Done here with what it was Done with, as long as the rules
                 // still take it when Done's cutoff is left aside (an edited rule, or a thing that changed, lets it go).
+                // Of what it was Done with, only what is still so stays: a state gone since (conflicts resolved) goes, so
+                // it is new when it comes back.
                 if category.id == doneIn, keys.isSubset(of: acked), let kept = m?.doneFacts, !kept.isEmpty {
                     var routing = m
                     routing?.doneAt = nil
-                    let stays = category.rules.contains {
-                        !off.contains($0.id) && facts($0, thing, marks: routing, resolved: resolved) != nil
+                    var stays = false
+                    var now = Set<String>()
+                    for rule in category.rules where !off.contains(rule.id) {
+                        guard let matched = facts(rule, thing, marks: routing, resolved: resolved) else { continue }
+                        stays = true
+                        now.formUnion(matched.map(\.key))
                     }
-                    if stays {
-                        var all = Set(kept.map(\.key))
-                        let shown = kept + union.filter { all.insert($0.key).inserted }
+                    let still = kept.filter { now.contains($0.key) }
+                    if stays, !still.isEmpty {
+                        var all = Set(still.map(\.key))
+                        let shown = still + union.filter { all.insert($0.key).inserted }
                         entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: shown, isDone: true,
                                                   isUnread: !all.isSubset(of: seen), importance: importance(thing, resolved)))
                         break
