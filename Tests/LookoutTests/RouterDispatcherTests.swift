@@ -785,6 +785,18 @@ import Testing
         #expect(f.startSettings == [SessionSettings(model: "haiku", effort: nil)] && f.started.map(\.title) == ["fix the CI, don't use opus"])
     }
 
+    @Test func aPillWithASpaceInItsNameStillLeadsARequestToStartASession() async {
+        let text = "@My App start a session to fix the CI"
+        let pills = Self.pills(text, ["My App"])
+        #expect(RouterDispatcher.wantsNewSession(text, pills: pills) && RouterTools.startRequest(text, pills: pills) != nil)
+        let (s, d, f) = setup()
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        s.claudeSessions["local_m"] = ClaudeSession(id: "local_m", title: "Polish the icon", folder: "/code/My App", lastActivity: Date())
+        let a = d.submit(text, context: RouterContext(projects: ["/code/My App"], pills: pills))
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty && f.started.map(\.folder) == ["/code/My App"] && f.started.map(\.title) == ["fix the CI"])
+    }
+
     @Test func aProjectNamedLikeAWordOfTheTaskNeverTakesItsWordsAway() {
         let p = ["no", "case", "lookout"]
         func task(_ t: String) -> String { SessionStart.task(from: t, pills: Self.pills(t, p), projects: p) }

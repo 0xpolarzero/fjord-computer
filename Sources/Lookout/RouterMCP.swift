@@ -770,7 +770,8 @@ final class RouterMCPServer: @unchecked Sendable {
     /// Without Jev: targets ranked by the words the message shares with their titles and projects, for you to pick from.
     /// `named`: where the message's own address sends it (`destination`), the only one gone to without your pick: a title
     /// the words merely mention could be a session's bait ("the tests").
-    static func unassisted(_ message: String, _ targets: [Target], store: Store) -> (ranked: [(target: String, score: Int)], named: String?) {
+    static func unassisted(_ message: String, _ targets: [Target], store: Store, pills: [Range<Int>] = [])
+        -> (ranked: [(target: String, score: Int)], named: String?) {
         let text = message.lowercased()
         let words = Set(text.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
         func mentions(_ name: String) -> Bool {
@@ -780,9 +781,9 @@ final class RouterMCPServer: @unchecked Sendable {
         }
         // Asked to start a session: a new one, never an existing session the words happen to name. In the project named
         // right after the request ("start a session in lookout to …"), else you pick among the projects the words mention.
-        if startRequest(message) != nil {
+        if startRequest(message, pills: pills) != nil {
             let projects = targets.filter { $0.target.hasPrefix("new:") }
-            return (projects.filter { mentions($0.project) }.map { ($0.target, 3) }, destination(message, targets, store: store))
+            return (projects.filter { mentions($0.project) }.map { ($0.target, 3) }, destination(message, targets, store: store, pills: pills))
         }
         var ranked: [(String, Int)] = []
         for t in targets where t.target != "unclear" {
@@ -796,14 +797,14 @@ final class RouterMCPServer: @unchecked Sendable {
             if score > 0 { ranked.append((t.target, score)) }
         }
         ranked.sort { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
-        return (ranked, destination(message, targets, store: store))
+        return (ranked, destination(message, targets, store: store, pills: pills))
     }
 
     /// Where the message's own address, at its very start, sends it, resolved here and not by Jev: a request to start a
     /// session followed by "in <project>" (one word, one project), else the session the message is addressed to
     /// (`addressedSession`) when it is among the targets. Nil for anything else, or more than one fit.
-    static func destination(_ message: String, _ targets: [Target], store: Store) -> String? {
-        if let start = startRequest(message) {
+    static func destination(_ message: String, _ targets: [Target], store: Store, pills: [Range<Int>] = []) -> String? {
+        if let start = startRequest(message, pills: pills) {
             guard let p = start.project else { return nil }
             let fits = targets.filter {
                 $0.target.hasPrefix("new:") && ($0.project.lowercased() == p || (($0.folder ?? "") as NSString).lastPathComponent.lowercased() == p)
@@ -833,14 +834,22 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// A message that asks for a new session (`SessionStart.startPhrase`, at its start or after its @projects), and the
     /// project named by the one word right after "in", lowercased, where the request goes on after it: "start a session
-    /// in lookout to …" → lookout ("in case the build breaks" names none, and nor does a word of negation).
+    /// in lookout to …" → lookout ("in case the build breaks" names none, and nor does a word of negation). `pills`: where
+    /// the message's @project pills are (`pastLeadingTags`).
     struct StartRequest { var project: String? }
-    static func startRequest(_ message: String) -> StartRequest? {
-        let t = message.replacingOccurrences(of: #"^(?:\s*@[\w.\-/]+[\s,:;]*)*\s*"#, with: "", options: .regularExpression)
+    static func startRequest(_ message: String, pills: [Range<Int>] = []) -> StartRequest? {
+        let t = pastLeadingTags(message, pills: pills)
         guard let regex = try? NSRegularExpression(pattern: SessionStart.startPhrase + #"(?:\s+in\s+(?:the\s+)?([\w.\-]+)(?![\w./-])(?:\s+(?:project|repo|repository|folder))?\#(SessionStart.goesOn))?"#,
                                                    options: [.caseInsensitive]),
               let m = regex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) else { return nil }
         return StartRequest(project: Range(m.range(at: 1), in: t).map { t[$0].lowercased() }.flatMap { SessionStart.negations.contains($0) ? nil : $0 })
+    }
+
+    /// `text` past the @project pills it starts with, by where the composer put them (never by reading names back out of
+    /// the words: "@My App start a session…"), then past any @word typed at its start.
+    nonisolated static func pastLeadingTags(_ text: String, pills: [Range<Int>]) -> String {
+        let rest = Addressing.withoutLeadingPills(text, pills) ?? text
+        return rest.replacingOccurrences(of: #"^(?:\s*@[\w.\-/]+[\s,:;]*)*\s*"#, with: "", options: .regularExpression)
     }
 
     /// Who a message is addressed to at its start, lowercased: "tell/ask (the) X (session) to …", "(for) (the) X (session):".
