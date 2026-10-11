@@ -1089,6 +1089,33 @@ extension Store {
                                    ownerRepos: inboxSyncState.ownerRepos).subtracting(fetched)
     }
 
+    /// What an edit's actions wait to have read before anything runs (`baselineIfFetched`), as the inbox's status says it
+    /// ("Actions paused until … can be read"): the repos and owners its searches name, else the searches, and the repos
+    /// whose workflows it asks for. Nil when nothing waits.
+    func actionsPausedFor() -> String? {
+        guard baselinePending, baselineAwaitsFetch else { return nil }
+        var seen = Set<String>()
+        let names = unfetchedScope().sorted().map(Self.scopeName).filter { seen.insert($0.lowercased()).inserted }
+        guard !names.isEmpty else { return nil }
+        let shown = names.prefix(3).joined(separator: ", ")
+        return names.count > 3 ? shown + " and \(names.count - 3) more" : shown
+    }
+
+    /// A scope key (`InboxSync.scopeKeys`) as said to you.
+    nonisolated static func scopeName(_ key: String) -> String {
+        if key.hasPrefix("workflow:") { return "\(key.dropFirst(9).prefix { $0 != "@" })'s workflows" }
+        let query = key.hasPrefix("search:") ? String(key.dropFirst(7)) : key
+        let tokens = query.split(separator: " ").map(String.init)
+        let places = tokens.compactMap { token -> String? in
+            let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, ["repo", "user", "org"].contains(parts[0].lowercased()) else { return nil }
+            return parts[1]
+        }
+        if !places.isEmpty { return places.joined(separator: " or ") }
+        let said = tokens.filter { !$0.hasPrefix("archived:") && !$0.hasPrefix("sort:") }.joined(separator: " ")
+        return "“\(said)”"
+    }
+
     /// The scope the things were fetched for, as keys (`InboxSync.scopeKeys`).
     func fetchedScopeKeys() -> Set<String>? {
         switch fetchedFor {

@@ -336,8 +336,10 @@ extension LookoutHub {
                              detail: "Check your connection · Lookout tries again on its own\n" + refresh)
         }
         if let error = store.inboxError {
+            // An edit's actions waiting for what can't be read: nothing runs until it is, which isn't seen otherwise.
+            let paused = store.actionsPausedFor().map { "\nActions paused until \($0) can be read" } ?? ""
             return SyncState(color: Theme.amber, text: "Inbox didn't sync", title: "GitHub didn't answer the inbox's search",
-                             detail: error + "\n" + refresh)
+                             detail: error + paused + "\n" + refresh)
         }
         if let error = store.inboxReadError {
             return SyncState(color: Theme.amber, text: "Jev can't read", title: "Jev couldn't read the inbox's new comments",
