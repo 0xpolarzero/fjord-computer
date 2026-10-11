@@ -158,7 +158,7 @@ enum InboxSync {
     }
 
     /// The qualifier for an author: a bot's login is `app/name` in search.
-    private static func author(_ login: String) -> String {
+    static func author(_ login: String) -> String {
         login.hasSuffix("[bot]") ? "app/" + login.dropLast(5) : login
     }
 
@@ -766,8 +766,9 @@ enum InboxSync {
                       thing.updatedAt >= day else { return false }
             case "-repo": guard !same(value, thing.repo) else { return false }
             case "-user", "-org": guard !same(value, owner) else { return false }
-            case "author": guard let a = thing.author?.login, same(value, a) else { return false }
-            case "-author": guard thing.author.map({ !same(value, $0.login) }) ?? true else { return false }
+            // Written as the query is (`author(_:)`): a bot is `app/name` there, `name[bot]` on the thing.
+            case "author": guard let a = thing.author?.login, same(value, author(a)) else { return false }
+            case "-author": guard thing.author.map({ !same(value, author($0.login)) }) ?? true else { return false }
             default: return false
             }
         }

@@ -717,6 +717,17 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(draft.signals?.involved == false)
     }
 
+    @Test func aBotsPRIsLeftOutByTheBotsAuthorQualifierAsTheQueryWritesIt() {
+        var pr = InboxFixture.pr(12, repo: "o/r", by: Person(login: "renovate[bot]"))
+        pr.signals = ThingSignals(viewer: "me", involved: true)
+        // A search leaving the bot out never returns its PR: its absence there says nothing, and it stays involved.
+        let query = "is:pr archived:false involves:me -author:app/renovate is:open sort:updated-desc"
+        #expect(!InboxSync.wouldFind(query, pr, me: "me"))
+        InboxSync.markInvolved(&pr, foundBy: [], complete: [query], me: "me")
+        #expect(pr.signals?.involved == true)
+        #expect(InboxSync.wouldFind("is:pr involves:me author:app/renovate", pr, me: "me"))
+    }
+
     @Test func anEventAnnouncedOnceStaysAnnouncedThoughTheRuleStopsMatchingForAWhile() async {
         final class Checks: @unchecked Sendable { var state = "SUCCESS" }
         let checks = Checks()
