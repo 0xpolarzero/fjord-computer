@@ -847,16 +847,17 @@ extension Store {
             announceInbox()
             return
         }
-        // Out of GraphQL points: wait for the reset rather than fail every poll.
-        if !searches.isEmpty, InboxSync.waitsForPoints(remaining: gh.graphqlRemaining, resetsAt: gh.graphqlResetsAt, manual: manual) {
-            return
-        }
+        // Out of GraphQL points: the searches wait for the reset rather than fail every poll, and the PRs and issues stay as
+        // they were; the workflows, read with REST, are still refreshed.
+        let searchesWait = !searches.isEmpty
+            && InboxSync.waitsForPoints(remaining: gh.graphqlRemaining, resetsAt: gh.graphqlResetsAt, manual: manual)
+        if searchesWait, targets.isEmpty { return }
         gh.reserveETags(forRepositories: targets.count)
 
         var found: [String: Thing] = [:]
         var searchFailure: String?
         var fetched = Fetched()
-        if !searches.isEmpty {
+        if !searches.isEmpty, !searchesWait {
             do {
                 fetched = try await fetchThings(searches)
                 for thing in fetched.things { found[thing.id] = InboxSync.keepingRequestTimes(thing, from: things[thing.id]) }
@@ -890,8 +891,12 @@ extension Store {
         inboxError = searchFailure ?? fetched.error ?? workflowFailure
         // A search that failed can't say what is gone: the things stay as they were.
         guard searchFailure == nil else { return }
-        inboxSyncState.searchCursor = plan.next
         var next = found
+        if searchesWait {
+            for (id, old) in things where old.kind != .workflow { next[id] = old }
+        } else {
+            inboxSyncState.searchCursor = plan.next
+        }
         // Nor can an answer GitHub gave in part: what it left out stays, and so does a thing it gave without some of its
         // parts (its comments, its threads), which would otherwise lose facts and announce them again when they come back.
         if fetched.error != nil {
@@ -900,7 +905,7 @@ extension Store {
             }
         }
         // Past the cap the searches take turns: what those not run this time found stays until they run.
-        next.merge(keepingUnvisited(fetched, ran: searches, all: plan.all)) { a, _ in a }
+        if !searchesWait { next.merge(keepingUnvisited(fetched, ran: searches, all: plan.all)) { a, _ in a } }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
