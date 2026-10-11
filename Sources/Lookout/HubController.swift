@@ -173,6 +173,8 @@ final class HubController {
     }
     /// Scrolls the Router's conversation to a message, before the window opens on it.
     var pickRouterMessage: (UUID) -> Void = { _ in }
+    /// The avatars about to be shown. Replaceable so tests can observe when and in what order they are warmed.
+    var prefetchAvatars: ([URL]) -> Void = { ImageCache.shared.prefetch($0) }
     /// The place the app window shows (or opens on).
     var windowPlace: () -> AppDestination? = { nil }
 
@@ -432,9 +434,9 @@ final class HubController {
                 syncTrigger()
             }
         }
-        // Leaving for the window: the store's refresh and the avatars' fetches wait for the turn after the morph started.
+        // Leaving for the window: the store's refresh waits for the turn after the morph started.
         if leaving {
-            DispatchQueue.main.async { [weak self] in self?.reportOpen() }
+            AppTransition.nextTurn { [weak self] in self?.reportOpen() }
         } else {
             reportOpen()
         }
@@ -506,7 +508,13 @@ final class HubController {
         guard open != reportedOpen else { return }
         reportedOpen = open
         store.setHubOpen(open)
-        if open { ImageCache.shared.prefetch(store.avatarsToWarm(first: windowOpen ? windowPlace()?.tab : hub.tab)) }
+        if open {
+            // A frame later: the opening's own work comes first.
+            AppTransition.nextFrame(screen) { [weak self] in
+                guard let self, self.reportedOpen else { return }
+                self.prefetchAvatars(self.store.avatarsToWarm(first: self.windowOpen ? self.windowPlace()?.tab : self.hub.tab))
+            }
+        }
     }
 
     // MARK: Dragging to another edge
