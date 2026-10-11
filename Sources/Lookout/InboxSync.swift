@@ -110,6 +110,16 @@ enum InboxSync {
         }
     }
 
+    /// Whether a refresh needs the repos you own or contribute to: a rule names them, to take them in or to leave them out
+    /// ("acme/* except Repos I contribute to" can't leave out what isn't known).
+    static func needsRepos(categories: [InboxCategory]) -> Bool {
+        categories.contains { category in
+            category.rules.contains { rule in
+                rule.scope.in.map { ($0.include + $0.except).contains { $0 == .owned || $0 == .contributed } } ?? false
+            }
+        }
+    }
+
     /// How soon the teams are asked again after looking them up failed.
     static let teamsRetry: TimeInterval = 15 * 60
 
@@ -847,9 +857,7 @@ extension Store {
                 repoNamesChecking = false
             }
         }
-        let needsRepos = categories.contains { $0.rules.contains { rule in
-            (rule.scope.in?.include ?? []).contains { $0 == .owned || $0 == .contributed }
-        } }
+        let needsRepos = InboxSync.needsRepos(categories: categories)
         let needsTeams = InboxSync.needsTeams(categories: categories, jevReads: jevReadsInboxNow)
         // What couldn't be looked up but left what was known: said once the refresh is done.
         var scopeFailure: String?

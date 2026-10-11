@@ -1152,6 +1152,22 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.reposResolvedAt == dayAgo && s.inboxError?.contains("Something went wrong") == true)
     }
 
+    @Test @MainActor func reposLeftOutByARuleAreLookedUpToLeaveThemOut() async throws {
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [rule(Scope(kinds: [.pr], in: Pick(include: [.owner("acme")], except: [.contributed])))]
+        s.gh.session = StubbedGitHub.session { request in
+            if InboxSyncRefresh.body(request).contains("ownerAffiliations") {
+                return .init(200, #"{"data":{"viewer":{"repositories":{"nodes":[]}},"merged":{"nodes":[{"repository":{"nameWithOwner":"acme/mine"}}]},"open":{"nodes":[]}}}"#)
+            }
+            return .init(200, #"{"data":{"s0":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}"#)
+        }
+        await s.syncInbox()
+        // "acme/* except Repos I contribute to" knows which those are.
+        #expect(s.contributedRepos == ["acme/mine"] && s.reposResolvedAt != nil)
+    }
+
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {
         let s = Store()
         s.persists = false
