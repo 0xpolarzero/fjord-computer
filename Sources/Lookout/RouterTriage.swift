@@ -709,11 +709,16 @@ extension Store {
             guard card.isOpen, card.kind == .waiting, let triage = card.triage, triage.watch == nil, triage.ready == nil,
                   triage.told == nil, Self.waitsOnCI(triage), let session = claudeSessions[card.sessionID], !session.running,
                   card.id == "\(session.id)#t\(session.completedTurns)" else { continue }
-            guard let message = routerTriager.unwatched[card.id], let repos = routerTriager.repos[session.folder ?? ""] else {
+            guard let message = routerTriager.unwatched[card.id] else {
                 readUnwatched(card.id, session: session)
                 continue
             }
+            // Kept until it binds or its card closes: its folder with no remote yet (no `origin`), it is read again later.
             kept[card.id] = message
+            guard let repos = routerTriager.repos[session.folder ?? ""] else {
+                readUnwatched(card.id, session: session)
+                continue
+            }
             let named = things.values.filter { thing in
                 (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
                     && (thing.checks == .pending || thing.ciRunning

@@ -344,6 +344,26 @@ import Testing
         #expect(Store.prsNamed("see o/app#1 (github.com/o/app/pull/1)") == ["o/app#1"])
     }
 
+    @Test func aWaitOnCIWhoseFolderHadNoRemoteYetIsBoundOnceItHasOne() async {
+        // Its folder's remotes read empty (no `origin` yet), at the first read and the retry: its message is kept.
+        let (s, _) = store(watch: ciWatch)
+        s.router.cards[0].triage?.watch = nil
+        s.routerTriager.repos["/code/app"] = nil
+        var reads = 0
+        s.routerTriager.reader = { _ in reads += 1; return "Opened o/app#1; waiting for its CI." }
+        s.resolveWaits()
+        await settle()
+        s.resolveWaits()
+        await settle()
+        s.resolveWaits()
+        #expect(reads == 1 && s.routerTriager.unwatched["a#t3"] != nil)
+        // `origin` added, its remote read: the PR it names is bound.
+        s.routerTriager.repos["/code/app"] = ["o/app"]
+        s.things["pr:o/app#1"] = ci(.pending)
+        #expect(s.router.cards[0].triage?.watch?.target == .ci(thing: "pr:o/app#1"))
+        #expect(s.routerTriager.unwatched["a#t3"] == nil)
+    }
+
     @Test func ciThatFinishedBeforeItsPRWasFoundIsStillBoundAndReady() async {
         // The turn opened the PR and ended waiting on its CI, which finished before the next refresh found the PR.
         let (s, _) = store(watch: ciWatch)
