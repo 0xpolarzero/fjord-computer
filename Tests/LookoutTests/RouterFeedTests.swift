@@ -345,6 +345,18 @@ import Testing
         #expect(state.changes.count == RouterFeed.maxChanges && state.changes.first?.title == "10")
     }
 
+    @Test func aChangeWaitingForYourApplyOutlivesTheCap() {
+        var state = RouterState()
+        var waiting = LookoutChange(date: at(0), title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        waiting.pending = "asks first"
+        state.changes = [waiting] + (1...510).map {
+            LookoutChange(date: at(Double($0)), title: "\($0)", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        }
+        RouterFeed.prune(&state)
+        #expect(state.changes.count == RouterFeed.maxChanges)
+        #expect(state.changes.first == waiting && state.changes[1].title == "12")
+    }
+
     @Test func anOlderFileWithAChatAndAConversationStillLoads() throws {
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601

@@ -735,7 +735,15 @@ enum RouterFeed {
             }
             state.cards = state.cards.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
         }
-        if state.changes.count > maxChanges { state.changes.removeFirst(state.changes.count - maxChanges) }
+        // Past `maxChanges`, the oldest go, but never one still waiting for your Apply or Discard.
+        if state.changes.count > maxChanges {
+            var over = state.changes.count - maxChanges
+            state.changes = state.changes.filter { change in
+                guard over > 0, !change.isPending else { return true }
+                over -= 1
+                return false
+            }
+        }
     }
 }
 
