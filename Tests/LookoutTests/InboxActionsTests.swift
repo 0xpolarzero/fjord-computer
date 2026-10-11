@@ -663,6 +663,36 @@ final class DiskCheckingPerformer: ActionPerformer {
 
     // MARK: Rate limit, chips, persistence
 
+    @Test func aRulesNumberIsTheSameWhateverOrderALaunchGivesItsSetsAndAnOldOneIsTakenInOnce() throws {
+        // Lists of plain values are sorted: a set written in another order is the same rule.
+        #expect(InboxActions.canonical(Array(#"[{"a":["pr","issue"],"b":[{"c":["z","y"]}],"d":"[x,a]"}]"#.utf8))
+            == Array(#"[{"a":["issue","pr"],"b":[{"c":["y","z"]}],"d":"[x,a]"}]"#.utf8))
+        let action = CategoryAction.make(.comment("hi"))
+        var category = InboxFixture.category()
+        category.rules[0].conditions.append(.checks([.failing, .pending, .passing]))
+        category.actions = ActionList([action])
+        // A ledger saved by a build that hashed the sets as a launch gave them: an order neither sorted nor this launch's.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        encoder.dateEncodingStrategy = .iso8601
+        let raw = String(decoding: try encoder.encode(category.rules), as: UTF8.self)
+        let set = try #require(raw.range(of: #"\[[^\[\]{}]*"failing"[^\[\]{}]*\]"#, options: .regularExpression))
+        let items = raw[set].dropFirst().dropLast().split(separator: ",").map(String.init)
+        let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]].map { $0.map { items[$0] } }
+        let other = try #require(orders.first { $0 != items && $0 != items.sorted() })
+        let old = raw.replacingCharacters(in: set, with: "[" + other.joined(separator: ",") + "]")
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in Array(old.utf8) { hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3 }
+        var ledger = ActionLedger()
+        ledger.baselines[category.id] = .init(rules: String(hash, radix: 16), actions: [action.id])
+        // Taken as the same rules: a thing new since is acted on, and the number is stored sorted.
+        let entry = InboxEntry(thing: InboxFixture.pr(1, by: Person(login: "alice")), categoryID: category.id,
+                               facts: [Fact(key: "greptile:3", label: "g")], isDone: false, isUnread: true)
+        let jobs = InboxActions.plan(entries: [entry], categories: [category], groups: [], ledger: &ledger, me: "me")
+        #expect(jobs.count == 1)
+        #expect(ledger.baselines[category.id]?.rules == InboxActions.fingerprint(category.rules, groups: []))
+    }
+
     @Test func atMostTenRunPerRefreshAndTheRestWait() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()

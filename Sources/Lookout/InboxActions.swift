@@ -230,22 +230,131 @@ enum InboxActions {
 
     /// What the rules say, in a number that is the same at every launch: any edit of a rule (not only adding or removing
     /// one) makes what matches it old news. So does an edit of a group a rule names: adding Carol to it brings in what
-    /// Carol already had, and that isn't new either. Rules that name no group read as they always did.
+    /// Carol already had, and that isn't new either. Rules that name no group read as they always did. A set (kinds, roles,
+    /// states) is written in an order that changes at every launch: each list of plain values is sorted first.
     static func fingerprint(_ rules: [Rule], groups: [InboxGroup]) -> String {
+        let (json, appendix) = fingerprintParts(rules, groups: groups)
+        return hash(canonical(json) + appendix)
+    }
+
+    /// Whether `stored` is the fingerprint of the same rules as written before they were sorted (in any order a launch
+    /// may have given the sets), as ledgers saved by earlier builds hold it. Bounded: rules with too many orders to try
+    /// read as changed, which takes what they match as old (the safe side).
+    static func isLegacyFingerprint(_ stored: String, of rules: [Rule], groups: [InboxGroup], limit: Int = 5_000) -> Bool {
+        let (json, appendix) = fingerprintParts(rules, groups: groups)
+        let arrays = plainArrays(json)
+        var budget = limit
+        var found = false
+        // Every order of every list of plain values, the text around them kept.
+        func walk(_ index: Int, _ built: [UInt8], _ from: Int) {
+            guard !found, budget > 0 else { return }
+            guard index < arrays.count else {
+                budget -= 1
+                if hash(built + json[from...] + appendix) == stored { found = true }
+                return
+            }
+            let array = arrays[index]
+            let prefix = built + json[from..<array.range.lowerBound]
+            for order in permutations(array.items) {
+                guard !found, budget > 0 else { return }
+                walk(index + 1, prefix + joined(order), array.range.upperBound)
+            }
+        }
+        walk(0, [], 0)
+        return found
+    }
+
+    private static func fingerprintParts(_ rules: [Rule], groups: [InboxGroup]) -> (json: [UInt8], appendix: [UInt8]) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         encoder.dateEncodingStrategy = .iso8601
-        var data = (try? encoder.encode(rules)) ?? Data()
+        let data = (try? encoder.encode(rules)) ?? Data()
         let text = String(decoding: data, as: UTF8.self)
+        var appendix: [UInt8] = []
         for group in groups.sorted(by: { $0.id.uuidString < $1.id.uuidString }) where text.contains(group.id.uuidString) {
             let members = Set(group.members.map { $0.lowercased() }).sorted().joined(separator: "\u{1F}")
-            data.append(contentsOf: Array("\u{1E}\(group.id.uuidString)\u{1F}\(group.kind.rawValue)\u{1F}\(members)".utf8))
+            appendix += Array("\u{1E}\(group.id.uuidString)\u{1F}\(group.kind.rawValue)\u{1F}\(members)".utf8)
         }
+        return (Array(data), appendix)
+    }
+
+    private static func hash(_ bytes: [UInt8]) -> String {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in data {
+        for byte in bytes {
             hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
         }
         return String(hash, radix: 16)
+    }
+
+    /// JSON text with each list of plain values sorted, as written otherwise.
+    static func canonical(_ json: [UInt8]) -> [UInt8] {
+        var out: [UInt8] = []
+        var from = 0
+        for array in plainArrays(json) {
+            out += json[from..<array.range.lowerBound]
+            out += joined(array.items.sorted { $0.lexicographicallyPrecedes($1) })
+            from = array.range.upperBound
+        }
+        return out + json[from...]
+    }
+
+    private static func joined(_ items: [ArraySlice<UInt8>]) -> [UInt8] {
+        var out: [UInt8] = [UInt8(ascii: "[")]
+        for (i, item) in items.enumerated() {
+            if i > 0 { out.append(UInt8(ascii: ",")) }
+            out += item
+        }
+        out.append(UInt8(ascii: "]"))
+        return out
+    }
+
+    /// Every order of a list; a long one (a set is a few values, a list of labels is kept in its order) only as it is.
+    private static func permutations(_ items: [ArraySlice<UInt8>]) -> [[ArraySlice<UInt8>]] {
+        guard items.count > 1, items.count <= 5 else { return [items] }
+        var out: [[ArraySlice<UInt8>]] = []
+        for i in items.indices {
+            var rest = items
+            let first = rest.remove(at: i)
+            for tail in permutations(rest) { out.append([first] + tail) }
+        }
+        return out
+    }
+
+    /// Each array of JSON text holding only plain values (strings, numbers, literals): its range, `[` to `]` included,
+    /// and its items as written. They never nest.
+    private static func plainArrays(_ json: [UInt8]) -> [(range: Range<Int>, items: [ArraySlice<UInt8>])] {
+        var out: [(range: Range<Int>, items: [ArraySlice<UInt8>])] = []
+        // Open containers: whether each is an array, where it starts, whether it holds only plain values, its commas.
+        var stack: [(array: Bool, start: Int, plain: Bool, commas: [Int])] = []
+        var inString = false, escaped = false
+        for (i, byte) in json.enumerated() {
+            if inString {
+                if escaped { escaped = false } else if byte == UInt8(ascii: "\\") { escaped = true } else if byte == UInt8(ascii: "\"") { inString = false }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                inString = true
+            case UInt8(ascii: "["), UInt8(ascii: "{"):
+                if !stack.isEmpty { stack[stack.count - 1].plain = false }
+                stack.append((byte == UInt8(ascii: "["), i, true, []))
+            case UInt8(ascii: ","):
+                if !stack.isEmpty { stack[stack.count - 1].commas.append(i) }
+            case UInt8(ascii: "]"), UInt8(ascii: "}"):
+                guard let open = stack.popLast() else { continue }
+                guard open.array, open.plain, i > open.start + 1 else { continue }
+                var items: [ArraySlice<UInt8>] = []
+                var start = open.start + 1
+                for comma in open.commas + [i] {
+                    items.append(json[start..<comma])
+                    start = comma + 1
+                }
+                out.append((open.start..<(i + 1), items))
+            default:
+                break
+            }
+        }
+        return out.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
     /// Brings the ledger up to date with the categories (a category, rule set or action seen for the first time takes what
@@ -260,7 +369,11 @@ enum InboxActions {
         for category in categories {
             let ruleIDs = fingerprint(category.rules, groups: groups)
             let actionIDs = Set(category.actions.items.map(\.id))
-            let before = ledger.baselines[category.id]
+            var before = ledger.baselines[category.id]
+            // Saved by a build that didn't sort the sets: the same rules, taken in once under their sorted number.
+            if let stored = before?.rules, stored != ruleIDs, isLegacyFingerprint(stored, of: category.rules, groups: groups) {
+                before?.rules = ruleIDs
+            }
             let all = before == nil || before!.rules != ruleIDs
             let fresh = all ? category.actions.items : category.actions.items.filter { !(before?.actions.contains($0.id) ?? false) }
             for action in fresh {
@@ -275,7 +388,7 @@ enum InboxActions {
                 }
             }
             let baseline = ActionLedger.Baseline(rules: ruleIDs, actions: actionIDs)
-            if before != baseline { ledger.baselines[category.id] = baseline }
+            if ledger.baselines[category.id] != baseline { ledger.baselines[category.id] = baseline }
         }
         for id in ledger.baselines.keys where !known.contains(id) { ledger.baselines[id] = nil }
 
