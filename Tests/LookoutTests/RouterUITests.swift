@@ -216,6 +216,27 @@ import UserNotifications
         #expect(store.routerCanReopen(handled[1]))
     }
 
+    @Test func aPinnedSessionDeletedWhileThePageWasAwayIsUnpinnedWhenItIsBack() async {
+        let store = demo()
+        let model = RouterModel()
+        guard let session = store.claudeSessions.values.first(where: { !$0.isArchived }) else { Issue.record("no session"); return }
+        model.live.pinned = "session:\(session.id)"
+        model.live.pinnedTitle = session.title
+        model.live.suspend()
+        // Deleted while the composer wasn't there to watch.
+        store.claudeSessions[session.id] = nil
+        let hosting = NSHostingView(rootView: RouterComposer(store: store, model: model).frame(width: 600, height: 200))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 200), styleMask: .borderless, backing: .buffered,
+                              defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        await waitUntil { model.live.pinned == nil }
+        #expect(model.live.pinned == nil && model.live.pinnedTitle == nil && model.context(store).target == nil)
+    }
+
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
         let store = demo()
         let model = RouterModel()

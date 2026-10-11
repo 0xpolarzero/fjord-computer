@@ -65,6 +65,8 @@ struct RouterComposer: View {
         }
         .onAppear {
             if on { requestFocus() }
+            // What was pinned before the page was left may be gone since (the watch below only sees changes from now on).
+            model.live.revalidate(store: store)
             model.predictTarget(store: store)
         }
         .onChange(of: model.focusRequest) { requestFocus() }
