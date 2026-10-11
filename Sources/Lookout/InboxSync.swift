@@ -247,6 +247,8 @@ enum InboxSync {
         var clauses: [[String]] = []
         if place.involved || (place.qualifiers.isEmpty && scope.by == nil && scope.to == nil) {
             clauses.append(["involves:" + me])
+            // `involves:` leaves out a review you're asked for, and one you made: a first request has nothing else of yours.
+            if kind == .pr { clauses += [["review-requested:" + me], ["reviewed-by:" + me]] }
         }
         // Repos go together in one query (they are or-ed), within the length search allows.
         var chunk: [String] = []

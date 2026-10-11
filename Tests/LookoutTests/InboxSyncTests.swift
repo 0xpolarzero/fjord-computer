@@ -270,9 +270,19 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
 
     @Test func involvedUsesInvolvesAndWhatSearchCantSayIsOverFetched() {
         let q = searches([rule(Scope(kinds: [.pr], by: Pick(include: [.maintainers]), in: Pick(include: [.involved])))])
-        #expect(q.count == 1 && q[0].contains("involves:me") && !q[0].contains("author:"))
+        #expect(q.count == 3 && q[0].contains("involves:me") && !q.contains { $0.contains("author:") })
         // Nothing narrowing at all is what involves you, not every PR on GitHub.
         #expect(searches([rule(Scope(kinds: [.pr]))]) == q)
+    }
+
+    @Test func involvedPRsAreAlsoThoseYoureAskedToReviewOrReviewed() {
+        // `involves:` leaves out review requests (a first one is all of yours there) and reviews.
+        let q = searches([rule(Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])))])
+        #expect(q.count == 3 && q[0].contains("involves:me") && !q[0].contains("is:pr") && !q[0].contains("is:issue"))
+        #expect(q.contains { $0.contains("is:pr") && $0.contains("review-requested:me") && !$0.contains("involves:") })
+        #expect(q.contains { $0.contains("is:pr") && $0.contains("reviewed-by:me") && !$0.contains("involves:") })
+        let issues = searches([rule(Scope(kinds: [.issue], in: Pick(include: [.involved])))])
+        #expect(issues.count == 1 && issues[0].contains("involves:me"))
     }
 
     @Test func groupsOwnedAndContributedExpand() {
