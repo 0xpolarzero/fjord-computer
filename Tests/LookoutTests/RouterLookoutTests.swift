@@ -1048,10 +1048,10 @@ import Testing
             #expect(RouterRun.role(intent).contains("don't act on GitHub"), "\(intent)")
         }
         #expect(RouterRun.role(.changeLookout).contains("Revert"))
-        #expect(RouterRun.toolNames(.changeLookout) == LookoutTools.names)
+        #expect(RouterRun.toolNames(.changeLookout, triage: true) == LookoutTools.names)
         // A question only reads; the board and Lookout's own tools are all a run is offered.
-        #expect(RouterRun.toolNames(.question).isSubset(of: LookoutTools.names.union(["board"])))
-        #expect(RouterRun.specs(.changeLookout).count == LookoutTools.names.count)
+        #expect(RouterRun.toolNames(.question, triage: true).isSubset(of: LookoutTools.names.union(["board"])))
+        #expect(RouterRun.specs(.changeLookout, triage: true).count == LookoutTools.names.count)
         #expect(Set(RouterTools.specs.compactMap { $0["name"] as? String }) == LookoutTools.names.union(["board"]))
     }
 }

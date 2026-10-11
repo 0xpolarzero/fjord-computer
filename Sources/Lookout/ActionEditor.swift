@@ -20,9 +20,12 @@ struct ActionsEditor: View {
                 .tip("Then", "Runs once for each thing that comes in, never for what is already here when you add it")
                 .padding(.bottom, 12)
             VStack(alignment: .leading, spacing: 6) {
+                // One that starts a session shows only while Triage and the Router are both on (it is kept meanwhile).
                 ForEach($actions.items) { $action in
-                    ActionRow(action: $action, store: store, rules: rules, categoryName: categoryName, kinds: kinds) {
-                        actions.items.removeAll { $0.id == action.id }
+                    if store.toolsLinked || !action.kind.startsSession {
+                        ActionRow(action: $action, store: store, rules: rules, categoryName: categoryName, kinds: kinds) {
+                            actions.items.removeAll { $0.id == action.id }
+                        }
                     }
                 }
                 addMenu.padding(.top, actions.isEmpty ? 0 : 6)
@@ -32,7 +35,9 @@ struct ActionsEditor: View {
 
     private var addMenu: some View {
         Menu {
-            Button("Ask the Router") { actions.items.append(.make(.askRouter(prompt: ""))) }
+            if store.toolsLinked {
+                Button("Ask the Router") { actions.items.append(.make(.askRouter(prompt: ""))) }
+            }
             Button("Comment on GitHub") { actions.items.append(.make(.comment(""))) }
             Button("Re-run failed checks") { actions.items.append(.make(.rerun)) }
         } label: {

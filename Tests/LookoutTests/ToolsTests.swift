@@ -54,6 +54,34 @@ import Testing
         #expect(s.firstPlace == .router)
     }
 
+    @Test func anActionThatStartsASessionWaitsForTheRouterAndThenOnlyForWhatComesAfter() async {
+        let performer = FakePerformer()
+        var category = InboxFixture.category()
+        category.actions = ActionList([.make(.askRouter(prompt: "Fix it")), .make(.rerun)])
+        let s = InboxFixture.store([InboxFixture.pr(1)], category: category)
+        s.actionPerformer = performer
+        await s.runActions()
+        // Triage alone: a PR that comes in gets no session (a re-run isn't due: its checks pass).
+        s.things["pr:a/one#2"] = InboxFixture.pr(2)
+        await s.runActions()
+        #expect(performer.requests.isEmpty)
+        // The Router on: what was already there is old news; what comes after starts one.
+        s.setTool(.router, on: true)
+        #expect(s.toolsLinked)
+        await s.runActions()
+        #expect(performer.requests.isEmpty)
+        s.things["pr:a/one#3"] = InboxFixture.pr(3)
+        await s.runActions()
+        #expect(performer.requests.map(\.thingID) == ["pr:a/one#3"])
+    }
+
+    @Test func jevReadsNothingOfTheInboxWithTriageOff() {
+        let s = store()
+        #expect(!s.jevReadsInbox && !s.jevAllows(.inbox) && !s.jevAllows(.actions))
+        s.setTool(.triage, on: true)
+        #expect(s.jevReadsInbox && s.jevAllows(.inbox))
+    }
+
     @Test func eachShortcutBelongsToItsTool() {
         #expect(ShortcutAction.togglePanel.tool == nil)
         #expect(ShortcutAction.router.tool == .router)

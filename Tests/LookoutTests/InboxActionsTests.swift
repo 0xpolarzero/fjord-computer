@@ -67,12 +67,15 @@ final class DiskCheckingPerformer: ActionPerformer {
 @Suite(.serialized) struct InboxActionsTests {
     private let session = CategoryAction.make(.askRouter(prompt: "Look at {title} by {author} ({repo}#{number}) {url}"))
 
-    /// A store whose category has `actions` and holds PRs with a Greptile score below 5.
+    /// A store, the Router on with Triage (an action may start a session), whose category has `actions` and holds PRs with
+    /// a Greptile score below 5.
     private func store(_ things: [Thing], actions: [CategoryAction], performer: FakePerformer? = nil) -> (Store, FakePerformer) {
         let performer = performer ?? FakePerformer()
         var category = InboxFixture.category()
         category.actions = ActionList(actions)
         let store = InboxFixture.store(things, category: category)
+        store.router.enabled = true
+        store.agents.enabled = true
         store.actionPerformer = performer
         return (store, performer)
     }
@@ -392,6 +395,8 @@ final class DiskCheckingPerformer: ActionPerformer {
         let store = InboxFixture.store([InboxFixture.pr(1, by: Person(login: "alice")), InboxFixture.pr(2, by: carol)],
                                        category: category)
         store.groups = [friends]
+        store.router.enabled = true
+        store.agents.enabled = true
         let performer = FakePerformer()
         store.actionPerformer = performer
         await store.runActions()

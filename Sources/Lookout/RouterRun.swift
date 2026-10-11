@@ -89,16 +89,18 @@ enum RouterRun {
     static let model = "claude-haiku-5-5"
     static let timeout: TimeInterval = 90
 
-    /// The tools an intent may call. A question only reads.
-    @MainActor static func toolNames(_ intent: Intent) -> Set<String> {
-        switch intent {
+    /// The tools an intent may call. A question only reads. With Triage off (`triage` false), none of Triage's: the Router
+    /// reads and changes only the app's settings.
+    @MainActor static func toolNames(_ intent: Intent, triage: Bool) -> Set<String> {
+        let names: Set<String> = switch intent {
         case .changeLookout, .compound: LookoutTools.names
         case .question: Set(LookoutTools.tools.filter(\.reads).map(\.name)).union(["board"])
         }
+        return triage ? names : names.subtracting(LookoutTools.triageNames)
     }
 
-    @MainActor static func specs(_ intent: Intent) -> [[String: Any]] {
-        let allowed = toolNames(intent)
+    @MainActor static func specs(_ intent: Intent, triage: Bool) -> [[String: Any]] {
+        let allowed = toolNames(intent, triage: triage)
         return RouterTools.specs.filter { allowed.contains($0["name"] as? String ?? "") }
     }
 
@@ -182,8 +184,8 @@ enum RouterRun {
     static func run(_ intent: Intent, input: String, tools: RouterTools, store: Store, binary: String,
                     timeout: TimeInterval = RouterRun.timeout) async throws -> Answer {
         guard let home = store.routerFiles?.routerHome else { throw RouterTools.Failure("The Router can't run here (no folder for its files)") }
-        let allowed = toolNames(intent)
-        let specs = specs(intent)
+        let allowed = toolNames(intent, triage: store.triageOn)
+        let specs = specs(intent, triage: store.triageOn)
         let server = RouterMCPServer { body in
             // One ticket for the whole request: a batch's later entries can't act after a Stop its first one waited out.
             let ticket = tools.ticket()

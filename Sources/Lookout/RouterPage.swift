@@ -1745,7 +1745,7 @@ private struct WaitingCard: View {
                 .accessibilityLabel(card.title)
                 .accessibilityValue(line + (card.brief.map { ". " + $0 } ?? ""))
                 .accessibilityHint("Opens it in Claude")
-                if ready, triage.told == nil, let message = RouterWaits.message(triage) {
+                if ready, triage.told == nil, store.triageOn || triage.watch?.onCI != true, let message = RouterWaits.message(triage) {
                     ClaudeButton("Tell it", variant: .secondary, size: .sm, icon: "arrow.turn.down.right") { store.tellWaiting(card.id) }
                         .help("Sends it: \(message)")
                 }

@@ -1505,22 +1505,25 @@ import Testing
     }
 
     @Test func eachIntentGetsOnlyTheToolsItNeeds() {
-        let read = RouterRun.toolNames(.question)
+        let read = RouterRun.toolNames(.question, triage: true)
         #expect(read.contains("board") && read.contains("list_categories") && read.contains("list_inbox") && read.contains("get_settings"))
         for change in ["create_category", "update_category", "delete_category", "reorder_categories", "create_group", "update_group",
                        "delete_group", "mark_entries", "set_setting"] {
             #expect(!read.contains(change), "a question can't \(change)")
         }
-        let all = RouterRun.toolNames(.changeLookout)
+        let all = RouterRun.toolNames(.changeLookout, triage: true)
         #expect(all == LookoutTools.names && all.contains("set_setting") && all.contains("list_categories"))
-        #expect(RouterRun.toolNames(.compound) == all)
+        #expect(RouterRun.toolNames(.compound, triage: true) == all)
         for intent in RouterRun.Intent.allCases {
-            let served = RouterRun.specs(intent).compactMap { $0["name"] as? String }
-            #expect(Set(served) == RouterRun.toolNames(intent), "\(intent) serves what it may call")
+            let served = RouterRun.specs(intent, triage: true).compactMap { $0["name"] as? String }
+            #expect(Set(served) == RouterRun.toolNames(intent, triage: true), "\(intent) serves what it may call")
         }
+        // With Triage off, none of its tools: only the settings (and the board, for a question).
+        #expect(RouterRun.toolNames(.changeLookout, triage: false) == ["get_settings", "set_setting"])
+        #expect(RouterRun.toolNames(.question, triage: false) == ["get_settings", "board"])
         // Nothing of the sessions: no way to send, start or answer from a run.
         for intent in RouterRun.Intent.allCases {
-            let names = RouterRun.toolNames(intent)
+            let names = RouterRun.toolNames(intent, triage: true)
             for forbidden in ["prepare", "start_session", "answer_form", "mark", "open_session", "route"] { #expect(!names.contains(forbidden)) }
         }
     }

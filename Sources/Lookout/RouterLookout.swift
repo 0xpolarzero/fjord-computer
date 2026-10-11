@@ -105,6 +105,8 @@ enum LookoutTools {
 
     static let specs: [[String: Any]] = tools.map(\.spec)
     static let names: Set<String> = Set(tools.map(\.name))
+    /// Triage's own (all but the settings'): offered only while it is on.
+    static let triageNames = names.subtracting(["get_settings", "set_setting"])
 
     /// A tool's input as a shape: what the Router sends is checked against it, and its schema is made from it.
     static func shape(of name: String) -> JSONShape? { tools.first { $0.name == name }.map { .object($0.fields) } }
@@ -115,6 +117,8 @@ enum LookoutTools {
 extension RouterTools {
     func lookout(_ name: String, _ args: [String: Any], store: Store, ticket: Ticket) async -> RouterRPC.ToolResult? {
         guard LookoutTools.names.contains(name) else { return nil }
+        // Offered only with Triage on (`RouterRun.toolNames`), and refused if it was switched off since the run began.
+        if LookoutTools.triageNames.contains(name), !store.triageOn { return .error("Triage is off; nothing was done") }
         do {
             let reads = LookoutTools.tools.first { $0.name == name }?.reads == true
             try live(ticket, acting: !reads)

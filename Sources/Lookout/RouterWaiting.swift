@@ -125,7 +125,6 @@ extension Store {
     /// changed, its checks or its PR, so checks that just finished on a PR not updated for a while aren't left out.
     func waitOptions(for session: ClaudeSession, message: String? = nil) async -> [RouterTriage.WaitOption] {
         let since = session.lastActivity
-        let repos = await gitRepos(of: session.folder)
         // Read once: every option below is checked against it.
         let reading = message.map { waitReading($0, by: session) }
         // A session whose turn is over but whose background work still runs is at work too: on the turn it ended.
@@ -156,6 +155,9 @@ extension Store {
                                            about: UntrustedText.clean("“\(other.title)” in \(other.folderName)", limit: 300))
         }
         // The inbox's PRs and workflows go to TypeSafe only while you let Jev read the inbox (Settings).
+        guard jevReadsInbox else { return options }
+        let repos = await gitRepos(of: session.folder)
+        // Switched off while the remotes were read: none goes.
         guard jevReadsInbox else { return options }
         let candidates = things.values.filter { thing in
             // A failure while other checks still run (`ciRunning`) is running CI too: lint failed, the build goes on.
@@ -346,7 +348,8 @@ extension Store {
         var ready: [RouterCard] = []
         for i in state.cards.indices {
             let card = state.cards[i]
-            guard card.isOpen, card.kind == .waiting, let watch = card.triage?.watch else { continue }
+            // The inbox's CI isn't followed while Triage is off: what it last had stays as it was.
+            guard card.isOpen, card.kind == .waiting, let watch = card.triage?.watch, triageOn || !watch.onCI else { continue }
             let result = RouterWaits.result(watch, sessions: claudeSessions, things: things, tasks: routerTasks,
                                             inventory: claudeTaskInventory)
             let run = RouterWaits.run(watch, things: things)
@@ -454,7 +457,8 @@ extension Store {
               let card = router.cards.first(where: { $0.id == cardID }), card.isOpen, card.kind == .waiting,
               let ready = card.triage?.ready, card.triage?.told == nil,
               let session = claudeSessions[card.sessionID], !session.isArchived, !session.running,
-              card.id == "\(session.id)#t\(session.completedTurns)" else { return false }
+              card.id == "\(session.id)#t\(session.completedTurns)", triageOn || card.triage?.watch?.onCI != true
+        else { return false }
         if let watch = card.triage?.watch, case .ci(let id) = watch.target, things[id] != nil,
            RouterWaits.result(watch, sessions: claudeSessions, things: things) != ready.result { return false }
         return !automatic || (continuesAutomatically(card.sessionID) && card.triage?.watch?.named == true)

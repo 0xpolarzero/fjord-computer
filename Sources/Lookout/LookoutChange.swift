@@ -447,6 +447,9 @@ enum LookoutTarget: Equatable {
 }
 
 extension LookoutChange {
+    /// It changed Triage (its categories, groups or inbox), not the app's settings.
+    var touchesTriage: Bool { if case .setting = patch { false } else { true } }
+
     /// Where Open goes now: a category or group that is gone opens the page that listed it.
     @MainActor func target(in store: Store) -> LookoutTarget {
         switch patch {

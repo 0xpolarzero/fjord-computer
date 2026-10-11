@@ -58,6 +58,9 @@ struct ChangeCard: View {
             if reverted {
                 Text(change.revertNote ?? "Reverted").cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
                     .lineLimit(2).multilineTextAlignment(.trailing)
+            } else if change.touchesTriage, !store.triageOn {
+                // Triage is off: what was changed in it is only told, nothing of it is opened or changed back.
+                EmptyView()
             } else if change.isPending {
                 failure
                 ClaudeButton("Discard", variant: .ghost, size: .sm) { store.discardLookoutChange(change.id) }

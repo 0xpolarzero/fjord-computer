@@ -174,6 +174,8 @@ import Testing
         var category = InboxFixture.category()
         category.actions = ActionList([session])
         let store = InboxFixture.store([InboxFixture.pr(1)], category: category)
+        store.router.enabled = true
+        store.agents.enabled = true
         let performer = FakePerformer()
         store.actionPerformer = performer
         await store.runActions()

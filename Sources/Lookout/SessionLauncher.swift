@@ -75,7 +75,10 @@ final class SessionLauncher {
     func start(folder: String, title: String, firstMessage: String, model: String? = nil,
                effort: String? = nil) async throws -> (sessionID: String, peer: String, applied: AppliedSettings?) {
         guard let store else { throw RouterTools.Failure("Lookout isn't ready") }
-        guard store.router.enabled, store.agents.enabled else { throw RouterTools.Failure("The Router is off") }
+        // It starts sessions for the inbox's actions: only while Triage and the Router are both on, checked again after each
+        // wait (the bootstrap, the plugin coming up) and at the send's own gate.
+        func linked() throws { if !store.toolsLinked { throw RouterTools.Failure("Triage or the Router is off; nothing was sent") } }
+        try linked()
         guard store.routerPluginStatus == .installed else {
             throw RouterTools.Failure("Lookout's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
@@ -101,7 +104,9 @@ final class SessionLauncher {
         try await effects.pluginReady(started.cliID)
         // Only a plugin that says it takes settings is sent them; an older one gets the plain message.
         let supported = requested == nil ? false : await effects.supportsSettings(started.cliID)
+        try linked()
         let signed = try await effects.sign(firstMessage, started.cliID, supported ? requested : nil)
+        try linked()
         let prepared = Prepared(text: signed, original: firstMessage, rephrased: false, newSessionIn: store.folderName(folder), body: firstMessage)
         let ack = try await effects.send(started.peer, prepared)
         let applied = requested.map { AppliedSettings.from(ack: ack, requested: $0, supported: supported) }
@@ -130,6 +135,8 @@ extension SessionLauncher.Effects {
                 let output = try await OneShot.run(binary, SessionStart.bootstrapArguments(uuid: uuid, title: title),
                                                    cwd: URL(fileURLWithPath: folder), timeout: SessionStart.wait)
                 _ = try OneShot.result(output)
+                // Switched off while it was made: it isn't opened in Claude.
+                guard store.toolsLinked else { throw RouterTools.Failure("Triage or the Router is off; nothing was sent") }
                 guard let url = SessionStart.importURL(uuid: uuid) else { throw RouterTools.Failure("Couldn't make the link") }
                 if let intercept = store.interceptOpen { intercept("New Claude session in \(store.folderName(folder))") } else { Link.open(url) }
                 // The app has it but doesn't run it yet: `SessionStart.NotRunning`, held by `start`.
@@ -170,6 +177,7 @@ extension SessionLauncher.Effects {
                 let tools = RouterTools(store: store)
                 tools.beginTurn(prepared.original)
                 tools.prepared[peer] = prepared
+                tools.deliveryCheck = { store.toolsLinked ? nil : "Triage or the Router is off; nothing was sent" }
                 defer { tools.endTurn() }
                 return try await RouterSender.send(binary: binary, cwd: home, to: peer, text: prepared.text, tools: tools,
                                                    inbox: await store.relayInbox(forSigned: prepared.text))
@@ -197,10 +205,12 @@ enum ActionSessions {
             store.updateDecision(id) { $0.add(.failed(reason)); $0.outcome = .done }
             return ActionFailure(reason)
         }
-        guard store.router.enabled, store.agents.enabled else { throw fail("the Router is off") }
+        // An inbox action starts a session only while Triage and the Router are both on, then as now (Jev's pick takes a while).
+        guard store.toolsLinked else { throw fail("Triage or the Router is off") }
         guard !clones.isEmpty else { throw fail("no local clone of \(request.repo)") }
         let ask = store.jevAsker(.actions, base: launcher.asker ?? chooser.map(JevClient.asker(choosing:)))
         let folder = await pick(clones, for: request, store: store, ask: ask)
+        guard store.toolsLinked else { throw fail("Triage or the Router is off") }
         let project = store.folderName(folder)
         store.updateDecision(id) { $0.decision.target = project }
         do {

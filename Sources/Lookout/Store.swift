@@ -590,8 +590,10 @@ final class Store {
         claudeTimer = timer
     }
 
+    /// Polls GitHub on a loop; nothing with Triage off.
     func restartPolling() {
         stopPolling()
+        guard triageOn else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }

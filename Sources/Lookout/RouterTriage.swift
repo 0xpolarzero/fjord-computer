@@ -55,6 +55,8 @@ struct RouterTriage: Codable, Hashable {
         }
 
         var target: Target
+        /// It watches the inbox's CI: it is followed, and told, only while Triage is on.
+        var onCI: Bool { if case .ci = target { true } else { false } }
         /// "CI on owner/repo#12", "session “Title”": shown here, never sent.
         var label: String
         /// For CI: "owner/repo#12" (or "owner/repo" for a workflow), the only part of it the session is told.
@@ -726,9 +728,9 @@ extension Store {
     /// CI runs, or changed since the turn ended, and the turn's final message names it, by Lookout's own reading (its ref,
     /// its link or number for a PR, as `waitNamed` reads a workflow) and names no other, it is watched, named: no call to
     /// Jev. The message is kept from the triage (read again once, when it isn't: after a relaunch). Nothing of the inbox
-    /// goes to TypeSafe here, so it is bound whether or not Jev may read the inbox.
+    /// goes to TypeSafe here, so it is bound whether or not Jev may read the inbox; only while Triage is on to have it.
     func bindUnwatchedWaits() {
-        guard router.enabled, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch == nil })
+        guard triageOn, router.enabled, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch == nil })
         else { return }
         var state = router
         var kept: [String: String] = [:]

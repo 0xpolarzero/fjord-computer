@@ -1975,6 +1975,7 @@ extension InboxSyncMapping {
         #expect(InboxSync.needsTeams(categories: except, jevReads: false))
         let s = Store()
         s.persists = false
+        s.settings.triage = true
         s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
         s.categories = none
         s.gh.session = StubbedGitHub.session { request in

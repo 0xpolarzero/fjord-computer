@@ -21,6 +21,9 @@ enum ActionKind: Codable, Hashable {
     /// Re-run the failed jobs of the failing workflow runs.
     case rerun
 
+    /// It starts a Claude session (the Router does it): it runs and shows only while Triage and the Router are both on.
+    var startsSession: Bool { if case .askRouter = self { true } else { false } }
+
     // Written as the synthesized form was, so what is saved reads back. A `session(folder, prompt:)` saved before the Router
     // was the only way in is read as `askRouter` with the same prompt (the Router picks the folder now).
     private enum Key: String, CodingKey { case askRouter, session, comment, rerun }
@@ -413,8 +416,11 @@ enum InboxActions {
     /// is there as old; runs of what is gone are forgotten) and returns the runs that are due, in the order of the
     /// categories, newest things first.
     /// `known`: the ids of every thing still fetched, in a category now or not.
+    /// `held`: actions held back (one that starts a session while Triage and the Router aren't both on): neither taken in
+    /// nor due, their runs kept; no longer held, they are taken in as just added, so only what comes after runs them.
     static func plan(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: inout ActionLedger,
-                     me: String, known things: Set<String> = [], ratings: [String: Rating] = [:], now: Date = Date()) -> [Job] {
+                     me: String, known things: Set<String> = [], ratings: [String: Rating] = [:], now: Date = Date(),
+                     held: (CategoryAction) -> Bool = { _ in false }) -> [Job] {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
         // Reviews a PR had all along, back since this build reads every latest one: old, as if they had been there.
@@ -480,7 +486,8 @@ enum InboxActions {
         // Baselines: what is there when a category's rules change, or an action is added, is old.
         for category in categories {
             let ruleIDs = fingerprint(category.rules, groups: groups)
-            let actionIDs = Set(category.actions.items.map(\.id))
+            let taken = category.actions.items.filter { !held($0) }
+            let actionIDs = Set(taken.map(\.id))
             var before = ledger.baselines[category.id]
             // Saved by a build that didn't sort the sets: the same rules, taken in once under their sorted number.
             // Too many orders to tell (several conditions of states): taken as the same rules too, the safer side. Such a
@@ -493,7 +500,7 @@ enum InboxActions {
                 before?.rules = ruleIDs
             }
             let all = before == nil || before!.rules != ruleIDs
-            let fresh = all ? category.actions.items : category.actions.items.filter { !(before?.actions.contains($0.id) ?? false) }
+            let fresh = all ? taken : taken.filter { !(before?.actions.contains($0.id) ?? false) }
             for action in fresh {
                 for entry in byCategory[category.id] ?? [] where action.applies(to: entry.thing.kind) {
                     for key in ["enter"] + entry.facts.map(\.key) {
@@ -1069,12 +1076,12 @@ extension Store {
             actionsAgain = false
             var ledger = actionLedger
             let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
-                                         known: Set(things.keys), ratings: actionRatings(), now: now)
+                                         known: Set(things.keys), ratings: actionRatings(), now: now, held: heldActions)
             if ledger != actionLedger { actionLedger = ledger }
             for queued in jobs.prefix(InboxActions.perSync) {
                 // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
                 // Triage switched off while they run: nothing more reaches GitHub or a session.
-                guard !baselinePending, triageOn,
+                guard !baselinePending, triageOn, runnable(queued),
                       let job = InboxActions.stillDue(queued, entries: entries, categories: categories, groups: groups,
                                                       ledger: actionLedger, me: me) else { continue }
                 // Each job is recorded as running just before it reaches outside, and nothing reaches outside before that
@@ -1115,7 +1122,7 @@ extension Store {
                 }
                 // The write took a while: deleted, Done, no longer matching, its rules edited or Triage switched off meanwhile,
                 // it isn't run (its record goes back, and that is written in turn).
-                guard !baselinePending, triageOn, actionLedger.baselines[job.category.id]?.rules == rules,
+                guard !baselinePending, triageOn, runnable(job), actionLedger.baselines[job.category.id]?.rules == rules,
                       let checked = InboxActions.stillDue(job, entries: entries, categories: categories, groups: groups,
                                                           ledger: undone(job.keys), me: me)
                 else {
@@ -1219,8 +1226,14 @@ extension Store {
         guard let me = me?.login, !me.isEmpty, !onDefaults else { return }
         var ledger = actionLedger
         _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
-                              known: Set(things.keys), ratings: actionRatings(), now: now)
+                              known: Set(things.keys), ratings: actionRatings(), now: now, held: heldActions)
         if ledger != actionLedger { actionLedger = ledger }
+    }
+
+    /// The actions held back now (`InboxActions.plan`): those that start a session while Triage and the Router aren't both on.
+    var heldActions: (CategoryAction) -> Bool {
+        let linked = toolsLinked
+        return { !linked && $0.kind.startsSession }
     }
 
     /// Each thing's review request or assignment of yours, and whether Jev has rated it (`InboxActions.plan`).
@@ -1246,10 +1259,20 @@ extension Store {
         return out
     }
 
+    /// A row's chips: none of an action that starts a session while Triage and the Router aren't both on.
     func actionChips(for entry: InboxEntry) -> [InboxActions.Chip] {
         guard let category = categories.first(where: { $0.id == entry.categoryID }), !category.actions.isEmpty else { return [] }
-        return InboxActions.chips(for: entry, category: category, groups: groups, ledger: actionLedger, me: me?.login ?? "")
+        var shown = category
+        // The Router's switch is read only for a category that has such an action (rows redraw with what they read).
+        if shown.actions.items.contains(where: \.kind.startsSession), !toolsLinked {
+            shown.actions.items.removeAll { $0.kind.startsSession }
+        }
+        return InboxActions.chips(for: entry, category: shown, groups: groups, ledger: actionLedger, me: me?.login ?? "")
     }
+
+    /// Whether a job may still run: one that starts a session only while Triage and the Router are both on (switched off
+    /// since it was planned, it isn't run; it is held back from the next plan on).
+    private func runnable(_ job: InboxActions.Job) -> Bool { !job.action.kind.startsSession || toolsLinked }
 
     /// The most recently updated thing the rules match, with its facts: what "Try on latest match" tries on.
     func latestMatch(of rules: [Rule]) -> (thing: Thing, facts: [Fact])? {

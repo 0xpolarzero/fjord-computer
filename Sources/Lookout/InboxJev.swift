@@ -243,8 +243,9 @@ enum InboxJev {
 }
 
 extension Store {
-    /// Settings' "Let Jev label new comments" (default on).
-    var jevReadsInbox: Bool { settings.jevReadsInbox ?? true }
+    /// Settings' "Let Jev label new comments" (default on), with Triage on: off, nothing of the inbox goes to TypeSafe (its
+    /// labels, a turn's CI to wait on, an action's clone).
+    var jevReadsInbox: Bool { triageOn && (settings.jevReadsInbox ?? true) }
 
     /// Jev reads the inbox at the next refresh: switched on, with a key (or a test's asker).
     var jevReadsInboxNow: Bool { jevReadsInbox && (inboxAsker != nil || !(typesafeKey ?? "").isEmpty) }
