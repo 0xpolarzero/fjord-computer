@@ -996,6 +996,8 @@ import Testing
             controller.show(.settings)
             guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
             let before = run.pose
+            let overlayFrame = run.overlay.frame
+            let geometry = run.geometry.frame
             controller.close()
             // On its way out it counts as closed: a toggle opens it again.
             #expect(controller.phase == .closing && controller.run === run && !controller.isOpen)
@@ -1007,6 +1009,8 @@ import Testing
             controller.show(.settings)
             #expect(controller.phase == .opening && run.startPose?.rect == now.rect && controller.isOpen)
             #expect(ticks.blocks.isEmpty)
+            #expect(controller.run === run && run.overlay.frame == overlayFrame && run.geometry.frame == geometry)
+            #expect(run.overlay.frame.origin == UnderTest.away)
         }
     }
 }

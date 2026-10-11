@@ -3,7 +3,7 @@ import OSLog
 import QuartzCore
 
 // The morph between the bar and the app window: the window grows out of the bar's cell when it opens, and shrinks back into
-// it when it closes. One borderless overlay covers the screen and hosts a few Core Animation layers (the window's exact
+// it when it closes. One borderless overlay covers the morph and hosts a few Core Animation layers (the window's exact
 // picture, the bar's, a shadow like the window's own) that the render server moves on a spring at the display's rate; the
 // real window waits, invisible, at its frame. At the end of an opening the real window is shown under the identical
 // overlay, which goes only once it has been composited, so nothing pops. Reduce Motion gets a short cross-fade of the
@@ -52,6 +52,11 @@ enum AppTransition {
     static let curve = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
     /// A window's corner radius when the system does not say.
     static let fallbackRadius: CGFloat = 16
+    static let shadowRadius: CGFloat = 22
+    static let shadowOffset = CGSize(width: 0, height: -10)
+    /// The handoff's shadow mask already keeps this much room. Keep the same envelope around every pose: over eight blur
+    /// radii beyond the downward offset, rather than treating a blur radius as its cutoff.
+    static let shadowRoom: CGFloat = 200
 
     /// Off under a test: the window opens and closes at once.
     static var enabled = !UnderTest.isRunning
@@ -144,32 +149,80 @@ enum AppTransition {
         }
     }
 
-    /// The overlay, kept from one morph to the next (a screen-sized window is not free to make); made again for another
-    /// screen.
-    private static var sharedOverlay: NSWindow?
+    /// Fixed for a whole run, including reversals. Bounds and position use the same monotone spring, so the union of the
+    /// two ends also contains every intermediate pose. The bar's whole picture needs room, not just its starting cell.
+    struct OverlayGeometry {
+        let frame: NSRect
+
+        init(window: NSRect, bar: BarMorph?, screen: NSRect, scale: CGFloat) {
+            var bounds = window
+            if let bar { bounds = bounds.union(bar.frame).union(bar.cellFrame) }
+            bounds = bounds.insetBy(dx: -shadowRoom, dy: -shadowRoom)
+            let x = floor((bounds.minX - screen.minX) * scale) / scale + screen.minX
+            let y = floor((bounds.minY - screen.minY) * scale) / scale + screen.minY
+            let right = ceil((bounds.maxX - screen.minX) * scale) / scale + screen.minX
+            let top = ceil((bounds.maxY - screen.minY) * scale) / scale + screen.minY
+            let visible = NSRect(x: x, y: y, width: right - x, height: top - y).intersection(screen)
+            // An away test window without a bar has no pixels on this screen. Keep a valid host all the same.
+            frame = visible.isEmpty ? screen : visible
+        }
+
+        func local(_ rect: NSRect) -> CGRect { rect.offsetBy(dx: -frame.minX, dy: -frame.minY) }
+        func screen(_ rect: CGRect) -> NSRect { rect.offsetBy(dx: frame.minX, dy: frame.minY) }
+    }
+
+    enum ScreenIdentity: Equatable {
+        case display(UInt32)
+        case screen(ObjectIdentifier)
+
+        init(_ screen: NSScreen) {
+            if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+                self = .display(number.uint32Value)
+            } else {
+                self = .screen(ObjectIdentifier(screen))
+            }
+        }
+    }
+
+    /// Kept on the same display, resized between runs. Screen identity is separate from the frame: equal bounds (and
+    /// especially equal away frames under test) do not mean the same display.
+    final class OverlayCache {
+        private var screen: ScreenIdentity?
+        private var overlay: NSWindow?
+
+        /// The window made ahead of a first morph (its frame is set again when one starts); one on screen is left alone.
+        func prepare(on screen: ScreenIdentity, frame: NSRect) -> NSWindow {
+            if let overlay, overlay.isVisible { return overlay }
+            return window(on: screen, frame: frame)
+        }
+
+        func window(on screen: ScreenIdentity, frame: NSRect) -> NSWindow {
+            let placed = UnderTest.isRunning ? NSRect(origin: UnderTest.away, size: frame.size) : frame
+            if let overlay, self.screen == screen {
+                if overlay.frame != placed { overlay.setFrame(placed, display: false) }
+                return overlay
+            }
+            overlay?.orderOut(nil)
+            let window = AwayWindow(contentRect: placed, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = false
+            window.ignoresMouseEvents = true
+            window.isReleasedWhenClosed = false
+            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+            window.animationBehavior = .none
+            self.screen = screen
+            overlay = window
+            return window
+        }
+    }
+
+    private static let sharedOverlay = OverlayCache()
 
     /// Make the shared overlay at idle, without showing it or disturbing a morph already on screen.
     @discardableResult
     static func prepareOverlay(on screen: NSScreen) -> NSWindow {
-        if let sharedOverlay, sharedOverlay.isVisible { return sharedOverlay }
-        return overlay(on: screen)
-    }
-
-    fileprivate static func overlay(on screen: NSScreen) -> NSWindow {
-        // A test run's overlay covers no screen (its layers are laid out on `screen` all the same).
-        let frame = UnderTest.isRunning ? NSRect(origin: UnderTest.away, size: screen.frame.size) : screen.frame
-        if let sharedOverlay, sharedOverlay.frame == frame { return sharedOverlay }
-        sharedOverlay?.orderOut(nil)
-        let overlay = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        overlay.isOpaque = false
-        overlay.backgroundColor = .clear
-        overlay.hasShadow = false
-        overlay.ignoresMouseEvents = true
-        overlay.isReleasedWhenClosed = false
-        overlay.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-        overlay.animationBehavior = .none
-        sharedOverlay = overlay
-        return overlay
+        sharedOverlay.prepare(on: ScreenIdentity(screen), frame: screen.frame)
     }
 
     /// Where the layers are, and how they look.
@@ -201,6 +254,7 @@ enum AppTransition {
     @MainActor
     final class Run {
         let overlay: NSWindow
+        let geometry: OverlayGeometry
         private let screen: NSScreen
         private let host: NSView
         private let root = CALayer()
@@ -242,10 +296,11 @@ enum AppTransition {
             windowFrame = window.frame
             windowRadius = radius
             let scale = screen.backingScaleFactor
-            overlay = AppTransition.overlay(on: screen)
+            geometry = OverlayGeometry(window: window.frame, bar: bar, screen: screen.frame, scale: scale)
+            overlay = AppTransition.sharedOverlay.window(on: ScreenIdentity(screen), frame: geometry.frame)
             // Above the window, and above the bar (floating) which fades in or out beneath.
             overlay.level = NSWindow.Level(rawValue: max(window.level.rawValue, NSWindow.Level.floating.rawValue) + 1)
-            host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            host = NSView(frame: NSRect(origin: .zero, size: geometry.frame.size))
             root.frame = host.bounds
             root.speed = 1 / AppTransition.slowdown
             host.layer = root
@@ -255,8 +310,8 @@ enum AppTransition {
             root.contentsScale = scale
             shadow.contentsScale = scale
             shadow.shadowColor = NSColor.black.cgColor
-            shadow.shadowRadius = 22
-            shadow.shadowOffset = CGSize(width: 0, height: -10)
+            shadow.shadowRadius = AppTransition.shadowRadius
+            shadow.shadowOffset = AppTransition.shadowOffset
             shadow.shadowOpacity = 0
             root.addSublayer(shadow)
             container.masksToBounds = true
@@ -285,7 +340,7 @@ enum AppTransition {
 
         /// A screen rect in the overlay's layer coordinates.
         private func local(_ rect: NSRect) -> CGRect {
-            rect.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
+            geometry.local(rect)
         }
 
         /// The overlay, in front of the screen.
@@ -354,9 +409,9 @@ enum AppTransition {
             guard let c = container.presentation(), let s = shadow.presentation() else {
                 return Pose(rect: windowFrame, radius: windowRadius)
             }
-            let origin = CGPoint(x: c.position.x - c.bounds.width / 2 + screen.frame.minX,
-                                 y: c.position.y - c.bounds.height / 2 + screen.frame.minY)
-            return Pose(rect: NSRect(origin: origin, size: c.bounds.size), radius: c.cornerRadius,
+            let rect = CGRect(x: c.position.x - c.bounds.width / 2, y: c.position.y - c.bounds.height / 2,
+                              width: c.bounds.width, height: c.bounds.height)
+            return Pose(rect: geometry.screen(rect), radius: c.cornerRadius,
                         window: windowLayer.presentation()?.opacity ?? windowLayer.opacity,
                         bar: barLayer.presentation()?.opacity ?? barLayer.opacity,
                         shadow: Pose.shadow(drawn: s.shadowOpacity, container: c.opacity),
@@ -618,7 +673,7 @@ enum AppTransition {
             let mask = CAShapeLayer()
             mask.frame = shadow.bounds
             let around = CGMutablePath()
-            around.addRect(shadow.bounds.insetBy(dx: -200, dy: -200))
+            around.addRect(shadow.bounds.insetBy(dx: -AppTransition.shadowRoom, dy: -AppTransition.shadowRoom))
             around.addPath(Self.path(shadow.bounds.size, container.cornerRadius))
             mask.path = around
             mask.fillRule = .evenOdd

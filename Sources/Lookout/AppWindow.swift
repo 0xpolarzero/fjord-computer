@@ -231,6 +231,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let current: AppTransition.Run?
         let kept = closedPicture.flatMap { $0.fits(window) ? $0 : nil }
         if reversing, let run {
+            // Keep the overlay's bounds and coordinate origin for the whole trip, including this reversal.
             current = run
         } else {
             run?.end()
