@@ -536,6 +536,9 @@ import Testing
     private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
         let saved = (AppTransition.enabled, AppTransition.nextFrame, AppTransition.nextTurn, AppTransition.isKey,
                      AppTransition.isMiniaturized)
+        // The app's policy as found: the morph's close never gets to its tidying turn here, which would put it back, and a
+        // test awaiting its own close meanwhile reads it.
+        let policy = AppPolicy.current
         let ticks = Ticks()
         AppTransition.enabled = true
         AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
@@ -546,6 +549,7 @@ import Testing
             AppTransition.nextTurn = saved.2
             AppTransition.isKey = saved.3
             AppTransition.isMiniaturized = saved.4
+            AppPolicy.update(windowOpen: policy == .regular)
         }
         _ = NSApplication.shared
         let store = Store()
