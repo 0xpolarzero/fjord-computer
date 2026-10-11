@@ -1111,6 +1111,7 @@ def main(argv=None):
     parser.add_argument("command", choices=("prepare", "run", "aggregate", "agreement", "anchor", "import-anchor", "merge"))
     parser.add_argument("--inputs", nargs="*", help="raw JSONL paths/globs inside v2; default raw/*.jsonl")
     parser.add_argument("--labels", type=Path, default=LABELS)
+    parser.add_argument("--keys", help="file of event keys, one per line: label only these (the Gemini audit)")
     parser.add_argument("--pilot", type=int, help="stratified subset of real.jsonl + scripted.jsonl")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int, default=10)
@@ -1139,6 +1140,9 @@ def main(argv=None):
             else:
                 selected = stratified(candidates, args.pilot)
             write_jsonl(directory / "pilot.jsonl", selected)
+        elif args.keys:
+            wanted = {line.strip() for line in open(args.keys) if line.strip()}
+            selected = [record for record in records if record["key"] in wanted]
         elif args.limit:
             selected = records[:args.limit]
         if args.command == "run":
