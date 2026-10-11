@@ -87,6 +87,23 @@ import Testing
         #expect(try edit("Look at\n    echo ask @router help\nplease") == "Look at\n    echo ask @router help\nplease")
     }
 
+    @Test func singleQuotedCodeKeepsItsAtRouterTextAndAQuoteThatMayBeProseIsRefusedNotCut() throws {
+        // Single-quoted code, its escapes and a double quote escaped in one: verbatim, no marker.
+        for code in ["print('ask @router for help')", "x = 'ask @router'", "print('don\\'t ask @router')",
+                     "f(a, 'b @router c')", "say \"a \\\" @router b\""] {
+            #expect(try edit(code) == code, "\(code)")
+            #expect(!RouterTools.hasRouterMarker(code), "\(code)")
+        }
+        // Quoted in prose, maybe code: neither cut nor taken as text; left to be refused.
+        let prose = "Tell them 'ask @router for help' later"
+        #expect(try edit(prose) == prose)
+        #expect(RouterTools.hasRouterMarker(try edit(prose)))
+        // Apostrophes are no quotes: the aside still goes.
+        #expect(try edit("Don't wait @router it's slow") == "Don't wait")
+        #expect(try edit("Check the users' guide @router later, it's long") == "Check the users' guide")
+        #expect(try edit("It's 'fine' now @router no rush") == "It's 'fine' now")
+    }
+
     // MARK: Running a CLI once
 
     /// A stand-in for Claude Code: keeps its arguments and stdin, then prints `output`.
