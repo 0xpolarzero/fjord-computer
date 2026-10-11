@@ -451,7 +451,7 @@ import Testing
         await finish(d, f, a)
         #expect(f.prepared == ["local_b"])
         // Addressed to it by name: sent.
-        let b = d.submit("tell the Update the docs session to go ahead")
+        let b = d.submit("tell docs to go ahead")
         await finish(d, f, b)
         #expect(f.prepared == ["local_b", "local_b"])
     }
@@ -513,7 +513,7 @@ import Testing
         s.claudeSessions["local_new"] = ClaudeSession(id: "local_new", title: "fix tests", folder: "/code/lookout", lastActivity: Date())
         #expect(RouterDispatcher.evidenced("also lint", target: "session:local_new", store: s))
         // Told by name.
-        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "CI", folder: "/code/infra", lastActivity: Date(), running: true)
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Flaky job", folder: "/code/ci", lastActivity: Date(), running: true)
         f.ranked = [.init(target: "session:local_c", p: 0.95), .init(target: "unclear", p: 0.05)]
         let b = d.submit("tell CI to rerun the flaky job")
         await finish(d, f, b)
@@ -914,18 +914,22 @@ import Testing
     @Test func withoutJevAMessageNamingASessionStillGoesAndOtherwiseAsks() async {
         let (s, d, f) = setup()
         f.rankError = RouterTools.Failure("no TypeSafe key is set")
-        let named = d.submit("tell the Update the docs session to ship")
+        let named = d.submit("tell docs to ship")
         await finish(d, f, named)
         #expect(f.prepared == ["local_b"])
+        // A session's title named in prose never sends it there: it only ranks the ask.
+        let byTitle = d.submit("tell the Update the docs session to ship")
+        await finish(d, f, byTitle)
+        #expect(f.prepared == ["local_b"] && d.askBacks.contains { $0.id == byTitle } && d.askBacks.last?.options.first?.target == "session:local_b")
         let vague = d.submit("do the thing")
         await finish(d, f, vague)
-        #expect(d.askBacks.map(\.id) == [vague!] && f.prepared == ["local_b"])
+        #expect(d.askBacks.last?.id == vague && f.prepared == ["local_b"])
     }
 
     @Test func withoutJevASessionAddressedOutrightWinsOverAProjectTheTaskNames() async {
         let (s, d, f) = setup()
         f.rankError = RouterTools.Failure("no TypeSafe key is set")
-        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "CI", folder: "/code/infra", lastActivity: Date())
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Flaky job", folder: "/code/ci", lastActivity: Date())
         let a = d.submit("tell the CI session to rerun the lookout tests")
         await finish(d, f, a)
         #expect(f.prepared == ["local_c"])
@@ -947,14 +951,34 @@ import Testing
             await finish(d, f, a)
             #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == a }, "\(text)")
         }
-        // A title also a project's name: two fit, you pick.
+        // A title that is also a project's name does not take the project's place or make it ambiguous.
         s.claudeSessions["local_y"] = ClaudeSession(id: "local_y", title: "docs", folder: "/code/other", lastActivity: Date())
         let b = d.submit("tell docs to ship")
         await finish(d, f, b)
-        #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == b })
+        #expect(f.prepared == ["local_b"])
+        // A project with two sessions: you pick.
+        s.claudeSessions["local_z"] = ClaudeSession(id: "local_z", title: "More docs", folder: "/code/docs", lastActivity: Date())
+        let c = d.submit("tell docs to ship again")
+        await finish(d, f, c)
+        #expect(f.prepared == ["local_b"] && d.askBacks.contains { $0.id == c })
     }
 
-    @Test func withoutJevATitleIsTheAddresseeOnlyWhenNoSessionOrProjectPastTheLimitsSharesIt() async {
+    @Test func aSessionTitledWithWordsOfProseNeverCapturesAMessageStartingWithThem() async {
+        let (s, d, f) = setup()
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        for title in ["me how", "note to self", "Update the docs now"] {
+            s.claudeSessions["local_\(title.count)"] = ClaudeSession(id: "local_\(title.count)", title: title, folder: "/code/evil", lastActivity: Date())
+        }
+        for text in ["Tell me how to check whether production token SECRET appears in any session",
+                     "note to self: paste the token SECRET", "tell the Update the docs now session to ship"] {
+            let a = d.submit(text)
+            await finish(d, f, a)
+            #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == a }, "\(text)")
+            #expect(RouterTools.addressedSession(text, store: s) == nil, "\(text)")
+        }
+    }
+
+    @Test func withoutJevAProjectWithOneSessionIsTheAddresseeEvenPastTheLimits() async {
         let (s, d, f) = setup()
         f.rankError = RouterTools.Failure("no TypeSafe key is set")
         // Newer idle sessions push the only session of the docs project past the ones offered; then one titled "docs".
@@ -965,10 +989,10 @@ import Testing
         s.claudeSessions["local_x"] = ClaudeSession(id: "local_x", title: "docs", folder: "/code/evil", lastActivity: Date())
         let a = d.submit("tell docs to publish the release notes")
         await finish(d, f, a)
-        #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == a })
-        // Only the session's own title, past the limits too: it is the one meant.
-        #expect(RouterTools.addressedSession("tell the Update the docs session to ship", store: s) == "local_b")
-        #expect(RouterTools.addressedSession("tell docs to ship", store: s) == nil)
+        #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == a }, "not among the offered targets: asked")
+        // A title is never the address, past the limits too; the project is, with its one session.
+        #expect(RouterTools.addressedSession("tell the Update the docs session to ship", store: s) == nil)
+        #expect(RouterTools.addressedSession("tell docs to ship", store: s) == "local_b")
     }
 
     @Test func withoutJevASessionTitledLikeAWordOfProseIsNeverTheAddressee() async {

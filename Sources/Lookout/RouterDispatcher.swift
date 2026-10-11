@@ -982,7 +982,7 @@ extension RouterDispatcher {
     }
 
     /// The message is addressed to the session by words you typed: "tell X to …" or "X: …" naming it and nothing else
-    /// (`RouterTools.addressedSession`), or a short name of its project's ("CI"). Never a word of its title alone: a
+    /// (`RouterTools.addressedSession`: its project, with it the only session), or a short name of its project's ("CI"). Never its title: a
     /// session sets its own.
     static func addressed(_ message: String, to session: String, store: Store) -> Bool {
         guard let s = store.claudeSessions[session] else { return false }

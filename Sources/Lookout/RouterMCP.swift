@@ -815,11 +815,11 @@ final class RouterMCPServer: @unchecked Sendable {
         return "session:\(id)"
     }
 
-    /// The session a message is addressed to at its start ("tell/ask (the) X (session) to …", "X: …"): X is exactly one
-    /// session's title or its project's name, counted among every session not archived and every project Lookout knows,
-    /// never only the few offered to Jev (an older session of the same title, or a project of that name, past a limit
-    /// would hide that X means two things). A title another session or a project also has, or a project with more than
-    /// one session, names none.
+    /// The session a message is addressed to at its start ("tell/ask (the) X (session) to …", "X: …"): X is a PROJECT (a
+    /// folder name you own), the only one by that name, and it has exactly one session not archived. A session's title
+    /// named in prose never sends the message there on its own (a session sets its own title: "me how", "note to self"
+    /// could capture anything); it only ranks the ask (`spokenAddressee`). Counted among every session not archived and
+    /// every project Lookout knows, never only the few offered to Jev.
     static func addressedSession(_ message: String, store: Store) -> String? {
         guard let to = addressee(message) else { return nil }
         let sessions = store.claudeSessions.values.filter { !$0.isArchived }
@@ -827,9 +827,9 @@ final class RouterMCPServer: @unchecked Sendable {
             !folder.isEmpty && (store.folderName(folder).lowercased() == to || (folder as NSString).lastPathComponent.lowercased() == to)
         }
         let projects = Set((store.knownFolders + sessions.map(\.folderKey)).filter(named))
-        let fits = sessions.filter { $0.title.lowercased() == to || projects.contains($0.folderKey) }
-        guard fits.count == 1, let session = fits.first, projects.allSatisfy({ $0 == session.folderKey }) else { return nil }
-        return session.id
+        guard projects.count == 1, let folder = projects.first else { return nil }
+        let inProject = sessions.filter { $0.folderKey == folder }
+        return inProject.count == 1 ? inProject[0].id : nil
     }
 
     /// A message that asks for a new session (`SessionStart.startPhrase`, at its start or after its @projects), and the
