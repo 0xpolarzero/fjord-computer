@@ -576,6 +576,9 @@ extension Store {
         // What is under way with the old key stops (the icon's pick starts again with the new one once it has).
         iconTask?.cancel()
         routerTriager.cancelAll()
+        // The triage's retry was timed to the old key's pause: a pause with the new one times its own (`triageTurns`).
+        routerTriager.retry?.cancel()
+        routerTriager.retry = nil
         iconError = nil
         iconsPausedUntil = .distantPast
         pickIcons()
