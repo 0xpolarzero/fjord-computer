@@ -112,6 +112,30 @@ import Testing
         #expect(calls == 1)
     }
 
+    @Test func anOlderCallThatWorkedDoesntLiftANewerPause() async throws {
+        let s = store()
+        let latch = Latch()
+        var inside = false
+        // B is let through and still asks when A is told to wait a minute.
+        let b = Task { try await s.throughJevGate(.inbox, generation: s.jevGate.generation) { inside = true; await latch.wait(); return 1 } }
+        while !inside { await Task.yield() }
+        await #expect(throws: JevClient.Failure.rateLimited(retryAfter: 60)) {
+            try await s.throughJevGate(.inbox, generation: s.jevGate.generation) { () async throws -> Int in throw JevClient.Failure.rateLimited(retryAfter: 60) }
+        }
+        latch.open = true
+        #expect(try await b.value == 1)
+        // C still waits.
+        var asked = false
+        await #expect(throws: JevClient.Failure.rateLimited(retryAfter: 60)) {
+            try await s.throughJevGate(.inbox, generation: s.jevGate.generation) { asked = true; return 1 }
+        }
+        #expect(!asked && s.jevGate.failures == 1)
+        // A call let through after it does start over.
+        let pauses = s.jevGate.pauses
+        s.jevGate.succeeded(since: pauses)
+        #expect(s.jevGate.isOpen(for: "sk-old") && s.jevGate.failures == 0)
+    }
+
     @Test func anAnswerAfterTheKeyOrTheSwitchChangedIsDropped() async {
         let s = store()
         var flip: () -> Void = {}

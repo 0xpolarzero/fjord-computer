@@ -44,6 +44,8 @@ enum JevUse {
     private(set) var paused: JevClient.Failure?
     /// Failures in a row (rate limits and overloads included).
     private(set) var failures = 0
+    /// Counts the pauses failures put in: a call that worked doesn't lift one put in after it was let through.
+    private(set) var pauses = 0
 
     /// Throws why no call may go now with `key`.
     func admit(key: String) throws {
@@ -54,7 +56,10 @@ enum JevUse {
     /// Whether a call with `key` may go now.
     func isOpen(for key: String) -> Bool { (try? admit(key: key)) != nil }
 
-    func succeeded() {
+    /// A call worked: everything starts over, unless (`since`: the `pauses` it was let through at) a failure paused calls
+    /// meanwhile, as an older call worked before TypeSafe said to wait.
+    func succeeded(since: Int? = nil) {
+        if let since, since != pauses { return }
         failures = 0
         until = .distantPast
         paused = nil
@@ -91,6 +96,7 @@ enum JevUse {
     private func pause(_ seconds: TimeInterval, _ failure: JevClient.Failure) {
         until = max(until, now().addingTimeInterval(seconds))
         paused = failure
+        pauses &+= 1
     }
 }
 
@@ -124,6 +130,7 @@ extension Store {
         }
         try allowed()
         try jevGate.admit(key: key)
+        let pauses = jevGate.pauses
         let out: T
         do {
             out = try await call()
@@ -131,7 +138,7 @@ extension Store {
             if generation == jevGate.generation { jevGate.failed(error, key: key) }
             throw error
         }
-        if generation == jevGate.generation { jevGate.succeeded() }
+        if generation == jevGate.generation { jevGate.succeeded(since: pauses) }
         try allowed()
         return out
     }
