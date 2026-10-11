@@ -16,6 +16,8 @@ struct ChangeCard: View {
     @Environment(\.cdsColumnWidth) private var width
 
     private var reverted: Bool { change.isReverted }
+    /// The whole before and after of a change waiting for Apply, shown.
+    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -64,13 +66,22 @@ struct ChangeCard: View {
         .frame(minHeight: 36)
     }
 
-    /// Why a change waits for you, under its line: nothing of it is applied until Apply.
+    /// Why a change waits for you, under its line: nothing of it is applied until Apply. Everything Apply allows (every
+    /// prompt, comment, trigger, setting and rule, before and after) opens under it, whole.
     @ViewBuilder private var waiting: some View {
         if let why = change.pending, change.isPending {
-            Text("Not applied yet: \(why).")
-                .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
-                .padding(.horizontal, CDS.Density.compact.pad.xs).padding(.bottom, CDS.Density.compact.pad.sm)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: CDS.Density.compact.gap.sm) {
+                HStack(alignment: .firstTextBaseline, spacing: CDS.Density.compact.gap.sm) {
+                    Text("Not applied yet: \(why).")
+                        .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
+                    Spacer(minLength: 0)
+                    ClaudeButton(expanded ? "Hide details" : "Details", variant: .ghost, size: .sm) { expanded.toggle() }
+                        .help("Everything Apply allows: the whole before and after of this change")
+                }
+                if expanded { PayloadView(payload: change.payload(store: store)) }
+            }
+            .padding(.horizontal, CDS.Density.compact.pad.xs).padding(.bottom, CDS.Density.compact.pad.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -112,6 +123,31 @@ struct ChangeCard: View {
 }
 
 // MARK: - Pieces
+
+/// A change's whole before and after, line by line, nothing cut.
+private struct PayloadView: View {
+    let payload: ChangePayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CDS.Density.compact.gap.sm) {
+            side("Before", payload.before)
+            side("After", payload.after)
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func side(_ name: String, _ lines: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(name).cdsText(CDS.Density.compact.footnote, .medium, CDS.Text.secondary)
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(line).cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
 
 /// A rule's lines as read-only chips, in the editor's own look.
 struct RuleChips: View {
