@@ -737,6 +737,21 @@ import Testing
         #expect(d.askBacks.map(\.id) == [vague!] && f.prepared == ["local_b"])
     }
 
+    @Test func withoutJevASessionAddressedOutrightWinsOverAProjectTheTaskNames() async {
+        let (s, d, f) = setup()
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "CI", folder: "/code/infra", lastActivity: Date())
+        let a = d.submit("tell the CI session to rerun the lookout tests")
+        await finish(d, f, a)
+        #expect(f.prepared == ["local_c"])
+        let b = d.submit("CI: rerun the lookout tests")
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_c", "local_c"])
+        // Addressed to no session by that name: the words as before.
+        #expect(RouterTools.addressee("tell Bob to rerun the lookout tests") == "bob")
+        #expect(RouterTools.addressee("rerun the lookout tests") == nil)
+    }
+
     @Test func pickingTheSuggestionLogsNoCorrectionAndAnotherPickDoes() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]

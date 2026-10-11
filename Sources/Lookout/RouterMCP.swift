@@ -795,6 +795,15 @@ final class RouterMCPServer: @unchecked Sendable {
             if score > 0 { ranked.append((t.target, score)) }
         }
         ranked.sort { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
+        // Addressed outright ("tell the CI session to …", "CI: …"): that session, whatever else the words mention (a
+        // project named in the task). By its title whole, else a project with that one session.
+        if let to = addressee(message) {
+            let sessions = targets.filter { $0.target.hasPrefix("session:") }
+            let byTitle = Set(sessions.filter { $0.title.lowercased() == to }.compactMap(\.sessionID))
+            let inProject = Set(sessions.filter { $0.project.lowercased() == to }.compactMap(\.sessionID))
+            if byTitle.count == 1 { return (ranked, "session:\(byTitle.first!)") }
+            if byTitle.isEmpty, inProject.count == 1 { return (ranked, "session:\(inProject.first!)") }
+        }
         var named: String?
         if titled.count == 1 {
             named = "session:\(titled.first!)"
@@ -802,6 +811,21 @@ final class RouterMCPServer: @unchecked Sendable {
             named = "session:\(only.first!)"
         }
         return (ranked, named)
+    }
+
+    /// Who a message is addressed to at its start, lowercased: "tell/ask (the) X (session) to …", "(for) (the) X (session):".
+    static func addressee(_ message: String) -> String? {
+        let polite = #"(?:(?:please|pls|hey|ok|okay|can\s+you|could\s+you|would\s+you)[,\s]+)?"#
+        let patterns = [#"^\s*\#(polite)(?:tell|ask)\s+(?:the\s+)?([^\n:]{1,80}?)(?:\s+(?:session|chat))?(?:\s+to\s|\s*:)"#,
+                        #"^\s*\#(polite)(?:for\s+)?(?:the\s+)?([^\n:]{1,80}?)(?:\s+(?:session|chat))?\s*:\s"#]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let m = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
+                  let r = Range(m.range(at: 1), in: message) else { continue }
+            let name = message[r].trimmingCharacters(in: .whitespaces).lowercased()
+            if !name.isEmpty { return name }
+        }
+        return nil
     }
 
     // MARK: actions
