@@ -44,11 +44,18 @@ final class ImageCache: @unchecked Sendable {
         return await task.value
     }
 
-    /// Warms the cache, e.g. after a sync, so avatars are there the first time the hub opens.
+    /// Warms the cache, e.g. after a sync, so avatars are there the first time the hub opens: in the order given (what
+    /// shows first, first), each once.
     func prefetch(_ urls: [URL]) {
-        for url in Set(urls) where cached(url) == nil {
+        for url in Self.unique(urls) where cached(url) == nil {
             Task.detached(priority: .utility) { _ = await ImageCache.shared.load(url) }
         }
+    }
+
+    /// `urls` without repeats, in their order.
+    static func unique(_ urls: [URL]) -> [URL] {
+        var seen = Set<URL>()
+        return urls.filter { seen.insert($0).inserted }
     }
 
     private static func pixels(_ url: URL) -> Int {

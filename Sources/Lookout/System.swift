@@ -399,6 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hub.pickRouterCard = { [weak window] id in window?.pick(card: id) }
         hub.pickRouterMessage = { [weak window] id in window?.pick(message: id) }
+        hub.windowPlace = { [weak window] in window?.navigator.selection }
         // Banners for new cards that need you; a demo posts none.
         if !demo {
             RouterBanners.attach(store: store, windowIsKey: { [weak window] in window?.isKey == true && window?.navigator.selection == .router }) {

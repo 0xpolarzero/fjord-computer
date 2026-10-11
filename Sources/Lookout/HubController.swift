@@ -167,6 +167,8 @@ final class HubController {
     }
     /// Scrolls the Router's conversation to a message, before the window opens on it.
     var pickRouterMessage: (UUID) -> Void = { _ in }
+    /// The place the app window shows (or opens on).
+    var windowPlace: () -> AppDestination? = { nil }
 
     /// The edge `--edge` names, if it names one.
     nonisolated static func edge(in arguments: [String]) -> DockEdge? {
@@ -475,13 +477,14 @@ final class HubController {
     }
 
     /// Tells the store when the hub is more than the bare bar (a peek or the app window), so it refreshes stale
-    /// data and polls faster meanwhile; warms the avatars the inbox is about to show.
+    /// data and polls faster meanwhile; warms the avatars the inbox is about to show, those of the page opened first (the
+    /// window's place, or the peek's tab).
     private func reportOpen() {
         let open = windowOpen || (hub.section != nil && !hub.quiet)
         guard open != reportedOpen else { return }
         reportedOpen = open
         store.setHubOpen(open)
-        if open { ImageCache.shared.prefetch(store.avatarsToWarm()) }
+        if open { ImageCache.shared.prefetch(store.avatarsToWarm(first: windowOpen ? windowPlace()?.tab : hub.tab)) }
     }
 
     // MARK: Dragging to another edge
@@ -568,12 +571,14 @@ struct BarPresence: Equatable {
 }
 
 extension Store {
-    /// The pictures the rows are about to show, at the URLs they ask for (the latest actor's, at a row's size): the tab
-    /// the inbox opens on first, then the other categories in order, at most `limit`; and the account's, at Settings' size.
-    func avatarsToWarm(limit: Int = 60) -> [URL] {
+    /// The pictures the rows are about to show, at the URLs they ask for (the latest actor's, at a row's size): `first`'s
+    /// (the page opened, else the tab the inbox opens on) first, then the other categories in order, at most `limit`; and
+    /// the account's, at Settings' size. Done's only when it is `first`.
+    func avatarsToWarm(first: InboxTab? = nil, limit: Int = 60) -> [URL] {
         var seen = Set<URL>()
         var urls: [URL] = []
-        let tabs = [tabNeedingYou] + shownCategories.map { InboxTab.category($0.id) }
+        let lead = first ?? tabNeedingYou
+        let tabs = [lead] + shownCategories.map { InboxTab.category($0.id) }.filter { $0 != lead }
         scan: for tab in tabs {
             for entry in entries(in: tab) where entry.thing.kind != .workflow {
                 guard let url = Avatar.sizedURL(entry.thing.latestActor?.avatar, size: EntryRow.avatar),

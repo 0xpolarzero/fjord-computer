@@ -407,6 +407,33 @@ import Testing
         #expect(store.avatarsToWarm(limit: 1).filter { $0 != account }.count <= 1)
     }
 
+    /// The page actually opened is warmed first: a category other than the one needing you, or Done (whose actors are
+    /// warmed only then).
+    @Test func theAvatarsOfThePageOpenedComeFirst() throws {
+        let store = Store()
+        store.persists = false
+        Demo.populate(store, .router)
+        func faces(_ tab: InboxTab) -> [URL] {
+            store.entries(in: tab).filter { $0.thing.kind != .workflow }
+                .compactMap { Avatar.sizedURL($0.thing.latestActor?.avatar, size: EntryRow.avatar) }
+        }
+        let done = faces(.done)
+        try #require(!done.isEmpty)
+        let doneOnly = done.filter { !store.avatarsToWarm().contains($0) }
+        let warmed = store.avatarsToWarm(first: .done)
+        #expect(warmed.first == done.first && doneOnly.allSatisfy(warmed.contains))
+        if let other = store.shownCategories.map({ InboxTab.category($0.id) }).last(where: { !faces($0).isEmpty }) {
+            #expect(store.avatarsToWarm(first: other).first == faces(other).first)
+        }
+        #expect(Set(warmed).count == warmed.count)
+    }
+
+    /// Warming keeps the order it is given (the page opened first), each picture once.
+    @Test func warmingKeepsItsOrder() throws {
+        let urls = try ["a", "b", "a", "c", "b"].map { try #require(URL(string: "https://x.test/" + $0)) }
+        #expect(ImageCache.unique(urls).map(\.lastPathComponent) == ["a", "b", "c"])
+    }
+
     @Test func aPeekWaitsForThePointerToSettleThenSwitchesAtOnce() async {
         let hub = HubState()
         hub.enter(.inbox)
