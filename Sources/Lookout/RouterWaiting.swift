@@ -178,7 +178,7 @@ extension Store {
     }
 
     /// Whether the waiting session's final message names what it waits on, by Lookout's own reading (not Jev's): the other
-    /// session's id, or its title's words or project (`RouterDepends.names`); the PR's ref (`owner/repo#12`, whole: not
+    /// session's id, or its title's words or project said of a session (`RouterDepends.namesSession`); the PR's ref (`owner/repo#12`, whole: not
     /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`), its number (`#12`), or two words of its title, unless the message names another PR by its ref, or two PRs at all; a
     /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named on
     /// another branch too is either), from Lookout's own data. A watch whose ref
@@ -192,14 +192,14 @@ extension Store {
                 !candidate.isArchived && candidate.id != session.id
                     && (lower.range(of: #"(?<![\w-])"# + NSRegularExpression.escapedPattern(for: candidate.id.lowercased()) + #"(?![\w-])"#,
                                     options: .regularExpression) != nil
-                        || RouterDepends.names(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
+                        || RouterDepends.namesSession(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
             }
             guard namedSessions.count <= 1 else { return false }
             // A workflow or a PR named too, by its bare number as well (`#12`, a PR of its repo): which of them it waits on isn't clear.
             guard namedCI(lower, excluding: nil).isEmpty, Self.prsNamed(lower, repo: "").isEmpty else { return false }
             if lower.contains(id.lowercased()) { return true }
             guard let other = claudeSessions[id] else { return false }
-            return RouterDepends.names(message, title: other.title, project: other.folderName, ownProject: session.folderName)
+            return RouterDepends.namesSession(message, title: other.title, project: other.folderName, ownProject: session.folderName)
         case .ci(let thingID):
             guard let thing = things[thingID] else { return false }
             let ref = RouterWaits.ref(thing)
@@ -249,13 +249,13 @@ extension Store {
         }
     }
 
-    /// Whether the message names another live session, by its id, title words or project.
+    /// Whether the message names another live session, by its id, or its title words or project said of a session.
     func hasNamedSession(_ message: String, lower: String, by session: ClaudeSession) -> Bool {
         claudeSessions.values.contains { candidate in
             !candidate.isArchived && candidate.id != session.id
                 && (lower.range(of: #"(?<![\w-])"# + NSRegularExpression.escapedPattern(for: candidate.id.lowercased()) + #"(?![\w-])"#,
                                 options: .regularExpression) != nil
-                    || RouterDepends.names(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
+                    || RouterDepends.namesSession(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
         }
     }
 

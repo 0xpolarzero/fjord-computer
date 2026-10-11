@@ -24,6 +24,32 @@ enum RouterDepends {
         return other.count >= 3 && other != ownProject.lowercased() && message.lowercased().contains(other)
     }
 
+    /// Whether the message names the other session as a session, which a wait continued on its own needs: its title's words
+    /// or its project (as `names` reads them) said of a session, beside the word in the same sentence ("the schema migration
+    /// session", "session “Schema migration”", "the lookout session"). Words it shares with a session's title said of
+    /// anything else ("waiting for tests", another session being "Fix tests") are not, nor is the turn's own ("this session").
+    static func namesSession(_ message: String, title: String, project: String, ownProject: String) -> Bool {
+        let tokens = message.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+        func bare(_ token: String) -> String { token.filter { $0.isLetter } }
+        func endsSentence(_ token: String) -> Bool { token.last.map { ".;:!?".contains($0) } ?? false }
+        for (i, token) in tokens.enumerated() where ["session", "sessions"].contains(bare(token)) {
+            if i > 0, ["this", "my", "our", "current"].contains(bare(tokens[i - 1])), !endsSentence(tokens[i - 1]) { continue }
+            var window: [String] = []
+            var j = i - 1
+            while j >= 0, i - j <= 4, !endsSentence(tokens[j]) { window.insert(tokens[j], at: 0); j -= 1 }
+            if !endsSentence(token) {
+                var k = i + 1
+                while k < tokens.count, k - i <= 4 {
+                    window.append(tokens[k])
+                    if endsSentence(tokens[k]) { break }
+                    k += 1
+                }
+            }
+            if names(window.joined(separator: " "), title: title, project: project, ownProject: ownProject) { return true }
+        }
+        return false
+    }
+
     static func extra(_ options: [RouterTriage.WaitOption]) -> TriageExtra {
         TriageExtra(
             questions: ["buildsOn": .choice(options.map(\.key) + ["none"],

@@ -735,6 +735,28 @@ import Testing
         #expect(s.waitNamed(one, in: "Waiting for the migration session to finish", by: a))
     }
 
+    @Test func aSessionIsNamedOnlyAsASession() {
+        var twelve = InboxFixture.pr(12, repo: "o/app")
+        twelve.checks = .pending
+        let (s, _) = store(watch: ciWatch, things: [twelve])
+        s.claudeSessions["c"] = ClaudeSession(id: "c", title: "Fix tests", folder: "/x/lookout", completedTurns: 1, lastActivity: Date())
+        let a = s.claudeSessions["a"]!
+        let pr = RouterTriage.Watch(target: .ci(thing: "pr:o/app#12"), label: "CI on o/app#12", ref: "o/app#12")
+        // Another session's title words, or its project, not said of a session: the CI wait is named.
+        #expect(s.waitNamed(pr, in: "Waiting for tests on o/app#12", by: a))
+        #expect(s.waitNamed(pr, in: "Waiting for the lookout tests on o/app#12", by: a))
+        #expect(s.waitNamed(pr, in: "Waiting for tests on o/app#12. This session goes on after.", by: a))
+        // Said of a session, by its title or project, or named by its id: not.
+        #expect(!s.waitNamed(pr, in: "Waiting for o/app#12 and the fix tests session", by: a))
+        #expect(!s.waitNamed(pr, in: "Waiting for o/app#12 and session “Fix tests”", by: a))
+        #expect(!s.waitNamed(pr, in: "Waiting for o/app#12 and the lookout session", by: a))
+        #expect(!s.waitNamed(pr, in: "Waiting for o/app#12 and c", by: a))
+        let migration = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "")
+        #expect(s.waitNamed(migration, in: "Waiting for the migration session to finish", by: a))
+        #expect(!s.waitNamed(migration, in: "Waiting for the migration to finish", by: a))
+        #expect(s.waitNamed(migration, in: "Waiting for b to finish", by: a))
+    }
+
     @Test func aFolderWithNoRemoteYetIsReadAgainOnceItHasOne() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lk-remotes-\(UUID().uuidString)/app")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git"), withIntermediateDirectories: true)
