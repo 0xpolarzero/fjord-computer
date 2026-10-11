@@ -230,8 +230,9 @@ enum InboxActions {
     /// Brings the ledger up to date with the categories (a category, rule set or action seen for the first time takes what
     /// is there as old; runs of what is gone are forgotten) and returns the runs that are due, in the order of the
     /// categories, newest things first.
+    /// `known`: the ids of every thing still fetched, in a category now or not.
     static func plan(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: inout ActionLedger,
-                     me: String, now: Date = Date()) -> [Job] {
+                     me: String, known things: Set<String> = [], now: Date = Date()) -> [Job] {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
         // Baselines: what is there when a category's rules change, or an action is added, is old.
@@ -276,16 +277,22 @@ enum InboxActions {
             }
         }
         // Over the cap, only what nothing present can ask about again goes, oldest first: a run for a fact a thing still has
-        // (or the entering of a thing still in) is what keeps it from running again, so it stays however many there are.
+        // is what keeps it from running again, so it stays however many there are, and so do the runs of a thing still
+        // fetched but out of the category for now (it may come back with the same facts). Entering is forgotten only by the
+        // cooldown above.
         if ledger.runs.count > maxRuns {
             var present: Set<String> = []
             for entry in entries {
                 let prefix = "\(entry.categoryID.uuidString)\u{1F}\(entry.id)\u{1F}"
-                present.insert(prefix + "enter")
                 for fact in entry.facts { present.insert(prefix + fact.key) }
             }
-            let drop = ledger.runs.filter { $0.value.state != .running
-                && !present.contains("\($0.value.category.uuidString)\u{1F}\($0.value.thing)\u{1F}\($0.value.trigger)") }
+            let inCategory = Set(entries.map { "\($0.categoryID.uuidString)\u{1F}\($0.id)" })
+            let drop = ledger.runs.filter { _, run in
+                guard run.state != .running, run.trigger != "enter" else { return false }
+                let thing = "\(run.category.uuidString)\u{1F}\(run.thing)"
+                if inCategory.contains(thing) { return !present.contains(thing + "\u{1F}" + run.trigger) }
+                return !things.contains(run.thing)
+            }
                 .sorted { $0.value.at < $1.value.at }
                 .prefix(ledger.runs.count - maxRuns)
             for (key, _) in drop { ledger.runs[key] = nil }
@@ -738,7 +745,8 @@ extension Store {
         repeat {
             actionsAgain = false
             var ledger = actionLedger
-            let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me, now: now)
+            let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
+                                         known: Set(things.keys), now: now)
             let batch = Array(jobs.prefix(InboxActions.perSync))
             for job in batch {
                 for key in job.keys {
@@ -779,7 +787,8 @@ extension Store {
     func baselineActions(now: Date = Date()) {
         guard let me = me?.login, !me.isEmpty else { return }
         var ledger = actionLedger
-        _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me, now: now)
+        _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
+                              known: Set(things.keys), now: now)
         if ledger != actionLedger { actionLedger = ledger }
     }
 

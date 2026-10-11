@@ -223,6 +223,19 @@ final class DiskCheckingPerformer: ActionPerformer {
         for run in gone { ledger.set(run) }
         _ = InboxActions.plan(entries: entries, categories: [category], groups: [], ledger: &ledger, me: "me")
         #expect(ledger.runs.count == 70 * 31)
+
+        // Over the cap, a thing out of the category for a refresh (still fetched) keeps its runs, its entering too: back
+        // with the same comments, nothing runs.
+        let out = Array(entries.dropFirst())
+        _ = InboxActions.plan(entries: out, categories: [category], groups: [], ledger: &ledger, me: "me",
+                              known: Set(entries.map(\.id)))
+        #expect(ledger.runs.count == 70 * 31)
+        #expect(InboxActions.plan(entries: entries, categories: [category], groups: [], ledger: &ledger, me: "me").isEmpty)
+        // Gone from what is fetched: its comments' runs can go, its entering waits for the cooldown.
+        for run in gone { ledger.set(run) }
+        _ = InboxActions.plan(entries: out, categories: [category], groups: [], ledger: &ledger, me: "me")
+        #expect(ledger.runs.count == 69 * 31 + 1)
+        #expect(ledger.run(category.id, entries[0].id, action.id, "enter") != nil)
     }
 
     @Test func doneThingsDoNotRun() async {
