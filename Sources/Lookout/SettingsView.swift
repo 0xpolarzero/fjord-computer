@@ -47,9 +47,11 @@ struct SettingsView: View {
             .onChange(of: hub.settingsScroll) { scroll(proxy, animated: true) }
         }
         // The page is kept while the window is closed: what the system holds is read again when it is back, and a pasted
-        // secret that wasn't saved doesn't wait behind a closed window.
+        // secret that wasn't saved doesn't wait behind a closed window. A login item that failed to change says so only
+        // until then: what the system now holds is what the switch shows (it may have been fixed in System Settings).
         .onAppear {
             launchAtLogin = LaunchAtLogin.isEnabled
+            launchError = nil
             accessibilityTrusted = AXIsProcessTrusted()
         }
         .onDisappear {
