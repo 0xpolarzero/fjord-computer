@@ -159,31 +159,43 @@ import Testing
         #expect(model.expanded.contains(card.id) && opened.height > back.height && opened.fromBottom <= 1, "\(back) → \(opened)")
     }
 
-    @Test func aMessageAskedForBeforeThePageShowsIsWhereItOpens() async {
+    @Test func aMessageAskedForBeforeThePageShowsIsWhereItOpensAndOnlyThatOnce() async {
         let store = store()
         let model = RouterModel()
         // An action's chip, clicked before the page is drawn: a message far up the log.
         let message = store.router.decisions[store.router.decisions.count - 200].id
         model.show(message: message)
-        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
-            .frame(width: 1100, height: 900))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: .borderless, backing: .buffered,
-                              defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        window.orderFrontRegardless()
-        defer { window.contentView = nil; window.orderOut(nil) }
+        func render() -> (NSHostingView<some View>, NSWindow) {
+            let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
+                .frame(width: 1100, height: 900))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: .borderless,
+                                  backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+            window.orderFrontRegardless()
+            return (hosting, window)
+        }
         func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
-        func fromBottom() -> Int {
+        func fromBottom(_ hosting: NSView) -> Int {
             hosting.layoutSubtreeIfNeeded()
             guard let view = scrolls(hosting).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }),
                   let doc = view.documentView else { return -1 }
             return Int(doc.frame.height - view.contentView.bounds.maxY)
         }
-        await waitUntil { fromBottom() > 1000 }
-        await waitUntilSteady(turns: 8) { fromBottom() }
-        #expect(fromBottom() > 1000, "the page opened on the message, far above the bottom")
+        do {
+            let (hosting, window) = render()
+            defer { window.contentView = nil; window.orderOut(nil) }
+            await waitUntil { fromBottom(hosting) > 1000 }
+            await waitUntilSteady(turns: 8) { fromBottom(hosting) }
+            #expect(fromBottom(hosting) > 1000, "the page opened on the message, far above the bottom")
+        }
+        // The page left and come back to: it opens at the bottom, not on the message it went to before.
+        let (hosting, window) = render()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        await waitUntil { fromBottom(hosting) >= 0 }
+        await waitUntilSteady(turns: 8) { fromBottom(hosting) }
+        #expect(fromBottom(hosting) <= 1)
     }
 
     @Test func aLineAskedForBeforeThePageShowsIsWhereItOpensAndOnlyThatOnce() async {

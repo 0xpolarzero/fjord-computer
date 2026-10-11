@@ -331,9 +331,10 @@ private struct RouterHistory: View {
                     guard let request = model.takeReveal(request, by: "history") else { return }
                     scroll(to: request.id, anchor: request.id == RouterModel.endID ? .bottom : nil, in: all, drawn: entries)
                 }
-                // A message asked for (an action's chip), the page opening on it or not.
+                // A message asked for (an action's chip), the page opening on it or not: gone to once, not again each time the
+                // page is drawn.
                 .onChange(of: model.messageRequest, initial: true) { _, request in
-                    guard let request else { return }
+                    guard let request = model.takeReveal(request, by: "message") else { return }
                     scroll(to: request.id, anchor: .center, in: all, drawn: entries)
                 }
                 // Scrolled up, the lines drawn stay; back at the bottom, only the newest are.
