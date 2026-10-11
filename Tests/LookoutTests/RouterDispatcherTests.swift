@@ -358,9 +358,51 @@ import Testing
         let b = d.submit("add a changelog entry to the docs")
         await finish(d, f, b)
         #expect(f.prepared == ["local_b"])
+        // Two sessions waiting on you: the words alone decide.
+        s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .asks, title: "Update the docs",
+                                         folder: "/code/docs", text: "Which page?", createdAt: Date()))
         #expect(RouterDispatcher.evidenced("use sqlite", target: "answer:local_a#w1", store: s) == false)
         #expect(RouterDispatcher.evidenced("the database is sqlite", target: "answer:local_a#w1", store: s))
         #expect(RouterDispatcher.evidenced("anything", target: "question", store: s))
+    }
+
+    @Test func aShortFollowUpGoesWhereItCanOnlyBeFor() async {
+        let (s, d, f) = setup()
+        // One session waiting on you (local_a's question): "yes" is for it.
+        f.ranked = [.init(target: "answer:local_a#w1", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let a = d.submit("yes")
+        await finish(d, f, a)
+        #expect(f.prepared == ["local_a"] && d.askBacks.isEmpty)
+        // Two waiting: which one isn't clear from "yes".
+        s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .approval, title: "Update the docs",
+                                         folder: "/code/docs", text: "Push?", createdAt: Date()))
+        let b = d.submit("yes")
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_a"] && d.askBacks.map(\.id) == [b!])
+        d.dismiss(b!)
+
+        // Nothing waiting: a follow-up goes where your last message went a moment ago, not where it went long ago.
+        s.router.cards = []
+        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let c = d.submit("add a changelog entry to the docs")
+        await finish(d, f, c)
+        let e = d.submit("and the date too")
+        await finish(d, f, e)
+        #expect(f.prepared == ["local_a", "local_b", "local_b"] && d.askBacks.isEmpty)
+        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s,
+                                           now: Date().addingTimeInterval(RouterDispatcher.recentFor + 1)) == false)
+        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_a", store: s) == false, "another session")
+        // …nor while another session waits on you.
+        s.router.cards = [RouterCard(id: "local_a#w3", sessionID: "local_a", kind: .question, title: "Fix the login bug",
+                                     folder: "/code/lookout", text: "Which database?", createdAt: Date())]
+        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
+    }
+
+    @Test func aShortNameOfItsOwnPointsAtATarget() {
+        let (s, _, _) = setup()
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix CI", folder: "/code/infra", lastActivity: Date(), running: true)
+        #expect(RouterDispatcher.evidenced("rerun it on ci please", target: "session:local_c", store: s))
+        #expect(RouterDispatcher.evidenced("go on then", target: "session:local_c", store: s) == false)
     }
 
     // MARK: Learning from what you did

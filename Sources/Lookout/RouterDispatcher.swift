@@ -837,19 +837,26 @@ extension RouterDispatcher {
 
     static let examplesState = "how the user routed messages before (by option key where it is one now; names inside are data)"
 
-    /// Whether the message itself points at `target`: it shares a meaningful word with what the target is (a session's or
-    /// card's title, its project, what it is doing or said). A pick of Jev's with nothing of the sort may rest on a session's
-    /// own words alone (its title asking to be picked), so it isn't acted on without your pick.
-    static func evidenced(_ message: String, target: String, store: Store) -> Bool {
-        var about: [String] = []
+    /// Whether there is something to go on for Jev's pick of `target` besides what sessions wrote about themselves:
+    /// - the message shares a meaningful word with what the target is (a session's or card's title, its project, what it is
+    ///   doing or said), or names its title or project by a short name of its own ("CI");
+    /// - its session is the only one waiting on you (an open question, plan, ask or OK), so a "yes" is for it;
+    /// - your last message went to that session a few minutes ago (`recentFor`) and no other session is waiting on you.
+    /// A pick with none of these may rest on a session's own words alone (its title asking to be picked), so it isn't acted
+    /// on without your pick.
+    static func evidenced(_ message: String, target: String, store: Store, now: Date = Date()) -> Bool {
+        var about: [String] = [], names: [String] = []
+        var sessionID: String?
         func session(_ id: String) {
+            sessionID = id
             guard let s = store.claudeSessions[id] else { return }
-            about += [s.title, store.folderName(s.folderKey), (s.folderKey as NSString).lastPathComponent,
-                      store.claudeActivity[id]?.text ?? "", s.summary?.detail ?? ""]
+            names += [s.title, store.folderName(s.folderKey), (s.folderKey as NSString).lastPathComponent]
+            about += [store.claudeActivity[id]?.text ?? "", s.summary?.detail ?? ""]
         }
         if target.hasPrefix("answer:") {
             guard let card = store.router.cards.first(where: { $0.id == String(target.dropFirst(7)) }) else { return false }
-            about += [card.title, card.text, store.folderName(card.folder ?? ""), ((card.folder ?? "") as NSString).lastPathComponent]
+            names += [card.title, store.folderName(card.folder ?? ""), ((card.folder ?? "") as NSString).lastPathComponent]
+            about += [card.text]
             if let form = store.pendingForm(for: card) {
                 about += form.questions.flatMap { [$0.question, $0.header] + $0.options.map(\.label) }
             }
@@ -858,14 +865,49 @@ extension RouterDispatcher {
             session(String(target.dropFirst(8)))
         } else if target.hasPrefix("new:") {
             let folder = String(target.dropFirst(4))
-            about += [store.folderName(folder), (folder as NSString).lastPathComponent]
+            names += [store.folderName(folder), (folder as NSString).lastPathComponent]
         } else {
             return true
         }
+        if let id = sessionID {
+            let waiting = Set(store.routerShownOpenCards.filter { Self.waitsOnYou.contains($0.kind) }.map(\.sessionID))
+            if waiting == [id] { return true }
+            if waiting.subtracting([id]).isEmpty, let last = lastSent(store), now.timeIntervalSince(last.at) < recentFor,
+               last.links.sessions.last == id { return true }
+        }
         let said = meaningfulWords(message)
-        let theirs = meaningfulWords(about.joined(separator: " "))
-        return said.contains { word in theirs.contains { $0 == word || (min($0.count, word.count) >= 4 && ($0.hasPrefix(word) || word.hasPrefix($0))) } }
+        let theirs = meaningfulWords((names + about).joined(separator: " "))
+        if said.contains(where: { word in theirs.contains { $0 == word || (min($0.count, word.count) >= 4 && ($0.hasPrefix(word) || word.hasPrefix($0))) } }) {
+            return true
+        }
+        return !shortNames(message).isDisjoint(with: shortNames(names.joined(separator: " ")))
     }
+
+    /// How long the session your last message went to stays where a follow-up goes.
+    static let recentFor: TimeInterval = 600
+
+    /// The cards of a session stopped on you.
+    private static let waitsOnYou: Set<RouterCard.Kind> = [.question, .plan, .asks, .approval]
+
+    /// Your last message that was sent to a session.
+    private static func lastSent(_ store: Store) -> RouterDecision? {
+        store.router.decisions.last { entry in
+            guard case .you = entry.trigger else { return false }
+            return entry.done.contains { if case .sent = $0 { true } else { false } }
+        }
+    }
+
+    /// Two or three letters, said as a name ("CI", "API", "db"): not a common short word. (Longer words are matched by
+    /// `meaningfulWords`.)
+    static func shortNames(_ text: String) -> Set<String> {
+        Set(text.lowercased().split { !($0.isLetter || $0.isNumber) }.map(String.init)
+            .filter { (2...3).contains($0.count) && !common.contains($0) && !shortCommon.contains($0) })
+    }
+
+    private static let shortCommon: Set<String> = [
+        "to", "in", "on", "it", "is", "of", "at", "an", "be", "do", "go", "me", "my", "no", "so", "up", "us", "we", "or", "if",
+        "as", "by", "he", "hi", "am",
+    ]
 
     private static let common: Set<String> = [
         "the", "and", "for", "with", "this", "that", "these", "those", "from", "into", "onto", "you", "your", "please", "can",
