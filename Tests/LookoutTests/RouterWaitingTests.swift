@@ -300,6 +300,37 @@ import Testing
         #expect(!s.waitNamed(other, in: "Waiting for the other session to finish", by: a))
     }
 
+    @Test func aRefNamesOnlyItsOwnThingWhole() {
+        var twelve = InboxFixture.pr(12, repo: "o/app", title: "Speed up the build")
+        twelve.checks = .pending
+        var workflow = InboxFixture.pr(1, repo: "o/app")
+        workflow.id = "workflow:o/app:7@main"
+        workflow.kind = .workflow
+        workflow.number = nil
+        workflow.workflowName = "Release"
+        let (s, _) = store(watch: ciWatch, things: [twelve, workflow])
+        let a = s.claudeSessions["a"]!
+        let pr = RouterTriage.Watch(target: .ci(thing: "pr:o/app#12"), label: "CI on o/app#12", ref: "o/app#12")
+        #expect(s.waitNamed(pr, in: "Waiting for CI on o/app#12.", by: a))
+        // A longer number, or another PR's ref beside this one's title words: not this one.
+        #expect(!s.waitNamed(pr, in: "Waiting for CI on o/app#123", by: a))
+        #expect(!s.waitNamed(pr, in: "Waiting on o/app#123 to speed up the build", by: a))
+        // A watch whose ref isn't its thing's names nothing.
+        var wrong = pr
+        wrong.ref = "o/app#123"
+        #expect(!s.waitNamed(wrong, in: "Waiting for CI on o/app#123 and o/app#12", by: a))
+        // A workflow: its repo alone is any of them (and o/app#12 is a PR); its repo and name together name it.
+        let wf = RouterTriage.Watch(target: .ci(thing: workflow.id), label: "CI: Release on main", ref: "o/app")
+        #expect(!s.waitNamed(wf, in: "Waiting for CI on o/app#12", by: a))
+        #expect(!s.waitNamed(wf, in: "Waiting for CI on o/app", by: a))
+        #expect(!s.waitNamed(wf, in: "Waiting for the release workflow", by: a))
+        #expect(s.waitNamed(wf, in: "Waiting for the Release workflow on o/app", by: a))
+        // The gate's own reading of a ref is as whole.
+        #expect(LookoutGate.names("mark acme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
+        #expect(!LookoutGate.names("mark acme/api#123 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
+        #expect(!LookoutGate.names("mark xacme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
+    }
+
     @Test func aSessionsOwnChoiceOverridesTheDefault() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
         s.setContinuesAutomatically("a", false)

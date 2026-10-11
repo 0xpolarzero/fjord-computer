@@ -118,8 +118,10 @@ extension Store {
     }
 
     /// Whether the waiting session's final message names what it waits on, by Lookout's own reading (not Jev's): the other
-    /// session's id, or its title's words or project (`RouterDepends.names`); the PR's or workflow's ref (`owner/repo#12`),
-    /// its number (`#12`), or two words of its title. A wait it doesn't name is never continued on its own.
+    /// session's id, or its title's words or project (`RouterDepends.names`); the PR's ref (`owner/repo#12`, whole: not
+    /// `owner/repo#123`), its number (`#12`), or two words of its title, unless the message names another PR by its ref; a
+    /// workflow's repo and its name together (a repo alone is any of its workflows), from Lookout's own data. A watch whose ref
+    /// isn't its thing's names nothing. A wait it doesn't name is never continued on its own.
     func waitNamed(_ watch: RouterTriage.Watch, in message: String, by session: ClaudeSession) -> Bool {
         let lower = message.lowercased()
         switch watch.target {
@@ -128,8 +130,19 @@ extension Store {
             guard let other = claudeSessions[id] else { return false }
             return RouterDepends.names(message, title: other.title, project: other.folderName, ownProject: session.folderName)
         case .ci(let thingID):
-            if let ref = watch.ref, lower.contains(ref.lowercased()) { return true }
             guard let thing = things[thingID] else { return false }
+            let ref = RouterWaits.ref(thing)
+            if let given = watch.ref, given.lowercased() != ref?.lowercased() { return false }
+            if thing.kind == .workflow {
+                if lower.contains(thingID.lowercased()) { return true }
+                guard let ref, LookoutGate.mentions(lower, ref: ref),
+                      let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty else { return false }
+                return lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w])"#,
+                                   options: .regularExpression) != nil
+            }
+            if let ref, LookoutGate.mentions(lower, ref: ref) { return true }
+            // Another PR named by its ref: this one's number or title words in the same message are about that one.
+            if lower.range(of: #"(?<![\w./-])[a-z0-9][a-z0-9-]*/[a-z0-9._-]+#\d"#, options: .regularExpression) != nil { return false }
             if let number = thing.number,
                lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil { return true }
             let titled = RouterDepends.words(thing.workflowName ?? thing.title)

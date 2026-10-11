@@ -82,7 +82,7 @@ enum LookoutGate {
     static func names(_ request: String, thing: Thing, category: String?) -> Bool {
         let said = request.lowercased()
         if let number = thing.number {
-            if said.contains("\(thing.repo.lowercased())#\(number)") { return true }
+            if mentions(said, ref: "\(thing.repo)#\(number)") { return true }
             if said.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil { return true }
         }
         let title = (thing.kind == .workflow ? thing.workflowName ?? thing.title : thing.title).lowercased()
@@ -93,6 +93,14 @@ enum LookoutGate {
             return true
         }
         return false
+    }
+
+    /// Whether `text` says `ref` (`owner/repo#12`, or `owner/repo`) as a whole: not part of a longer one (`acme/api#123` is
+    /// not `acme/api#12`, `acme/api-v2` is not `acme/api`, nor is `acme/api#12` the repo alone).
+    static func mentions(_ text: String, ref: String) -> Bool {
+        let tail = ref.contains("#") ? #"(?!\d)"# : #"(?![\w/-]|\.\w|#\d)"#
+        let pattern = #"(?<![\w./-])"# + NSRegularExpression.escapedPattern(for: ref.lowercased()) + tail
+        return text.lowercased().range(of: pattern, options: .regularExpression) != nil
     }
 
     /// The words that name each setting (a word of your message starting with one counts).
