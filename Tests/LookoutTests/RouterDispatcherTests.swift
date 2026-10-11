@@ -672,6 +672,29 @@ import Testing
         #expect(RouterDispatcher.formAnswers(two, message: "SQLite") == nil)
     }
 
+    @Test func aFormIsAnsweredByYourWordsWithoutTheirAddressingAndWhenItsSessionIsPicked() async {
+        let (s, d, f) = setup()
+        s.claudeSessions["local_a"]?.cliID = "cli-a"
+        s.router.cards[0].toolUseID = "call-1"
+        s.pendingForms["cli-a"] = PendingForm(id: "f", cliSessionID: "cli-a", transcriptPath: "", questions: [
+            .init(question: "Which database?", header: "DB", multiSelect: false,
+                  options: [.init(label: "SQLite", description: ""), .init(label: "Postgres", description: "")]),
+        ], createdAt: Date(), pid: 1, toolUseID: "call-1")
+        for text in ["SQLite (@router no rush)", "@lookout SQLite"] {
+            let a = d.submit(text, context: RouterContext(replyTo: "local_a#w1", pills: Self.pills(text, ["lookout"])))
+            await finish(d, f, a)
+        }
+        // Its session picked under "Something else…": the form it is stopped on.
+        f.ranked = [.init(target: "unclear", p: 1)]
+        let b = d.submit("Postgres")
+        await finish(d, f, b)
+        f.finished = []
+        d.pick(b!, target: "session:local_a")
+        await finish(d, f, b)
+        #expect(f.answered.map(\.card) == ["local_a#w1", "local_a#w1", "local_a#w1"] && f.prepared.isEmpty)
+        #expect(f.answered.map { $0.answers["Which database?"] } == ["SQLite", "SQLite", "Postgres"])
+    }
+
     @Test func aNewSessionTakesTheModelAndEffortYouAskedForAndTheLogSaysWhatWasApplied() async {
         let (s, d, f) = setup()
         f.ack = "ok model=opus effort=high"

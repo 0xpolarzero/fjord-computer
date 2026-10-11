@@ -439,11 +439,16 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Passes your words to a session: the form's answer when you gave one, else your words without their addressing, signed, through the gate.
     private func reply(_ job: Job, session: String, card: String?) async throws {
         guard let store else { return }
-        if let card, let c = store.router.cards.first(where: { $0.id == card }), let form = store.pendingForm(for: c),
-           let answers = Self.formAnswers(form, message: job.text) {
+        // What the session would get, its addressing taken out ("@lookout SQLite", "SQLite (@router no rush)"), is what
+        // answers its form. Sent to the session itself (picked under "Something else…"), the form it is stopped on.
+        let said = (try? Addressing.edit(job.text, pills: job.context.pills).text) ?? job.text
+        let held = card.map { id in store.router.cards.filter { $0.id == id } }
+            ?? store.routerShownOpenCards.filter { $0.sessionID == session && store.pendingForm(for: $0) != nil }
+        if held.count == 1, let c = held.first, let form = store.pendingForm(for: c),
+           let answers = Self.formAnswers(form, message: said) {
             stage(job, "answering")
-            _ = try await effects.answer(job.tools, card, answers)
-            note(job, .answered(card: c.title), session: session, card: card)
+            _ = try await effects.answer(job.tools, c.id, answers)
+            note(job, .answered(card: c.title), session: session, card: c.id)
             return
         }
         stage(job, "preparing")
