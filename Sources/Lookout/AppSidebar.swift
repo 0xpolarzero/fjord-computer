@@ -81,7 +81,6 @@ struct AppSidebar: View {
     static let tile: CGFloat = CDS.Tile.size
 
     var body: some View {
-        let routerCounts = store.routerCounts
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -104,6 +103,7 @@ struct AppSidebar: View {
                     }
                     .padding(.bottom, rowGap)
                     if store.routerOn {
+                        let routerCounts = store.routerCounts
                         // The Router stands apart from the inbox: a rule and a gap, no header over a single row.
                         rule.padding(.top, 4)
                         Color.clear.frame(height: M.groupTop - 4)

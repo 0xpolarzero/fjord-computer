@@ -107,6 +107,33 @@ import Testing
         #expect(s.openRouterCards.isEmpty)
     }
 
+    @Test func routerCountsMatchFilteringAcrossKindsAndOutstandingWork() {
+        let s = Store()
+        s.persists = false
+        let kinds: [RouterCard.Kind] = [.question, .plan, .done, .stuck, .asks, .approval, .waiting]
+        s.router.cards = kinds.flatMap { kind in
+            [RouterCard(id: "open-\(kind.rawValue)", sessionID: "open-\(kind.rawValue)", kind: kind,
+                        title: "Open", folder: nil, text: "", createdAt: now),
+             RouterCard(id: "closed-\(kind.rawValue)", sessionID: "closed-\(kind.rawValue)", kind: kind,
+                        title: "Closed", folder: nil, text: "", createdAt: now, addressedAt: now, addressedBy: .you)]
+        }
+        s.router.cards.append(RouterCard(id: "busy-done", sessionID: "busy-done", kind: .done,
+                                         title: "Still working", folder: nil, text: "", createdAt: now))
+        let task = ClaudeTask(id: "t1", kind: .command, title: "swift test", since: now)
+        s.claudeTasks = ["busy-done": [task], "open-question": [task]]
+        func filteredCounts() -> (needsYou: Int, done: Int) {
+            let open = s.router.cards.filter(\.isOpen)
+            let tasks = s.routerTasks
+            return (open.filter { $0.kind.needsYou }.count,
+                    open.filter { $0.kind == .done && RouterPage.shows($0, tasks: tasks) }.count)
+        }
+        #expect(s.routerCounts == filteredCounts())
+        #expect(s.routerCounts.needsYou == 5 && s.routerCounts.done == 1)
+        s.claudeTasks["busy-done"] = nil
+        #expect(s.routerCounts == filteredCounts())
+        #expect(s.routerCounts.needsYou == 5 && s.routerCounts.done == 2)
+    }
+
     @Test func switchingItOnInstallsTheHookAndOffRemovesIt() async throws {
         let dir = TempDir()
         let s = store(dir, [session("local_a", turns: 1)])
