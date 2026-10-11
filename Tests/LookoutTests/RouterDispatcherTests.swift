@@ -280,6 +280,17 @@ import Testing
         #expect(f.startSettings == [nil] && decision(s, a)?.decision.settingsBy == nil)
     }
 
+    @Test func switchingToYourDefaultWhileJevSizesTheTaskLeavesTheSessionOnIt() async {
+        let (s, d, f) = setup()
+        d.asker = { _, _ in
+            s.settings.jevPicksSessionModels = false
+            return ["scope": .score(0.2, confidence: 0.9)]
+        }
+        let a = d.submit("start a new session to fix the typo in the readme", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.startSettings == [nil] && decision(s, a)?.decision.settingsBy == nil)
+    }
+
     @Test func aStartJevRoutedTakesTheSizeFromTheSameCall() async {
         let (s, d, f) = setup()
         var calls = 0

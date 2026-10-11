@@ -430,7 +430,9 @@ struct RouterAskBack: Identifiable, Equatable {
         // of the task, when you let him.
         var settings = SessionSettings.parse(job.text)
         if settings == nil, store.jevPicksSessionModels, !task.isEmpty,
-           let scope = await scope(of: task, project: project, job: job), let picked = SessionScope.settings(scope) {
+           let scope = await scope(of: task, project: project, job: job),
+           // Switched to "Your default" while Jev was asked: his size isn't used.
+           store.jevPicksSessionModels, let picked = SessionScope.settings(scope) {
             settings = picked
             store.updateDecision(job.id) { $0.decision.settingsBy = SessionScope.by }
         }
