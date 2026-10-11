@@ -154,6 +154,26 @@ import Testing
         #expect(s.router.cards[0].triage?.ready?.result == "it finished its turn" && s.inventoryRecheck == nil)
     }
 
+    @Test func aWatchAttachedByALateTriageSchedulesTheReadItWaitsFor() {
+        // b's turn is over but its background work isn't known yet: the wait on it needs the inventory read again soon,
+        // also when the watch came only now, after the pass that scheduled the reads saw none.
+        let (s, _) = store(watch: .init(target: .session(id: "b", turns: 5), label: "session “Migration”"))
+        let watch = s.router.cards[0].triage?.watch
+        s.router.cards[0].triage = nil
+        s.router.cards[0].kind = .done
+        s.claudeSessions["b"]?.running = false
+        s.claudeTaskInventory = []
+        s.agents.enabled = true
+        s.stateFile = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-wait-\(UUID().uuidString).json")
+        s.persists = true
+        defer { s.claudeTimer?.invalidate(); s.claudeTimer = nil; s.persists = false }
+        s.scheduleClaudeTick()
+        #expect(s.claudeTimer == nil)
+        s.applyTriage(RouterTriage(state: .waiting, waitingOn: .session, watch: watch), to: "a#t3")
+        #expect(s.router.cards[0].kind == .waiting && s.inventoryRecheck != nil)
+        #expect(s.claudeTimer?.isValid == true)
+    }
+
     @Test func aSessionAtWorkIsDoneOnceItStopsWhateverItsCountShowedWhenItWasPicked() async {
         // b's turn ended and was counted (6) before its summary came, while it still shows running: picked then, it is
         // done when it stops, not one turn later.

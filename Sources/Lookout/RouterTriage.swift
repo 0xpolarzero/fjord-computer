@@ -692,6 +692,8 @@ extension Store {
             announceTurn(card, in: state.cards)
         }
         resolveWaits()
+        // A watch attached only now (a session whose background work isn't known yet) needs its read again soon.
+        scheduleClaudeTick()
     }
 
     /// Looking back at launch: a turn that ended asking you (or blocked) gets the card it never had, if it still may (you
