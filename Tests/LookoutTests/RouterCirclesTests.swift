@@ -135,6 +135,23 @@ import Testing
         #expect(RouterCircles.again(next, in: s.router.cards + [next], announced: s.routerAttention.delivered))
     }
 
+    @Test func aTurnBetweenWithNoCardEndsTheStreak() {
+        func stuck(_ turns: Int, minutes: Double) -> RouterCard {
+            var c = card(turns, minutes: minutes)
+            c.kind = .stuck
+            c.triage = RouterTriage(state: .done)
+            c.triage?.circles = true
+            return c
+        }
+        // a#t3's streak was announced; a#t4 went well, watched in the app (no card); a#t5 starts a new streak.
+        let cards = [stuck(3, minutes: -10), stuck(5, minutes: 0)]
+        #expect(!RouterCircles.again(cards[1], in: cards, announced: ["a#t3"]))
+        // Turns in a row are the same streak.
+        let row = [stuck(3, minutes: -10), stuck(4, minutes: -5), stuck(5, minutes: 0)]
+        #expect(RouterCircles.again(row[2], in: row, announced: ["a#t3"]))
+        #expect(RouterCircles.turn("local_a#t12") == 12 && RouterCircles.turn("local_a#w500") == nil)
+    }
+
     @Test func aQuestionOrAnOKAskedInAStreakIsAnnouncedAllTheSame() async {
         for state in ["asks", "approval"] {
             let (s, _) = store(earlier: alike, circles: 0.9)
