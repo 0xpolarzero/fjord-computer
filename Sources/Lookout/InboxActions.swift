@@ -238,7 +238,7 @@ enum InboxActions {
         let id = parts[1]
         switch parts[0] {
         case "comment", "mention", "last", "person", "noise", "asks":
-            return !thing.comments.contains { $0.id == id } && !thing.threads.contains { $0.lastReplyID == id }
+            return !thing.comments.contains { $0.id == id } && !thing.threads.contains { $0.hasReply(id) }
                 && !(parts[0] == "mention" && thing.threads.contains { $0.mentions?.contains { $0.id == id } == true })
         case "review", "approved", "changes":
             return !thing.reviews.contains { $0.id == id } && !thing.comments.contains { $0.id == id }

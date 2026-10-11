@@ -437,6 +437,12 @@ struct ThingThread: Codable, Hashable, Identifiable {
     /// The comments among those fetched (its first and last ones) that @-mention someone: a mention in the middle of a
     /// thread is one, though a later reply's text is the thread's. Nil in an older file.
     var mentions: [ThreadMention]?
+    /// The replies among its last ones fetched before its latest, oldest first: a question there still asks you though
+    /// someone else replied after it. Nil in an older file.
+    var earlier: [ThingComment]?
+
+    /// Whether a reply among those fetched (its latest, or an earlier one) has this id.
+    func hasReply(_ id: String) -> Bool { lastReplyID == id || earlier?.contains { $0.id == id } == true }
 }
 
 /// A review-thread comment's @-mentions, with what makes it an event: its id, who wrote it and when.

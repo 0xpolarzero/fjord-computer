@@ -425,6 +425,13 @@ enum InboxSync {
         // Its first comment too: you started it, and ten replies from others since are all of its last ones fetched.
         var latestBy: [String: Date] = [:]
         var mentioned: [ThreadMention] = []
+        var earlier: [ThingComment] = []
+        for reply in replies.dropLast() {
+            guard let replyID = reply["id"] as? String, replyID != lastID, let when = date(reply["createdAt"]),
+                  !earlier.contains(where: { $0.id == replyID }) else { continue }
+            earlier.append(ThingComment(id: replyID, author: person(reply["author"], association: reply["authorAssociation"]), at: when,
+                                        snippet: snippet(reply["body"] as? String), text: readText(reply["body"] as? String)))
+        }
         for reply in [first] + replies {
             guard let when = date(reply["createdAt"]) else { continue }
             let who = person(reply["author"], association: reply["authorAssociation"])
@@ -440,7 +447,7 @@ enum InboxSync {
             lastReplyBy: person(last["author"], association: last["authorAssociation"]), lastReplyID: lastID,
             lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String),
             text: readText(last["body"] as? String), latestBy: latestBy,
-            mentions: mentioned),
+            mentions: mentioned, earlier: earlier),
                 // Every reply read mentions them, not only its latest: "@me what do you think?" stays to me once answered.
                 uniqued(mentioned.flatMap(\.logins)))
     }
@@ -917,7 +924,7 @@ enum InboxSync {
         let id = parts[1]
         switch parts[0] {
         case "comment", "mention", "last", "asks", "noise", "person":
-            return thing.comments.contains { $0.id == id } || thing.threads.contains { $0.lastReplyID == id }
+            return thing.comments.contains { $0.id == id } || thing.threads.contains { $0.hasReply(id) }
                 || (parts[0] == "mention" && thing.threads.contains { $0.mentions?.contains { $0.id == id } == true })
         case "review", "approved", "changes":
             return thing.reviews.contains { $0.id == id }
