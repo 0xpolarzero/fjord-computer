@@ -45,13 +45,25 @@ struct RuleEditor: View {
         .padding(.horizontal, 12).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
-        // Whenever the rule changes (its kinds too), debounced; different kinds are counted at once.
-        .task(id: rule) {
+        // Whenever the rule changes (its kinds too), debounced; different kinds are counted at once. Again whenever what it
+        // counts in changes: a refresh, a group edited, a thing crossing a "no activity" threshold, Jev's reading.
+        .task(id: Self.previewKey(rule, store: store)) {
             if previewedKinds == rule.scope.kinds { try? await Task.sleep(for: .milliseconds(300)) }
             guard !Task.isCancelled else { return }
             previewedKinds = rule.scope.kinds
             matches = store.preview(rule).count
         }
+    }
+
+    /// What the count under the rule depends on.
+    struct PreviewKey: Hashable {
+        var rule: Rule
+        var inbox: Int
+        var jev: Bool
+    }
+
+    static func previewKey(_ rule: Rule, store: Store) -> PreviewKey {
+        PreviewKey(rule: rule, inbox: store.inboxRevision, jev: store.jevReadsInbox)
     }
 
     // MARK: Sentence

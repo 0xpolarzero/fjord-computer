@@ -191,4 +191,20 @@ private final class RepoCalls: @unchecked Sendable {
         // An undo while the field has the keyboard still shows what it is now.
         #expect(DaysField.synced("14", to: 7, focused: true) == "7")
     }
+
+    @MainActor @Test func theCountUnderARuleIsTakenAgainWhenWhatItCountsInChanges() {
+        let store = InboxFixture.store([InboxFixture.pr(1)])
+        let rule = store.categories[0].rules[0]
+        let before = RuleEditor.previewKey(rule, store: store)
+        // A refresh brings a thing: the same rule, counted again.
+        store.things["pr:a/one#2"] = InboxFixture.pr(2)
+        #expect(RuleEditor.previewKey(rule, store: store) != before)
+        let refreshed = RuleEditor.previewKey(rule, store: store)
+        // So do a group edited and time crossing a threshold.
+        store.groups.append(InboxGroup(name: "g", kind: .people, members: ["x"]))
+        #expect(RuleEditor.previewKey(rule, store: store) != refreshed)
+        let grouped = RuleEditor.previewKey(rule, store: store)
+        store.inboxTimePassed()
+        #expect(RuleEditor.previewKey(rule, store: store) != grouped)
+    }
 }
