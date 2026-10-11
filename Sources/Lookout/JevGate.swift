@@ -49,6 +49,15 @@ enum JevUse {
     /// The cards judged at once, whatever message they were judged for (`Store.judgeCards`).
     let cardSlots = JevSlots(CardJudge.concurrency)
 
+    /// Told when a call made in its task is let through the gate (`Store.throughJevGate`): a call refused at the gate was
+    /// never sent, and is not a failure of what it asked about.
+    final class Admission: @unchecked Sendable {
+        private(set) var sent = false
+        func letThrough() { sent = true }
+    }
+
+    @TaskLocal static var admission: Admission?
+
     /// Throws why no call may go now with `key`.
     func admit(key: String) throws {
         if let rejected, rejected == key { throw JevClient.Failure.unauthorized }
@@ -151,6 +160,7 @@ extension Store {
         }
         try allowed()
         try jevGate.admit(key: key)
+        JevGate.admission?.letThrough()
         let pauses = jevGate.pauses
         let out: T
         do {

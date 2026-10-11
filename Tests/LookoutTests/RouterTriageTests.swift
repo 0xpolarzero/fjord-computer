@@ -312,6 +312,32 @@ import Testing
         #expect(calls == 1 && s.router.cards[0].triage == nil && s.router.cards[0].kind == .done)
     }
 
+    @Test func aTriageRefusedWhileTypeSafeIsPausedIsAskedOnceThePauseIsOver() async {
+        let a = session("a")
+        let (s, counter) = store(sessions: [a]) { _, _ in self.answers(state: "asks", sentences: [0.95]) }
+        s.routerTriager.rescanned = true
+        s.router.cards = [turnCard(a)]
+        // TypeSafe says to wait (Retry-After) while the turn is read: the call is refused at the gate, never sent.
+        s.routerTriager.reader = { [weak s] _ in
+            s?.jevGate.failed(JevClient.Failure.rateLimited(retryAfter: 60), key: "")
+            return "All done. Should I push to main?"
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(counter.calls == 0 && s.router.cards[0].triage == nil)
+        // Still paused: nothing is read or asked.
+        s.routerTriager.reader = { _ in "All done. Should I push to main?" }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(counter.calls == 0)
+        // The pause is over: the same turn is asked about.
+        s.jevGate.now = { Date().addingTimeInterval(120) }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(counter.calls == 1 && s.router.cards[0].kind == .asks)
+        s.routerTriager.retry?.cancel()
+    }
+
     @Test func aKeyArrivingLaterTriagesTheCardsAndLooksBack() async {
         let a = session("a")
         let s = InboxFixture.store([])

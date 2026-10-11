@@ -393,6 +393,8 @@ extension Claude {
     /// How many sessions the launch's look back may read.
     static let rescanLimit = 20
 
+    /// The triage waiting for TypeSafe's pause to be over (`Store.triageWhenTheGateOpens`).
+    var retry: Task<Void, Never>?
     /// Cards being triaged.
     private(set) var inFlight: Set<String> = []
     /// Per card, the text last asked about (or "" when there was none): asked again only for a new one.
@@ -539,6 +541,8 @@ extension Store {
     /// launch looks back at the sessions' latest turns (`rescanTurns`).
     func triageTurns() {
         guard router.enabled, triageAsker != nil else { return }
+        // While the gate is closed nothing is read or asked: once TypeSafe's pause is over (a new key, for a rejected one).
+        guard jevGate.isOpen(for: typesafeKey ?? "") else { return triageWhenTheGateOpens() }
         for card in router.cards where card.isOpen && card.kind.isTurn && card.triage == nil {
             guard let (_, session) = currentTurnCard(card.id), !session.running else { continue }
             triage(card.id, session: session, rescue: false)
@@ -549,6 +553,18 @@ extension Store {
         } else {
             let again = routerTriager.takeUnrescued(generation: jevGate.generation)
             if !again.isEmpty { rescanTurns(only: again) }
+        }
+    }
+
+    /// Triages again once TypeSafe's pause is over (one wait at a time). A rejected key has no end: a new one triages.
+    private func triageWhenTheGateOpens() {
+        let wait = jevGate.until.timeIntervalSince(jevGate.now())
+        guard wait > 0, routerTriager.retry == nil else { return }
+        routerTriager.retry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait + 0.5))
+            guard let self, !Task.isCancelled else { return }
+            self.routerTriager.retry = nil
+            self.triageTurns()
         }
     }
 
@@ -592,15 +608,16 @@ extension Store {
         let generation = jevGate.generation
         routerTriager.tasks[id] = Task { [weak self] in
             guard let self else { return }
-            // Stopped, or the key or switch changed: nothing was learned, so the text may be asked about again.
-            var stopped = false
+            // Stopped, or the key or switch changed: nothing was learned, so the text may be asked about again. Refused at
+            // the gate (TypeSafe paused, a rejected key): never sent, so asked again once it opens.
+            var stopped = false, refused = false
             defer {
                 self.routerTriager.end(id)
                 self.releaseBanner(id)
-                if stopped {
+                if stopped || refused {
                     self.routerTriager.forget(id)
                     if rescue { self.routerTriager.unrescued.insert(session.id) }
-                    self.triageTurns()
+                    if stopped { self.triageTurns() } else { self.triageWhenTheGateOpens() }
                 }
             }
             let message = await self.finalMessage(session)
@@ -628,12 +645,15 @@ extension Store {
             // What each option is goes in the state, fenced (after the inbox's are taken out, when they must be).
             state[RouterTriage.optionsState] = RouterTriage.described(options)
             let answers: [String: JevClient.Answer]
+            let admission = JevGate.Admission()
             do {
                 try Task.checkCancellation()
-                answers = try await ask(questions, state)
+                answers = try await JevGate.$admission.withValue(admission) { try await ask(questions, state) }
             } catch {
                 stopped = error is CancellationError || error as? JevClient.Failure == .cancelled
-                if !stopped { self.routerTriager.failed(id, session: rescue ? session.id : nil, generation: generation) }
+                refused = !stopped && !admission.sent
+                // Only a call that was sent and failed is asked again with a new key alone.
+                if !stopped, !refused { self.routerTriager.failed(id, session: rescue ? session.id : nil, generation: generation) }
                 return
             }
             if !self.jevReadsInbox { options.removeAll(where: \.fromInbox) }
