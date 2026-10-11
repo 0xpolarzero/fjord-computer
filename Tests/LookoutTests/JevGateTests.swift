@@ -150,6 +150,27 @@ import Testing
         #expect(!asked && s.jevAsker(.triage, base: { _, _ in [:] }) == nil)
     }
 
+    @Test func aRejectionOfAKeySinceReplacedIsDroppedAndPausesNoIcons() async {
+        let s = store()
+        s.agents.iconsEnabled = true
+        let old = s.jevChooser(.icons, base: { _, _, _, _ in
+            _ = s.setTypesafeKey("sk-new")
+            throw JevClient.Failure.unauthorized
+        })
+        await #expect(throws: JevClient.Failure.cancelled) { try await old?(["a"], [:], [:], "") }
+        #expect(s.jevGate.isOpen(for: "sk-new") && s.jevGate.isOpen(for: "sk-old"))
+        // A cancelled call's failure is dropped too.
+        let task = Task { try await s.throughJevGate(.icons, generation: s.jevGate.generation) { () async throws -> Int in
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw JevClient.Failure.unauthorized
+        } }
+        await #expect(throws: JevClient.Failure.cancelled) { try await task.value }
+        #expect(s.jevGate.isOpen(for: "sk-new"))
+        // The icons take it as nothing failed: no pause.
+        s.iconPickFailed(JevClient.Failure.cancelled)
+        #expect(s.iconsPausedUntil < .distantFuture && s.iconError == nil)
+    }
+
     /// Lets a read go on once opened (from any thread).
     final class Latch: @unchecked Sendable {
         private let lock = NSLock()

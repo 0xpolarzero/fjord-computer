@@ -121,8 +121,9 @@ extension Store {
         return client
     }
 
-    /// One call for `use`, made with the key of `generation`: not made, or its answer dropped (`cancelled`), when the key
-    /// changed or the switch went off; not made while the gate is closed; its failure tells the gate.
+    /// One call for `use`, made with the key of `generation`: not made, or its answer or failure dropped (`cancelled`), when
+    /// the key changed or the switch went off (a failure also when the task was cancelled); not made while the gate is closed;
+    /// its failure tells the gate.
     func throughJevGate<T>(_ use: JevUse, generation: Int, _ call: () async throws -> T) async throws -> T {
         let key = typesafeKey ?? ""
         func allowed() throws {
@@ -135,7 +136,9 @@ extension Store {
         do {
             out = try await call()
         } catch {
-            if generation == jevGate.generation { jevGate.failed(error, key: key) }
+            // Asked with a key since replaced, or stopped: nothing failed (an old key's rejection says nothing of the new one).
+            guard generation == jevGate.generation, !Task.isCancelled else { throw JevClient.Failure.cancelled }
+            jevGate.failed(error, key: key)
             throw error
         }
         if generation == jevGate.generation { jevGate.succeeded(since: pauses) }
