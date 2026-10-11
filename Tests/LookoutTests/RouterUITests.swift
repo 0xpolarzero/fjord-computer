@@ -168,6 +168,30 @@ import UserNotifications
         #expect(RouterModel.targets(store).contains(hidden.id))
     }
 
+    @Test func spaceOpensAgainOnlyWhatReopenDoesNotACardWhoseSessionIsGone() {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        let ids = store.routerShownOpenCards.filter { $0.kind != .waiting }.prefix(2).map(\.id)
+        #expect(ids.count == 2)
+        let i = store.router.cards.firstIndex { $0.id == ids[0] }!
+        store.router.cards[i].addressedAt = now
+        store.router.cards[i].addressedBy = .gone
+        #expect(!store.router.cards[i].canReopen)
+        // Space on the archived session's card in the history: it stays addressed, with its reason.
+        model.select(ids[0], store: store)
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(store.router.cards[i].addressedBy == .gone && !store.router.cards[i].isOpen)
+        model.reopen(ids[0], store: store)
+        #expect(store.router.cards[i].addressedBy == .gone)
+        // A card you addressed opens again with Space, as with Reopen.
+        store.setCardAddressed(ids[1], true)
+        #expect(store.router.cards.first { $0.id == ids[1] }!.canReopen)
+        model.select(ids[1], store: store)
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(store.router.cards.first { $0.id == ids[1] }!.isOpen)
+    }
+
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
         let store = demo()
         let model = RouterModel()

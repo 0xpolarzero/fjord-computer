@@ -154,6 +154,12 @@ extension RouterCard.Addressed {
     }
 }
 
+extension RouterCard {
+    /// Whether it can be opened again (Reopen, Space): an addressed card, unless a newer card of its session replaced it or
+    /// its session was archived or deleted.
+    var canReopen: Bool { !isOpen && addressedBy != .superseded && addressedBy != .gone }
+}
+
 /// A card's kind in its colour: words and a glyph, never colour alone.
 struct KindTag: View {
     let kind: RouterCard.Kind
@@ -417,8 +423,7 @@ final class RouterModel {
 
     /// Reopen on a history line: the card is back in Needs you and the page goes to it.
     func reopen(_ id: String, store: Store) {
-        guard let card = store.router.cards.first(where: { $0.id == id }), !card.isOpen,
-              card.addressedBy != .superseded, card.addressedBy != .gone else { return }
+        guard let card = store.router.cards.first(where: { $0.id == id }), card.canReopen else { return }
         store.setCardAddressed(id, false)
         expanded.remove(id)
         Announce.say("Open again")
@@ -440,13 +445,15 @@ final class RouterModel {
     }
 
     /// Space: addressed, or open again. An addressed card goes up to the history, so the next open card is picked (or the one
-    /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card.
+    /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card; nor
+    /// is one whose session is gone (`RouterCard.canReopen`, as Reopen).
     func toggleAddressed(store: Store) {
         reconcile(store: store)
         let shown = cards(store)
         guard let id = selection, let card = shown.first(where: { $0.id == id }) else { return }
-        if card.addressedBy == .superseded {
-            if let newer = store.routerShownOpenCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
+        if !card.isOpen, !card.canReopen {
+            if card.addressedBy == .superseded,
+               let newer = store.routerShownOpenCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
             return
         }
         let open = shown.filter(\.isOpen).map(\.id)
