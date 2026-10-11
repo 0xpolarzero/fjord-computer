@@ -493,6 +493,10 @@ import Testing
         #expect(task("fix the tests") == "fix the tests")
         #expect(task("write about opus the band") == "write about opus the band")
         #expect(task("@router.js is broken, fix it") == "@router.js is broken, fix it")
+        // Only where a clause was taken out are the spaces tidied: code keeps its indentation and its spacing.
+        #expect(task("start a new session with opus to fix this:\n    def f():\n        return  1") == "fix this:\n    def f():\n        return  1")
+        #expect(task("fix  this with opus  now:\n\tx  =  1") == "fix  this now:\n\tx  =  1")
+        #expect(task("fix the tests with opus\n    and the docs") == "fix the tests\n    and the docs")
         #expect(task("start a session in lookout") == "")
         #expect(task("@lookout start a new session with opus") == "")
         #expect(RouterDispatcher.title(for: task("start a session with haiku, low effort: reply with exactly the word pong"))

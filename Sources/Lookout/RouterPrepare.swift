@@ -496,16 +496,33 @@ enum SessionStart {
     private static let startPhrase =
         #"^(?:(?:please|pls|hey|can\s+you|could\s+you|i\s+want\s+you\s+to|i'd\s+like\s+you\s+to)[,\s]+)?(?:(?:start|open|create|launch|spin\s+up|kick\s+off|begin)\s+(?:up\s+)?(?:an?\s+|the\s+|one\s+)?(?:new\s+|fresh\s+)?(?:claude\s+)?(?:session|chat|conversation)|(?:in\s+)?(?:an?\s+)?(?:new|fresh)\s+(?:claude\s+)?(?:session|chat|conversation))\b"#
 
-    private static func strip(_ pattern: String, from text: inout String, all: Bool = false) -> Bool {
+    /// `joining`: the words either side of what is taken out are tidied where they meet (one space between words, none
+    /// before punctuation or a line's end); nothing else in the text is touched (code keeps its indentation and spacing).
+    private static func strip(_ pattern: String, from text: inout String, all: Bool = false, joining: Bool = false) -> Bool {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
         var changed = false
         repeat {
             guard let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                   let r = Range(m.range, in: text), !r.isEmpty else { return changed }
+            let at = text.distance(from: text.startIndex, to: r.lowerBound)
             text.removeSubrange(r)
+            if joining { join(&text, at: at) }
             changed = true
         } while all
         return changed
+    }
+
+    /// The spaces where a clause was taken out (at `offset`): one between two words, none at a line's start or end or
+    /// before punctuation.
+    private static func join(_ text: inout String, at offset: Int) {
+        let i = text.index(text.startIndex, offsetBy: offset)
+        var end = i
+        while end < text.endIndex, text[end] == " " || text[end] == "\t" { text.formIndex(after: &end) }
+        guard end > i else { return }
+        let before = i > text.startIndex ? text[text.index(before: i)] : nil
+        let after = end < text.endIndex ? text[end] : nil
+        let between = (before.map { !$0.isWhitespace } ?? false) && (after.map { !$0.isWhitespace && !",.;:!?)]}".contains($0) } ?? false)
+        text.replaceSubrange(i..<end, with: between ? " " : "")
     }
 
     /// What a new session is for, from the words that asked for it: the request to start one ("start a (new) session (in X)",
@@ -534,11 +551,8 @@ enum SessionStart {
         }
         // Settings words anywhere else ("fix the tests with opus, low effort"): the plugin applies them, the session never reads them.
         if SessionSettings.parse(t) != nil || started {
-            _ = strip(#"[,;]?\s*\b"# + settingClause, from: &t, all: true)
+            _ = strip(#"[,;]?[ \t]*\b"# + settingClause, from: &t, all: true, joining: true)
             if started || SessionSettings.parse(text) != nil { tidy() }
-        }
-        if t != text.trimmingCharacters(in: .whitespacesAndNewlines) {
-            t = t.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
         }
         return t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
     }
