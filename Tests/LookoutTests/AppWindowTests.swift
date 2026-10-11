@@ -822,6 +822,16 @@ import Testing
         }
     }
 
+    /// A morph turned round mid-fade starts its shadow where it is drawn: the pose read back holds the shadow apart from the
+    /// container's opacity, which the new animation multiplies it by (once), so the shadow does not jump darker or lighter.
+    @Test func aPoseReadMidFadeHoldsTheShadowApartFromTheContainer() {
+        let drawn: Float = 0.5 * 0.4
+        let shadow = AppTransition.Pose.shadow(drawn: drawn, container: 0.4)
+        #expect(abs(shadow * 0.4 - drawn) < 0.0001)
+        #expect(AppTransition.Pose.shadow(drawn: 0, container: 0) == 0)
+        #expect(AppTransition.Pose.shadow(drawn: 1, container: 1) == 1)
+    }
+
     @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
         morphing { controller, ticks in
             controller.show(.settings)

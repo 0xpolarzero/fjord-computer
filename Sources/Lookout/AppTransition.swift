@@ -148,6 +148,12 @@ enum AppTransition {
         var bar: Float = 0
         var shadow: Float = 1
         var container: Float = 1
+
+        /// The pose's own shadow, from the shadow layer's opacity as drawn: that is the pose's shadow times its container's
+        /// (see `containers(set:)`), which an animation from this pose multiplies by the container again.
+        static func shadow(drawn: Float, container: Float) -> Float {
+            container > 0.001 ? min(1, drawn / container) : 0
+        }
     }
 
     struct Spring {
@@ -318,7 +324,7 @@ enum AppTransition {
             return Pose(rect: NSRect(origin: origin, size: c.bounds.size), radius: c.cornerRadius,
                         window: windowLayer.presentation()?.opacity ?? windowLayer.opacity,
                         bar: barLayer.presentation()?.opacity ?? barLayer.opacity,
-                        shadow: s.shadowOpacity,
+                        shadow: Pose.shadow(drawn: s.shadowOpacity, container: c.opacity),
                         container: c.opacity)
         }
 
