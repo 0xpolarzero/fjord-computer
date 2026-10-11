@@ -248,6 +248,27 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(keys(answered) == nil)
     }
 
+    @Test func aThreadsOpenerStillAsksOnceTenRepliesFollowIt() throws {
+        func comment(_ id: String, _ who: String, _ at: String) -> [String: Any] {
+            ["id": id, "createdAt": at, "body": id == "q" ? "@me can you check this?" : "…", "authorAssociation": "NONE",
+             "author": ["login": who, "__typename": "User"]]
+        }
+        // Bob opens the thread asking you, and ten replies from others follow: its last ten no longer hold his question.
+        let question = comment("q", "bob", "2026-10-07T10:00:00Z")
+        let replies = (0..<10).map { comment("r\($0)", "carol", "2026-10-07T11:0\($0):00Z") }
+        let thread: [String: Any] = ["id": "t9", "isResolved": false, "path": "a.swift",
+                                     "first": ["nodes": [question]], "last": ["nodes": replies]]
+        var thing = try #require(InboxSync.thing(node([
+            "comments": ["nodes": []], "reviews": ["nodes": []], "latestOpinionatedReviews": ["nodes": []],
+            "reviewThreads": ["nodes": [thread]]])))
+        #expect(thing.threads.first?.lastReplyID == "r9")
+        #expect(InboxEngine.messages(thing).map(\.id).filter { $0 == "q" } == ["q"])
+        thing.signals = ThingSignals(messages: ["q": MessageSignal(asksMe: true, noise: false)], viewer: "me")
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.asksMe], createdAt: .distantPast)
+        let context = InboxContext(me: "me", now: iso("2026-10-07T14:00:00Z")!)
+        #expect(InboxEngine.facts(rule, thing, marks: nil, context: context)?.map(\.key) == ["asks:q"])
+    }
+
     @Test func statusesAndAnIssue() throws {
         #expect(InboxSync.thing(node(["isDraft": true]))?.status == .draft)
         #expect(InboxSync.thing(node(["merged": true, "state": "MERGED"]))?.status == .merged)

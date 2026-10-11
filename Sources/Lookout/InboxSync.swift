@@ -426,7 +426,8 @@ enum InboxSync {
         var latestBy: [String: Date] = [:]
         var mentioned: [ThreadMention] = []
         var earlier: [ThingComment] = []
-        for reply in replies.dropLast() {
+        // Its opener too: ten replies since push it out of the last ten, and a question it asks still asks.
+        for reply in [first] + replies.dropLast() {
             guard let replyID = reply["id"] as? String, replyID != lastID, let when = date(reply["createdAt"]),
                   !earlier.contains(where: { $0.id == replyID }) else { continue }
             earlier.append(ThingComment(id: replyID, author: person(reply["author"], association: reply["authorAssociation"]), at: when,

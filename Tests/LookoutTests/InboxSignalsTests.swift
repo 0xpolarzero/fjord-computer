@@ -258,7 +258,8 @@ import Testing
         let (s, calls) = store([thing])
         await s.readInbox()
         let texts = ((calls.states.first?["messages"] as? [String: Any]) ?? [:]).values.compactMap { ($0 as? [String: Any])?["text"] as? String }
-        #expect(texts.count == 2 && texts.allSatisfy { $0.contains("could you approve the migration?") })
+        // The comment and the thread's latest reply, whole (its opener, "a", is a message too).
+        #expect(texts.count == 3 && texts.filter { $0.contains("could you approve the migration?") }.count == 2)
     }
 
     @Test func aReviewThreadsFileNameIsFencedApartFromItsKind() async {
