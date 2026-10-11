@@ -821,6 +821,11 @@ import Testing
         }
         #expect(task("add a settings toggle for high effort using sonnet") == "add a settings toggle for high effort")
         #expect(asked("add a settings toggle for high effort using sonnet") == SessionSettings(model: "sonnet", effort: nil))
+        // An infinitive ("to use sonnet") and a bare "use" closing the request belong to the task.
+        let model = "start a session in lookout to change the default model to use sonnet"
+        #expect(task(model) == "change the default model to use sonnet" && asked(model) == nil)
+        #expect(task("start a session, use opus, to fix login") == "fix login")
+        #expect(asked("start a session, use opus, to fix login") == SessionSettings(model: "opus", effort: nil))
         // Before the task, or the clause the request ends with: the request's.
         #expect(task("start a session with high effort to add a settings toggle") == "add a settings toggle")
         #expect(asked("start a session with high effort to add a settings toggle") == SessionSettings(model: nil, effort: "high"))
@@ -839,15 +844,15 @@ import Testing
     }
 
     @Test func aNegationEndsAtButInsteadOrRather() {
-        #expect(SessionSettings.parse("fix the CI, don't use opus but use haiku") == SessionSettings(model: "haiku", effort: nil))
+        #expect(SessionSettings.parse("fix the CI, don't use opus but using haiku") == SessionSettings(model: "haiku", effort: nil))
         #expect(SessionSettings.parse("fix it, not with opus, rather using sonnet") == SessionSettings(model: "sonnet", effort: nil))
-        #expect(SessionSettings.parse("fix it without opus instead use haiku") == SessionSettings(model: "haiku", effort: nil))
+        #expect(SessionSettings.parse("fix it without opus instead using haiku") == SessionSettings(model: "haiku", effort: nil))
         #expect(SessionSettings.parse("don't use opus but fix it") == nil)
-        #expect(SessionStart.task(from: "start a session to fix the CI, don't use opus but use haiku") == "fix the CI, don't use opus")
+        #expect(SessionStart.task(from: "start a session to fix the CI, don't use opus but using haiku") == "fix the CI, don't use opus")
     }
 
     @Test func aSettingSaidNotToBeWantedIsNeitherAppliedNorTakenOut() async {
-        let text = "start a session in lookout to fix the CI, don't use opus, use haiku"
+        let text = "start a session in lookout to fix the CI, don't use opus, using haiku"
         #expect(SessionStart.task(from: text, projects: ["lookout"]) == "fix the CI, don't use opus")
         #expect(SessionSettings.parse(text) == SessionSettings(model: "haiku", effort: nil))
         #expect(SessionStart.task(from: "start a session to fix it without using opus") == "fix it without using opus")

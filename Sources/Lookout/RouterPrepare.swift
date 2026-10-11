@@ -598,7 +598,7 @@ enum SessionStart {
     }
 
     /// The settings `text` ends with ("fix the tests with opus, high effort", "…, using sonnet", "…but use haiku"): a clause
-    /// that opens with "with", "using" or "use" and holds settings only, with nothing after it but the sentence's closing
+    /// that opens with "with" or "using" (not a bare "use", and not after "to": an infinitive belongs to the task) and holds settings only, with nothing after it but the sentence's closing
     /// mark. Each setting as its words (`item`) and what goes with them when they are taken out (`cut`: the comma or "and"
     /// before it, and, before the first, a "but", "instead" or "rather" leading into the clause). Never one said not to be
     /// wanted (`SessionSettings.negated`).
@@ -631,7 +631,7 @@ enum SessionStart {
     }
 
     private static func trailingSettings(seen text: String) -> [(cut: Range<String.Index>, item: Range<String.Index>)] {
-        let pattern = #"(?:[ \t]*\b(?:but|instead|rather|and))?[,;]?[ \t]*\b(?=(?:with|using|use)\b)"# + settingItem
+        let pattern = #"(?:[ \t]*\b(?:but|instead|rather|and))?[,;]?[ \t]*(?<!\bto[ \t]{0,3})\b(?=(?:with|using)\b)"# + settingItem
             + "(?:" + settingJoin + settingItem + ")*" + #"(?=[ \t]*[.,;:!?]*[ \t]*$)"#
         guard let clause = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
               let one = try? NSRegularExpression(pattern: "(" + settingJoin + ")(" + settingItem + ")", options: [.caseInsensitive])
