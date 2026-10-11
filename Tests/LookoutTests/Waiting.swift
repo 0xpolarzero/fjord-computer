@@ -9,14 +9,17 @@ import Foundation
 }
 
 /// Waits until `value` reads the same over `turns` consecutive turns of the main actor: what SwiftUI had pending (a
-/// layout, an update) has happened, however slowly it ran. Bounded by a watchdog like `waitUntil`.
-@MainActor func waitUntilSteady<T: Equatable>(within seconds: TimeInterval = 60, turns: Int = 5, _ value: () -> T) async {
+/// layout, an update) has happened, however slowly it ran. `quiet` also asks for that much time unchanged: turns alone
+/// can pass in a stall, with an animation or a deferred layout still to move the value once the machine lets it.
+/// Bounded by a watchdog like `waitUntil`.
+@MainActor func waitUntilSteady<T: Equatable>(within seconds: TimeInterval = 60, turns: Int = 5, quiet: TimeInterval = 0,
+                                              _ value: () -> T) async {
     let deadline = Date().addingTimeInterval(seconds)
-    var last = value(), same = 0
-    while same < turns, Date() < deadline {
+    var last = value(), same = 0, since = Date()
+    while same < turns || Date().timeIntervalSince(since) < quiet, Date() < deadline {
         try? await Task.sleep(for: .milliseconds(20))
         let now = value()
-        same = now == last ? same + 1 : 0
+        if now == last { same += 1 } else { same = 0; since = Date() }
         last = now
     }
 }

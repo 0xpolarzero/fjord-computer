@@ -119,7 +119,9 @@ import Testing
             return Geometry(top: Int(r.minY), fromBottom: Int(doc.frame.height - r.maxY), height: Int(doc.frame.height))
         }
         func settled() async -> Geometry {
-            await waitUntilSteady(turns: 8) { geometry() }
+            // The scroll to a line is animated (0.12 s) and the lines under it lay out after: a second of no change, not
+            // just a few turns, which a stalled machine passes before the animation has moved.
+            await waitUntilSteady(turns: 8, quiet: 1) { geometry() }
             return geometry()
         }
         func line(_ text: String) { store.logDecision(RouterDecision(at: Date(), trigger: .you(text), outcome: .done)) }
