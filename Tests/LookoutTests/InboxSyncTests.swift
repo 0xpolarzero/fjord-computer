@@ -982,6 +982,56 @@ extension InboxSyncMapping {
         #expect(s.things["pr:o/r#2"] == nil && s.things["pr:o/r#1"] != nil)
     }
 
+    @Test func aPRKeptPastTheCapsIsLookedAtAgainAndLeavesOnceMerged() async {
+        final class Box: @unchecked Sendable { var shown: [Int] = [1, 2]; var more = false; var merged: Set<Int> = []; var looked: [String] = [] }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [InboxCategory(name: "Repo", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u")])))
+        ])]
+        s.gh.session = StubbedGitHub.session { request in
+            let text = InboxSyncRefresh.body(request)
+            func pr(_ n: Int) -> [String: Any] {
+                box.merged.contains(n)
+                    ? node(["id": "PR_\(n)", "number": n, "url": "https://github.com/o/r/pull/\(n)", "state": "MERGED", "merged": true,
+                            "updatedAt": "2026-10-10T10:00:00Z"])
+                    : node(["id": "PR_\(n)", "number": n, "url": "https://github.com/o/r/pull/\(n)"])
+            }
+            var data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000]]
+            if text.contains("nodes(ids:") {
+                let ids = (1...2).filter { text.contains("PR_\($0)") }
+                box.looked.append(text.contains("...P") ? "whole" : "states")
+                data["nodes"] = ids.map { n -> [String: Any] in
+                    let whole = pr(n)
+                    return text.contains("...P") ? whole
+                        : ["__typename": "PullRequest", "id": "PR_\(n)", "state": whole["state"]!, "merged": whole["merged"]!,
+                           "isDraft": false, "updatedAt": whole["updatedAt"]!]
+                }
+            } else {
+                // Its first page has what is shown; the pages after it, none of them (they are past the caps).
+                let first = !text.contains("after:")
+                let info: [String: Any] = box.more ? ["hasNextPage": true, "endCursor": "c"] : ["hasNextPage": false]
+                data["s0"] = ["pageInfo": info, "nodes": first ? box.shown.map(pr) : []]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#2"] != nil)
+        // #2 falls past the caps: kept, and looked at again; as it was, it stays as it was.
+        box.shown = [1]
+        box.more = true
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#2"]?.status == .open && box.looked == ["states"])
+        // Merged meanwhile: the look tells, it is read whole, and it goes.
+        box.merged = [2]
+        box.looked = []
+        await s.syncInbox()
+        #expect(box.looked == ["states", "whole"])
+        #expect(s.things["pr:o/r#2"] == nil && s.things["pr:o/r#1"] != nil)
+    }
+
     @Test func aSearchGitHubDidntAnswerHasntRunAndWhatItFoundStaysUntilItDoes() async {
         final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var failing: Set<Int> = [] }
         let box = Box()

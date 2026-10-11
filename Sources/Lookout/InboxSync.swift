@@ -26,6 +26,9 @@ enum InboxSync {
     static let reviewsShape = 1
     /// Searches a refresh makes at most, shared out a turn at a time between the rules so that none goes without.
     static let maxSearches = 16
+    /// PRs and issues a refresh looks at again by their node ids, of those kept though no search returned them this time
+    /// (one cut short at the caps, or whose turn didn't come): taken in turns, so one merged or closed since leaves.
+    static let recheckBatch = 20
     /// Workflow targets a refresh checks at most; past it, they take turns (`workflowWindow`).
     static let maxWorkflows = 30
     /// Closed and merged things are only fetched when updated this recently.
@@ -338,6 +341,19 @@ enum InboxSync {
 
     /// The repos you own and have merged or open PRs in.
     /// The next page of review threads of several PRs, by their node ids, each from its own cursor.
+    /// How things stand now, by node id: cheap, to tell which of those kept unseen changed.
+    fileprivate static func statesRequest(_ ids: [String]) -> String {
+        let list = ids.map { "\"\(escape($0))\"" }.joined(separator: ", ")
+        return "query { rateLimit { cost remaining resetAt } nodes(ids: [\(list)]) { __typename "
+            + "... on PullRequest { id state merged isDraft updatedAt } ... on Issue { id state updatedAt } } }"
+    }
+
+    /// Things whole, by node id, as a search gives them.
+    fileprivate static func nodesRequest(_ ids: [String]) -> String {
+        let list = ids.map { "\"\(escape($0))\"" }.joined(separator: ", ")
+        return "query { rateLimit { cost remaining resetAt } nodes(ids: [\(list)]) { __typename ...P ...I } }\n" + fragments
+    }
+
     fileprivate static func threadsRequest(_ pages: [(alias: String, node: String, cursor: String, first: Int)]) -> String {
         let body = pages.map { p in
             "\(p.alias): node(id: \"\(escape(p.node))\") { ... on PullRequest { reviewThreads(first: \(p.first), after: \"\(escape(p.cursor))\") { \(threadFields) } } }"
@@ -455,7 +471,7 @@ enum InboxSync {
 
     private static func dict(_ value: Any?) -> [String: Any]? { value as? [String: Any] }
     private static func nodes(_ value: Any?) -> [[String: Any]] { (dict(value)?["nodes"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? [] }
-    private static func date(_ value: Any?) -> Date? { (value as? String).flatMap { try? Date.ISO8601FormatStyle().parse($0) } }
+    static func date(_ value: Any?) -> Date? { (value as? String).flatMap { try? Date.ISO8601FormatStyle().parse($0) } }
 
     static func association(_ raw: Any?) -> Association {
         switch raw as? String {
@@ -565,6 +581,7 @@ enum InboxSync {
         let body = node["body"] as? String
         var thing = Thing(id: "\(isPR ? "pr" : "issue"):\(repo)#\(number)", kind: isPR ? .pr : .issue, repo: repo, number: number,
                           title: node["title"] as? String ?? "#\(number)", url: url, createdAt: created, updatedAt: updated)
+        thing.nodeID = node["id"] as? String
         thing.author = person(node["author"], association: node["authorAssociation"])
         thing.labels = nodes(node["labels"]).compactMap { $0["name"] as? String }
         thing.assignees = nodes(node["assignees"]).compactMap { $0["login"] as? String }
@@ -987,6 +1004,8 @@ struct InboxSyncState {
     var ownerReposAt: [String: Date] = [:]
     /// Where the next refresh's window of workflow targets starts (`InboxSync.workflowWindow`).
     var workflowCursor = 0
+    /// Where the next look at things kept unseen starts (`Store.recheck`).
+    var recheckCursor = 0
 }
 
 // MARK: - Repos that moved
@@ -1226,6 +1245,14 @@ extension Store {
         if !searchesKept {
             let ran = searches.filter { !fetched.failed.contains($0) }
             next.merge(keepingUnvisited(fetched, ran: ran, all: plan.all)) { a, _ in a }
+            // What is kept unseen is looked at again, some each time: one merged or closed meanwhile leaves.
+            let unseen = next.filter { $0.value.kind != .workflow && fetched.foundBy[$0.key] == nil && $0.value.nodeID != nil }
+            if !unseen.isEmpty {
+                let rechecked = await recheck(Array(unseen.values), me: me,
+                                              keepsClosed: plan.all.contains { $0.contains("is:closed") })
+                guard current() else { return }
+                for (id, thing) in rechecked { next[id] = thing }
+            }
         }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
@@ -1394,6 +1421,38 @@ extension Store {
         }
         return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy, failed: failed,
                        complete: complete.subtracting(failed))
+    }
+
+    /// Looks again at some of the things kept though no search returned them (`recheckBatch`, in turns): first how each
+    /// stands, then, for those changed since, the whole of it. One merged or closed goes (nil) unless a search asks for
+    /// closed ones; one changed and still open is taken as it is now. What can't be told (a failed request, a node GitHub
+    /// doesn't give) stays as it was.
+    func recheck(_ kept: [Thing], me: String, keepsClosed: Bool) async -> [String: Thing?] {
+        let sorted = kept.sorted { $0.id < $1.id }
+        let start = inboxSyncState.recheckCursor % sorted.count
+        let batch = (0..<min(InboxSync.recheckBatch, sorted.count)).map { sorted[(start + $0) % sorted.count] }
+        inboxSyncState.recheckCursor = (start + batch.count) % sorted.count
+        let byNode = Dictionary(batch.map { ($0.nodeID!, $0) }, uniquingKeysWith: { a, _ in a })
+        guard let states = try? await gh.graphql(InboxSync.statesRequest(Array(byNode.keys).sorted())),
+              let nodes = (states["data"] as? [String: Any])?["nodes"] as? [Any] else { return [:] }
+        var changed: [String] = []
+        for case let node as [String: Any] in nodes {
+            guard let id = node["id"] as? String, let old = byNode[id], let updated = InboxSync.date(node["updatedAt"]) else { continue }
+            let status: ThingStatus = node["merged"] as? Bool == true ? .merged : node["state"] as? String == "CLOSED" ? .closed
+                : node["isDraft"] as? Bool == true ? .draft : .open
+            if updated != old.updatedAt || status != old.status { changed.append(id) }
+        }
+        guard !changed.isEmpty, let whole = try? await gh.graphql(InboxSync.nodesRequest(changed)),
+              let fresh = (whole["data"] as? [String: Any])?["nodes"] as? [Any] else { return [:] }
+        var out: [String: Thing?] = [:]
+        for case let node as [String: Any] in fresh {
+            guard var thing = InboxSync.thing(node), let old = byNode[thing.nodeID ?? ""], old.id == thing.id else { continue }
+            if thing.status == .merged || thing.status == .closed, !keepsClosed { out[thing.id] = .some(nil); continue }
+            // Review threads past those read with it: as read before, as a refresh that can't read them on keeps them.
+            if InboxSync.moreThreads(node) != nil, old.threadsTail != nil { InboxSync.takeTail(of: old, into: &thing) }
+            out[thing.id] = InboxSync.keepingRequestTimes(thing, from: old)
+        }
+        return out
     }
 
     /// Notes which searches found what, and gives back the things this refresh didn't find that a search it didn't run

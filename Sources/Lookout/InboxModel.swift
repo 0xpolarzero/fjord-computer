@@ -523,6 +523,8 @@ struct Thing: Codable, Hashable, Identifiable {
     var additions: Int?
     var deletions: Int?
     var changedFiles: Int?
+    /// GitHub's node id of a PR or issue: what it is looked at again by when no search returned it (`Store.recheck`).
+    var nodeID: String?
     /// What Jev made of it (InboxJev.swift), kept across refreshes; nil before it was asked anything.
     var signals: ThingSignals?
 }
@@ -571,6 +573,7 @@ extension Thing {
         deletions = try c.decodeIfPresent(Int.self, forKey: .deletions)
         changedFiles = try c.decodeIfPresent(Int.self, forKey: .changedFiles)
         signals = try c.decodeIfPresent(ThingSignals.self, forKey: .signals)
+        nodeID = try c.decodeIfPresent(String.self, forKey: .nodeID)
     }
 }
 
