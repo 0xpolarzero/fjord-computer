@@ -280,10 +280,12 @@ final class RouterModel {
     /// Why the draft wasn't sent (it stays in the composer), until it changes.
     var sendRefused: String?
     static let goneTarget = "Not sent: what you named was handled or is gone since. Pick where it goes on the ask, or say more."
-    /// Asks the Router's conversation to scroll to a message (an inbox action's), selecting no card.
+    /// Asks the Router's conversation to scroll to a message (an inbox action's), selecting no card and replying to none:
+    /// what you write next goes to the Router.
     var messageRequest: ScrollRequest?
     func show(message: UUID) {
         selection = nil
+        replyTo = nil
         messageRequest = ScrollRequest(id: message.uuidString, seq: (messageRequest?.seq ?? 0) + 1)
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).

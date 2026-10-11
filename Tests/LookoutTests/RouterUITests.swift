@@ -1003,4 +1003,19 @@ import UserNotifications
         model.send(store: store)
         #expect(store.router.decisions.last?.links.cards == [card.id] && model.replyTo == nil)
     }
+
+    @Test func aMessageOpenedFromAnActionsChipLeavesNoReplyArmed() {
+        let store = demo()
+        let model = RouterModel()
+        let card = store.routerPage.needs[0]
+        // Replying to a card when the page was left; an inbox action's chip then opens a Router message.
+        model.reply(to: card.id, store: store)
+        model.show(message: store.router.decisions.last!.id)
+        #expect(model.selection == nil && model.replyTo == nil)
+        // What is written next goes to the Router, not to that card's session.
+        let before = store.router.decisions.count
+        model.draft = "what's left today?"
+        model.send(store: store)
+        #expect(store.router.decisions.count > before && store.router.decisions.last?.links.cards == [])
+    }
 }
