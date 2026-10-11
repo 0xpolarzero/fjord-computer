@@ -463,8 +463,9 @@ def validate_label(label, record, strict=False):
     if not all(field in label for field in fields):
         raise ValueError("missing annotation fields")
     if not strict:
+        # Models count a dash or a code fence as one of the three words, so the echo may carry only two real ones.
         echo, expected = opening(label.get("echo", "")), opening(record["view"]["message"])
-        if echo[:len(expected)] != expected:
+        if len(echo) < min(2, len(expected)) or echo != expected[:len(echo)]:
             raise ValueError("label echo does not match its message")
     if label["ask"] not in ASK or type(label["consequential"]) is not bool:
         raise ValueError("invalid ask/consequential")

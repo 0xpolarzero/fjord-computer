@@ -13,7 +13,7 @@ import unittest
 from .label import (LABELS, ModelCLI, aggregate_labels, annotations, build_gold,
                     current_adjudication, digest, export_anchor, import_anchor,
                     independent_families, jsonl, krippendorff_alpha, latest_labels,
-                    merge, parse_labels, prepare, prompt_for, render_events, write_jsonl)
+                    merge, parse_labels, prepare, prompt_for, render_events, validate_label, write_jsonl)
 from v2.run.episodes import load_episodes
 
 
@@ -278,6 +278,15 @@ class ResponseParsingTests(unittest.TestCase):
     def test_the_echo_ignores_case_and_punctuation(self):
         loose = [{**self.responses[0], "echo": "use V2"}, self.responses[1]]
         self.assertEqual(len(self.parse(loose)), 2)
+
+    def test_an_echo_that_counted_a_dash_as_a_word_still_matches(self):
+        record = deepcopy(self.records[0])
+        record["view"]["message"] = "Fork 2 - some stuff changed"
+        label = {k: v for k, v in self.responses[0].items() if k != "key"}
+        self.assertTrue(validate_label({**label, "echo": "Fork 2 -"}, record))
+        for wrong in ("Fork", "Fork 3 -", "some stuff changed"):
+            with self.assertRaises(ValueError):
+                validate_label({**label, "echo": wrong}, record)
 
     # One bad or missing label fails only its own event; its valid siblings are kept (label.parse_labels).
 
