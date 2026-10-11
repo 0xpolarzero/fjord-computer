@@ -524,6 +524,17 @@ enum SessionStart {
         let tag = #"[\x{E000}-\x{F8FF}]"#
         while strip("^" + tag, from: &t) { tidy() }
         let started = strip(startPhrase, from: &t)
+        // Each of the model and the effort as `SessionSettings.parse` reads it, the first asked for: only that clause goes.
+        var asked: Set<String> = []
+        func setting(_ clause: Substring) -> String {
+            clause.range(of: #"\b(?:\#(models))\b"#, options: [.regularExpression, .caseInsensitive]) != nil ? "model" : "effort"
+        }
+        func takeSetting() -> Bool {
+            guard let r = t.range(of: "^" + settingClause, options: [.regularExpression, .caseInsensitive]), !r.isEmpty,
+                  asked.insert(setting(t[r])).inserted else { return false }
+            t.removeSubrange(r)
+            return true
+        }
         if started {
             // A project by its words only right after "in", and only where the request goes on after it ("in lookout to …",
             // "in lookout, with opus", the end): "in case the build breaks" and "on no account" are the task's.
@@ -533,7 +544,7 @@ enum SessionStart {
             while moved, inRequest {
                 tidy()
                 moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?\#(tag)\#(suffix)(?![\w])\#(named)"#, from: &t)
-                    || strip("^" + settingClause, from: &t)
+                    || takeSetting()
                     || strip("^" + tag, from: &t)
             }
             tidy()
@@ -545,7 +556,20 @@ enum SessionStart {
         let end = t.index(t.startIndex, offsetBy: min(left, t.count))
         if SessionSettings.parse(String(t[..<end])) != nil || started {
             var head = String(t[..<end])
-            _ = strip(#"[,;]?[ \t]*\b"# + settingClause, from: &head, all: true, joining: true)
+            // Never one said not to be wanted ("don't use opus"): the session reads that as you wrote it.
+            var cuts: [Range<String.Index>] = []
+            let clauses = try? NSRegularExpression(pattern: #"([,;]?[ \t]*)\b"# + settingClause, options: [.caseInsensitive])
+            for m in clauses?.matches(in: head, range: NSRange(head.startIndex..., in: head)) ?? [] {
+                guard let whole = Range(m.range, in: head), let lead = Range(m.range(at: 1), in: head), !whole.isEmpty,
+                      !SessionSettings.negated(head, before: lead.upperBound),
+                      asked.insert(setting(head[lead.upperBound..<whole.upperBound])).inserted else { continue }
+                cuts.append(whole)
+            }
+            for r in cuts.reversed() {
+                let at = head.distance(from: head.startIndex, to: r.lowerBound)
+                head.removeSubrange(r)
+                join(&head, at: at)
+            }
             t = head + t[end...]
             if started || SessionSettings.parse(Self.request(text, pills: pills)) != nil { tidy() }
         }

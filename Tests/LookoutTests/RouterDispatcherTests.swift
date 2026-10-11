@@ -773,6 +773,18 @@ import Testing
         #expect(f.started.map(\.title) == ["fix login"] && f.startSettings == [SessionSettings(model: "opus", effort: nil)])
     }
 
+    @Test func aSettingSaidNotToBeWantedIsNeitherAppliedNorTakenOut() async {
+        let text = "start a session in lookout to fix the CI, don't use opus, use haiku"
+        #expect(SessionStart.task(from: text, projects: ["lookout"]) == "fix the CI, don't use opus")
+        #expect(SessionSettings.parse(text) == SessionSettings(model: "haiku", effort: nil))
+        #expect(SessionStart.task(from: "start a session to fix it without using opus") == "fix it without using opus")
+        #expect(SessionSettings.parse("fix it without using opus") == nil)
+        let (_, d, f) = setup()
+        let a = d.submit(text, context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.startSettings == [SessionSettings(model: "haiku", effort: nil)] && f.started.map(\.title) == ["fix the CI, don't use opus"])
+    }
+
     @Test func aProjectNamedLikeAWordOfTheTaskNeverTakesItsWordsAway() {
         let p = ["no", "case", "lookout"]
         func task(_ t: String) -> String { SessionStart.task(from: t, pills: Self.pills(t, p), projects: p) }

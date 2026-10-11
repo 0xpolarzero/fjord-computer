@@ -304,19 +304,34 @@ struct SessionSettings: Equatable, Sendable {
     }
 
     /// "…with opus, high effort", "using sonnet", "with xhigh effort": the model named after with/using/use, the effort
-    /// before the word effort (or after "effort"). Nothing else in the text counts.
+    /// before the word effort (or after "effort"), the first of each asked for: "don't use opus, use haiku" is haiku
+    /// (`negated`). Nothing else in the text counts.
     static func parse(_ text: String) -> SessionSettings? {
         let t = text.lowercased()
         func capture(_ pattern: String) -> String? {
-            guard let regex = try? NSRegularExpression(pattern: pattern),
-                  let m = regex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)), m.numberOfRanges > 1,
-                  let r = Range(m.range(at: 1), in: t) else { return nil }
-            return String(t[r])
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+            for m in regex.matches(in: t, range: NSRange(t.startIndex..., in: t)) where m.numberOfRanges > 1 {
+                guard let whole = Range(m.range, in: t), let r = Range(m.range(at: 1), in: t), !negated(t, before: whole.lowerBound)
+                else { continue }
+                return String(t[r])
+            }
+            return nil
         }
         let model = capture(#"\b(?:with|using|use|on)\s+(?:the\s+)?(opus|sonnet|haiku|fable)\b"#)
         let effort = capture(#"\b(low|medium|high|xhigh|max)\s+effort\b"#)
             ?? capture(#"\beffort\s+(?:of\s+|to\s+|level\s+)?(low|medium|high|xhigh|max)\b"#)
         return SessionSettings(model: model, effort: effort)
+    }
+
+    /// A setting at `at` is said not to be wanted: a word of negation (`SessionStart.negations`) comes before it in its
+    /// own part of the sentence, since a comma, a semicolon, a sentence's end or a line break ("don't use opus", "fix it
+    /// without using opus").
+    static func negated(_ text: String, before at: String.Index) -> Bool {
+        let start = text[..<at].lastIndex(where: { ",;.!?\n\r".contains($0) }).map(text.index(after:)) ?? text.startIndex
+        let keep = CharacterSet.punctuationCharacters.subtracting(CharacterSet(charactersIn: "'’"))
+        return text[start..<at].lowercased().split(whereSeparator: \.isWhitespace).contains {
+            SessionStart.negations.contains($0.trimmingCharacters(in: keep).replacingOccurrences(of: "’", with: "'"))
+        }
     }
 }
 
