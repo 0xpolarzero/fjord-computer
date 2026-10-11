@@ -254,17 +254,34 @@ class RouterSystem:
 
 
 def apply_delta(state, delta):
-    """Apply exogenous changes by identity, preserving all unrelated state."""
+    """Apply exogenous changes by identity, preserving all unrelated state.
+
+    A `started-<event>` session exists only if the policy under test started it. When it asked or sent elsewhere
+    instead, later changes to that session (and its cards) describe nothing in this replay and are skipped, and a
+    writer re-adding one the policy did start merges into it. Every other identity stays strict."""
+    present = {row["id"] for row in state.get("sessions", [])}
+    def absent_start(session_id):
+        return str(session_id).startswith("started-") and session_id not in present
     for collection in ("cards", "sessions"):
         rows = state.setdefault(collection, [])
         removed = set(delta.get(collection + "-", []))
         rows[:] = [row for row in rows if row["id"] not in removed]
         for added in delta.get(collection + "+", []):
-            if any(row["id"] == added["id"] for row in rows):
+            existing = next((row for row in rows if row["id"] == added["id"]), None)
+            if existing is not None and str(added["id"]).startswith("started-"):
+                existing.update(copy.deepcopy(added))
+                continue
+            if existing is not None:
                 raise ValueError("board delta adds a duplicate identity")
+            if collection == "cards" and absent_start(added.get("session")):
+                continue
             rows.append(copy.deepcopy(added))
+            if collection == "sessions":
+                present.add(added["id"])
         for change in delta.get(collection + "~", []):
             row = next((row for row in rows if row["id"] == change["id"]), None)
+            if row is None and (absent_start(change["id"].split("#")[0]) or absent_start(change.get("session", ""))):
+                continue
             if row is None:
                 raise ValueError("board delta updates an absent identity")
             row.update(copy.deepcopy(change))
@@ -338,7 +355,8 @@ def play_episode(episode, system):
                          ranked=pending["ranked"])
             if accepted:
                 recovery = recoveries.get(pending["id"])
-                _delivery(state, pending["message"], target, event["id"], pending["context"],
+                # A session started from an ask is named after the submit, as writers and gold name it.
+                _delivery(state, pending["message"], target, pending["id"], pending["context"],
                           recovery["wrong_target"] if recovery else None)
                 if target == pending["gold"].get("intended") or target in pending["gold"].get("acceptable", []):
                     outstanding.discard(pending["id"])

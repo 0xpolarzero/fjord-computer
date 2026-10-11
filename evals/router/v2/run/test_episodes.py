@@ -116,6 +116,30 @@ class EpisodesTests(unittest.TestCase):
             episodes.validate_episode(self.episode([{"id": "board", "kind": "board", "delta": {}}]))
 
 
+class StartedSessionDeltaTests(unittest.TestCase):
+    """A started-<event> session exists only if the policy started it (episodes.apply_delta)."""
+
+    def state(self, *sessions):
+        return {"sessions": [{"id": s} for s in sessions], "cards": []}
+
+    def test_updates_to_a_session_the_policy_never_started_are_skipped(self):
+        state = self.state("a")
+        episodes.apply_delta(state, {"sessions~": [{"id": "started-e1", "running": False}],
+                                     "cards+": [{"id": "started-e1#t1", "session": "started-e1"}]})
+        self.assertEqual(([s["id"] for s in state["sessions"]], state["cards"]), (["a"], []))
+
+    def test_re_adding_a_started_session_merges(self):
+        state = self.state("started-e1")
+        episodes.apply_delta(state, {"sessions+": [{"id": "started-e1", "title": "t"}]})
+        self.assertEqual(state["sessions"], [{"id": "started-e1", "title": "t"}])
+
+    def test_other_identities_stay_strict(self):
+        with self.assertRaises(ValueError):
+            episodes.apply_delta(self.state("a"), {"sessions~": [{"id": "b"}]})
+        with self.assertRaises(ValueError):
+            episodes.apply_delta(self.state("a"), {"sessions+": [{"id": "a"}]})
+
+
 class AdapterTests(unittest.TestCase):
     def test_turns_feed_bm25_without_any_corpus_read(self):
         lexical = adapter.install_lexical()
