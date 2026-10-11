@@ -725,6 +725,25 @@ import Testing
         #expect(RouterDispatcher.title(for: "") == "New session")
     }
 
+    @Test func aProjectNamedLikeAWordOfTheTaskNeverTakesItsWordsAway() {
+        let p = ["no", "case", "lookout"]
+        func task(_ t: String) -> String { SessionStart.task(from: t, pills: Self.pills(t, p), projects: p) }
+        #expect(task("start a session on no account delete the prod db") == "on no account delete the prod db")
+        #expect(task("start a session in no way should it delete prod") == "in no way should it delete prod")
+        #expect(task("start a session in no to never delete the backups") == "in no to never delete the backups")
+        #expect(task("start a session in case the build breaks, revert it") == "in case the build breaks, revert it")
+        #expect(task("start a session for lookout to fix it") == "for lookout to fix it")
+        // Its pill, or a plain name right after "in" where the request goes on: taken out.
+        #expect(task("@no start a session: don't delete the backups") == "don't delete the backups")
+        #expect(task("start a session in @no to never delete the backups") == "never delete the backups")
+        #expect(task("start a session in case to fix it") == "fix it")
+        #expect(task("start a session in lookout, with opus: fix it") == "fix it")
+        // Nor do those words name where it starts.
+        #expect(RouterTools.startRequest("start a session in case the build breaks, revert it")?.project == nil)
+        #expect(RouterTools.startRequest("start a session in no to never delete the backups")?.project == nil)
+        #expect(RouterTools.startRequest("start a session in the lookout project, with opus: fix it")?.project == "lookout")
+    }
+
     @Test func settingsAreOnlyAskedForInTheRequestNeverInCodeOrQuotes() async {
         let fenced = "start a session to fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```"
         #expect(SessionStart.task(from: fenced) == "fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```")

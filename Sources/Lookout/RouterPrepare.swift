@@ -494,6 +494,13 @@ enum SessionStart {
         text.replaceSubrange(i..<end, with: between ? " " : "")
     }
 
+    /// After a project named in the request to start a session: the request goes on ("to …", ", with opus", ":") or ends.
+    static let goesOn = #"(?=[ \t]*(?:$|\n|[,:;.!?\-–—]|(?:to|and|then|with|using|at)\b))"#
+    static let negations: Set<String> = [
+        "no", "not", "never", "none", "nothing", "nobody", "nowhere", "neither", "nor", "without", "dont", "don't", "cannot",
+        "can't", "cant", "won't", "wont", "stop", "avoid",
+    ]
+
     /// What a new session is for, from the words that asked for it: the request to start one ("start a (new) session (in X)",
     /// "new chat:", "open a session to"), its model and effort settings, and a leading @project (already a pill) are taken
     /// out; the rest stays verbatim, not capitalised or reworded. Empty when nothing is left ("start a session in lookout").
@@ -511,17 +518,21 @@ enum SessionStart {
         let request = max(0, envelope(body).count - (body.count - whole))
         var inRequest: Bool { whole - t.count < request }
         func tidy() { if inRequest { _ = strip(#"^[ \t,:;\-–—]*"#, from: &t) } }
-        let names = projects.filter { !$0.isEmpty && !$0.contains(where: \.isWhitespace) }
+        // A name that is a word of negation ("no", "never") is never taken out by its words: only its pill is.
+        let names = projects.filter { !$0.isEmpty && !$0.contains(where: \.isWhitespace) && !negations.contains($0.lowercased()) }
             .map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
         let tag = #"[\x{E000}-\x{F8FF}]"#
         while strip("^" + tag, from: &t) { tidy() }
         let started = strip(startPhrase, from: &t)
         if started {
-            let named = names.isEmpty ? "" : #"|(?:\#(names))(?![\w./-])"#
+            // A project by its words only right after "in", and only where the request goes on after it ("in lookout to …",
+            // "in lookout, with opus", the end): "in case the build breaks" and "on no account" are the task's.
+            let suffix = #"(?:\s+(?:project|repo|repository|folder))?"#
+            let named = names.isEmpty ? "" : #"|^in\s+(?:the\s+)?(?:\#(names))(?![\w./-])\#(suffix)\#(goesOn)"#
             var moved = true
             while moved, inRequest {
                 tidy()
-                moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?(?:\#(tag)\#(named))(?:\s+(?:project|repo|repository|folder))?(?![\w])"#, from: &t)
+                moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?\#(tag)\#(suffix)(?![\w])\#(named)"#, from: &t)
                     || strip("^" + settingClause, from: &t)
                     || strip("^" + tag, from: &t)
             }

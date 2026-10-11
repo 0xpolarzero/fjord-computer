@@ -815,14 +815,15 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// A message that asks for a new session (`SessionStart.startPhrase`, at its start or after its @projects), and the
-    /// project named by the one word right after it, lowercased: "start a session in lookout to …" → lookout.
+    /// project named by the one word right after "in", lowercased, where the request goes on after it: "start a session
+    /// in lookout to …" → lookout ("in case the build breaks" names none, and nor does a word of negation).
     struct StartRequest { var project: String? }
     static func startRequest(_ message: String) -> StartRequest? {
         let t = message.replacingOccurrences(of: #"^(?:\s*@[\w.\-/]+[\s,:;]*)*\s*"#, with: "", options: .regularExpression)
-        guard let regex = try? NSRegularExpression(pattern: SessionStart.startPhrase + #"(?:\s+in\s+(?:the\s+)?([\w.\-]+)(?![\w./-]))?"#,
+        guard let regex = try? NSRegularExpression(pattern: SessionStart.startPhrase + #"(?:\s+in\s+(?:the\s+)?([\w.\-]+)(?![\w./-])(?:\s+(?:project|repo|repository|folder))?\#(SessionStart.goesOn))?"#,
                                                    options: [.caseInsensitive]),
               let m = regex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) else { return nil }
-        return StartRequest(project: Range(m.range(at: 1), in: t).map { t[$0].lowercased() })
+        return StartRequest(project: Range(m.range(at: 1), in: t).map { t[$0].lowercased() }.flatMap { SessionStart.negations.contains($0) ? nil : $0 })
     }
 
     /// Who a message is addressed to at its start, lowercased: "tell/ask (the) X (session) to …", "(for) (the) X (session):".
