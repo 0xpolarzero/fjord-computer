@@ -195,8 +195,8 @@ extension Store {
                         || RouterDepends.names(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
             }
             guard namedSessions.count <= 1 else { return false }
-            // A workflow or a PR named too: which of them it waits on isn't clear.
-            guard namedCI(lower, excluding: nil).isEmpty else { return false }
+            // A workflow or a PR named too, by its bare number as well (`#12`, a PR of its repo): which of them it waits on isn't clear.
+            guard namedCI(lower, excluding: nil).isEmpty, Self.prsNamed(lower, repo: "").isEmpty else { return false }
             if lower.contains(id.lowercased()) { return true }
             guard let other = claudeSessions[id] else { return false }
             return RouterDepends.names(message, title: other.title, project: other.folderName, ownProject: session.folderName)

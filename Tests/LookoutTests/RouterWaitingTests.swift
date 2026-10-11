@@ -726,6 +726,15 @@ import Testing
         #expect(!s.waitNamed(ciWatch, in: "Waiting for o/app#1 and the Build workflow in o/app on main", by: a))
     }
 
+    @Test func aSessionAndABarePRNumberNamedTogetherAreNeverContinuedOnTheirOwn() {
+        let (s, _) = store(watch: ciWatch, things: [ci(.pending)])
+        let a = s.claudeSessions["a"]!
+        let one = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "")
+        #expect(!s.waitNamed(one, in: "Waiting for the migration session and CI on #12", by: a))
+        #expect(!s.waitNamed(ciWatch, in: "Waiting for the migration session and CI on #1", by: a))
+        #expect(s.waitNamed(one, in: "Waiting for the migration session to finish", by: a))
+    }
+
     @Test func aFolderWithNoRemoteYetIsReadAgainOnceItHasOne() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lk-remotes-\(UUID().uuidString)/app")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git"), withIntermediateDirectories: true)
