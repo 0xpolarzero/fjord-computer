@@ -675,7 +675,11 @@ enum InboxSync {
             if let head = nodes(node["head"]).first.flatMap({ dict($0["commit"]) }),
                let rollup = dict(head["statusCheckRollup"]), let contexts = dict(rollup["contexts"]) {
                 let execution = ciExecution(sha: head["oid"] as? String ?? "", contexts: contexts)
-                thing.ciFinishedAt = nodes(contexts).compactMap { date($0["completedAt"] ?? $0["createdAt"]) }.max()
+                // Only from all its checks: of 60 with 50 read, the latest of those may be well before the CI finished, so
+                // it is left to when the thing is found.
+                let read = nodes(contexts)
+                thing.ciFinishedAt = (contexts["totalCount"] as? Int ?? read.count) > read.count ? nil
+                    : read.compactMap { date($0["completedAt"] ?? $0["createdAt"]) }.max()
                 thing.ciRun = execution.run
                 thing.ciRunning = execution.running || checkState(rollup["state"]) == .pending
                 // Failing only by checks cancelled (none failed, errored or timed out): cancelled, never a failure of its own.

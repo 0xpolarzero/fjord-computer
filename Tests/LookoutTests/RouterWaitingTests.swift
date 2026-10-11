@@ -377,6 +377,22 @@ import Testing
                                            ["__typename": "CheckRun", "databaseId": 1, "status": "COMPLETED", "completedAt": "2026-10-08T11:00:00Z"],
                                            ["__typename": "StatusContext", "context": "ext", "state": "SUCCESS", "createdAt": "2026-10-08T11:30:00Z"]]]]]]]]]
         #expect(InboxSync.thing(node)?.ciFinishedAt == InboxSync.date("2026-10-08T11:30:00Z"))
+        // Read in part (60 checks, these 2 given): when the rest finished isn't known, so it is when the PR is found.
+        var partial = node
+        partial["head"] = ["nodes": [["commit": ["oid": "abc", "statusCheckRollup": ["state": "SUCCESS", "contexts": [
+            "totalCount": 60, "nodes": [
+                ["__typename": "CheckRun", "databaseId": 1, "status": "COMPLETED", "completedAt": "2026-10-08T11:00:00Z"],
+                ["__typename": "StatusContext", "context": "ext", "state": "SUCCESS", "createdAt": "2026-10-08T11:30:00Z"]]]]]]]]
+        let found = InboxSync.thing(partial)
+        #expect(found != nil && found?.ciFinishedAt == nil)
+        var late = ci(.passing)
+        late.id = "pr:o/app#4"
+        late.number = 4
+        late.updatedAt = Date().addingTimeInterval(-600)
+        late.ciFinishedAt = found?.ciFinishedAt
+        let before = Date()
+        s.things[late.id] = late
+        #expect((s.things[late.id]?.ciChangedAt ?? .distantPast) >= before)
     }
 
     @Test func aWaitNamingTwoPRsByNumberIsNeverBoundToTheOneTheInboxHas() async {
