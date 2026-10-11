@@ -396,8 +396,9 @@ enum InboxSync {
         let replies = nodes(t["last"])
         guard let id = t["id"] as? String, let first = nodes(t["first"]).first, let last = replies.last,
               let lastID = last["id"] as? String, let at = date(last["createdAt"]) else { return nil }
+        // Its first comment too: you started it, and ten replies from others since are all of its last ones fetched.
         var latestBy: [String: Date] = [:]
-        for reply in replies {
+        for reply in [first] + replies {
             guard let when = date(reply["createdAt"]) else { continue }
             let who = person(reply["author"], association: nil).login.lowercased()
             if latestBy[who].map({ $0 < when }) ?? true { latestBy[who] = when }

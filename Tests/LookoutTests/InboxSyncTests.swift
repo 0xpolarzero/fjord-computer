@@ -507,6 +507,19 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.inboxError == nil && posted.isEmpty)
     }
 
+    @Test func aThreadYouStartedKeepsYourWordThoughTenOthersRepliedSince() {
+        func comment(_ id: String, _ who: String, _ at: String) -> [String: Any] {
+            ["id": id, "createdAt": at, "body": "x", "author": ["login": who], "authorAssociation": "NONE"]
+        }
+        let replies = (0..<InboxSync.threadReplies).map { comment("c\($0 + 1)", "bob", "2026-01-0\($0 < 9 ? 2 : 3)T00:00:0\($0 % 10)Z") }
+        let connection: [String: Any] = ["nodes": [["id": "t1", "isResolved": false, "path": "a.swift",
+                                                    "first": ["nodes": [comment("c0", "Me", "2026-01-01T00:00:00Z")]],
+                                                    "last": ["nodes": replies]]]]
+        var thing = InboxFixture.pr(1)
+        InboxSync.addThreads(connection, to: &thing)
+        #expect(thing.threads.first?.latestBy?["me"] == (try? Date.ISO8601FormatStyle().parse("2026-01-01T00:00:00Z")))
+    }
+
     @Test func reviewThreadsPastTheFirstPageAreReadAndOneThatCantBeKeepsWhatWasKnown() async {
         final class Phase: @unchecked Sendable {
             var fails = false; var pages: [String] = []; var updatedAt = "2026-10-09T10:00:00Z"; var total: Int?
