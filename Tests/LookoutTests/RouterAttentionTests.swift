@@ -137,6 +137,41 @@ import Testing
         #expect(posted().count == 2)
     }
 
+    @Test func aCardTheSummaryToldOfAsFinishedStillBannersOnceItNeedsYou() {
+        let (s, idle, posted) = store()
+        let done = card("done", .done)
+        s.router.cards = [done]
+        idle.seconds = 400
+        RouterBanners.post([done], store: s, windowIsKey: false)
+        // Back before Jev answered: the summary says it finished.
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(posted() == [RouterBanners.prefix + "done"] && s.routerAttention.strip?.line(s.router.cards) == "1 finished")
+        // His triage: it asks for your OK. That is news, and it comes.
+        s.router.cards[0].kind = .approval
+        RouterBanners.post([s.router.cards[0]], store: s, windowIsKey: false)
+        #expect(posted().count == 2)
+    }
+
+    @Test func aCardLeftOutOfTheSummaryWhileTheRouterWasOffStillBanners() {
+        let (s, idle, posted) = store()
+        let ask = card("ask", .asks, urgency: 1)
+        s.router.cards = [ask]
+        idle.seconds = 400
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        #expect(!s.routerAttention.admitInbox(.low))
+        // Back with the Router off: only the inbox is said.
+        s.router.enabled = false
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(posted().count == 1)
+        // On again, it comes as it is: a stop of the session's.
+        s.router.enabled = true
+        s.router.cards[0].kind = .question
+        RouterBanners.post([s.router.cards[0]], store: s, windowIsKey: false)
+        #expect(posted().count == 2)
+    }
+
     @Test func withTheRouterOffComingBackSaysOnlyWhatCameInTheInbox() {
         let (s, idle, _) = store()
         var bodies: [String] = []

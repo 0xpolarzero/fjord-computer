@@ -61,8 +61,13 @@ struct AwayStrip: Equatable {
     @ObservationIgnored private(set) var heldInbox = 0
     /// The cards a banner was shown for: never a second one.
     @ObservationIgnored private(set) var delivered: Set<String> = []
-    /// The cards the summary when you came back told of: no banner of their own after it, until you're away again.
-    @ObservationIgnored private(set) var summarized: Set<String> = []
+    /// What the summary when you came back told of each card it said (`reported`): no banner of their own after it for that,
+    /// until you're away again. One it told of as finished that needs you now (Jev's triage came after), or that is ready to
+    /// continue now, is news and still comes.
+    @ObservationIgnored private(set) var summarized: [String: Told] = [:]
+
+    /// What a card was told as in the summary.
+    enum Told { case needs, ready, finished }
     /// What came while you were last away, on the Router until dismissed.
     var strip: AwayStrip?
     /// You're back and something came meanwhile (the summary banner).
@@ -91,7 +96,7 @@ struct AwayStrip: Equatable {
     func admit(_ new: [RouterCard]) -> [RouterCard] {
         let away = refresh()
         if away { for card in new where card.kind.isTurn || card.kind.needsYou { hold(card.id) } }
-        return new.filter { !delivered.contains($0.id) && !summarized.contains($0.id) && Self.bannerNow($0, away: away) }
+        return new.filter { !delivered.contains($0.id) && summarized[$0.id] != .needs && Self.bannerNow($0, away: away) }
     }
 
     /// A card's banner was shown.
@@ -100,7 +105,7 @@ struct AwayStrip: Equatable {
     /// A waiting session ready to continue: a banner now, or, away, in the summary (also when it became ready as you came
     /// back, and the summary that coming back makes says so already).
     func admitReady(_ card: RouterCard) -> Bool {
-        guard refresh() else { return !summarized.contains(card.id) }
+        guard refresh() else { return summarized[card.id] != .ready }
         hold(card.id)
         return false
     }
@@ -132,7 +137,7 @@ struct AwayStrip: Equatable {
         if away {
             if awaySince == nil {
                 awaySince = clock().addingTimeInterval(locked || asleep ? 0 : -idle)
-                summarized = []
+                summarized = [:]
             }
         } else if let since = awaySince {
             back(since: since)
@@ -146,12 +151,18 @@ struct AwayStrip: Equatable {
         heldCards = []
         heldInbox = 0
         guard came.line(cards()) != nil else { return }
-        summarized = Set(came.listed(cards()).map(\.id))
         strip = came
         onBack?(came)
     }
 
     func dismissStrip() { strip = nil }
+
+    /// The summary said these cards, each as what it is now (those it left out, as the Router's while it is off, are not).
+    func reported(_ cards: [RouterCard]) {
+        for card in cards {
+            summarized[card.id] = card.kind.needsYou ? .needs : card.kind == .waiting ? .ready : .finished
+        }
+    }
 
     /// Watches your input, the screen lock and sleep (the app, not tests).
     func start(cards: @escaping () -> [RouterCard]) {

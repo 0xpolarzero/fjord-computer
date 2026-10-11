@@ -153,6 +153,7 @@ enum RouterBanners {
     /// With the Router off, its cards are left out: only what came in the inbox is said.
     static func postBack(_ strip: AwayStrip, store: Store, windowIsKey: Bool) {
         let cards = store.router.enabled ? store.routerShownCards : []
+        store.routerAttention.reported(strip.listed(cards))
         guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(cards) else { return }
         let first = strip.listed(cards).first
         store.notifier.post(id: first.map { prefix + $0.id } ?? Notifier.summaryPrefix + UUID().uuidString,
