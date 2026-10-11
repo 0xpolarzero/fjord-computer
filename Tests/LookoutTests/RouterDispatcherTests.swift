@@ -762,6 +762,17 @@ import Testing
         #expect(RouterDispatcher.title(for: "") == "New session")
     }
 
+    @Test func aPillOnALineOfItsOwnLeavesTheRequestAndItsSettingsUnderIt() async {
+        let text = "@lookout\nstart a session with opus:\nfix login"
+        let pills = Self.pills(text, ["lookout"])
+        #expect(SessionStart.task(from: text, pills: pills, projects: ["lookout"]) == "fix login")
+        #expect(SessionStart.request(text, pills: pills).hasPrefix("start a session with opus"))
+        let (_, d, f) = setup()
+        let a = d.submit(text, context: RouterContext(projects: ["/code/lookout"], pills: pills))
+        await finish(d, f, a)
+        #expect(f.started.map(\.title) == ["fix login"] && f.startSettings == [SessionSettings(model: "opus", effort: nil)])
+    }
+
     @Test func aProjectNamedLikeAWordOfTheTaskNeverTakesItsWordsAway() {
         let p = ["no", "case", "lookout"]
         func task(_ t: String) -> String { SessionStart.task(from: t, pills: Self.pills(t, p), projects: p) }

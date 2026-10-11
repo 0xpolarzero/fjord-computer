@@ -512,7 +512,7 @@ enum SessionStart {
         let (masked, pilled) = masking(text, pills)
         // The request is taken from the front of the text only, and only within its envelope (worked out once, on the text
         // as written): past it is the task's own, kept exactly (a pasted line's indentation, "// use opus to reproduce").
-        let body = RouterModel.sendable(masked)
+        let body = pastPillLine(masked)
         var t = String(body.drop(while: { $0 == " " || $0 == "\t" }))
         let whole = t.count
         let request = max(0, envelope(body).count - (body.count - whole))
@@ -547,7 +547,7 @@ enum SessionStart {
             var head = String(t[..<end])
             _ = strip(#"[,;]?[ \t]*\b"# + settingClause, from: &head, all: true, joining: true)
             t = head + t[end...]
-            if started || SessionSettings.parse(envelope(text)) != nil { tidy() }
+            if started || SessionSettings.parse(Self.request(text, pills: pills)) != nil { tidy() }
         }
         // What is left starts after the request's line breaks: the first line of code under it keeps its indentation.
         var task = RouterModel.sendable(String(t.drop(while: { $0 == " " || $0 == "\t" || $0 == "," || $0 == ";" })))
@@ -555,6 +555,20 @@ enum SessionStart {
         // Nothing taken out: the words as written, the first line's indentation kept (code).
         if task == masked.trimmingCharacters(in: .whitespacesAndNewlines) { task = body }
         return String(task.map { c in c.unicodeScalars.first.flatMap { pilled[$0] } ?? String(c) }.joined())
+    }
+
+    /// Where a new session's model and effort may be asked for (`envelope`), past a first line of nothing but the message's
+    /// @project pills ("@lookout⏎start a session with opus:⏎fix login"): the one reading of the request, for its task and
+    /// its settings alike.
+    static func request(_ text: String, pills: [Range<Int>] = []) -> String {
+        envelope(pastPillLine(masking(text, pills).0))
+    }
+
+    /// `RouterModel.sendable(masked)`, without a first line that holds only pills (`masking`).
+    private static func pastPillLine(_ masked: String) -> String {
+        let body = RouterModel.sendable(masked)
+        guard let r = body.range(of: #"^[ \t]*(?:[\x{E000}-\x{F8FF}][ \t,:;\-–—]*)+\r?\n"#, options: .regularExpression) else { return body }
+        return RouterModel.sendable(String(body[r.upperBound...]))
     }
 
     /// Where a message's model and effort may be asked for: its first line up to the end of its first sentence, stopping at a
