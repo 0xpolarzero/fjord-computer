@@ -231,8 +231,107 @@ def v5(case, rng=None, history="none"):
     return state, q, keymap
 
 
+# ---------------------------------------------------------------- v2: the destination choice plus "does it answer this card?"
+
+ROUTE_INSTRUCTIONS_V2 = {
+    "question": "Where does the user's `message` go?",
+    "focus": ("Decide about `message` alone; `earlier messages` only say what it refers to. A message addressed to a "
+              "session (\"tell the CI one to…\", \"lcu: …\") goes to that existing session. A question about a session or "
+              "about what is going on (\"is the CI one done?\") is `question`, not a message to the session. Start a new "
+              "session only when the message asks for one or no existing session does that work."),
+}
+ROUTE_INSTRUCTIONS_V2B = {
+    "question": "Where does the user's `message` go?",
+    "focus": ("Decide about `message` alone. A message addressed to a session (\"tell the CI one to…\", \"lcu: …\") goes "
+              "to that existing session; a question about a session or about what is going on (\"is the CI one done?\") "
+              "is `question`. Turning a Lookout setting on or off, its notifications, inbox categories or groups is "
+              "`change_lookout`, even when a session works on that feature's code; asking for code to change goes to "
+              "that session. Start a new session only when the message asks for one or no existing session does that work."),
+}
+ROUTE_INSTRUCTIONS_V2C = {
+    "question": "Where does the user's `message` go?",
+    "focus": "Decide about `message` alone.",
+    "rules": [
+        "Addressed to a session (\"tell the CI one to…\", \"lcu: …\"): that existing session.",
+        "A question about a session or about what is going on (\"is the CI one done?\"): `question`.",
+        "A Lookout setting, its notifications, inbox categories or groups: `change_lookout`, even when a session works on that code.",
+        "A new session only when the message asks for one, or no existing session does that work.",
+    ],
+}
+ROUTE_INSTRUCTIONS_V2_SHORT ="Where does the user's `message` go? Decide about `message` alone."
+UNCLEAR_V2 = "none of these: small talk, a fragment, or nothing says where it goes"
+
+
+def waiting_cards(board):
+    return [c for c in board.get("cards", []) if c["kind"] in ("question", "plan", "asks", "approval")]
+
+
+def v2(case, rng=None, history="none", unclear=True, replies=True, instructions="long", structured=True, told=False,
+       waiting=False, compact_after=None):
+    board = case["board"]
+    ordered, names = session_options(board)
+    waits = {c["session"] for c in waiting_cards(board)}
+    told_to = {h["to"] for h in board.get("history", [])}
+    entries = []
+    for s in ordered:
+        crit = ({"kind": "Claude Code session", "project": s["project"], "now": session_status(board, s)} if structured
+                else f"Claude Code session in project {s['project']}, {session_status(board, s)}")
+        if (compact_after is not None and structured and not s.get("running") and s["id"] not in waits
+                and s["id"] not in told_to and s.get("idle_min", 0) > compact_after):
+            crit = {"kind": "Claude Code session", "project": s["project"], "now": f"idle since {ago(s['idle_min'])}"}
+        if waiting and structured:
+            crit["waiting on the user"] = s["id"] in waits
+        if told and structured:
+            mine = [h for h in board.get("history", []) if h["to"] == s["id"]]
+            if mine:
+                crit["the user last told it"] = f"{mine[-1]['you'][:160]} ({ago(mine[-1]['ago_min'])})"
+        entries.append((names[s["id"]], s["id"], crit))
+    for p in board["projects"]:
+        entries.append((f"new session in {p}", f"new:{p}", {"kind": "new session", "project": p} if structured
+                        else f"Start a new Claude Code session in project {p}"))
+    for k, v in INTENTS.items():
+        entries.append((k, k, v))
+    if unclear:
+        entries.append(("unclear", "unclear", UNCLEAR_V2))
+    if rng:
+        rng.shuffle(entries)
+    keymap = {n: d for n, d, _ in entries}
+    state = {"message": case["message"]}
+    if history != "none":
+        state.update(history_state(board, names, history))
+    instr = {"long": ROUTE_INSTRUCTIONS_V2, "short": ROUTE_INSTRUCTIONS_V2_SHORT, "b": ROUTE_INSTRUCTIONS_V2B,
+             "c": ROUTE_INSTRUCTIONS_V2C}[instructions]
+    q = {"route": {"type": "choice", "instructions": instr, "criteria": {n: c for n, _, c in entries}}}
+    if replies:
+        for i, c in enumerate(waiting_cards(board)):
+            s = session_by_id(board)[c["session"]]
+            card = {"session": s["title"], "asks": c["text"][:400]}
+            if c.get("options"):
+                card["options"] = c["options"]
+            q[f"answers{i}"] = {"type": "noul", "instructions": {
+                "question": "Is `message` the user's answer to `card`: a reply to what it asks?", "card": card}}
+            keymap[f"answers{i}"] = c["session"]
+    return state, q, keymap
+
+
 FORMATS = {
     "v0": v0,
+    "v2": v2,
+    "v2-nounclear": lambda c, rng=None: v2(c, rng, unclear=False),
+    "v2-short": lambda c, rng=None: v2(c, rng, instructions="short"),
+    "v2-h3": lambda c, rng=None: v2(c, rng, history="last3"),
+    "v2-h10": lambda c, rng=None: v2(c, rng, history="last10"),
+    "v2-flat": lambda c, rng=None: v2(c, rng, structured=False),
+    "v3-told": lambda c, rng=None: v2(c, rng, told=True),
+    "v3-told-h3": lambda c, rng=None: v2(c, rng, told=True, history="last3"),
+    "v3-told-h10": lambda c, rng=None: v2(c, rng, told=True, history="last10"),
+    "v3-wait-h10": lambda c, rng=None: v2(c, rng, waiting=True, history="last10"),
+    "v3-all": lambda c, rng=None: v2(c, rng, told=True, waiting=True, history="last10"),
+    "v3-told-b": lambda c, rng=None: v2(c, rng, told=True, instructions="b"),
+    "v3-told-c": lambda c, rng=None: v2(c, rng, told=True, instructions="c"),
+    "v3-told-nounclear": lambda c, rng=None: v2(c, rng, told=True, unclear=False),
+    "v3-compact3h":lambda c, rng=None: v2(c, rng, told=True, compact_after=180),
+    "v3-compact1d": lambda c, rng=None: v2(c, rng, told=True, compact_after=1440),
     "v5": v5,
     "v5h": lambda c, rng=None: v5(c, rng, history="last10"),
     "v1": v1,

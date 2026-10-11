@@ -50,6 +50,8 @@ def save(name, rows):
 
 
 def load(name):
+    if name.startswith("_"):
+        return json.load(open(HERE / "runs" / f"{name}.json"))
     return [json.loads(l) for l in open(HERE / "runs" / f"{name}.jsonl") if l.strip()]
 
 
@@ -58,13 +60,19 @@ def load(name):
 def reading(row):
     """{'options': [(dest, p)] best first (per option, as Lookout ranks), 'dests': {dest: p} (summed per destination)}.
     For fan-out answers, also 'kind', 'yes' (per session) and 'project'."""
+    if "_r" in row:
+        return row["_r"]
     a, km = row["answers"], row["keymap"]
     if "route" in a:
         opts = sorted(((km.get(k, k), p) for k, p in a["route"].get("probabilities", {}).items()), key=lambda x: -x[1])
         dests = {}
         for d, p in opts:
             dests[d] = dests.get(d, 0) + p
-        return {"options": opts, "dests": dests}
+        replies = {}
+        for k, v in a.items():
+            if k.startswith("answers"):
+                replies[km[k]] = max(replies.get(km[k], 0), v["noul"])
+        return {"options": opts, "dests": dests, "replies": replies}
     kind = a["kind"]["probabilities"]
     yes = {km[k]: v["noul"] for k, v in a.items() if k in km}
     project = a.get("project", {}).get("probabilities", {})
@@ -187,14 +195,19 @@ def main():
     ap.add_argument("--cases", default="cases/*.jsonl")
     ap.add_argument("--only")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--pad", type=int, help="pad every board to this many sessions")
+    ap.add_argument("--tag", default="", help="suffix for the saved run's name")
     a = ap.parse_args()
     cases = load_cases(a.cases)
     if a.only:
         cases = [c for c in cases if a.only in c.get("tags", []) or c["id"].startswith(a.only)]
+    if a.pad:
+        import transforms
+        cases = [transforms.pad(c, a.pad) for c in cases]
     for fmt in a.formats:
         rows = run(fmt, cases, a.orders)
-        save(fmt, rows)
-        report(fmt, cases, rows, a.verbose)
+        save(fmt + a.tag, rows)
+        report(fmt + a.tag, cases, rows, a.verbose)
 
 
 if __name__ == "__main__":
