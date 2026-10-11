@@ -563,6 +563,18 @@ struct RouterAskBack: Identifiable, Equatable {
             found.sure = false
             liveCache[Self.liveKey(job.text, narrowed)] = nil
         }
+        // Where your own words send it ("start a session in lookout …", "tell CI to …"), resolved here and not by Jev, is
+        // where it goes: his pick of another doesn't send it elsewhere ("tell CI to update the docs" isn't for Docs). Not
+        // where you waved it off, nor when it is gone.
+        let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
+        let named = Self.forRouter(job.text, pills: job.context.pills)
+            ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
+        if let named, named != found.top?.target, named != job.context.notTo, eligible(named, store: store) {
+            confirm(job, named)
+            var job = job
+            job.jev = found
+            return try await route(job, to: named)
+        }
         // Wholly for the Router: one of its own runs, never a session or a project; you pick when Jev's pick isn't one.
         if Self.forRouter(job.text, pills: job.context.pills) {
             let intents = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) != nil }
@@ -595,10 +607,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var job = job
         job.jev = found
         if found.sure, let top = found.top {
-            // Where your own words send it, resolved here and not by Jev ("start a session in lookout …", "tell CI to …"):
-            // yours, as a pin is, so a follow-up may go there.
-            let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
-            if RouterTools.destination(job.text, targets, store: store, pills: job.context.pills) == top.target { chosen(job) }
+            // Where your own words send it: yours, as a pin is, so a follow-up may go there.
+            if named == top.target { chosen(job) }
             return try await route(job, to: top.target)
         }
         askBack(job, found)

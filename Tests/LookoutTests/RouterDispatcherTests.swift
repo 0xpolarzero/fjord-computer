@@ -539,12 +539,18 @@ import Testing
         await finish(d, f, b)
         #expect(f.prepared == ["local_c"])
         #expect(RouterDispatcher.evidenced("and the e2e too", target: "session:local_c", store: s))
-        // Jev's pick where the words name another: not yours.
+        // Jev's pick of another where the words name one: where the words say, and yours.
         f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
         let c = d.submit("tell CI to update the docs")
         await finish(d, f, c)
-        #expect(f.prepared == ["local_c", "local_b"])
+        #expect(f.prepared == ["local_c", "local_c"])
+        #expect(decision(s, c)?.decision.targetID == "session:local_c" && decision(s, c)?.decision.confirmed == true)
         #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
+        // A new session asked for in a project by name: started there, whatever Jev picked.
+        f.ranked = [.init(target: "session:local_a", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let e = d.submit("start a session in docs to fix the links")
+        await finish(d, f, e)
+        #expect(f.started.map(\.folder) == ["/code/lookout", "/code/docs"] && f.prepared == ["local_c", "local_c"])
     }
 
     @Test func aShortNameOfItsOwnPointsAtATarget() {
