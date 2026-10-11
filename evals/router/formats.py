@@ -1,5 +1,6 @@
 """Ways of asking Jev where a message goes. Each format turns a case into (state, questions, keymap); keymap maps
 the route question's option keys to destinations (a session id, new:<project>, or an intent)."""
+import json
 import random
 
 FENCE_OPEN, FENCE_CLOSE = '<session-content untrusted="true">', "</session-content>"
@@ -314,6 +315,30 @@ def v2(case, rng=None, history="none", unclear=True, replies=True, instructions=
     return state, q, keymap
 
 
+# ---------------------------------------------------------------- gates: yes/no checks asked beside any format
+
+GATES = {
+    "gate_setting": {"type": "noul", "instructions": {
+        "question": ("Does `message` ask to change how Lookout behaves for the user (a setting turned on or off, its "
+                     "notifications, an inbox category, a rule or a group), rather than for code to be written or for a "
+                     "session to do something?")}},
+    "gate_compound": {"type": "noul", "instructions": {
+        "question": "Does `message` ask for two or more different things, meant for different places (sessions or Lookout itself)?"}},
+    "gate_question": {"type": "noul", "instructions": {
+        "question": "Is `message` a question to the user's assistant about what is going on (a session's progress, what is waiting), rather than a message for a session to read?"}},
+}
+
+
+def gated(fmt):
+    def build(case, rng=None):
+        state, q, keymap = FORMATS[fmt](case, rng=rng)
+        gates = GATES
+        if "message" not in state:
+            gates = json.loads(json.dumps(GATES).replace("`message`", "`user message`"))
+        return state, {**q, **gates}, keymap
+    return build
+
+
 FORMATS = {
     "v0": v0,
     "v2": v2,
@@ -339,6 +364,10 @@ FORMATS = {
     "v1h": lambda c, rng=None: v1(c, rng, history="last10"),
     "v1sh": lambda c, rng=None: v1(c, rng, structured=True, history="last10"),
 }
+
+
+for _name in ["v0", "v2-h10", "v3-told"]:
+    FORMATS[_name + "+g"] = gated(_name)
 
 
 def build(name, case, shuffle_seed=None):

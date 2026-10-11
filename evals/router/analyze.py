@@ -17,6 +17,9 @@ FAMILIES = {
               for y in (0.5, 0.6, 0.7, 0.8, 0.9) for o in (0.2, 0.4)],
     "guard": [dict(p_min=p, lead=l, reply=y, reply_other=0.4, p_new=n, p_intent=i, conflict=k) for p in (0.5, 0.6, 0.7, 0.8)
               for l in (0, 0.2) for y in (0.5, 0.6) for n in (0.5, 0.6, 0.7) for i in (0.4, 0.5, 0.6) for k in (0.5, 0.7)],
+    "gates": [dict(p_min=p, lead=0, reply=0.5, reply_other=0.4, p_new=n, p_intent=0.6, conflict=0.5, g_compound=gc,
+                   g_setting=gs, g_question=gq) for p in (0.6, 0.7, 0.8) for n in (0.5, 0.6, 0.7)
+              for gc in (0.6, 0.75, 0.9, 2) for gs in (0.6, 0.75, 0.9, 2) for gq in (0.75, 0.9, 2)],
     # by risk: a session send keeps a high bar; a new session and Lookout's own intents get theirs
     "risk": [dict(p_min=p, lead=0, reply=y, reply_other=0.4, p_new=n, p_intent=i) for p in (0.6, 0.7, 0.8)
              for y in (0.5, 0.7) for n in (0.5, 0.6, 0.7) for i in (0.4, 0.5, 0.6)],
@@ -26,12 +29,21 @@ FAMILIES = {
 LOW_RISK = {"question", "compound", "change_lookout"}
 
 
-def policy(family, p_min=0.75, lead=0.3, ratio=2.0, reply=None, reply_other=0.3, p_new=None, p_intent=None, conflict=None):
+def policy(family, p_min=0.75, lead=0.3, ratio=2.0, reply=None, reply_other=0.3, p_new=None, p_intent=None, conflict=None,
+           g_compound=None, g_setting=None, g_question=None):
     """p_new / p_intent: the bar for a new session, and for Lookout's own intents (answered, or a change you can revert).
-    conflict: when one card's answer check stands out but the route's top is another session at least this sure, ask."""
+    conflict: when one card's answer check stands out but the route's top is another session at least this sure, ask.
+    g_*: a gate's yes at least this sure decides the intent first."""
     def pol(r):
         ranked = sorted(r["dests"].items(), key=lambda x: -x[1])
         top, p = ranked[0]
+        g = r.get("gates") or {}
+        if g_compound is not None and g.get("gate_compound", 0) >= g_compound:
+            return ("send", "compound")
+        if g_setting is not None and g.get("gate_setting", 0) >= g_setting:
+            return ("send", "change_lookout")
+        if g_question is not None and g.get("gate_question", 0) >= g_question:
+            return ("send", "question")
         if conflict is not None and reply is not None and r.get("replies"):
             ys = sorted(r["replies"].items(), key=lambda x: -x[1])
             if ys[0][1] >= reply and (len(ys) < 2 or ys[1][1] <= reply_other):

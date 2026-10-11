@@ -72,7 +72,8 @@ def reading(row):
         for k, v in a.items():
             if k.startswith("answers"):
                 replies[km[k]] = max(replies.get(km[k], 0), v["noul"])
-        return {"options": opts, "dests": dests, "replies": replies}
+        gates = {k: v["noul"] for k, v in a.items() if k.startswith("gate_")}
+        return {"options": opts, "dests": dests, "replies": replies, "gates": gates}
     kind = a["kind"]["probabilities"]
     yes = {km[k]: v["noul"] for k, v in a.items() if k in km}
     project = a.get("project", {}).get("probabilities", {})
