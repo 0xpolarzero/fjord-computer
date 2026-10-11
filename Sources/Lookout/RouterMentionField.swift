@@ -29,35 +29,6 @@ enum MentionText {
         }
         return (text.string, tokens)
     }
-
-    /// The pasted text with each "@name" of a known project (`resolve`: name → folder) made a pill. The word must stand
-    /// alone (after a break or the start, before a break or the end); the longest name wins.
-    static func pills(in text: String, names: [(name: String, folder: String)]) -> (draft: String, tokens: [String]) {
-        let sorted = names.sorted { $0.name.count > $1.name.count }
-        let chars = Array(text)
-        var out = ""
-        var tokens: [String] = []
-        var i = 0
-        while i < chars.count {
-            if chars[i] == "@", i == 0 || isBreak(chars[i - 1]) {
-                let rest = chars[(i + 1)...]
-                if let hit = sorted.first(where: { entry in
-                    let n = Array(entry.name)
-                    guard !n.isEmpty, rest.count >= n.count, Array(rest.prefix(n.count)).map({ String($0).lowercased() }) == n.map({ String($0).lowercased() }) else { return false }
-                    let end = rest.startIndex + n.count
-                    return end == chars.endIndex || isBreak(chars[end]) || ",.;:!?)".contains(chars[end])
-                }) {
-                    out.append(mark)
-                    tokens.append(hit.folder)
-                    i += 1 + hit.name.count
-                    continue
-                }
-            }
-            out.append(chars[i])
-            i += 1
-        }
-        return (out, tokens)
-    }
 }
 
 /// A pill in the text: the project's colour dot and its name on a rounded fill.
@@ -97,12 +68,10 @@ final class MentionAttachment: NSTextAttachment {
     required init?(coder: NSCoder) { fatalError("not archived") }
 }
 
-/// The composer's text view: pills copy as "@name", a paste of "@name" of a known project becomes a pill, and its focus is
-/// told.
+/// The composer's text view: pills copy as "@name", a paste is plain text (a pill is made only by picking a project from the
+/// @ suggestions: pasted code's `@cache` stays the decorator it is), and its focus is told.
 final class MentionTextView: NSTextView {
     var onFocus: (Bool) -> Void = { _ in }
-    /// The known projects' names and folders, for a paste.
-    var known: () -> [(name: String, folder: String)] = { [] }
     var makePill: (String) -> MentionAttachment? = { _ in nil }
     var name: (String) -> String = { $0 }
     var base: [NSAttributedString.Key: Any] = [:]
@@ -143,22 +112,9 @@ final class MentionTextView: NSTextView {
         insertPlain(text, replacing: selectedRange())
     }
 
-    /// Inserts text, its "@name"s of known projects as pills.
+    /// Inserts text as it is: an "@name" in it, a project's or not, stays text.
     func insertPlain(_ text: String, replacing range: NSRange) {
-        let (draft, tokens) = MentionText.pills(in: text, names: known())
-        let out = NSMutableAttributedString()
-        var next = tokens.makeIterator()
-        var run = ""
-        func flush() { if !run.isEmpty { out.append(NSAttributedString(string: run, attributes: base)); run = "" } }
-        for c in draft {
-            if c == MentionText.mark, let folder = next.next(), let pill = makePill(folder) {
-                flush()
-                out.append(NSAttributedString(attachment: pill))
-            } else { run.append(c) }
-        }
-        flush()
-        out.addAttributes(base, range: NSRange(location: 0, length: out.length))
-        // Attachments keep their own attribute; the base has none.
+        let out = NSAttributedString(string: text, attributes: base)
         guard shouldChangeText(in: range, replacementString: out.string) else { return }
         textStorage?.replaceCharacters(in: range, with: out)
         setSelectedRange(NSRange(location: range.location + out.length, length: 0))
@@ -228,7 +184,6 @@ struct MentionField: NSViewRepresentable {
         view.font = font
         view.isEditable = editable
         view.isSelectable = editable
-        view.known = { [store] in store.knownFolders.filter { !$0.isEmpty }.map { (store.folderName($0), $0) } }
         view.name = { [store] in store.folderName($0) }
         view.makePill = { [store] folder in
             MentionAttachment(folder: folder, name: store.folderName(folder), color: store.projectColor(folder), font: font)

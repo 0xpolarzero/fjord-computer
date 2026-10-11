@@ -360,10 +360,11 @@ enum Addressing {
     }
 
     /// The pills `text` starts with taken out, each with the spaces, or the colon or dash (and one line break), after it; nil
-    /// when it starts with none, or when nothing would be left. A pill glued to what follows it is left.
+    /// when it starts with none, or when nothing would be left. A pill glued to what follows it is left, and so is one in
+    /// code (`outsideCode`): an indented `@cache` is the decorator of the code it starts.
     static func withoutLeadingPills(_ text: String, _ pills: [Range<Int>]) -> String? {
         let chars = Array(text)
-        let ends = Dictionary(pills.map { ($0.lowerBound, $0.upperBound) }, uniquingKeysWith: max)
+        let ends = Dictionary(outsideCode(chars, pills).map { ($0.lowerBound, $0.upperBound) }, uniquingKeysWith: max)
         func blank(_ i: Int) -> Bool { i < chars.count && (chars[i] == " " || chars[i] == "\t") }
         var cut = 0
         while true {
@@ -383,6 +384,13 @@ enum Addressing {
         }
         guard cut > 0, chars[cut...].contains(where: { !$0.isWhitespace }) else { return nil }
         return String(chars[cut...])
+    }
+
+    /// The pills that start in the message's own words: one in code (fenced, indented or inline, `codeMask`) is its text.
+    static func outsideCode(_ text: [Character], _ pills: [Range<Int>]) -> [Range<Int>] {
+        guard !pills.isEmpty else { return [] }
+        let code = codeMask(text)
+        return pills.filter { $0.lowerBound >= 0 && $0.lowerBound < code.count && !code[$0.lowerBound] }
     }
 
     // MARK: @router asides
@@ -689,11 +697,13 @@ enum SessionStart {
     }
 
     /// `text` with each pill (an "@name" at its place) made one private character, and what each stands for. A text that
-    /// holds private characters of its own is left as it is (its pills aren't tags then: the words go whole).
+    /// holds private characters of its own is left as it is (its pills aren't tags then: the words go whole), and a pill in
+    /// code is the code's text (`Addressing.outsideCode`).
     private static func masking(_ text: String, _ pills: [Range<Int>]) -> (String, [Unicode.Scalar: String]) {
         let isPrivate = { (s: Unicode.Scalar) in (0xE000...0xF8FF).contains(s.value) }
-        guard !pills.isEmpty, !text.unicodeScalars.contains(where: isPrivate) else { return (text, [:]) }
         var chars = Array(text)
+        let pills = Addressing.outsideCode(chars, pills)
+        guard !pills.isEmpty, !text.unicodeScalars.contains(where: isPrivate) else { return (text, [:]) }
         var pilled: [Unicode.Scalar: String] = [:]
         var last = Int.max
         for (n, r) in pills.sorted(by: { $0.lowerBound > $1.lowerBound }).enumerated()

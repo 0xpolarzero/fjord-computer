@@ -47,6 +47,18 @@ import Testing
         #expect(throws: Addressing.NothingLeft.self) { try edit("@router what needs me?") }
     }
 
+    @Test func aPillInCodeIsTheCodesTextAndNeverTakenOut() throws {
+        // A project named "cache": the decorator of an indented or fenced method is the code's, pill or not.
+        for message in ["    @cache\n    def f(self):\n        return 1", "```\n@cache\ndef f(): pass\n```", "`@cache` it"] {
+            let at = pills(message, ["cache"])
+            #expect(!at.isEmpty)
+            #expect(try edit(message, pills: at) == message, "\(message)")
+            #expect(SessionStart.task(from: message, pills: at, projects: ["cache"]) == message, "\(message)")
+        }
+        #expect(try edit("@cache\n    @cache\n    def f(): pass", pills: pills("@cache\n    @cache", ["cache"]))
+                == "\n    @cache\n    def f(): pass")
+    }
+
     @Test func onlyAPillIsATagAndAnAddressGoesAsYouWroteIt() throws {
         // "@lookout" typed, not a pill: your words.
         #expect(try edit("@lookout add a badge", pills: []) == "@lookout add a badge")
