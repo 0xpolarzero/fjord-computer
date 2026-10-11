@@ -736,17 +736,23 @@ extension Store {
         guard thing.kind == .pr else { return true }
         guard let number = thing.number, let ref = RouterWaits.ref(thing) else { return false }
         let lower = message.lowercased()
-        // Two PRs named: which it waits on isn't clear, though the inbox has only one of them yet.
-        guard Self.prsNamed(lower).count <= 1 else { return false }
+        // Two PRs named: which it waits on isn't clear, though the inbox has only one of them yet ("#1 and #2" too).
+        guard Self.prsNamed(lower, repo: thing.repo).count <= 1 else { return false }
         return LookoutGate.mentions(lower, ref: ref) || Self.linksPR(lower, repo: thing.repo, number: number)
             || lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil
     }
 
-    /// The PRs a (lowercased) message names by ref or link, as `owner/repo#12`.
-    static func prsNamed(_ lower: String) -> Set<String> {
+    /// The PRs a (lowercased) message names by ref or link, as `owner/repo#12`; given the repo it would be in, by its bare
+    /// number too (`#12`, that repo's), so the same PR named both ways is one.
+    static func prsNamed(_ lower: String, repo: String? = nil) -> Set<String> {
         let patterns = [#"(?<![\w./-])([a-z0-9][a-z0-9-]*/[a-z0-9._-]+)#(\d+)(?!\d)"#,
                         #"github\.com/([a-z0-9][a-z0-9-]*/[a-z0-9._-]+)/pull/(\d+)(?!\d)"#]
         var found = Set<String>()
+        if let repo, let bare = try? NSRegularExpression(pattern: #"(?<![\w/&])#(\d+)(?!\d)"#) {
+            for match in bare.matches(in: lower, range: NSRange(lower.startIndex..., in: lower)) {
+                if let number = Range(match.range(at: 1), in: lower) { found.insert("\(repo.lowercased())#\(lower[number])") }
+            }
+        }
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
             for match in regex.matches(in: lower, range: NSRange(lower.startIndex..., in: lower)) {

@@ -342,6 +342,22 @@ import Testing
         #expect(Store.prsNamed("see o/app#1 (github.com/o/app/pull/1)") == ["o/app#1"])
     }
 
+    @Test func aWaitNamingTwoPRsByNumberIsNeverBoundToTheOneTheInboxHas() async {
+        for (message, binds) in [("Waiting for CI on PR #1 and PR #2.", false), ("Waiting for CI on #1 (o/app#1).", true),
+                                 ("Waiting for CI on PR #1, see github.com/o/app/pull/1.", true)] {
+            let (s, _) = store(watch: ciWatch)
+            s.router.cards[0].triage?.watch = nil
+            s.routerTriager.reader = { _ in message }
+            s.resolveWaits()
+            await settle()
+            s.things["pr:o/app#1"] = ci(.pending)
+            #expect(s.router.cards[0].triage?.watch?.target == (binds ? .ci(thing: "pr:o/app#1") : nil), "\(message)")
+        }
+        // A bare number is the repo's own PR, the same as its ref.
+        #expect(Store.prsNamed("#1 and o/app#1", repo: "o/app") == ["o/app#1"])
+        #expect(Store.prsNamed("pr #1 and pr #2", repo: "o/app") == ["o/app#1", "o/app#2"])
+    }
+
     @Test func aLateDeliveryLeavesACardYouReopenedMeanwhileOpen() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
         var release: CheckedContinuation<Void, Never>?
