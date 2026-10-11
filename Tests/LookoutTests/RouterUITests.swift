@@ -49,6 +49,8 @@ import UserNotifications
         #expect(store.router.cards.first { $0.id == open[1] }?.addressedBy == .you)
         // The addressed card goes up to the history: the next open one is picked.
         #expect(model.selection == open[2])
+        // The pick is replied to: Esc takes that off, then closes.
+        #expect(keys.key(key(kVK_Escape), responder: nil) && model.replyTo == nil && !closed)
         #expect(keys.key(key(kVK_Escape), responder: nil) && closed)
     }
 
@@ -149,7 +151,7 @@ import UserNotifications
         // Space on the superseded card in the history: its session's newer card isn't on the page, so the pick stays.
         model.select(older.id, store: store)
         #expect(keys.key(key(kVK_Space, " "), responder: nil))
-        #expect(model.selection == older.id && model.replyTo == nil)
+        #expect(model.selection == older.id && model.replyTo == older.id)
         // Jev neither offers it nor goes to it, and a pin on it doesn't hold; the history's card is still replied to.
         let tools = RouterTools(store: store)
         #expect(!tools.targets(store).contains { $0.target == "answer:\(hidden.id)" })
@@ -519,6 +521,33 @@ import UserNotifications
         #expect(model.replyTo == nil && model.focusRequest != request)
     }
 
+    @Test(.hostsWindows) func aCardPickedWhileThePageIsAwayIsTheOneRepliedToAndAReplyTakenOffStaysOff() async {
+        let store = demo()
+        let model = RouterModel()
+        let open = store.routerShownOpenCards.filter { $0.kind != .waiting }.map(\.id)
+        #expect(open.count >= 2)
+        // Replying to one card when the Router was left; a banner then picks another, with no page drawn to follow the pick.
+        model.reply(to: open[0], store: store)
+        model.select(open[1], store: store)
+        #expect(model.replyTo == open[1])
+        // The reply taken off: the page shown again doesn't put it back.
+        model.replyTo = nil
+        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
+            .frame(width: 1100, height: 720))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        for _ in 0..<3 {
+            await drainMainQueue()
+            hosting.layoutSubtreeIfNeeded()
+        }
+        #expect(model.selection == open[1] && model.replyTo == nil)
+    }
+
     @Test func backspaceAtTheStartTakesTheReplyOff() {
         let store = demo()
         let model = RouterModel()
@@ -696,9 +725,11 @@ import UserNotifications
         #expect(model.revisingPlan == form.id && closed == 0)
         #expect(keys.key(key(kVK_Escape), responder: feedback))
         #expect(model.revisingPlan == nil && closed == 0)
-        // Another card shown in full: no plan to revise, Esc closes.
+        // Another card shown in full: no plan to revise. Picking it armed a reply to it, which Esc takes off; then it closes.
         model.select(other.id, store: store)
-        #expect(model.expandedPlan(store) == nil)
+        #expect(model.expandedPlan(store) == nil && model.replyTo == other.id)
+        #expect(keys.key(key(kVK_Escape), responder: nil))
+        #expect(model.replyTo == nil && closed == 0)
         #expect(keys.key(key(kVK_Escape), responder: nil))
         #expect(closed == 1)
     }

@@ -388,8 +388,11 @@ final class RouterModel {
 
     /// Picks a card, or none (the Router itself), and takes the page there: an addressed card opens in the history, the
     /// Router row goes back down to the live zones. A card clicked is where you see it: the page is not taken anywhere.
+    /// The composer replies to what is picked, at once: a banner's card picked while the page isn't drawn is answered too,
+    /// not the card the reply was on when the page was left.
     func select(_ id: String?, store: Store, reveal shows: Bool = true) {
         selection = id
+        replyTo = id
         guard let id else { reveal(Self.endID, highlight: false); return }
         if let card = store.router.cards.first(where: { $0.id == id }) {
             // A session waiting is a row of Working.
