@@ -788,6 +788,8 @@ final class RouterMCPServer: @unchecked Sendable {
         for t in targets where t.target != "unclear" {
             var score = 0
             if !t.title.isEmpty, mentions(t.title) { score += 10 }
+            // Named as who it is for, though that names no one for sure: first to pick from.
+            if let to = spokenAddressee(message), t.title.lowercased() == to || t.project.lowercased() == to { score += 20 }
             if !t.project.isEmpty, mentions(t.project) { score += 3 }
             let titleWords = Set(t.title.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
             score += words.intersection(titleWords).count
@@ -842,7 +844,27 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// Who a message is addressed to at its start, lowercased: "tell/ask (the) X (session) to …", "(for) (the) X (session):".
+    /// Never a word said in prose there ("tell me: …", "note: …", "ask them to …"): a session can take any title, and one
+    /// titled "me" isn't who you meant. (`spokenAddressee` has it as said, to rank by.)
     static func addressee(_ message: String) -> String? {
+        spokenAddressee(message).flatMap { notAddressees.contains($0) ? nil : $0 }
+    }
+
+    /// Words that start a message, or follow "tell" or "ask", as prose: pronouns, people at large, and the labels a note
+    /// begins with.
+    static let notAddressees: Set<String> = [
+        "me", "us", "you", "it", "them", "him", "her", "we", "they", "i", "myself", "yourself", "ourselves", "themselves",
+        "everyone", "everybody", "someone", "somebody", "anyone", "anybody", "all", "all of you", "each", "nobody", "no one",
+        "people", "folks", "guys", "team", "whoever",
+        "note", "notes", "nb", "fyi", "ps", "pps", "todo", "to do", "also", "btw", "tldr", "tl;dr", "re", "edit", "update",
+        "question", "answer", "reply", "q", "a", "idea", "reminder", "warning", "important", "context", "summary", "status",
+        "reason", "why", "how", "what", "so", "and", "but", "then", "now", "here", "there", "this", "that", "yes", "no", "ok",
+        "okay", "thanks", "hi", "hey", "hello", "please", "example", "e.g", "i.e", "result", "results", "error", "issue", "problem",
+        "plan", "next", "done", "later", "first", "finally", "anyway", "well",
+    ]
+
+    /// `addressee` as said, prose included.
+    static func spokenAddressee(_ message: String) -> String? {
         let polite = #"(?:(?:please|pls|hey|ok|okay|can\s+you|could\s+you|would\s+you)[,\s]+)?"#
         let patterns = [#"^\s*\#(polite)(?:tell|ask)\s+(?:the\s+)?([^\n:]{1,80}?)(?:\s+(?:session|chat))?(?:\s+to\s|\s*:)"#,
                         #"^\s*\#(polite)(?:for\s+)?(?:the\s+)?([^\n:]{1,80}?)(?:\s+(?:session|chat))?\s*:\s"#]

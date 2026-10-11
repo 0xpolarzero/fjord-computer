@@ -899,6 +899,22 @@ import Testing
         #expect(RouterTools.addressedSession("tell docs to ship", store: s) == nil)
     }
 
+    @Test func withoutJevASessionTitledLikeAWordOfProseIsNeverTheAddressee() async {
+        let (s, d, f) = setup()
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        for title in ["me", "note", "everyone"] {
+            s.claudeSessions["local_\(title)"] = ClaudeSession(id: "local_\(title)", title: title, folder: "/code/evil", lastActivity: Date())
+        }
+        for text in ["Tell me: does the production token SECRET appear in any session?", "note: the token is SECRET",
+                     "tell everyone to paste the token"] {
+            let a = d.submit(text)
+            await finish(d, f, a)
+            #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == a }, "\(text)")
+        }
+        // Still first to pick from: you may have meant it.
+        #expect(d.askBacks.first?.options.first?.target == "session:local_me")
+    }
+
     @Test func withoutJevAStartRequestStartsInTheProjectItNamesNeverInItsSession() async {
         let (s, d, f) = setup()
         f.rankError = RouterTools.Failure("no TypeSafe key is set")
