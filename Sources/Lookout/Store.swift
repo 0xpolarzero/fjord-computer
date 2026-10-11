@@ -211,7 +211,7 @@ final class Store {
     /// Where the token comes from; replaced in tests (the real one can spawn `gh`).
     @ObservationIgnored var resolveToken: @Sendable () -> (String, TokenSource)? = { TokenProvider.resolve() }
     /// Counts the changes made in Settings; the token held was found under `foundAt`, and is looked for again once they differ.
-    @ObservationIgnored private var credentialsChanged = 0
+    @ObservationIgnored private(set) var credentialsChanged = 0
     @ObservationIgnored private var foundAt = 0
     /// A token was just saved or taken away: the sign-in that fails next is its result and is said aloud (a poll's isn't).
     @ObservationIgnored private(set) var awaitingSignIn = false

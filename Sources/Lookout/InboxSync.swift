@@ -829,6 +829,10 @@ extension Store {
     /// is a refresh asked for by hand: it searches even when the points looked spent.
     func syncInbox(manual: Bool = false) async {
         guard let me = me?.login else { return }
+        // Signed in as someone else, or with other credentials, while it waits (suggestions sign in too): what it was
+        // answered is about the last sign-in, and nothing of it is taken, said or acted on.
+        let fence = inboxFence
+        func current() -> Bool { inboxFence == fence }
         // In the background: the refresh never waits on it.
         if !repoNamesChecked, !repoNamesChecking {
             repoNamesChecking = true
@@ -845,7 +849,9 @@ extension Store {
         var scopeFailure: String?
         if needsTeams, InboxSync.teamsDue(resolvedAt: teamsResolvedAt, failedAt: inboxSyncState.teamsFailedAt) {
             // With no teams known, rules naming My teams would search nothing and empty: the refresh says so and waits.
-            if let failure = await resolveTeams(me: me) {
+            let failure = await resolveTeams(me: me)
+            guard current() else { return }
+            if let failure {
                 if myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
                     inboxError = "Your teams couldn't be looked up: " + failure
                     return
@@ -858,18 +864,22 @@ extension Store {
         if needsRepos, reposResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true {
             // A failure leaves what was known; with nothing known, the refresh waits: it would read as "nothing there".
             do { try await resolveRepos(me: me) } catch {
+                guard current() else { return }
                 // Never looked up whole: a part left empty may be the part that failed.
                 let unknown = reposResolvedAt == nil ? ownedRepos.isEmpty || contributedRepos.isEmpty
                     : ownedRepos.isEmpty && contributedRepos.isEmpty
                 if unknown { inboxError = error.localizedDescription; return }
                 scopeFailure = scopeFailure ?? "Your repos couldn't all be looked up: " + error.localizedDescription
             }
+            guard current() else { return }
         }
         let plan = InboxSync.searchPlan(categories: categories, groups: groups, me: me, contributed: contributedRepos,
                                         myTeams: myTeams, cursor: inboxSyncState.searchCursor)
         let searches = plan.searches
         let owners = InboxSync.workflowOwners(categories: categories, groups: groups)
-        if let failure = await resolveOwnerRepos(owners) {
+        let ownersFailure = await resolveOwnerRepos(owners)
+        guard current() else { return }
+        if let failure = ownersFailure {
             scopeFailure = scopeFailure ?? "The repos of an owner couldn't be looked up: " + failure
         }
         // Owners whose repos aren't known (their lookup failed since launch): their workflow things stay as they were.
@@ -902,6 +912,7 @@ extension Store {
             } catch {
                 searchFailure = error.localizedDescription
             }
+            guard current() else { return }
         }
         // Workflows: a repo that can't be read keeps the things it had.
         var workflowFailure: String?
@@ -926,6 +937,7 @@ extension Store {
                 if let t = queue.next() { add(t) }
             }
         }
+        guard current() else { return }
         // Each workflow thing says its repo's default branch, as its default target found it (or as known from before).
         var defaults: [String: String] = [:]
         for thing in workflows.values { if let main = thing.defaultBranch { defaults[thing.repo.lowercased()] = main } }
@@ -979,6 +991,7 @@ extension Store {
         inboxSyncState.workflowCursor = window.next
         applyThings(next)
         await readInbox()
+        guard current() else { return }
         announceInbox()
     }
 
@@ -1124,6 +1137,15 @@ extension Store {
         inboxSyncState = InboxSyncState()
     }
 
+    /// Which sign-in (`InboxSyncState.account`), with which credentials, the inbox's refresh is asking about: an answer
+    /// asked for under another is dropped.
+    struct InboxFence: Equatable {
+        let account: UUID
+        let credentials: Int
+    }
+
+    var inboxFence: InboxFence { InboxFence(account: inboxSyncState.account, credentials: credentialsChanged) }
+
     /// Whether `me` is still who is signed in (or no one is known yet): an answer about someone else is dropped.
     private func stillSignedIn(as me: String) -> Bool {
         let current = self.me?.login ?? login
@@ -1132,7 +1154,9 @@ extension Store {
 
     /// The repos you own and those you merged a PR in. Kept for a day.
     func resolveRepos(me: String) async throws {
+        let fence = inboxFence
         let json = try await gh.graphql(InboxSync.reposRequest(me: me))
+        guard inboxFence == fence else { return }
         guard let data = json["data"] as? [String: Any] else {
             throw GitHubError(message: ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer")
         }
@@ -1170,11 +1194,13 @@ extension Store {
     func resolveOwnerRepos(_ owners: [String], now: Date = Date()) async -> String? {
         let due = owners.filter { owner in inboxSyncState.ownerReposAt[owner].map { now.timeIntervalSince($0) > 86400 } ?? true }
         guard !due.isEmpty else { return nil }
-        let account = inboxSyncState.account
+        let fence = inboxFence
         let json: [String: Any]
-        do { json = try await gh.graphql(InboxSync.ownerReposRequest(due)) } catch { return error.localizedDescription }
+        do { json = try await gh.graphql(InboxSync.ownerReposRequest(due)) } catch {
+            return inboxFence == fence ? error.localizedDescription : nil
+        }
         // Asked for an account signed out since: not taken.
-        guard inboxSyncState.account == account else { return nil }
+        guard inboxFence == fence else { return nil }
         let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
         guard let data = json["data"] as? [String: Any] else {
             return (errors.first?["message"] as? String) ?? "GitHub gave no answer"
@@ -1203,11 +1229,15 @@ extension Store {
     /// if it did.
     @discardableResult
     func resolveTeams(me: String) async -> String? {
+        let fence = inboxFence
         let json: [String: Any]
         do { json = try await gh.graphql(InboxSync.teamsRequest(me: me)) } catch {
+            // Asked for an account signed out since: its failure isn't the new one's to wait on.
+            guard inboxFence == fence else { return nil }
             inboxSyncState.teamsFailedAt = Date()
             return error.localizedDescription
         }
+        guard inboxFence == fence else { return nil }
         guard let data = json["data"] as? [String: Any] else {
             inboxSyncState.teamsFailedAt = Date()
             return ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"

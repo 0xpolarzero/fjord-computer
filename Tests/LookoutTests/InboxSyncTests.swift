@@ -716,6 +716,54 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(count.searches == 1 && s.things["pr:o/r#12"] != nil && s.count(ci) == 3)
     }
 
+    @Test func whatARefreshIsAnsweredAfterAnotherAccountSignsInIsntTakenSaidOrWaitedOn() async {
+        final class Ref: @unchecked Sendable { var store: Store?; var switches = false }
+        let ref = Ref()
+        let (s, ci) = store(State()) { _ in }
+        ref.store = s
+        // Another account signs in while GitHub answers (as Categories' suggestions may).
+        nonisolated func switched() {
+            guard ref.switches else { return }
+            ref.switches = false
+            DispatchQueue.main.sync { MainActor.assumeIsolated { ref.store?.me = GHUser(login: "someone", avatarUrl: nil, type: "User") } }
+        }
+        s.gh.session = StubbedGitHub.session { request in
+            let path = request.url?.path ?? ""
+            if path == "/graphql" {
+                switched()
+                if InboxSyncRefresh.body(request).contains("organizations") { return .init(502, #"{"message":"Server Error"}"#) }
+                let reply: [String: Any] = ["data": ["s0": ["pageInfo": ["hasNextPage": false], "nodes": [node()]]]]
+                return .init(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+            }
+            if path == "/repos/a/x/actions/runs" { switched(); return .init(200, Self.runs([11])) }
+            if path.hasSuffix("/check-runs") { return .init(200, #"{"total_count":0,"check_runs":[]}"#) }
+            if path.hasSuffix("/status") { return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#) }
+            return .init(404, #"{"message":"unrouted"}"#)
+        }
+        func signIn() { s.me = GHUser(login: "me", avatarUrl: nil, type: "User"); ref.switches = true }
+        // The searches' answer.
+        s.categories = [InboxCategory(name: "Mine", symbol: "star", color: .blue, rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])))])]
+        signIn()
+        await s.syncInbox()
+        #expect(s.things.isEmpty && s.marks.isEmpty && s.categoryBaselines.isEmpty)
+        #expect(s.inboxSyncState.foundBy.isEmpty && s.inboxSyncState.searchCursor == 0 && s.inboxError == nil)
+        // A workflow's.
+        var workflows = InboxStore.ci
+        workflows.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/x")]), on: ["main"]),
+                                conditions: [.workflow([.failing])], createdAt: .distantPast)]
+        s.categories = [workflows]
+        signIn()
+        await s.syncInbox()
+        #expect(s.things.isEmpty && s.count(ci) == 0 && s.categoryBaselines.isEmpty)
+        // The teams' failure: the new account's teams aren't held back by it.
+        s.categories = [InboxCategory(name: "Team", symbol: "eye", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested])),
+        ])]
+        signIn()
+        await s.syncInbox()
+        #expect(s.inboxSyncState.teamsFailedAt == nil && s.inboxError == nil)
+    }
+
     @Test func pastTheCapTheWorkflowTargetsTakeTurnsAndThoseWaitingKeepTheirThings() async {
         final class Asked: @unchecked Sendable {
             private let lock = NSLock()
