@@ -50,3 +50,5 @@ The long-lived process, `--resume`, the transcript (`chat`), peer turns and the 
 5. Jev decides what a message addresses.
 6. Live Working explanations and end-of-turn summaries.
 7. Remove the long-lived process, resume and transcript.
+
+Research, what was tried and what was not enough: router-research.md.

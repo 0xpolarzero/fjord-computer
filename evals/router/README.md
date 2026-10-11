@@ -1,6 +1,7 @@
 # Router routing evals
 
-How well Jev routes what you type in the Router, measured on boards like yours.
+How well Jev routes what you type in the Router, measured on boards like yours. The whole story (what worked, what
+wasn't enough, dead ends, mistakes, open leads) is in docs/design/router-research.md.
 
 - `cases/` (210: everyday, hard, traps) and `heldout/` (150, written independently, bigger boards): see CASES.md. Gold
   was relabelled blind; what either labeler accepts counts, asking is fine when either allows it.
