@@ -404,6 +404,12 @@ struct RouterCard: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(unread, forKey: .unread)
     }
 
+    /// The turn a turn's card was made for (`<session>#t<completedTurns>`), from its id; nil for a question or plan.
+    var turn: Int? {
+        guard kind.isTurn, let range = id.range(of: "#t", options: .backwards) else { return nil }
+        return Int(id[range.upperBound...])
+    }
+
     /// The wait a question or plan card was made for (ms since 1970), from its id.
     var waitMs: Int64? {
         guard !kind.isTurn, let range = id.range(of: "#w", options: .backwards) else { return nil }
@@ -548,6 +554,9 @@ enum RouterFeed {
                 // No card for what you watched happen in the app, nor for muted projects.
                 let quiet = watching || muted.contains(session.folderKey)
                 if session.completedTurns > before.turns {
+                    // A newer turn ended: the cards of the turns before it are past, whether or not this one gets a card of
+                    // its own (none when you watched it end): the session went on from them.
+                    address(&state, id, .superseded, now) { $0.kind.isTurn && ($0.turn ?? Int.max) < session.completedTurns }
                     // A newer turn: one still waiting is past (the usual rules apply to this one). It waits too, until it
                     // can be told whether it left work running (decided below, at once when it can be). One that ended
                     // while you look at the session is held, not dropped: see below.
