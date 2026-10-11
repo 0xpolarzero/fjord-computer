@@ -1550,6 +1550,9 @@ struct CardView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(warm.opacity(marked || expanded || focused ? 0.8 : 0.4), lineWidth: marked ? 1.5 : 1)
         }
+        // One shadow for the card as a whole: without the group each of its parts (every line of text, every icon) casts its
+        // own, and the window's picture for the opening morph blurs every one of them again.
+        .compositingGroup()
         .shadow(color: warm.opacity(expanded ? 0.10 : 0), radius: 10, y: 2)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(card.kind.label): \(card.title)")
