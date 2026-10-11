@@ -152,11 +152,13 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         let changes: [String: Any] = ["id": "r1", "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-06T10:00:00Z", "body": "fix it",
                                       "authorAssociation": "MEMBER", "author": bob]
         let followUp: [String: Any] = ["id": "r3", "state": "COMMENTED", "submittedAt": "2026-10-08T10:00:00Z", "body": "",
-                                       "authorAssociation": "MEMBER", "author": bob]
+                                       "authorAssociation": "MEMBER", "author": bob, "commit": ["oid": "mid"]]
         let commit: [String: Any] = ["commit": ["oid": "mid", "committedDate": "2026-10-07T10:00:00Z", "author": ["user": ["login": "me"]]]]
         let t = try #require(InboxSync.thing(node(["latestOpinionatedReviews": ["nodes": [changes]],
                                                    "reviews": ["nodes": [changes, followUp]], "commits": ["nodes": [commit]]])))
         #expect(t.reviews.map(\.id) == ["r1", "r3"])
+        // What each review was of.
+        #expect(t.reviews.map(\.commitID) == [nil, "mid"])
         var marks = EntryMarks()
         marks.doneAt = iso("2026-10-07T00:00:00Z")
         func keys(_ condition: Condition, me: String = "me") -> [String]? {

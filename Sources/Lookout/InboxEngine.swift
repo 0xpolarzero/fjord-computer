@@ -444,9 +444,16 @@ enum InboxEngine {
         case .newReview(let by, _):
             return thing.reviews.filter { $0.at > cutoff && matches(by, $0.author, r) }
                 .map { Fact(key: "review:\($0.id)", label: "review by @\($0.author.login)", tint: .attention) }
-        case .newCommits(let by, _):
+        case .newCommits(let by, let since):
+            // Since your review: the commit it was made on, and those before it, were reviewed, though Lookout first saw
+            // them after (pushed and reviewed while it was closed).
+            var covered = 0
+            if since == .myLastReview, let reviewed = thing.reviews.filter({ isMe($0.author, r) }).max(by: { $0.at < $1.at })?.commitID,
+               let at = thing.commits.firstIndex(where: { $0.id == reviewed }) {
+                covered = at + 1
+            }
             // By when it came to the PR: committed before Done and pushed after it is new.
-            return thing.commits.filter { $0.arrived > cutoff && matches(by, login: $0.author, r) }
+            return thing.commits.dropFirst(covered).filter { $0.arrived > cutoff && matches(by, login: $0.author, r) }
                 .map { Fact(key: "commit:\($0.id)", label: "commit by @\($0.author)", tint: .neutral) }
         case .mentions(let pick, _):
             // In comments, and in review threads (inline, on a line of the diff).

@@ -48,6 +48,32 @@ import Testing
         #expect(seen != nil && s.things[thing.id]?.commits.last?.seenAt == seen)
     }
 
+    @Test func aCommitYouReviewedWhileLookoutWasClosedIsNotNewSinceYourReview() {
+        var thing = InboxFixture.pr(1)
+        thing.commits = [ThingCommit(id: "c0", author: "alice", at: Date().addingTimeInterval(-7200))]
+        thing.headSha = "c0"
+        let sinceReview = InboxCategory(name: "Commits", symbol: "arrow.up", color: .blue, rules: [Rule(
+            scope: Scope(kinds: [.pr]), conditions: [.newCommits(by: Pick(), since: .myLastReview)], createdAt: .distantPast)])
+        let s = InboxFixture.store([thing], category: sinceReview)
+        #expect(s.entries.isEmpty)
+        // Lookout is closed: Alice pushes c1 and you review it. Opened again, c1 is first seen now, after your review.
+        var reviewed = thing
+        reviewed.commits.append(ThingCommit(id: "c1", author: "alice", at: Date().addingTimeInterval(-1800)))
+        reviewed.headSha = "c1"
+        reviewed.reviews = [ThingReview(id: "r1", author: Person(login: "me"), state: .approved, at: Date().addingTimeInterval(-600),
+                                        commitID: "c1")]
+        s.applyThings([thing.id: reviewed])
+        #expect(s.things[thing.id]?.commits.last?.seenAt != nil)
+        // Your review was of c1: it and what came before are covered by it.
+        #expect(s.entries.isEmpty)
+        // What is pushed after it is new.
+        var pushed = s.things[thing.id]!
+        pushed.commits.append(ThingCommit(id: "c2", author: "alice", at: Date().addingTimeInterval(-1200)))
+        pushed.headSha = "c2"
+        s.applyThings([thing.id: pushed])
+        #expect(s.entries.first?.facts.map(\.key) == ["commit:c2"])
+    }
+
     @Test func anAssignmentWhoseTimeBecomesKnownStaysDoneRatedAndActedOn() {
         // An issue assigned to you, rated before GitHub said when (`assigned`), and Done.
         var issue = Thing(id: "issue:a/one#2", kind: .issue, repo: "a/one", number: 2, title: "t",

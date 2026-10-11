@@ -302,8 +302,8 @@ enum InboxSync {
       requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 50) { nodes { ... on ReviewRequestedEvent {
         createdAt requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } } }
       comments(last: 10) { nodes { ...C } }
-      latestOpinionatedReviews(first: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
-      reviews(last: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
+      latestOpinionatedReviews(first: 10) { nodes { id state submittedAt commit { oid } body authorAssociation author { \(personNode) } } }
+      reviews(last: 10) { nodes { id state submittedAt commit { oid } body authorAssociation author { \(personNode) } } }
       reviewThreads(first: \(threadsFirst)) { totalCount \(threadFields) }
       commits(last: 5) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
       head: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 50) { totalCount
@@ -661,7 +661,8 @@ enum InboxSync {
             }
             for r in nodes(node["latestOpinionatedReviews"]) {
                 guard let id = r["id"] as? String, let s = state(r["state"]), let at = date(r["submittedAt"]) else { continue }
-                reviews.append(ThingReview(id: id, author: person(r["author"], association: r["authorAssociation"]), state: s, at: at))
+                reviews.append(ThingReview(id: id, author: person(r["author"], association: r["authorAssociation"]), state: s, at: at,
+                                           commitID: dict(r["commit"])?["oid"] as? String))
             }
             var reviewIDs = Set(reviews.map(\.id))
             for r in nodes(node["reviews"]) {
@@ -675,7 +676,9 @@ enum InboxSync {
                     comments.append(ThingComment(id: id, author: who, at: at, snippet: snippet(text), mentions: found,
                                                  text: readText(text), isReview: true))
                 }
-                if reviewIDs.insert(id).inserted { reviews.append(ThingReview(id: id, author: who, state: s, at: at)) }
+                if reviewIDs.insert(id).inserted {
+                    reviews.append(ThingReview(id: id, author: who, state: s, at: at, commitID: dict(r["commit"])?["oid"] as? String))
+                }
             }
             thing.reviews = reviews.sorted { $0.at < $1.at }
             thing.reviewsShape = reviewsShape

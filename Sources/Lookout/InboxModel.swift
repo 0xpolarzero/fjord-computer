@@ -417,6 +417,9 @@ struct ThingReview: Codable, Hashable, Identifiable {
     var author: Person
     var state: ReviewState
     var at: Date
+    /// The commit it was made on (GitHub's `commit.oid`): it and those before it were reviewed, whenever Lookout first saw
+    /// them. Nil when GitHub didn't say, or in an older file.
+    var commitID: String? = nil
 }
 
 struct ThingThread: Codable, Hashable, Identifiable {
