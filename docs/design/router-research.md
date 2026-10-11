@@ -138,6 +138,27 @@ assistant-only turns, stemming, French stop words, corpus vs board IDF: all with
 the evidence, the user's own words are weak (and point away: a message repeating your last instruction starts
 something new).
 
+## Benchmark v2 (in progress, evals/router/v2, spec in evals/router/BENCHMARK.md)
+
+Episodes rather than single messages: a board, then submits, card changes, picks and corrections in order.
+
+- **Sources:** 501 real episodes (942 submits) on your real timelines; 180 scripted contracts plus 60 metamorphic
+  siblings (the shipped Router passes every contract, 0 wrong sends); 763 written episodes (Claude 350 and GPT 350
+  from 1,050 packets; Gemini still writing through `agy`, slowly).
+- **Written episodes are not typical traffic:** messages shorter than yours (p90 30–39 words against 73), fewer
+  questions, more session switches (about 40% same against your 51%), and writers mark asking unnecessary about 80% of
+  the time. They are kept for coverage of flows, weighted to the real mix, and never used for gold on asking.
+  Curation drops rewrites that translated an English real message into French (15), and marks a first submit copied
+  word for word from a real moment (179) so it plays but isn't scored twice.
+- **Gold comes from blind labels by three model families** (Claude, GPT, Gemini), never the writer's own family.
+  Pilot on 30 events (29 with all three): the same target 66% of the time, pairwise 76%; almost every split is "a
+  target" against "unknown", a split on whether the board is enough. Asking agreement is low (α 0.38): on real
+  moments whether to ask is genuinely ambiguous, so asking gold is a majority with adjudication, not one label.
+- **Labelling lessons:** in a batch, Claude put labels on neighbouring keys, and on a shared real board the wrong
+  target still looked valid. Each label now echoes the opening words of its message. `agy` (Gemini) is an agent: given
+  a ~70k-token batch it tries a shell command, which headless mode denies, and returns nothing; it gets small batches
+  (≤3 events) and a JSON schema, and is never granted command permissions. It is slow (1.5–3 min per event).
+
 ## Mistakes, and what they taught
 
 - **Sorted keys hid option order.** `jev.py` sent `json.dumps(sort_keys=True)`, so named options always reached Jev in
@@ -156,6 +177,9 @@ something new).
 - **Credits ran out mid-round 2** (HTTP 402) after ~43,000 calls / 106M input tokens (≈ $4.50): benchmarks, not real use.
   Real use is ~5 calls per message (live prediction while typing, the send, card checks), ≈ $0.04/day at 100 messages.
   Most of that is the while-typing predictions.
+- **A redaction pass over every string broke the scripted episodes:** the long-token pattern (28+ letters and digits)
+  also matched long internal names, so episode, family and some session ids became `[redacted]`. Redact free text
+  only, never identifiers; the scripted set was rebuilt and replayed.
 - **Real-moment caveats**: the real set is messages typed inside a session (no address, context from the
   conversation), a stress test rather than the Router's own traffic; gold is strict; labels come from agents; a
   session's title is its final one; a running session is never the gold in this data (an artefact of the extraction).
