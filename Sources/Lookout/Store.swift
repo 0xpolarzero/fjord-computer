@@ -68,6 +68,16 @@ final class Store {
     /// Why Jev couldn't read the inbox's new comments and requests (InboxJev.swift): what rests on his reading (asks me,
     /// noise, importance) stays as it was until he can.
     var inboxReadError: String?
+    /// Why what is changed isn't being saved, if it isn't (the state's file or the actions'): said where the sync status is,
+    /// until a save works.
+    var saveProblem: String? {
+        let problems = [stateSaveProblem, actionsSaveProblem].compactMap { $0 }
+        return problems.isEmpty ? nil : problems.joined(separator: "\n")
+    }
+    var stateSaveProblem: String?
+    var actionsSaveProblem: String?
+    /// The saved state couldn't be read at launch: what runs is the defaults, until a save works.
+    @ObservationIgnored private var onDefaults = false
     /// Repos (lowercased) GitHub said don't exist, or can't be seen: their chips are red and block Save.
     var missingRepos: Set<String> = []
     /// What GitHub said of each repo named, this session (lowercased name to its canonical name).
@@ -615,6 +625,8 @@ final class Store {
             // There but unreadable (its mode, say): not fresh state. Nothing is written over it until it can be read and
             // kept aside (see `writeSnapshot`). The actions' file is read (and kept from being written over) all the same.
             unreadable = file
+            onDefaults = true
+            stateSaveProblem = "state.json can't be read: \(error.localizedDescription)" + Self.onDefaultsNote
             Self.stateLog.error("the saved state can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
             loadActions()
             return
@@ -664,6 +676,7 @@ final class Store {
             Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup, privacy: .public)")
         } catch {
             unkept = (file, data, dropped)
+            stateSaveProblem = "state.json, read only in part, can't be kept aside: \(error.localizedDescription)"
             Self.stateLog.error("the saved state was read only in part, and keeping it aside failed (it isn't written over until it is): \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -805,9 +818,12 @@ final class Store {
         guard let failure else {
             saveFailures = 0
             savedRevision = revision
+            stateSaveProblem = nil
+            onDefaults = false
             return
         }
         saveFailures += 1
+        stateSaveProblem = "Saving state.json failed: \(failure)" + (onDefaults ? Self.onDefaultsNote : "")
         Self.stateLog.error("saving the state failed (\(self.saveFailures, privacy: .public) in a row): \(failure, privacy: .public)")
         // (A change made since has a write of its own coming, which retries in turn.)
         if retry, persistedRevision == revision {
@@ -816,6 +832,8 @@ final class Store {
     }
 
     private struct SnapshotBox: @unchecked Sendable { let state: PersistedState }
+
+    private static let onDefaultsNote = "\nRunning on defaults until the file can be read"
 
     // MARK: Derived
 

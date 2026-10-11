@@ -1054,6 +1054,7 @@ extension Store {
             // There but unreadable: not written over until it can be read and kept aside (see `saveActions`).
             Self.actionsLog.error("actions.json can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
             actionsDisk.unreadable = true
+            actionsSaveProblem = "actions.json can't be read: \(error.localizedDescription)"
             return
         }
         let dec = JSONDecoder()
@@ -1107,8 +1108,11 @@ extension Store {
                 }
                 try enc.encode(ledger.ledger).write(to: url, options: .atomic)
                 disk.wrote(revision)
+                DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.actionsSaveProblem = nil } }
             } catch {
                 let failures = disk.failed()
+                let problem = "Saving actions.json failed: \(error.localizedDescription)"
+                DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.actionsSaveProblem = problem } }
                 Self.actionsLog.error("saving actions.json failed (\(failures, privacy: .public) in a row): \(error.localizedDescription, privacy: .public)")
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(min(60, 1 << min(failures, 6))))

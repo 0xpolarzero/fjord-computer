@@ -257,6 +257,50 @@ import Testing
         #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
     }
 
+    @Test func aSaveThatCannotBeMadeIsSaidUntilOneIs() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        try Data(#"{"settings": {"pollInterval": 45, "notifications": true}}"#.utf8).write(to: file)
+        let actions = folder.appendingPathComponent("actions.json")
+        try Data(#"{"baselines": {}, "runs": {}}"#.utf8).write(to: actions)
+        for url in [file, actions] { try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path) }
+        defer { for url in [file, actions] { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) } }
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        // Unreadable: running on defaults, said from the start, the ledger's file too.
+        #expect(store.stateSaveProblem?.contains("Running on defaults until the file can be read") == true)
+        #expect(store.actionsSaveProblem?.contains("actions.json") == true)
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        #expect(store.stateSaveProblem?.contains("Running on defaults until the file can be read") == true)
+        // Readable again: once a save works, nothing is said.
+        for url in [file, actions] { try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        store.flushSave()
+        store.saveActions()
+        store.flushActions()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.saveProblem == nil)
+        // A write that fails (a full disk, a folder it can't write in) is said too, until one works.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        store.marks = [:]
+        store.flushSave()
+        store.saveActions()
+        store.flushActions()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.stateSaveProblem?.hasPrefix("Saving state.json failed") == true)
+        #expect(store.stateSaveProblem?.contains("Running on defaults") == false)
+        #expect(store.actionsSaveProblem?.hasPrefix("Saving actions.json failed") == true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        store.flushSave()
+        store.saveActions()
+        store.flushActions()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.saveProblem == nil)
+    }
+
     @Test func oneElementThatNoLongerDecodesIsLostAloneNotItsWholeList() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

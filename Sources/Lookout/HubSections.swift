@@ -327,6 +327,9 @@ extension LookoutHub {
             return SyncState(color: Theme.amber, text: "Not syncing", title: "Couldn't reach GitHub",
                              detail: "Check your connection · Lookout tries again on its own\n" + refresh)
         }
+        if let problem = store.saveProblem {
+            return SyncState(color: Theme.amber, text: "Not saved", title: "Changes aren't being saved", detail: problem)
+        }
         if let error = store.inboxError {
             return SyncState(color: Theme.amber, text: "Inbox didn't sync", title: "GitHub didn't answer the inbox's search",
                              detail: error + "\n" + refresh)
