@@ -257,6 +257,30 @@ import Testing
         await waitUntil { closed == 1 }
     }
 
+    /// Prepared on the Router out of sight, a notice it would show (the form hook couldn't be installed) is not said to
+    /// VoiceOver; it is once the window opens on it.
+    @Test func aPreparedRouterSaysItsNoticeOnlyOnceShown() async {
+        await Announced.exclusively {
+            var said: [String] = []
+            Announce.sink = { said.append($0) }
+            let (window, store) = controller()
+            store.routerHookError = "denied"
+            var closed = 0
+            window.onClose = { closed += 1 }
+            window.navigator.go(.router)
+            window.prepare()
+            try? await Task.sleep(for: .milliseconds(600))
+            await drainMainQueue()
+            #expect(!said.contains { $0.contains("denied") })
+            window.show(.router)
+            away(window)
+            await waitUntil { said.contains { $0.contains("denied") } }
+            #expect(said.contains { $0.contains("denied") })
+            window.close()
+            await waitUntil { closed == 1 }
+        }
+    }
+
     /// Prepared on the categories page, the page out of sight leaves no undo history to take ⌘Z, and opening on it has a
     /// fresh one.
     @Test func aPreparedCategoriesPageRegistersItsHistoryOnlyOnceOpen() async throws {
