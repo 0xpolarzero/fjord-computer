@@ -43,13 +43,14 @@ enum InboxEngine {
                     var routing = m
                     routing?.doneAt = nil
                     var stays = false
-                    var now = Set<String>()
+                    var now: [String: Fact] = [:]
                     for rule in category.rules where !off.contains(rule.id) {
                         guard let matched = facts(rule, thing, marks: routing, resolved: resolved) else { continue }
                         stays = true
-                        now.formUnion(matched.map(\.key))
+                        for fact in matched where now[fact.key] == nil { now[fact.key] = fact }
                     }
-                    let still = kept.filter { now.contains($0.key) }
+                    // Its identity is the saved fact's, its words today's ("1 unresolved" once one of two is resolved).
+                    let still = kept.compactMap { now[$0.key] }
                     if stays, !still.isEmpty {
                         var all = Set(still.map(\.key))
                         let shown = still + union.filter { all.insert($0.key).inserted }

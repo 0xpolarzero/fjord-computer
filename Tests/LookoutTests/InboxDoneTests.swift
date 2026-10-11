@@ -62,6 +62,22 @@ import Testing
         #expect(s.undoLast() && s.entries(in: comments).map(\.id) == ["pr:a/one#1"])
     }
 
+    @Test func aDoneThingSaysWhatIsTrueNow() {
+        var pr = InboxFixture.pr(3)
+        pr.threads = ["t1", "t2"].map {
+            ThingThread(id: $0, isResolved: false, startedBy: alice, lastReplyBy: alice, lastReplyID: $0 + "r", lastReplyAt: Date(), snippet: "")
+        }
+        let threads = InboxCategory(name: "Threads", symbol: "bubble", color: .blue,
+                                    rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.unresolvedThreads(startedBy: nil, lastReplyBy: nil)],
+                                                 createdAt: .distantPast)])
+        let s = InboxFixture.store([pr], category: threads)
+        s.markDone(s.entries[0])
+        pr.threads[1].isResolved = true
+        s.things[pr.id] = pr
+        // Still Done for the thread left, which it says as it is now.
+        #expect(s.doneEntries.map { $0.facts.map(\.label) } == [["1 unresolved"]])
+    }
+
     @Test func somethingNewAfterDoneOpensItAgainAndARuleThatNoLongerTakesItLetsItGo() {
         let (s, comments, all) = store()
         s.markDone(s.entries(in: comments)[0])
