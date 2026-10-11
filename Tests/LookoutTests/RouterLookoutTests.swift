@@ -640,7 +640,7 @@ import Testing
 
     @Test func markingDoneSeenAndRestoreIsOneCardThatRevertsExactly() async throws {
         let s = inboxStore()
-        let t = tools(s, turn: "mark them seen, then done")
+        let t = tools(s, turn: "mark a/one#1 seen, then everything in Mine done")
         let seenBefore = s.marks
         let seen = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
         #expect(seen.ok && changes(s).last?.title == "Marked 1 seen")
@@ -657,6 +657,28 @@ import Testing
         let restored = await call(t, "mark_entries", ["state": "restore", "entries": ["pr:a/one#1"]])
         #expect(restored.json["changed"] as? String == "nothing")
         #expect(await call(t, "mark_entries", ["state": "done"]).ok == false, "needs entries or a category")
+    }
+
+    @Test func marksAreBoundToWhatYourMessageNamesAndCountedOverTheTurn() async throws {
+        let s = inboxStore()
+        for n in 4...9 { s.things["pr:a/one#\(n)"] = InboxFixture.pr(n, greptile: 1) }
+        let refs = (4...9).map { "a/one#\($0)" }
+        let t = tools(s, turn: "mark " + refs.joined(separator: ", ") + " done")
+        let before = s.marks
+        // One at a time: the first five go, the sixth makes six this turn and waits, nothing of it marked.
+        for ref in refs.prefix(5) {
+            #expect(await call(t, "mark_entries", ["state": "done", "entries": [ref]]).json["waiting"] == nil, "\(ref)")
+        }
+        let sixth = await call(t, "mark_entries", ["state": "done", "entries": [refs[5]]])
+        #expect(sixth.json["waiting"] != nil && s.marks["pr:a/one#9"] == before["pr:a/one#9"])
+        #expect(try #require(changes(s).last).pending?.contains("6 things") == true)
+        // A new turn counts again; a thing your message doesn't name waits, unmarked.
+        t.beginTurn("mark a/one#4 done")
+        let other = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
+        #expect(other.json["waiting"] != nil && s.marks["pr:a/one#1"] == before["pr:a/one#1"])
+        #expect(LookoutGate.names("close #12 please", thing: InboxFixture.pr(12), category: nil))
+        #expect(!LookoutGate.names("close #123 please", thing: InboxFixture.pr(12), category: nil))
+        #expect(LookoutGate.names("clear out Reviews", thing: InboxFixture.pr(12), category: "Reviews"))
     }
 
     @Test func knownValuesAreListedForTheRulesToUse() async throws {
@@ -919,7 +941,7 @@ import Testing
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.generalID))
         await call(t, "set_setting", ["key": "snooze", "value": "3h"])
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.notificationsID))
-        t.beginTurn("delete it and mark it done")
+        t.beginTurn("delete it and mark a/one#1 done")
         await call(t, "delete_category", ["category": "Mine too"])
         s.applyLookoutChange(try #require(changes(s).last).id)
         #expect(try #require(changes(s).last).target(in: s) == .categories, "a category that is gone opens the page that listed it")

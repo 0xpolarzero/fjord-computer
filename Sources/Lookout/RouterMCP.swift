@@ -511,11 +511,14 @@ final class RouterMCPServer: @unchecked Sendable {
     var decision: UUID?
     /// The records of changes this turn made, so a later change to the same thing joins its record (see `record`).
     var turnChanges: [UUID] = []
+    /// The things this turn marked (or asked to): many at once wait for you however the marking is split.
+    var turnMarked: Set<String> = []
 
     /// A turn of yours begins.
     func beginTurn(_ text: String) {
         turnText = text
         turnChanges = []
+        turnMarked = []
     }
 
     /// The turn ended or was stopped: unused preparations go, runs under way are stopped, late work acts on nothing.
@@ -523,6 +526,7 @@ final class RouterMCPServer: @unchecked Sendable {
         turn += 1
         turnText = nil
         turnChanges = []
+        turnMarked = []
         prepared = [:]
         cancelRuns()
     }

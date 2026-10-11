@@ -68,6 +68,33 @@ enum LookoutGate {
         }
     }
 
+    /// Why marking `changes` waits beyond the change's own reasons: together with what this turn marked already, more than
+    /// `manyMarks` things (however the marking was split); or a thing your message doesn't name (`named`).
+    static func marksReason(_ changes: [EntryChange], named: Set<String>, markedThisTurn: Set<String>) -> String? {
+        let total = markedThisTurn.union(changes.map(\.thing)).count
+        if total > manyMarks { return "It marks \(total) things in this run" }
+        let unnamed = changes.filter { !named.contains($0.thing) }.count
+        return unnamed == 0 ? nil : "Your message didn't name \(unnamed == 1 ? "a thing" : "\(unnamed) things") it marks"
+    }
+
+    /// Whether your message names a thing: its reference (`owner/repo#12`), its number (`#12`), its whole title, or the
+    /// category it is marked by (`category`, when the marking is by category).
+    static func names(_ request: String, thing: Thing, category: String?) -> Bool {
+        let said = request.lowercased()
+        if let number = thing.number {
+            if said.contains("\(thing.repo.lowercased())#\(number)") { return true }
+            if said.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil { return true }
+        }
+        let title = (thing.kind == .workflow ? thing.workflowName ?? thing.title : thing.title).lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.count >= 4, said.contains(title) { return true }
+        if let category = category?.lowercased().trimmingCharacters(in: .whitespaces), category.count >= 2,
+           said.range(of: #"\b\#(NSRegularExpression.escapedPattern(for: category))\b"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
+    }
+
     /// The words that name each setting (a word of your message starting with one counts).
     private static let topics: [String: [String]] = [
         "notifications": ["notif", "banner", "alert", "mute", "silen", "quiet", "disturb"],
