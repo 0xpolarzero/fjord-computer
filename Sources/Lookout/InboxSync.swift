@@ -643,6 +643,13 @@ enum InboxSync {
                 let execution = ciExecution(sha: head["oid"] as? String ?? "", contexts: contexts)
                 thing.ciRun = execution.run
                 thing.ciRunning = execution.running || checkState(rollup["state"]) == .pending
+                // Failing only by checks cancelled (none failed, errored or timed out): cancelled, never a failure of its own.
+                let tally = Dictionary(((contexts["checkRunCountsByState"] as? [Any] ?? [])
+                    + (contexts["statusContextCountsByState"] as? [Any] ?? [])).compactMap { $0 as? [String: Any] }.compactMap { c in
+                        (c["state"] as? String).flatMap { state in (c["count"] as? Int).map { (state, $0) } }
+                    }, uniquingKeysWith: +).filter { $0.value > 0 }
+                let failed: Set<String> = ["FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]
+                thing.ciCancelled = thing.checks == .failing && tally["CANCELLED"] != nil && !tally.keys.contains(where: failed.contains)
             }
         } else {
             thing.status = node["state"] as? String == "CLOSED" ? .closed : .open

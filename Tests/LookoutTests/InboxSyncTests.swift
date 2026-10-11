@@ -100,6 +100,21 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(!again.ciRunning && again.ciRun != done.ciRun)
     }
 
+    @Test func aPullRequestFailingOnlyByCancelledChecksIsCancelled() throws {
+        func head(_ tally: [String: Int], statuses: [String: Int] = [:]) -> [String: Any] {
+            ["head": ["nodes": [["commit": ["oid": "abc", "statusCheckRollup": [
+                "state": "FAILURE", "contexts": ["totalCount": 0, "nodes": [] as [Any],
+                                                 "checkRunCountsByState": tally.map { ["state": $0.key, "count": $0.value] },
+                                                 "statusContextCountsByState": statuses.map { ["state": $0.key, "count": $0.value] }]]]]]]]
+        }
+        let cancelled = try #require(InboxSync.thing(node(head(["CANCELLED": 1, "SUCCESS": 2]))))
+        #expect(cancelled.checks == .failing && cancelled.ciCancelled)
+        // A failure among them, of a check or a status, is the outcome.
+        #expect(try #require(InboxSync.thing(node(head(["CANCELLED": 1, "FAILURE": 1])))).ciCancelled == false)
+        #expect(try #require(InboxSync.thing(node(head(["CANCELLED": 1], statuses: ["ERROR": 1])))).ciCancelled == false)
+        #expect(try #require(InboxSync.thing(node(head(["CANCELLED": 0, "FAILURE": 1])))).ciCancelled == false)
+    }
+
     @Test func aPullRequestBecomesAThing() throws {
         let t = try #require(InboxSync.thing(node()))
         #expect(t.id == "pr:o/r#12")
