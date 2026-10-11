@@ -493,7 +493,8 @@ private struct CDSButtonStyle: ButtonStyle {
                 .frame(width: iconOnly ? size.height : nil, height: size.height)
                 .background {
                     shape.fill(fill(hovered && enabled))
-                        .shadow(color: variant == .secondary ? CDS.fieldShadow : .clear, radius: 1, y: 1)
+                        .bakedShadow(variant == .secondary ? CDS.fieldShadow : .clear, .rounded(size.radius), radius: 1, y: 1,
+                                     fill: fill(hovered && enabled))
                         .padding(solid ? 0.5 : 0)
                         .scaleEffect(pressed ? 0.975 : 1)
                         .animation(pressed ? .easeOut(duration: 0.06) : .spring(duration: 0.45, bounce: 0.35), value: pressed)

@@ -713,7 +713,8 @@ struct CDSFieldChrome: ViewModifier {
                     RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius + 1, style: .continuous)
                         .strokeBorder(invalid ? CDS.Fill.danger : CDS.Fill.accent, lineWidth: 1)
                         .padding(-1)
-                        .shadow(color: invalid ? CDS.Settings.focusGlowDanger : CDS.Settings.focusGlow, radius: 3)
+                        .bakedShadow(invalid ? CDS.Settings.focusGlowDanger : CDS.Settings.focusGlow,
+                                     .ring(CDS.Settings.fieldRadius + 1, lineWidth: 1), radius: 3)
                         .allowsHitTesting(false)
                 }
             }
@@ -791,7 +792,7 @@ private struct CDSSwitch: View {
             .overlay {
                 Circle().fill(.white)
                     .frame(width: CDS.Settings.knob, height: CDS.Settings.knob)
-                    .shadow(color: .black.opacity(0.24), radius: 2, y: 1)
+                    .bakedShadow(.black.opacity(0.24), .circle, radius: 2, y: 1)
                     .offset(x: on ? travel / 2 : -travel / 2)
             }
             .animation(reduce ? nil : .timingCurve(0.34, 1.3, 0.64, 1, duration: 0.12), value: on)
@@ -847,7 +848,8 @@ struct SettingsSegmented<Value: Hashable>: View {
                                     .fill(CDS.Fill.secondary)
                                     .overlay(RoundedRectangle(cornerRadius: CDS.Settings.segmentThumbRadius, style: .continuous)
                                         .strokeBorder(CDS.border, lineWidth: 1))
-                                    .shadow(color: CDS.fieldShadow, radius: 1, y: 1)
+                                    .bakedShadow(CDS.fieldShadow, .rounded(CDS.Settings.segmentThumbRadius), radius: 1, y: 1,
+                                                 fill: CDS.Fill.secondary)
                                     .matchedGeometryEffect(id: "thumb", in: thumb)
                             }
                         }
@@ -947,7 +949,7 @@ struct SettingsButtonStyle: ButtonStyle {
                 .frame(width: style.iconOnly ? size.height : nil, height: size.height)
                 .background {
                     shape.fill(fill)
-                        .shadow(color: style.variant == .secondary ? CDS.fieldShadow : .clear, radius: 1, y: 1)
+                        .bakedShadow(style.variant == .secondary ? CDS.fieldShadow : .clear, .rounded(size.radius), radius: 1, y: 1, fill: fill)
                         .scaleEffect(pressed ? 0.975 : 1)
                         .animation(pressed ? .easeOut(duration: 0.06) : .spring(duration: 0.45, bounce: 0.35), value: pressed)
                 }

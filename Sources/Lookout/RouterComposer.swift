@@ -141,7 +141,7 @@ struct RouterComposer: View {
         .background(shape.fill(CDS.Surface.s3))
         .background(AnchorView(anchor: anchor) { windowHeight = $0 })
         .overlay(shape.strokeBorder(ring, lineWidth: 1))
-        .shadow(color: focused ? C.dropFocus : C.drop, radius: 10, y: 4)
+        .bakedShadow(focused ? C.dropFocus : C.drop, .rounded(C.radius), radius: 10, y: 4)
         .contentShape(shape)
         .onHover { hovering = $0 }
         .onTapGesture { if on { focusTick &+= 1 } }
