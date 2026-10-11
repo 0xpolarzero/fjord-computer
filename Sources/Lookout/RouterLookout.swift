@@ -285,9 +285,11 @@ extension RouterTools {
     private func commit(_ store: Store, _ change: LookoutChange, reason given: String? = nil,
                         apply: () throws -> LookoutChange) throws -> LookoutChange? {
         if !undoesThisTurn(store, change),
-           let reason = LookoutGate.reason(change, request: turnText ?? "", categories: store.categories) ?? given {
+           let reason = LookoutGate.reason(change, request: turnText ?? "", categories: store.categories,
+                                           pending: store.router.changes.filter(\.isPending)) ?? given {
             var waiting = change
             waiting.pending = reason
+            if case .category(_, _, let after?) = change.patch { waiting.groups = LookoutGate.groups(of: after, in: store.groups) }
             return record(store, waiting)
         }
         return record(store, try apply())

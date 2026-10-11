@@ -224,8 +224,8 @@ private struct GroupPreview: View {
             VStack(alignment: .leading, spacing: 6) {
                 SentenceLayout(spacing: 4, lineSpacing: 4) {
                     Word(group.kind == .people ? "People" : "Repos")
-                    ForEach(group.members.prefix(10), id: \.self) { Text($0).modifier(ChipLook()) }
-                    if group.members.count > 10 { Word("and \(group.members.count - 10) more") }
+                    // Every member: what a rule by this group takes is all of them.
+                    ForEach(group.members, id: \.self) { Text($0).modifier(ChipLook()) }
                     if group.members.isEmpty { Word("no members yet") }
                 }
             }

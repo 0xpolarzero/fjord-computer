@@ -13,9 +13,11 @@ enum LookoutGate {
     static let manyMarks = 5
 
     /// Why `change` waits for your Apply, or nil when it applies at once. `request`: your message for the run;
-    /// `categories`: the categories as they are now.
-    static func reason(_ change: LookoutChange, request: String, categories: [InboxCategory]) -> String? {
+    /// `categories`: the categories as they are now; `pending`: the changes waiting for your Apply, whose categories count as
+    /// made (a group or category one depends on can't change unseen under it).
+    static func reason(_ change: LookoutChange, request: String, categories: [InboxCategory], pending: [LookoutChange] = []) -> String? {
         let said = words(request)
+        let categories = prospective(categories, pending: pending)
         switch change.patch {
         case .category(let index, let before, let after):
             guard let after else { return "Deleting a category waits for you" }
@@ -150,6 +152,42 @@ enum LookoutGate {
         text.lowercased().split { !($0.isLetter || $0.isNumber) }.map(String.init)
     }
 
+    /// The categories as they would be with the waiting changes' categories applied, each where it would go.
+    static func prospective(_ categories: [InboxCategory], pending: [LookoutChange]) -> [InboxCategory] {
+        var out = categories
+        for change in pending where change.isPending {
+            guard case .category(let index, _, let after?) = change.patch else { continue }
+            if let i = out.firstIndex(where: { $0.id == after.id }) { out[i] = after }
+            else { out.insert(after, at: min(max(index, 0), out.count)) }
+        }
+        return out
+    }
+
+    /// The groups a category's rules name, as they are in `groups`.
+    static func groups(of category: InboxCategory, in groups: [InboxGroup]) -> [InboxGroup] {
+        groups.filter { uses(category, group: $0.id) }
+    }
+
+    /// What changed in the groups a waiting change was shown with (`old`), now `new`: "Crew: added mallory, removed bob".
+    static func groupChanges(from old: [InboxGroup], to new: [InboxGroup]) -> [String] {
+        var out: [String] = []
+        for g in old {
+            guard let now = new.first(where: { $0.id == g.id }) else { out.append("\(g.name): no longer used or gone"); continue }
+            var parts: [String] = []
+            if now.name != g.name { parts.append("renamed to \(now.name)") }
+            if now.kind != g.kind { parts.append("now \(now.kind.rawValue)") }
+            let added = now.members.filter { !g.members.contains($0) }, removed = g.members.filter { !now.members.contains($0) }
+            if !added.isEmpty { parts.append("added " + added.joined(separator: ", ")) }
+            if !removed.isEmpty { parts.append("removed " + removed.joined(separator: ", ")) }
+            if parts.isEmpty, now != g { parts.append("members reordered") }
+            if !parts.isEmpty { out.append("\(g.name): " + parts.joined(separator: ", ")) }
+        }
+        for g in new where !old.contains(where: { $0.id == g.id }) {
+            out.append("\(g.name) (" + (g.members.isEmpty ? "no members" : g.members.joined(separator: ", ")) + ")")
+        }
+        return out
+    }
+
     /// Whether a category's rules name the group (by its id, anywhere in them).
     private static func uses(_ category: InboxCategory, group: UUID) -> Bool {
         let encoder = JSONEncoder()
@@ -172,6 +210,18 @@ extension Store {
     func applyLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
         guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
         var change = router.changes[i]
+        // What its Details showed of the groups it uses is what it applies with: changed since, it waits again, saying how,
+        // and its Details show them as they are now.
+        if case .category(_, _, let after?) = change.patch {
+            let now = LookoutGate.groups(of: after, in: groups), shown = change.groups ?? []
+            if now != shown {
+                let what = LookoutGate.groupChanges(from: shown, to: now)
+                change.groups = now
+                change.pending = "A group it uses changed since you could see it (" + what.joined(separator: "; ") + "); check the details again"
+                router.changes[i] = change
+                return change
+            }
+        }
         let decision = router.decisions.first { $0.links.changes.contains(id) }?.id
         do {
             try changingInbox(.routerTool(decision: decision)) { try applyPatch(change.patch) }

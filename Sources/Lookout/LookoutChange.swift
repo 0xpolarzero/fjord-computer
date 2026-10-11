@@ -31,6 +31,9 @@ struct LookoutChange: Codable, Hashable, Identifiable {
     /// Why it waits for your Apply: made by the Router but not applied (`LookoutGate`). Nil once applied, or for one that
     /// applied at once.
     var pending: String?
+    /// A waiting category change: the groups its rules name, as they were when it was made (or last refused). Its Details
+    /// show them whole, and Apply refuses when they have changed since.
+    var groups: [InboxGroup]?
 
     enum Patch: Codable, Hashable {
         /// `before` nil: made; `after` nil: deleted. `index`: where it was (or is).
@@ -166,7 +169,7 @@ extension LookoutChange {
     @MainActor
     func payload(store: Store) -> ChangePayload {
         let words = RuleWords(store: store)
-        func category(_ c: InboxCategory?) -> [String] {
+        func category(_ c: InboxCategory?, groups: [InboxGroup]? = nil) -> [String] {
             guard let c else { return ["(none)"] }
             var out = ["Name: \(c.title)", "Icon: \(c.symbol)", "Color: \(c.color.rawValue)",
                        "Notifications: \(c.notifies ? "on" : "off")", c.hidden ? "Hidden from the bar" : "Shown in the bar"]
@@ -175,6 +178,10 @@ extension LookoutChange {
             }
             out += c.rules.isEmpty ? ["Rules: none"] : c.rules.enumerated().map { "Rule \($0.offset + 1): " + words.summary($0.element) }
             out += c.actions.isEmpty ? ["Actions: none"] : c.actions.items.enumerated().map { "Action \($0.offset + 1): " + Self.describe($0.element) }
+            // Every member of every group its rules name: what a rule by a group takes is its members.
+            out += LookoutGate.groups(of: c, in: groups ?? store.groups).map { g in
+                "Group \(g.name) (\(g.kind.rawValue)): " + (g.members.isEmpty ? "no members" : g.members.joined(separator: ", "))
+            }
             return out
         }
         func group(_ g: InboxGroup?) -> [String] {
@@ -188,7 +195,8 @@ extension LookoutChange {
             }
         }
         switch patch {
-        case .category(_, let before, let after): return ChangePayload(before: category(before), after: category(after))
+        case .category(_, let before, let after):
+            return ChangePayload(before: category(before), after: category(after, groups: isPending ? groups : nil))
         case .group(_, let before, let after): return ChangePayload(before: group(before), after: group(after))
         case .order(let before, let after): return ChangePayload(before: order(before), after: order(after))
         case .setting(let key, let before, let after):

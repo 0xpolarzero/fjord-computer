@@ -848,6 +848,35 @@ import Testing
         #expect(reason(.marks(state: "done", many), "mark everything done") != nil)
     }
 
+    @Test func aGroupAWaitingCategoryUsesCantChangeUnseenUnderIt() async throws {
+        let s = inboxStore()
+        let t = tools(s, turn: "make a Crew group, a category for it that thanks them, and swap in mallory")
+        let crew = (1...11).map { "member\($0)" }
+        let made = await call(t, "create_group", ["group": ["name": "Crew", "kind": "people", "members": crew]])
+        let group = try #require(s.groups.first { $0.name == "Crew" }, "\(made.text)")
+        let byCrew: [String: Any] = ["scope": ["kinds": ["pr"], "by": ["include": [["group": ["_0": group.id.uuidString]]]]]]
+        let acting = await call(t, "create_category", ["category": category("Crew", rules: [byCrew],
+                                                                            extra: ["actions": [["kind": ["comment": ["_0": "Thanks"]]]]])])
+        let card = try #require(changes(s).last, "\(acting.text)")
+        #expect(card.isPending && card.groups == [group])
+        // Every member, in its Details: none left out.
+        #expect(card.payload(store: s).after.contains("Group Crew (people): " + crew.joined(separator: ", ")))
+        // Its group's members, changed while it waits: that waits too, nothing of it applied.
+        let swapped = await call(t, "update_group", ["group": ["id": group.id.uuidString, "members": Array(crew.dropLast()) + ["mallory"]]])
+        #expect(swapped.json["waiting"] != nil && s.groups[0].members == crew, "\(swapped.text)")
+        let edit = try #require(changes(s).last)
+        #expect(edit.pending?.contains("Crew") == true)
+        // Applied anyway (or changed in the editor): the category's Apply then refuses once, saying what changed, and shows it.
+        s.applyLookoutChange(edit.id)
+        #expect(s.groups[0].members.last == "mallory")
+        let refused = try #require(s.applyLookoutChange(card.id))
+        #expect(refused.isPending && refused.pending?.contains("added mallory") == true && refused.pending?.contains("removed member11") == true)
+        #expect(!s.categories.contains { $0.name == "Crew" })
+        #expect(refused.payload(store: s).after.contains { $0.hasPrefix("Group Crew (people): ") && $0.hasSuffix("mallory") })
+        // Seen as it is now, it applies.
+        #expect(s.applyLookoutChange(card.id)?.isPending == false && s.categories.contains { $0.name == "Crew" })
+    }
+
     @Test func aCardPreviewReadsLikeTheEditorsSentence() async throws {
         let s = store()
         s.groups = [InboxGroup(name: "Crew", kind: .people, members: ["a"])]
