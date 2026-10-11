@@ -42,6 +42,14 @@ enum RouterWaits {
         return thing.headSha
     }
 
+    /// Whether a run kept the older way (a PR's head commit, a workflow's last update) is still the execution `run` (GitHub's
+    /// `ci:<commit>:…`) names: the same head commit, the same last update. A head that moved on meanwhile is another run.
+    static func sameRun(legacy: String, as run: String, thing: Thing) -> Bool {
+        if thing.kind == .workflow { return legacy == "\(thing.updatedAt.timeIntervalSince1970)" }
+        let parts = run.split(separator: ":", omittingEmptySubsequences: false)
+        return parts.count >= 2 && parts[1] == Substring(legacy)
+    }
+
     /// What the session is told: "The CI on owner/repo#12 finished: passing." It goes to the session as your own words
     /// (signed), so nothing free-form goes in, not even what Lookout saw (a workflow's or job's name, a title, another
     /// session's): only a repo and number checked to look like GitHub's, and the outcome in fixed words.
@@ -216,11 +224,15 @@ extension Store {
                                             inventory: claudeTaskInventory)
             let run = RouterWaits.run(watch, things: things)
             if let was = card.triage?.ready {
-                guard card.triage?.told == nil, case .ci(let id) = watch.target, things[id] != nil else { continue }
+                guard card.triage?.told == nil, case .ci(let id) = watch.target, let thing = things[id] else { continue }
                 // The same outcome of another run (a rerun that failed again) is ready again; an older card's, with no run
-                // kept or one told the older way (not GitHub's ids), only learns which run it is.
+                // kept or one told the older way (not GitHub's ids), only learns which run it is, if it is still that run:
+                // its head commit moved on meanwhile (or the workflow ran again), it is another run's outcome, ready again.
                 let comparable = was.run != nil && run != nil && was.run?.hasPrefix("ci:") == run?.hasPrefix("ci:")
-                guard result != was.result || (comparable && run != was.run) else {
+                let moved = !comparable && run?.hasPrefix("ci:") == true && was.run.map { legacy in
+                    !legacy.hasPrefix("ci:") && !RouterWaits.sameRun(legacy: legacy, as: run!, thing: thing)
+                } == true
+                guard result != was.result || (comparable && run != was.run) || moved else {
                     if !comparable, run != nil { state.cards[i].triage?.ready?.run = run }
                     continue
                 }

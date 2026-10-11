@@ -497,6 +497,44 @@ import Testing
         #expect(ready == 1 && s.router.cards[0].triage?.ready?.run == "ci:h1:aaa")
     }
 
+    @Test func aCardReadyTheOlderWayOnAnotherHeadIsReadyAgain() {
+        // Saved untold, the older way, on head h1; h2 was pushed and failed the same way while Lookout was closed.
+        var pr = ci(.failing)
+        pr.headSha = "h1"
+        let (s, _) = store(watch: ciWatch, things: [pr])
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        s.resolveWaits(now: Date(timeIntervalSince1970: 1_000))
+        #expect(ready == 1 && s.router.cards[0].triage?.ready?.run == "h1")
+        var upgraded = pr
+        upgraded.headSha = "h2"
+        upgraded.ciRun = "ci:h2:aaa"
+        s.things[pr.id] = upgraded
+        s.resolveWaits(now: Date(timeIntervalSince1970: 1_100))
+        #expect(ready == 2 && s.router.cards[0].triage?.ready?.run == "ci:h2:aaa")
+        s.resolveWaits(now: Date(timeIntervalSince1970: 1_200))
+        #expect(ready == 2)
+        // A workflow's older run is its last update: the same one learns its run, another is ready again.
+        var workflow = ci(.failing)
+        workflow.id = "workflow:o/app:1@main"
+        workflow.kind = .workflow
+        let watch = RouterTriage.Watch(target: .ci(thing: workflow.id), label: "CI", ref: "o/app", named: true)
+        let (w, _) = store(watch: watch, things: [workflow])
+        var told = 0
+        w.routerTriager.onReady = { _ in told += 1 }
+        w.resolveWaits(now: Date(timeIntervalSince1970: 1_000))
+        w.things[workflow.id]?.ciRun = "ci:s:5#1"
+        w.resolveWaits(now: Date(timeIntervalSince1970: 1_100))
+        #expect(told == 1 && w.router.cards[0].triage?.ready?.run == "ci:s:5#1")
+        w.router.cards[0].triage?.ready?.run = "\(workflow.updatedAt.timeIntervalSince1970)"
+        var rerun = workflow
+        rerun.updatedAt = workflow.updatedAt.addingTimeInterval(600)
+        rerun.ciRun = "ci:s:6#1"
+        w.things[workflow.id] = rerun
+        w.resolveWaits(now: Date(timeIntervalSince1970: 1_200))
+        #expect(told == 2 && w.router.cards[0].triage?.ready?.run == "ci:s:6#1")
+    }
+
     @Test func aWaitItsMessageDidntNameIsNeverContinuedOnItsOwn() async {
         var unnamed = ciWatch
         unnamed.named = false
