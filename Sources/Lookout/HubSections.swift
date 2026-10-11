@@ -289,12 +289,11 @@ extension LookoutHub {
         }
     }
 
-    /// Checks GitHub now; a spinner in its place while a check runs.
+    /// Checks GitHub now; the loader in its place while a check runs.
     @ViewBuilder private var refreshButton: some View {
         if store.isSyncing {
-            ProgressView().controlSize(.mini).scaleEffect(0.6)
+            FjordLoader(color: CDS.Text.secondary, label: "Checking GitHub").frame(width: 13, height: 13)
                 .frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control)
-                .accessibilityLabel("Checking GitHub")
         } else {
             IconButton(symbol: "arrow.clockwise", help: "Check now", detail: store.shortcut(.refresh).display,
                        size: CDS.Density.compact.control) { store.refreshNow() }

@@ -1511,10 +1511,10 @@ private struct ZoneHeaderButton<Preview: View>: View {
     }
 }
 
-/// A sparkles icon button that makes summaries, pulsing while they are made. `shown` false keeps its room but hides it, until
-/// it has the keyboard or is busy.
+/// A sparkles icon button that makes summaries, the loader in its place while they are made. `shown` false keeps its room but
+/// hides it, until it has the keyboard or is busy.
 private struct SparklesButton: View {
-    /// Its summaries are being made: it pulses.
+    /// Its summaries are being made: the loader shows.
     let busy: Bool
     /// Nothing more to ask for (each of its summaries is under way): it can't be clicked.
     var done = false
@@ -1523,20 +1523,23 @@ private struct SparklesButton: View {
     let action: () -> Void
     @State private var hovered = false
     @FocusState private var focused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var help: String { busy ? "Summarizing…" : label }
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "sparkles").font(.system(size: 11, weight: .medium))
-                .symbolEffect(.pulse, options: .repeating, isActive: busy && !reduceMotion)
-                .foregroundStyle(busy || hovered ? CDS.Text.secondary : CDS.Text.muted)
-                .opacity(busy && reduceMotion ? 0.6 : 1)
-                .frame(width: 22, height: 20)
-                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(hovered && !done ? CDS.Fill.ghostHover : .clear))
-                .contentShape(Rectangle())
+            Group {
+                if busy {
+                    FjordLoader(color: CDS.Text.secondary, label: help).frame(width: 11, height: 11)
+                } else {
+                    Image(systemName: "sparkles").font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(hovered ? CDS.Text.secondary : CDS.Text.muted)
+                }
+            }
+            .frame(width: 22, height: 20)
+            .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                .fill(hovered && !done ? CDS.Fill.ghostHover : .clear))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(done)

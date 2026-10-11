@@ -431,7 +431,7 @@ struct ClaudeButton: View {
     var body: some View {
         Button(action: action) {
             content.opacity(busy ? 0 : 1)
-                .overlay { if busy { ProgressView().controlSize(.small).tint(ink) } }
+                .overlay { if busy { FjordLoader(color: ink).frame(width: 14, height: 14) } }
         }
         .buttonStyle(CDSButtonStyle(variant: variant, size: size, iconOnly: iconOnly))
         .allowsHitTesting(!busy)

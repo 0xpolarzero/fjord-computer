@@ -98,7 +98,7 @@ private struct UpdateLabel: View {
                         .animation(.linear(duration: 0.2), value: fraction)
                 }
                 if updater.phase == .installing {
-                    ProgressView().controlSize(.mini)
+                    FjordLoader(color: tint, label: "Installing").frame(width: CDS.Sidebar.symbol, height: CDS.Sidebar.symbol)
                 } else {
                     Image(systemName: symbol)
                         .font(.system(size: CDS.Sidebar.symbol, weight: .semibold))
