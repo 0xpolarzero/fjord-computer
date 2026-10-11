@@ -53,14 +53,16 @@ struct ClaudeDot: View {
     }
 }
 
-/// `dframe-dot-blink`: 1.2s ease-in-out, opacity .3 → 1 → .3, forever.
+/// `dframe-dot-blink`: 1.2s ease-in-out, opacity .3 → 1 → .3, forever; lit and still with Reduce Motion.
 private struct BlinkingDot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var lit = false
     var body: some View {
         Circle().fill(CDS.Text.muted).frame(width: 6, height: 6)
             .opacity(lit ? 1 : 0.3)
             .onAppear {
-                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { lit = true }
+                let blink = Animation.easeInOut(duration: 0.6).repeatForever(autoreverses: true)
+                withAnimation(blink.resolved(reduce: reduceMotion)) { lit = true }
             }
     }
 }

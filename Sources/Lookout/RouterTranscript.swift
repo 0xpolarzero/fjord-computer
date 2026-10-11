@@ -150,7 +150,7 @@ struct StatusCaret: View {
             .font(.system(size: 8, weight: .semibold))
             .foregroundStyle(hot || open ? CDS.Text.secondary : CDS.Text.muted)
             .rotationEffect(.degrees(open ? 90 : 0))
-            .animation(.easeOut(duration: 0.06), value: open)
+            .motion(.easeOut(duration: 0.06), value: open)
             .frame(width: CDS.Transcript.caretBox, height: CDS.Transcript.text.1)
             .accessibilityHidden(true)
     }

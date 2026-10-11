@@ -827,7 +827,7 @@ private struct HoverOpen: View {
         .accessibilityLabel("Open \(title) in Claude")
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)
-        .animation(.easeOut(duration: 0.12), value: shown)
+        .motion(.easeOut(duration: 0.12), value: shown)
         .accessibilityHidden(!shown)
     }
 }

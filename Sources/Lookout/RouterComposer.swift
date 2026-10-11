@@ -148,7 +148,7 @@ struct RouterComposer: View {
         .contentShape(shape)
         .onHover { hovering = $0 }
         .onTapGesture { if on { focusTick &+= 1 } }
-        .animation(.easeOut(duration: 0.2), value: hot)
+        .motion(.easeOut(duration: 0.2), value: hot)
     }
 
     private func field(on: Bool) -> some View {

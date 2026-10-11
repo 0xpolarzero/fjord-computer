@@ -187,6 +187,7 @@ struct AwayStrip: Equatable {
 struct AwayStripView: View {
     let store: Store
     let model: RouterModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     static let shown = 5
 
     var body: some View {
@@ -199,7 +200,9 @@ struct AwayStripView: View {
                     Text("While you were away").cdsText((12, 16), .semibold, CDS.Text.secondary)
                     Text(line).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 4)
-                    Button { withAnimation(.easeOut(duration: 0.15)) { attention.dismissStrip() } } label: {
+                    Button {
+                        withAnimation(Animation.easeOut(duration: 0.15).resolved(reduce: reduceMotion)) { attention.dismissStrip() }
+                    } label: {
                         Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(CDS.Text.muted)
                             .frame(width: 18, height: 18).contentShape(Rectangle())
                     }
