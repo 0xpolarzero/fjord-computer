@@ -29,6 +29,18 @@ import Testing
         #expect(store.entries.map(\.id) == [thing.id])
     }
 
+    @Test func crossingTheThresholdIsSeenAndAnnouncedWithNothingReadingTheInbox() async throws {
+        let thing = InboxFixture.pr(1, updated: Date().addingTimeInterval(-86_400 + 0.5))
+        let store = InboxFixture.store([thing], category: stale(days: 1))
+        var posted: [String] = []
+        store.notifier.onPost = { posted.append($0.identifier) }
+        store.announceInbox()
+        let revision = store.inboxRevision
+        try await Task.sleep(for: .seconds(1.5))
+        #expect(store.inboxRevision != revision)
+        #expect(posted == ["inbox:\(thing.id)"])
+    }
+
     @Test func theListsAndCountsAreGroupedOnceWithTheEntries() {
         let now = Date()
         let store = InboxFixture.store([InboxFixture.pr(1, updated: now.addingTimeInterval(-60)), InboxFixture.pr(2, updated: now),

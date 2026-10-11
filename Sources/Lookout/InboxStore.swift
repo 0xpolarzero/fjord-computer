@@ -14,6 +14,8 @@ enum InboxStore {
         var open: [UUID: [InboxEntry]] = [:]
         var unread: [UUID: Int] = [:]
         var done: [InboxEntry] = []
+        /// Waits for `expires`, then makes the change seen (`inboxTimePassed`) and announces what came in.
+        var timer: Task<Void, Never>?
     }
 
     /// Done is always there and isn't a category. A new inbox starts with My repos: the PRs and issues in the repos you own.
@@ -55,6 +57,21 @@ extension Store {
         }
         memo.unread = memo.open.mapValues { $0.filter(\.isUnread).count }
         memo.done = result.filter(\.isDone).sorted { (marks[$0.id]?.doneAt ?? .distantPast) > (marks[$1.id]?.doneAt ?? .distantPast) }
+        // One timer, for the next threshold: what shows the inbox and the notifications see it crossed, with no refresh.
+        if inboxMemo.timer != nil, inboxMemo.expires == memo.expires {
+            memo.timer = inboxMemo.timer
+        } else {
+            inboxMemo.timer?.cancel()
+            if let expires = memo.expires {
+                memo.timer = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow) + 0.05))
+                    guard !Task.isCancelled, let self else { return }
+                    inboxMemo.timer = nil
+                    inboxTimePassed()
+                    announceInbox()
+                }
+            }
+        }
         inboxMemo = memo
         return memo
     }

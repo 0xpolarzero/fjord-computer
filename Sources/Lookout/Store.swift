@@ -90,6 +90,8 @@ final class Store {
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()
+    /// Time alone changed what matches (InboxStore.swift): what reads the inbox reads it again.
+    func inboxTimePassed() { inboxRevision &+= 1 }
     /// Done, taken back with ⌘Z or the inbox's undo line.
     let undoStack = UndoStack()
     var settings = AppSettings() {
