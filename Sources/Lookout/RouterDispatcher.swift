@@ -569,8 +569,9 @@ struct RouterAskBack: Identifiable, Equatable {
            !Self.evidenced(job.text, target: top.target, store: store) {
             found.sure = false
         }
-        // A session stopped on a permission or an ask of its own gets words not addressed to it only with your click: it is
-        // the ask's first button. Its card could be what made it the pick ("May I delete the production data?" for a "yes").
+        // A session stopped on a permission gets words not addressed to it only with your click: it is the ask's first
+        // button. Its card could be what made it the pick ("May I delete the production data?" for a "yes"). An ask of its
+        // own ("SQLite or Postgres?") takes an answer on the evidence above, as any session does.
         if found.sure, !found.live, let top = found.top, let session = Self.session(of: top.target, store: store),
            Self.asksYou(session, store: store), !Self.addressed(job.text, to: session, store: store) {
             found.sure = false
@@ -900,6 +901,10 @@ extension RouterDispatcher {
             guard let s = store.claudeSessions[id] else { return }
             names += [s.title, store.folderName(s.folderKey), (s.folderKey as NSString).lastPathComponent]
             about += [store.claudeActivity[id]?.text ?? "", s.summary?.detail ?? ""]
+            // What it asks you, as its own question ("SQLite or Postgres?"): an answer shares words with it.
+            for card in store.routerShownOpenCards where card.sessionID == id && card.kind == .asks {
+                about += [card.text] + (store.pendingForm(for: card)?.questions.flatMap { [$0.question] + $0.options.map(\.label) } ?? [])
+            }
         }
         if target.hasPrefix("answer:") {
             guard let card = store.router.cards.first(where: { $0.id == String(target.dropFirst(7)) }) else { return false }
@@ -956,9 +961,9 @@ extension RouterDispatcher {
         return nil
     }
 
-    /// The session has an open card asking you for a permission or an ask of its own.
+    /// The session has an open card asking you for a permission.
     static func asksYou(_ session: String, store: Store) -> Bool {
-        store.routerShownOpenCards.contains { $0.sessionID == session && ($0.kind == .approval || $0.kind == .asks) }
+        store.routerShownOpenCards.contains { $0.sessionID == session && $0.kind == .approval }
     }
 
     /// The message is addressed to the session by words you typed: "tell X to …" or "X: …" with its title or project, or

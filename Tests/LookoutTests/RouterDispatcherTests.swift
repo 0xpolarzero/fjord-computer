@@ -456,6 +456,21 @@ import Testing
         #expect(f.prepared == ["local_b", "local_b"])
     }
 
+    @Test func anAnswerToASessionsOwnAskGoesOnItsEvidence() async {
+        let (s, d, f) = setup()
+        s.router.cards = [RouterCard(id: "local_b#w4", sessionID: "local_b", kind: .asks, title: "Update the docs",
+                                     folder: "/code/docs", text: "SQLite or Postgres?", createdAt: Date())]
+        // Its words answer what it asks: sent, no click.
+        f.ranked = [.init(target: "session:local_b", p: 0.97), .init(target: "unclear", p: 0.03)]
+        let a = d.submit("SQLite")
+        await finish(d, f, a)
+        #expect(f.prepared == ["local_b"] && d.askBacks.isEmpty)
+        // Nothing to go on: still asked.
+        let b = d.submit("go ahead")
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_b"] && d.askBacks.map(\.id) == [b!])
+    }
+
     @Test func aFollowUpOnlyGoesWhereYouChoseYourLastMessageShouldGo() async {
         let (s, d, f) = setup()
         s.router.cards = []
