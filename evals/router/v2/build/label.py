@@ -56,6 +56,7 @@ if str(ROUTER) not in sys.path:
 from v2.run import adapter, episodes, rules
 
 FAMILIES = ("claude", "gpt", "gemini")
+REQUIRED = ("claude", "gpt")
 GEMINI_JOBS = int(os.environ.get("LABEL_GEMINI_JOBS", "3"))
 ASK = ("required", "allowed", "forbidden")
 VERSION = "blind-router-label-v2"
@@ -538,8 +539,15 @@ def latest_labels(rows):
 
 
 def independent_families(record):
-    return FAMILIES if record["source"] in {"real-moment", "scripted"} else tuple(
-        family for family in FAMILIES if family != record["writer"])
+    """Every family may label every event, the writer's own included: Gemini's subscription can't label the ~1,600
+    written events the other two families didn't write, so Claude and GPT label everything and a Gemini audit on a
+    sample measures whether a writer's own family agrees with it more than the other family does."""
+    return FAMILIES
+
+
+def has_required(labels):
+    """Gold needs Claude's and GPT's labels; Gemini's, where present, is a third vote."""
+    return set(REQUIRED) <= {label.get("family") for label in labels}
 
 
 def annotations(record, successes):
@@ -826,7 +834,7 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
             for record in records:
                 labels = annotations(record, successes)
                 identity = (record["key"], record["fingerprint"], "claude", "adjudicator")
-                if len(labels) == len(independent_families(record)) and (record["writer"] in FAMILIES or judgments_disagree(labels)):
+                if has_required(labels) and judgments_disagree(labels):
                     tried_current = any((row["key"], row["fingerprint"], row["family"], row["role"]) == identity and
                                         row.get("judgments_sha256") == digest(labels) for row in rows)
                     if current_adjudication(record, labels, successes) is None and (retry_failed or not tried_current):
@@ -870,20 +878,17 @@ def build_gold(records, directory=LABELS):
                     reason = "human anchor omits consequence and annotations do not resolve it"
             if gold is not None:
                 status, reason = "ready", None
-        elif len(labels) == len(independent_families(record)):
-            if record["writer"] in FAMILIES and adjudication is None:
-                reason = "writer exclusion requires the third adjudicator pass"
-            else:
-                try:
-                    gold = aggregate_labels(labels, source=record["source"], deterministic_gold=record["original_gold"],
-                        historical_intended=record["original_gold"].get("intended"), adjudication=adjudication,
-                        require_adjudication=True)
-                    status, reason = "ready", None
-                except NeedsAdjudication as error:
-                    reason = str(error)
+        elif has_required(labels):
+            try:
+                gold = aggregate_labels(labels, source=record["source"], deterministic_gold=record["original_gold"],
+                    historical_intended=record["original_gold"].get("intended"), adjudication=adjudication,
+                    require_adjudication=True)
+                status, reason = "ready", None
+            except NeedsAdjudication as error:
+                reason = str(error)
         output.append({"key": record["key"], "fingerprint": record["fingerprint"], "episode_id": record["episode_id"],
             "event_id": record["event_id"], "status": status, "gold": gold, "reason": reason,
-            "independent_labels": len(labels), "expected_independent": len(independent_families(record)),
+            "independent_labels": len(labels), "families": sorted(label["family"] for label in labels),
             "adjudicated": adjudication is not None, "human": human is not None,
             "scripted_check_disagreements": sum(any(label[field] != gold[field] for field in ("intended", "ask", "consequential")) or
                 any(set(label[field]) != set(gold[field]) for field in ("acceptable", "clarify"))
@@ -903,7 +908,7 @@ def agreement_stats(records, successes):
         for left, right in itertools.combinations(labels, 2):
             pairs += 1
             equal += left["intended"] == right["intended"]
-        if len(labels) == len(independent_families(record)):
+        if has_required(labels):
             complete += 1
             unanimous += len({label["intended"] for label in labels}) == 1
     return {"events": len(records), "ratings": sum(map(len, units)), "complete": complete,

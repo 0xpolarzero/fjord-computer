@@ -520,28 +520,35 @@ class IncrementalIntegrationTests(unittest.TestCase):
                          {"labelled_episodes": 0, "pending_episodes": 1})
         self.assertEqual(jsonl(self.output / "scripted.jsonl"), [])
 
-    def test_two_agreeing_real_labels_still_leave_third_family_pending(self):
+    def test_two_agreeing_real_labels_make_gold_without_gemini(self):
         self.source("real.jsonl")
         records = self.prepare()
         write_jsonl(self.directory / "raw.jsonl", [self.raw_label(records[0], family)
                                                     for family in ("claude", "gpt")])
         golds = build_gold(records, directory=self.directory)
-        self.assertEqual(golds[0]["status"], "pending")
-        self.assertIsNone(golds[0]["gold"])
-        self.assertEqual((golds[0]["independent_labels"], golds[0]["expected_independent"]), (2, 3))
+        self.assertEqual(golds[0]["status"], "ready")
+        self.assertEqual(golds[0]["families"], ["claude", "gpt"])
 
-    def test_writer_is_excluded_and_other_two_need_a_current_adjudicator(self):
+    def test_gemini_alone_with_one_required_family_is_not_enough(self):
+        self.source("real.jsonl")
+        records = self.prepare()
+        write_jsonl(self.directory / "raw.jsonl", [self.raw_label(records[0], family)
+                                                    for family in ("claude", "gemini")])
+        self.assertEqual(build_gold(records, directory=self.directory)[0]["status"], "pending")
+
+    # The writer's own family labels too (Gemini can't cover the written set); a split still needs a current
+    # adjudication, and a Gemini audit measures same-family bias (label.independent_families).
+    def test_the_writers_family_labels_and_a_split_needs_adjudication(self):
         self.source("written_claude.jsonl", source="goal", writer="claude")
         records = self.prepare()
         record = records[0]
-        self.assertEqual(independent_families(record), ("gpt", "gemini"))
+        self.assertEqual(independent_families(record), ("claude", "gpt", "gemini"))
         rows = [self.raw_label(record, "claude", intended="question", acceptable=["question"]),
                 self.raw_label(record, "gpt"), self.raw_label(record, "gemini")]
         write_jsonl(self.directory / "raw.jsonl", rows)
         gold = build_gold(records, directory=self.directory)[0]
-        self.assertEqual((gold["status"], gold["independent_labels"]), ("pending", 2))
+        self.assertEqual((gold["status"], gold["independent_labels"]), ("pending", 3))
         independent = annotations(record, latest_labels(rows)[0])
-        self.assertEqual([judgment["family"] for judgment in independent], ["gpt", "gemini"])
         adjudication = self.raw_label(record, "claude", role="adjudicator")
         adjudication["judgments_sha256"] = digest(independent)
         write_jsonl(self.directory / "raw.jsonl", rows + [adjudication])
