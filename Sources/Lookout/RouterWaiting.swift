@@ -178,7 +178,7 @@ extension Store {
 
     /// Whether the waiting session's final message names what it waits on, by Lookout's own reading (not Jev's): the other
     /// session's id, or its title's words or project (`RouterDepends.names`); the PR's ref (`owner/repo#12`, whole: not
-    /// `owner/repo#123`), its number (`#12`), or two words of its title, unless the message names another PR by its ref; a
+    /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`), its number (`#12`), or two words of its title, unless the message names another PR by its ref; a
     /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named on
     /// another branch too is either), from Lookout's own data. A watch whose ref
     /// isn't its thing's names nothing. A wait it doesn't name is never continued on its own.
@@ -208,6 +208,7 @@ extension Store {
                 }
             }
             if let ref, LookoutGate.mentions(lower, ref: ref) { return true }
+            if let number = thing.number, Self.linksPR(lower, repo: thing.repo, number: number) { return true }
             // Another PR named by its ref: this one's number or title words in the same message are about that one.
             if lower.range(of: #"(?<![\w./-])[a-z0-9][a-z0-9-]*/[a-z0-9._-]+#\d"#, options: .regularExpression) != nil { return false }
             if let number = thing.number,
@@ -215,6 +216,12 @@ extension Store {
             let titled = RouterDepends.words(thing.workflowName ?? thing.title)
             return !titled.isEmpty && titled.intersection(RouterDepends.words(message)).count >= min(2, titled.count)
         }
+    }
+
+    /// Whether a (lowercased) message links the PR: `github.com/owner/repo/pull/12`, not `…/pull/123`.
+    static func linksPR(_ lower: String, repo: String, number: Int) -> Bool {
+        lower.range(of: #"github\.com/"# + NSRegularExpression.escapedPattern(for: repo.lowercased()) + #"/pull/\#(number)(?!\d)"#,
+                    options: .regularExpression) != nil
     }
 
     /// Whether a (lowercased) message names a branch, whole: `main` isn't `maintenance`, `dev` isn't `develop` or `x/dev`.
@@ -244,6 +251,7 @@ extension Store {
     /// continues automatically. CI ready but not told yet follows its checks: running again (a new push) it waits again,
     /// and an outcome that changed is the one it is ready with (said again).
     func resolveWaits(now: Date = Date()) {
+        bindUnwatchedWaits()
         guard router.enabled, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch != nil }) else { return }
         var state = router
         var ready: [RouterCard] = []

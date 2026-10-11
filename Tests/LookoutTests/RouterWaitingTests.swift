@@ -289,6 +289,59 @@ import Testing
         }
     }
 
+    @Test func aPRTheTurnOpenedIsWatchedOnceTheInboxHasItWhenItsMessageNamesIt() async {
+        // The turn opened the PR and ended waiting on its CI before the inbox had it: Jev had nothing to pick.
+        let (s, _) = store(watch: ciWatch)
+        s.router.cards = [RouterCard(id: "a#t3", sessionID: "a", kind: .done, title: "Deploy fix", folder: "/code/app",
+                                     text: "Waiting on CI", createdAt: Date())]
+        s.routerTriager.rescanned = true
+        s.routerTriager.reader = { _ in "Opened https://github.com/o/app/pull/1 with the fix; waiting for its CI." }
+        s.routerTriager.earlier = { _ in [] }
+        var asked = 0
+        s.routerTriager.asker = { _, _ in
+            asked += 1
+            return ["state": .choice(.init(choice: "waiting", confidence: 0.9, probabilities: ["waiting": 0.9])),
+                    "waitingOn": .choice(.init(choice: "ci", confidence: 0.9, probabilities: ["ci": 0.9]))]
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(s.router.cards[0].kind == .waiting && s.router.cards[0].triage?.watch == nil)
+        // Another PR of the repo comes, which it doesn't name: nothing is watched.
+        var other = ci(.pending)
+        other.id = "pr:o/app#2"
+        other.number = 2
+        s.things[other.id] = other
+        #expect(s.router.cards[0].triage?.watch == nil)
+        // Its PR comes: watched, as named, with no call to Jev; its checks going green make it ready.
+        s.things["pr:o/app#1"] = ci(.pending)
+        let watch = s.router.cards[0].triage?.watch
+        #expect(watch?.target == .ci(thing: "pr:o/app#1") && watch?.named == true && watch?.ref == "o/app#1" && asked == 1)
+        #expect(s.router.cards[0].triage?.ready == nil)
+        s.things["pr:o/app#1"]?.checks = .passing
+        #expect(s.router.cards[0].triage?.ready?.result == "passing")
+    }
+
+    @Test func aWaitOnCINotYetInTheInboxIsReadAgainOnceAfterARelaunchAndNeverBoundWhenItNamesTwo() async {
+        for message in ["Pushed; waiting on CI for o/app#1.", "Pushed; waiting on CI for o/app#1 and o/app#2."] {
+            // Saved waiting on CI with nothing watched; the message isn't known after the relaunch: read again, once.
+            let (s, _) = store(watch: ciWatch)
+            s.router.cards[0].triage?.watch = nil
+            var reads = 0
+            s.routerTriager.reader = { _ in reads += 1; return message }
+            s.resolveWaits()
+            await settle()
+            s.resolveWaits()
+            await settle()
+            #expect(reads == 1)
+            s.things["pr:o/app#1"] = ci(.pending)
+            // Naming two, which it waits on isn't clear, though the inbox has only one of them yet.
+            let one = message.contains("#2") ? nil : RouterTriage.Watch.Target.ci(thing: "pr:o/app#1")
+            #expect(s.router.cards[0].triage?.watch?.target == one)
+        }
+        // A ref and its link are the one PR.
+        #expect(Store.prsNamed("see o/app#1 (github.com/o/app/pull/1)") == ["o/app#1"])
+    }
+
     @Test func aLateDeliveryLeavesACardYouReopenedMeanwhileOpen() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
         var release: CheckedContinuation<Void, Never>?

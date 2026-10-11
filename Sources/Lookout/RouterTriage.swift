@@ -421,6 +421,11 @@ extension Claude {
     var telling: Set<String> = []
     /// The GitHub repos each folder's git remotes name (`Store.gitRepos`), read once; tests fill it in.
     var repos: [String: Set<String>] = [:]
+    /// Waiting cards Jev found waiting on CI with nothing Lookout could watch yet (a PR the turn opened, before the inbox
+    /// has it), by id: the turn's final message, read for the CI it names as it comes (`Store.bindUnwatchedWaits`).
+    var unwatched: [String: String] = [:]
+    /// Those whose message was read again for it (once each: after a relaunch, say).
+    var unwatchedRead: Set<String> = []
     private var running = 0
 
     /// Waits until no triage is under way (tests).
@@ -672,8 +677,97 @@ extension Store {
             if rescue {
                 self.rescueTurn(session, triage: triage, message: message)
             } else {
+                // Waiting on CI Lookout doesn't have yet: what the message names is bound once the inbox has it.
+                if triage.state == .waiting, triage.watch == nil, Self.waitsOnCI(triage) {
+                    self.routerTriager.unwatched[id] = message
+                }
                 self.applyTriage(triage, to: id)
             }
+        }
+    }
+
+    /// Whether a triage says the turn waits on something CI shows (checks, tests, a deploy's workflow).
+    static func waitsOnCI(_ triage: RouterTriage) -> Bool {
+        [.ci, .tests, .deploy].contains(triage.waitingOn)
+    }
+
+    /// The open waiting cards of their session's latest turn that wait on CI with nothing watched: a turn that opened a
+    /// PR and ended waiting on its checks before the inbox had it. Once a PR or workflow of the session's repo comes whose
+    /// CI runs, or changed since the turn ended, and the turn's final message names it, by Lookout's own reading (its ref,
+    /// its link or number for a PR, as `waitNamed` reads a workflow) and names no other, it is watched, named: no call to
+    /// Jev. The message is kept from the triage (read again once, when it isn't: after a relaunch). As the inbox's CI is
+    /// offered to Jev only while he may read the inbox, it is bound only then too.
+    func bindUnwatchedWaits() {
+        guard router.enabled, jevReadsInbox, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch == nil })
+        else { return }
+        var state = router
+        var kept: [String: String] = [:]
+        for i in state.cards.indices {
+            let card = state.cards[i]
+            guard card.isOpen, card.kind == .waiting, let triage = card.triage, triage.watch == nil, triage.ready == nil,
+                  triage.told == nil, Self.waitsOnCI(triage), let session = claudeSessions[card.sessionID], !session.running,
+                  card.id == "\(session.id)#t\(session.completedTurns)" else { continue }
+            guard let message = routerTriager.unwatched[card.id], let repos = routerTriager.repos[session.folder ?? ""] else {
+                readUnwatched(card.id, session: session)
+                continue
+            }
+            kept[card.id] = message
+            let named = things.values.filter { thing in
+                (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
+                    && (thing.checks == .pending || thing.ciRunning
+                        || (thing.checks != nil && max(thing.updatedAt, thing.ciChangedAt ?? .distantPast) > session.lastActivity))
+                    && bindsTo(thing, message: message, by: session)
+            }
+            guard named.count == 1, let thing = named.first else { continue }
+            state.cards[i].triage?.watch = .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing),
+                                                 ref: RouterWaits.ref(thing), named: true)
+            kept[card.id] = nil
+        }
+        routerTriager.unwatched = kept
+        if state != router { router = state }
+    }
+
+    /// Whether a waiting message names this CI well enough to watch it without Jev: as `waitNamed` reads it, and, for a PR,
+    /// by its ref, its link or its number (its title's words alone are not enough).
+    private func bindsTo(_ thing: Thing, message: String, by session: ClaudeSession) -> Bool {
+        guard waitNamed(.init(target: .ci(thing: thing.id), label: "", ref: RouterWaits.ref(thing)), in: message, by: session) else {
+            return false
+        }
+        guard thing.kind == .pr else { return true }
+        guard let number = thing.number, let ref = RouterWaits.ref(thing) else { return false }
+        let lower = message.lowercased()
+        // Two PRs named: which it waits on isn't clear, though the inbox has only one of them yet.
+        guard Self.prsNamed(lower).count <= 1 else { return false }
+        return LookoutGate.mentions(lower, ref: ref) || Self.linksPR(lower, repo: thing.repo, number: number)
+            || lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil
+    }
+
+    /// The PRs a (lowercased) message names by ref or link, as `owner/repo#12`.
+    static func prsNamed(_ lower: String) -> Set<String> {
+        let patterns = [#"(?<![\w./-])([a-z0-9][a-z0-9-]*/[a-z0-9._-]+)#(\d+)(?!\d)"#,
+                        #"github\.com/([a-z0-9][a-z0-9-]*/[a-z0-9._-]+)/pull/(\d+)(?!\d)"#]
+        var found = Set<String>()
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            for match in regex.matches(in: lower, range: NSRange(lower.startIndex..., in: lower)) {
+                if let repo = Range(match.range(at: 1), in: lower), let number = Range(match.range(at: 2), in: lower) {
+                    found.insert("\(lower[repo])#\(lower[number])")
+                }
+            }
+        }
+        return found
+    }
+
+    /// The final message of a waiting card's turn, read again (once) for the CI it names, with its folder's repos.
+    private func readUnwatched(_ cardID: String, session: ClaudeSession) {
+        guard routerTriager.unwatchedRead.insert(cardID).inserted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let message = await self.finalMessage(session)
+            _ = await self.gitRepos(of: session.folder)
+            guard let message, self.router.cards.contains(where: { $0.id == cardID && $0.isOpen && $0.triage?.watch == nil }) else { return }
+            self.routerTriager.unwatched[cardID] = message
+            self.resolveWaits()
         }
     }
 
