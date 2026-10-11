@@ -522,6 +522,10 @@ private struct TipSpaceModifier: ViewModifier {
 extension View {
     /// Hosts tooltips for everything inside (use once, at the root of the panel).
     func tipSpace() -> some View { modifier(TipSpaceModifier()) }
+    /// A tip space only where `on`: inside a view that has one already, that one draws the tips.
+    @ViewBuilder func tipSpace(_ on: Bool) -> some View {
+        if on { tipSpace() } else { self }
+    }
 
     /// A tooltip for a control: on hover, and after a second on keyboard focus when it hands over its own `focused`.
     func tip(_ title: String, _ detail: String? = nil, focused: Bool = false) -> some View {

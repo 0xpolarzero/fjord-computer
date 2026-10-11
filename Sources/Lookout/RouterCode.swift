@@ -21,7 +21,8 @@ struct RouterCodeView: View {
         .frame(minWidth: embedded ? 0 : 760, minHeight: embedded ? 0 : 520)
         .foregroundStyle(Theme.text)
         .environment(\.colorScheme, .dark)
-        .tipSpace()
+        // Inside the app window, the window's tip space draws the tips: a second one would only measure the page again.
+        .tipSpace(!embedded)
         .task { if checksClaudeCode { await model.checkClaudeCode(store) } }
         // Picking a card points the composer at it: what you type next is a reply to that session.
         .onChange(of: model.selection) { _, id in model.replyTo = id }
