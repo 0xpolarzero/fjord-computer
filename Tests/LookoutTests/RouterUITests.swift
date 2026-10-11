@@ -1059,6 +1059,22 @@ import UserNotifications
         #expect(store.router.decisions.count > before && store.router.decisions.last?.links.cards == [])
     }
 
+    @Test func markHandledOpensTheCardThePickMovesOnTo() throws {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        let open = model.cards(store).filter(\.isOpen).map(\.id)
+        try #require(open.count == 3)
+        // The middle card picked and handled: the next one is picked, shown in full and gone to, not the first one.
+        model.tap(open[1], store: store)
+        model.address(open[1], store: store)
+        #expect(model.selection == open[2] && model.expandedNeed == open[2] && model.revealRequest?.id == open[2])
+        #expect(store.routerPage.openNeed(preferred: model.expandedNeed) == open[2])
+        // The same with Space, back up to the first card when it was the last.
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(model.selection == open[0] && model.expandedNeed == open[0] && model.revealRequest?.id == open[0])
+    }
+
     @Test(.hostsWindows) func thePickMovingOnFromAHandledCardArmsNoReplyYouTookOff() async {
         let store = demo()
         let model = RouterModel()

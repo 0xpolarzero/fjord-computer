@@ -390,14 +390,16 @@ final class RouterModel {
         if let i = listed.firstIndex(of: id) {
             next = listed[(i + 1)...].first(where: visible.contains) ?? listed[..<i].reversed().first(where: visible.contains)
         }
-        advance(from: id, to: next)
+        advance(from: id, to: next, store: store)
     }
 
     /// The pick moved on by itself (its card handled or gone from the list): a reply on that card follows it while nothing is
     /// written, while no reply (one you took off) stays none. Only a card you pick (a click, a banner, the keys) arms a reply.
-    private func advance(from id: String, to next: String?) {
+    /// The page shows the new pick as it shows one you make (the card of Needs you opened in full), and goes there if `shows`.
+    private func advance(from id: String, to next: String?, store: Store, reveal shows: Bool = false) {
         selection = next
         replyTo = followingReply(from: id, to: next)
+        if let next { showPick(next, store: store, reveal: shows) }
     }
 
     /// The reply once the pick moved on by itself from `id` to `next`: words written to that card stay its own (its session
@@ -414,6 +416,11 @@ final class RouterModel {
         selection = id
         replyTo = id
         guard let id else { reveal(Self.endID, highlight: false); return }
+        showPick(id, store: store, reveal: shows)
+    }
+
+    /// The picked card opened (in full in Needs you, out in the history) and, if `shows`, gone to.
+    private func showPick(_ id: String, store: Store, reveal shows: Bool) {
         if let card = store.router.cards.first(where: { $0.id == id }) {
             // A session waiting is a row of Working.
             if card.isOpen, card.kind == .waiting { if shows { reveal(Self.workingID(card.sessionID)) }; return }
@@ -473,7 +480,7 @@ final class RouterModel {
         store.setCardAddressed(id, true)
         store.logCardAction("Marked handled", card: id)
         Announce.say("Addressed")
-        if selection == id { advance(from: id, to: next) }
+        if selection == id { advance(from: id, to: next, store: store, reveal: true) }
     }
 
     /// Reopen on a history line: the card is back in Needs you and the page goes to it.
@@ -517,9 +524,7 @@ final class RouterModel {
         if card.isOpen { store.logCardAction("Marked handled", card: id) }
         Announce.say(card.isOpen ? "Addressed" : "Open again")
         guard card.isOpen else { return }
-        let reply = followingReply(from: id, to: next)
-        select(next, store: store)
-        replyTo = reply
+        advance(from: id, to: next, store: store, reveal: true)
     }
 
     /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the
