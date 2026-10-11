@@ -752,14 +752,16 @@ enum InboxSync {
     }
 
     /// The searches that find what you're involved in, by their qualifier for you: `involves:`, and for PRs those for a
-    /// review asked of you (or your team) and one you made, which `involves:` leaves out.
-    static let involvementSearches = ["involves", "review-requested", "reviewed-by"]
+    /// review asked of you (or your team) and one you made, which `involves:` leaves out; and `mentions:`, which finds a
+    /// conversation you were mentioned in however many comments came since.
+    static let involvementSearches = ["involves", "review-requested", "reviewed-by", "mentions"]
 
     /// A thing your `involves:` search found is marked so (for you): GitHub knows you're involved there even once what
     /// you did is past what is fetched of it (your comment before ten newer ones), and that is kept from now on. One such
     /// search read to its end (`complete`) that would have found it and didn't says you're no longer involved (reassigned
     /// away): marked `false`, which takes back what was kept. A search cut short, or that failed, says nothing. Your review
-    /// searches are marked the same, each on its own (`ThingSignals.involvedBy`): one's absence never takes back another's.
+    /// and mention searches are marked the same, each on its own (`ThingSignals.involvedBy`): one's absence never takes back
+    /// another's.
     static func markInvolved(_ thing: inout Thing, foundBy searches: Set<String>, complete: Set<String> = [], me: String) {
         guard thing.kind != .workflow, !me.isEmpty else { return }
         var marks: [String: Bool] = [:]
@@ -790,7 +792,7 @@ enum InboxSync {
             guard parts.count == 2 else { return false }
             let (key, value) = (parts[0].lowercased(), parts[1])
             switch key {
-            case "involves", "review-requested", "reviewed-by": guard same(value, me) else { return false }
+            case "involves", "review-requested", "reviewed-by", "mentions": guard same(value, me) else { return false }
             case "archived", "sort": continue
             case "is":
                 switch value.lowercased() {

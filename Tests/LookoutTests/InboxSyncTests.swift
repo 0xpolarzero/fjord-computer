@@ -767,6 +767,59 @@ extension InboxSyncMapping {
         #expect(category() == repo.id)
     }
 
+    @Test func aConversationYourMentionsSearchFindsStaysToYouMentionedPastTenNewerCommentsUntilAWholeSearchNoLongerDoes() async {
+        final class Phase: @unchecked Sendable { var mentions = "found" }
+        let phase = Phase()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            let body = InboxSyncRefresh.body(request)
+            // Someone else's PR whose mention of you came before the ten comments fetched, none of which mentions you.
+            let comments = (0..<10).map { n -> [String: Any] in
+                ["id": "c\(n)", "createdAt": "2026-10-0\(n % 9 + 1)T10:00:00Z", "body": "more", "authorAssociation": "NONE",
+                 "author": ["login": "alice", "__typename": "User", "avatarUrl": ""]]
+            }
+            let pr = node(["author": ["login": "alice", "__typename": "User"], "body": "", "assignees": ["nodes": []],
+                           "reviewRequests": ["nodes": []], "comments": ["nodes": comments], "reviews": ["nodes": []],
+                           "latestOpinionatedReviews": ["nodes": []], "reviewThreads": ["nodes": []]])
+            var data: [String: Any] = [:]
+            for i in 0..<8 {
+                guard let start = body.range(of: "s\(i): search(") else { continue }
+                let query = body[start.upperBound...].prefix { $0 != ")" }
+                if query.contains("mentions:me") {
+                    switch phase.mentions {
+                    case "found": data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": [pr]]
+                    case "more": data["s\(i)"] = ["pageInfo": ["hasNextPage": true, "endCursor": "c"], "nodes": []]
+                    default: data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": []]
+                    }
+                } else if query.contains("repo:o") {
+                    data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": [pr]]
+                } else {
+                    data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": []]
+                }
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        var mentioned = InboxCategory(name: "Mentioned", symbol: "star", color: .blue)
+        mentioned.rules = [Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.me]), toRoles: [.mentioned]), conditions: [])]
+        var repo = InboxCategory(name: "Repo", symbol: "star", color: .blue)
+        repo.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("o/r")])), conditions: [])]
+        s.categories = [mentioned, repo]
+        func category() -> UUID? { s.entries.first { $0.thing.id == "pr:o/r#12" }?.categoryID }
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#12"]?.mentioned.isEmpty == true)
+        #expect(category() == mentioned.id)
+        // Your mentions: search, cut short, says nothing: it is still to you (mentioned).
+        phase.mentions = "more"
+        await s.syncInbox()
+        #expect(category() == mentioned.id)
+        // Read whole, without it, while the repo's search still brings it: no longer.
+        phase.mentions = "gone"
+        await s.syncInbox()
+        #expect(category() == repo.id)
+    }
+
     @Test func aDraftIsOpenToAnInvolvesSearchSoUnassignedFromOneItIsNoLongerInvolved() {
         var draft = InboxFixture.pr(12, repo: "o/r", by: Person(login: "alice"))
         draft.status = .draft

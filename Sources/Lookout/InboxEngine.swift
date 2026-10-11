@@ -351,7 +351,12 @@ enum InboxEngine {
                 var logins: [String] = []
                 if scope.toRoles.contains(.assigned) { logins += thing.assignees }
                 if scope.toRoles.contains(.reviewRequested), thing.kind == .pr { logins += thing.requestedReviewers }
-                if scope.toRoles.contains(.mentioned) { logins += thing.mentioned }
+                if scope.toRoles.contains(.mentioned) {
+                    logins += thing.mentioned
+                    // GitHub's `mentions:` search for you found it: you were mentioned there, though the comment that
+                    // did may be past those fetched (ten newer ones came since).
+                    if signals(thing, r.me)?.involvedBy?["mentions"] == true { logins.append(r.me) }
+                }
                 if !logins.contains(where: { matches(to, login: $0, r) }) { return false }
             }
         }
