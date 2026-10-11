@@ -768,25 +768,39 @@ struct RouterAskBack: Identifiable, Equatable {
     /// The newest ask that the name fits once, among the targets still there; a nil target when it fits only ones gone since.
     /// Only what that ask offered is picked so: a title is a session's own to set, and one never offered (a session renamed
     /// "router what needs me") isn't where a message goes for being typed. A card handled since stands for its
-    /// session when the name is the session's too.
+    /// session when the name is the session's too. A name said exactly (case aside) wins, its punctuation kept ("C#" over
+    /// "C"); only else the words alone ("fix the login bug." for "Fix the login bug"), and then only when they fit one
+    /// option offered: "C." fitting "C#" and "C" picks neither.
     func typedPick(_ text: String) -> (ask: UUID, target: String?)? {
         guard let store, !askBacks.isEmpty else { return nil }
-        var name = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)).lowercased()
-        guard !name.isEmpty, name.split(separator: " ").count <= 6 else { return nil }
-        for prefix in ["to ", "the ", "in "] where name.hasPrefix(prefix) { name.removeFirst(prefix.count) }
-        func fits(_ option: RouterAskBack.Option) -> Bool {
-            let title = option.title.lowercased(), detail = option.detail.lowercased()
+        let ws = CharacterSet.whitespacesAndNewlines, trim = ws.union(.punctuationCharacters)
+        func said(_ set: CharacterSet) -> String {
+            var name = text.trimmingCharacters(in: set).lowercased()
+            for prefix in ["to ", "the ", "in "] where name.hasPrefix(prefix) { name.removeFirst(prefix.count) }
+            return name.trimmingCharacters(in: set)
+        }
+        let exact = said(ws), loose = said(trim)
+        guard !loose.isEmpty, loose.split(separator: " ").count <= 6 else { return nil }
+        func fits(_ option: RouterAskBack.Option, _ name: String, _ set: CharacterSet) -> Bool {
+            let title = option.title.trimmingCharacters(in: set).lowercased(), detail = option.detail.trimmingCharacters(in: set).lowercased()
             return name == title || name == "\(title) (\(detail))" || name == "\(title) in \(detail)"
                 || (option.target.hasPrefix("new:") && (name == detail || name == "new session in \(detail)"))
         }
         var gone: UUID?
         for ask in askBacks.reversed() {
-            let fitting = ask.options.filter(fits)
+            var fitting = ask.options.filter { fits($0, exact, ws) }
+            var fit: (RouterAskBack.Option) -> Bool = { fits($0, exact, ws) }
+            if fitting.isEmpty {
+                fitting = ask.options.filter { fits($0, loose, trim) }
+                fit = { fits($0, loose, trim) }
+                // The words alone fit more than one option offered: not a pick of either.
+                guard fitting.count <= 1 else { continue }
+            }
             let own = fitting.filter { eligible($0.target, store: store) }
             if own.count == 1 { return (ask.id, own[0].target) }
             guard own.isEmpty else { continue }
             let sessions = Set(fitting.compactMap { $0.target.hasPrefix("answer:") ? Self.session(of: $0.target, store: store) : nil })
-                .map { "session:\($0)" }.filter { eligible($0, store: store) && option($0, store: store).map(fits) == true }
+                .map { "session:\($0)" }.filter { eligible($0, store: store) && option($0, store: store).map(fit) == true }
             if sessions.count == 1 { return (ask.id, sessions[0]) }
             if sessions.isEmpty, !fitting.isEmpty { gone = gone ?? ask.id }
         }

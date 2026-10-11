@@ -1159,6 +1159,23 @@ import Testing
         #expect(!f.prepared.contains("local_h") && !f.prepared.contains("local_i") && d.askBacks.contains { $0.id == ask })
     }
 
+    @Test func aTypedNamePicksTheOptionItSaysNotOneWhosePunctuationWasTrimmed() async {
+        let (s, d, f) = setup()
+        s.claudeSessions["local_s"] = ClaudeSession(id: "local_s", title: "C#", folder: "/code/lookout", lastActivity: Date())
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "C", folder: "/code/other", lastActivity: Date())
+        f.ranked = [.init(target: "session:local_s", p: 0.4), .init(target: "session:local_c", p: 0.3),
+                    .init(target: "session:local_a", p: 0.2), .init(target: "unclear", p: 0.1)]
+        let ask = d.submit("rotate the production token")
+        await finish(d, f, ask)
+        #expect(d.typedPick("C#")?.target == "session:local_s")
+        #expect(d.typedPick(" c# ")?.target == "session:local_s")
+        #expect(d.typedPick("C")?.target == "session:local_c")
+        // Said with punctuation that fits both once trimmed: neither.
+        #expect(d.typedPick("C.") == nil)
+        // The words alone, fitting one: still picked.
+        #expect(d.typedPick("Fix the login bug.")?.target == "session:local_a")
+    }
+
     @Test func somethingElseCanPickAProjectToStartIn() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "unclear", p: 1)]
