@@ -767,8 +767,9 @@ final class RouterMCPServer: @unchecked Sendable {
         return out
     }
 
-    /// Without Jev: a session whose title the message names, then its project, then shared words. `named` is the one
-    /// target the message names outright, if exactly one.
+    /// Without Jev: targets ranked by the words the message shares with their titles and projects, for you to pick from.
+    /// `named`: where the message's own address sends it (`destination`), the only one gone to without your pick: a title
+    /// the words merely mention could be a session's bait ("the tests").
     static func unassisted(_ message: String, _ targets: [Target]) -> (ranked: [(target: String, score: Int)], named: String?) {
         let text = message.lowercased()
         let words = Set(text.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
@@ -779,47 +780,38 @@ final class RouterMCPServer: @unchecked Sendable {
         }
         // Asked to start a session: a new one, never an existing session the words happen to name. In the project named
         // right after the request ("start a session in lookout to …"), else you pick among the projects the words mention.
-        if let start = startRequest(message) {
+        if startRequest(message) != nil {
             let projects = targets.filter { $0.target.hasPrefix("new:") }
-            let named = start.project.map { p in
-                projects.filter { $0.project.lowercased() == p || (($0.folder ?? "") as NSString).lastPathComponent.lowercased() == p }
-            }
-            return (projects.filter { mentions($0.project) }.map { ($0.target, 3) }, named?.count == 1 ? named?.first?.target : nil)
+            return (projects.filter { mentions($0.project) }.map { ($0.target, 3) }, destination(message, targets))
         }
         var ranked: [(String, Int)] = []
-        var titled: Set<String> = []
-        var byProject: [String: Set<String>] = [:]
         for t in targets where t.target != "unclear" {
             var score = 0
-            if !t.title.isEmpty, mentions(t.title) {
-                score += 10
-                if let id = t.sessionID, t.target.hasPrefix("session:") { titled.insert(id) }
-            }
-            if !t.project.isEmpty, mentions(t.project) {
-                score += 3
-                if let id = t.sessionID, t.target.hasPrefix("session:") { byProject[t.project.lowercased(), default: []].insert(id) }
-            }
+            if !t.title.isEmpty, mentions(t.title) { score += 10 }
+            if !t.project.isEmpty, mentions(t.project) { score += 3 }
             let titleWords = Set(t.title.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
             score += words.intersection(titleWords).count
             if score > 0 { ranked.append((t.target, score)) }
         }
         ranked.sort { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
-        // Addressed outright ("tell the CI session to …", "CI: …"): that session, whatever else the words mention (a
-        // project named in the task). By its title whole, else a project with that one session.
-        if let to = addressee(message) {
-            let sessions = targets.filter { $0.target.hasPrefix("session:") }
-            let byTitle = Set(sessions.filter { $0.title.lowercased() == to }.compactMap(\.sessionID))
-            let inProject = Set(sessions.filter { $0.project.lowercased() == to }.compactMap(\.sessionID))
-            if byTitle.count == 1 { return (ranked, "session:\(byTitle.first!)") }
-            if byTitle.isEmpty, inProject.count == 1 { return (ranked, "session:\(inProject.first!)") }
+        return (ranked, destination(message, targets))
+    }
+
+    /// Where the message's own address, at its very start, sends it, resolved here and not by Jev: a request to start a
+    /// session followed by "in <project>" (one word, one project), else "tell/ask (the) X (session) to …" or "X: …" where X
+    /// is exactly one session's title or its project (one session in it). Nil for anything else, or more than one fit.
+    static func destination(_ message: String, _ targets: [Target]) -> String? {
+        if let start = startRequest(message) {
+            guard let p = start.project else { return nil }
+            let fits = targets.filter {
+                $0.target.hasPrefix("new:") && ($0.project.lowercased() == p || (($0.folder ?? "") as NSString).lastPathComponent.lowercased() == p)
+            }
+            return fits.count == 1 ? fits[0].target : nil
         }
-        var named: String?
-        if titled.count == 1 {
-            named = "session:\(titled.first!)"
-        } else if titled.isEmpty, byProject.count == 1, let only = byProject.values.first, only.count == 1 {
-            named = "session:\(only.first!)"
-        }
-        return (ranked, named)
+        guard let to = addressee(message) else { return nil }
+        let fits = Set(targets.filter { $0.target.hasPrefix("session:") && ($0.title.lowercased() == to || $0.project.lowercased() == to) }
+            .compactMap(\.sessionID))
+        return fits.count == 1 ? "session:\(fits.first!)" : nil
     }
 
     /// A message that asks for a new session (`SessionStart.startPhrase`, at its start or after its @projects), and the

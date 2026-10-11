@@ -821,6 +821,23 @@ import Testing
         #expect(RouterTools.addressee("rerun the lookout tests") == nil)
     }
 
+    @Test func withoutJevASessionTitledLikeTheTaskIsNeverTheAddressee() async {
+        let (s, d, f) = setup()
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        s.claudeSessions["local_x"] = ClaudeSession(id: "local_x", title: "the tests", folder: "/code/other", lastActivity: Date())
+        s.claudeSessions["local_l2"] = ClaudeSession(id: "local_l2", title: "Bump deps", folder: "/code/lookout", lastActivity: Date())
+        for text in ["tell lookout to fix the tests", "fix the tests"] {
+            let a = d.submit(text)
+            await finish(d, f, a)
+            #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == a }, "\(text)")
+        }
+        // A title also a project's name: two fit, you pick.
+        s.claudeSessions["local_y"] = ClaudeSession(id: "local_y", title: "docs", folder: "/code/other", lastActivity: Date())
+        let b = d.submit("tell docs to ship")
+        await finish(d, f, b)
+        #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == b })
+    }
+
     @Test func withoutJevAStartRequestStartsInTheProjectItNamesNeverInItsSession() async {
         let (s, d, f) = setup()
         f.rankError = RouterTools.Failure("no TypeSafe key is set")
