@@ -89,14 +89,24 @@ enum RouterWaits {
 }
 
 extension Store {
-    /// The GitHub repos (`owner/repo`, lowercased) a folder's git remotes name, read off the main thread, kept once found.
+    /// The GitHub repos (`owner/repo`, lowercased) a folder's git remotes name, read off the main thread, kept once found
+    /// and read again once older than `RouterTriager.remotesTTL` (a remote added since, as a fork's `upstream`).
     func gitRepos(of folder: String?) async -> Set<String> {
         guard let folder, !folder.isEmpty else { return [] }
-        if let known = routerTriager.repos[folder] { return known }
+        let known = routerTriager.repos[folder]
+        if let known, !reposExpired(folder) { return known }
         let repos = await Task.detached(priority: .utility) { Set(LocalClones.remotes(of: folder)) }.value
         // Nothing found isn't kept: the folder may get its remote later (a turn before `origin` existed), and is read again.
+        // Read again and found empty, the set it had is kept, for another while.
         if !repos.isEmpty { routerTriager.repos[folder] = repos }
-        return repos
+        if !repos.isEmpty || known != nil { routerTriager.reposRead[folder] = Date() }
+        return repos.isEmpty ? known ?? [] : repos
+    }
+
+    /// Whether a folder's remotes, as read, are old enough to be read again. One with no read time (filled in by a test) is not.
+    func reposExpired(_ folder: String?) -> Bool {
+        guard let folder, let read = routerTriager.reposRead[folder] else { return false }
+        return Date().timeIntervalSince(read) > RouterTriager.remotesTTL
     }
 
     /// What a session's turn might be waiting on that Lookout can watch: the other live sessions (working ones first), and

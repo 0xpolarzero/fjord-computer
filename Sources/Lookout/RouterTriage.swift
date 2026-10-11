@@ -419,8 +419,13 @@ extension Claude {
     var bannerWait: Duration = .seconds(20)
     /// Waiting cards whose session is being told its wait is over (never saved: a send cut short by quitting is not one).
     var telling: Set<String> = []
-    /// The GitHub repos each folder's git remotes name (`Store.gitRepos`), read once; tests fill it in.
+    /// The GitHub repos each folder's git remotes name (`Store.gitRepos`); tests fill it in.
     var repos: [String: Set<String>] = [:]
+    /// When each folder's entry in `repos` was read: past `remotesTTL` it is read again (a remote added since, as a fork's
+    /// `upstream`). One with no time (filled in by a test) is current.
+    var reposRead: [String: Date] = [:]
+    /// How long a folder's remotes, once read, are taken as they are.
+    static let remotesTTL: TimeInterval = 300
     /// When a folder with no remotes found was last read again for an unbound wait.
     var remotesRetried: [String: Date] = [:]
     /// Waiting cards Jev found waiting on CI with nothing Lookout could watch yet (a PR the turn opened, before the inbox
@@ -719,6 +724,8 @@ extension Store {
                 readUnwatched(card.id, session: session)
                 continue
             }
+            // Read long ago: read again (an `upstream` added since), and bound by what was read meanwhile.
+            if reposExpired(session.folder) { readUnwatched(card.id, session: session) }
             let named = things.values.filter { thing in
                 (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
                     && (thing.checks == .pending || thing.ciRunning
@@ -772,8 +779,10 @@ extension Store {
     /// The final message of a waiting card's turn, read again (once) for the CI it names, with its folder's repos.
     private func readUnwatched(_ cardID: String, session: ClaudeSession) {
         guard routerTriager.unwatchedRead.insert(cardID).inserted else {
-            // Its message is read, but its folder's remotes were found empty: read them again (at most every half minute).
-            guard routerTriager.unwatched[cardID] != nil, routerTriager.repos[session.folder ?? ""] == nil,
+            // Its message is read, but its folder's remotes were found empty, or are old: read them again (at most every
+            // half minute).
+            guard routerTriager.unwatched[cardID] != nil,
+                  routerTriager.repos[session.folder ?? ""] == nil || reposExpired(session.folder),
                   Date().timeIntervalSince(routerTriager.remotesRetried[session.folder ?? ""] ?? .distantPast) > 30 else { return }
             routerTriager.remotesRetried[session.folder ?? ""] = Date()
             Task { [weak self] in

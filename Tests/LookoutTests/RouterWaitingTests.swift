@@ -803,6 +803,26 @@ import Testing
         #expect(await s.gitRepos(of: dir.path) == ["o/app"])
     }
 
+    @Test func aFoldersRemotesAreReadAgainOnceTheyAreOld() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lk-remotes-\(UUID().uuidString)/app")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        let config = dir.appendingPathComponent(".git/config")
+        try "[remote \"origin\"]\n\turl = git@github.com:me/app.git\n".write(to: config, atomically: true, encoding: .utf8)
+        let s = InboxFixture.store([])
+        #expect(await s.gitRepos(of: dir.path) == ["me/app"])
+        // An `upstream` added since: kept as read until the entry is old.
+        try "[remote \"origin\"]\n\turl = git@github.com:me/app.git\n[remote \"upstream\"]\n\turl = https://github.com/o/app.git\n"
+            .write(to: config, atomically: true, encoding: .utf8)
+        #expect(await s.gitRepos(of: dir.path) == ["me/app"])
+        s.routerTriager.reposRead[dir.path] = Date().addingTimeInterval(-600)
+        #expect(await s.gitRepos(of: dir.path) == ["me/app", "o/app"])
+        // Read again and found empty (the config unreadable a moment): the set it had is kept.
+        try FileManager.default.removeItem(at: config)
+        s.routerTriager.reposRead[dir.path] = Date().addingTimeInterval(-600)
+        #expect(await s.gitRepos(of: dir.path) == ["me/app", "o/app"])
+    }
+
     @Test func aRefNamesOnlyItsOwnThingWhole() {
         var twelve = InboxFixture.pr(12, repo: "o/app", title: "Speed up the build")
         twelve.checks = .pending
