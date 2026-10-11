@@ -500,6 +500,33 @@ import UserNotifications
         #expect(model.suggestions(store).isEmpty)
     }
 
+    @Test(.hostsWindows) func aLongDraftScrolledInTheComposerIsStillTheComposers() {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.orderOut(nil) }
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        window.contentView = content
+        // The field: 100pt high at the bottom of the window, its text view scrolled down a draft far taller than it.
+        let anchor = FieldAnchor()
+        let behind = NSView(frame: CGRect(x: 0, y: 0, width: 600, height: 100))
+        content.addSubview(behind)
+        anchor.view = behind
+        let scroll = NSScrollView(frame: behind.frame)
+        let editor = NSTextView(frame: CGRect(x: 0, y: 0, width: 600, height: 100))
+        scroll.documentView = editor
+        content.addSubview(scroll)
+        editor.string = String(repeating: "a long draft\n", count: 300)
+        editor.layoutManager?.ensureLayout(for: editor.textContainer!)
+        editor.sizeToFit()
+        editor.scroll(CGPoint(x: 0, y: 2000))
+        #expect(anchor.owns(editor))
+        // A text view elsewhere in the window isn't.
+        let beside = NSTextView(frame: CGRect(x: 0, y: 200, width: 600, height: 100))
+        content.addSubview(beside)
+        #expect(!anchor.owns(beside))
+    }
+
     @Test func aClickedFinishedCardIsOpenedThenStaysPicked() {
         let store = demo()
         let model = RouterModel()

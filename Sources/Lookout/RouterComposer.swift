@@ -372,7 +372,8 @@ struct MentionList: View {
 }
 
 /// The composer field's place on screen, kept by an empty AppKit view behind it: a text view is the composer's when it is in
-/// the same window and inside the field (SwiftUI doesn't hand out the field's own text view). It also tells its window's
+/// the same window and what it shows is inside the field (SwiftUI doesn't hand out the field's own text view): the part of
+/// its text in view, not the whole of a long draft scrolled in it, which reaches far out of the field. It also tells its window's
 /// height, for the field's `min(24rem, 40svh)`.
 final class FieldAnchor {
     weak var view: NSView?
@@ -380,7 +381,9 @@ final class FieldAnchor {
     func owns(_ editor: NSTextView) -> Bool {
         guard let view, let window = view.window, editor.window === window else { return false }
         let field = view.convert(view.bounds, to: nil)
-        let text = editor.convert(editor.bounds, to: nil)
+        let shown = editor.visibleRect
+        guard !shown.isEmpty else { return false }
+        let text = editor.convert(shown, to: nil)
         return field.contains(CGPoint(x: text.midX, y: text.midY))
     }
 }
