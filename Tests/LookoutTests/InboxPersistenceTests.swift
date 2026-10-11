@@ -229,6 +229,23 @@ import Testing
         #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
     }
 
+    @Test func aRunUnderWayWhenTheAppQuitSaysItWasInterrupted() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let first = Store()
+        first.stateFile = file
+        let working = first.logDecision(RouterDecision(trigger: .you("fix the bug")))
+        let finished = first.logDecision(RouterDecision(trigger: .you("hi"), done: [.sent(to: "a", text: "hi", original: nil)], outcome: .done))
+        first.flushSave()
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        let entry = second.router.decisions.first { $0.id == working }
+        #expect(entry?.outcome == .done && entry?.done == [.failed("interrupted")] && entry?.summary == "failed")
+        #expect(second.router.decisions.first { $0.id == finished }?.done == [.sent(to: "a", text: "hi", original: nil)])
+    }
+
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

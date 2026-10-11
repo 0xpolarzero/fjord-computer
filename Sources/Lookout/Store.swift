@@ -604,7 +604,9 @@ final class Store {
         if !state.dropped.isEmpty { keepAside(file, data, dropped: state.dropped) }
         settings = state.settings
         agents = state.agents ?? AgentsState()
-        router = state.router ?? RouterState()
+        var router = state.router ?? RouterState()
+        router.settleInterrupted()
+        self.router = router
         changingInbox(.load) {
             if let c = state.categories { categories = c }
             groups = state.groups ?? []

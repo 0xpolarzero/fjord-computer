@@ -212,6 +212,17 @@ extension RouterState {
     }
 }
 
+extension RouterState {
+    /// Runs and asks still under way when the app quit (quitting can't wait for them to settle) can't go on in this launch:
+    /// they say they were interrupted, rather than "working…" for ever.
+    mutating func settleInterrupted() {
+        for i in decisions.indices where decisions[i].outcome == .pending {
+            decisions[i].add(.failed("interrupted"))
+            decisions[i].outcome = .done
+        }
+    }
+}
+
 extension Store {
     /// Records a decision and returns its id.
     @discardableResult
