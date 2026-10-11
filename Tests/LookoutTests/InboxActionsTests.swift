@@ -12,8 +12,11 @@ final class FakePerformer: ActionPerformer {
     var cloneFolders: [String: [String]] = [:]
     var failed: [FailedRun] = []
     var failure: Error?
+    /// Called as each session is started or comment posted, before it is recorded: the world changing meanwhile.
+    var onAct: (() -> Void)?
 
     func startSession(_ request: ActionSessionRequest) async throws -> ActionSessionStarted {
+        onAct?()
         if let failure { throw failure }
         asked.append((request.message, request.category))
         requests.append(request)
@@ -21,6 +24,7 @@ final class FakePerformer: ActionPerformer {
     }
 
     func comment(repo: String, number: Int, body: String) async throws -> URL? {
+        onAct?()
         if let failure { throw failure }
         comments.append((repo, number, body))
         return URL(string: "https://github.com/\(repo)/pull/\(number)#issuecomment-1")
@@ -253,6 +257,32 @@ final class DiskCheckingPerformer: ActionPerformer {
         add(store, InboxFixture.pr(4, greptile: 3))
         await store.runActions(now: later.addingTimeInterval(400 + InboxActions.reentryCooldown + 20))
         #expect(performer.asked.count == 2)
+    }
+
+    @Test func aJobWaitingBehindAnotherIsDroppedOnceItsActionIsDeletedOrItsEntryDone() async {
+        let comment = CategoryAction.make(.comment("hi"))
+        let (store, performer) = store([], actions: [comment])
+        await store.runActions()
+        add(store, InboxFixture.pr(4))
+        add(store, InboxFixture.pr(5))
+        // While the first comment is posted, the action is deleted: the second, already planned, isn't posted.
+        performer.onAct = { store.categories[0].actions = ActionList([]) }
+        await store.runActions()
+        #expect(performer.comments.count == 1)
+        #expect(!store.actionLedger.runs.values.contains { $0.state == .running })
+
+        // While the first one runs, the other entry is marked Done: it isn't acted on.
+        let (store2, performer2) = self.store([], actions: [comment])
+        await store2.runActions()
+        add(store2, InboxFixture.pr(4))
+        add(store2, InboxFixture.pr(5))
+        performer2.onAct = {
+            performer2.onAct = nil
+            for entry in store2.entries { store2.markDone(entry) }
+        }
+        await store2.runActions()
+        #expect(performer2.comments.count == 1)
+        #expect(!store2.actionLedger.runs.values.contains { $0.state == .running })
     }
 
     @Test func anActionListedTwiceRunsOnce() {

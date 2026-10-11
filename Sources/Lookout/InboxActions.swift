@@ -335,6 +335,31 @@ enum InboxActions {
         return jobs
     }
 
+    /// A job planned before others ran, as it stands now: nil when it is no longer due (its action deleted or edited, its
+    /// category's rules or groups changed, the thing out of the category or Done), else for the facts it still has.
+    static func stillDue(_ job: Job, entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup],
+                         ledger: ActionLedger, me: String) -> Job? {
+        guard let category = categories.first(where: { $0.id == job.category.id }),
+              category.actions.items.contains(job.action),
+              let baseline = ledger.baselines[category.id], baseline.actions.contains(job.action.id),
+              baseline.rules == fingerprint(category.rules, groups: groups),
+              let entry = entries.first(where: { $0.id == job.entry.id && $0.categoryID == category.id && !$0.isDone })
+        else { return nil }
+        let facts = triggering(entry, me: me)
+        guard !facts.isEmpty else { return nil }
+        var now = job
+        now.category = category
+        now.entry = entry
+        if job.keys != ["enter"] {
+            now.facts = facts.filter { job.keys.contains($0.key) }
+            now.keys = now.facts.map(\.key)
+            if now.keys.isEmpty { return nil }
+        } else {
+            now.facts = facts
+        }
+        return now
+    }
+
     // MARK: Words
 
     /// `{title} {url} {number} {repo} {author}` filled in, for a comment posted on GitHub. What others write goes in on one
@@ -776,7 +801,20 @@ extension Store {
                     return
                 }
             }
-            for job in batch {
+            for queued in batch {
+                // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
+                let current = baselinePending ? nil : InboxActions.stillDue(queued, entries: entries, categories: categories,
+                                                                             groups: groups, ledger: actionLedger, me: me)
+                let dropped = queued.keys.filter { !(current?.keys.contains($0) ?? false) }
+                if !dropped.isEmpty {
+                    var back = actionLedger
+                    for key in dropped {
+                        let id = ActionLedger.key(queued.category.id, queued.entry.id, queued.action.id, key)
+                        if back.runs[id]?.state == .running { back.runs[id] = planned.runs[id] }
+                    }
+                    actionLedger = back
+                }
+                guard let job = current else { continue }
                 let result = await InboxActions.perform(job, with: performer, now: now)
                 var next = actionLedger
                 for key in job.keys {
