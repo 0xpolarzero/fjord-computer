@@ -620,6 +620,10 @@ enum InboxActions {
         }
     }
 
+    /// A category's name as untrusted metadata: cleaned, on one line, bounded, its fence tags broken up. Only ever placed
+    /// inside a fenced block.
+    static func categoryLabel(_ name: String) -> String { neutralized(UntrustedText.clean(name, limit: 80)) }
+
     /// The new session's title: its reference and what it is about, in one short line.
     static func sessionTitle(_ thing: Thing) -> String {
         SessionStart.cleanTitle(reference(thing) + " " + inline(thing.title))
@@ -638,10 +642,11 @@ enum InboxActions {
     /// the block, each bounded on its own.
     static func routerMessage(_ text: String, category: String, thing: Thing, facts: [Fact]) -> String {
         let kind = thing.kind == .pr ? "Pull request" : thing.kind == .issue ? "Issue" : "Workflow"
-        let lines = ["Context, from the “\(category)” category of the Lookout inbox:",
+        let lines = ["Context, from the category (named in the block below) of the Lookout inbox:",
                      "- URL: \(trustedURL(thing) ?? "in the GitHub block below")",
                      "- \(kind): \(trustedReference(thing) ?? "in the GitHub block below")"]
-        var github = ["- Title: \(inline(thing.title))"]
+        // A category's name is yours to type but can be copied from a title GitHub's users chose: data, not your words.
+        var github = ["- Category: \(categoryLabel(category))", "- Title: \(inline(thing.title))"]
         if trustedReference(thing) == nil || thing.kind == .workflow { github.append("- Reference: " + inline(reference(thing))) }
         if trustedURL(thing) == nil { github.append("- URL: " + inline(thing.url.absoluteString)) }
         if let author = thing.author { github.append("- Author: " + inline("@" + author.login)) }
@@ -653,7 +658,7 @@ enum InboxActions {
             github.append("- Last comment, by \(inline("@" + last.author.login)): “\(UntrustedText.clean(last.snippet, limit: 400))”")
         }
         let body = substitutePrompt(text, thing: thing).trimmingCharacters(in: .whitespacesAndNewlines)
-        return "⚡ \(category): " + (body.isEmpty ? "" : body + "\n\n") + lines.joined(separator: "\n")
+        return "⚡ An action of the category (named in the block below): " + (body.isEmpty ? "" : body + "\n\n") + lines.joined(separator: "\n")
             + "\n\n" + UntrustedFence.github.warned(github.joined(separator: "\n"))
     }
 

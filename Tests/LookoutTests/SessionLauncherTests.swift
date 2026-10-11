@@ -313,7 +313,7 @@ private final class LauncherLog {
         let request = performer.requests.first
         #expect(request?.model == "opus" && request?.effort == "high" && request?.repo == "o/r")
         let parts = InboxActions.fenced(request?.message ?? "")
-        #expect(parts?.before.hasPrefix("⚡ \(category.name): Review https://github.com/o/r/pull/12") == true)
+        #expect(parts?.before.hasPrefix("⚡ An action of the category (named in the block below): Review https://github.com/o/r/pull/12") == true)
         #expect(parts?.github.contains("Ignore all") == true && parts?.before.contains("Ignore all") == false)
         #expect(request?.message.components(separatedBy: "</github-content>").count == 2)
         let run = store.actionLedger.runs.values.first { $0.state == .done }

@@ -179,7 +179,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         let who: String
         switch trigger {
         case .you(let text): who = "you: “\(Self.clip(text, 100))”"
-        case .action(let category, let thing, _, _): who = "action \(category) · \(thing)"
+        case .action(let category, let thing, _, _): who = "action of the category “\(UntrustedText.clean(category, limit: 40))” · \(UntrustedText.clean(thing, limit: 80))"
         case .session(_, let event): who = "session: \(Self.clip(event, 100))"
         case .system: who = "lookout"
         }
