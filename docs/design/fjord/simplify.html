@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fjord — simpler marks</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #101418; --paper: #F7F8F5; --fonte: #0F9AC3; --bg: var(--ink); --text: var(--paper); --sec: #A3AAB0; --line: #2A3138; }
+  [data-theme="light"] { --bg: var(--paper); --text: var(--ink); --sec: #5C636A; --line: #DCDFD9; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 Geist, system-ui, sans-serif; padding: 44px; transition: background .3s, color .3s; }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  h1 { font-weight: 500; font-size: 22px; letter-spacing: -.03em; }
+  p.note { color: var(--sec); margin-bottom: 26px; max-width: 760px; }
+  button { font: inherit; color: var(--text); background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  table { border-collapse: collapse; }
+  th { font: 12px "Geist Mono", monospace; color: var(--sec); font-weight: 400; text-align: left; padding: 0 0 14px; }
+  td { padding: 0 34px 34px 0; vertical-align: middle; }
+  td.label { min-width: 170px; } td.label small { display: block; color: var(--sec); font-size: 12.5px; max-width: 190px; }
+  .set { display: flex; gap: 14px; align-items: center; }
+  .tile { width: 84px; height: 84px; border-radius: 22.5%; background: var(--ink); display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(127,140,150,.28); }
+  .inline { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--sec); white-space: nowrap; }
+  svg { display: block; overflow: visible; }
+</style>
+</head>
+<body>
+<header><h1>Sun over water, simpler</h1><button id="theme">light</button></header>
+<p class="note">The same idea with fewer parts. The loader: the parts fade out one by one from the top, then come back in the same order.</p>
+<table id="t"><tr><th></th><th>mark</th><th>icon</th><th>32 · 16</th><th>loading, colour</th><th>loading, one colour</th><th>in a line</th></tr></table>
+<script>
+// each mark is a list of parts: [kind, y, height, width] in units of the circle's diameter; 'sun' is the circle above y+height
+const MARKS = {
+  'three bands': { note: 'Today’s mark.', parts: [['sun', 0, .55], ['w', .61, .14], ['w', .81, .09], ['w', .96, .05]] },
+  'two bands': { note: 'One band fewer, the cuts a little wider.', parts: [['sun', 0, .55], ['w', .625, .2], ['w', .895, .11]] },
+  'one band': { note: 'The circle cut once: sun and reflection.', parts: [['sun', 0, .58], ['w', .66, .34]] },
+  'open water': { note: 'Half a sun on the horizon, two lines of water below it, shorter as they go.', open: true, parts: [['sun', 0, .5], ['w', .6, .09, 1], ['w', .76, .09, .6]] },
+};
+let uid = 0; const live = [];
+function mark(name, size, { sun = 'var(--text)', water = 'var(--fonte)', anim = false } = {}) {
+  const m = MARKS[name], id = 'c' + (uid++);
+  const body = m.parts.map(([k, y, h, w = 1], i) => {
+    const fill = k === 'sun' ? sun : water;
+    if (m.open && k === 'sun') return `<path class="p${i}" d="M0 .5 A.5 .5 0 0 1 1 .5 Z" fill="${fill}"/>`;
+    return `<rect class="p${i}" x="${(1 - w) / 2}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`;
+  }).join('');
+  const clip = m.open ? '' : ` clip-path="url(#${id})"`;
+  const html = `<svg id="${id}" width="${size}" height="${size}" viewBox="0 ${m.open ? -.1 : 0} 1 1"><defs><clipPath id="${id}c"><circle cx=".5" cy=".5" r=".5"/></clipPath></defs><g${clip.replace(id, id + 'c')}>${body}</g></svg>`;
+  if (anim) live.push({ id, n: m.parts.length });
+  return html;
+}
+// part i fades out at its turn, every part is gone a moment, then they come back in the same order; a faint trace stays
+const smooth = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+function level(t, i, n) {
+  const p = (t / 2.6) % 1, step = 0.3 / n, fade = 0.11;
+  const out = 0.04 + i * step, back = 0.52 + i * step;
+  return 1 - smooth((p - out) / fade) + smooth((p - back) / fade);
+}
+const t = document.getElementById('t');
+function build() {
+  live.length = 0;
+  t.querySelectorAll('tr.v').forEach((r) => r.remove());
+  for (const [name, m] of Object.entries(MARKS)) {
+    const mono = { sun: 'var(--text)', water: 'var(--text)' };
+    t.insertAdjacentHTML('beforeend', `<tr class="v"><td class="label">${name}<small>${m.note}</small></td>
+      <td>${mark(name, 96)}</td>
+      <td><div class="tile">${mark(name, 52, { sun: '#F7F8F5' })}</div></td>
+      <td><div class="set">${mark(name, 32)}${mark(name, 16)}</div></td>
+      <td><div class="set">${mark(name, 64, { anim: true })}${mark(name, 24, { anim: true })}</div></td>
+      <td><div class="set">${mark(name, 64, { ...mono, anim: true })}${mark(name, 24, { ...mono, anim: true })}</div></td>
+      <td><div class="inline">${mark(name, 13, { sun: 'var(--sec)', water: 'var(--sec)', anim: true })}Syncing 14 repos</div></td></tr>`);
+  }
+  for (const l of live) l.els = [...Array(l.n)].map((_, i) => document.getElementById(l.id).querySelector('.p' + i));
+}
+function frame(now) {
+  for (const l of live) l.els.forEach((el, i) => el.setAttribute('opacity', 0.1 + 0.9 * level(now / 1000, i, l.n)));
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) requestAnimationFrame(frame);
+}
+build(); requestAnimationFrame(frame);
+const btn = document.getElementById('theme');
+btn.onclick = () => { const light = document.documentElement.dataset.theme !== 'light'; document.documentElement.dataset.theme = light ? 'light' : 'dark'; btn.textContent = light ? 'dark' : 'light'; };
+</script>
+</body>
+</html>

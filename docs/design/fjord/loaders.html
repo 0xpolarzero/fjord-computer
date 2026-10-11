@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fjord — loaders</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #0B0B0B; --s2: #141414; --s3: #1C1C1C; --text: #F2F2F0; --sec: #8E8E8A; --line: #262626; }
+  [data-theme="light"] { --bg: #F7F8F5; --s2: #FFFFFF; --s3: #EEF0EC; --text: #14181B; --sec: #5F666C; --line: #DCDFD9; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 Geist, system-ui, sans-serif; padding: 40px; transition: background .3s, color .3s; }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  h1 { font-weight: 500; font-size: 22px; letter-spacing: -.03em; }
+  p.note { color: var(--sec); margin-bottom: 28px; max-width: 760px; }
+  button { font: inherit; color: var(--text); background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .loader { display: grid; grid-template-columns: 190px 170px minmax(0,1.3fr) minmax(0,1.5fr) minmax(0,1.2fr); gap: 14px; margin-bottom: 14px; }
+  .name { padding-top: 6px; font-weight: 500; }
+  .name small { display: block; font-weight: 400; color: var(--sec); font-size: 12px; margin-top: 2px; }
+  .ctx { background: var(--s2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-height: 128px; display: flex; flex-direction: column; justify-content: center; }
+  .cap { font: 11px "Geist Mono", monospace; color: var(--sec); margin-bottom: 8px; }
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--sec); }
+  .bar { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .bar b { font-weight: 500; } .status { white-space: nowrap; display: flex; align-items: center; gap: 6px; color: var(--sec); font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 9px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border: 0; } .row span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .row em { font-style: normal; color: var(--sec); font: 11px "Geist Mono", monospace; }
+  .ok { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #3FB950; flex: none; }
+  .card { background: var(--s3); border-radius: 8px; padding: 10px; display: flex; gap: 9px; align-items: flex-start; }
+  .card div { flex: 1; min-width: 0; } .card small { white-space: nowrap; display: block; color: var(--sec); }
+  svg { display: block; flex: none; color: var(--sec); overflow: visible; }
+  .empty svg { color: var(--text); }
+  /* light passing over the words, as over water: the label shimmers, the mark rests */
+  .gleam { background: linear-gradient(100deg, var(--sec) 0 40%, var(--text) 50%, var(--sec) 60% 100%); background-size: 250% 100%;
+           -webkit-background-clip: text; background-clip: text; color: transparent; animation: gleam 2.2s cubic-bezier(.45,0,.25,1) infinite; }
+  @keyframes gleam { from { background-position: 100% 0; } to { background-position: -50% 0; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+<header><h1>The mark, working — in place</h1><button id="theme">light</button></header>
+<p class="note">One colour, continuous motion that never snaps, and each part following the one before it a beat late. Shown where Fjord would actually wait: an empty view, the toolbar, a list row, a Router card.</p>
+<div id="list"></div>
+<script>
+const TAU = Math.PI * 2;
+const ease = (x) => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+let n = 0; const live = [];
+// the logo's edges, top to bottom: sun to 0.55, then gap 0.06 and bands 0.14, 0.09, 0.05
+const EDGES = [0.55, 0.61, 0.75, 0.81, 0.90, 0.96, 1.01];
+function mark(size, kind) {
+  const id = 'c' + (n++);
+  live.push({ id, kind });
+  return `<svg width="${size}" height="${size}" viewBox="0 0 1 1">
+    <defs><clipPath id="${id}"><circle cx=".5" cy=".5" r=".5"/></clipPath>
+      <linearGradient id="${id}g" gradientUnits="userSpaceOnUse" x1="-.6" y1="0" x2=".6" y2=".35">
+        <stop offset=".2" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff"/><stop offset=".8" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <mask id="${id}m" maskUnits="userSpaceOnUse" x="-1" y="-1" width="3" height="3"><rect class="sweep" x="-1" y="-1" width="3" height="3" fill="url(#${id}g)"/></mask></defs>
+    <g class="turn" fill="currentColor" clip-path="url(#${id})"><g class="base"></g>${kind === 'glint' ? `<g class="hi" mask="url(#${id}m)"></g>` : ''}</g></svg>`;
+}
+const shape = (e) => `<rect y="-.02" width="1" height="${e[0] + 0.02}"/>` + [1, 3, 5].map((i) => `<rect y="${e[i]}" width="1" height="${Math.max(0, e[i + 1] - e[i])}"/>`).join('');
+const KINDS = {
+  // swell: the horizon rises and falls a little; each edge below follows it a beat late and a little less, like water
+  swell(t) { return { edges: EDGES.map((y, i) => i === 6 ? y : y + 0.045 * Math.pow(0.8, i) * Math.sin(TAU * (t / 2.4 - i * 0.07))) }; },
+  // glint: the mark rests at half strength; a soft band of light crosses it, then a pause
+  glint(t) { const p = (t % 2.4) / 1.5; return { dim: 0.42, sweep: p < 1 ? -0.7 + 1.9 * ease(p) : 2 }; },
+  // turn: a steady turn that gathers speed through each half turn, never stopping
+  turn(t) { const k = t / 1.4; return { rotate: 90 * k + 180 * ease(k % 1) }; },
+  gleam() { return {}; },
+};
+const LOADERS = [
+  ['swell', 'The horizon rises and falls a little; each band follows a beat late, softer, like water.'],
+  ['glint', 'The mark rests at half strength; light crosses it, then a pause.'],
+  ['turn', 'The mark turns, quickening each half turn, never stopping.'],
+  ['gleam', 'The mark rests; light passes over the words beside it.'],
+];
+const label = (k, text) => k === 'gleam' ? `<span class="gleam">${text}</span>` : text;
+const contexts = (k) => [
+  `<div class="cap">empty view · 44</div><div class="empty">${mark(44, k)}${label(k, 'Loading your inbox')}</div>`,
+  `<div class="cap">toolbar · 13</div><div class="bar"><b>Triage</b><div class="status">${mark(13, k)}${label(k, 'Syncing 14 repos')}</div></div>`,
+  `<div class="cap">list · 12</div><div class="row">${mark(12, k)}<span${k === 'gleam' ? ' class="gleam"' : ''}>Fix crash on launch in refresh</span><em>#412</em></div><div class="row"><i class="ok"></i><span>Router evals on real data</span><em>#409</em></div>`,
+  `<div class="cap">router · 14</div><div class="card">${mark(14, k)}<div>lookout<small>${label(k, 'Claude is working · 2 min')}</small></div></div>`,
+];
+const list = document.getElementById('list');
+for (const [k, note] of LOADERS)
+  list.insertAdjacentHTML('beforeend', `<div class="loader"><div class="name">${k}<small>${note}</small></div>${contexts(k).map((c) => `<div class="ctx">${c}</div>`).join('')}</div>`);
+for (const l of live) {
+  const svg = document.getElementById(l.id).closest('svg');
+  l.base = svg.querySelector('.base'); l.hi = svg.querySelector('.hi'); l.sweep = svg.querySelector('.sweep'); l.turn = svg.querySelector('.turn');
+  l.base.innerHTML = shape(EDGES); if (l.hi) l.hi.innerHTML = shape(EDGES);
+}
+function frame(now) {
+  const t = now / 1000;
+  for (const l of live) {
+    const f = KINDS[l.kind](t);
+    if (f.edges) l.base.innerHTML = shape(f.edges);
+    if (f.dim) { l.base.setAttribute('opacity', f.dim); l.sweep.setAttribute('transform', `translate(${f.sweep} 0)`); }
+    if (f.rotate !== undefined) l.turn.setAttribute('transform', `rotate(${f.rotate % 360} .5 .5)`);
+  }
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+const btn = document.getElementById('theme');
+btn.onclick = () => { const light = document.documentElement.dataset.theme !== 'light'; document.documentElement.dataset.theme = light ? 'light' : 'dark'; btn.textContent = light ? 'dark' : 'light'; };
+</script>
+</body>
+</html>
