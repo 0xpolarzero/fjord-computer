@@ -474,6 +474,22 @@ import Testing
         #expect(state.cards[1].addressedBy == .superseded)
     }
 
+    @Test func aHandledTurnOutlastsArchivingAndIsForgottenOnlyWithItsSession() {
+        var state = seen([session(turns: 2)])
+        state.handledTurns = ["local_a": 2]
+        // Archived: kept, so that unarchived it makes no card of that turn again.
+        RouterFeed.update(&state, sessions: [session(turns: 2, archived: true)], activity: [:], muted: [], viewing: nil, now: at(1))
+        #expect(state.handledTurns == ["local_a": 2])
+        // Gone for good: forgotten.
+        RouterFeed.update(&state, sessions: [], activity: [:], muted: [], viewing: nil, now: at(2))
+        #expect(state.handledTurns.isEmpty)
+        // At most `maxHandled`, those active last kept.
+        let many = (0...RouterFeed.maxHandled).map { session("local_\($0)", turns: 2, message: Double($0), archived: true) }
+        state.handledTurns = Dictionary(uniqueKeysWithValues: many.map { ($0.id, 2) })
+        RouterFeed.update(&state, sessions: many, activity: [:], muted: [], viewing: nil, now: at(3))
+        #expect(state.handledTurns.count == RouterFeed.maxHandled && state.handledTurns["local_0"] == nil && state.handledTurns["local_1"] == 2)
+    }
+
     @Test func aReplyInTheSameSecondAsTheCardIsToldApartAfterARelaunch() throws {
         var state = seen([session(turns: 1), session("local_b", turns: 1)])
         let made = at(1).addingTimeInterval(0.2)

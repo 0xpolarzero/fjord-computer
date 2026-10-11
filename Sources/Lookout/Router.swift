@@ -372,6 +372,8 @@ enum RouterFeed {
     static let placeholder = "Finished its turn"
     static let maxCards = 300
     static let maxChanges = 500
+    /// Sessions whose handled turn is kept (`RouterState.handledTurns`), archived ones included.
+    static let maxHandled = 500
     /// How long the app's sidebar dot may lag behind a turn you left unread (it is written to disk up to ~30 s late).
     static let unreadGraceMs: Int64 = 40_000
 
@@ -591,7 +593,14 @@ enum RouterFeed {
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
         state.autoContinueSessions = state.autoContinueSessions.filter { live[$0.key] != nil }
-        state.handledTurns = state.handledTurns.filter { live[$0.key] != nil }
+        // A handled turn outlasts its session's archiving (unarchived, it is no new card): forgotten once the session is gone
+        // for good, and past the `maxHandled` sessions active last.
+        let known = Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
+        state.handledTurns = state.handledTurns.filter { known[$0.key] != nil }
+        if state.handledTurns.count > maxHandled {
+            let kept = Set(state.handledTurns.keys.sorted { (known[$0] ?? .distantPast, $0) > (known[$1] ?? .distantPast, $1) }.prefix(maxHandled))
+            state.handledTurns = state.handledTurns.filter { kept.contains($0.key) }
+        }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
         state.lookoutStarted = state.lookoutStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
         // What started a session goes with it, past the same hour (a session is noted as Lookout's before its origin is):
