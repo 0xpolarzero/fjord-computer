@@ -20,7 +20,7 @@ enum JevUse {
     case icons
     /// The inbox's new comments and requests.
     case inbox
-    /// The clone and size of a session an inbox action starts.
+    /// The clone and size of a session an inbox action starts (it reads the item, so the inbox's switch too).
     case actions
     /// A category's or a section's icon.
     case categoryIcons
@@ -109,7 +109,8 @@ extension Store {
         case .triage, .cards: router.enabled
         case .icons: agents.enabled && agents.iconsEnabled
         case .inbox: jevReadsInbox
-        case .actions: router.enabled && agents.enabled
+        // It reads the item (its title and what GitHub wrote): only when Jev may read the inbox.
+        case .actions: router.enabled && agents.enabled && jevReadsInbox
         case .categoryIcons: true
         }
     }

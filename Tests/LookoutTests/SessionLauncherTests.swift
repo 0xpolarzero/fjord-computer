@@ -167,6 +167,24 @@ private final class LauncherLog {
         #expect(log.signedSettings.dropFirst() == [SessionSettings(model: "haiku", effort: nil), nil])
     }
 
+    @Test func withJevNotReadingTheInboxNothingOfTheItemGoesToHim() async throws {
+        let store = ready()
+        store.settings.jevReadsInbox = false
+        let log = LauncherLog()
+        let launcher = launcher(store, log)
+        var asked = false
+        launcher.asker = { _, _ in
+            asked = true
+            return ["clone": .choice(.init(choice: "c2", confidence: 0.9, probabilities: ["c1": 0.1, "c2": 0.9])),
+                    "scope": .score(3.8, confidence: 0.8)]
+        }
+        store.claudeSessions = ["b": ClaudeSession(id: "b", title: "b", folder: "/code/r/.worktrees/x", completedTurns: 1,
+                                                   lastActivity: Date(), lastUserMessage: nil, summary: nil, running: false, cliID: nil)]
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
+        // The clone last used, and your defaults.
+        #expect(!asked && log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"] && log.signedSettings == [nil])
+    }
+
     @Test func aCloneOrASizeJevIsntSureOfIsNotTaken() async throws {
         let store = ready()
         let log = LauncherLog()
