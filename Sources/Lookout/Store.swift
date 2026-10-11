@@ -43,11 +43,16 @@ final class Store {
 
     /// The things with when their CI was last seen to change (`Thing.ciChangedAt`): kept from before while it is the same
     /// (a refresh makes the thing anew), `now` once its state, its run or whether it still runs changed; nil when none moved.
+    /// One first seen with CI is stamped when that CI finished, as GitHub says (`ciFinishedAt`), else now: CI that finished
+    /// before it was found, after a turn that waits on it ended, is still CI that changed since.
     nonisolated static func stampingCIChanges(_ things: [String: Thing], before: [String: Thing], now: Date) -> [String: Thing]? {
         var stamped = things
         var moved = false
         for (id, thing) in things where thing.kind == .pr || thing.kind == .workflow {
-            guard let old = before[id] else { continue }
+            guard let old = before[id] else {
+                if thing.ciChangedAt == nil, thing.checks != nil { stamped[id]?.ciChangedAt = thing.ciFinishedAt ?? now; moved = true }
+                continue
+            }
             let same = thing.checks == old.checks && thing.ciRunning == old.ciRunning && thing.ciCancelled == old.ciCancelled
                 && (old.ciRun == nil || thing.ciRun == old.ciRun)
             let at = same ? thing.ciChangedAt ?? old.ciChangedAt

@@ -308,7 +308,7 @@ enum InboxSync {
       commits(last: 5) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
       head: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 50) { totalCount
         checkRunCountsByState { state count } statusContextCountsByState { state count } nodes {
-        __typename ... on CheckRun { databaseId status } ... on StatusContext { context state createdAt } } } } } } }
+        __typename ... on CheckRun { databaseId status completedAt } ... on StatusContext { context state createdAt } } } } } } }
     }
     fragment I on Issue {
       id number title url state createdAt updatedAt body
@@ -675,6 +675,7 @@ enum InboxSync {
             if let head = nodes(node["head"]).first.flatMap({ dict($0["commit"]) }),
                let rollup = dict(head["statusCheckRollup"]), let contexts = dict(rollup["contexts"]) {
                 let execution = ciExecution(sha: head["oid"] as? String ?? "", contexts: contexts)
+                thing.ciFinishedAt = nodes(contexts).compactMap { date($0["completedAt"] ?? $0["createdAt"]) }.max()
                 thing.ciRun = execution.run
                 thing.ciRunning = execution.running || checkState(rollup["state"]) == .pending
                 // Failing only by checks cancelled (none failed, errored or timed out): cancelled, never a failure of its own.
@@ -708,6 +709,7 @@ enum InboxSync {
             thing.failingJobs = workflow.failing
             thing.ciRun = workflow.run
             thing.ciRunning = workflow.running ?? false
+            thing.ciFinishedAt = workflow.updatedAt
             // Cancelled isn't passing: it counts as failing (as GitHub's rollup has it), and the wait says it was cancelled.
             thing.ciCancelled = workflow.state == .cancelled
             thing.checks = switch workflow.state {

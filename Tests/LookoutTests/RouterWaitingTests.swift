@@ -344,6 +344,41 @@ import Testing
         #expect(Store.prsNamed("see o/app#1 (github.com/o/app/pull/1)") == ["o/app#1"])
     }
 
+    @Test func ciThatFinishedBeforeItsPRWasFoundIsStillBoundAndReady() async {
+        // The turn opened the PR and ended waiting on its CI, which finished before the next refresh found the PR.
+        let (s, _) = store(watch: ciWatch)
+        s.router.cards[0].triage?.watch = nil
+        s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-120)
+        s.routerTriager.reader = { _ in "Opened o/app#1; waiting for its CI." }
+        s.resolveWaits()
+        await settle()
+        var pr = ci(.passing)
+        pr.updatedAt = Date().addingTimeInterval(-600)
+        pr.ciFinishedAt = Date().addingTimeInterval(-60)
+        s.things[pr.id] = pr
+        #expect(s.things[pr.id]?.ciChangedAt == pr.ciFinishedAt)
+        #expect(s.router.cards[0].triage?.watch?.target == .ci(thing: pr.id) && s.router.cards[0].triage?.ready?.result == "passing")
+        // Offered to Jev as finished since, too; one that finished before the turn ended is not.
+        #expect(await s.waitOptions(for: s.claudeSessions["a"]!).contains { $0.watch.target == .ci(thing: pr.id) })
+        var old = ci(.passing)
+        old.id = "pr:o/app#2"
+        old.number = 2
+        old.updatedAt = Date().addingTimeInterval(-600)
+        old.ciFinishedAt = Date().addingTimeInterval(-300)
+        s.things[old.id] = old
+        #expect(await !s.waitOptions(for: s.claudeSessions["a"]!).contains { $0.watch.target == .ci(thing: old.id) })
+        // GitHub's answer says when: the checks' completion, the statuses' posting.
+        let node: [String: Any] = ["__typename": "PullRequest", "id": "n", "number": 3, "title": "t", "url": "https://github.com/o/app/pull/3",
+                                   "state": "OPEN", "createdAt": "2026-10-08T10:00:00Z", "updatedAt": "2026-10-08T10:00:00Z",
+                                   "repository": ["nameWithOwner": "o/app"],
+                                   "commits": ["nodes": [["commit": ["oid": "abc", "statusCheckRollup": ["state": "SUCCESS"]]]]],
+                                   "head": ["nodes": [["commit": ["oid": "abc", "statusCheckRollup": ["state": "SUCCESS", "contexts": [
+                                       "totalCount": 2, "nodes": [
+                                           ["__typename": "CheckRun", "databaseId": 1, "status": "COMPLETED", "completedAt": "2026-10-08T11:00:00Z"],
+                                           ["__typename": "StatusContext", "context": "ext", "state": "SUCCESS", "createdAt": "2026-10-08T11:30:00Z"]]]]]]]]]
+        #expect(InboxSync.thing(node)?.ciFinishedAt == InboxSync.date("2026-10-08T11:30:00Z"))
+    }
+
     @Test func aWaitNamingTwoPRsByNumberIsNeverBoundToTheOneTheInboxHas() async {
         for (message, binds) in [("Waiting for CI on PR #1 and PR #2.", false), ("Waiting for CI on #1 (o/app#1).", true),
                                  ("Waiting for CI on PR #1, see github.com/o/app/pull/1.", true)] {
@@ -766,6 +801,7 @@ import Testing
         var named = InboxFixture.pr(9, repo: "o/app")
         named.checks = .pending
         named.updatedAt = Date().addingTimeInterval(-7200)
+        named.ciFinishedAt = named.updatedAt
         s.things[old.id] = old
         s.things[named.id] = named
         func ids(_ message: String?) async -> [String] {
@@ -826,6 +862,7 @@ import Testing
         var old = ci(.failing)
         old.id = "pr:o/app#7"
         old.updatedAt = Date().addingTimeInterval(-3600)
+        old.ciFinishedAt = old.updatedAt
         let (s, _) = store(watch: ciWatch, things: [done, old])
         s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-60)
         s.claudeSessions["b"]?.running = false
