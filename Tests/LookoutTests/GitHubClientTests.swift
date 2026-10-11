@@ -71,6 +71,28 @@ import Testing
         #expect(client.remembered == 3)
     }
 
+    @Test func twoBranchesAtDifferentCommitsKeepTheirAnswersSideBySide() async throws {
+        let client = GitHubClient()
+        let server = Server()
+        client.session = server.session
+        let heads = ["main": String(repeating: "a", count: 40), "release": String(repeating: "b", count: 40)]
+        // Polls going through both branches in turn: once each was asked, every answer is a 304.
+        for _ in 0..<3 {
+            for branch in ["main", "release"] {
+                let sha = heads[branch]!
+                let _: Counted = try await client.get("/repos/o/r/actions/runs", ["branch": branch, "head_sha": sha], lineage: branch)
+                let _: Counted = try await client.get("/repos/o/r/commits/\(sha)/check-runs", lineage: branch)
+                let _: Counted = try await client.get("/repos/o/r/commits/\(sha)/status", lineage: branch)
+            }
+        }
+        #expect(server.full.withLock { $0 } == 6)
+        // A new commit on main takes the place of main's old one only, runs included.
+        let next = String(repeating: "c", count: 40)
+        let _: Counted = try await client.get("/repos/o/r/actions/runs", ["branch": "main", "head_sha": next], lineage: "main")
+        let _: Counted = try await client.get("/repos/o/r/commits/\(next)/status", lineage: "main")
+        #expect(client.remembered == 6)
+    }
+
     @Test func nothingIsAskedOfTheCoreBudgetBetweenItsEndAndItsResetButSearchStillIs() async throws {
         let client = GitHubClient()
         let asked = OSAllocatedUnfairLock(initialState: [String]())

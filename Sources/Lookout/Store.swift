@@ -1140,9 +1140,10 @@ final class Store {
         // Only push-triggered Actions runs count: issue/comment-triggered workflows also run against the
         // default branch HEAD and would otherwise make CI look red.
         let actions: GHWorkflowRuns = try await gh.get("/repos/\(name)/actions/runs",
-                                                       ["branch": branch, "event": "push", "head_sha": sha, "per_page": "30"])
-        async let checksReq = branchCheckRuns(name, target: sha)
-        async let statusReq = branchStatuses(name, target: sha)
+                                                       ["branch": branch, "event": "push", "head_sha": sha, "per_page": "30"],
+                                                       lineage: branch)
+        async let checksReq = branchCheckRuns(name, target: sha, branch: branch)
+        async let statusReq = branchStatuses(name, target: sha, branch: branch)
         let ((checks, checksRead), (combined, statusesRead)) = try await (checksReq, statusReq)
         let reading = Self.readCI(runs: actions.workflowRuns, sha: sha, checks: checks, combined: combined,
                                   complete: checksRead && statusesRead)
@@ -1155,11 +1156,11 @@ final class Store {
     nonisolated static let ciPages = 3
 
     /// A commit's check runs, page by page (GitHub gives 30 unless asked, 100 at most), and whether all of them were read.
-    func branchCheckRuns(_ name: String, target: String) async throws -> ([GHCheckRuns.Run], Bool) {
+    func branchCheckRuns(_ name: String, target: String, branch: String) async throws -> ([GHCheckRuns.Run], Bool) {
         var runs: [GHCheckRuns.Run] = []
         for page in 1...Self.ciPages {
             let answer: GHCheckRuns = try await gh.get("/repos/\(name)/commits/\(target)/check-runs",
-                                                       ["per_page": "100", "page": "\(page)"])
+                                                       ["per_page": "100", "page": "\(page)"], lineage: branch)
             runs += answer.checkRuns
             if runs.count >= answer.totalCount || answer.checkRuns.isEmpty { return (runs, runs.count >= answer.totalCount) }
         }
@@ -1167,12 +1168,12 @@ final class Store {
     }
 
     /// A commit's combined status with all its statuses, page by page, and whether all of them were read.
-    func branchStatuses(_ name: String, target: String) async throws -> (GHCombinedStatus, Bool) {
+    func branchStatuses(_ name: String, target: String, branch: String) async throws -> (GHCombinedStatus, Bool) {
         var first: GHCombinedStatus?
         var statuses: [GHCombinedStatus.Status] = []
         for page in 1...Self.ciPages {
             let answer: GHCombinedStatus = try await gh.get("/repos/\(name)/commits/\(target)/status",
-                                                            ["per_page": "100", "page": "\(page)"])
+                                                            ["per_page": "100", "page": "\(page)"], lineage: branch)
             if first == nil { first = answer }
             statuses += answer.statuses
             if statuses.count >= answer.totalCount || answer.statuses.isEmpty { break }
