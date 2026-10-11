@@ -268,8 +268,9 @@ struct CodePlanCard: View {
     let card: String
     let store: Store
     @Bindable var model: RouterModel
-    @State private var revising = false
     @FocusState private var noteFocused: Bool
+    /// In the model, not the view: the window's keys see it, so Esc is Back before it is anything else (`RouterKeys`).
+    private var revising: Bool { model.revisingPlan == form.id }
 
     var body: some View {
         let A = CDS.Approval.self
@@ -312,6 +313,8 @@ struct CodePlanCard: View {
         .overlay(RoundedRectangle(cornerRadius: A.radius, style: .continuous).inset(by: -0.5).stroke(CDS.border, lineWidth: 1))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Claude proposed a plan")
+        // Revise mode opened by Esc as by Revise…: the feedback field has the keyboard.
+        .onChange(of: revising) { _, now in if now { noteFocused = true } }
     }
 
     /// The actions row: Revise… on the left; Accept on the right. In revise mode: Back, then Revise.
@@ -319,16 +322,15 @@ struct CodePlanCard: View {
     private func actions(locked: Bool, busy: Bool) -> some View {
         HStack(spacing: 4) {
             if revising {
-                ClaudeButton("Back") { revising = false }
-                    .keyboardShortcut(.escape, modifiers: [])
+                // Esc too, through the window's keys (`RouterKeys`), which have it first.
+                ClaudeButton("Back") { model.revisingPlan = nil }
                 Spacer(minLength: 0)
                 ClaudeButton("Revise", variant: .primary, busy: busy) { revise() }
             } else {
                 ClaudeButton("Revise…", shortcut: ["esc"]) {
-                    revising = true
+                    model.revisingPlan = form.id
                     noteFocused = true
                 }
-                .keyboardShortcut(.escape, modifiers: [])
                 Spacer(minLength: 0)
                 ClaudeButton("Accept", variant: .primary, shortcut: ["cmd", "enter"], busy: busy) {
                     model.decidePlan(form, approve: true, card: card, store: store)

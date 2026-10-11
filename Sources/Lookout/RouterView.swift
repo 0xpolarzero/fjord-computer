@@ -313,6 +313,17 @@ final class RouterModel {
     /// Per plan (by its form's key): the note typed to go with "Keep planning", and what was decided from here.
     var planNotes: [String: String] = [:]
     var planDecided: [String: PendingForm.PlanDecision] = [:]
+    /// The plan (its form's key) in revise mode, its feedback field showing: Esc is its Back before anything else.
+    var revisingPlan: String?
+
+    /// The plan of the card shown in full in Needs you, while it can still be decided: Esc opens its revise mode (Revise…)
+    /// once nothing else is there to dismiss, and is Back while it is in it.
+    func expandedPlan(_ store: Store) -> PendingForm? {
+        guard let id = store.routerZones.openNeed(preferred: expandedNeed),
+              let card = store.router.cards.first(where: { $0.id == id }),
+              let form = store.pendingForm(for: card), form.isPlan, !locked(form) else { return nil }
+        return form
+    }
 
     /// The form's controls are shut while its answer is written and once it is.
     func locked(_ form: PendingForm) -> Bool { sending.contains(form.id) || sent.contains(form.id) }

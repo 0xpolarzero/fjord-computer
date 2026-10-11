@@ -652,6 +652,36 @@ import UserNotifications
         #expect(model.planNote(form) == "Use the existing CI runner")
     }
 
+    @Test func escIsThePlansBackWhileItIsRevisedAndItsReviseOnceNothingElseIs() throws {
+        let store = demo()
+        let model = RouterModel()
+        var closed = 0
+        let keys = RouterKeys(store: store, model: model) { closed += 1 }
+        let card = try #require(store.routerShownOpenCards.first { $0.kind == .plan })
+        let form = try #require(store.pendingForm(for: card))
+        let other = try #require(store.routerShownOpenCards.first { $0.kind != .plan && $0.kind != .waiting })
+        model.select(card.id, store: store)
+        #expect(model.expandedPlan(store)?.id == form.id)
+        // Revising, the feedback field has the keyboard, the composer still replying to a card: Esc is Back, nothing else.
+        model.revisingPlan = form.id
+        model.replyTo = other.id
+        let feedback = NSTextView()
+        #expect(keys.key(key(kVK_Escape), responder: feedback))
+        #expect(model.revisingPlan == nil && model.replyTo == other.id && closed == 0)
+        // Then the composer's context, then the plan's Revise…, before the window closes.
+        #expect(keys.key(key(kVK_Escape), responder: nil))
+        #expect(model.replyTo == nil && model.revisingPlan == nil && closed == 0)
+        #expect(keys.key(key(kVK_Escape), responder: nil))
+        #expect(model.revisingPlan == form.id && closed == 0)
+        #expect(keys.key(key(kVK_Escape), responder: feedback))
+        #expect(model.revisingPlan == nil && closed == 0)
+        // Another card shown in full: no plan to revise, Esc closes.
+        model.select(other.id, store: store)
+        #expect(model.expandedPlan(store) == nil)
+        #expect(keys.key(key(kVK_Escape), responder: nil))
+        #expect(closed == 1)
+    }
+
     @Test func anApprovalIsWrittenToTheFormsFolder() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("router-forms-\(UUID().uuidString)")
         let store = writing(dir)
