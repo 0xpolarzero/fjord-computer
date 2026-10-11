@@ -44,10 +44,10 @@ import Testing
         try? await Task.sleep(for: .milliseconds(50))
         #expect(calls() == 0 && model.live.prediction == nil, "too short to ask")
         type("I don't know yet, maybe later", model, s)
-        await waitUntil(within: 2) { calls() == 1 }
+        await waitUntil { calls() == 1 }
         #expect(model.live.prediction == nil, "not sure: nothing shown")
         type("use sqlite for the database", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         #expect(model.live.prediction?.target == "answer:local_a#w1" && model.live.prediction?.title == "Fix the login bug")
         #expect(model.live.prediction?.mark == "local_a#w1")
         model.markPrediction(from: nil, to: model.live.prediction?.mark)
@@ -75,7 +75,7 @@ import Testing
         s.settings.jevReadsDrafts = false
         s.routerDispatcher.asker = sure
         #expect(s.routerDispatcher.submit("use sqlite for the database") != nil)
-        await waitUntil(within: 2) { calls() == 2 }
+        await waitUntil { calls() == 2 }
         #expect(calls() == 2)
     }
 
@@ -90,7 +90,7 @@ import Testing
     @Test func clickingACardsPickMakesItTheReplyAndEscWavesItOff() async {
         let (s, model, _) = setup()
         type("use sqlite for the database", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         model.pinPrediction(store: s)
         #expect(model.replyTo == "local_a#w1" && model.live.prediction == nil)
         #expect(model.context(s).predicted == "answer:local_a#w1" && model.context(s).jev?.sure == true,
@@ -98,7 +98,7 @@ import Testing
 
         model.replyTo = nil
         type("use sqlite for the database please", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         model.dismissPrediction()
         #expect(model.live.prediction == nil)
         #expect(model.context(s).notTo == "answer:local_a#w1", "the send won't go there unasked")
@@ -154,12 +154,12 @@ import Testing
         }
         let a = "use sqlite for the database"
         type(a, model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         type("update the docs page for sqlite", model, s)
         #expect(model.live.prediction == nil, "the chip goes as soon as the words change")
-        await waitUntil(within: 2) { held }
+        await waitUntil { held }
         type(a, model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         gate?.resume()
         try? await Task.sleep(for: .milliseconds(100))
         #expect(model.live.prediction?.target == "answer:local_a#w1", "the late answer for other words isn't shown")
@@ -178,7 +178,7 @@ import Testing
         try? await Task.sleep(for: .milliseconds(250))
         #expect(calls() == 0 && model.live.prediction == nil, "the draft wasn't sent to Jev")
         model.predictTarget(store: s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         #expect(calls() == 1 && model.live.prediction?.target == "answer:local_a#w1")
         model.live.suspend()
         #expect(model.live.prediction == nil)
@@ -187,7 +187,7 @@ import Testing
     @Test func aPickWhoseCardIsAddressedGoesWithItsMark() async {
         let (s, model, _) = setup()
         type("use sqlite for the database", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         let before = RouterModel.targets(s)
         s.setCardAddressed("local_a#w1", true)
         #expect(RouterModel.targets(s) != before, "the composer watches what can be routed to")
