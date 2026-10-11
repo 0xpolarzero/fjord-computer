@@ -337,32 +337,52 @@ struct Prepared: Equatable, Sendable {
 
 /// The only edit a message gets before it goes to a session as your words: what addresses the session or the Router is
 /// taken out of your own bytes, by fixed rules; nothing is ever added, reworded or reordered (no model writes what is
-/// signed as yours). Taken out: the leading @project tags, then one outer address ("tell/ask <the session> to",
-/// "<the session>:" or "for <the session>:") and nothing after it, and `@router` asides (in brackets, or from the marker to
-/// the end of its line). A name is only taken out whole and followed by "to" or a colon, and never one holding a "to", a
-/// colon or a negation (a session's title is its own words: it mustn't eat "not"); when in doubt, the words go verbatim.
+/// signed as yours). Taken out: the @project pills the message starts with (by where the composer put them, never by
+/// matching words against a project's or a session's name: a session's title is its own words, and could eat a condition
+/// of yours), and `@router` asides (in brackets, or from the marker to the end of its line). Anything else, "tell <the
+/// session> to …" included, goes as you wrote it.
 enum Addressing {
     /// Everything in the message was for the Router (`@router` asides): nothing to pass on.
     struct NothingLeft: LocalizedError {
         var errorDescription: String? { "Nothing to pass on: everything in the message was for the Router" }
     }
 
-    /// `message` with its addressing taken out. `names`: what the target goes by (its title, its project's names); a name
-    /// shorter than two characters is ignored, and so is one that could carry what you meant (`addressable`). `envelope`:
+    /// `message` with its addressing taken out. `pills`: where its @project pills are (`RouterContext.pills`). `envelope`:
     /// false for a new session's task, whose request was already taken out (`SessionStart.task`): only the asides go.
-    static func edit(_ message: String, names: [String], envelope: Bool = true) throws -> Prepared {
-        var text = withoutAsides(message)
-        if envelope {
-            let names = Array(Set(names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(addressable)))
-                .sorted { $0.count > $1.count }
-            // The @project tags, then a single address: what follows it is the message, however it starts.
-            while let next = withoutTag(text, names: names) { text = next }
-            if let next = withoutLeadingAddress(text, names: names) { text = next }
-        }
+    static func edit(_ message: String, pills: [Range<Int>] = [], envelope: Bool = true) throws -> Prepared {
+        var text = message
+        if envelope, let rest = withoutLeadingPills(message, pills) { text = rest }
+        text = withoutAsides(text)
         guard text != message else { return Prepared(text: message, original: message, rephrased: false) }
         while let last = text.last, last.isWhitespace { text.removeLast() }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw NothingLeft() }
         return Prepared(text: text, original: message, rephrased: true)
+    }
+
+    /// The pills `text` starts with taken out, each with the spaces, or the colon or dash (and one line break), after it; nil
+    /// when it starts with none, or when nothing would be left. A pill glued to what follows it is left.
+    static func withoutLeadingPills(_ text: String, _ pills: [Range<Int>]) -> String? {
+        let chars = Array(text)
+        let ends = Dictionary(pills.map { ($0.lowerBound, $0.upperBound) }, uniquingKeysWith: max)
+        func blank(_ i: Int) -> Bool { i < chars.count && (chars[i] == " " || chars[i] == "\t") }
+        var cut = 0
+        while true {
+            var i = cut
+            while blank(i) { i += 1 }
+            guard let end = ends[i], end <= chars.count, chars[i] == "@" else { break }
+            var k = end
+            guard k == chars.count || chars[k].isWhitespace || ":,—–".contains(chars[k]) else { break }
+            while blank(k) { k += 1 }
+            if k < chars.count, ":,—–".contains(chars[k]) {
+                k += 1
+                while blank(k) { k += 1 }
+                if k < chars.count, chars[k] == "\r" { k += 1 }
+                if k < chars.count, chars[k] == "\n" || chars[k] == "\r\n" { k += 1 }
+            }
+            cut = k
+        }
+        guard cut > 0, chars[cut...].contains(where: { !$0.isWhitespace }) else { return nil }
+        return String(chars[cut...])
     }
 
     // MARK: @router asides
@@ -416,57 +436,6 @@ enum Addressing {
             }
         }
         return String(chars)
-    }
-
-    // MARK: Leading addressing
-
-    /// Words that turn what follows around: never part of an address taken out.
-    private static let negations: Set<String> = ["not", "never", "no", "nor", "don't", "dont", "don’t", "doesn't",
-                                                "doesnt", "doesn’t", "without", "stop", "cannot", "can't", "can’t", "won't",
-                                                "won’t", "shouldn't", "shouldn’t", "mustn't", "mustn’t", "neither"]
-
-    /// Whether a name may be taken out as an address: two characters or more, and nothing in it that could be the start of
-    /// your message (a "to", a colon or a dash, a negation).
-    static func addressable(_ name: String) -> Bool {
-        guard name.count >= 2, !name.contains(where: { ":,—–\n".contains($0) }) else { return false }
-        let words = name.lowercased().split { !($0.isLetter || $0.isNumber || $0 == "'" || $0 == "’") }.map(String.init)
-        return !words.contains { $0 == "to" || negations.contains($0) }
-    }
-
-    /// One leading @project tag taken out of `text` (a pill: its name whole), or nil when it starts with none.
-    static func withoutTag(_ text: String, names: [String]) -> String? {
-        guard !names.isEmpty else { return nil }
-        let named = names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
-        return firstStripped(text, #"^[ \t]*@(?:\#(named))(?![\w./-])(?:\#(colon)|[ \t]+)?"#)
-    }
-
-    private static func firstStripped(_ text: String, _ pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Range(m.range, in: text), !r.isEmpty, r.upperBound < text.endIndex else { return nil }
-        // What is taken out never holds a negation.
-        let taken = text[r].lowercased().split { !($0.isLetter || $0.isNumber || $0 == "'" || $0 == "’") }
-        guard !taken.contains(where: { negations.contains(String($0)) }) else { return nil }
-        return String(text[r.upperBound...])
-    }
-
-    private static let polite = #"(?:(?:please|pls|hey|ok|okay|can\s+you|could\s+you|would\s+you)[,\s]+)?"#
-    private static let kind = #"(?:\s+(?:session|chat|project|repo|repository))?"#
-    /// After a colon or a dash: spaces, and one line break at most (an indented block after it keeps its indent).
-    private static let colon = #"[ \t]*[:,—–][ \t]*(?:\r?\n)?"#
-
-    /// One leading address taken out of `text`, or nil when it starts with none: "tell/ask <the session> to" or with a
-    /// colon, "(for) <the session>:". `names` are those `addressable` already.
-    static func withoutLeadingAddress(_ text: String, names: [String]) -> String? {
-        let named = names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
-        let target = named.isEmpty ? nil : #"(?:the\s+)?@?(?:\#(named))(?![\w])\#(kind)"#
-        let any = #"(?:\#(target.map { $0 + "|" } ?? "")it(?![\w'’])|them(?![\w])|(?:the|this|that)\s+session(?![\w]))"#
-        var patterns = [#"^[ \t]*\#(polite)(?:tell|ask)\s+\#(any)(?:\#(colon)|\s+to\s+)"#]
-        if let target { patterns.append(#"^[ \t]*\#(polite)(?:for\s+)?\#(target)\#(colon)"#) }
-        for pattern in patterns {
-            if let rest = firstStripped(text, pattern) { return rest }
-        }
-        return nil
     }
 }
 
@@ -528,24 +497,28 @@ enum SessionStart {
     /// What a new session is for, from the words that asked for it: the request to start one ("start a (new) session (in X)",
     /// "new chat:", "open a session to"), its model and effort settings, and a leading @project (already a pill) are taken
     /// out; the rest stays verbatim, not capitalised or reworded. Empty when nothing is left ("start a session in lookout").
-    /// `projects`: names the project goes by: only these are taken out, as "@name" or after "in" (any other @word, a
-    /// decorator like `@MainActor`, is the task's own).
-    static func task(from text: String, projects: [String] = []) -> String {
-        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// `pills`: where the @project pills are in `text` (`RouterContext.pills`): the only tags taken out (any other @word, a
+    /// decorator like `@MainActor`, is the task's own). `projects`: names the project goes by, for "in <project>" in the
+    /// request to start the session (one word each: a name can't hold words of yours).
+    static func task(from text: String, pills: [Range<Int>] = [], projects: [String] = []) -> String {
+        // Each pill stands as one character of its own while the request is taken apart, and is put back after.
+        let (masked, pilled) = masking(text, pills)
+        var t = masked.trimmingCharacters(in: .whitespacesAndNewlines)
         let sep = #"^[\s,:;\-–—]*"#
         func tidy() { _ = strip(sep, from: &t) }
-        let names = projects.filter { !$0.isEmpty }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
-        // The project as a pill: its name whole (never @router, which is for the Router).
-        let tag = names.isEmpty ? nil : #"@(?:\#(names))(?![\w./-])"#
-        while let tag, strip("^" + tag, from: &t) { tidy() }
+        let names = projects.filter { !$0.isEmpty && !$0.contains(where: \.isWhitespace) }
+            .map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+        let tag = #"[\x{E000}-\x{F8FF}]"#
+        while strip("^" + tag, from: &t) { tidy() }
         let started = strip(startPhrase, from: &t)
         if started {
+            let named = names.isEmpty ? "" : #"|(?:\#(names))(?![\w./-])"#
             var moved = true
             while moved {
                 tidy()
-                moved = (!names.isEmpty && strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?@?(?:\#(names))(?![\w./-])(?:\s+(?:project|repo|repository|folder))?\b"#, from: &t))
+                moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?(?:\#(tag)\#(named))(?:\s+(?:project|repo|repository|folder))?(?![\w])"#, from: &t)
                     || strip("^" + settingClause, from: &t)
-                    || (tag.map { strip("^" + $0, from: &t) } ?? false)
+                    || strip("^" + tag, from: &t)
             }
             tidy()
             _ = strip(#"^(?:to|and|then|that)\s+"#, from: &t)
@@ -555,7 +528,26 @@ enum SessionStart {
             _ = strip(#"[,;]?[ \t]*\b"# + settingClause, from: &t, all: true, joining: true)
             if started || SessionSettings.parse(text) != nil { tidy() }
         }
-        return t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
+        let task = t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
+        return String(task.map { c in c.unicodeScalars.first.flatMap { pilled[$0] } ?? String(c) }.joined())
+    }
+
+    /// `text` with each pill (an "@name" at its place) made one private character, and what each stands for. A text that
+    /// holds private characters of its own is left as it is (its pills aren't tags then: the words go whole).
+    private static func masking(_ text: String, _ pills: [Range<Int>]) -> (String, [Unicode.Scalar: String]) {
+        let isPrivate = { (s: Unicode.Scalar) in (0xE000...0xF8FF).contains(s.value) }
+        guard !pills.isEmpty, !text.unicodeScalars.contains(where: isPrivate) else { return (text, [:]) }
+        var chars = Array(text)
+        var pilled: [Unicode.Scalar: String] = [:]
+        var last = Int.max
+        for (n, r) in pills.sorted(by: { $0.lowerBound > $1.lowerBound }).enumerated()
+        where r.lowerBound >= 0 && r.upperBound <= min(chars.count, last) && !r.isEmpty && chars[r.lowerBound] == "@" {
+            guard let mark = Unicode.Scalar(0xE000 + UInt32(n)) else { break }
+            pilled[mark] = String(chars[r])
+            chars.replaceSubrange(r, with: [Character(mark)])
+            last = r.lowerBound
+        }
+        return (String(chars), pilled)
     }
 
     /// The CLI session: no model call, and the least left in it (the rename, which is also its title). Its permission mode

@@ -97,6 +97,22 @@ import Testing
         return (s, d, fakes)
     }
 
+    /// Where each "@name" of `names` stands in `text`, whole: the pills the composer would record.
+    static func pills(_ text: String, _ names: [String]) -> [Range<Int>] {
+        let chars = Array(text)
+        var out: [Range<Int>] = []
+        for i in chars.indices where chars[i] == "@" {
+            for name in names.sorted(by: { $0.count > $1.count }) {
+                let tag = Array("@" + name), end = i + tag.count
+                guard end <= chars.count, Array(chars[i..<end]) == tag else { continue }
+                if end < chars.count, chars[end].isLetter || chars[end].isNumber || "./-_".contains(chars[end]) { continue }
+                out.append(i..<end)
+                break
+            }
+        }
+        return out
+    }
+
     private func finish(_ d: RouterDispatcher, _ f: Fakes, _ id: UUID?) async {
         await waitUntil { id.map { f.finished.contains($0) } ?? true }
     }
@@ -589,7 +605,8 @@ import Testing
 
     @Test func theFirstMessageOfANewSessionIsTheTaskAloneAndTheTitleComesFromIt() {
         let p = ["lookout", "lookout-live"]
-        func task(_ t: String) -> String { SessionStart.task(from: t, projects: p) }
+        // Each "@name" of the project is a pill, as the composer records it.
+        func task(_ t: String) -> String { SessionStart.task(from: t, pills: Self.pills(t, p), projects: p) }
         #expect(task("@lookout-live start a session with haiku, low effort: reply with exactly the word pong and nothing else")
                 == "reply with exactly the word pong and nothing else")
         #expect(task("start a new session to add a badge with opus, high effort") == "add a badge")
@@ -606,6 +623,10 @@ import Testing
         #expect(task("@MainActor isn't on the store, add it") == "@MainActor isn't on the store, add it")
         #expect(task("start a session in @lookout @MainActor everywhere") == "@MainActor everywhere")
         #expect(task("@lookout-live2 is down") == "@lookout-live2 is down")
+        // Typed, not a pill: the task's words, even when it names the project.
+        #expect(SessionStart.task(from: "@lookout fix the tests", projects: p) == "@lookout fix the tests")
+        // A pill keeps its place, and its words, where it isn't the request's.
+        #expect(task("start a session to move @lookout-live to Swift 6") == "move @lookout-live to Swift 6")
         // Only where a clause was taken out are the spaces tidied: code keeps its indentation and its spacing.
         #expect(task("start a new session with opus to fix this:\n    def f():\n        return  1") == "fix this:\n    def f():\n        return  1")
         #expect(task("fix  this with opus  now:\n\tx  =  1") == "fix  this now:\n\tx  =  1")
@@ -620,7 +641,7 @@ import Testing
     @Test func aStartPassesTheTitleOfTheTaskNotTheRequest() async {
         let (_, d, f) = setup()
         let a = d.submit("@lookout start a session with haiku, low effort: reply with exactly pong and nothing else",
-                         context: RouterContext(projects: ["/code/lookout"]))
+                         context: RouterContext(projects: ["/code/lookout"], pills: [0..<8]))
         await finish(d, f, a)
         #expect(f.started.last?.title == "reply with exactly pong and nothing")
         #expect(f.startSettings.last! == SessionSettings(model: "haiku", effort: "low"))

@@ -186,7 +186,8 @@ import Testing
     /// Tools in a turn of the user's (side effects need one).
     private func tools(_ s: Store, turn: String? = "do it") -> RouterTools {
         let tools = RouterTools(store: s)
-        if let turn { tools.beginTurn(turn) }
+        // "@lookout" at the start is the pill the composer put there.
+        if let turn { tools.beginTurn(turn, pills: turn.hasPrefix("@lookout") ? [0..<8] : []) }
         return tools
     }
 
@@ -372,7 +373,7 @@ import Testing
         // No message of yours in this turn (a session's turn): nothing to prepare.
         t.endTurn()
         #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
-        t.beginTurn("tell it to bump the version")
+        t.beginTurn("@lookout bump the version", pills: [0..<8])
         // By session id, or by its peer name; any `message` the Router adds is not an input.
         #expect(await t.tool("prepare", ["session": "local_a", "message": "something else"])?.isError == false)
         let out = try #require(await t.tool("prepare", ["session": "Fix the login bug"]))
@@ -388,11 +389,29 @@ import Testing
         #expect(await t.tool("prepare", ["session": "nobody"])?.isError == true)
     }
 
+    @Test func aSessionsTitleCantTakeAConditionOutOfYourWords() async throws {
+        let dir = TempDir()
+        let s = await store(dir)
+        // Titled to read as the start of a message to it.
+        s.claudeSessions["local_a"]?.title = "lookout only if backup succeeds"
+        let t = tools(s, turn: nil)
+        t.beginTurn("@lookout only if backup succeeds: delete the database")
+        _ = try #require(await t.tool("prepare", ["session": "local_a"]))
+        #expect(t.prepared.values.first?.body == "@lookout only if backup succeeds: delete the database", "no pill: as written")
+        t.beginTurn("@lookout only if backup succeeds: delete the database", pills: [0..<8])
+        _ = try #require(await t.tool("prepare", ["session": "local_a"]))
+        #expect(t.prepared.values.first?.body == "only if backup succeeds: delete the database", "only the pill goes")
+        s.claudeSessions["local_a"]?.title = "Only if backup succeeds"
+        t.beginTurn("tell Only if backup succeeds to delete the database")
+        _ = try #require(await t.tool("prepare", ["session": "local_a"]))
+        #expect(t.prepared.values.first?.body == "tell Only if backup succeeds to delete the database", "an address goes as written")
+    }
+
     @Test func theGateLetsThroughOnlyThePreparedTextOnce() async throws {
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
-        t.beginTurn("tell lookout to bump the version")
+        t.beginTurn("@lookout bump the version", pills: [0..<8])
         #expect(gate(t, to: "Fix the login bug", message: "bump the version").reason?.contains("Not prepared") == true)
         _ = await t.tool("prepare", ["session": "local_a"])
         // Another text, a field of its own, a preview that isn't the message: refused, and the preparation stays.
@@ -416,7 +435,7 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
-        t.beginTurn("tell lookout to bump the version")
+        t.beginTurn("@lookout bump the version", pills: [0..<8])
         _ = await t.tool("prepare", ["session": "local_a"])
         t.beginTurn("@router never mind")
         #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
@@ -426,7 +445,7 @@ import Testing
     @Test func aLongMessagesPreviewsPass() async throws {
         let dir = TempDir()
         let s = await store(dir)
-        let t = tools(s, turn: "tell lookout: first line of a longer note that goes past sixty characters for sure, yes\nsecond line")
+        let t = tools(s, turn: "@lookout: first line of a longer note that goes past sixty characters for sure, yes\nsecond line")
         let text = "first line of a longer note that goes past sixty characters for sure, yes\nsecond line"
         _ = await t.tool("prepare", ["session": "local_a"])
         #expect(t.approveSend(claudeInput("Fix the login bug", sealed(t, "Fix the login bug", text)), otherFields: []) == nil)
@@ -435,14 +454,14 @@ import Testing
     @Test func aLatePrepareFromAnEarlierTurnLeavesTheNewOneAlone() async throws {
         let dir = TempDir()
         let s = await store(dir)
-        let t = tools(s, turn: "tell lookout to bump the version")
+        let t = tools(s, turn: "@lookout bump the version")
         let held = RouterGate()
         t.afterLookup = { await held.wait() }
         let late = Task { await t.tool("prepare", ["session": "local_a"]) }
         while !held.waiting { await Task.yield() }
         // The turn ends; the next one prepares the same target.
         t.endTurn()
-        t.beginTurn("tell lookout to tag the release")
+        t.beginTurn("@lookout tag the release", pills: [0..<8])
         t.afterLookup = nil
         _ = await t.tool("prepare", ["session": "local_a"])
         held.open()
@@ -534,7 +553,7 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let code = "    let x = 1\n    let y = 2"
-        let t = tools(s, turn: "tell lookout:\n" + code)
+        let t = tools(s, turn: "@lookout:\n" + code)
         _ = await t.tool("prepare", ["session": "local_a"])
         // Claude Code's previews of the signed text pass; the body, indent and all, is what was prepared.
         let signed = sealed(t, "Fix the login bug", code)
@@ -560,7 +579,7 @@ import Testing
     @Test func nothingGoesOnceSwitchedOffEvenBeforeTheAgentSeesIt() async throws {
         let dir = TempDir()
         let s = await store(dir)
-        let t = tools(s, turn: "tell lookout to bump the version")
+        let t = tools(s, turn: "@lookout bump the version")
         _ = await t.tool("prepare", ["session": "local_a"])
         let input = claudeInput("Fix the login bug", sealed(t, "Fix the login bug", "bump the version"))
         // Off, and asked right away (the agent's switch observer hasn't run): refused, and nothing used up.
@@ -611,7 +630,7 @@ import Testing
     @Test func theGateLetsThroughOnlyTheSignedText() async throws {
         let dir = TempDir()
         let s = await store(dir)
-        let t = tools(s, turn: "tell lookout to bump the version")
+        let t = tools(s, turn: "@lookout bump the version")
         _ = await t.tool("prepare", ["session": "local_a"])
         // The body alone (unsigned) is refused; so is the header with another body.
         #expect(t.approveSend(claudeInput("Fix the login bug", "bump the version"), otherFields: []) != nil)
@@ -655,7 +674,7 @@ import Testing
         let nfc = "Rename it to caf\u{E9}", nfd = "Rename it to cafe\u{301}"
         // Equal as Swift strings (canonically equivalent), not the same bytes.
         #expect(nfc == nfd)
-        let t = tools(s, turn: "tell lookout: " + nfc)
+        let t = tools(s, turn: "@lookout: " + nfc)
         _ = await t.tool("prepare", ["session": "local_a"])
         let signed = sealed(t, "Fix the login bug", nfc)
         let header = signed.components(separatedBy: "\n")[0]
@@ -668,7 +687,7 @@ import Testing
     @Test func aKeyNotReadYetOrChangedIsReadAgainBeforeSigning() async throws {
         let dir = TempDir()
         let s = await store(dir)
-        let t = tools(s, turn: "tell lookout to bump the version")
+        let t = tools(s, turn: "@lookout bump the version")
         // What's tested is that the key is read again, not how fast: a deadline no loaded machine can miss.
         t.keyReloadWait = 120
         func verifies(_ key: String) -> Bool {
@@ -700,7 +719,7 @@ import Testing
     @Test func aStalledKeyReadDoesntHoldThePrepare() async throws {
         let dir = TempDir()
         let s = await store(dir)
-        let t = tools(s, turn: "tell lookout to bump the version")
+        let t = tools(s, turn: "@lookout bump the version")
         let held = RouterGate()
         t.keyReload = { await held.wait(); return false }
         t.keyReloadWait = 0.05

@@ -26,9 +26,12 @@ struct RouterContext: Equatable {
     /// The target of Jev's pick shown over the composer for these very words as they are sent: only then does a send go
     /// with it as your confirmation (what was read while you typed but not shown, or shown for other words, is not).
     var shown: String?
+    /// Where the @project pills are in the message (character offsets of each "@name"): only these are ever taken out of
+    /// your words as tags, never words that happen to match a project or a session's title.
+    var pills: [Range<Int>]
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
-         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil) {
+         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = []) {
         self.replyTo = replyTo
         self.projects = projects
         self.target = target
@@ -36,6 +39,7 @@ struct RouterContext: Equatable {
         self.predicted = predicted
         self.jev = jev
         self.shown = shown
+        self.pills = pills
     }
 }
 
@@ -223,9 +227,12 @@ struct RouterAskBack: Identifiable, Equatable {
         let projects = context.projects.filter { seen.insert($0).inserted }
         var context = context
         context.projects = projects
+        // A pill is an "@name" where it was said; anything else given as one isn't.
+        let chars = Array(text)
+        context.pills = context.pills.filter { $0.lowerBound >= 0 && $0.upperBound <= chars.count && !$0.isEmpty && chars[$0.lowerBound] == "@" }
         let id = store.logDecision(RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
                                                   links: .init(cards: context.replyTo.map { [$0] } ?? [])))
-        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text)), stage: "starting") { [self] job in
+        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: context.pills)), stage: "starting") { [self] job in
             try await execute(job)
         }
         return id
@@ -253,7 +260,7 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         // A pick that is Jev's own suggestion confirms it: an example for the next ones.
         if !corrected { store.updateDecision(id) { $0.decision.confirmed = true } }
-        launch(Job(id: id, text: ask.message, context: ask.context, tools: makeTools(id, ask.message), jev: ask.jev),
+        launch(Job(id: id, text: ask.message, context: ask.context, tools: makeTools(id, ask.message, pills: ask.context.pills), jev: ask.jev),
                stage: "starting") { [self] job in
             try await route(job, to: target)
         }
@@ -281,11 +288,11 @@ struct RouterAskBack: Identifiable, Equatable {
 
     // MARK: Runs
 
-    private func makeTools(_ id: UUID, _ text: String) -> RouterTools {
+    private func makeTools(_ id: UUID, _ text: String, pills: [Range<Int>]) -> RouterTools {
         let tools = RouterTools(store: store!)
         tools.claudePath = { [weak self] in self?.claudePath() }
         tools.decision = id
-        tools.beginTurn(text)
+        tools.beginTurn(text, pills: pills)
         configure?(tools)
         return tools
     }
@@ -440,7 +447,8 @@ struct RouterAskBack: Identifiable, Equatable {
         guard let store else { return }
         stage(job, "starting a session")
         // The title and the first message come from the task, never from the request to start the session.
-        let task = SessionStart.task(from: job.text, projects: [store.folderName(folder), (folder as NSString).lastPathComponent])
+        let task = SessionStart.task(from: job.text, pills: job.context.pills,
+                                     projects: [store.folderName(folder), (folder as NSString).lastPathComponent])
         let project = store.folderName(folder)
         // "…with opus, high effort": set in the session by its plugin before the first message; else Jev's pick by the size
         // of the task, when you let him.

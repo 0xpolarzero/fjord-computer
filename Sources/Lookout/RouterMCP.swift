@@ -516,9 +516,13 @@ final class RouterMCPServer: @unchecked Sendable {
     /// What your message names, read as the turn began, before its run changed anything (`LookoutGate.Named`).
     var turnNamed = LookoutGate.Named()
 
+    /// Where the @project pills are in the turn's text (`RouterContext.pills`): the only tags taken out of it.
+    private(set) var turnPills: [Range<Int>] = []
+
     /// A turn of yours begins.
-    func beginTurn(_ text: String) {
+    func beginTurn(_ text: String, pills: [Range<Int>] = []) {
         turnText = text
+        turnPills = pills
         turnChanges = []
         turnMarked = []
         turnNamed = store.map { LookoutGate.named(text, store: $0) } ?? .init()
@@ -528,6 +532,7 @@ final class RouterMCPServer: @unchecked Sendable {
     func endTurn() {
         turn += 1
         turnText = nil
+        turnPills = []
         turnChanges = []
         turnMarked = []
         turnNamed = .init()
@@ -874,9 +879,9 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// Your words with the addressing taken out (`Addressing`): never a model's rewrite.
-    private func edited(_ message: String, names: [String], envelope: Bool = true) throws -> Prepared {
+    private func edited(_ message: String, envelope: Bool = true) throws -> Prepared {
         do {
-            return try Addressing.edit(message, names: names, envelope: envelope)
+            return try Addressing.edit(message, pills: envelope ? turnPills : [], envelope: envelope)
         } catch let nothing as Addressing.NothingLeft {
             throw Failure(nothing.localizedDescription)
         }
@@ -1011,8 +1016,7 @@ final class RouterMCPServer: @unchecked Sendable {
         // one, which is void even if this one fails.
         try live(ticket)
         prepared[to] = nil
-        let names = [session.title, store.folderName(session.folderKey), (session.folderKey as NSString).lastPathComponent]
-        let ready = verbatim ? Prepared(text: message, original: message, rephrased: false) : try edited(message, names: names)
+        let ready = verbatim ? Prepared(text: message, original: message, rephrased: false) : try edited(message)
         let sealed = try await signed(store, ready, title: session.title, cli: cli, ticket: ticket)
         try live(ticket)
         prepared[to] = sealed
@@ -1070,7 +1074,7 @@ final class RouterMCPServer: @unchecked Sendable {
         let name = store.folderName(folder)
         let title = SessionStart.cleanTitle(title)
         // The first message is the task alone, without the request to start the session or its settings.
-        let message = SessionStart.task(from: said, projects: [name, (folder as NSString).lastPathComponent])
+        let message = SessionStart.task(from: said, pills: turnPills, projects: [name, (folder as NSString).lastPathComponent])
         let noTask = message.isEmpty
         // Nothing to send it without the plugin: said before a session is made.
         guard store.routerPluginStatus == .installed else {
@@ -1079,7 +1083,7 @@ final class RouterMCPServer: @unchecked Sendable {
         // Prepared first: if a part for the Router is left in it, no session is made.
         var ready = noTask ? Prepared(text: "", original: "", rephrased: false)
             // The task is what is left once the request was taken out: it is not taken apart again (only `@router` asides go).
-            : try edited(message, names: [], envelope: false)
+            : try edited(message, envelope: false)
         try noMarker(ready.text)
         try live(ticket)
         let started: SessionStart.Started

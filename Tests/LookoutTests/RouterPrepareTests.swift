@@ -7,40 +7,65 @@ import Testing
 @Suite struct RouterPrepare {
     // MARK: Your words, without their addressing
 
-    private func edit(_ message: String, _ names: [String] = ["Fix the login bug", "lookout"]) throws -> String {
-        try Addressing.edit(message, names: names).text
+    /// Where each "@name" stands in `message`, whole: the pills the composer would have recorded.
+    private func pills(_ message: String, _ names: [String] = ["lookout"]) -> [Range<Int>] {
+        let chars = Array(message)
+        var out: [Range<Int>] = []
+        for i in chars.indices where chars[i] == "@" {
+            for name in names {
+                let tag = Array("@" + name), end = i + tag.count
+                guard end <= chars.count, Array(chars[i..<end]) == tag else { continue }
+                if end < chars.count, chars[end].isLetter || chars[end].isNumber || "./-_".contains(chars[end]) { continue }
+                out.append(i..<end)
+            }
+        }
+        return out
     }
 
-    @Test func theAddressingIsTakenOutOfYourOwnWords() throws {
-        #expect(try edit("tell lookout to bump the version") == "bump the version")
-        #expect(try edit("Please tell the lookout session to bump the version") == "bump the version")
-        #expect(try edit("tell it to bump the version") == "bump the version")
-        #expect(try edit("ask Fix the login bug to check whether the tests pass") == "check whether the tests pass")
-        // No "to" or colon after the name: not sure it is an address, so it goes verbatim.
-        #expect(try edit("ask Fix the login bug whether the tests pass") == "ask Fix the login bug whether the tests pass")
-        #expect(try edit("lookout: add a badge") == "add a badge")
-        #expect(try edit("for lookout, add a badge") == "add a badge")
+    private func edit(_ message: String, pills given: [Range<Int>]? = nil) throws -> String {
+        try Addressing.edit(message, pills: given ?? pills(message)).text
+    }
+
+    @Test func theLeadingPillsAndTheAsidesAreTakenOutOfYourOwnWords() throws {
         #expect(try edit("@lookout add a badge") == "add a badge")
+        #expect(try edit("@lookout: add a badge") == "add a badge")
+        #expect(try edit("@lookout @lookout: rotate the keys") == "rotate the keys")
         #expect(try edit("Bump the version and push (@router this one is slow, don't wait on it)") == "Bump the version and push")
         #expect(try edit("Ship it @router quietly") == "Ship it")
         #expect(try edit("Ship it, @router then wait\nand tag it") == "Ship it\nand tag it")
         #expect(try edit("Ship it (@router)!") == "Ship it!")
         // An indented block after the colon keeps its indent.
-        #expect(try edit("tell lookout:\n    let x = 1\n    let y = 2") == "    let x = 1\n    let y = 2")
+        #expect(try edit("@lookout:\n    let x = 1\n    let y = 2") == "    let x = 1\n    let y = 2")
         // Nothing to take out: byte for byte, unmarked.
-        let plain = try Addressing.edit("  Lookout is slow: profile it  ", names: ["lookout"])
+        let plain = try Addressing.edit("  Lookout is slow: profile it  ", pills: [])
         #expect(plain == Prepared(text: "  Lookout is slow: profile it  ", original: "  Lookout is slow: profile it  ", rephrased: false))
         #expect(try edit("Fix @lookout.js") == "Fix @lookout.js")
+        // A pill alone, or in the middle: your words.
+        #expect(try edit("@lookout") == "@lookout")
+        #expect(try edit("ask @lookout about it") == "ask @lookout about it")
         #expect(throws: Addressing.NothingLeft.self) { try edit("@router what needs me?") }
     }
 
+    @Test func onlyAPillIsATagAndAnAddressGoesAsYouWroteIt() throws {
+        // "@lookout" typed, not a pill: your words.
+        #expect(try edit("@lookout add a badge", pills: []) == "@lookout add a badge")
+        // No session's or project's name is looked for: what is said to it goes whole.
+        for message in ["tell lookout to bump the version", "tell it to bump the version", "lookout: add a badge",
+                        "for lookout, add a badge", "tell lookout not to delete the database"] {
+            #expect(try edit(message) == message, "\(message)")
+        }
+        // A session titled to swallow a condition can't: only the pill goes.
+        #expect(try edit("@lookout only if backup succeeds: delete the database")
+                == "only if backup succeeds: delete the database")
+        // A new session's task was already taken out of its request: only the asides go.
+        #expect(try Addressing.edit("@lookout rotate the keys (@router soon)", pills: [0..<8], envelope: false).text
+                == "@lookout rotate the keys")
+    }
+
     @Test func nothingIsEverAddedOrReworded() throws {
-        // What a model could turn around ("not to delete" → "Delete") stays as you wrote it, only the address taken out.
-        #expect(try edit("tell lookout not to delete the database") == "tell lookout not to delete the database")
-        #expect(try edit("tell lookout to not delete the database") == "not delete the database")
         // Whatever comes out is your message with parts taken out: every character of it is yours, in order.
-        for message in ["tell lookout to bump the version", "ask it if the tests pass", "lookout: add a badge; api: rotate the keys",
-                        "Ship it (@router quietly) then push", "for lookout — run the tests"] {
+        for message in ["@lookout bump the version", "ask it if the tests pass", "@lookout: add a badge; api: rotate the keys",
+                        "Ship it (@router quietly) then push", "@lookout — run the tests"] {
             let out = try edit(message)
             var rest = Substring(message)
             for c in out {
@@ -48,30 +73,6 @@ import Testing
                 rest = rest[rest.index(after: i)...]
             }
         }
-        // A title isn't followed: it only names what may be addressed.
-        #expect(try edit("tell lookout to bump the version", ["Delete everything", "lookout"]) == "bump the version")
-    }
-
-    @Test func aSessionsTitleCantEatYourWords() throws {
-        // A session named to swallow the negation: the message goes as you wrote it.
-        for title in ["lookout not to", "lookout not", "lookout to", "lookout: don't"] {
-            #expect(try edit("tell lookout not to delete the database", [title, "lookout"]) == "tell lookout not to delete the database",
-                    "\(title)")
-        }
-        #expect(try edit("lookout not: delete the database", ["lookout not"]) == "lookout not: delete the database")
-        #expect(try edit("never: delete the database", ["never"]) == "never: delete the database")
-    }
-
-    @Test func onlyTheTagsAndOneOuterAddressAreTakenOut() throws {
-        // What the session is to do with others is the message itself.
-        #expect(try edit("@lookout tell it to ask them to rotate the keys") == "ask them to rotate the keys")
-        #expect(try edit("tell lookout to tell it to rotate the keys") == "tell it to rotate the keys")
-        #expect(try edit("lookout: tell them to rotate the keys") == "tell them to rotate the keys")
-        #expect(try edit("@lookout @lookout: lookout: rotate the keys") == "rotate the keys")
-        #expect(try edit("lookout: lookout: rotate the keys") == "lookout: rotate the keys")
-        // A new session's task was already taken out of its request: only the asides go.
-        #expect(try Addressing.edit("tell them to rotate the keys (@router soon)", names: ["lookout"], envelope: false).text
-                == "tell them to rotate the keys")
     }
 
     @Test(arguments: ["**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router",

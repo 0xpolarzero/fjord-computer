@@ -120,6 +120,14 @@ import Testing
         #expect(model.plainDraft(s).isEmpty)
     }
 
+    @Test func theSendSaysWhereItsPillsAre() {
+        let (s, model, _) = setup()
+        model.draft = "\n  \n\(MentionText.mark) fix it, not @lookout typed"
+        model.tokens = ["/code/lookout"]
+        #expect(model.plainDraft(s) == "@lookout fix it, not @lookout typed")
+        #expect(model.context(s).pills == [0..<8], "only the pill, where it stands in what is sent")
+    }
+
     @Test func aSessionsPickIsPinnedAndSentWithTheMessage() async {
         let (s, model, _) = setup()
         model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "session “Update the docs” in docs",
