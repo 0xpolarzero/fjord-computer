@@ -12,7 +12,7 @@ enum InboxSync {
     static let searchesPerRequest = 4
     /// Searches a refresh makes at most, shared out a turn at a time between the rules so that none goes without.
     static let maxSearches = 16
-    /// Workflow things a refresh checks at most.
+    /// Workflow targets a refresh checks at most; past it, they take turns (`workflowWindow`).
     static let maxWorkflows = 30
     /// Closed and merged things are only fetched when updated this recently.
     static let closedDays = 14
@@ -684,7 +684,25 @@ enum InboxSync {
                 }
             }
         }
-        return Array(out.prefix(maxWorkflows))
+        return out
+    }
+
+    /// The targets a refresh checks: all of them, or past `maxWorkflows` a window from `cursor`, so that each gets its turn
+    /// over the refreshes. `next` is where the next refresh's window starts.
+    static func workflowWindow(_ all: [(repo: String, branch: String?)], cursor: Int)
+        -> (targets: [(repo: String, branch: String?)], next: Int) {
+        guard all.count > maxWorkflows else { return (all, 0) }
+        let start = cursor % all.count
+        return ((0..<maxWorkflows).map { all[(start + $0) % all.count] }, (start + maxWorkflows) % all.count)
+    }
+
+    /// The key of a workflow target, `repo@branch` lowercased (`repo@` for the default branch).
+    static func targetKey(repo: String, branch: String?) -> String { "\(repo.lowercased())@\(branch ?? "")" }
+
+    /// The targets a workflow thing may come from: its branch, and the default one when it is that.
+    static func targetKeys(of thing: Thing) -> [String] {
+        let branch = thing.branch ?? ""
+        return [targetKey(repo: thing.repo, branch: branch)] + (branch == thing.defaultBranch ? [targetKey(repo: thing.repo, branch: nil)] : [])
     }
 
     /// The repos of each owner (aliased `o0`, `o1`…), most recently pushed first, archived ones left out.
@@ -712,6 +730,8 @@ struct InboxSyncState {
     /// The repos of owners workflow rules name with a wildcard (by owner, lowercased), and when they were asked.
     var ownerRepos: [String: [String]] = [:]
     var ownerReposAt: [String: Date] = [:]
+    /// Where the next refresh's window of workflow targets starts (`InboxSync.workflowWindow`).
+    var workflowCursor = 0
 }
 
 // MARK: - Repos that moved
@@ -854,8 +874,10 @@ extension Store {
         }
         // Owners whose repos aren't known (their lookup failed since launch): their workflow things stay as they were.
         let unknownOwners = Set(owners.filter { inboxSyncState.ownerRepos[$0] == nil })
-        let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
-                                                contributed: contributedRepos, ownerRepos: inboxSyncState.ownerRepos)
+        let allTargets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
+                                                   contributed: contributedRepos, ownerRepos: inboxSyncState.ownerRepos)
+        let window = InboxSync.workflowWindow(allTargets, cursor: inboxSyncState.workflowCursor)
+        let targets = window.targets
         guard !searches.isEmpty || !targets.isEmpty || !unknownOwners.isEmpty else {
             // Nothing asked for: every thing is gone, and its marks start their month.
             applyThings([:])
@@ -943,6 +965,18 @@ extension Store {
                 && unknownOwners.contains(String($0.value.repo.lowercased().prefix { $0 != "/" })) }
             next.merge(kept) { a, _ in a }
         }
+        // Past the cap the workflow targets take turns: those not checked this time keep their things until their turn.
+        if targets.count < allTargets.count {
+            let visited = Set(targets.map { InboxSync.targetKey(repo: $0.repo, branch: $0.branch) })
+            let waiting = Set(allTargets.map { InboxSync.targetKey(repo: $0.repo, branch: $0.branch) }).subtracting(visited)
+            func waits(_ thing: Thing) -> Bool {
+                let keys = InboxSync.targetKeys(of: thing)
+                return !keys.contains(where: visited.contains) && keys.contains(where: waiting.contains)
+            }
+            let kept = things.filter { $0.value.kind == .workflow && next[$0.key] == nil && waits($0.value) }
+            next.merge(kept) { a, _ in a }
+        }
+        inboxSyncState.workflowCursor = window.next
         applyThings(next)
         await readInbox()
         announceInbox()

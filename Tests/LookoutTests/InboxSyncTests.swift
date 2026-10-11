@@ -716,6 +716,41 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(count.searches == 1 && s.things["pr:o/r#12"] != nil && s.count(ci) == 3)
     }
 
+    @Test func pastTheCapTheWorkflowTargetsTakeTurnsAndThoseWaitingKeepTheirThings() async {
+        final class Asked: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _repos: Set<String> = []
+            var repos: Set<String> {
+                get { lock.withLock { _repos } }
+                set { lock.withLock { _repos = newValue } }
+            }
+        }
+        let asked = Asked()
+        let (s, ci) = store(State()) { _ in }
+        s.gh.session = StubbedGitHub.session { request in
+            let parts = (request.url?.path ?? "").split(separator: "/").map(String.init)
+            guard parts.count >= 4, parts[0] == "repos" else { return .init(404, #"{"message":"unrouted"}"#) }
+            switch parts.dropFirst(3).joined(separator: "/") {
+            case "actions/runs":
+                asked.repos.insert(parts[2])
+                return .init(200, Self.runs([11]))
+            case "commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        // One repo more than a refresh checks.
+        let repos = (0...InboxSync.maxWorkflows).map { "a/x\($0)" }
+        s.categories[0].rules[0].scope = Scope(kinds: [.workflow], in: Pick(include: repos.map { .repo($0) }), on: ["main"])
+        await s.syncInbox()
+        #expect(asked.repos.count == InboxSync.maxWorkflows && !asked.repos.contains("x30") && s.count(ci) == InboxSync.maxWorkflows)
+        // The last one gets its turn; the one left out this time keeps its things.
+        asked.repos = []
+        await s.syncInbox()
+        #expect(asked.repos.contains("x30") && !asked.repos.contains("x29"))
+        #expect(s.count(ci) == repos.count && s.things["workflow:a/x29:11@main"] != nil)
+    }
+
     @Test func aFailedSearchKeepsThePullRequestsAndTheWorkflowsStillRefresh() async {
         final class Phase: @unchecked Sendable { var fails = false }
         let state = State(), phase = Phase()
