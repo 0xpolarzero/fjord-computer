@@ -36,6 +36,17 @@ On real moments the shipped router is unsafe. Known causes:
   Jev reads "finished 3m ago" poorly (numbers/dates are a weak spot).
 - the old format (`v0`, opaque keys) has better real top1 (46%) than the shipped one.
 
+## Round 3 baseline (read README.md "Round 2" first)
+
+Shipped now: format `combo` asked in Lookout's order (run it as `combo-o` with `JEV_ORDERED=1`, always), decided by
+`explore.fuse2:guarded` (rules + fused conditional logit + guards). Best so far: `combo-o` + `explore.fuse3`'s guarded
+policy with BM25 features (`python3 -m explore.fuse3 fit combo-o`): synth 60.0 right / 1.4 wrong, styleB 72.5 / 0.0,
+realA 32.0 / 4.5, realB 38.3 / 4.2, heldout 72.0 / 2.0. Already tried and not worth it: contextual calibration with a
+content-free message, averaging two option orders, exact identifiers alone, categorical recency words, a "latest"
+field, a second verification call, richer context per option. Real cases also have the session transcripts behind
+them: real/data/corpus.jsonl (turns per session, timestamps); real/lexical.py shows how to read a session's turns
+before a moment. Always `JEV_ORDERED=1`; name new formats so they don't collide with saved runs.
+
 ## How to explore
 
 - Put your formats in `explore/<yourname>.py` exposing `FORMATS = {"name": build}`; `build(case, rng=None)` returns

@@ -674,7 +674,8 @@ struct RouterAskBack: Identifiable, Equatable {
         guard let store else { return }
         var options: [RouterAskBack.Option] = []
         var seen = Set<String>()
-        for scored in found.ranked where scored.target != "unclear" && options.count < 3 {
+        // Four: on real moments the fourth holds the answer 3–10% more often (evals/router/explore/selective.py).
+        for scored in found.ranked where scored.target != "unclear" && options.count < 4 {
             guard let option = option(scored.target, store: store, tools: job.tools), seen.insert(option.id).inserted else { continue }
             options.append(option)
         }
@@ -757,7 +758,12 @@ extension RouterDispatcher.Effects {
                 let facts = tools.facts(store, destinations: destinations, message: message)
                 let call = RouterTools.routingQuestions(destinations, waiting: tools.waiting(store, among: destinations),
                                                         conversations: tools.conversations(store, facts: facts))
-                let answers = try await ask(call.questions, ["message": message])
+                // The words' evidence, from the sessions' transcripts, read while Jev answers.
+                let sources = tools.lexicalSources(store, facts: facts)
+                let reader: Claude.ActivityReader? = UnderTest.isRunning ? nil : store.activityReader
+                let lexical = Task.detached(priority: .userInitiated) { RouterTools.lexical(message, sources: sources, reader: reader) }
+                // Keys you paste go to the session, never to Jev.
+                let answers = try await ask(call.questions, ["message": RouterTools.redacted(message)])
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
                 var signals = RouteFusion.Signals(route: [:])
                 for (name, p) in pick.probabilities {
@@ -767,6 +773,7 @@ extension RouterDispatcher.Effects {
                 for c in checks { signals.reply[c.session] = max(signals.reply[c.session] ?? 0, c.p) }
                 for (id, session) in call.next { signals.next[session] = answers[id]?.yes }
                 signals.gates = RouterTools.gates.keys.reduce(into: [String: Double]()) { $0[$1] = answers[$1]?.yes }
+                signals.lexical = await lexical.value
                 let verdict = RouteFusion.decide(signals, facts: facts, answers: checks) {
                     RouterDispatcher.session(of: $0, store: store)
                 }

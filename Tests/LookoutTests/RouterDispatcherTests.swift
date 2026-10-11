@@ -456,7 +456,7 @@ import Testing
         #expect(Set(["change_lookout", "question", "compound", "unclear"]).isSubset(of: Set(names)))
         // Asked beside it: whether it answers the waiting card, the gates, and whether it is the next message of the
         // latest session's conversation (the one waiting on you; the docs session said nothing to go on).
-        #expect(Set(call.questions.keys) == ["route", "answers0", "gate_setting", "gate_compound", "gate_compound2", "gate_you", "next0"])
+        #expect(Set(call.questions.keys) == ["route", "answers0", "gate_setting", "gate_compound", "gate_question", "gate_compound2", "gate_you", "next0"])
         guard case .structuredNoul(let instructions) = call.questions["answers0"] else { Issue.record("no check"); return }
         #expect(((instructions as? [String: Any])?["card"] as? [String: Any])?["asks"] as? String == "Which database?")
         guard case .structuredNoul(let next) = call.questions["next0"] else { Issue.record("no next check"); return }
@@ -517,13 +517,13 @@ import Testing
              "gate_setting": .noul(0.9), "gate_compound": .noul(0.01), "gate_you": .noul(0.05)]
         }
         #expect(call.found?.top?.target == "change_lookout" && call.found?.sure == true)
-        // …but you pick when the route is sure it is for the session working on it.
+        // …and when the route leans to the session working on the docs: a sure setting gate outweighs it.
         d.forgetLive()
         call = await routed(d, "turn off the docs notifications") { _, _ in
             ["route": Self.choice(["Update the docs": 0.9, "change_lookout": 0.1]), "answers0": .noul(0.01),
              "gate_setting": .noul(0.9), "gate_compound": .noul(0.01), "gate_you": .noul(0.05)]
         }
-        #expect(call.found?.sure == false)
+        #expect(call.found?.top?.target == "change_lookout" && call.found?.sure == true)
         // Spoken to an agent as "you": never one of Lookout's own.
         d.forgetLive()
         call = await routed(d, "did you turn off the docs notifications?") { _, _ in

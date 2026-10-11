@@ -83,3 +83,34 @@ session existed). What did it (explore/, one module per explorer):
 5. Not worth it: categorical recency words, a "latest" field (Jev obeys it as an instruction: 32% wrong), richer
    context (+4–5 top1 at +40% tokens), fewer options, a second verification call.
 Swift (RouteFusion) decides exactly as the measured policy on all 360 written cases (RouterFusionParityTests).
+
+## Round 3 (2026-10-11): research, and the words
+
+A literature pass (disentanglement, calibration, selective prediction, per-user learning, cascades) and five explorers
+(explore/state, personal, cascade, selective, lexical). Measured with options in Lookout's order (`combo-o`).
+
+| set (right / wrong) | round 2 | round 3 (`combo-o` + `explore.final3:best`) |
+|---|---|---|
+| synth | 57.1 / 1.4 | 65.2 / 1.4 |
+| styleB | 68.1 / 0.0 | 71.4 / 0.0 |
+| realA | 29.2 / 3.8 | 37.5 / 3.5 |
+| realB | 37.9 / 4.7 | 40.7 / 2.8 |
+| heldout | 67.3 / 2.0 | 72.0 / 2.7 |
+
+What helped:
+1. Words (real/lexical.py, explore/lexical.py): BM25 between the message and each session's transcript, per field
+   (its last answer +1.11, older turns halving with age +1.36, what you last told it −0.84: a message repeating your own
+   last instruction starts something new; title −0.57). Alone it names where a real follow-up went 54% of the time.
+2. A guard on the rules (explore/selective.py, lexical.py): 24 of 25 real wrong sends came from the rules' path, the
+   fused pick at sureness 0.9 was right 78 of 79; a rules' send now needs the fused pick to agree at sureness ≥ 0.6.
+3. Short replies (explore/state.py): "go", "2", "yes do it" go to the fused pick at sureness ≥ 0.95 when that
+   session's last message asks or proposes something.
+4. The ask card shows four options: the right one is among them 79–89% of the time on real asks.
+What didn't: calibrating against a content-free message, averaging two option orders, exact identifiers (in 39 of
+611 real messages), session-state × message-type features beyond the short-reply rule, Haiku on the asks (as wrong as
+right on real asks, +1–4 s), a second Jev pass per candidate.
+Promising, not built: a per-user refit of the fusion weights from your own corrections and kept sends (explore/
+personal.py): after ~50 labels, late real wrong sends 4.5% → 2.3% in a time-ordered replay.
+Two live keys in your transcripts (an OpenRouter and a z.ai key) reached TypeSafe in eval requests before redaction
+caught them; real/boards.py now also strips any long letters-and-digits token, and Lookout redacts the same way
+before anything goes to Jev (RouterTools.redacted).

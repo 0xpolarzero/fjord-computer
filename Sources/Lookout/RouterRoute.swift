@@ -49,6 +49,7 @@ extension RouterTools {
     static let gates: [String: JevClient.Question] = [
         "gate_setting": .structuredNoul(instructions: ["question": "Does `message` ask to change how Lookout behaves for the user (a setting turned on or off, its notifications, an inbox category, a rule or a group), rather than for code to be written or for a session to do something?"]),
         "gate_compound": .structuredNoul(instructions: ["question": "Does `message` ask for two or more different things, meant for different places (sessions or Lookout itself)?"]),
+        "gate_question": .structuredNoul(instructions: ["question": "Is `message` a question to the user's assistant about what is going on (a session's progress, what is waiting), rather than a message for a session to read?"]),
         "gate_compound2": .structuredNoul(instructions: ["question": "Does `message` ask for things meant for two or more different places: Lookout itself and a session, or two different sessions it names? A message with several points or steps for one session is no."]),
         "gate_you": .structuredNoul(instructions: ["question": "Does `message` speak to one agent as \"you\" about its own work (\"did you…\", \"your end\", \"what are you waiting for\", \"you said…\"), or reply to something it just said?"]),
     ]
@@ -161,6 +162,8 @@ extension RouterTools {
         /// Each session's target (its card's when it has one).
         var targetOf: [String: String] = [:]
         var message = ""
+        /// The sessions whose last message asks you something or proposes a next step.
+        var leavesItToYou: Set<String> = []
     }
 
     func facts(_ store: Store, destinations: [Destination], message: String, now: Date = Date()) -> Facts {
@@ -177,7 +180,52 @@ extension RouterTools {
         f.latest = sessions.filter { !f.running.contains($0.id) }.sorted { $0.lastActivity > $1.lastActivity }.map(\.id)
         for s in sessions { f.idleMinutes[s.id] = max(0, now.timeIntervalSince(s.lastActivity) / 60) }
         f.lastTold = store.lastTold().filter { f.targetOf[$0.key] != nil }.max { $0.value.at < $1.value.at }?.key
+        let cards = store.routerShownOpenCards
+        for s in sessions {
+            let mine = cards.filter { $0.sessionID == s.id }
+            let last = mine.max { $0.createdAt < $1.createdAt }?.text ?? ""
+            if RouterLexical.leavesItToYou(last, waiting: mine.contains { Self.waitsOnYou.contains($0.kind) }) {
+                f.leavesItToYou.insert(s.id)
+            }
+        }
         return f
+    }
+
+    /// What BM25 reads per offered session: its title, and its turns from its transcript, else from the board (what you
+    /// told it, its cards, its summary and working line). Taken on the main actor; the transcripts are read off it.
+    struct LexicalSource {
+        var title: String
+        var cliID: String?
+        var working: Bool
+        var board: [RouterLexical.Turn]
+    }
+
+    func lexicalSources(_ store: Store, facts: Facts) -> [String: LexicalSource] {
+        let told = store.toldAll()
+        let cards = store.routerShownOpenCards
+        var out: [String: LexicalSource] = [:]
+        for id in facts.targetOf.keys {
+            guard let s = store.claudeSessions[id] else { continue }
+            let board = RouterLexical.boardTurns(
+                told: told[id] ?? [], cards: cards.filter { $0.sessionID == id }.map(\.text),
+                earlier: [s.summary?.detail ?? "", store.claudeActivity[id]?.text ?? ""])
+            out[id] = LexicalSource(title: s.title, cliID: s.cliID, working: facts.running.contains(id), board: board)
+        }
+        return out
+    }
+
+    /// Every field's BM25 scores, transcripts read with `reader` (nil: the board alone).
+    nonisolated static func lexical(_ message: String, sources: [String: LexicalSource],
+                                    reader: Claude.ActivityReader?) -> [String: [String: Double]] {
+        var sessions: [String: (title: String, turns: [RouterLexical.Turn])] = [:]
+        for (id, source) in sources {
+            var turns: [RouterLexical.Turn] = []
+            if let reader, let cli = source.cliID, let url = reader.transcript(cli) {
+                turns = RouterLexical.turns(tail: Claude.tail(of: url, bytes: 256 * 1024), working: source.working)
+            }
+            sessions[id] = (source.title, turns.isEmpty ? source.board : turns)
+        }
+        return RouterLexical.all(message, sessions: sessions)
     }
 
     /// The latest sessions' conversations, for the next-message check: what you last told each and what it last said.
@@ -294,29 +342,36 @@ extension RouterTools {
 @MainActor
 enum RouteFusion {
     static let weights: [String: Double] = [
-        "lp": 0.86,                                   // Jev's route probability (log, floored at 0.001)
-        "fin0": 0.83, "fin1": 1.32, "fin2": 0.49,     // 1st / 2nd / 3rd most recently finished session
-        "run": -1.5,                                  // still running
-        "reply": 1.03,                                // "is it the answer to this session's card?" yes
-        "told0": 0.88,                                // the session your last message went to
-        "fin0u": 1.26, "idle5u": 2.41,                // latest / finished ≤ 5 min ago, times Jev's `unclear` p
-        "nxt": 0.95,                                  // "is it your next message in this conversation?" yes
-        "new": -0.01,
-        "question": -0.83, "compound": 0.58, "change_lookout": 0.39,
-        "g_c": 1.94, "g_s": 2.52, "c2": 0.08,         // an intent's own gate
-        "you": -1.57,                                 // "does it speak to one agent as you?" yes, against intents
-        "ilong": -1.87,                               // an intent for a message over 80 characters
+        "lp": 0.84,                                   // Jev's route probability (log, floored at 0.001)
+        "fin0": 0.55, "fin1": 1.16, "fin2": 0.29,     // 1st / 2nd / 3rd most recently finished session
+        "run": -1.26,                                 // still running
+        "reply": 0.64,                                // "is it the answer to this session's card?" yes
+        "told0": 0.72,                                // the session your last message went to
+        "fin0u": 1.03, "idle5u": 2.44,                // latest / finished ≤ 5 min ago, times Jev's `unclear` p
+        "nxt": 0.87,                                  // "is it your next message in this conversation?" yes
+        "f_said": 1.11, "f_old": 1.36,                // the message's words in the session's last answer, older turns
+        "f_you": -0.84,                               // …in what you last told it: a message repeating it starts anew
+        "f_title": -0.57,                             // …in its title (it already weighs in Jev's reading)
+        "new": 0.66,
+        "question": -0.57, "compound": 1.03, "change_lookout": 0.63,
+        "g_q": 1.26, "g_c": 2.11, "g_s": 2.26, "c2": 0.18,   // an intent's own gate
+        "you": -1.46,                                 // "does it speak to one agent as you?" yes, against intents
+        "ilong": -1.51,                               // an intent for a message over 80 characters
     ]
     static let sureness: [String: Double] = [
-        "bias": 1.58, "lPtop": 0.83, "lgap": 0.12, "agree": 0.3, "u": -0.99, "lenlog": -0.28, "recent2": -0.33,
-        "top_fin0": 0.04, "top_intent": 0.14, "top_new": 0.47, "top_reply": 0.39,
+        "bias": 0.88, "lPtop": 1.28, "lgap": -0.3, "ljev": -0.21, "agree": 0.44, "u": -1.44, "lenlog": -0.35,
+        "recent2": -0.4, "top_fin0": -0.02, "top_intent": 0.46, "top_new": 0.82, "top_reply": 0.31,
     ]
-    /// The rules' send stands when the fused P gives it at least this; else the fused pick is sent at this sureness.
+    /// The rules' send stands when the fused P gives it at least this and the fused pick is the same at `rulesSure`;
+    /// else the fused pick is sent at `sure`. On real moments the rules made 24 of 25 wrong sends; the fused pick at 0.9
+    /// was right 78 times in 79.
     static let agrees = 0.5
+    static let rulesSure = 0.6
     static let sure = 0.9
-    /// The fused pick alone sends no message shorter than this ("ok" goes nowhere on recency alone), and never to one of
-    /// Lookout's intents.
+    /// The fused pick alone sends no message shorter than this, and never to one of Lookout's intents…
     static let fusedWords = 3
+    /// …except a short reply ("go", "yes do it") to a session whose last message asks or proposes, at this sureness.
+    static let shortSure = 0.95
 
     struct Signals {
         var route: [String: Double]
@@ -324,6 +379,8 @@ enum RouteFusion {
         var reply: [String: Double] = [:]
         var next: [String: Double] = [:]
         var gates: [String: Double] = [:]
+        /// BM25 per field (RouterLexical.fields): field → session → score.
+        var lexical: [String: [String: Double]] = [:]
     }
 
     static func features(_ s: Signals, facts f: RouterTools.Facts, sessionOf: (String) -> String?) -> [String: [String: Double]] {
@@ -341,6 +398,7 @@ enum RouteFusion {
                 x["fin0u"] = (rank == 0 ? 1 : 0) * u
                 x["idle5u"] = (idle5 ? 1 : 0) * u
                 x["nxt"] = s.next[id] ?? 0
+                for (field, byID) in s.lexical { x[field] = byID[id] ?? 0 }
                 x["session"] = 1
             } else if target.hasPrefix("new:") {
                 x["new"] = 1
@@ -353,6 +411,7 @@ enum RouteFusion {
                     x["c2"] = s.gates["gate_compound2"] ?? 0
                 }
                 if target == "change_lookout" { x["g_s"] = s.gates["gate_setting"] ?? 0 }
+                if target == "question" { x["g_q"] = s.gates["gate_question"] ?? 0 }
             }
             out[target] = x
         }
@@ -373,12 +432,13 @@ enum RouteFusion {
         let ranked = P.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
         guard let (top, p) = ranked.first else { return nil }
         let second = ranked.dropFirst().first?.value ?? 0
-        let jev = s.route.filter { $0.key != "unclear" }.max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key
+        // Jev agrees when nothing else is above the pick in his route (he often gives several the same small p).
+        let jevBest = s.route.filter { $0.key != "unclear" }.values.max() ?? 0
         let x = features[top] ?? [:]
         let recent = f.idleMinutes.filter { !f.running.contains($0.key) && $0.value <= 5 }.count
         let moment: [String: Double] = [
             "bias": 1, "lPtop": log(p / max(1 - p, 1e-4)), "lgap": log(max(p - second, 1e-3)),
-            "agree": jev == top ? 1 : 0, "u": s.route["unclear"] ?? 0, "lenlog": log(1 + Double(f.message.count)),
+            "ljev": log(max(s.route[top] ?? 0, 1e-3)), "agree": (s.route[top] ?? 0) >= jevBest ? 1 : 0, "u": s.route["unclear"] ?? 0, "lenlog": log(1 + Double(f.message.count)),
             "recent2": recent >= 2 ? 1 : 0, "top_fin0": x["fin0"] ?? 0,
             "top_intent": RouterRun.Intent(rawValue: top) != nil ? 1 : 0, "top_new": x["new"] ?? 0, "top_reply": x["reply"] ?? 0,
         ]
@@ -386,8 +446,9 @@ enum RouteFusion {
         return (top, 1 / (1 + exp(-z)))
     }
 
-    /// The decision: the rules' send (`RouterTools.verdict`) when the fused P agrees with it; else the fused pick when
-    /// it is sure, a message of a few words, and not one of Lookout's intents; else you pick, among the fused top three.
+    /// The decision: the rules' send (`RouterTools.verdict`) when the fused P agrees with it and the fused pick is the
+    /// same, sure enough; else the fused pick when it is sure, a message of a few words (or a short reply to a session
+    /// waiting on one), and not one of Lookout's intents; else you pick, among the fused top ones.
     static func decide(_ s: Signals, facts f: RouterTools.Facts, answers: [(target: String, session: String, p: Double)],
                        sessionOf: (String) -> String?) -> (ranked: [RouterDispatcher.Scored], sure: Bool) {
         let next = s.next.compactMap { id, p in f.targetOf[id].map { (target: $0, p: p) } }
@@ -396,19 +457,34 @@ enum RouteFusion {
         let P = probabilities(x)
         let fused = P.map { RouterDispatcher.Scored(target: $0.key, p: $0.value) }
             .sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
+        let picked = pick(P, features: x, signals: s, facts: f)
         // A card's check names its card; the fused P names the session's own target.
-        if rules.sure, let d = rules.ranked.first?.target, (P[sessionOf(d).flatMap { f.targetOf[$0] } ?? d] ?? 0) >= agrees {
-            return (rules.ranked, true)
+        if rules.sure, let d = rules.ranked.first?.target {
+            let own = sessionOf(d).flatMap { f.targetOf[$0] } ?? d
+            if (P[own] ?? 0) >= agrees, let picked, picked.target == own, picked.sure >= rulesSure { return (rules.ranked, true) }
         }
-        if let (top, sure) = pick(P, features: x, signals: s, facts: f), sure >= Self.sure,
-           f.message.split(whereSeparator: \.isWhitespace).count >= fusedWords, RouterRun.Intent(rawValue: top) == nil {
-            return (fused, true)
+        if let (top, sure) = picked, RouterRun.Intent(rawValue: top) == nil {
+            let words = f.message.split(whereSeparator: \.isWhitespace).count
+            if words >= fusedWords && sure >= Self.sure { return (fused, true) }
+            if words < fusedWords, sure >= shortSure, let id = sessionOf(top), f.leavesItToYou.contains(id) { return (fused, true) }
         }
         return (fused.isEmpty ? rules.ranked : fused, false)
     }
 }
 
 extension Store {
+    /// Everything you sent each session, oldest first.
+    func toldAll() -> [String: [String]] {
+        var out: [String: [String]] = [:]
+        for entry in router.decisions {
+            guard case .you(let text) = entry.trigger, let session = entry.links.sessions.last,
+                  entry.done.contains(where: { if case .sent = $0 { true } else if case .started = $0 { true } else { false } })
+            else { continue }
+            out[session, default: []].append(text)
+        }
+        return out
+    }
+
     /// What you last sent each session, and when: from the decision log, your messages that went to one.
     func lastTold() -> [String: (text: String, at: Date)] {
         var out: [String: (text: String, at: Date)] = [:]

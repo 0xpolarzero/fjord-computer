@@ -25,9 +25,14 @@ SECRET = re.compile(
     r"|(?i:(api[_-]?key|token|secret|password|passwd|bearer)\s*[:=]\s*\S{8,}))")
 
 
+# Any long run of letters and digits (a key with no known prefix, like a z.ai `<32 hex>.<16>` key the first pattern
+# missed and sent to TypeSafe; commit hashes go too, at little cost to routing).
+LONG_TOKEN = re.compile(r"\b(?=[A-Za-z0-9._\-]*\d)(?=[A-Za-z0-9._\-]*[A-Za-z])[A-Za-z0-9._\-]{28,}\b")
+
+
 def redact(text):
     """Keys and tokens out of anything that may go to Jev: your transcripts can hold them."""
-    return SECRET.sub("[redacted]", text or "")
+    return LONG_TOKEN.sub("[redacted]", SECRET.sub("[redacted]", text or ""))
 
 
 def ts(s):
