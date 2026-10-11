@@ -370,6 +370,19 @@ for _name in ["v0", "v2-h10", "v3-told"]:
     FORMATS[_name + "+g"] = gated(_name)
 
 
+def swift_keys(fmt):
+    """As Lookout sends it: JevClient.key turns a name's dots into underscores."""
+    def build(case, rng=None):
+        state, q, keymap = FORMATS[fmt](case, rng=rng)
+        crit = q["route"]["criteria"]
+        q = {**q, "route": {**q["route"], "criteria": {k.replace(".", "_"): v for k, v in crit.items()}}}
+        return state, q, {k.replace(".", "_"): v for k, v in keymap.items()}
+    return build
+
+
+FORMATS["swift"] = swift_keys("v3-told+g")
+
+
 def build(name, case, shuffle_seed=None):
     rng = random.Random(shuffle_seed) if shuffle_seed is not None else None
     return FORMATS[name](case, rng=rng)
