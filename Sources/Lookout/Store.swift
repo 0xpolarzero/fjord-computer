@@ -25,7 +25,7 @@ final class Store {
     /// Where those log lines go; the tests read them.
     @ObservationIgnored var inboxLog: (String) -> Void = InboxLog.write
     var things: [String: Thing] = [:] {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits(); carryAssignmentStamps(seenBefore: oldValue) }
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits(); if !loading { carryAssignmentStamps(seenBefore: oldValue) } }
     }
     var marks: [String: EntryMarks] = [:] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
@@ -645,6 +645,9 @@ final class Store {
         login = state.login ?? ""
         savedRevision = persistedRevision
         loadActions()
+        // Once the login, marks and actions' records are in: carried during the load, a cached rating or Done was lost.
+        loading = false
+        carryAssignmentStamps(seenBefore: things)
     }
 
     /// A file read only in part is copied aside (`state.json.bak-<date>`) before anything is written over it: what this

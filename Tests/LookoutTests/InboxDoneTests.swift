@@ -83,6 +83,38 @@ import Testing
         #expect(s.marks[issue.id]?.acked.contains(key) == false)
     }
 
+    @Test func aCachedAssignmentIsCarriedOnceTheLoadIsCompleteNotDuringIt() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-done-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        var issue = Thing(id: "issue:a/one#2", kind: .issue, repo: "a/one", number: 2, title: "t",
+                          url: URL(string: "https://github.com/a/one/issues/2")!, author: alice,
+                          createdAt: Date(timeIntervalSince1970: 1_700_000_000), updatedAt: Date(timeIntervalSince1970: 1_700_001_000))
+        issue.assignees = ["me"]
+        issue.assignedAt = ["me": Date(timeIntervalSince1970: 1_700_000_500)]
+        issue.signals = ThingSignals(importance: ImportanceSignal(level: .high, stamp: "assigned"), viewer: "me")
+        // Saved with its time already known but its rating and Done still under `assigned` (not yet carried).
+        let legacy = "importance:high:assigned"
+        let first = Store()
+        first.stateFile = file
+        first.things = [issue.id: issue]
+        first.marks = [issue.id: EntryMarks(seen: [legacy], acked: [legacy], doneAt: Date(),
+                                            doneFacts: [Fact(key: legacy, label: "High")])]
+        first.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        first.save()
+        first.flushSave()
+
+        // Opened offline: carried once everything is read, the login and Done included.
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        let key = "importance:high:assigned:1700000500"
+        #expect(second.things[issue.id]?.signals?.importance?.stamp == "assigned:1700000500")
+        #expect(second.marks[issue.id]?.acked == [key])
+        #expect(second.marks[issue.id]?.doneFacts?.map(\.key) == [key])
+    }
+
     @Test func aThingDoneStaysDoneInItsCategoryNotOpenInALaterOne() {
         let (s, comments, all) = store()
         let entry = s.entries(in: comments)[0]
