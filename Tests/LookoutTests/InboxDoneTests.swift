@@ -36,17 +36,51 @@ import Testing
         let action = UUID()
         s.actionLedger.set(ActionRun(category: rated.id, thing: issue.id, action: action, trigger: "importance:high:assigned",
                                      state: .done, at: Date()))
-        // GitHub now says when: the same assignment, still Done, its rating and its action's record carried over.
-        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        // GitHub now says when, before it was last seen: the same assignment, still Done, its rating and its action's
+        // record carried over.
+        let at = Date(timeIntervalSince1970: issue.updatedAt.timeIntervalSince1970.rounded(.down) - 100)
         issue.assignedAt = ["me": at]
         s.things[issue.id] = issue
-        let key = "importance:high:assigned:1800000000"
+        let stamp = "assigned:\(Int(at.timeIntervalSince1970))"
+        let key = "importance:high:" + stamp
         #expect(s.entries.map(\.isDone) == [true])
         #expect(s.entries.first?.facts.map(\.key) == [key])
-        #expect(s.things[issue.id]?.signals?.importance?.stamp == "assigned:1800000000")
+        #expect(s.things[issue.id]?.signals?.importance?.stamp == stamp)
         #expect(s.marks[issue.id]?.acked == [key])
         #expect(s.actionLedger.run(rated.id, issue.id, action, key)?.state == .done)
         #expect(s.actionLedger.run(rated.id, issue.id, action, "importance:high:assigned") == nil)
+    }
+
+    /// An issue assigned to you, rated (`assigned`, before GitHub said when), Done and acted on, in "Rated" (rated high).
+    private func ratedAssignment() -> (Store, Thing, category: UUID, action: UUID) {
+        var issue = Thing(id: "issue:a/one#2", kind: .issue, repo: "a/one", number: 2, title: "t",
+                          url: URL(string: "https://github.com/a/one/issues/2")!, author: alice,
+                          createdAt: Date(timeIntervalSince1970: 1_700_000_000), updatedAt: Date(timeIntervalSince1970: 1_700_001_000))
+        issue.assignees = ["me"]
+        issue.signals = ThingSignals(importance: ImportanceSignal(level: .high, stamp: "assigned"), viewer: "me")
+        let rated = InboxCategory(name: "Rated", symbol: "flag", color: .red,
+                                  rules: [Rule(scope: Scope(kinds: [.issue]), conditions: [.importance(.high)], createdAt: .distantPast)])
+        let s = InboxFixture.store([issue], category: rated)
+        s.markDone(s.entries[0])
+        let action = UUID()
+        s.actionLedger.set(ActionRun(category: rated.id, thing: issue.id, action: action, trigger: "importance:high:assigned",
+                                     state: .done, at: Date()))
+        return (s, issue, rated.id, action)
+    }
+
+    @Test func anAssignmentMadeSinceItWasLastSeenIsNewNotTheOldOneDone() {
+        var (s, issue, category, action) = ratedAssignment()
+        // Taken off and assigned again while the app was closed: GitHub's time is after the thing was last seen.
+        issue.assignedAt = ["me": Date(timeIntervalSince1970: 1_700_002_000)]
+        issue.updatedAt = Date(timeIntervalSince1970: 1_700_002_000)
+        s.things[issue.id] = issue
+        let key = "importance:high:assigned:1700002000"
+        #expect(s.things[issue.id]?.signals?.importance == nil)
+        #expect(s.marks[issue.id]?.acked.contains(key) == false)
+        #expect(s.actionLedger.run(category, issue.id, action, key) == nil)
+        // Its time seen since, nothing old is carried to it later.
+        s.things[issue.id] = issue
+        #expect(s.marks[issue.id]?.acked.contains(key) == false)
     }
 
     @Test func aThingDoneStaysDoneInItsCategoryNotOpenInALaterOne() {

@@ -25,7 +25,7 @@ final class Store {
     /// Where those log lines go; the tests read them.
     @ObservationIgnored var inboxLog: (String) -> Void = InboxLog.write
     var things: [String: Thing] = [:] {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits(); carryAssignmentStamps() }
+        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits(); carryAssignmentStamps(seenBefore: oldValue) }
     }
     var marks: [String: EntryMarks] = [:] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
