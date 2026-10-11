@@ -94,7 +94,7 @@ struct SessionGlyph: View {
             if dot, kind != .quiet {
                 ClaudeDot(kind: kind)
                     .scaleEffect(0.8)
-                    .background(Circle().fill(Color.black).frame(width: 9, height: 9))
+                    .background(Circle().fill(Theme.bg).frame(width: 9, height: 9))
                     .offset(x: 5, y: -5)
             }
         }

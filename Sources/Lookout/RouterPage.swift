@@ -988,7 +988,7 @@ private struct RouterZones: View {
                             .transition(.asymmetric(insertion: .opacity, removal: .opacity))
                     }
                 }
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.03)))
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(CDS.alpha(0.03)))
                 .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.working = h } }

@@ -144,9 +144,9 @@ struct RouterTriage: Codable, Hashable {
     static let urgencyLevels = ["fyi", "whenever", "today", "soon", "blocking now"]
 
     /// A session waiting: cool, apart from Needs you's warm and the working sessions' clay.
-    static let waitingTint = Color(red: 0.42, green: 0.78, blue: 0.86)
+    static let waitingTint = Brand.map(Color(red: 0.42, green: 0.78, blue: 0.86))
     /// An OK asked for: the hottest of Needs you.
-    static let approvalTint = Color(red: 0.98, green: 0.52, blue: 0.24)
+    static let approvalTint = Brand.map(Color(red: 0.98, green: 0.52, blue: 0.24))
 
     /// Where the changes stand, in a couple of words for the card; nil when there's nothing to say.
     var workLabel: String? {
