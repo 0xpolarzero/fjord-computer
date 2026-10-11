@@ -288,8 +288,9 @@ enum InboxActions {
             } else if run.trigger == "enter", run.state != .running {
                 // Out for the cooldown on end, counted from when it left (not from the run): back sooner is the same visit.
                 let isIn = inside.contains("\(run.category.uuidString)\u{1F}\(run.thing)")
-                if isIn, run.left != nil {
-                    ledger.runs[key]?.left = nil
+                if isIn, let left = run.left {
+                    // Seen back only now: out for the whole cooldown is a new visit, without a refresh in between to say so.
+                    if now.timeIntervalSince(left) > reentryCooldown { ledger.runs[key] = nil } else { ledger.runs[key]?.left = nil }
                 } else if !isIn, let left = run.left {
                     if now.timeIntervalSince(left) > reentryCooldown { ledger.runs[key] = nil }
                 } else if !isIn {

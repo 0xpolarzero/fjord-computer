@@ -309,6 +309,20 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(!store2.actionLedger.runs.values.contains { $0.state == .running })
     }
 
+    @Test func backAfterTheCooldownRunsAgainWithoutARefreshWhileItWasOut() async {
+        let (store, performer) = store([], actions: [session])
+        let t0 = Date()
+        await store.runActions(now: t0)
+        add(store, InboxFixture.pr(4))
+        await store.runActions(now: t0)
+        add(store, InboxFixture.pr(4, greptile: 5))
+        await store.runActions(now: t0.addingTimeInterval(60))
+        // The next refresh, over an hour later, already finds it back: a new visit.
+        add(store, InboxFixture.pr(4, greptile: 3))
+        await store.runActions(now: t0.addingTimeInterval(60 + InboxActions.reentryCooldown + 10))
+        #expect(performer.asked.count == 2)
+    }
+
     @Test func anActionListedTwiceRunsOnce() {
         let action = CategoryAction.make(.comment("hi"))
         var category = InboxFixture.category()
