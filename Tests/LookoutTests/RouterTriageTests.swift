@@ -348,8 +348,16 @@ import Testing
         s.router.cards = [turnCard(a)]
         s.routerTriager.rescanned = true
         s.keychainWrite = { _, _ in true }
-        var calls = 0
-        s.routerTriager.asker = { _, _ in calls += 1; return self.answers(sentences: [0.9]) }
+        // The gate's clock is the test's: a retry's wait goes by at once, moving it on, unless it was cancelled.
+        let start = Date()
+        var clock = start
+        s.jevGate.now = { clock }
+        s.routerTriager.sleep = { wait in
+            await Task.yield()
+            if !Task.isCancelled { clock = clock.addingTimeInterval(wait) }
+        }
+        var asked: [Date] = []
+        s.routerTriager.asker = { _, _ in asked.append(clock); return self.answers(sentences: [0.9]) }
         #expect(s.setTypesafeKey("sk-old"))
         // TypeSafe pauses for 30 minutes: the triage is timed to try again then.
         s.jevGate.failed(JevClient.Failure.rateLimited(retryAfter: 1800), key: "sk-old")
@@ -358,17 +366,17 @@ import Testing
         // A new key, and a short pause while the turn is read: the call is refused at the gate, never sent.
         var paused = false
         s.routerTriager.reader = { [weak s] _ in
-            if !paused { paused = true; s?.jevGate.failed(JevClient.Failure.rateLimited(retryAfter: 0.2), key: "sk-new") }
+            if !paused { paused = true; s?.jevGate.failed(JevClient.Failure.rateLimited(retryAfter: 60), key: "sk-new") }
             return "Should I push to main?"
         }
         #expect(s.setTypesafeKey("sk-new"))
         await s.routerTriager.idle()
-        #expect(paused && calls == 0)
+        #expect(paused)
         // Asked once the short pause is over, not at the old one's end.
-        s.triageTurns()
-        for _ in 0..<40 where calls == 0 { try? await Task.sleep(for: .milliseconds(100)); await s.routerTriager.idle() }
-        #expect(calls == 1 && s.router.cards[0].kind == .asks)
-        s.routerTriager.retry?.cancel()
+        while let retry = s.routerTriager.retry { await retry.value; await s.routerTriager.idle() }
+        await s.routerTriager.idle()
+        #expect(asked.count == 1 && s.router.cards[0].kind == .asks)
+        #expect(asked.allSatisfy { $0 >= start.addingTimeInterval(60) && $0 < start.addingTimeInterval(1800) })
     }
 
     @Test func aKeyArrivingLaterTriagesTheCardsAndLooksBack() async {

@@ -395,6 +395,8 @@ extension Claude {
 
     /// The triage waiting for TypeSafe's pause to be over (`Store.triageWhenTheGateOpens`).
     var retry: Task<Void, Never>?
+    /// How that wait is waited out, in seconds (tests move `JevGate.now` instead); returns early when cancelled.
+    var sleep: @MainActor (TimeInterval) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     /// Cards being triaged.
     private(set) var inFlight: Set<String> = []
     /// Per card, the text last asked about (or "" when there was none): asked again only for a new one.
@@ -560,8 +562,9 @@ extension Store {
     private func triageWhenTheGateOpens() {
         let wait = jevGate.until.timeIntervalSince(jevGate.now())
         guard wait > 0, routerTriager.retry == nil else { return }
+        let sleep = routerTriager.sleep
         routerTriager.retry = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(wait + 0.5))
+            await sleep(wait + 0.5)
             guard let self, !Task.isCancelled else { return }
             self.routerTriager.retry = nil
             self.triageTurns()
