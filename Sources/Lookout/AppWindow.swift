@@ -75,7 +75,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// last (off for shots and tests).
     init(store: Store, routerModel: RouterModel? = nil, remembers: Bool = true, checksClaudeCode: Bool = true) {
         self.store = store
-        self.routerModel = routerModel ?? RouterModel()
+        self.routerModel = routerModel ?? RouterModel(defaults: remembers ? .standard : nil)
         self.checksClaudeCode = checksClaudeCode
         navigator = AppNavigator(fallback: .category(store.tabNeedingYou.categoryID ?? UUID()),
                                  defaults: remembers ? .standard : nil)

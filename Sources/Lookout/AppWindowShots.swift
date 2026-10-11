@@ -107,34 +107,34 @@ enum AppWindowShots {
             model.pane = .history
         }),
         // Every section folded to its line, what it holds said on it.
-        Shot(name: "router-folded", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { _, store in
+        Shot(name: "router-folded", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             Demo.routerTriage(store)
-            for zone in RouterZone.allCases { store.setRouterZone(zone, folded: true) }
+            for zone in RouterZone.allCases { model.setFolded(zone, true) }
         }),
         // Every section open, Waiting and Working with them.
-        Shot(name: "router-all-open", destination: { _ in .router }, size: CGSize(width: 1500, height: 1000), compose: { _, store in
+        Shot(name: "router-all-open", destination: { _ in .router }, size: CGSize(width: 1500, height: 1000), compose: { model, store in
             manyNeeds(store)
-            for zone in RouterZone.allCases { store.setRouterZone(zone, folded: false) }
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
         // Jev's triage: an OK asked, a turn asking two questions, chips on the finished ones; and the sessions waiting.
         Shot(name: "router-triage-needs", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { model, store in
             Demo.routerTriage(store)
-            for zone in RouterZone.allCases { store.setRouterZone(zone, folded: false) }
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
             model.expandedNeed = store.router.cards.first { $0.kind == .asks }?.id
         }),
-        Shot(name: "router-triage-waiting", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { _, store in
+        Shot(name: "router-triage-waiting", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             Demo.routerTriage(store)
-            for zone in RouterZone.allCases { store.setRouterZone(zone, folded: false) }
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
         // A session going in circles in Needs you, one that builds on another's work ready to continue; then what came while
         // you were away at the top of Needs you.
-        Shot(name: "router-jev-circles", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { _, store in
+        Shot(name: "router-jev-circles", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { model, store in
             Demo.routerJevAttention(store, away: false)
-            for zone in RouterZone.allCases { store.setRouterZone(zone, folded: false) }
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
-        Shot(name: "router-jev-away", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { _, store in
+        Shot(name: "router-jev-away", destination: { _ in .router }, size: CGSize(width: 1280, height: 1400), compose: { model, store in
             Demo.routerJevAttention(store, away: true)
-            for zone in RouterZone.allCases { store.setRouterZone(zone, folded: false) }
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },

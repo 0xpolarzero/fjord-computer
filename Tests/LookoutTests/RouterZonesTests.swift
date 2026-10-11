@@ -12,18 +12,16 @@ import Testing
         return store
     }
 
-    @Test func waitingAndWorkingStartFoldedAndAFoldIsKeptAcrossLaunches() throws {
-        let store = demo()
-        #expect(store.routerFolded == [.waiting, .working])
-        store.setRouterZone(.working, folded: false)
-        store.setRouterZone(.needs, folded: true)
-        #expect(store.routerFolded == [.needs, .waiting])
-        let back = try JSONDecoder().decode(RouterState.self, from: JSONEncoder().encode(store.router))
-        #expect(back.foldedZones == ["needs", "waiting"])
-        // Nothing changed, nothing is written.
-        let before = store.router
-        store.setRouterZone(.needs, folded: true)
-        #expect(store.router == before)
+    @Test func waitingAndWorkingStartFoldedAndAFoldIsKeptInTheWindowsPreferences() throws {
+        let defaults = try #require(UserDefaults(suiteName: "RouterZonesTests-\(UUID().uuidString)"))
+        let model = RouterModel(defaults: defaults)
+        #expect(model.folded == [.waiting, .working])
+        model.setFolded(.working, false)
+        model.setFolded(.needs, true)
+        #expect(model.folded == [.needs, .waiting])
+        #expect(RouterModel(defaults: defaults).folded == [.needs, .waiting])
+        // Shots and tests keep nothing.
+        #expect(RouterModel().folded == RouterZone.foldedAtFirst)
     }
 
     @Test func thePaneFollowsWhatYouPickAndTheRouterAnswersInTheHistory() throws {

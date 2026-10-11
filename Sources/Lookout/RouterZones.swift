@@ -42,19 +42,13 @@ enum RouterZone: String, CaseIterable, Identifiable {
     static func sideBySide(width: CGFloat) -> Bool { width >= 1040 }
 }
 
-extension Store {
-    /// The sections of Now folded, as you last left them.
-    var routerFolded: Set<RouterZone> {
-        router.foldedZones.map { Set($0.compactMap(RouterZone.init(rawValue:))) } ?? RouterZone.foldedAtFirst
-    }
+extension RouterZone {
+    /// Where the folds are kept in the window's preferences.
+    static let foldsKey = "routerFoldedZones"
 
-    /// Folds a section of Now, or opens it, kept across launches.
-    func setRouterZone(_ zone: RouterZone, folded: Bool) {
-        var set = routerFolded
-        if folded { set.insert(zone) } else { set.remove(zone) }
-        guard router.foldedZones.map(Set.init) != Set(set.map(\.rawValue)) else { return }
-        var state = router
-        state.foldedZones = RouterZone.allCases.filter(set.contains).map(\.rawValue)
-        router = state
+    /// The folds kept in `defaults`; none kept (or no preferences: shots and tests), Waiting and Working.
+    static func folds(in defaults: UserDefaults?) -> Set<RouterZone> {
+        guard let kept = defaults?.stringArray(forKey: foldsKey) else { return foldedAtFirst }
+        return Set(kept.compactMap(RouterZone.init(rawValue:)))
     }
 }

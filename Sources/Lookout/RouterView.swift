@@ -295,7 +295,7 @@ final class RouterModel {
     func show(message: UUID) {
         selection = nil
         replyTo = nil
-        pane = .history
+        show(.history)
         messageRequest = ScrollRequest(id: message.uuidString, seq: (messageRequest?.seq ?? 0) + 1)
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
@@ -303,6 +303,27 @@ final class RouterModel {
     /// In a narrow window, the side of the page shown: it follows what you pick (an open card is in Now, an addressed one and
     /// the Router's conversation in History). A wide window shows both.
     var pane: RouterPane = .now
+    /// Shows a side of the page, written only when it changes: the page's frame redraws on it.
+    func show(_ side: RouterPane) { if pane != side { pane = side } }
+
+    /// The sections of Now folded, as you last left them (kept across launches with the window's other preferences, not in
+    /// the Router's state: a fold redraws only the page).
+    var folded: Set<RouterZone> {
+        didSet {
+            guard folded != oldValue else { return }
+            defaults?.set(RouterZone.allCases.filter(folded.contains).map(\.rawValue), forKey: RouterZone.foldsKey)
+        }
+    }
+    /// Where the folds are kept: the app's preferences for the window's model, none for shots and tests.
+    @ObservationIgnored private let defaults: UserDefaults?
+
+    init(defaults: UserDefaults? = nil) {
+        self.defaults = defaults
+        folded = RouterZone.folds(in: defaults)
+    }
+    func setFolded(_ zone: RouterZone, _ on: Bool) {
+        if on { folded.insert(zone) } else { folded.remove(zone) }
+    }
     /// Jev's pick for the draft while you type, and the target you fixed from it (see RouterJev.swift).
     let live = RouterLiveTarget()
     /// The pills in the draft (their projects' folders), one for each `MentionText.mark` in it, in order.
@@ -427,23 +448,23 @@ final class RouterModel {
     /// Router row goes back down to the live zones. A card clicked is where you see it: the page is not taken anywhere.
     /// The composer replies to what is picked, at once: a banner's card picked while the page isn't drawn is answered too,
     /// not the card the reply was on when the page was left.
-    func select(_ id: String?, store: Store, reveal shows: Bool = true) {
+    func select(_ id: String?, store: Store, reveal shows: Bool = true, expand: Bool = true) {
         selection = id
         replyTo = id
         guard let id else { reveal(Self.endID, highlight: false); return }
-        showPick(id, store: store, reveal: shows)
+        showPick(id, store: store, reveal: shows, expand: expand)
     }
 
     /// The picked card opened (in full in Needs you, out in the history) and, if `shows`, gone to.
-    private func showPick(_ id: String, store: Store, reveal shows: Bool) {
+    private func showPick(_ id: String, store: Store, reveal shows: Bool, expand: Bool = true) {
         if let card = store.router.cards.first(where: { $0.id == id }) {
             // A session waiting is a row under Working; one whose wait is over and is yours to continue, a row of Needs you.
-            pane = card.isOpen ? .now : .history
+            show(card.isOpen ? .now : .history)
             if card.isOpen, card.kind == .waiting {
                 if shows { reveal(store.routerTier(card) == .needsYou ? id : Self.workingID(card.sessionID)) }
                 return
             }
-            if card.isOpen { expandedNeed = id } else { expanded.insert(id) }
+            if card.isOpen { expandedNeed = id } else if expand { expanded.insert(id) }
         }
         if shows { reveal(id) }
     }
@@ -455,7 +476,7 @@ final class RouterModel {
     /// A section of Now asked for (its chip): opened, and scrolled to.
     var zoneRequest: ScrollRequest?
     func jump(to zone: RouterZone) {
-        pane = .now
+        show(.now)
         zoneRequest = ScrollRequest(id: zone.rawValue, seq: (zoneRequest?.seq ?? 0) + 1)
     }
 
@@ -571,7 +592,7 @@ final class RouterModel {
         replyTo = nil
         live.reset()
         // The Router answers in its conversation, in the history.
-        if toRouter { pane = .history }
+        if toRouter { show(.history) }
     }
 
     /// A card clicked: its session opens in Claude, and the card is picked (it stays open).
@@ -584,8 +605,8 @@ final class RouterModel {
     func reply() { focusRequest &+= 1 }
 
     /// Reply: a "Replying to" chip for that card over the composer, which takes the keyboard. Your words are yours to write.
-    func reply(to card: String, store: Store, reveal: Bool = true) {
-        select(card, store: store, reveal: reveal)
+    func reply(to card: String, store: Store, reveal: Bool = true, expand: Bool = true) {
+        select(card, store: store, reveal: reveal, expand: expand)
         replyTo = card
         focusRequest &+= 1
     }

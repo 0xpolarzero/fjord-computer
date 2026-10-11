@@ -39,28 +39,27 @@ import Testing
         for width in [1100, 900] as [CGFloat] {
             let model = RouterModel()
             let store = demo(copies: 6)
-            for zone in RouterZone.allCases { store.setRouterZone(zone, folded: false) }
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
             let (hosting, window) = mount(store, model, width: width)
             defer { window.contentView = nil; window.orderOut(nil) }
-            /// The page's scrolls: not the composer's field, nor one inside another (an open form's, inside a card).
+            /// The page's scrolls, down the page: not the composer's field, nor one inside a card (an open form's).
             func pages() -> [NSRect] {
                 hosting.layoutSubtreeIfNeeded()
-                let all = scrolls(hosting).filter { $0.frame.height > 0 && !($0.documentView is MentionTextView) }
-                    .map { $0.convert($0.bounds, to: nil) }
-                return all.filter { frame in !all.contains { $0 != frame && $0.contains(frame) } }
+                return scrolls(hosting).filter { !($0.documentView is MentionTextView) }
+                    .map { $0.convert($0.bounds, to: nil) }.filter { $0.height > 600 }
             }
             await waitUntil { !pages().isEmpty }
             await waitUntilSteady(turns: 8) { pages().map { [Int($0.minX), Int($0.width), Int($0.height)] } }
             let shown = pages().sorted { $0.minX < $1.minX }
+            // Now and History, nothing else scrolling down the page.
+            #expect(shown.count == 2, "Now and History: \(shown)")
+            guard shown.count == 2 else { continue }
             if width == 1100 {
-                #expect(shown.count == 2, "Now and History: \(shown)")
-                if shown.count == 2 {
-                    #expect(shown[0].maxX <= shown[1].minX + 1, "side by side: \(shown)")
-                    #expect(shown.allSatisfy { $0.height > 600 }, "each down the page: \(shown)")
-                }
+                #expect(shown[0].maxX <= shown[1].minX + 1, "side by side: \(shown)")
             } else {
-                #expect(shown.count == 1 && (shown.first?.height ?? 0) > 600, "Now alone, down the page: \(shown)")
-                model.pane = .history
+                // One over the other, each the page's width: the history kept under Now, hidden, where it was.
+                #expect(shown.allSatisfy { $0.width > width - 80 }, "each the page's width: \(shown)")
+                model.show(.history)
                 await waitUntilSteady(turns: 8) { pages().map { [Int($0.minX), Int($0.width), Int($0.height)] } }
                 #expect(pages().count == 1, "History alone: \(pages())")
             }

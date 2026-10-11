@@ -195,61 +195,93 @@ private extension EnvironmentValues {
 struct RouterPageView: View {
     let store: Store
     @Bindable var model: RouterModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var ns
 
     /// Now's share of a wide page.
     static let nowShare: CGFloat = 0.55
 
     var body: some View {
-        let page = store.routerZones
-        // A session moving between the zones is the same card travelling, unless it has one in both.
-        let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
-        let bothZones = Set(page.working.map(\.id))
-        let travelling = Set(once).subtracting(bothZones)
-        let travellingWorking = Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID)))
-        // The page's size as it is laid out, not measured after: the column's width is right on the first layout.
+        // The page's size as it is laid out, not measured after: the columns' widths are right on the first layout. The
+        // frame reads nothing of the store: what each side shows is worked out in its own column.
         GeometryReader { geometry in
-            let height = geometry.size.height, width = geometry.size.width
-            let now = { (width: CGFloat) in
-                RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
-                          travellingWorking: travellingWorking)
-                    .column(width)
-            }
-            if RouterZone.sideBySide(width: width) {
-                let nowWidth = (width * Self.nowShare).rounded()
-                HStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        ZoneChips(store: store, model: model, page: page).column(nowWidth).measured().padding(.top, 10)
-                        now(nowWidth)
-                    }
-                    .frame(width: nowWidth)
-                    Rectangle().fill(CDS.border).frame(width: CDS.hairline)
-                    RouterHistory(store: store, model: model).column(width - nowWidth - CDS.hairline)
+            let width = geometry.size.width, height = geometry.size.height
+            let wide = RouterZone.sideBySide(width: width)
+            let nowWidth = wide ? (width * Self.nowShare).rounded() : width
+            let historyWidth = wide ? width - nowWidth - CDS.hairline : width
+            let showsNow = wide || model.pane == .now
+            let historyHidden = !wide && showsNow
+            // The history is always the same view in the same place, shown or not, at any width: switching sides or
+            // crossing into a wide window keeps where you were in it (its scroll, the lines drawn).
+            ZStack(alignment: .topLeading) {
+                HistoryColumn(store: store, model: model, bar: !wide)
+                    .column(historyWidth)
+                    .frame(width: historyWidth, height: height)
+                    .offset(x: wide ? nowWidth + CDS.hairline : 0)
+                    .opacity(historyHidden ? 0 : 1)
+                    .allowsHitTesting(!historyHidden)
+                    .accessibilityHidden(historyHidden)
+                if showsNow {
+                    NowColumn(store: store, model: model, height: height, bar: !wide)
+                        .column(nowWidth)
+                        .frame(width: nowWidth, height: height)
                 }
-            } else {
-                VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        PaneSwitch(store: store, model: model, page: page)
-                        if model.pane == .now { ZoneChips(store: store, model: model, page: page, compact: true) }
-                        Spacer(minLength: 0)
-                    }
-                    .column(width)
-                    .measured()
-                    .padding(.top, 10)
-                    ZStack {
-                        if model.pane == .now { now(width).transition(.opacity) } else {
-                            RouterHistory(store: store, model: model).column(width).transition(.opacity)
-                        }
-                    }
-                    .frame(maxHeight: .infinity, alignment: .top)
+                if wide {
+                    Rectangle().fill(CDS.border).frame(width: CDS.hairline, height: height).offset(x: nowWidth)
                 }
-                .animation(Theme.Motion.hover.resolved(reduce: reduceMotion), value: model.pane)
             }
+            .frame(width: width, height: height, alignment: .topLeading)
         }
     }
 
     static func gutter(_ width: CGFloat) -> CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
+}
+
+/// The history's side: in a narrow window the switch over it.
+private struct HistoryColumn: View {
+    let store: Store
+    let model: RouterModel
+    let bar: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if bar {
+                HStack(spacing: 0) {
+                    PaneSwitch(store: store, model: model)
+                    Spacer(minLength: 0)
+                }
+                .measured()
+                .padding(.top, 10)
+            }
+            RouterHistory(store: store, model: model)
+        }
+    }
+}
+
+/// Now's side: the switch (in a narrow window) and the sections' chips over the sections. Only it works out what's live.
+private struct NowColumn: View {
+    let store: Store
+    let model: RouterModel
+    let height: CGFloat
+    let bar: Bool
+    @Namespace private var ns
+
+    var body: some View {
+        let page = store.routerZones
+        // A session moving between the zones is the same card travelling, unless it has one in both.
+        let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
+        let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
+        let travellingWorking = Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID)))
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                if bar { PaneSwitch(store: store, model: model) }
+                ZoneChips(model: model, page: page, compact: bar)
+                Spacer(minLength: 0)
+            }
+            .measured()
+            .padding(.top, 10)
+            RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
+                      travellingWorking: travellingWorking)
+        }
+    }
 }
 
 private extension View {
@@ -271,21 +303,18 @@ private extension View {
 private struct PaneSwitch: View {
     let store: Store
     let model: RouterModel
-    let page: RouterPage
     @Environment(\.routerGutter) private var gutter
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var thumb
     @State private var hovered: RouterPane?
 
     var body: some View {
         HStack(spacing: 0) {
-            segment(.now, "Now", count: page.needs.count + page.ready.count + page.asks.count, tint: CDS.Fill.warning)
+            // What needs you, as the badge counts it, and the messages waiting for you to say where they go.
+            segment(.now, "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count, tint: CDS.Fill.warning)
             segment(.history, "History", count: store.routerUnread.count, tint: CDS.Fill.accent)
         }
         .padding(1)
         .frame(height: CDS.Segmented.height)
         .background(RoundedRectangle(cornerRadius: CDS.Segmented.radius, style: .continuous).fill(CDS.Segmented.track))
-        .animation(Theme.Motion.hover.resolved(reduce: reduceMotion), value: model.pane)
         .padding(.leading, gutter)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Show")
@@ -293,7 +322,7 @@ private struct PaneSwitch: View {
 
     private func segment(_ pane: RouterPane, _ title: String, count: Int, tint: Color) -> some View {
         let picked = model.pane == pane
-        return Button { model.pane = pane } label: {
+        return Button { model.show(pane) } label: {
             HStack(spacing: 5) {
                 Text(title).cdsText((12, 16), .medium, picked || hovered == pane ? CDS.Text.primary : CDS.Text.muted)
                 if count > 0 {
@@ -307,7 +336,6 @@ private struct PaneSwitch: View {
                     RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous).fill(CDS.Segmented.thumb)
                         .overlay(RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous)
                             .strokeBorder(CDS.border, lineWidth: 1))
-                        .matchedGeometryEffect(id: "thumb", in: thumb)
                 }
             }
             .contentShape(Rectangle())
@@ -321,7 +349,6 @@ private struct PaneSwitch: View {
 
 /// A chip for each section of Now with something in it, its count: a click opens it and takes the page there.
 private struct ZoneChips: View {
-    let store: Store
     let model: RouterModel
     let page: RouterPage
     /// Beside the switch: the sections' names go first when there's no room for them.
@@ -498,7 +525,10 @@ private struct RouterHistory: View {
                 }
                 .cdsTopFade()
                 .modifier(HistoryAnchoring(pinned: $pinned, laidOut: laidOut, ready: { if pending != nil { released = true } }) {
-                    pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
+                    // Once: geometry changing again while it waits asks for nothing more.
+                    if pending?.id != RouterModel.endID {
+                        pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
+                    }
                 })
                 // A card picked (clicked, or with the keys): as little scrolling as shows it whole; the Router picked: the bottom.
                 // Asked for before the page was drawn too (a banner's card far up the history): it goes there once laid out.
@@ -548,7 +578,10 @@ private struct RouterHistory: View {
         if scroll.animated, let motion = Theme.Motion.hover.resolved(reduce: reduceMotion) {
             withAnimation(motion) { proxy.scrollTo(scroll.id, anchor: scroll.anchor) }
         } else {
-            proxy.scrollTo(scroll.id, anchor: scroll.anchor)
+            // A jump, even when what asked for it was animated (a line opening): it doesn't ride that animation.
+            var jump = Transaction(animation: nil)
+            jump.disablesAnimations = true
+            withTransaction(jump) { proxy.scrollTo(scroll.id, anchor: scroll.anchor) }
         }
     }
 
@@ -890,8 +923,15 @@ private struct HistoryCardLine: View, Equatable {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 // Opening an unread line is seeing it.
-                if unread { store.acknowledgeRouterCard(card.id) }
-                toggleHistoryLine(reduceMotion: reduceMotion) { model.tap(card.id, store: store) }
+                // The pick, the reply and the line seen change at once, unanimated; only the line opening or closing animates.
+                let opening = !model.expanded.contains(card.id)
+                withTransaction(Transaction(animation: nil)) {
+                    if unread { store.acknowledgeRouterCard(card.id) }
+                    if opening { model.reply(to: card.id, store: store, reveal: false, expand: false) }
+                }
+                toggleHistoryLine(reduceMotion: reduceMotion) {
+                    if opening { model.expanded.insert(card.id) } else { model.expanded.remove(card.id) }
+                }
             } label: {
                 HStack(spacing: 8) {
                     if unread { Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6).accessibilityHidden(true) }
@@ -1088,7 +1128,7 @@ private struct RouterNow: View {
     }
 
     var body: some View {
-        let folded = store.routerFolded
+        let folded = model.folded
         VStack(spacing: 0) {
             routerStatus
             ScrollViewReader { proxy in
@@ -1139,8 +1179,8 @@ private struct RouterNow: View {
     }
 
     private func open(_ zone: RouterZone) {
-        guard store.routerFolded.contains(zone) else { return }
-        withAnimation(spring) { store.setRouterZone(zone, folded: false) }
+        guard model.folded.contains(zone) else { return }
+        withAnimation(spring) { model.setFolded(zone, false) }
     }
 
     /// The scroll asked for, once what was opened for it is laid out.
@@ -1156,10 +1196,10 @@ private struct RouterNow: View {
     /// Folds a section or opens it. Folding the one whose header is held at the top (you are inside it) takes the page back
     /// to its start, so the header stays where you clicked it and the next section comes up under it.
     private func toggle(_ zone: RouterZone, proxy: ScrollViewProxy) {
-        let folding = !store.routerFolded.contains(zone)
+        let folding = !model.folded.contains(zone)
         let inside = (tops.y[zone] ?? 0) < -1
         withAnimation(spring) {
-            store.setRouterZone(zone, folded: folding)
+            model.setFolded(zone, folding)
             if folding && inside { proxy.scrollTo(zone.anchorID, anchor: .top) }
         }
         Announce.say(folding ? "\(zone.title) folded" : "\(zone.title) open")
