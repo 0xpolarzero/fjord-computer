@@ -115,7 +115,7 @@ extension Store {
     /// one call per card, `CardJudge.concurrency` at a time across all messages. Nothing changes without a stand-in or a TypeSafe key, or when Jev
     /// fails or is unsure.
     func judgeCards(session: String, message: String, eligible: [String: Int], asker: JevAsker?,
-                    decision: UUID? = nil, timeout: Duration = CardJudge.timeout) async {
+                    decision: UUID? = nil, by: RouterCard.Addressed = .router, timeout: Duration = CardJudge.timeout) async {
         guard let ask = jevAsker(.cards, base: asker) else { return }
         let generation = jevGate.generation
         let cards = router.cards.filter { $0.sessionID == session && $0.isOpen && eligible[$0.id] != nil }
@@ -148,7 +148,7 @@ extension Store {
             switch verdict {
             case .resolved:
                 state.cards[i].addressedAt = now
-                state.cards[i].addressedBy = .router
+                state.cards[i].addressedBy = by
                 state.cards[i].addressedNote = message
                 state.cards[i].left = nil
                 logged.append(state.cards[i])

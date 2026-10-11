@@ -388,6 +388,11 @@ extension Claude {
     var reader: ((ClaudeSession) async -> String?)?
     /// The final messages of a session's turns before its last, oldest first (tests); the transcript's tail otherwise.
     var earlier: ((ClaudeSession) async -> [String])?
+    /// What you wrote in a session after a time (ms), as one text (tests); the transcript's tail otherwise.
+    var replyReader: ((ClaudeSession, Int64) async -> String?)?
+    /// Sessions whose message is being judged against their cards, with that message (ms), and the judging (tests wait on it).
+    var judgingReplies: [String: Int64] = [:]
+    var replyJudging: [String: Task<Void, Never>] = [:]
     /// Sends a session (by id) a message as it is (tests); the Router's send path otherwise (see `Store.sendVerbatim`).
     typealias Sender = (String, String) async throws -> Void
     var sender: Sender?

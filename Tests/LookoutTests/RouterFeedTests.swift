@@ -120,11 +120,11 @@ import Testing
         #expect(state.cards.filter(\.isOpen).count == 2)
     }
 
-    @Test func replyingInTheSessionAddressesItsCards() {
+    @Test func replyingInTheSessionLeavesItsCardsToJev() {
         var state = seen([session(turns: 1)])
         update(&state, [session(turns: 2)], now: 1)
         update(&state, [session(turns: 2, message: 2, running: true)], now: 2)
-        #expect(state.cards[0].addressedBy == .reply)
+        #expect(state.cards[0].isOpen && state.replies["local_a"] == RouterFeed.Stamp.ms(at(2)))
     }
 
     @Test func openingTheSessionAddressesNothing() {
@@ -283,11 +283,14 @@ import Testing
         var state = seen([session(turns: 1)])
         update(&state, [session(turns: 2)], now: 1)
         update(&state, [session(turns: 2, message: 2)], now: 2)
-        #expect(state.cards[0].addressedBy == .reply)
+        // Jev judged the reply settled it; you open it again: the same reply isn't judged again.
+        state.cards[0].addressedAt = at(2)
+        state.cards[0].addressedBy = .reply
+        state.replies = [:]
         state.cards[0].addressedAt = nil
         state.cards[0].addressedBy = nil
         update(&state, [session(turns: 2, message: 2)], now: 3)
-        #expect(state.cards[0].isOpen)
+        #expect(state.cards[0].isOpen && state.replies.isEmpty)
     }
 
     @Test func aCardAlreadyMadeIsNotMadeTwice() {
@@ -468,11 +471,11 @@ import Testing
         let activity = ["local_d": ClaudeActivity(text: "Thinking", since: at(5)), "local_e": question(1)]
         RouterFeed.reconcile(&state, sessions: now, activity: activity, forms: ["local_f": ["toolu_f"]], now: at(200))
         let by = Dictionary(uniqueKeysWithValues: state.cards.map { ($0.sessionID, $0.addressedBy) })
-        #expect(by["local_a"] == .reply && by["local_b"] == RouterCard.Addressed?.none && by["local_c"] == .gone && by["local_d"] == .answered)
+        #expect(by["local_a"] == RouterCard.Addressed?.none && state.replies["local_a"] != nil && by["local_b"] == RouterCard.Addressed?.none && by["local_c"] == .gone && by["local_d"] == .answered)
         #expect(by["local_e"] == RouterCard.Addressed?.none && by["local_f"] == RouterCard.Addressed?.none)
         // The next update sees every session afresh and keeps the surviving waits, carding nothing twice.
         update(&state, now, activity: activity, forms: ["local_f": ["toolu_f"]], now: 201)
-        #expect(state.cards.filter(\.isOpen).map(\.sessionID).sorted() == ["local_b", "local_e", "local_f"])
+        #expect(state.cards.filter(\.isOpen).map(\.sessionID).sorted() == ["local_a", "local_b", "local_e", "local_f"])
         #expect(state.cards.count == 6)
     }
 
@@ -512,13 +515,13 @@ import Testing
         dec.dateDecodingStrategy = .iso8601
         state = try dec.decode(RouterState.self, from: enc.encode(state))
         #expect(state.cards[0].createdMs == RouterFeed.Stamp.ms(made))
-        // 0.5 s later, in the same second: a reply in a, an open of b (which addresses nothing).
+        // 0.5 s later, in the same second: a reply in a (to judge), an open of b (which addresses nothing).
         var a = session(turns: 2)
         a.lastUserMessage = made.addingTimeInterval(0.5)
         var b = session("local_b", turns: 2)
         b.lastFocused = made.addingTimeInterval(0.5)
         RouterFeed.update(&state, sessions: [a, b], activity: [:], muted: [], viewing: nil, now: made.addingTimeInterval(0.6))
-        #expect(state.cards.map(\.addressedBy) == [.reply, nil])
+        #expect(state.cards.allSatisfy { $0.isOpen } == true && Set(state.replies.keys) == ["local_a"])
 
         // A message just before a card (one with nothing else to go by), in the same second, is not a reply to it.
         let question = RouterCard(id: "local_a#w1", sessionID: "local_a", kind: .question, title: "", folder: nil, text: "",
@@ -680,6 +683,6 @@ import Testing
         #expect(state.cards.map(\.id) == ["local_a#t2"] && state.cards[0].isOpen)
         // The next full read has your reply, sent before the card was made: it is a reply to that turn all the same.
         update(&state, [session(turns: 2, message: 2.5, running: true)], now: 4)
-        #expect(state.cards[0].addressedBy == .reply)
+        #expect(state.cards[0].isOpen && state.replies["local_a"] == RouterFeed.Stamp.ms(at(2.5)))
     }
 }

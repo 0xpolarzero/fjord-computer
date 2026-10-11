@@ -45,6 +45,9 @@ struct RouterState: Codable, Equatable {
     /// By session, the latest turn whose card was handled and then pruned away (`RouterFeed.prune`): the launch's look back
     /// never makes such a turn a card again, though its card is gone.
     var handledTurns: [String: Int] = [:]
+    /// By session, a message of yours (ms) its open turn cards are still to be judged against: Jev decides which it settled
+    /// (see RouterReplies.swift); none is addressed just for being written after.
+    var replies: [String: Int64] = [:]
 
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
@@ -99,7 +102,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions, handledTurns
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions, handledTurns, replies
     }
 
     func encode(to encoder: Encoder) throws {
@@ -122,6 +125,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(autoContinue, forKey: .autoContinue)
         try c.encode(autoContinueSessions, forKey: .autoContinueSessions)
         try c.encode(handledTurns, forKey: .handledTurns)
+        try c.encode(replies, forKey: .replies)
     }
 
     init(from decoder: Decoder) throws {
@@ -171,6 +175,7 @@ struct RouterState: Codable, Equatable {
         autoContinue = value(.autoContinue) ?? false
         autoContinueSessions = map(.autoContinueSessions)
         handledTurns = map(.handledTurns)
+        replies = map(.replies)
         linkUnlinkedChanges(legacy: legacy)
         dropped = lost
     }
@@ -246,7 +251,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
     enum Addressed: String, Codable {
         /// By hand.
         case you
-        /// You sent the session a message after the card.
+        /// You sent the session a message after the card: a question or plan it was stopped on is over; a turn's card is
+        /// addressed only when Jev judged that the message settled it (older builds: any message after it).
         case reply
         /// The Router sent the session a message.
         case router
@@ -497,7 +503,8 @@ enum RouterFeed {
             if let before {
                 // What addresses the cards there are, before any new one is made (a new one is newer than all of it).
                 if stamp.message != before.message, let message = stamp.message {
-                    address(&state, id, .reply, now) { message > $0.replyAfter }
+                    address(&state, id, .reply, now) { !$0.kind.isTurn && message > $0.replyAfter }
+                    queueReply(&state, id, message)
                 }
                 if let previous, ongoing != previous {
                     address(&state, id, .answered, now) { !$0.kind.isTurn }
@@ -597,6 +604,7 @@ enum RouterFeed {
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
         state.autoContinueSessions = state.autoContinueSessions.filter { live[$0.key] != nil }
+        state.replies = state.replies.filter { live[$0.key] != nil }
         // A handled turn outlasts its session's archiving (unarchived, it is no new card): forgotten once the session is gone
         // for good, and past the `maxHandled` sessions active last. `listed`: every session the read listed, archived ones too
         // (the store's sessions leave the archived out); nil: `sessions`.
@@ -612,6 +620,15 @@ enum RouterFeed {
         // its cards keep their own copy.
         state.origins = state.origins.filter { live[$0.key] != nil || state.lookoutStarted[$0.key] != nil }
         prune(&state)
+    }
+
+    /// Your message to judge the session's open turn cards against, when one is older than it. Not one a run of Lookout's
+    /// sent: the Router judges those as it sends them.
+    static func queueReply(_ state: inout RouterState, _ session: String, _ message: Int64) {
+        guard !lookoutSent(state, session, atMs: message),
+              state.cards.contains(where: { $0.sessionID == session && $0.isOpen && $0.kind.isTurn && message > $0.replyAfter })
+        else { return }
+        state.replies[session] = max(state.replies[session] ?? 0, message)
     }
 
     /// Whether a run of Lookout's on the session sent the user message at `ms`: one that was started shortly before it
@@ -667,8 +684,10 @@ enum RouterFeed {
             if let session = live[card.sessionID] {
                 let stamp = Stamp(session)
                 let change = moved(session)
-                if let message = stamp.message, message > card.replyAfter || (change.message && !card.kind.isTurn) {
+                if !card.kind.isTurn, let message = stamp.message, message > card.replyAfter || change.message {
                     by = .reply
+                } else if card.kind.isTurn, let message = stamp.message, message > card.replyAfter {
+                    queueReply(&state, session.id, message)
                 } else if !card.kind.isTurn, change.turns {
                     by = .answered
                 } else if !card.kind.isTurn, let ms = card.waitMs,
@@ -836,6 +855,7 @@ extension Store {
         }
         // What the turns ended on (Jev), and the waits that are over.
         triageTurns()
+        judgeReplies()
         resolveWaits(now: now)
     }
 
