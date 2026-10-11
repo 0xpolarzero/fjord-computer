@@ -848,7 +848,17 @@ extension Store {
         guard persists, let url = actionsFile, let data = try? Data(contentsOf: url) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        guard var ledger = try? dec.decode(ActionLedger.self, from: data) else { return }
+        // Record by record: one this build can't read is lost alone. With anything lost, the file is kept aside before it
+        // is first written over (see `saveActions`), and what is there now is taken as old, as for a new action: a thing
+        // whose record was lost is not acted on again for what it already had.
+        let read = try? dec.decode(LossyLedger.self, from: data)
+        var ledger = read?.ledger ?? ActionLedger()
+        let lost = read?.lost ?? ["everything"]
+        if !lost.isEmpty {
+            Self.actionsLog.error("actions.json was read only in part (\(lost.joined(separator: ", "), privacy: .public) lost)")
+            ledger.baselines = [:]
+            actionsDisk.keepAside(data)
+        }
         // Running when the app quit: not retried (it may have happened), said as failed.
         for (key, run) in ledger.runs where run.state == .running {
             var r = run
@@ -875,6 +885,12 @@ extension Store {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
             do {
+                // A file read only in part is copied aside first: until that works, it isn't written over.
+                if let original = disk.unkept {
+                    let backup = try Store.keepAside(original, of: url)
+                    disk.keptAside()
+                    Self.actionsLog.error("actions.json, read only in part, is kept as \(backup, privacy: .public)")
+                }
                 try enc.encode(ledger.ledger).write(to: url, options: .atomic)
                 disk.wrote(revision)
             } catch {
@@ -910,11 +926,39 @@ extension Store {
 
 private struct ActionsBox: @unchecked Sendable { let ledger: ActionLedger }
 
+/// actions.json read record by record, saying what it couldn't read.
+private struct LossyLedger: Decodable {
+    var ledger = ActionLedger()
+    var lost: [String] = []
+
+    private enum CodingKeys: String, CodingKey { case baselines, runs }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        do { ledger.baselines = try c.decodeIfPresent([UUID: ActionLedger.Baseline].self, forKey: .baselines) ?? [:] } catch {
+            lost.append("baselines")
+        }
+        do {
+            let all = try c.decodeIfPresent([String: Lossy<ActionRun>].self, forKey: .runs) ?? [:]
+            ledger.runs = all.compactMapValues(\.value)
+            if ledger.runs.count < all.count { lost.append("\(all.count - ledger.runs.count) of runs") }
+        } catch {
+            lost.append("runs")
+        }
+    }
+}
+
 /// The revisions of the ledger asked to be written, and the latest written (the writes go in order, so it has every one
 /// before it); read and changed from the writer and the main actor alike.
 final class ActionsDisk: @unchecked Sendable {
     private let lock = NSLock()
     private var _asked = 0, _written = 0, failures = 0
+    private var _unkept: Data?
+
+    /// What the file held when it was read only in part, until it is copied aside.
+    var unkept: Data? { lock.withLock { _unkept } }
+    func keepAside(_ data: Data) { lock.withLock { _unkept = data } }
+    func keptAside() { lock.withLock { _unkept = nil } }
 
     var asked: Int { lock.withLock { _asked } }
     var written: Int { lock.withLock { _written } }

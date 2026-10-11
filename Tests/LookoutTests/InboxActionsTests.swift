@@ -120,6 +120,39 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(saved.runs.values.contains { $0.thing == "pr:a/one#3" && $0.state == .done })
     }
 
+    @Test func aRecordThatCannotBeReadIsLostAloneKeptAsideAndNotRunAgain() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        let file = try #require(store.actionsFile)
+        await store.runActions()
+        add(store, InboxFixture.pr(3))
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+        store.flushSave()
+        // PR 3's run is written by a build that knows another state: that record alone can't be read.
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(text.contains(#""state":"done""#))
+        let damaged = Data(text.replacingOccurrences(of: #""state":"done""#, with: #""state":"later""#).utf8)
+        try damaged.write(to: file)
+        store.loadActions()
+        #expect(store.actionLedger.runs.values.contains { $0.thing == "pr:a/one#1" })
+        #expect(!store.actionLedger.runs.values.contains { $0.thing == "pr:a/one#3" && $0.trigger == "enter" })
+        // What is there now is old: PR 3 isn't acted on again.
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("actions.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [damaged])
+        // Something new still runs.
+        add(store, InboxFixture.pr(4))
+        await store.runActions()
+        #expect(performer.asked.count == 2)
+    }
+
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])
         await store.runActions()
