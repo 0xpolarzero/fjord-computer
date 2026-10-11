@@ -916,6 +916,37 @@ extension InboxSyncMapping {
         #expect(s.things["pr:o/r#0"] == nil && s.things.count == 16)
     }
 
+    @Test func aSearchCutShortAtTheCapsKeepsWhatItDidntReach() async {
+        final class Box: @unchecked Sendable { var shown: [Int] = [1, 2]; var more = false }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [InboxCategory(name: "Repo", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u")])))
+        ])]
+        s.gh.session = StubbedGitHub.session { request in
+            let text = InboxSyncRefresh.body(request)
+            // Its first page has what is shown; the pages after it, none of them (they are past the caps).
+            let first = !text.contains("after:")
+            let nodes = first ? box.shown.map { node(["id": "PR_\($0)", "number": $0, "url": "https://github.com/o/r/pull/\($0)"]) } : []
+            let info: [String: Any] = box.more ? ["hasNextPage": true, "endCursor": "c"] : ["hasNextPage": false]
+            let reply: [String: Any] = ["data": ["rateLimit": ["cost": 1, "remaining": 4000], "s0": ["pageInfo": info, "nodes": nodes]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#1"] != nil && s.things["pr:o/r#2"] != nil)
+        // The repo has more PRs than are fetched: #2 falls past the caps, and the search has pages left.
+        box.shown = [1]
+        box.more = true
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#2"] != nil)
+        // Read to its end without it: gone.
+        box.more = false
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#2"] == nil && s.things["pr:o/r#1"] != nil)
+    }
+
     @Test func aSearchGitHubDidntAnswerHasntRunAndWhatItFoundStaysUntilItDoes() async {
         final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var failing: Set<Int> = [] }
         let box = Box()

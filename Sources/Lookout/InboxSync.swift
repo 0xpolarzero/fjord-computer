@@ -1203,7 +1203,8 @@ extension Store {
             }
         }
         // Past the cap the searches take turns: what those not run this time found stays until they run. One GitHub didn't
-        // answer whole hasn't run: what it found stays, and is still its own, until it does.
+        // answer whole hasn't run: what it found stays, and is still its own, until it does. Nor has one cut short at the
+        // caps (more pages left): what it didn't reach may be past them.
         if !searchesKept {
             let ran = searches.filter { !fetched.failed.contains($0) }
             next.merge(keepingUnvisited(fetched, ran: ran, all: plan.all)) { a, _ in a }
@@ -1369,10 +1370,11 @@ extension Store {
     }
 
     /// Notes which searches found what, and gives back the things this refresh didn't find that a search it didn't run
-    /// may still find: one that found it before, or, for a thing kept from before launch, any not yet run since.
+    /// may still find: one that found it before, or, for a thing kept from before launch, any not yet run since. Only a
+    /// search read to its last page has run for this: one cut short at the caps may have it past what was read.
     func keepingUnvisited(_ fetched: Fetched, ran: [String], all: Set<String>) -> [String: Thing] {
         var state = inboxSyncState
-        let ran = Set(ran)
+        let ran = Set(ran).intersection(fetched.complete)
         state.ranSinceLaunch = state.ranSinceLaunch.union(ran).intersection(all)
         var kept: [String: Thing] = [:]
         var foundBy: [String: Set<String>] = [:]
