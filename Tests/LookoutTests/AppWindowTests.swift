@@ -548,7 +548,7 @@ import Testing
     /// test never has the keyboard (the test runner is not the active app): `AppTransition.isKey` may say otherwise.
     private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
         let saved = (AppTransition.enabled, AppTransition.nextFrames, AppTransition.nextTurn, AppTransition.isKey,
-                     AppTransition.isMiniaturized)
+                     AppTransition.isMiniaturized, AppTransition.flushInitial)
         // The app's policy as found: the morph's close never gets to its tidying turn here, which would put it back, and a
         // test awaiting its own close meanwhile reads it.
         let policy = AppPolicy.current
@@ -566,6 +566,7 @@ import Testing
             AppTransition.nextTurn = saved.2
             AppTransition.isKey = saved.3
             AppTransition.isMiniaturized = saved.4
+            AppTransition.flushInitial = saved.5
             AppPolicy.update(windowOpen: policy == .regular)
         }
         _ = NSApplication.shared
@@ -593,6 +594,27 @@ import Testing
             #expect(window.alphaValue == 1 && run.overlay.isVisible && ticks.blocks.count == 1)
             ticks.blocks.removeFirst()()
             #expect(window.alphaValue == 1 && !run.ended)
+        }
+    }
+
+    /// An opening's motion is handed to the render server before anything heavy: its first frame is flushed with nothing
+    /// captured and no content in the window, and the window is brought in only on the turn after, on the spring as on
+    /// Reduce Motion's fade (no bar to grow out of takes that path too).
+    @Test(arguments: [false, true]) func theMotionIsFlushedBeforeTheWindowIsBroughtIn(reduced: Bool) {
+        morphing { controller, ticks in
+            if reduced { controller.bar = { nil } }
+            var flushes: [(captures: Int, content: Bool, turns: Int)] = []
+            let before = AppTransition.captures
+            AppTransition.flushInitial = {
+                flushes.append((AppTransition.captures - before, controller.window?.contentViewController != nil,
+                                ticks.turns.count))
+            }
+            controller.show(.settings)
+            #expect(flushes.count == 1)
+            #expect(flushes.first?.captures == 0 && flushes.first?.content == false && flushes.first?.turns == 0)
+            #expect(controller.window?.contentViewController == nil && ticks.turns.count == 1)
+            ticks.turns.removeFirst()()
+            #expect(controller.window?.contentViewController != nil && flushes.count == 1)
         }
     }
 

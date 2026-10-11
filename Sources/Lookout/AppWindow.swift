@@ -144,6 +144,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// Shows the window in front, on `destination` when one is given (else where it was left). `card`: a Router card to pick
     /// (it opens on the Router).
     func show(_ destination: AppDestination? = nil, card: String? = nil) {
+        // Until the opening's first frame is flushed (see `startOpening`), or at once when there is no morph.
+        let asked = MorphSignposts.signposter.beginInterval("Open to first flush")
+        defer { MorphSignposts.signposter.endInterval("Open to first flush", asked) }
         Self.active = self
         settle()
         var destination = destination
@@ -198,8 +201,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
 
     /// What shows the window: its content (built once, kept across closes), the app regular and active, the window in front
-    /// with the keyboard. The heavy part of an opening, which waits until its morph is on screen.
+    /// with the keyboard. The heavy part of an opening, which waits until its morph's first frame has been submitted.
     private func bringIn(_ window: NSWindow) {
+        let signpost = MorphSignposts.signposter.beginInterval("Bring in")
+        defer { MorphSignposts.signposter.endInterval("Bring in", signpost) }
         if window.contentViewController == nil {
             // The window takes its content's size: kept content is given the window's as it is now (it may have been fitted
             // to a smaller screen since), new content is made at it.
@@ -216,8 +221,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     /// The window opens: the overlay grows out of the bar's cell (or picks up from where a close had got to) while the real
     /// window waits at its frame, invisible; then the real window takes over under the overlay. The motion comes first: the
-    /// overlay starts on the picture kept from the last close (or the window's bare surface) and is on screen before the
-    /// window is built and brought in, a turn later, which gives it a fresh picture.
+    /// overlay starts on the picture kept from the last close (or the window's bare surface) and its first frame is flushed
+    /// to the render server (submitted: drawn as soon as the server can) before the window is built and brought in, a turn
+    /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
         generation += 1
@@ -256,7 +262,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             }
             current.handoff(reveal: { self.reveal(window) }, finished: { self.finishOpening(mine) })
         }
-        // The motion is on screen: the rest waits a turn.
+        // The motion submitted to the render server, nothing captured or built yet: the rest waits a turn.
+        AppTransition.flushInitial()
         AppTransition.nextTurn { [weak self] in self?.bringInPending(mine) }
     }
 

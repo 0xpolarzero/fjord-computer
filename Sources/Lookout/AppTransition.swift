@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import QuartzCore
 
 // The morph between the bar and the app window: the window grows out of the bar's cell when it opens, and shrinks back into
@@ -9,8 +10,18 @@ import QuartzCore
 // overlay, and a test run no animation at all.
 //
 // An opening moves first and draws after: the morph starts on the picture kept from the last close (or the window's bare
-// surface), with nothing captured, and is on screen before the window's content is built; a fresh picture replaces it a
-// turn later, and is in place before the real window takes over.
+// surface), with nothing captured, and its first frame is flushed to the render server (submitted, not yet proven drawn)
+// before the window's content is built, a turn later; a fresh picture then replaces it, in place before the real window
+// takes over.
+//
+// Each step is a signpost interval (subsystem dev.polarzero.lookout, category "morph"), to see in Instruments where an
+// opening's time goes: the request to the first flush, bringing the window in, each capture and picture installed, the
+// handoff, and the overlay going.
+
+/// The morph's signposts.
+enum MorphSignposts {
+    static let signposter = OSSignposter(subsystem: InboxLog.subsystem, category: "morph")
+}
 
 /// Where the bar is, for the morph to start from or end at.
 struct BarMorph {
@@ -58,6 +69,9 @@ enum AppTransition {
 
     /// Runs `block` on the screen's next refresh.
     static func nextFrame(_ screen: NSScreen?, _ block: @escaping @MainActor () -> Void) { nextFrames(screen, 1, block) }
+    /// Submits an opening's first frame to the render server before its window is built: the motion goes ahead of the
+    /// heavy work rather than waiting behind it. Replaceable, so a test can see when it happens.
+    static var flushInitial: () -> Void = { CATransaction.flush() }
     /// Runs `block` on the main queue's next turn (after the current one has committed). Replaceable, as `nextFrame`.
     static var nextTurn: (@escaping @MainActor () -> Void) -> Void = { block in
         DispatchQueue.main.async { MainActor.assumeIsolated { block() } }
@@ -86,6 +100,8 @@ enum AppTransition {
     static func snapshot(of window: NSWindow) -> CGImage? {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
         captures += 1
+        let signpost = MorphSignposts.signposter.beginInterval("Capture")
+        defer { MorphSignposts.signposter.endInterval("Capture", signpost) }
         view.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
@@ -276,6 +292,8 @@ enum AppTransition {
             guard let image = AppTransition.snapshot(of: window) else { return }
             self.image = image
             imageIsKey = AppTransition.isKey(window)
+            let signpost = MorphSignposts.signposter.beginInterval("Install picture")
+            defer { MorphSignposts.signposter.endInterval("Install picture", signpost) }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             windowLayer.removeAnimation(forKey: kCATransition)
@@ -359,7 +377,7 @@ enum AppTransition {
         }
 
         /// Grows from where the overlay is now (or the bar's cell, when it was not showing) to the window. `done` runs once
-        /// it is there (not if another animation takes over first).
+        /// it is there (not if another animation takes over first). The caller flushes it (`AppTransition.flushInitial`).
         func open(reduced: Bool, done: @escaping () -> Void) {
             let wasShowing = showing
             show()
@@ -384,6 +402,11 @@ enum AppTransition {
         /// Shrinks from where the overlay is now to the bar's cell.
         func close(reduced: Bool, done: @escaping () -> Void) {
             if !showing { present() }
+            defer {
+                // Submitted to the render server within the turn's own transaction, before whatever else the turn does
+                // (the real window going): the overlay is drawn as soon as the server can.
+                CATransaction.flush()
+            }
             guard !reduced, let cell = cellPose else {
                 fade(to: 0, done: done)
                 return
@@ -404,6 +427,8 @@ enum AppTransition {
             end.container = opacity
             token += 1
             let mine = token
+            // A handoff under way is called off.
+            endHandoffSignpost()
             startPose = from
             completion = done
             settlesAt = CACurrentMediaTime() + AppTransition.reducedDuration * Double(AppTransition.slowdown)
@@ -427,8 +452,6 @@ enum AppTransition {
                 MainActor.assumeIsolated { self?.finishAnimation(mine) }
             }
             CATransaction.commit()
-            // Called within the turn's own transaction: on screen now, before whatever else the turn does.
-            CATransaction.flush()
         }
 
         /// When each layer's opacity moves, as fractions of the spring's duration: (start, length).
@@ -447,6 +470,8 @@ enum AppTransition {
             let from = start ?? pose
             token += 1
             let mine = token
+            // A handoff under way is called off.
+            endHandoffSignpost()
             startPose = from
             completion = done
             let fromRect = local(from.rect)
@@ -499,8 +524,6 @@ enum AppTransition {
             fadeLayer(shadow, "shadowOpacity", from.shadow * from.container, end.shadow * end.container, opacities.shadow)
             fadeLayer(container, "opacity", from.container, end.container, opacities.container)
             CATransaction.commit()
-            // Called within the turn's own transaction: on screen now, before whatever else the turn does.
-            CATransaction.flush()
             // The layers run at 1/slowdown; `lead` is in real refreshes.
             let real = length * Double(AppTransition.slowdown)
             settlesAt = start + real
@@ -543,6 +566,7 @@ enum AppTransition {
         /// refreshes later), its shadow giving way to the window's own. `reveal` makes the real window visible; `finished`
         /// runs when the overlay is gone.
         func handoff(reveal: @escaping () -> Void, finished: @escaping () -> Void) {
+            handoffSignpost = MorphSignposts.signposter.beginInterval("Handoff")
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             reveal()
@@ -578,6 +602,8 @@ enum AppTransition {
         /// overlay's shadow gives way to the window's own, then the overlay goes.
         private func letGo(_ mine: Int, finished: @escaping () -> Void) {
             handedOver = true
+            endHandoffSignpost()
+            let going = MorphSignposts.signposter.beginInterval("Overlay going")
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             container.opacity = 0
@@ -600,6 +626,7 @@ enum AppTransition {
             // The layers run at 1/slowdown: the overlay goes once the fade is over as it is seen.
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.shadowHandoff * Double(AppTransition.slowdown)) { [weak self] in
                 MainActor.assumeIsolated {
+                    MorphSignposts.signposter.endInterval("Overlay going", going)
                     guard let self, self.token == mine else { return }
                     self.end()
                     finished()
@@ -607,9 +634,19 @@ enum AppTransition {
             }
         }
 
+        /// The handoff under way, if any: its signpost interval ends as the overlay lets go (or the run ends first).
+        private var handoffSignpost: OSSignpostIntervalState?
+
+        private func endHandoffSignpost() {
+            guard let handoffSignpost else { return }
+            MorphSignposts.signposter.endInterval("Handoff", handoffSignpost)
+            self.handoffSignpost = nil
+        }
+
         func end() {
             guard !ended else { return }
             ended = true
+            endHandoffSignpost()
             completion = nil
             token += 1
             // The overlay is shared: a newer morph may have it already.
