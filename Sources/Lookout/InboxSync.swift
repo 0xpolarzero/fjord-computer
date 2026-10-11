@@ -10,6 +10,11 @@ enum InboxSync {
     static let maxThings = 150
     /// Searches in one request.
     static let searchesPerRequest = 4
+    /// A PR's review threads: read with it, then a page at a time past those, up to `maxThreads`, for several PRs a request.
+    static let threadsFirst = 20
+    static let threadsPage = 100
+    static let maxThreads = 220
+    static let threadPRsPerRequest = 10
     /// Searches a refresh makes at most, shared out a turn at a time between the rules so that none goes without.
     static let maxSearches = 16
     /// Workflow targets a refresh checks at most; past it, they take turns (`workflowWindow`).
@@ -261,6 +266,13 @@ enum InboxSync {
     private static let personNode = "login __typename avatarUrl"
     private static let assignEvents = "assignEvents: timelineItems(itemTypes: [ASSIGNED_EVENT], last: 20) { nodes { ... on AssignedEvent { createdAt assignee { ... on User { login } } } } }"
 
+    /// A page of review threads: where the next one starts, and each thread's first and latest comment.
+    private static let threadFields = """
+    pageInfo { hasNextPage endCursor } nodes { id isResolved path
+        first: comments(first: 1) { nodes { id createdAt body author { \(personNode) } authorAssociation } }
+        last: comments(last: 1) { nodes { id createdAt body author { \(personNode) } authorAssociation } } }
+    """
+
     static let fragments = """
     fragment C on Comment { id createdAt body authorAssociation author { \(personNode) } }
     fragment P on PullRequest {
@@ -276,9 +288,7 @@ enum InboxSync {
       comments(last: 10) { nodes { ...C } }
       latestOpinionatedReviews(first: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
       reviews(last: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
-      reviewThreads(first: 20) { nodes { id isResolved path
-        first: comments(first: 1) { nodes { id createdAt body author { \(personNode) } authorAssociation } }
-        last: comments(last: 1) { nodes { id createdAt body author { \(personNode) } authorAssociation } } } }
+      reviewThreads(first: \(threadsFirst)) { \(threadFields) }
       commits(last: 5) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
     }
     fragment I on Issue {
@@ -311,6 +321,48 @@ enum InboxSync {
     }
 
     /// The repos you own and have merged or open PRs in.
+    /// The next page of review threads of several PRs, by their node ids, each from its own cursor.
+    fileprivate static func threadsRequest(_ pages: [(alias: String, node: String, cursor: String)]) -> String {
+        let body = pages.map { p in
+            "\(p.alias): node(id: \"\(escape(p.node))\") { ... on PullRequest { reviewThreads(first: \(threadsPage), after: \"\(escape(p.cursor))\") { \(threadFields) } } }"
+        }
+        return "query { rateLimit { cost remaining resetAt } \(body.joined(separator: "\n")) }"
+    }
+
+    /// Where a PR's review threads go on past the page read, if they do: its node id and the cursor.
+    static func moreThreads(_ node: [String: Any]) -> (node: String, cursor: String)? {
+        guard node["__typename"] as? String == "PullRequest", let id = node["id"] as? String else { return nil }
+        return nextPage(node["reviewThreads"]).map { (id, $0) }
+    }
+
+    static func nextPage(_ connection: Any?) -> String? {
+        let info = dict(dict(connection)?["pageInfo"])
+        guard info?["hasNextPage"] as? Bool == true else { return nil }
+        return info?["endCursor"] as? String
+    }
+
+    /// Takes in a page of review threads (those not already there) and the mentions in their latest replies.
+    static func addThreads(_ connection: Any?, to thing: inout Thing) {
+        var mentioned: [String] = []
+        for t in nodes(connection) {
+            guard let thread = thread(t), !thing.threads.contains(where: { $0.id == thread.thread.id }) else { continue }
+            thing.threads.append(thread.thread)
+            mentioned += thread.mentions
+        }
+        var seen = Set(thing.mentioned)
+        thing.mentioned += mentioned.filter { seen.insert($0).inserted }
+    }
+
+    private static func thread(_ t: [String: Any]) -> (thread: ThingThread, mentions: [String])? {
+        guard let id = t["id"] as? String, let first = nodes(t["first"]).first, let last = nodes(t["last"]).first,
+              let lastID = last["id"] as? String, let at = date(last["createdAt"]) else { return nil }
+        return (ThingThread(
+            id: id, isResolved: t["isResolved"] as? Bool ?? false,
+            startedBy: person(first["author"], association: first["authorAssociation"]),
+            lastReplyBy: person(last["author"], association: last["authorAssociation"]), lastReplyID: lastID,
+            lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String)), mentions(last["body"] as? String))
+    }
+
     fileprivate static func reposRequest(me: String) -> String {
         """
         query { viewer { repositories(first: 100, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { nameWithOwner } } }
@@ -486,14 +538,9 @@ enum InboxSync {
             thing.reviews = reviews.sorted { $0.at < $1.at }
 
             for t in nodes(node["reviewThreads"]) {
-                guard let id = t["id"] as? String, let first = nodes(t["first"]).first, let last = nodes(t["last"]).first,
-                      let lastID = last["id"] as? String, let at = date(last["createdAt"]) else { continue }
-                mentioned += mentions(last["body"] as? String)
-                thing.threads.append(ThingThread(
-                    id: id, isResolved: t["isResolved"] as? Bool ?? false,
-                    startedBy: person(first["author"], association: first["authorAssociation"]),
-                    lastReplyBy: person(last["author"], association: last["authorAssociation"]), lastReplyID: lastID,
-                    lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String)))
+                guard let thread = thread(t) else { continue }
+                mentioned += thread.mentions
+                thing.threads.append(thread.thread)
             }
 
             let commits = nodes(node["commits"]).compactMap { $0["commit"] as? [String: Any] }
@@ -1028,6 +1075,8 @@ extension Store {
         var error: String?
         var foundBy: [String: Set<String>] = [:]
         var failed = Set<String>()
+        // PRs with more review threads than came with them: read on before they are taken.
+        var moreThreads: [String: (node: String, cursor: String)] = [:]
         var cursors: [Int: String?] = Dictionary(uniqueKeysWithValues: searches.indices.map { ($0, String?.none) })
         var pages = 0
         while !cursors.isEmpty, pages < InboxSync.maxPages, found.count < InboxSync.maxThings {
@@ -1061,6 +1110,7 @@ extension Store {
                     for (n, value) in ((result["nodes"] as? [Any]) ?? []).enumerated() {
                         guard let node = value as? [String: Any], let thing = InboxSync.thing(node) else { continue }
                         foundBy[thing.id, default: []].insert(searches[i])
+                        if let more = InboxSync.moreThreads(node) { moreThreads[thing.id] = more } else { moreThreads[thing.id] = nil }
                         // Given whole by another search, it is whole.
                         if broken.contains(["s\(i)", String(n)]) {
                             if found[thing.id] == nil { partial.insert(thing.id); found[thing.id] = thing }
@@ -1074,6 +1124,38 @@ extension Store {
                 }
             }
             cursors = next
+        }
+        // The rest of their review threads, a page at a time up to the cap: an unresolved one past the first page is there.
+        // One that can't be read is a thing given in part.
+        var read: [String: Int] = moreThreads.mapValues { _ in InboxSync.threadsFirst }
+        while !moreThreads.isEmpty {
+            let ids = moreThreads.keys.sorted()
+            var next: [String: (node: String, cursor: String)] = [:]
+            for start in stride(from: 0, to: ids.count, by: InboxSync.threadPRsPerRequest) {
+                let batch = Array(ids[start..<min(start + InboxSync.threadPRsPerRequest, ids.count)])
+                let pages = batch.enumerated().map { ("p\($0.offset)", moreThreads[$0.element]!.node, moreThreads[$0.element]!.cursor) }
+                var json: [String: Any] = [:]
+                do { json = try await gh.graphql(InboxSync.threadsRequest(pages)) } catch let failure {
+                    json = ["errors": [["message": failure.localizedDescription]]]
+                }
+                let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+                let data = json["data"] as? [String: Any]
+                for (n, id) in batch.enumerated() {
+                    let alias = "p\(n)"
+                    let failedHere = errors.contains { e in ((e["path"] as? [Any])?.first as? String).map { $0 == alias } ?? true }
+                    guard !failedHere, let connection = (data?[alias] as? [String: Any])?["reviewThreads"] else {
+                        error = error ?? (errors.first?["message"] as? String) ?? "GitHub gave part of an answer"
+                        partial.insert(id)
+                        continue
+                    }
+                    if found[id] != nil { InboxSync.addThreads(connection, to: &found[id]!) }
+                    read[id, default: 0] += InboxSync.threadsPage
+                    if let cursor = InboxSync.nextPage(connection), read[id, default: 0] < InboxSync.maxThreads {
+                        next[id] = (moreThreads[id]!.node, cursor)
+                    }
+                }
+            }
+            moreThreads = next
         }
         return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy, failed: failed)
     }
