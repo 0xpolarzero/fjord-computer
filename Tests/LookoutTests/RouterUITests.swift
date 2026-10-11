@@ -960,6 +960,19 @@ import UserNotifications
         #expect(model.selection == card.id && !model.expanded.contains(card.id))
     }
 
+    @Test func spaceOnAHandledCardReopensItAndShowsIt() {
+        let store = demo()
+        let model = RouterModel()
+        let card = store.routerPage.needs[0]
+        model.address(card.id, store: store)
+        model.expandedNeed = nil
+        model.select(card.id, store: store)
+        model.toggleAddressed(store: store)
+        #expect(store.router.cards.first { $0.id == card.id }?.isOpen == true)
+        // The reopened card is the one shown in full, as Reopen does.
+        #expect(model.selection == card.id && model.expandedNeed == card.id && !model.expanded.contains(card.id))
+    }
+
     @Test func aSupersededCardIsNotReopened() {
         let store = demo()
         let model = RouterModel()

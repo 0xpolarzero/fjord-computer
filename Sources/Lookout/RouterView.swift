@@ -518,12 +518,13 @@ final class RouterModel {
                let newer = store.routerShownOpenCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
             return
         }
+        // Open again: as Reopen, which shows the card in Needs you and goes to it.
+        guard card.isOpen else { reopen(id, store: store); return }
         let open = shown.filter(\.isOpen).map(\.id)
         let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
-        store.setCardAddressed(id, card.isOpen)
-        if card.isOpen { store.logCardAction("Marked handled", card: id) }
-        Announce.say(card.isOpen ? "Addressed" : "Open again")
-        guard card.isOpen else { return }
+        store.setCardAddressed(id, true)
+        store.logCardAction("Marked handled", card: id)
+        Announce.say("Addressed")
         advance(from: id, to: next, store: store, reveal: true)
     }
 
