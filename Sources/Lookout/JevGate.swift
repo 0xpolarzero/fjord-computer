@@ -8,7 +8,7 @@ import Foundation
 
 /// What Jev is asked for, each with its own switch.
 enum JevUse {
-    /// Where a message you send goes, and its task's size.
+    /// Where a message you send goes.
     case routing
     /// Where the draft you are typing goes (asked while you type).
     case drafts
@@ -20,7 +20,7 @@ enum JevUse {
     case icons
     /// The inbox's new comments and requests.
     case inbox
-    /// The clone and size of a session an inbox action starts (it reads the item, so the inbox's switch too).
+    /// The clone a session an inbox action starts works in (it reads the item, so the inbox's switch too).
     case actions
     /// A category's or a section's icon.
     case categoryIcons

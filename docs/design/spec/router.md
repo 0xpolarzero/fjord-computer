@@ -46,7 +46,7 @@ The long-lived process, `--resume`, the transcript (`chat`), peer turns and the 
 1. Decision log, and the history built on it.
 2. Typed runs: dispatcher → rules → Jev → Haiku; the ask-back card.
 3. Inbox actions start sessions directly, tagged with their origin; model and effort overrides.
-4. Model and effort for sessions the Router starts. Asked for before the task ("with opus: …") or in a closing clause set apart from it by a comma, semicolon, dash or parentheses (", with opus", " — using haiku, high effort", "(with opus)"); an unseparated "with <model>" at the end is the task's own words.
+4. Model and effort for sessions the Router starts. Asked for before the task ("with opus: …") or in a closing clause set apart from it by a comma, semicolon, dash or parentheses (", with opus", " — using haiku, high effort", "(with opus)"); an unseparated "with <model>" at the end is the task's own words. Nothing named: the session runs on the user's Claude Code defaults; nothing (Jev included) picks them for the task.
 5. Jev decides what a message addresses.
 6. Live Working explanations and end-of-turn summaries.
 7. Remove the long-lived process, resume and transcript.

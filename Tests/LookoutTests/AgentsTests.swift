@@ -300,6 +300,15 @@ import Testing
         let partial = try JSONDecoder().decode(AgentsState.self, from: Data(#"{"enabled":true}"#.utf8))
         #expect(partial.enabled && partial.entries.isEmpty)
     }
+
+    /// Saved when Jev could pick a new session's model and effort: the setting and the history's "picked by" are gone, and
+    /// what was saved with them still loads.
+    @Test func stateSavedWithJevsSessionModelPickStillLoads() throws {
+        let state = try JSONDecoder().decode(PersistedState.self, from: Data(#"{"settings":{"botHandles":[],"treatAppsAsBots":true,"pollInterval":60,"notifications":true,"centerPill":true,"jevPicksSessionModels":true,"jevReadsDrafts":false}}"#.utf8))
+        #expect(state.dropped.isEmpty && state.settings.centerPill == true && state.settings.jevReadsDrafts == false)
+        let decided = try JSONDecoder().decode(RouterDecision.Decided.self, from: Data(#"{"target":"lookout","settingsBy":"Jev"}"#.utf8))
+        #expect(decided.target == "lookout")
+    }
 }
 
 @Suite struct AgentLabels {

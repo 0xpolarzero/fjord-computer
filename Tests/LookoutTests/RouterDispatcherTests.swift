@@ -9,9 +9,6 @@ import Testing
     /// What the stand-ins saw and answer.
     @MainActor final class Fakes {
         var ranked: [RouterDispatcher.Scored] = []
-        var scope: Double?
-        /// The routing call asked the task's size (a nil `scope` is then an answer Jev wasn't sure of).
-        var scopeAsked = false
         var rankError: Error?
         var ranks = 0
         /// Holds the next routing call until the test lets it go.
@@ -43,7 +40,7 @@ import Testing
                     ranks += 1
                     if holdRank { await withCheckedContinuation { rankHeld = $0 } }
                     if let rankError { throw rankError }
-                    return RouterDispatcher.Ranking(scored: ranked, scope: scope, scopeAsked: scopeAsked)
+                    return RouterDispatcher.Ranking(scored: ranked)
                 },
                 prepare: { [unowned self] _, session in
                     prepared.append(session)
@@ -282,16 +279,14 @@ import Testing
         #expect(d.askBacks.first?.options.map(\.target).contains("answer:local_b#w2") == false)
     }
 
-    @Test func aClickedPickKeepsWhatJevMadeOfTheDraftAndIsAnExample() async {
+    @Test func aClickedPickIsSentWithoutAskingAgainAndIsAnExample() async {
         let (s, d, f) = setup()
         var calls = 0
         d.asker = { _, _ in calls += 1; return [:] }
-        let read = RouterDispatcher.Classification(ranked: [.init(target: "new:/code/lookout", p: 0.9)], sure: true, assisted: true, scope: 3.2)
         let a = d.submit("rework how the router stores its decisions",
-                         context: RouterContext(target: "new:/code/lookout", predicted: "new:/code/lookout", jev: read))
+                         context: RouterContext(target: "new:/code/lookout", predicted: "new:/code/lookout"))
         await finish(d, f, a)
-        #expect(calls == 0 && f.ranks == 0 && f.startSettings == [SessionSettings(model: "opus", effort: "high")],
-                "the task's size comes from the pick you clicked")
+        #expect(calls == 0 && f.ranks == 0 && f.startSettings == [nil])
         let b = d.submit("use sqlite", context: RouterContext(replyTo: "local_a#w1", predicted: "answer:local_a#w1"))
         await finish(d, f, b)
         #expect(decision(s, b)?.decision.confirmed == true && f.prepared == ["local_a"])
@@ -302,83 +297,27 @@ import Testing
         #expect(decision(s, c)?.decision.target == nil && !s.routingExamples().contains("use postgres"))
     }
 
-    // MARK: Jev's model and effort
+    // MARK: A new session's model and effort
 
-    @Test func aStartWithNoSettingsNamedTakesJevsPickByTheTasksSizeAndSaysSo() async {
+    @Test func aStartWithNoSettingsNamedRunsOnYourDefaultsWhateverJevWouldSay() async {
         let (s, d, f) = setup()
-        var asked: [[String: String]] = []
-        d.asker = { questions, state in
-            asked.append(state)
-            #expect(questions.keys.sorted() == ["scope"])
-            return ["scope": .score(0.2, confidence: 0.9)]
+        var asked: [[String: JevClient.Question]] = []
+        // Jev would rate anything he were asked as sure as can be: nothing asks him the task's size.
+        d.asker = { questions, _ in
+            asked.append(questions)
+            return questions.mapValues { _ in .score(4, confidence: 1) }
         }
-        f.ack = "ok model=haiku effort=low"
         let a = d.submit("start a new session to fix the typo in the readme", context: RouterContext(projects: ["/code/lookout"]))
         await finish(d, f, a)
-        #expect(f.startSettings == [SessionSettings(model: "haiku", effort: "low")])
-        #expect(asked.first?["task"]?.contains("typo") == true && asked.first?["project"] == "lookout")
-        #expect(decision(s, a)?.doneLines == ["started a session in lookout (haiku, low · picked by Jev)"])
-        #expect(decision(s, a)?.summary == "started in lookout (haiku, low · picked by Jev)")
-
-        // Named settings win, and "Your default" asks nothing.
+        #expect(asked.isEmpty && f.startSettings == [nil])
+        #expect(decision(s, a)?.doneLines == ["started a session in lookout"])
+        // Routed there by Jev: the same.
+        f.ranked = [.init(target: "new:/code/lookout", p: 0.9), .init(target: "unclear", p: 0.1)]
+        await finish(d, f, d.submit("rework how the lookout router stores its decisions"))
+        #expect(asked.isEmpty && f.startSettings == [nil, nil])
+        // Named settings are yours, as named.
         await finish(d, f, d.submit("start a new session to refactor the store, with opus", context: RouterContext(projects: ["/code/lookout"])))
-        s.settings.jevPicksSessionModels = false
-        await finish(d, f, d.submit("start a new session to refactor the store", context: RouterContext(projects: ["/code/lookout"])))
-        #expect(asked.count == 1)
-        #expect(f.startSettings.dropFirst() == [SessionSettings(model: "opus", effort: nil), nil])
-    }
-
-    @Test func aSizeJevIsntSureOfLeavesTheSessionOnYourDefaults() async {
-        let (s, d, f) = setup()
-        d.asker = { _, _ in ["scope": .score(3.6, confidence: 0.3)] }
-        let a = d.submit("start a new session to rework the store", context: RouterContext(projects: ["/code/lookout"]))
-        await finish(d, f, a)
-        #expect(f.startSettings == [nil] && decision(s, a)?.decision.settingsBy == nil)
-    }
-
-    @Test func switchingToYourDefaultWhileJevSizesTheTaskLeavesTheSessionOnIt() async {
-        let (s, d, f) = setup()
-        d.asker = { _, _ in
-            s.settings.jevPicksSessionModels = false
-            return ["scope": .score(0.2, confidence: 0.9)]
-        }
-        let a = d.submit("start a new session to fix the typo in the readme", context: RouterContext(projects: ["/code/lookout"]))
-        await finish(d, f, a)
-        #expect(f.startSettings == [nil] && decision(s, a)?.decision.settingsBy == nil)
-    }
-
-    @Test func aStartJevRoutedTakesTheSizeFromTheSameCall() async {
-        let (s, d, f) = setup()
-        var calls = 0
-        d.asker = { _, _ in calls += 1; return [:] }
-        f.ranked = [.init(target: "new:/code/lookout", p: 0.9), .init(target: "unclear", p: 0.1)]
-        f.scope = 3.2
-        let a = d.submit("rework how the lookout router stores its decisions")
-        await finish(d, f, a)
-        #expect(calls == 0 && f.startSettings == [SessionSettings(model: "opus", effort: "high")])
-        #expect(decision(s, a)?.decision.settingsBy == "Jev")
-    }
-
-    @Test func aSizeTheRoutingCallWasntSureOfIsNotAskedAgain() async {
-        let (s, d, f) = setup()
-        var calls = 0
-        d.asker = { _, _ in calls += 1; return ["scope": .score(3.2, confidence: 0.9)] }
-        f.ranked = [.init(target: "new:/code/lookout", p: 0.9), .init(target: "unclear", p: 0.1)]
-        // Asked with the routing, below the floor: Jev's answer is "your defaults".
-        f.scopeAsked = true
-        f.scope = nil
-        let a = d.submit("rework how the lookout router stores its decisions")
-        await finish(d, f, a)
-        #expect(calls == 0 && f.startSettings == [nil] && decision(s, a)?.decision.settingsBy == nil)
-    }
-
-    @Test func theTableMapsEachLevelAndRoundsBetweenThem() {
-        #expect(SessionScope.settings(0) == SessionSettings(model: "haiku", effort: "low"))
-        #expect(SessionScope.settings(1.4) == SessionSettings(model: "sonnet", effort: "low"))
-        #expect(SessionScope.settings(2) == SessionSettings(model: "sonnet", effort: "medium"))
-        #expect(SessionScope.settings(3.6) == SessionSettings(model: "opus", effort: "max"))
-        #expect(SessionScope.settings(9) == SessionSettings(model: "opus", effort: "max"))
-        #expect(SessionScope.settings(.nan) == nil)
+        #expect(f.startSettings == [nil, nil, SessionSettings(model: "opus", effort: nil)])
     }
 
     @Test func aPickRestingOnASessionsOwnWordsIsAskedAbout() async {
@@ -594,10 +533,7 @@ import Testing
         #expect(lines.filter { $0.contains("→ session “C”") }.count == 2, "a few confirmations, the rest corrections")
         #expect(lines.last?.hasPrefix("“long") == true && lines.allSatisfy { $0.count < 200 })
         #expect(lines.contains { $0.contains("“message 19” → session “B” in y, not session “A” in x") })
-        #expect(questions == ["route", "scope"], "one call asks both")
-        s.settings.jevPicksSessionModels = false
-        _ = await d.predict("where does this go now", projects: [])
-        #expect(questions == ["route"])
+        #expect(questions == ["route"], "the routing call asks only where it goes")
     }
 
     @Test func examplesNameTargetsByThemselvesSoTwoOfTheSameTitleStayApart() async {
@@ -836,8 +772,7 @@ import Testing
         #expect(task("start a session to add a settings toggle, with high effort") == "add a settings toggle")
         #expect(asked("start a session to add a settings toggle, with high effort") == SessionSettings(model: nil, effort: "high"))
         // Started so: the session gets the task whole and your defaults.
-        let (s, d, f) = setup()
-        s.settings.jevPicksSessionModels = false
+        let (_, d, f) = setup()
         let a = d.submit("start a session to add a settings toggle for high effort", context: RouterContext(projects: ["/code/lookout"]))
         await finish(d, f, a)
         #expect(f.startSettings == [nil] && f.started.map(\.title) == ["add a settings toggle for high"])

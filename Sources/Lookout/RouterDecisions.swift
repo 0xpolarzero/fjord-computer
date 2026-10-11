@@ -24,8 +24,6 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         /// You went with the target: Jev's pick shown while you typed (sent as it was, or clicked), his suggestion picked on
         /// an ask, or a target you pinned. An example for the next routings, as corrections are.
         var confirmed: Bool?
-        /// Who picked a new session's model and effort when you named none ("Jev").
-        var settingsBy: String?
         /// The target itself (`session:<id>`, `answer:<card>`, `new:<folder>`, an intent), and on a correction the one Jev
         /// suggested: what examples name it by, as titles can be shared or change. Nil in entries from before.
         var targetID: String?
@@ -160,11 +158,11 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         }
     }
 
-    /// " (haiku, low · picked by Jev)", " (opus, high)", or nothing.
+    /// " (opus, high)", or nothing.
     private func settingsWords(_ model: String?, _ effort: String?) -> String {
         let set = [model, effort].compactMap { $0 }
         guard !set.isEmpty else { return "" }
-        return " (" + set.joined(separator: ", ") + (decision.settingsBy.map { " · picked by \($0)" } ?? "") + ")"
+        return " (" + set.joined(separator: ", ") + ")"
     }
 
     static func clip(_ text: String, _ n: Int) -> String {
