@@ -593,6 +593,20 @@ import Testing
         await finish(d, f, other)
     }
 
+    @Test func aDraftWithAPinnedTargetIsItsOwnMessageEvenWhenItIsATargetsName() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]
+        let ask = d.submit("ship it")
+        await finish(d, f, ask)
+        // "Update the docs" is a name the ask offers, but you pinned where this draft goes: it goes there, as itself.
+        let id = d.submit("Update the docs", context: RouterContext(target: "session:local_a"))
+        #expect(id != nil && id != ask)
+        await finish(d, f, id)
+        #expect(f.prepared == ["local_a"] && d.askBacks.map(\.id) == [ask!], "the older message still waits for its pick")
+        guard case .you(let text)? = decision(s, id)?.trigger else { Issue.record("no entry of its own"); return }
+        #expect(text == "Update the docs")
+    }
+
     @Test func aTypedNameGoesToATargetStillThereAndOnlyAGoneOneSendsNothing() async {
         let (s, d, f) = setup()
         s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .question, title: "Docs question",

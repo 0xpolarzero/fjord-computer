@@ -201,8 +201,9 @@ struct RouterAskBack: Identifiable, Equatable {
         guard let store, store.routerOn else { return nil }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        // Typing the name of a target answers an ask-back; nothing else is made of it.
-        if context.replyTo == nil, let ask = typedPick(text) {
+        // Typing the name of a target answers an ask-back; nothing else is made of it. Not when a reply or a pinned target
+        // already fixes where this message goes: it is a message of its own.
+        if context.replyTo == nil, context.target == nil, let ask = typedPick(text) {
             // Only a target gone since fits the name: nothing is sent (nil), and the composer keeps the draft.
             guard let target = ask.target, pick(ask.ask, target: target) else { return nil }
             return ask.ask
