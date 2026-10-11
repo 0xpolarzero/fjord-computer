@@ -452,7 +452,7 @@ enum Addressing {
 
     /// The `@router` asides of `text`, as the character ranges they take, in order. Only two forms are asides, both in the
     /// message's own words (not in code): a bracket opened right before the marker and closed, balanced, on the same line
-    /// ("(@router no rush)", "[@router later]"), with the spaces before it; or a whole line that starts with the marker
+    /// ("(@router no rush)", "[@router later]"), with the spaces before it, code inside it included; or a whole line that starts with the marker
     /// (after up to three spaces), with its line break ("@router what needs me?"). A marker anywhere else ("ask @router",
     /// `print(f'ask @router')`) is text, and goes as written.
     static func asides(_ text: [Character]) -> [Range<Int>] {
@@ -481,12 +481,14 @@ enum Addressing {
                 var m = k + 1
                 while m < lineEnd, blank(text[m]) { m += 1 }
                 guard m < lineEnd, !code[m], isMarker(text, at: m) else { continue }
+                // Balanced on the brackets outside code: code inside the aside ("don't wait on `CI`") is the aside's own.
                 var depth = 0, j = k, end: Int?
                 while j < lineEnd {
-                    if text[j] == open { depth += 1 } else if text[j] == close { depth -= 1; if depth == 0 { end = j; break } }
+                    if !code[j], text[j] == open { depth += 1 }
+                    else if !code[j], text[j] == close { depth -= 1; if depth == 0 { end = j; break } }
                     j += 1
                 }
-                guard let end, !code[k...end].contains(true) else { continue }
+                guard let end else { continue }
                 var start = k
                 while start > lineStart, blank(text[start - 1]) { start -= 1 }
                 var stop = end + 1

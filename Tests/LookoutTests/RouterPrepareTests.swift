@@ -82,6 +82,16 @@ import Testing
         #expect(try edit("Look at\n    @router help\nplease") == "Look at\n    @router help\nplease")
     }
 
+    @Test func anAsideWithCodeInItIsStillTakenOut() throws {
+        #expect(try edit("Bump the version and push (@router this one is slow; don't wait on `CI`)") == "Bump the version and push")
+        // Brackets in its code neither close it nor leave it open: only its own count.
+        #expect(try edit("Ship it (@router see `f(x)` and `)` first) now") == "Ship it now")
+        #expect(try edit("Ship it [@router not `]` yet] now") == "Ship it now")
+        // Its bracket left open outside code: text, as written.
+        #expect(try edit("Ship it (@router see `)`") == "Ship it (@router see `)`")
+        #expect(RouterTools.hasRouterAside("Ship it (@router wait on `CI`)"))
+    }
+
     @Test func aRouterMentionThatIsntAnExplicitAsideGoesAsWritten() throws {
         // In code or quotes of any kind, in prose, glued to punctuation, or in a bracket left open: never cut, never refused.
         for text in ["print(f'ask @router for {name}')", "print(‘ask @router’)", "print('ask @router for help')",
