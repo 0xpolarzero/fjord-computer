@@ -288,13 +288,14 @@ import Testing
         window.memoryPressure(elevated: true)
         #expect(window.content === content)
         window.close()
-        await waitUntil { closed == 1 }
+        // The bar is told first; the content leaves the window, and goes, a turn later.
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         #expect(window.content == nil && window.window?.contentViewController == nil && !window.keepsPicture)
         window.memoryPressure(elevated: false)
         window.show(.settings)
         away(window)
         window.close()
-        await waitUntil { closed == 2 }
+        await waitUntil { closed == 2 && window.window?.contentViewController == nil }
         #expect(window.content != nil)
     }
 
@@ -345,7 +346,7 @@ import Testing
             await waitUntil { said.contains { $0.contains("denied") } }
             #expect(said.contains { $0.contains("denied") })
             window.close()
-            await waitUntil { closed == 1 }
+            await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         }
     }
 
@@ -590,7 +591,7 @@ import Testing
         controller.window?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
         #expect(controller.window?.alphaValue == 1 && controller.isOpen)
         controller.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && controller.window?.contentViewController == nil }
         #expect(closed == 1 && closing == 0 && asked == 0 && !controller.isOpen)
     }
 
@@ -610,6 +611,11 @@ import Testing
     private final class Ticks {
         var blocks: [@MainActor () -> Void] = []
         var turns: [@MainActor () -> Void] = []
+
+        /// Every turn queued, and those they queue in turn: a close tells the bar a turn before it tidies.
+        @MainActor func runTurns() {
+            while !turns.isEmpty { turns.removeFirst()() }
+        }
     }
 
     /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on. A window under
@@ -796,7 +802,7 @@ import Testing
             #expect(controller.keepsPicture && controller.window?.contentViewController != nil)
             controller.memoryPressure(elevated: true)
             #expect(!controller.keepsPicture && controller.content != nil)
-            ticks.turns.forEach { $0() }
+            ticks.runTurns()
             #expect(controller.window?.contentViewController == nil && controller.content == nil)
         }
     }
