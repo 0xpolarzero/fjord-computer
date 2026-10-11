@@ -682,6 +682,35 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.comments.count == 1)
     }
 
+    @Test func aReviewMadeWhileLookoutWasClosedIsNewWhenThisBuildReadsTheReviewsBack() async {
+        func review(_ id: String, _ at: TimeInterval) -> ThingReview {
+            ThingReview(id: id, author: Person(login: "bob"), state: id == "r1" ? .changesRequested : .commented,
+                        at: Date().addingTimeInterval(at))
+        }
+        var action = CategoryAction.make(.comment("thanks"))
+        action.trigger = .eachFact
+        let performer = FakePerformer()
+        let category = InboxCategory(name: "Reviews", symbol: "star", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.newReview(by: Pick())], createdAt: .distantPast)],
+                                     actions: ActionList([action]))
+        // As an earlier build last read it, 100 seconds ago: bob's opinion only.
+        var before = InboxFixture.pr(7, updated: Date().addingTimeInterval(-100))
+        before.reviews = [review("r1", -300)]
+        let store = InboxFixture.store([before], category: category)
+        store.actionPerformer = performer
+        await store.runActions()
+        // Read again by this build: bob's follow-up, there all along, and one he made since, while Lookout was closed.
+        var after = before
+        after.updatedAt = Date()
+        after.reviews = [review("r1", -300), review("r2", -200), review("r4", -50)]
+        after.reviewsShape = InboxSync.reviewsShape
+        store.applyThings([after.id: after])
+        await store.runActions()
+        #expect(performer.comments.count == 1)
+        let ran = store.actionLedger.runs.values.filter { $0.state != .baselined }.map(\.trigger)
+        #expect(ran == ["review:r4"])
+    }
+
     @Test func enterModeIgnoresLaterFactsOfAThingAlreadyHandled() async {
         let (store, performer) = watchingComments(.enter, .comment("hi"))
         await store.runActions()

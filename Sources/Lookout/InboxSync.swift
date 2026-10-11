@@ -1334,11 +1334,17 @@ extension Store {
         var next = next
         let me = inboxContext.me
         for id in next.keys { InboxJev.carry(things[id]?.signals, into: &next[id]!, me: me) }
-        // Read for the first time as this build reads reviews: those it had all along and that come back now are old.
-        let restored = next.compactMap { id, thing in
-            thing.kind == .pr && thing.reviewsShape != nil && things[id].map { $0.reviewsShape == nil } == true ? id : nil
+        // Read for the first time as this build reads reviews: those it had all along and that come back now are old. It
+        // had them by the time it was last read (when it was last updated then, or its newest review): one made after,
+        // while Lookout was closed, is new.
+        var restored = actionLedger.restoredReviewIDs ?? [:]
+        for (id, thing) in next where thing.kind == .pr && thing.reviewsShape != nil {
+            guard let stored = things[id], stored.reviewsShape == nil else { continue }
+            let cutoff = max(stored.updatedAt, stored.reviews.map(\.at).max() ?? .distantPast)
+            let old = thing.reviews.filter { $0.at <= cutoff }.map(\.id)
+            if !old.isEmpty { restored[id, default: []].formUnion(old) }
         }
-        if !restored.isEmpty { actionLedger.restoredReviews = (actionLedger.restoredReviews ?? []).union(restored) }
+        if !restored.isEmpty, restored != actionLedger.restoredReviewIDs { actionLedger.restoredReviewIDs = restored }
         if next != things { things = next }
         // When each thing went missing is kept in its marks (and so across restarts).
         var kept = marks

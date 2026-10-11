@@ -145,8 +145,12 @@ struct ActionLedger: Codable, Equatable {
     var baselines: [UUID: Baseline] = [:]
     var runs: [String: ActionRun] = [:]
     /// PRs read again with every latest review (`InboxSync.reviewsShape`) since the last plan: the reviews they had all
-    /// along, back now, are taken as old, once.
+    /// along, back now, are taken as old, once. Kept by an earlier build, every review of the PR; this one keeps
+    /// `restoredReviewIDs` instead.
     var restoredReviews: Set<String>?
+    /// The same, by PR: the ids of the reviews it had all along (made by the time it was last read), back now. One made
+    /// since, while Lookout was closed, isn't among them, and is new.
+    var restoredReviewIDs: [String: Set<String>]?
 
     static func key(_ category: UUID, _ thing: String, _ action: UUID, _ trigger: String) -> String {
         "\(category.uuidString)\u{1F}\(thing)\u{1F}\(action.uuidString)\u{1F}\(trigger)"
@@ -381,11 +385,19 @@ enum InboxActions {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
         // Reviews a PR had all along, back since this build reads every latest one: old, as if they had been there.
-        if let restored = ledger.restoredReviews {
+        // Only those it had by the time it was last read: one made since is new. A review's opinion counts with it.
+        if ledger.restoredReviews != nil || ledger.restoredReviewIDs != nil {
+            let whole = ledger.restoredReviews ?? []
+            let byID = ledger.restoredReviewIDs ?? [:]
+            func restored(_ key: String, of thing: String) -> Bool {
+                let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+                guard parts.count == 2, ["review", "approved", "changes"].contains(parts[0]) else { return false }
+                return whole.contains(thing) || byID[thing]?.contains(parts[1]) == true
+            }
             for category in categories {
-                for entry in byCategory[category.id] ?? [] where restored.contains(entry.id) {
+                for entry in byCategory[category.id] ?? [] where whole.contains(entry.id) || byID[entry.id] != nil {
                     for action in category.actions.items where action.trigger == .eachFact && action.applies(to: entry.thing.kind) {
-                        for fact in entry.facts where fact.key.hasPrefix("review:")
+                        for fact in entry.facts where restored(fact.key, of: entry.id)
                             && ledger.run(category.id, entry.id, action.id, fact.key) == nil {
                             ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: fact.key,
                                                  state: .baselined, at: now))
@@ -394,6 +406,7 @@ enum InboxActions {
                 }
             }
             ledger.restoredReviews = nil
+            ledger.restoredReviewIDs = nil
         }
         // Baselines: what is there when a category's rules change, or an action is added, is old.
         for category in categories {
