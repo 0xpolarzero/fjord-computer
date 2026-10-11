@@ -303,24 +303,18 @@ struct SessionSettings: Equatable, Sendable {
         self.effort = effort
     }
 
-    /// "…with opus, high effort", "using sonnet", "with xhigh effort": the model named after with/using/use, the effort
-    /// before the word effort (or after "effort"), the first of each asked for: "don't use opus, use haiku" is haiku
-    /// (`negated`). Nothing else in the text counts.
+    /// The model and effort a request asks for (`SessionStart.settings(in:)`: before its task, or the clause it ends with),
+    /// the first of each: "start a session with opus: …", "…fix the bug with opus, high effort", "don't use opus, use haiku"
+    /// is haiku (`negated`). Nothing else in the text counts: "add a toggle for high effort" asks for nothing.
     static func parse(_ text: String) -> SessionSettings? {
-        let t = text.lowercased()
-        func capture(_ pattern: String) -> String? {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-            for m in regex.matches(in: t, range: NSRange(t.startIndex..., in: t)) where m.numberOfRanges > 1 {
-                guard let whole = Range(m.range, in: t), let r = Range(m.range(at: 1), in: t), !negated(t, before: whole.lowerBound)
-                else { continue }
-                return String(t[r])
+        let asked = SessionStart.settings(in: text)
+        func first(_ pattern: String) -> String? {
+            for words in asked {
+                if let r = words.range(of: pattern, options: [.regularExpression, .caseInsensitive]) { return words[r].lowercased() }
             }
             return nil
         }
-        let model = capture(#"\b(?:with|using|use|on)\s+(?:the\s+)?(opus|sonnet|haiku|fable)\b"#)
-        let effort = capture(#"\b(low|medium|high|xhigh|max)\s+effort\b"#)
-            ?? capture(#"\beffort\s+(?:of\s+|to\s+|level\s+)?(low|medium|high|xhigh|max)\b"#)
-        return SessionSettings(model: model, effort: effort)
+        return SessionSettings(model: first(#"\b(?:opus|sonnet|haiku|fable)\b"#), effort: first(#"\b(?:low|medium|high|xhigh|max)\b"#))
     }
 
     /// A setting at `at` is said not to be wanted: a word of negation (`SessionStart.negations`) comes before it in its

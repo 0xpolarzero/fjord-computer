@@ -310,7 +310,7 @@ enum PluginFixture {
         #expect(SessionSettings.parse("@lookout fix the bug with opus, high effort") == SessionSettings(model: "opus", effort: "high"))
         #expect(SessionSettings.parse("start a new session using Sonnet") == SessionSettings(model: "sonnet", effort: nil))
         #expect(SessionSettings.parse("do it with xhigh effort") == SessionSettings(model: nil, effort: "xhigh"))
-        #expect(SessionSettings.parse("effort max please") == SessionSettings(model: nil, effort: "max"))
+        #expect(SessionSettings.parse("start a session, effort max: fix it") == SessionSettings(model: nil, effort: "max"))
         #expect(SessionSettings.parse("write about opus the band") == nil)
         #expect(SessionSettings.parse("fix the thing") == nil)
     }

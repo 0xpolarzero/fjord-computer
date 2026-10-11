@@ -784,7 +784,7 @@ import Testing
         #expect(task("start a session to move @lookout-live to Swift 6") == "move @lookout-live to Swift 6")
         // Only where a clause was taken out are the spaces tidied: code keeps its indentation and its spacing.
         #expect(task("start a new session with opus to fix this:\n    def f():\n        return  1") == "fix this:\n    def f():\n        return  1")
-        #expect(task("fix  this with opus  now:\n\tx  =  1") == "fix  this now:\n\tx  =  1")
+        #expect(task("fix  this with opus:\n\tx  =  1") == "fix  this:\n\tx  =  1")
         #expect(task("fix the tests with opus\n    and the docs") == "fix the tests\n    and the docs")
         #expect(task("start a session in lookout") == "")
         #expect(task("@lookout start a new session with opus") == "")
@@ -807,6 +807,35 @@ import Testing
         let a = d.submit(text, context: RouterContext(projects: ["/code/lookout"], pills: pills))
         await finish(d, f, a)
         #expect(f.started.map(\.title) == ["fix login"] && f.startSettings == [SessionSettings(model: "opus", effort: nil)])
+    }
+
+    @Test func settingsAreAskedForBeforeTheTaskOrInTheClauseItEndsWithNeverInItsWords() async {
+        let p = ["lookout"]
+        func task(_ t: String) -> String { SessionStart.task(from: t, pills: Self.pills(t, p), projects: p) }
+        func asked(_ t: String) -> SessionSettings? { SessionSettings.parse(SessionStart.request(t, pills: Self.pills(t, p))) }
+        // The task's own words: neither taken out nor applied.
+        for text in ["start a session to add a settings toggle for high effort", "start a session to document the opus model",
+                     "start a session to say which tasks run on opus", "start a session to show high effort, low effort and max"] {
+            #expect(task(text) == String(text.dropFirst("start a session to ".count)), "\(text)")
+            #expect(asked(text) == nil, "\(text)")
+        }
+        #expect(task("add a settings toggle for high effort using sonnet") == "add a settings toggle for high effort")
+        #expect(asked("add a settings toggle for high effort using sonnet") == SessionSettings(model: "sonnet", effort: nil))
+        // Before the task, or the clause the request ends with: the request's.
+        #expect(task("start a session with high effort to add a settings toggle") == "add a settings toggle")
+        #expect(asked("start a session with high effort to add a settings toggle") == SessionSettings(model: nil, effort: "high"))
+        #expect(task("start a session at high effort: add a toggle") == "add a toggle")
+        #expect(asked("start a session at high effort: add a toggle") == SessionSettings(model: nil, effort: "high"))
+        #expect(task("start a session in lookout, opus model, to add a toggle") == "add a toggle")
+        #expect(asked("start a session in lookout, opus model, to add a toggle") == SessionSettings(model: "opus", effort: nil))
+        #expect(task("start a session to add a settings toggle, with high effort") == "add a settings toggle")
+        #expect(asked("start a session to add a settings toggle, with high effort") == SessionSettings(model: nil, effort: "high"))
+        // Started so: the session gets the task whole and your defaults.
+        let (s, d, f) = setup()
+        s.settings.jevPicksSessionModels = false
+        let a = d.submit("start a session to add a settings toggle for high effort", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.startSettings == [nil] && f.started.map(\.title) == ["add a settings toggle for high"])
     }
 
     @Test func aNegationEndsAtButInsteadOrRather() {

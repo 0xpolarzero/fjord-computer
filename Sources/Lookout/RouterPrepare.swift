@@ -536,9 +536,74 @@ enum SessionStart {
 
     private static let models = "opus|sonnet|haiku|fable"
     private static let efforts = "low|medium|high|xhigh|max"
-    /// "with opus", "using the sonnet model", "with low effort", "high effort", "effort of max": the settings words.
-    private static let settingClause =
-        #"(?:(?:and\s+)?(?:with|using|use|on)\s+(?:the\s+)?(?:\#(models))(?:\s+model)?|(?:and\s+)?(?:(?:with|at|on)\s+)?(?:\#(efforts))\s+effort|(?:and\s+)?effort\s+(?:of\s+|to\s+|level\s+)?(?:\#(efforts)))\b"#
+    /// One setting, in the words that ask for it: a model ("with opus", "using the sonnet model", "on haiku", "opus model")
+    /// or an effort ("with low effort", "at high effort", "high effort", "effort of max"). Where these words ask for it is
+    /// the request's alone (`settings(in:)`): before the task, or the clause the request ends with.
+    static let settingItem =
+        #"(?:(?:with|using|use|on)\s+(?:the\s+)?(?:\#(models))(?:\s+model)?|(?:the\s+)?(?:\#(models))\s+model|(?:(?:with|at|on)\s+)?(?:\#(efforts))\s+effort|(?:with\s+)?effort\s+(?:of\s+|to\s+|level\s+)?(?:\#(efforts)))\b"#
+    private static let settingClause = #"(?:and\s+)?"# + settingItem
+    /// What joins one setting to the next in a run of them: "with opus, high effort", "using sonnet and low effort".
+    private static let settingJoin = #"[ \t]*(?:[,;][ \t]*)?(?:and[ \t]+)?"#
+    /// Where a session starts, as the request names it before the task ("in lookout", "in the <pill> repo"): only so the
+    /// settings after it are still the request's, never a model's or an effort's words.
+    private static let settingPlace =
+        #"(?:in|on|for|inside)\s+(?:the\s+)?(?:[\x{E000}-\x{F8FF}]|(?!(?:\#(models)|\#(efforts))\b)[\w.\-]+)(?:\s+(?:project|repo|repository|folder))?"# + goesOn
+
+    /// The settings a request (`envelope`) asks for, in its words, in order: a run of them that leads it, after the request
+    /// to start a session and where it starts ("start a session in lookout with opus, high effort: …"), or, with no such
+    /// request, one that opens with "with", "using" or "use" ("with opus fix the tests"); and the clause it ends with
+    /// (`trailingSettings`). Anywhere else ("add a settings toggle for high effort") they are the task's own words.
+    static func settings(in request: String) -> [String] {
+        var rest = request, at = 0
+        func eat(_ pattern: String) -> String? {
+            guard let r = rest.range(of: "^(?:" + pattern + ")", options: [.regularExpression, .caseInsensitive]), !r.isEmpty
+            else { return nil }
+            let taken = String(rest[r])
+            at += taken.count
+            rest = String(rest[r.upperBound...])
+            return taken
+        }
+        _ = eat(#"[\s\x{E000}-\x{F8FF},:;\-–—]+"#)
+        let started = eat(startPhrase) != nil
+        var items: [String] = []
+        if started || rest.range(of: #"^(?:with|using|use)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            while true {
+                _ = eat(#"[ \t,:;\-–—]+"#)
+                if let item = eat(settingClause) { items.append(item); continue }
+                if started, eat(settingPlace) != nil { continue }
+                break
+            }
+        }
+        let tail = trailingSettings(request).filter { request.distance(from: request.startIndex, to: $0.item.lowerBound) >= at }
+        return items + tail.map { String(request[$0.item]) }
+    }
+
+    /// The settings `text` ends with ("fix the tests with opus, high effort", "…, using sonnet", "…but use haiku"): a clause
+    /// that opens with "with", "using" or "use" and holds settings only, with nothing after it but the sentence's closing
+    /// mark. Each setting as its words (`item`) and what goes with them when they are taken out (`cut`: the comma or "and"
+    /// before it, and, before the first, a "but", "instead" or "rather" leading into the clause). Never one said not to be
+    /// wanted (`SessionSettings.negated`).
+    static func trailingSettings(_ text: String) -> [(cut: Range<String.Index>, item: Range<String.Index>)] {
+        let pattern = #"(?:[ \t]*\b(?:but|instead|rather|and))?[,;]?[ \t]*\b(?=(?:with|using|use)\b)"# + settingItem
+            + "(?:" + settingJoin + settingItem + ")*" + #"(?=[ \t]*[.,;:!?]*[ \t]*$)"#
+        guard let clause = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let one = try? NSRegularExpression(pattern: "(" + settingJoin + ")(" + settingItem + ")", options: [.caseInsensitive])
+        else { return [] }
+        let length = NSRange(text.startIndex..., in: text).length
+        var from = 0
+        while from < length, let m = clause.firstMatch(in: text, range: NSRange(location: from, length: length - from)),
+              let whole = Range(m.range, in: text) {
+            var found: [(cut: Range<String.Index>, item: Range<String.Index>)] = []
+            for im in one.matches(in: text, range: m.range) {
+                guard let join = Range(im.range(at: 1), in: text), let item = Range(im.range(at: 2), in: text) else { continue }
+                guard !SessionSettings.negated(text, before: item.lowerBound) else { found = []; break }
+                found.append((found.isEmpty ? whole.lowerBound..<item.upperBound : join.lowerBound..<item.upperBound, item))
+            }
+            if !found.isEmpty { return found }
+            from = m.range.location + 1
+        }
+        return []
+    }
     static let startPhrase =
         #"^(?:(?:please|pls|hey|can\s+you|could\s+you|i\s+want\s+you\s+to|i'd\s+like\s+you\s+to)[,\s]+)?(?:(?:start|open|create|launch|spin\s+up|kick\s+off|begin)\s+(?:up\s+)?(?:an?\s+|the\s+|one\s+)?(?:new\s+|fresh\s+)?(?:claude\s+)?(?:session|chat|conversation)|(?:in\s+)?(?:an?\s+)?(?:new|fresh)\s+(?:claude\s+)?(?:session|chat|conversation))\b"#
 
@@ -601,7 +666,8 @@ enum SessionStart {
         let tag = #"[\x{E000}-\x{F8FF}]"#
         while strip("^" + tag, from: &t) { tidy() }
         let started = strip(startPhrase, from: &t)
-        // Each of the model and the effort as `SessionSettings.parse` reads it, the first asked for: only that clause goes.
+        // Each of the model and the effort as `SessionSettings.parse` reads it (`settings(in:)`), the first asked for: only
+        // that clause goes.
         var asked: Set<String> = []
         func setting(_ clause: Substring) -> String {
             clause.range(of: #"\b(?:\#(models))\b"#, options: [.regularExpression, .caseInsensitive]) != nil ? "model" : "effort"
@@ -612,7 +678,9 @@ enum SessionStart {
             t.removeSubrange(r)
             return true
         }
-        if started {
+        // Settings before the task: after the request to start a session (and where), or opening the message ("with opus
+        // fix the tests").
+        if started || t.range(of: #"^(?:with|using|use)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
             // A project by its words only right after "in", and only where the request goes on after it ("in lookout to …",
             // "in lookout, with opus", the end): "in case the build breaks" and "on no account" are the task's.
             let suffix = #"(?:\s+(?:project|repo|repository|folder))?"#
@@ -620,42 +688,27 @@ enum SessionStart {
             var moved = true
             while moved, inRequest {
                 tidy()
-                moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?\#(tag)\#(suffix)(?![\w])\#(named)"#, from: &t)
+                moved = (started && strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?\#(tag)\#(suffix)(?![\w])\#(named)"#, from: &t))
                     || takeSetting()
-                    || strip("^" + tag, from: &t)
+                    || (started && strip("^" + tag, from: &t))
             }
             tidy()
             if inRequest { _ = strip(#"^(?:to|and|then|that)\s+"#, from: &t) }
         }
-        // Settings words elsewhere in the request's sentence ("fix the tests with opus, low effort"): the plugin applies them,
-        // the session never reads them. Never in the code, quotes or lines after it, which are the task's own words.
+        // The settings clause the request's sentence ends with ("fix the tests with opus, low effort"): the plugin applies
+        // them, the session never reads them. Never one in the task's own words ("a toggle for high effort"), nor in the
+        // code, quotes or lines after the request.
         let left = max(0, request - (whole - t.count))
         let end = t.index(t.startIndex, offsetBy: min(left, t.count))
-        if SessionSettings.parse(String(t[..<end])) != nil || started {
-            var head = String(t[..<end])
-            // Never one said not to be wanted ("don't use opus"): the session reads that as you wrote it.
-            var cuts: [Range<String.Index>] = []
-            let clauses = try? NSRegularExpression(pattern: #"([,;]?[ \t]*)\b"# + settingClause, options: [.caseInsensitive])
-            for m in clauses?.matches(in: head, range: NSRange(head.startIndex..., in: head)) ?? [] {
-                guard let whole = Range(m.range, in: head), let lead = Range(m.range(at: 1), in: head), !whole.isEmpty,
-                      !SessionSettings.negated(head, before: lead.upperBound),
-                      asked.insert(setting(head[lead.upperBound..<whole.upperBound])).inserted else { continue }
-                // "…don't use opus but use haiku": the "but" that led into the clause goes with it.
-                var cut = whole
-                if let conn = head[..<whole.lowerBound].range(of: #"[ \t]*\b(?:but|instead|rather)[ \t]*$"#,
-                                                              options: [.regularExpression, .caseInsensitive]) {
-                    cut = conn.lowerBound..<whole.upperBound
-                }
-                cuts.append(cut)
-            }
-            for r in cuts.reversed() {
-                let at = head.distance(from: head.startIndex, to: r.lowerBound)
-                head.removeSubrange(r)
-                join(&head, at: at)
-            }
-            t = head + t[end...]
-            if started || SessionSettings.parse(Self.request(text, pills: pills)) != nil { tidy() }
+        var head = String(t[..<end])
+        let cuts = trailingSettings(head).filter { asked.insert(setting(head[$0.item])).inserted }.map(\.cut)
+        for r in cuts.reversed() {
+            let at = head.distance(from: head.startIndex, to: r.lowerBound)
+            head.removeSubrange(r)
+            join(&head, at: at)
         }
+        t = head + t[end...]
+        if started || !asked.isEmpty { tidy() }
         // What is left starts after the request's line breaks: the first line of code under it keeps its indentation.
         var task = RouterModel.sendable(String(t.drop(while: { $0 == " " || $0 == "\t" || $0 == "," || $0 == ";" })))
         while let last = task.last, last == "," || last == ";" || last.isWhitespace { task.removeLast() }
