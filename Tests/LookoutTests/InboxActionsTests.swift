@@ -711,7 +711,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(ran == ["review:r4"])
     }
 
-    @Test func aPRInANewReviewCategoryOnlyByReviewsItHadAllAlongDoesNotEnterItButOneWithANewReviewDoes() async {
+    @Test func aPRInANewReviewCategoryByReviewsItHadAllAlongDoesNotEnterItButOneWithOnlyANewReviewDoes() async {
         func review(_ id: String, _ at: TimeInterval) -> ThingReview {
             ThingReview(id: id, author: Person(login: "bob"), state: .commented, at: Date().addingTimeInterval(at))
         }
@@ -724,24 +724,55 @@ final class DiskCheckingPerformer: ActionPerformer {
         // As an earlier build last read them, 100 seconds ago: no review it kept, so in no category.
         let quiet = InboxFixture.pr(7, updated: Date().addingTimeInterval(-100))
         let busy = InboxFixture.pr(8, updated: Date().addingTimeInterval(-100))
-        let store = InboxFixture.store([quiet, busy], category: category)
+        let fresh = InboxFixture.pr(9, updated: Date().addingTimeInterval(-100))
+        let store = InboxFixture.store([quiet, busy, fresh], category: category)
         store.actionPerformer = performer
         await store.runActions()
-        // Read again by this build: a follow-up each had all along comes back; #8 has one made since as well.
-        var quietAfter = quiet, busyAfter = busy
-        quietAfter.reviews = [review("r1", -200)]
-        busyAfter.reviews = [review("r2", -200), review("r3", -50)]
-        for i in [0, 1] {
-            var t = i == 0 ? quietAfter : busyAfter
+        // Read again by this build: a follow-up #7 and #8 had all along comes back (so they were in the category all along);
+        // #8 has one made since as well; #9 has only one made since.
+        var after: [Thing] = []
+        for (thing, reviews) in [(quiet, [review("r1", -200)]), (busy, [review("r2", -200), review("r3", -50)]),
+                                 (fresh, [review("r4", -50)])] {
+            var t = thing
+            t.reviews = reviews
             t.updatedAt = Date()
             t.reviewsShape = InboxSync.reviewsShape
-            if i == 0 { quietAfter = t } else { busyAfter = t }
+            after.append(t)
         }
-        store.applyThings([quietAfter.id: quietAfter, busyAfter.id: busyAfter])
-        #expect(store.entries.count == 2)
+        store.applyThings(Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) }))
+        #expect(store.entries.count == 3)
         await store.runActions()
         let ran = store.actionLedger.runs.values.filter { $0.state != .baselined }.map(\.thing)
-        #expect(ran == [busyAfter.id])
+        #expect(ran == [fresh.id])
+        #expect(performer.comments.count == 1)
+    }
+
+    @Test func aCommitPushedWhileLookoutWasClosedRunsThoughTheReviewThatHoldsThePRInAnAllOfCategoryCameBack() async {
+        var action = CategoryAction.make(.comment("thanks"))
+        action.trigger = .eachFact
+        let performer = FakePerformer()
+        let category = InboxCategory(name: "Reviewed and pushed", symbol: "star", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), match: .all,
+                                                  conditions: [.newReview(by: Pick()), .newCommits(by: Pick())], createdAt: .distantPast)],
+                                     actions: ActionList([action]))
+        // As an earlier build last read it, 100 seconds ago: a commit, and no review it kept, so in no category.
+        var before = InboxFixture.pr(7, updated: Date().addingTimeInterval(-100))
+        before.commits = [ThingCommit(id: "c1", author: "alice", at: Date().addingTimeInterval(-300))]
+        let store = InboxFixture.store([before], category: category)
+        store.actionPerformer = performer
+        await store.runActions()
+        // Read again by this build: bob's review, there all along, comes back, and a commit pushed since.
+        var after = before
+        after.updatedAt = Date()
+        after.reviews = [ThingReview(id: "r1", author: Person(login: "bob"), state: .commented, at: Date().addingTimeInterval(-200))]
+        after.commits.append(ThingCommit(id: "c2", author: "alice", at: Date().addingTimeInterval(-50)))
+        after.reviewsShape = InboxSync.reviewsShape
+        store.applyThings([after.id: after])
+        #expect(store.entries.count == 1)
+        await store.runActions()
+        // It was in the category all along, with the review and the first commit: only the new commit is new.
+        let ran = store.actionLedger.runs.values.filter { $0.state != .baselined }.map(\.trigger)
+        #expect(ran == ["commit:c2"])
         #expect(performer.comments.count == 1)
     }
 

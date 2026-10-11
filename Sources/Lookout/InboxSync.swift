@@ -1415,15 +1415,29 @@ extension Store {
         // Read for the first time as this build reads reviews: those it had all along and that come back now are old (those
         // it was read with already were never left out). It had them by the time it was last read (when it was last updated then, or its newest review): one made after,
         // while Lookout was closed, is new.
+        // Where it was then, those reviews back, and with what facts, is kept too: only that is old (`restoredBefore`).
         var restored = actionLedger.restoredReviewIDs ?? [:]
+        var then: [Thing] = []
         for (id, thing) in next where thing.kind == .pr && thing.reviewsShape != nil {
             guard let stored = things[id], stored.reviewsShape == nil else { continue }
             let cutoff = max(stored.updatedAt, stored.reviews.map(\.at).max() ?? .distantPast)
             let had = Set(stored.reviews.map(\.id))
-            let old = thing.reviews.filter { $0.at <= cutoff && !had.contains($0.id) }.map(\.id)
-            if !old.isEmpty { restored[id, default: []].formUnion(old) }
+            let old = thing.reviews.filter { $0.at <= cutoff && !had.contains($0.id) }
+            guard !old.isEmpty else { continue }
+            restored[id, default: []].formUnion(old.map(\.id))
+            var was = stored
+            was.reviews += old
+            then.append(was)
         }
         if !restored.isEmpty, restored != actionLedger.restoredReviewIDs { actionLedger.restoredReviewIDs = restored }
+        if !then.isEmpty {
+            var before = actionLedger.restoredBefore ?? [:]
+            for thing in then where before[thing.id] == nil { before[thing.id] = [:] }
+            for entry in InboxEngine.evaluate(things: then, categories: categories, marks: marks, context: inboxContext) {
+                before[entry.id, default: [:]][entry.categoryID, default: []].formUnion(entry.facts.map(\.key))
+            }
+            if before != actionLedger.restoredBefore { actionLedger.restoredBefore = before }
+        }
         if next != things { things = next }
         // When each thing went missing is kept in its marks (and so across restarts).
         var kept = marks

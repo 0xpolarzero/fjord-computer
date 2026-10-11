@@ -151,6 +151,9 @@ struct ActionLedger: Codable, Equatable {
     /// The same, by PR: the ids of the reviews it had all along (made by the time it was last read), back now. One made
     /// since, while Lookout was closed, isn't among them, and is new.
     var restoredReviewIDs: [String: Set<String>]?
+    /// Each such PR as it was last read, with the reviews it had all along back: the categories it was in then, and its
+    /// facts there. Only those were there before; what it has besides (a commit pushed while Lookout was closed) is new.
+    var restoredBefore: [String: [UUID: Set<String>]]?
 
     static func key(_ category: UUID, _ thing: String, _ action: UUID, _ trigger: String) -> String {
         "\(category.uuidString)\u{1F}\(thing)\u{1F}\(action.uuidString)\u{1F}\(trigger)"
@@ -382,18 +385,16 @@ enum InboxActions {
     /// is there as old; runs of what is gone are forgotten) and returns the runs that are due, in the order of the
     /// categories, newest things first.
     /// `known`: the ids of every thing still fetched, in a category now or not.
-    /// `restoredHomes`: the category each PR whose reviews came back (`ActionLedger.restoredReviewIDs`) would be in without
-    /// them; one it isn't in is taken as in none.
     static func plan(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: inout ActionLedger,
-                     me: String, known things: Set<String> = [], restoredHomes: [String: UUID] = [:],
-                     now: Date = Date()) -> [Job] {
+                     me: String, known things: Set<String> = [], now: Date = Date()) -> [Job] {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
         // Reviews a PR had all along, back since this build reads every latest one: old, as if they had been there.
         // Only those it had by the time it was last read: one made since is new. A review's opinion counts with it.
-        if ledger.restoredReviews != nil || ledger.restoredReviewIDs != nil {
+        if ledger.restoredReviews != nil || ledger.restoredReviewIDs != nil || ledger.restoredBefore != nil {
             let whole = ledger.restoredReviews ?? []
             let byID = ledger.restoredReviewIDs ?? [:]
+            let before = ledger.restoredBefore ?? [:]
             func restored(_ key: String, of thing: String) -> Bool {
                 let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
                 guard parts.count == 2, ["review", "approved", "changes"].contains(parts[0]) else { return false }
@@ -401,21 +402,14 @@ enum InboxActions {
             }
             for category in categories {
                 for entry in byCategory[category.id] ?? [] where whole.contains(entry.id) || byID[entry.id] != nil {
-                    // In the category only by them (a "New review" one it wasn't in): it was never new there, its entering
-                    // and all it has there are old.
-                    if restoredHomes[entry.id] != category.id {
-                        for action in category.actions.items where action.applies(to: entry.thing.kind) {
-                            for key in ["enter"] + entry.facts.map(\.key) where ledger.run(category.id, entry.id, action.id, key) == nil {
-                                ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: key,
-                                                     state: .baselined, at: now))
-                            }
-                        }
-                        continue
-                    }
-                    for action in category.actions.items where action.trigger == .eachFact && action.applies(to: entry.thing.kind) {
-                        for fact in entry.facts where restored(fact.key, of: entry.id)
-                            && ledger.run(category.id, entry.id, action.id, fact.key) == nil {
-                            ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: fact.key,
+                    // In the category as last read, those reviews back (a "New review" one it is in only by them): it was
+                    // there all along, its entering and the facts it had there then are old. Nothing else is.
+                    let had = before[entry.id]?[category.id]
+                    for action in category.actions.items where action.applies(to: entry.thing.kind) {
+                        var keys = had.map { had in ["enter"] + entry.facts.map(\.key).filter(had.contains) } ?? []
+                        if action.trigger == .eachFact { keys += entry.facts.map(\.key).filter { restored($0, of: entry.id) } }
+                        for key in keys where ledger.run(category.id, entry.id, action.id, key) == nil {
+                            ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: key,
                                                  state: .baselined, at: now))
                         }
                     }
@@ -423,6 +417,7 @@ enum InboxActions {
             }
             ledger.restoredReviews = nil
             ledger.restoredReviewIDs = nil
+            ledger.restoredBefore = nil
         }
         // Baselines: what is there when a category's rules change, or an action is added, is old.
         for category in categories {
@@ -989,7 +984,7 @@ extension Store {
             actionsAgain = false
             var ledger = actionLedger
             let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
-                                         known: Set(things.keys), restoredHomes: restoredHomes(), now: now)
+                                         known: Set(things.keys), now: now)
             if ledger != actionLedger { actionLedger = ledger }
             for queued in jobs.prefix(InboxActions.perSync) {
                 // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
@@ -1074,22 +1069,8 @@ extension Store {
         guard let me = me?.login, !me.isEmpty, !onDefaults else { return }
         var ledger = actionLedger
         _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
-                              known: Set(things.keys), restoredHomes: restoredHomes(), now: now)
+                              known: Set(things.keys), now: now)
         if ledger != actionLedger { actionLedger = ledger }
-    }
-
-    /// The category each PR whose reviews came back would be in without them (`InboxActions.plan`'s `restoredHomes`).
-    private func restoredHomes() -> [String: UUID] {
-        let whole = actionLedger.restoredReviews ?? []
-        let byID = actionLedger.restoredReviewIDs ?? [:]
-        guard !whole.isEmpty || !byID.isEmpty else { return [:] }
-        let without: [Thing] = whole.union(byID.keys).compactMap { id in
-            guard var thing = things[id] else { return nil }
-            thing.reviews.removeAll { whole.contains(id) || byID[id]?.contains($0.id) == true }
-            return thing
-        }
-        let homes = InboxEngine.evaluate(things: without, categories: categories, marks: marks, context: inboxContext)
-        return Dictionary(homes.map { ($0.id, $0.categoryID) }, uniquingKeysWith: { first, _ in first })
     }
 
     func actionChips(for entry: InboxEntry) -> [InboxActions.Chip] {
