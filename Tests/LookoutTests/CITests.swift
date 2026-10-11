@@ -220,6 +220,36 @@ import Testing
         #expect(status.workflows.map(\.name) == ["Checks"] && status.workflows.map(\.failing) == [["deploy"]])
     }
 
+    @Test func aRenamedBranchIsReadAsTheBranchItIsNowActionsAndAll() async throws {
+        // master was renamed main: GitHub answers master's head with main's (the redirect followed), and lists Actions runs
+        // filtered by main only.
+        let store = Store()
+        store.persists = false
+        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        store.gh.session = StubbedGitHub.session { request in
+            let comps = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (comps?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            switch comps?.path ?? "" {
+            case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"master"}"#)
+            case "/repos/a/x/branches/master", "/repos/a/x/branches/main":
+                return .init(200, #"{"name":"main","commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
+            case "/repos/a/x/actions/runs":
+                let run = #"{"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"failure","check_suite_id":5}"#
+                return .init(200, query["branch"] == "main" ? #"{"workflow_runs":[\#(run)]}"# : #"{"workflow_runs":[]}"#)
+            case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        let asked = try await store.fetchBranchCI("a/x", branch: "master")
+        #expect(asked.branch == "main" && asked.workflows.map(\.name) == ["CI"] && asked.workflows.map(\.state) == [.failure])
+        // A rule's branch keeps its things as it names them.
+        #expect(InboxSync.workflowThings(repo: "a/x", branch: "master", status: asked).map(\.id) == ["workflow:a/x:11@master"])
+        // The default branch found as master before the rename is main now.
+        let main = try await store.fetchCI("a/x")
+        #expect(main.branch == "main" && main.workflows.map(\.name) == ["CI"] && store.defaultBranches["a/x"] == "main")
+    }
+
     @Test func aBranchIsPassingOnlyOnceAllItsChecksAndStatusesAreReadAndDone() async throws {
         let store = Store()
         store.persists = false

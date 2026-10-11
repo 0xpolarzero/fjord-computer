@@ -93,12 +93,14 @@ struct GHCommit: Decodable {
     }
 }
 
-/// A branch and the commit at its head (`/repos/o/r/branches/{b}`).
+/// A branch and the commit at its head (`/repos/o/r/branches/{b}`). A branch renamed since is answered with the branch it
+/// is now (GitHub redirects the old name): `name` says which.
 struct GHBranch: Decodable {
     struct Head: Decodable {
         let sha: String
         let commit: GHCommit.Detail
     }
+    var name: String? = nil
     let commit: Head
     var headline: String? { GHCommit(commit: commit.commit).headline }
 }

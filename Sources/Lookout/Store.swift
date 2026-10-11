@@ -1125,10 +1125,16 @@ final class Store {
             defaultBranches[name] = info.defaultBranch
             branch = info.defaultBranch
         }
-        return try await fetchBranchCI(name, branch: branch!)
+        let status = try await fetchBranchCI(name, branch: branch!)
+        // Renamed since it was found: the name it has now is the default branch.
+        if status.branch != branch { defaultBranches[name] = status.branch }
+        return status
     }
 
-    /// Asks GitHub for the CI of one branch of a repo, and the commit's headline.
+    /// Asks GitHub for the CI of one branch of a repo, and the commit's headline. A branch renamed since (`master` now
+    /// `main`) is read as the branch it is now: its head comes under the new name, and so must its Actions runs, filtered by
+    /// it. `CIStatus.branch` is that name; a rule's branch keeps its things as it names them (`@master`), so what it, its
+    /// marks and waits know them by stays.
     func fetchBranchCI(_ name: String, branch: String) async throws -> CIStatus {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove("/")
@@ -1137,10 +1143,11 @@ final class Store {
         // skip, while external CI runs on it). All three sources are asked about that commit.
         let head: GHBranch = try await gh.get("/repos/\(name)/branches/\(ref)")
         let sha = head.commit.sha
+        let current = head.name.flatMap { $0.isEmpty ? nil : $0 } ?? branch
         // Only push-triggered Actions runs count: issue/comment-triggered workflows also run against the
         // default branch HEAD and would otherwise make CI look red.
         let actions: GHWorkflowRuns = try await gh.get("/repos/\(name)/actions/runs",
-                                                       ["branch": branch, "event": "push", "head_sha": sha, "per_page": "30"],
+                                                       ["branch": current, "event": "push", "head_sha": sha, "per_page": "30"],
                                                        lineage: branch)
         async let checksReq = branchCheckRuns(name, target: sha, branch: branch)
         async let statusReq = branchStatuses(name, target: sha, branch: branch)
@@ -1148,7 +1155,7 @@ final class Store {
         let reading = Self.readCI(runs: actions.workflowRuns, sha: sha, checks: checks, combined: combined,
                                   complete: checksRead && statusesRead)
         let title = actions.workflowRuns.first { $0.headSha == sha }?.displayTitle ?? head.headline
-        return CIStatus(branch: branch, sha: sha, url: URL(string: "https://github.com/\(name)/commit/\(sha)"),
+        return CIStatus(branch: current, sha: sha, url: URL(string: "https://github.com/\(name)/commit/\(sha)"),
                         checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows)
     }
 
