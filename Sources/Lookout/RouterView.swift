@@ -390,7 +390,14 @@ final class RouterModel {
         if let i = listed.firstIndex(of: id) {
             next = listed[(i + 1)...].first(where: visible.contains) ?? listed[..<i].reversed().first(where: visible.contains)
         }
+        advance(from: id, to: next)
+    }
+
+    /// The pick moved on by itself (its card handled or gone from the list): a reply on that card follows it, while no reply
+    /// (one you took off) stays none. Only a card you pick (a click, a banner, the keys) arms a reply.
+    private func advance(from id: String, to next: String?) {
         selection = next
+        if replyTo == id { replyTo = next }
     }
 
     /// Picks a card, or none (the Router itself), and takes the page there: an addressed card opens in the history, the
@@ -460,7 +467,7 @@ final class RouterModel {
         store.setCardAddressed(id, true)
         store.logCardAction("Marked handled", card: id)
         Announce.say("Addressed")
-        if selection == id { selection = next }
+        if selection == id { advance(from: id, to: next) }
     }
 
     /// Reopen on a history line: the card is back in Needs you and the page goes to it.
@@ -503,7 +510,10 @@ final class RouterModel {
         store.setCardAddressed(id, card.isOpen)
         if card.isOpen { store.logCardAction("Marked handled", card: id) }
         Announce.say(card.isOpen ? "Addressed" : "Open again")
-        if card.isOpen { select(next, store: store) }
+        guard card.isOpen else { return }
+        let reply = replyTo
+        select(next, store: store)
+        replyTo = reply == id ? next : reply
     }
 
     /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the

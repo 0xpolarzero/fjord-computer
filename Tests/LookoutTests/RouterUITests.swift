@@ -1018,4 +1018,45 @@ import UserNotifications
         model.send(store: store)
         #expect(store.router.decisions.count > before && store.router.decisions.last?.links.cards == [])
     }
+
+    @Test(.hostsWindows) func thePickMovingOnFromAHandledCardArmsNoReplyYouTookOff() async {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
+            .frame(width: 1100, height: 720))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        func settle() async {
+            for _ in 0..<3 {
+                await drainMainQueue()
+                hosting.layoutSubtreeIfNeeded()
+            }
+        }
+        await settle()
+        // A card clicked, its reply chip taken off, a general request typed, then its Mark handled: the pick moves on to the
+        // next card, but no reply is armed, so the request goes to the Router.
+        let open = model.cards(store).filter(\.isOpen).map(\.id)
+        #expect(open.count >= 3)
+        model.tap(open[0], store: store)
+        #expect(model.removeLastChip() && model.replyTo == nil)
+        model.draft = "what's left today?"
+        model.address(open[0], store: store)
+        await settle()
+        #expect(model.selection == open[1] && model.replyTo == nil)
+        let before = store.router.decisions.count
+        model.send(store: store)
+        #expect(store.router.decisions.count > before && store.router.decisions.last?.links.cards == [])
+        // The same with Space.
+        model.tap(open[1], store: store)
+        #expect(model.removeLastChip() && model.replyTo == nil)
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        await settle()
+        #expect(model.selection == open[2] && model.replyTo == nil)
+    }
 }

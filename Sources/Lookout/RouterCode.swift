@@ -23,9 +23,6 @@ struct RouterCodeView: View {
         .environment(\.colorScheme, .dark)
         .tipSpace()
         .task { if checksClaudeCode { await model.checkClaudeCode(store) } }
-        // Picking a card points the composer at it: what you type next is a reply to that session (`RouterModel.select`
-        // does it at once, wherever the pick comes from). The page shown again doesn't arm a reply you took off.
-        .onChange(of: model.selection) { _, id in model.replyTo = id }
     }
 }
 
