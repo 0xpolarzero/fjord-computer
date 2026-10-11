@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Actions: what a category does by itself when a thing comes in. Pure planning here (which runs are due, which are old
 // news), the Store's runner and the real performer below. The user-facing contract is in docs/design/spec/inbox.md.
@@ -748,6 +749,7 @@ extension Store {
             let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
                                          known: Set(things.keys), now: now)
             let batch = Array(jobs.prefix(InboxActions.perSync))
+            let planned = ledger
             for job in batch {
                 for key in job.keys {
                     ledger.set(ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
@@ -755,7 +757,23 @@ extension Store {
                 }
             }
             if ledger != actionLedger { actionLedger = ledger }
-            if !batch.isEmpty { await actionsWritten() }
+            // Nothing reaches outside before its record is on disk: a failed write is tried again now, and if that fails
+            // too the runs are not made, and their records go back to what they were (due again at a later refresh).
+            if !batch.isEmpty, await !actionsWritten() {
+                saveActions()
+                if await !actionsWritten() {
+                    Self.actionsLog.error("\(batch.count, privacy: .public) actions not run: their record couldn't be saved")
+                    var back = actionLedger
+                    for job in batch {
+                        for key in job.keys {
+                            let id = ActionLedger.key(job.category.id, job.entry.id, job.action.id, key)
+                            back.runs[id] = planned.runs[id]
+                        }
+                    }
+                    actionLedger = back
+                    return
+                }
+            }
             for job in batch {
                 let result = await InboxActions.perform(job, with: performer, now: now)
                 var next = actionLedger
@@ -842,28 +860,69 @@ extension Store {
     /// Where actions.json is written: off the main thread, one write at a time, in the order asked.
     private static let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
 
+    nonisolated private static let actionsLog = Logger(subsystem: InboxLog.subsystem, category: "actions")
+
+    /// Each write is the whole ledger as of a revision: one that is written has every change before it on disk. One that
+    /// fails is said in the log and tried again (2, 4, 8… seconds, a minute at most) unless a later one is written first.
     func saveActions() {
         guard persists, let url = actionsFile else { return }
         let ledger = ActionsBox(ledger: actionLedger)
+        let disk = actionsDisk
+        let revision = disk.ask()
         Self.actionsWriter.async {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
-            guard let data = try? enc.encode(ledger.ledger) else { return }
-            try? data.write(to: url, options: .atomic)
+            do {
+                try enc.encode(ledger.ledger).write(to: url, options: .atomic)
+                disk.wrote(revision)
+            } catch {
+                let failures = disk.failed()
+                Self.actionsLog.error("saving actions.json failed (\(failures, privacy: .public) in a row): \(error.localizedDescription, privacy: .public)")
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(min(60, 1 << min(failures, 6))))
+                    guard let self, disk.isBehind, disk.asked == revision else { return }
+                    saveActions()
+                }
+            }
         }
     }
 
-    /// Returns once every write of actions.json asked so far is on disk: a run is recorded as running before what it does
-    /// reaches outside (a relaunch then says it was interrupted rather than doing it again).
-    func actionsWritten() async {
+    /// Whether every change of the ledger made so far is on disk, once the writes asked are done: a run is recorded as
+    /// running before what it does reaches outside (a relaunch then says it was interrupted rather than doing it again).
+    @discardableResult
+    func actionsWritten() async -> Bool {
+        guard persists, actionsFile != nil else { return true }
+        let wanted = actionsDisk.asked
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in Self.actionsWriter.async { done.resume() } }
+        return actionsDisk.written >= wanted
     }
 
-    /// The same, waiting here (quitting).
-    func flushActions() { Self.actionsWriter.sync {} }
+    /// The same, waiting here (quitting): one that failed is tried once more.
+    func flushActions() {
+        Self.actionsWriter.sync {}
+        guard actionsDisk.isBehind else { return }
+        saveActions()
+        Self.actionsWriter.sync {}
+    }
 }
 
 private struct ActionsBox: @unchecked Sendable { let ledger: ActionLedger }
+
+/// The revisions of the ledger asked to be written, and the latest written (the writes go in order, so it has every one
+/// before it); read and changed from the writer and the main actor alike.
+final class ActionsDisk: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _asked = 0, _written = 0, failures = 0
+
+    var asked: Int { lock.withLock { _asked } }
+    var written: Int { lock.withLock { _written } }
+    var isBehind: Bool { lock.withLock { _written < _asked } }
+
+    func ask() -> Int { lock.withLock { _asked += 1; return _asked } }
+    func wrote(_ revision: Int) { lock.withLock { _written = max(_written, revision); failures = 0 } }
+    /// Counts a failed write; returns how many in a row.
+    func failed() -> Int { lock.withLock { failures += 1; return failures } }
+}
 
 // MARK: - The real performer
 

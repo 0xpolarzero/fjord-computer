@@ -97,6 +97,29 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(saved.runs.values.contains { $0.thing == "pr:a/one#3" && $0.state == .done })
     }
 
+    @Test func nothingRunsWhileItsRecordCannotBeSavedAndItRunsOnceItCan() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
+        // Its folder isn't there: every write of actions.json fails.
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        await store.runActions()
+        add(store, InboxFixture.pr(3))
+        await store.runActions()
+        #expect(performer.asked.isEmpty)
+        #expect(!store.actionLedger.runs.values.contains { $0.thing == "pr:a/one#3" })
+        // The folder is back: the record is written, then the action runs.
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+        store.flushSave()
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let saved = try dec.decode(ActionLedger.self, from: Data(contentsOf: try #require(store.actionsFile)))
+        #expect(saved.runs.values.contains { $0.thing == "pr:a/one#3" && $0.state == .done })
+    }
+
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])
         await store.runActions()

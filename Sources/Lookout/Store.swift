@@ -61,6 +61,8 @@ final class Store {
     @ObservationIgnored var baselinePending = false
     @ObservationIgnored var baselineTask: Task<Void, Never>?
     @ObservationIgnored var actionsAgain = false
+    /// Which of the ledger's changes are on disk (InboxActions.swift): no action runs before its record is.
+    @ObservationIgnored let actionsDisk = ActionsDisk()
     /// What the last inbox refresh failed at, if it did (InboxSync.swift); the things it had stay.
     var inboxError: String?
     /// Why Jev couldn't read the inbox's new comments and requests (InboxJev.swift): what rests on his reading (asks me,
@@ -646,7 +648,7 @@ final class Store {
     @ObservationIgnored var keepAsideStandIn: ((Data, URL) throws -> String)?
 
     /// Distinct copies kept aside of a file, at most: the oldest go first.
-    static let maxBackups = 5
+    nonisolated static let maxBackups = 5
 
     /// Copies `data` (what `file` held) beside it as `<name>.bak-<date>`, unless a copy with the same bytes is already
     /// there (the same damaged file, launch after launch, is kept once); past `maxBackups` copies the oldest go. Returns
