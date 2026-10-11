@@ -127,6 +127,8 @@ struct ActionRun: Codable, Hashable {
     var sessionID: String?
     /// The entry in the Router's history (its decision log id) the run left.
     var message: UUID?
+    /// For `enter`: when the thing was first seen out of the category since (nil while it is in).
+    var left: Date?
 }
 
 /// Everything actions remember: what was already there when each category (or action) began, and each run.
@@ -156,8 +158,8 @@ struct ActionLedger: Codable, Equatable {
 enum InboxActions {
     /// Runs per sync; the rest wait for the next.
     static let perSync = 10
-    /// How long a thing must have been out of a category before coming back counts as entering again (a workflow that
-    /// is re-run and fails again would otherwise be re-run for ever).
+    /// How long a thing must have been out of a category, without a break, before coming back counts as entering again (a
+    /// workflow that is re-run and fails again would otherwise be re-run for ever).
     static let reentryCooldown: TimeInterval = 3600
     /// Runs remembered, beyond those for what is still present (never forgotten while their trigger is there).
     static let maxRuns = 2000
@@ -261,10 +263,16 @@ enum InboxActions {
         for (key, run) in ledger.runs {
             if !known.contains(run.category) || !actionIDs.contains(run.action) {
                 ledger.runs[key] = nil
-            } else if run.trigger == "enter", run.state != .running,
-                      !inside.contains("\(run.category.uuidString)\u{1F}\(run.thing)"),
-                      now.timeIntervalSince(run.at) > reentryCooldown {
-                ledger.runs[key] = nil
+            } else if run.trigger == "enter", run.state != .running {
+                // Out for the cooldown on end, counted from when it left (not from the run): back sooner is the same visit.
+                let isIn = inside.contains("\(run.category.uuidString)\u{1F}\(run.thing)")
+                if isIn, run.left != nil {
+                    ledger.runs[key]?.left = nil
+                } else if !isIn, let left = run.left {
+                    if now.timeIntervalSince(left) > reentryCooldown { ledger.runs[key] = nil }
+                } else if !isIn {
+                    ledger.runs[key]?.left = now
+                }
             }
         }
         // Over the cap, only what nothing present can ask about again goes, oldest first: a run for a fact a thing still has

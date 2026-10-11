@@ -183,11 +183,19 @@ final class DiskCheckingPerformer: ActionPerformer {
         add(store, InboxFixture.pr(4, greptile: 3))
         await store.runActions(now: t0.addingTimeInterval(120))
         #expect(performer.asked.count == 1)
-        // Out for good measure, forgotten after the cooldown, back: a new visit.
+        // Long after the run, out for one refresh and back minutes later: still the same visit (the hour counts from leaving).
+        let later = t0.addingTimeInterval(3 * InboxActions.reentryCooldown)
         add(store, InboxFixture.pr(4, greptile: 5))
-        await store.runActions(now: t0.addingTimeInterval(120 + InboxActions.reentryCooldown + 10))
+        await store.runActions(now: later)
         add(store, InboxFixture.pr(4, greptile: 3))
-        await store.runActions(now: t0.addingTimeInterval(120 + InboxActions.reentryCooldown + 20))
+        await store.runActions(now: later.addingTimeInterval(300))
+        #expect(performer.asked.count == 1)
+        // Out for the whole hour, forgotten, back: a new visit.
+        add(store, InboxFixture.pr(4, greptile: 5))
+        await store.runActions(now: later.addingTimeInterval(400))
+        await store.runActions(now: later.addingTimeInterval(400 + InboxActions.reentryCooldown + 10))
+        add(store, InboxFixture.pr(4, greptile: 3))
+        await store.runActions(now: later.addingTimeInterval(400 + InboxActions.reentryCooldown + 20))
         #expect(performer.asked.count == 2)
     }
 
