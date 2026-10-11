@@ -43,6 +43,8 @@ struct GHWorkflowRuns: Decodable {
         var htmlUrl: URL? = nil
         /// The run's own id (what re-running it takes).
         var id: Int? = nil
+        /// Which attempt of the run it is: re-running it keeps its id and counts one more.
+        var runAttempt: Int? = nil
     }
     let workflowRuns: [Run]
 }
@@ -60,6 +62,8 @@ struct GHCheckRuns: Decodable {
         let headSha: String
         let startedAt: Date?
         let completedAt: Date?
+        /// Its own id: a rerun makes a new check run, one finishing keeps its own.
+        var id: Int? = nil
     }
     let totalCount: Int
     let checkRuns: [Run]

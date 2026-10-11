@@ -471,9 +471,14 @@ enum InboxSync {
             }
         }
         let total = contexts["totalCount"] as? Int ?? seen.count
+        return (ciRun(sha: sha, ids: ids) + (total > seen.count ? "+\(total)" : ""), running)
+    }
+
+    /// `ci:<commit>:<digest of the checks' ids>`, whatever order they came in.
+    nonisolated static func ciRun(sha: String, ids: [String]) -> String {
         let digest = SHA256.hash(data: Data(ids.sorted().joined(separator: "\n").utf8)).prefix(12)
             .map { String(format: "%02x", $0) }.joined()
-        return ("ci:\(sha):\(digest)" + (total > seen.count ? "+\(total)" : ""), running)
+        return "ci:\(sha):\(digest)"
     }
 
     /// A search node (a PR or an issue) as a Thing; nil when it lacks what a Thing needs.
@@ -602,6 +607,8 @@ enum InboxSync {
             thing.workflowName = workflow.name
             thing.branch = branch
             thing.failingJobs = workflow.failing
+            thing.ciRun = workflow.run
+            thing.ciRunning = workflow.running ?? false
             thing.checks = switch workflow.state {
             case .failure: .failing
             case .pending: .pending

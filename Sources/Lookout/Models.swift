@@ -61,6 +61,9 @@ struct CIStatus: Codable, Hashable {
         var failing: [String]
         var url: URL?
         var updatedAt: Date?
+        /// Which execution it shows (`Thing.ciRun`), and whether any of it still runs though it already fails.
+        var run: String? = nil
+        var running: Bool? = nil
     }
 }
 

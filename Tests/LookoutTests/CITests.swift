@@ -18,6 +18,15 @@ import Testing
 
     // MARK: Reading GitHub's answer
 
+    @Test func aWorkflowsExecutionIsItsRunAndAttempt() {
+        var run = GHWorkflowRuns.Run(name: "build", workflowId: 1, headSha: "s", displayTitle: "Fix", updatedAt: t0, status: "completed",
+                                     conclusion: "failure", checkSuiteId: nil, id: 42, runAttempt: 1)
+        let once = Store.readCI(runs: [run], sha: "s", checks: [], combined: combined()).workflows[0]
+        run.runAttempt = 2
+        let again = Store.readCI(runs: [run], sha: "s", checks: [], combined: combined()).workflows[0]
+        #expect(once.run == "ci:s:42#1" && again.run == "ci:s:42#2")
+    }
+
     @Test func aRepoWithOnlyExternalChecksHasAStateNamesAndAChangeTime() {
         let failed = Store.readCI(runs: [], sha: nil, checks: [check("build", "completed", "failure", started: 10, completed: 90),
                                                                 check("lint", started: 5, completed: 40)], combined: combined())

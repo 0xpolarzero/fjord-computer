@@ -1158,7 +1158,8 @@ final class Store {
             }
             let state: CIState = !failing.isEmpty ? .failure : run.status != "completed" ? .pending : .success
             workflows.append(CIStatus.Workflow(id: "\(run.workflowId)", name: run.name, state: state, failing: failing,
-                                               url: run.htmlUrl, updatedAt: run.updatedAt))
+                                               url: run.htmlUrl, updatedAt: run.updatedAt,
+                                               run: run.id.map { "ci:\(run.headSha):\($0)#\(run.runAttempt ?? 1)" }))
         }
         if !external.isEmpty || combined.totalCount > 0 {
             let failing = external.filter { bad.contains($0.conclusion ?? "") }.map(\.name)
@@ -1166,9 +1167,13 @@ final class Store {
             let pending = external.contains { $0.status != "completed" } || combined.statuses.contains { $0.state == "pending" }
             let changed = external.compactMap { $0.completedAt ?? $0.startedAt }
                 + combined.statuses.compactMap { $0.updatedAt ?? $0.createdAt }
+            // Another check finishing moves `changed`, not which execution it is: its checks by id, statuses by when posted.
+            let ids = external.map { $0.id.map { "c\($0)" } ?? "n\($0.name)" }
+                + combined.statuses.map { "s\($0.context)@\(($0.createdAt ?? .distantPast).timeIntervalSince1970)" }
             workflows.append(CIStatus.Workflow(id: externalWorkflowID, name: "Checks",
                                                state: !failing.isEmpty ? .failure : pending ? .pending : .success,
-                                               failing: failing, url: nil, updatedAt: changed.max()))
+                                               failing: failing, url: nil, updatedAt: changed.max(),
+                                               run: InboxSync.ciRun(sha: sha ?? combined.sha, ids: ids), running: pending))
         }
         return CIReading(changedAt: workflows.compactMap(\.updatedAt).max(), workflows: workflows)
     }

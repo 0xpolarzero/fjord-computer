@@ -428,6 +428,40 @@ import Testing
         #expect(ready == 1)
     }
 
+    @Test func externalChecksAreDoneOnceAllOfThemAreAndToldAgainOnlyForARerun() {
+        let t0 = Date(timeIntervalSince1970: 2_000_000)
+        func check(_ id: Int, _ name: String, _ status: String, _ conclusion: String?, at: TimeInterval) -> GHCheckRuns.Run {
+            GHCheckRuns.Run(app: .init(slug: "circleci"), checkSuite: nil, name: name, status: status, conclusion: conclusion,
+                            headSha: "s", startedAt: t0, completedAt: status == "completed" ? t0.addingTimeInterval(at) : nil, id: id)
+        }
+        func things(_ checks: [GHCheckRuns.Run]) -> Thing {
+            let reading = Store.readCI(runs: [], sha: "s", checks: checks,
+                                       combined: GHCombinedStatus(state: "success", totalCount: 0, sha: "s", statuses: []))
+            let status = CIStatus(branch: "main", sha: "s", url: nil, checkedAt: t0, title: "Fix", updatedAt: reading.changedAt,
+                                  workflows: reading.workflows)
+            return InboxSync.workflowThings(repo: "o/app", branch: "main", status: status)[0]
+        }
+        let first = things([check(1, "lint", "completed", "failure", at: 10), check(2, "build", "in_progress", nil, at: 0)])
+        let watch = RouterTriage.Watch(target: .ci(thing: first.id), label: "CI: Checks on main in o/app", ref: "o/app", named: true)
+        let (s, _) = store(watch: watch, things: [first])
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        // Lint failed, the build still runs: not done.
+        s.resolveWaits(now: t0)
+        #expect(first.checks == .failing && ready == 0)
+        // The build finishes: the time moves, the failure is the same. Done, once.
+        s.things[first.id] = things([check(1, "lint", "completed", "failure", at: 10), check(2, "build", "completed", "success", at: 90)])
+        s.resolveWaits(now: t0.addingTimeInterval(100))
+        #expect(ready == 1)
+        s.things[first.id] = things([check(1, "lint", "completed", "failure", at: 10), check(2, "build", "completed", "success", at: 95)])
+        s.resolveWaits(now: t0.addingTimeInterval(110))
+        #expect(ready == 1)
+        // Lint rerun, failing again: a new check run.
+        s.things[first.id] = things([check(3, "lint", "completed", "failure", at: 300), check(2, "build", "completed", "success", at: 90)])
+        s.resolveWaits(now: t0.addingTimeInterval(400))
+        #expect(ready == 2)
+    }
+
     @Test func aCardReadyTheOlderWayOnlyLearnsTheRun() {
         var pr = ci(.failing)
         pr.headSha = "h1"
