@@ -10,6 +10,8 @@ import Testing
     @MainActor final class Fakes {
         var ranked: [RouterDispatcher.Scored] = []
         var scope: Double?
+        /// The routing call asked the task's size (a nil `scope` is then an answer Jev wasn't sure of).
+        var scopeAsked = false
         var rankError: Error?
         var ranks = 0
         /// Holds the next routing call until the test lets it go.
@@ -41,7 +43,7 @@ import Testing
                     ranks += 1
                     if holdRank { await withCheckedContinuation { rankHeld = $0 } }
                     if let rankError { throw rankError }
-                    return RouterDispatcher.Ranking(scored: ranked, scope: scope)
+                    return RouterDispatcher.Ranking(scored: ranked, scope: scope, scopeAsked: scopeAsked)
                 },
                 prepare: { [unowned self] _, session in
                     prepared.append(session)
@@ -301,6 +303,19 @@ import Testing
         await finish(d, f, a)
         #expect(calls == 0 && f.startSettings == [SessionSettings(model: "opus", effort: "high")])
         #expect(decision(s, a)?.decision.settingsBy == "Jev")
+    }
+
+    @Test func aSizeTheRoutingCallWasntSureOfIsNotAskedAgain() async {
+        let (s, d, f) = setup()
+        var calls = 0
+        d.asker = { _, _ in calls += 1; return ["scope": .score(3.2, confidence: 0.9)] }
+        f.ranked = [.init(target: "new:/code/lookout", p: 0.9), .init(target: "unclear", p: 0.1)]
+        // Asked with the routing, below the floor: Jev's answer is "your defaults".
+        f.scopeAsked = true
+        f.scope = nil
+        let a = d.submit("rework how the lookout router stores its decisions")
+        await finish(d, f, a)
+        #expect(calls == 0 && f.startSettings == [nil] && decision(s, a)?.decision.settingsBy == nil)
     }
 
     @Test func theTableMapsEachLevelAndRoundsBetweenThem() {

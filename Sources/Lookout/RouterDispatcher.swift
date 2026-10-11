@@ -72,8 +72,11 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's answers to a routing call: the targets, and the questions asked with them in the same call.
     struct Ranking: Equatable {
         var scored: [Scored]
-        /// The task's size on `SessionScope`'s levels, for a session started from it; nil when not asked.
+        /// The task's size on `SessionScope`'s levels, for a session started from it; nil when not asked, or when Jev
+        /// wasn't sure enough of it (`scopeAsked` tells which).
         var scope: Double? = nil
+        /// The size was asked in this call: a nil `scope` is then Jev's answer (your defaults), not a question still to ask.
+        var scopeAsked = false
     }
 
     /// What Jev (or the words alone) made of a message.
@@ -85,23 +88,26 @@ struct RouterAskBack: Identifiable, Equatable {
         /// Jev answered (else the words alone were matched against titles).
         var assisted: Bool
         var scope: Double? = nil
+        /// The size was asked with the routing (see `Ranking.scopeAsked`).
+        var scopeAsked = false
         /// Asked while you typed (the composer showed it when sure), not again when sent.
         var live = false
 
         var top: Scored? { ranked.first }
 
-        init(ranked: [Scored], sure: Bool, assisted: Bool, scope: Double? = nil) {
+        init(ranked: [Scored], sure: Bool, assisted: Bool, scope: Double? = nil, scopeAsked: Bool = false) {
             self.ranked = ranked
             self.sure = sure
             self.assisted = assisted
             self.scope = scope
+            self.scopeAsked = scopeAsked || scope != nil
         }
 
         /// Jev's answer, best first, sure by `RouterTools.decision`.
         @MainActor init(_ ranking: Ranking) {
             let ranked = ranking.scored.sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
             self.init(ranked: ranked, sure: RouterTools.decision(ranked.map { (target: $0.target, p: $0.p) }) == "send",
-                      assisted: true, scope: ranking.scope)
+                      assisted: true, scope: ranking.scope, scopeAsked: ranking.scopeAsked)
         }
     }
 
@@ -586,9 +592,10 @@ struct RouterAskBack: Identifiable, Equatable {
         store?.jevAsker(.routing, base: asker ?? tools?.chooser.map(JevClient.asker(choosing:)))
     }
 
-    /// The size of a new session's task: from the routing call when there was one, else a call of its own.
+    /// The size of a new session's task: from the routing call when there was one, else a call of its own. A size the
+    /// routing call asked and Jev wasn't sure of is his answer (your defaults), not asked again.
     private func scope(of task: String, project: String, job: Job) async -> Double? {
-        if let scope = job.jev?.scope { return scope }
+        if let jev = job.jev, jev.scopeAsked { return jev.scope }
         guard let ask = jev(job.tools) else { return nil }
         return try? await ask(["scope": SessionScope.question], ["task": task, "project": project])["scope"]?.score(sure: SessionScope.sure)
     }
@@ -753,7 +760,7 @@ extension RouterDispatcher.Effects {
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
                 return RouterDispatcher.Ranking(scored: pick.probabilities.compactMap { key, p -> RouterDispatcher.Scored? in
                     options.keys.firstIndex(of: key).map { RouterDispatcher.Scored(target: targets[$0].target, p: p) }
-                }, scope: answers["scope"]?.score(sure: SessionScope.sure))
+                }, scope: answers["scope"]?.score(sure: SessionScope.sure), scopeAsked: questions["scope"] != nil)
             },
             prepare: { [weak dispatcher] tools, session in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
