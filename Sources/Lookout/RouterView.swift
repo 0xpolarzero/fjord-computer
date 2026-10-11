@@ -160,6 +160,16 @@ extension RouterCard {
     var canReopen: Bool { !isOpen && addressedBy != .superseded && addressedBy != .gone }
 }
 
+extension Store {
+    /// `RouterCard.canReopen`, and once the app's sessions have been read, only while its session is still there and not
+    /// archived: a card handled before its session went (only open cards are marked gone) isn't opened again on nothing.
+    func routerCanReopen(_ card: RouterCard) -> Bool {
+        guard card.canReopen else { return false }
+        guard claudeLink == .ok else { return true }
+        return claudeSessions[card.sessionID].map { !$0.isArchived } ?? false
+    }
+}
+
 /// A card's kind in its colour: words and a glyph, never colour alone.
 struct KindTag: View {
     let kind: RouterCard.Kind
@@ -423,7 +433,7 @@ final class RouterModel {
 
     /// Reopen on a history line: the card is back in Needs you and the page goes to it.
     func reopen(_ id: String, store: Store) {
-        guard let card = store.router.cards.first(where: { $0.id == id }), card.canReopen else { return }
+        guard let card = store.router.cards.first(where: { $0.id == id }), store.routerCanReopen(card) else { return }
         store.setCardAddressed(id, false)
         expanded.remove(id)
         Announce.say("Open again")
@@ -451,7 +461,7 @@ final class RouterModel {
         reconcile(store: store)
         let shown = cards(store)
         guard let id = selection, let card = shown.first(where: { $0.id == id }) else { return }
-        if !card.isOpen, !card.canReopen {
+        if !card.isOpen, !store.routerCanReopen(card) {
             if card.addressedBy == .superseded,
                let newer = store.routerShownOpenCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
             return

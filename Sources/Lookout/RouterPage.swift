@@ -757,7 +757,7 @@ private struct CardDetails: View {
                 if let origin = card.origin { OriginTag(origin: origin) }
             }
             CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
-            if card.canReopen {
+            if store.routerCanReopen(card) {
                 ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
                     model.reopen(card.id, store: store)
                 }

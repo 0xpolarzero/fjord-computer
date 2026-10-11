@@ -192,6 +192,30 @@ import UserNotifications
         #expect(store.router.cards.first { $0.id == ids[1] }!.isOpen)
     }
 
+    @Test func aHandledCardIsNotOpenedAgainOnceItsSessionIsArchivedOrDeleted() {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        let ids = store.routerShownOpenCards.filter { $0.kind != .waiting }.prefix(2).map(\.id)
+        #expect(ids.count == 2)
+        let cards = ids.map { id in store.router.cards.first { $0.id == id }! }
+        #expect(cards[0].sessionID != cards[1].sessionID)
+        for id in ids { store.setCardAddressed(id, true) }
+        let handled = ids.map { id in store.router.cards.first { $0.id == id }! }
+        #expect(handled.allSatisfy { store.routerCanReopen($0) })
+        // Handled, then its session archived (the first) or deleted (the second): only open cards are marked gone.
+        store.claudeSessions[cards[0].sessionID]?.isArchived = true
+        store.claudeSessions[cards[1].sessionID] = nil
+        for card in handled { #expect(!store.routerCanReopen(card)) }
+        model.reopen(ids[0], store: store)
+        model.select(ids[1], store: store)
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(ids.allSatisfy { id in store.router.cards.first { $0.id == id }?.isOpen == false })
+        // Before the sessions are read, nothing is known gone.
+        store.claudeLink = .off
+        #expect(store.routerCanReopen(handled[1]))
+    }
+
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
         let store = demo()
         let model = RouterModel()
