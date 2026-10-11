@@ -16,6 +16,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Lookout"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+# The layered icon, compiled from the Icon Composer document: light, dark, tinted and clear on macOS 26, its light tile on
+# earlier systems (CFBundleIconName picks the catalog over the .icns, which stays for whatever reads the file alone).
+ICON_OUT="$(mktemp -d)"
+xcrun actool Resources/AppIcon.icon --compile "$ICON_OUT" --app-icon AppIcon --platform macosx \
+  --minimum-deployment-target 14.0 --output-partial-info-plist "$ICON_OUT/partial.plist" >/dev/null
+cp "$ICON_OUT/Assets.car" "$APP/Contents/Resources/"
 cp -R Resources/Fonts "$APP/Contents/Resources/"   # Geist and Geist Mono (OFL), registered at launch by Brand
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,6 +33,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Lookout</string>
   <key>CFBundleExecutable</key><string>Lookout</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
