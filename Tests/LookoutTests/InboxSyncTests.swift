@@ -266,6 +266,41 @@ extension InboxSyncMapping {
         let saved = try JSONDecoder().decode(Thing.self, from: JSONEncoder().encode(thing))
         #expect(InboxEngine.facts(rule, saved, marks: EntryMarks(doneAt: iso("2026-10-03T12:00:00Z")!), context: context) == nil)
     }
+
+    @Test func aMentionEarlierInAReviewThreadIsToMeMentionedOnTheFirstPageAndPastIt() throws {
+        func threads(_ id: String) -> [String: Any] {
+            ["nodes": [
+                ["id": id, "isResolved": false, "path": "a.swift",
+                 "first": ["nodes": [["id": "\(id)x", "createdAt": "2026-10-02T10:00:00Z", "body": "a", "authorAssociation": "MEMBER",
+                                     "author": ["login": "bob", "__typename": "User"]]]],
+                 "last": ["nodes": [
+                    ["id": "\(id)m", "createdAt": "2026-10-03T10:00:00Z", "body": "@me what do you think?", "authorAssociation": "MEMBER",
+                     "author": ["login": "bob", "__typename": "User"]],
+                    ["id": "\(id)y", "createdAt": "2026-10-04T10:00:00Z", "body": "agreed", "authorAssociation": "NONE",
+                     "author": ["login": "carol", "__typename": "User"]]]]],
+            ], "pageInfo": ["hasNextPage": false]]
+        }
+        let bare: [String: Any] = ["author": ["login": "alice", "__typename": "User"], "body": "", "comments": ["nodes": []]]
+        var extra = bare
+        extra["reviewThreads"] = threads("t1")
+        let rule = Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.me]), toRoles: [.mentioned]), createdAt: .distantPast)
+        let context = InboxContext(me: "me", now: iso("2026-10-10T10:00:00Z")!)
+        // On the first page.
+        let thing = try #require(InboxSync.thing(node(extra)))
+        #expect(thing.mentioned.contains("me") && InboxEngine.facts(rule, thing, marks: nil, context: context) != nil)
+        // On a page past it.
+        extra["reviewThreads"] = ["nodes": []]
+        var paged = try #require(InboxSync.thing(node(extra)))
+        #expect(InboxEngine.facts(rule, paged, marks: nil, context: context) == nil)
+        #expect(InboxSync.addThreads(threads("t2"), to: &paged) == ["me"])
+        #expect(InboxEngine.facts(rule, paged, marks: nil, context: context) != nil)
+        // A tail taken as read before, its mentions noted from its latest replies only: its threads still say them.
+        var old = paged
+        old.threadsTail = ThreadsTail(total: 1, updatedAt: old.updatedAt, readAt: old.updatedAt, mentions: [])
+        var again = try #require(InboxSync.thing(node(extra)))
+        InboxSync.takeTail(of: old, into: &again)
+        #expect(InboxEngine.facts(rule, again, marks: nil, context: context) != nil)
+    }
 }
 
 @Suite struct InboxSyncQueries {

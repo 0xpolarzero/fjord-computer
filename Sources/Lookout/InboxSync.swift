@@ -368,9 +368,12 @@ enum InboxSync {
     /// The threads past the first page as read before, and what their replies mention, added to a PR fetched again.
     static func takeTail(of old: Thing, into thing: inout Thing) {
         let have = Set(thing.threads.map(\.id))
-        thing.threads += old.threads.filter { !have.contains($0.id) }
+        let taken = old.threads.filter { !have.contains($0.id) }
+        thing.threads += taken
         var seen = Set(thing.mentioned)
-        thing.mentioned += (old.threadsTail?.mentions ?? []).filter { seen.insert($0).inserted }
+        // What a tail read before this build noted was only its latest replies' mentions: its threads say them all.
+        let mentions = (old.threadsTail?.mentions ?? []) + taken.flatMap { ($0.mentions ?? []).flatMap(\.logins) }
+        thing.mentioned += mentions.filter { seen.insert($0).inserted }
         thing.threadsTail = old.threadsTail
     }
 
@@ -380,7 +383,7 @@ enum InboxSync {
         return info?["endCursor"] as? String
     }
 
-    /// Takes in a page of review threads (those not already there) and the mentions in their latest replies, and says those.
+    /// Takes in a page of review threads (those not already there) and the mentions in their replies, and says those.
     @discardableResult
     static func addThreads(_ connection: Any?, to thing: inout Thing) -> [String] {
         var mentioned: [String] = []
@@ -392,6 +395,11 @@ enum InboxSync {
         var seen = Set(thing.mentioned)
         thing.mentioned += mentioned.filter { seen.insert($0).inserted }
         return mentioned
+    }
+
+    private static func uniqued(_ logins: [String]) -> [String] {
+        var seen = Set<String>()
+        return logins.filter { seen.insert($0).inserted }
     }
 
     private static func thread(_ t: [String: Any]) -> (thread: ThingThread, mentions: [String])? {
@@ -416,7 +424,8 @@ enum InboxSync {
             lastReplyBy: person(last["author"], association: last["authorAssociation"]), lastReplyID: lastID,
             lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String), latestBy: latestBy,
             mentions: mentioned),
-                mentions(last["body"] as? String))
+                // Every reply read mentions them, not only its latest: "@me what do you think?" stays to me once answered.
+                uniqued(mentioned.flatMap(\.logins)))
     }
 
     fileprivate static func reposRequest(me: String) -> String {
