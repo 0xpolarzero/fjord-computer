@@ -980,6 +980,11 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
                                   rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])))])]
         #expect(!InboxSync.needsTeams(categories: none, jevReads: false))
         #expect(InboxSync.needsTeams(categories: none, jevReads: true))
+        // Left out is named too: "to me except My teams" needs them known to leave them out.
+        let except = [InboxCategory(name: "Mine", symbol: "star", color: .blue,
+                                    rules: [Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.me], except: [.myTeams]),
+                                                              toRoles: [.reviewRequested]))])]
+        #expect(InboxSync.needsTeams(categories: except, jevReads: false))
         let s = Store()
         s.persists = false
         s.me = GHUser(login: "me", avatarUrl: nil, type: "User")

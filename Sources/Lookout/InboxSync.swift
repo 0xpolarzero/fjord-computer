@@ -98,10 +98,16 @@ enum InboxSync {
         return unique.isEmpty ? nil : unique
     }
 
-    /// Whether a refresh needs the teams you're in: a rule names `My teams`, or Jev rates review requests, those to a team of
-    /// yours among them.
+    /// Whether a refresh needs the teams you're in: a rule names `My teams` (to take them in or to leave them out: "to me
+    /// except My teams" can't leave out what isn't known), or Jev rates review requests, those to a team of yours among them.
     static func needsTeams(categories: [InboxCategory], jevReads: Bool) -> Bool {
-        jevReads || categories.contains { $0.rules.contains { $0.scope.to?.include.contains(.myTeams) == true } }
+        jevReads || categories.contains { category in
+            category.rules.contains { rule in
+                var picks = [rule.scope.to, rule.scope.by] + rule.conditions.map(\.people)
+                for case .unresolvedThreads(let started, let last) in rule.conditions { picks += [started, last] }
+                return picks.contains { pick in pick.map { ($0.include + $0.except).contains(.myTeams) } ?? false }
+            }
+        }
     }
 
     /// How soon the teams are asked again after looking them up failed.
