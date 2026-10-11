@@ -33,7 +33,7 @@ import Testing
         #expect(AppPolicy.current == .regular)
         #expect(NSApp.activationPolicy() != .regular)
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         #expect(!window.isOpen && closed == 1)
         // The bar only again: no Dock icon.
         #expect(AppPolicy.current == .accessory)
@@ -62,12 +62,12 @@ import Testing
         window.window?.setContentSize(NSSize(width: 1100, height: 700))
         let size = window.window?.frame.size
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         window.show(.settings)
         #expect(window.window?.frame.size == size)
         away(window)
         window.close()
-        await waitUntil { closed == 2 }
+        await waitUntil { closed == 2 && window.window?.contentViewController == nil }
     }
 
     /// The window made smaller while closed (opening on a smaller screen fits it to that one) keeps that size when its kept
@@ -79,13 +79,13 @@ import Testing
         window.show(.settings)
         window.window?.setContentSize(NSSize(width: 1300, height: 800))
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         let smaller = NSRect(x: -5000, y: -5000, width: 1050, height: 650)
         window.window?.setFrame(smaller, display: false)
         window.show(.settings)
         #expect(window.window?.frame.size == smaller.size)
         window.close()
-        await waitUntil { closed == 2 }
+        await waitUntil { closed == 2 && window.window?.contentViewController == nil }
     }
 
     /// Closed, the window lets go of its content, which stands still out of it, and keeps it for the next open: the same
@@ -98,13 +98,81 @@ import Testing
         away(window)
         let content = try #require(window.window?.contentViewController)
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         #expect(window.window?.contentViewController == nil && content.view.window == nil)
         window.show(.router)
         away(window)
         #expect(window.window?.contentViewController === content)
         window.close()
-        await waitUntil { closed == 2 }
+        await waitUntil { closed == 2 && window.window?.contentViewController == nil }
+    }
+
+    /// Without a morph, the bar returns a turn before the content leaves the window and the app gives up its Dock icon.
+    @Test func closingRestoresTheBarBeforeDeferredContentCleanup() throws {
+        #expect(!AppTransition.enabled)
+        let (window, _) = controller()
+        let nextTurn = AppTransition.nextTurn
+        var turns: [@MainActor () -> Void] = []
+        AppTransition.nextTurn = { turns.append($0) }
+        defer { AppTransition.nextTurn = nextTurn; window.onClose = nil; window.close() }
+        window.show(.settings)
+        let content = try #require(window.window?.contentViewController)
+        var closed = 0
+        window.onClose = {
+            closed += 1
+            #expect(window.window?.contentViewController === content && AppPolicy.current == .regular)
+        }
+        window.close()
+        #expect(!window.isOpen && closed == 0 && turns.count == 1)
+        let restore = try #require(turns.first)
+        turns.removeFirst()
+        restore()
+        #expect(closed == 1 && window.window?.contentViewController === content && AppPolicy.current == .regular)
+        let cleanup = try #require(turns.first)
+        turns.removeFirst()
+        cleanup()
+        #expect(window.window?.contentViewController == nil && content.view.window == nil && AppPolicy.current == .accessory)
+        #expect(turns.isEmpty)
+    }
+
+    /// Opening from the bar's return callback or before the following cleanup keeps the content attached and the app regular.
+    @Test(arguments: [true, false]) func openingAgainAfterTheBarReturnsCancelsContentCleanup(duringCallback: Bool) throws {
+        #expect(!AppTransition.enabled)
+        let (window, _) = controller()
+        let nextTurn = AppTransition.nextTurn
+        var turns: [@MainActor () -> Void] = []
+        AppTransition.nextTurn = { turns.append($0) }
+        defer { AppTransition.nextTurn = nextTurn; window.onClose = nil; window.close() }
+        window.show(.settings)
+        let content = try #require(window.window?.contentViewController)
+        var closed = 0
+        window.onClose = {
+            closed += 1
+            if duringCallback { window.show(.settings) }
+        }
+        window.close()
+        let restore = try #require(turns.first)
+        turns.removeFirst()
+        restore()
+        if !duringCallback {
+            #expect(turns.count == 1)
+            window.show(.settings)
+            let cleanup = try #require(turns.first)
+            turns.removeFirst()
+            cleanup()
+        }
+        #expect(closed == 1 && turns.isEmpty && window.isOpen && window.window?.contentViewController === content)
+        #expect(AppPolicy.current == .regular)
+        // Close for real, with both turns stepped so no cleanup remains when another test begins.
+        window.onClose = nil
+        window.close()
+        let finalRestore = try #require(turns.first)
+        turns.removeFirst()
+        finalRestore()
+        let finalCleanup = try #require(turns.first)
+        turns.removeFirst()
+        finalCleanup()
+        #expect(turns.isEmpty && window.window?.contentViewController == nil && AppPolicy.current == .accessory)
     }
 
     /// The categories page kept from a close has an undo history of what was done before it: a change the Router made while
@@ -125,7 +193,7 @@ import Testing
         await waitUntil { store.categoryHistory?.canUndo == true }
         #expect(store.categoryHistory?.canUndo == true)
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         #expect(store.categoryHistory == nil)
         var made = CategoriesView.newDraft(after: store.categories)
         made.name = "From the Router"
@@ -138,7 +206,7 @@ import Testing
         store.categoryHistory?.undo(store)
         #expect(store.categories.contains { $0.id == made.id })
         window.close()
-        await waitUntil { closed == 2 }
+        await waitUntil { closed == 2 && window.window?.contentViewController == nil }
     }
 
     /// The composer kept from a close, given the keyboard again when the window opens, says so: Return sends again rather
@@ -164,7 +232,7 @@ import Testing
         await waitUntil { window.routerModel.composerFocused }
         #expect(window.routerModel.composerFocused)
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         #expect(!window.routerModel.composerFocused)
         window.show(.router)
         away(window)
@@ -172,7 +240,7 @@ import Testing
         await waitUntil { window.routerModel.composerFocused }
         #expect(window.routerModel.composerFocused)
         window.close()
-        await waitUntil { closed == 2 }
+        await waitUntil { closed == 2 && window.window?.contentViewController == nil }
     }
 
     /// Short of memory, a closed window lets go of the content it kept, and the next open makes it again; an open one keeps it.
@@ -186,14 +254,14 @@ import Testing
         window.releaseKept()
         #expect(window.content === content && window.window?.contentViewController === content)
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
         window.releaseKept()
         #expect(window.content == nil)
         window.show(.settings)
         away(window)
         #expect(window.window?.contentViewController != nil && window.window?.contentViewController !== content)
         window.close()
-        await waitUntil { closed == 2 }
+        await waitUntil { closed == 2 && window.window?.contentViewController == nil }
     }
 
     /// Short of memory before the launch's preparing comes, the window prepares nothing: the content it would build is
@@ -254,7 +322,7 @@ import Testing
         away(window)
         #expect(window.isOpen && window.window?.contentViewController === content)
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
     }
 
     /// Prepared on the Router out of sight, a notice it would show (the form hook couldn't be installed) is not said to
@@ -297,7 +365,7 @@ import Testing
         await waitUntil { store.categoryHistory != nil }
         #expect(store.categoryHistory?.canUndo == false)
         window.close()
-        await waitUntil { closed == 1 }
+        await waitUntil { closed == 1 && window.window?.contentViewController == nil }
     }
 
     /// Why `prepare` builds the content in the window and takes it out again: once it has been in a window, a hosting
@@ -373,7 +441,7 @@ import Testing
         var closed = false
         window.onClose = { closed = true }
         window.close()
-        await waitUntil { closed }
+        await waitUntil { closed && window.window?.contentViewController == nil }
         window.showUpdates()
         away(window)
         #expect(window.hub.settingsScroll?.id == SettingsView.updatesID)
