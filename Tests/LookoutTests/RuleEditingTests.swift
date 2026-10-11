@@ -127,6 +127,20 @@ private final class RepoCalls: @unchecked Sendable {
         #expect(RuleEditing.problems(rule, groups: [], isCI: false).isEmpty)
     }
 
+    @Test func aGroupGoneFromAConditionTurnsTheRuleOff() {
+        let trusted = InboxGroup(name: "Trusted", kind: .people, members: ["ann"])
+        let gone = Pick<PersonRef>(except: [.group(trusted.id)])
+        for condition: Condition in [.newComment(by: gone, since: .done), .approved(by: gone),
+                                     .unresolvedThreads(startedBy: nil, lastReplyBy: gone),
+                                     .unresolvedThreads(startedBy: gone, lastReplyBy: nil)] {
+            let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [condition])
+            #expect(RuleEditing.problems(rule, groups: [trusted], isCI: false).isEmpty)
+            let found = RuleEditing.problems(rule, groups: [], isCI: false)
+            #expect(found.map(\.condition) == [0])
+            #expect(found.map(\.reason) == ["This group no longer exists"])
+        }
+    }
+
     @Test func savedRulesAndGroupsAreRenamedOnceAtSync() async {
         let calls = RepoCalls()
         let s = store(calls)

@@ -233,6 +233,12 @@ enum RuleEditing {
             found.append(.init(condition: nil, slot: "in", reason: "Workflows need at least one repo"))
         }
         for (i, c) in rule.conditions.enumerated() {
+            // A group gone from a condition's pick would widen it ("by anyone except Trusted" taking Trusted's), so it is off.
+            var picks = [c.people]
+            if case .unresolvedThreads(let started, let last) = c { picks = [started, last] }
+            if picks.contains(where: { gone($0, person) }) {
+                found.append(.init(condition: i, slot: nil, reason: "This group no longer exists"))
+            }
             switch c {
             case .status(let s) where s.isEmpty: found.append(.init(condition: i, slot: nil, reason: "Pick at least one status"))
             case .checks(let s) where s.isEmpty, .workflow(let s) where s.isEmpty:
