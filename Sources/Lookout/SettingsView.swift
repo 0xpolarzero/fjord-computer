@@ -246,13 +246,14 @@ struct SettingsView: View {
     /// The Router, which reads your Claude Code sessions (never writing to the desktop app's files): its switch, then what it
     /// needs and how each part is doing (the hook, Claude Code, routing).
     @ViewBuilder private var router: some View {
+        let needsClaude = !store.router.enabled && !Claude.isInstalled
         SettingsRow("Router",
-                    description: !Claude.isInstalled && !store.router.enabled ? "Needs the Claude desktop app" : nil,
+                    description: needsClaude ? "Needs the Claude desktop app" : nil,
                     adornment: AnyView(Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(CDS.Text.secondary)),
                     info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Lookout or answers a question. Messages reach your sessions through Lookout's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
             SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.switchRouter($0) }))
-                .disabled(!Claude.isInstalled && !store.router.enabled)
+                .disabled(needsClaude)
         }
         .id(Self.routerID)
         // Off, but taking the hook or the plugin out failed: that stays in sight, with a way to try again.
