@@ -382,6 +382,9 @@ extension Claude {
     private(set) var attempted: [String: String] = [:]
     /// The launch's look back at the sessions' latest turns has been made.
     var rescanned = false
+    /// Sessions the look back was stopped for before Jev answered (the Router turned off, the key changed): looked back at
+    /// again once he can be asked.
+    var unrescued: Set<String> = []
     /// Stuck turns whose banner waits for Jev's triage (`Store.announceRouterCards`).
     var heldBanners: Set<String> = []
     /// How long a stuck turn's banner waits for the triage at most.
@@ -492,6 +495,10 @@ extension Store {
         if !routerTriager.rescanned {
             routerTriager.rescanned = true
             rescanTurns()
+        } else if !routerTriager.unrescued.isEmpty {
+            let again = routerTriager.unrescued
+            routerTriager.unrescued = []
+            rescanTurns(only: again)
         }
     }
 
@@ -504,9 +511,11 @@ extension Store {
 
     /// Once at launch: the latest finished turn of each live session (newest first, at most `rescanLimit`) that has no card
     /// and ended on what looks like a question nobody answered. Turns you addressed, opened since or wrote after are left.
-    func rescanTurns() {
+    /// `only`: those sessions alone (a look back stopped before it was answered, made again).
+    func rescanTurns(only: Set<String>? = nil) {
         let sessions = claudeSessions.values
             .filter { !$0.isArchived && !$0.running && $0.completedTurns > 0 }
+            .filter { session in only.map { $0.contains(session.id) } ?? true }
             .sorted { $0.lastActivity > $1.lastActivity }
             .prefix(RouterTriager.rescanLimit)
         for session in sessions where rescannable(session) {
@@ -539,6 +548,7 @@ extension Store {
                 self.releaseBanner(id)
                 if stopped {
                     self.routerTriager.forget(id)
+                    if rescue { self.routerTriager.unrescued.insert(session.id) }
                     self.triageTurns()
                 }
             }

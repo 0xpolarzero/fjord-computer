@@ -388,6 +388,33 @@ import Testing
         #expect(counter.calls == 1 && s.router.cards.contains { $0.id == "a#t3" && $0.isOpen })
     }
 
+    @Test func aLookBackStoppedBeforeJevAnsweredIsMadeOnceHeCanBeAskedAgain() async {
+        let (s, counter) = store(sessions: [session("a"), session("b", minutes: -9)]) { _, _ in self.answers(sentences: [0.9]) }
+        let answer = s.routerTriager.asker!
+        var stopped = false
+        s.routerTriager.asker = { [weak s] questions, state in
+            // Turned off as a's look back is asked: it is stopped, b's with it.
+            if !stopped, state["session"] == "T a" {
+                stopped = true
+                s?.setRouterEnabled(false)
+                throw JevClient.Failure.cancelled
+            }
+            return try await answer(questions, state)
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(s.routerTriager.rescanned && !s.router.cards.contains { $0.id == "a#t2" })
+        // On again: what was stopped is looked back at, once.
+        s.router.enabled = true
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(s.router.cards.filter(\.isOpen).map(\.id).sorted() == ["a#t2", "b#t2"])
+        let calls = counter.calls
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(counter.calls == calls && s.routerTriager.unrescued.isEmpty)
+    }
+
     @Test func theLookBackSkipsTurnsThatDontLookLikeTheyAsk() async {
         let (s, counter) = store(sessions: [session("a")], message: "All done. Tests pass.") { _, _ in self.answers() }
         s.triageTurns()
