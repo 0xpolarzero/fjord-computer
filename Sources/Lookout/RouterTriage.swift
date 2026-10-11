@@ -736,8 +736,6 @@ extension Store {
         guard thing.kind == .pr else { return true }
         guard let number = thing.number, let ref = RouterWaits.ref(thing) else { return false }
         let lower = message.lowercased()
-        // Two PRs named: which it waits on isn't clear, though the inbox has only one of them yet ("#1 and #2" too).
-        guard Self.prsNamed(lower, repo: thing.repo).count <= 1 else { return false }
         return LookoutGate.mentions(lower, ref: ref) || Self.linksPR(lower, repo: thing.repo, number: number)
             || lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil
     }

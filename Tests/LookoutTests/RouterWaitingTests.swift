@@ -660,6 +660,10 @@ import Testing
         #expect(s.waitNamed(ciWatch, in: "Waiting for #1 to go green", by: a))
         #expect(!s.waitNamed(ciWatch, in: "Waiting for #12 to go green", by: a))
         #expect(!s.waitNamed(ciWatch, in: "Waiting on CI.", by: a))
+        // Two PRs named: whichever Jev picked, the message doesn't say it waits on that one.
+        #expect(!s.waitNamed(ciWatch, in: "Waiting for CI on PR #1 and PR #2.", by: a))
+        #expect(!s.waitNamed(ciWatch, in: "Waiting for CI on o/app#1 and o/app#2.", by: a))
+        #expect(!s.waitNamed(ciWatch, in: "Waiting on github.com/o/app/pull/1 and #2", by: a))
         let other = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "session “Migration”")
         #expect(s.waitNamed(other, in: "Waiting for the migration session to finish", by: a))
         #expect(!s.waitNamed(other, in: "Waiting for the other session to finish", by: a))

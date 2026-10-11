@@ -178,7 +178,7 @@ extension Store {
 
     /// Whether the waiting session's final message names what it waits on, by Lookout's own reading (not Jev's): the other
     /// session's id, or its title's words or project (`RouterDepends.names`); the PR's ref (`owner/repo#12`, whole: not
-    /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`), its number (`#12`), or two words of its title, unless the message names another PR by its ref; a
+    /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`), its number (`#12`), or two words of its title, unless the message names another PR by its ref, or two PRs at all; a
     /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named on
     /// another branch too is either), from Lookout's own data. A watch whose ref
     /// isn't its thing's names nothing. A wait it doesn't name is never continued on its own.
@@ -210,6 +210,8 @@ extension Store {
                             .contains { !branches.contains($0) && Self.namesBranch(lower, branch: $0) }
                 }
             }
+            // Two PRs named ("#1 and #2"): which it waits on isn't clear, whichever of them Jev picked.
+            guard Self.prsNamed(lower, repo: thing.repo).count <= 1 else { return false }
             if let ref, LookoutGate.mentions(lower, ref: ref) { return true }
             if let number = thing.number, Self.linksPR(lower, repo: thing.repo, number: number) { return true }
             // Another PR named by its ref: this one's number or title words in the same message are about that one.
