@@ -1012,7 +1012,17 @@ extension Store {
     var actionsFile: URL? { stateFileURL?.deletingLastPathComponent().appendingPathComponent("actions.json") }
 
     func loadActions() {
-        guard persists, let url = actionsFile, let data = try? Data(contentsOf: url) else { return }
+        guard persists, let url = actionsFile else { return }
+        let data: Data
+        do {
+            guard let read = try Store.readExisting(url) else { return }
+            data = read
+        } catch {
+            // There but unreadable: not written over until it can be read and kept aside (see `saveActions`).
+            Self.actionsLog.error("actions.json can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
+            actionsDisk.unreadable = true
+            return
+        }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         // Record by record: one this build can't read is lost alone. With anything lost, the file is kept aside before it
@@ -1053,6 +1063,10 @@ extension Store {
             enc.dateEncodingStrategy = .iso8601
             do {
                 // A file read only in part is copied aside first: until that works, it isn't written over.
+                if disk.unreadable {
+                    if let original = try Store.readExisting(url) { disk.keepAside(original) }
+                    disk.unreadable = false
+                }
                 if let original = disk.unkept {
                     let backup = try Store.keepAside(original, of: url)
                     disk.keptAside()
@@ -1127,6 +1141,12 @@ final class ActionsDisk: @unchecked Sendable {
     var unkept: Data? { lock.withLock { _unkept } }
     func keepAside(_ data: Data) { lock.withLock { _unkept = data } }
     func keptAside() { lock.withLock { _unkept = nil } }
+    private var _unreadable = false
+    /// Whether the file was there but couldn't be read: until it can be (and is kept aside), it isn't written over.
+    var unreadable: Bool {
+        get { lock.withLock { _unreadable } }
+        set { lock.withLock { _unreadable = newValue } }
+    }
 
     var asked: Int { lock.withLock { _asked } }
     var written: Int { lock.withLock { _written } }

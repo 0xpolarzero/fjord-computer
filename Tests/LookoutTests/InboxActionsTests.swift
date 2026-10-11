@@ -207,6 +207,32 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.asked.count == 2)
     }
 
+    @Test func aLedgerThatIsThereButCannotBeReadIsNotWrittenOverUntilItCanBeAndIsKeptAside() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, _) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        let file = try #require(store.actionsFile)
+        let original = Data(#"{"baselines": {}, "runs": {}}"#.utf8)
+        try original.write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+        store.loadActions()
+        await store.runActions()
+        store.flushActions()
+        // Unreadable isn't absent: the only copy stays as it was.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        #expect(try Data(contentsOf: file) == original)
+        // Readable again: it is kept aside, then the ledger is written.
+        store.saveActions()
+        store.flushActions()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("actions.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+        #expect(try Data(contentsOf: file) != original)
+    }
+
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])
         await store.runActions()

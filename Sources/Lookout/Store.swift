@@ -598,7 +598,18 @@ final class Store {
     func load() {
         loading = true
         defer { loading = false }
-        guard let file, let data = try? Data(contentsOf: file) else { return }
+        guard let file else { return }
+        let data: Data
+        do {
+            guard let read = try Self.readExisting(file) else { return }
+            data = read
+        } catch {
+            // There but unreadable (its mode, say): not fresh state. Nothing is written over it until it can be read and
+            // kept aside (see `writeSnapshot`).
+            unreadable = file
+            Self.stateLog.error("the saved state can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
+            return
+        }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         guard let state = try? dec.decode(PersistedState.self, from: data) else {
@@ -646,6 +657,24 @@ final class Store {
 
     /// A file read only in part not yet kept aside: what it held, and what was lost of it.
     @ObservationIgnored private var unkept: (file: URL, data: Data, dropped: [String])?
+    /// A file that was there but couldn't be read at launch: nothing is written over it until it can be read and kept aside.
+    @ObservationIgnored private var unreadable: URL?
+
+    /// What `file` holds; nil only when it isn't there (fresh state). Any other failure to read it throws.
+    nonisolated static func readExisting(_ file: URL) throws -> Data? {
+        do {
+            return try Data(contentsOf: file)
+        } catch {
+            let ns = error as NSError
+            let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+            if (ns.domain == NSCocoaErrorDomain && ns.code == CocoaError.fileReadNoSuchFile.rawValue)
+                || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+                || (underlying?.domain == NSPOSIXErrorDomain && underlying?.code == Int(ENOENT)) {
+                return nil
+            }
+            throw error
+        }
+    }
     /// Stands in for `Store.keepAside(_:of:)` (tests).
     @ObservationIgnored var keepAsideStandIn: ((Data, URL) throws -> String)?
 
@@ -715,6 +744,15 @@ final class Store {
         }
         guard let url = file else { return }
         let revision = persistedRevision
+        if let unreadable {
+            do {
+                if let data = try Self.readExisting(unreadable) { keepAside(unreadable, data, dropped: ["everything"]) }
+                self.unreadable = nil
+            } catch {
+                wrote(revision, failure: "the saved state can't be read, so it isn't written over: \(error.localizedDescription)", retry: !wait)
+                return
+            }
+        }
         if let unkept {
             keepAside(unkept.file, unkept.data, dropped: unkept.dropped)
             guard self.unkept == nil else {

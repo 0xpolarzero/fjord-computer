@@ -230,6 +230,33 @@ import Testing
         #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
     }
 
+    @Test func aFileThatIsThereButCannotBeReadIsNotWrittenOverUntilItCanBeAndIsKeptAside() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let original = Data(#"{"settings": {"pollInterval": 45, "notifications": true}}"#.utf8)
+        try original.write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        // Unreadable isn't absent: the only copy stays as it was.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        #expect(try Data(contentsOf: file) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["state.json"])
+        // Readable again: it is kept aside, then the change is written.
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
+    }
+
     @Test func oneElementThatNoLongerDecodesIsLostAloneNotItsWholeList() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
