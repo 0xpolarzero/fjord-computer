@@ -751,18 +751,23 @@ extension RouterDispatcher.Effects {
             rank: { [weak dispatcher] tools, message, projects in
                 guard let dispatcher, let store = dispatcher.storeForEffects else { throw RouterTools.Failure("Lookout isn't ready") }
                 guard let ask = dispatcher.jevForEffects(tools) else { throw RouterTools.Failure("no TypeSafe key is set") }
-                // One option per destination, described in its own criteria; the message alone as the state (RouterRoute).
+                // One option per destination, described in its own criteria; the message alone as the state; the board's
+                // recency weighed with Jev's answers (RouterRoute).
                 let destinations = tools.destinations(store, projects: projects.isEmpty ? nil : Set(projects))
-                let call = RouterTools.routingQuestions(destinations, waiting: tools.waiting(store, among: destinations))
+                let facts = tools.facts(store, destinations: destinations, message: message)
+                let call = RouterTools.routingQuestions(destinations, waiting: tools.waiting(store, among: destinations),
+                                                        conversations: tools.conversations(store, facts: facts))
                 let answers = try await ask(call.questions, ["message": message])
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
-                var route: [String: Double] = [:]
+                var signals = RouteFusion.Signals(route: [:])
                 for (name, p) in pick.probabilities {
-                    if let target = call.route[name] { route[target, default: 0] += p }
+                    if let target = call.route[name] { signals.route[target, default: 0] += p }
                 }
                 let checks = call.answers.compactMap { id, w in answers[id]?.yes.map { (target: w.target, session: w.sessionID, p: $0) } }
-                let gates = RouterTools.gates.keys.reduce(into: [String: Double]()) { $0[$1] = answers[$1]?.yes }
-                let verdict = RouterTools.verdict(route: route, answers: checks, gates: gates) {
+                for c in checks { signals.reply[c.session] = max(signals.reply[c.session] ?? 0, c.p) }
+                for (id, session) in call.next { signals.next[session] = answers[id]?.yes }
+                signals.gates = RouterTools.gates.keys.reduce(into: [String: Double]()) { $0[$1] = answers[$1]?.yes }
+                let verdict = RouteFusion.decide(signals, facts: facts, answers: checks) {
                     RouterDispatcher.session(of: $0, store: store)
                 }
                 return RouterDispatcher.Ranking(scored: verdict.ranked, sure: verdict.sure)

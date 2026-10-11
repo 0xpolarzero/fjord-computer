@@ -81,6 +81,9 @@ struct JevClient {
     func ask(_ questions: [String: Question], about state: Any) async throws -> [String: Answer] {
         var body: [String: Any] = [:]
         var keys: [String: [String: String]] = [:]
+        // A structured choice's options reach Jev in their own order (he leans toward the first: shuffled, the decision
+        // changed on 14% of real messages, evals/router): its criteria object is written in order where a placeholder stood.
+        var ordered: [String: Data] = [:]
         for (id, question) in questions {
             switch question {
             case .choice(let options, let hints, let instructions):
@@ -98,13 +101,14 @@ struct JevClient {
             case .structuredChoice(let options, let criteria, let instructions):
                 let map = Dictionary(uniqueKeysWithValues: options.map { (Self.key(for: $0), $0) })
                 keys[id] = map
-                body[id] = ["type": "choice", "instructions": instructions,
-                            "criteria": map.mapValues { option -> Any in criteria[option] ?? NSNull() }]
+                let placeholder = "\u{1}ordered-criteria-\(ordered.count)\u{1}"
+                ordered[placeholder] = try Self.orderedObject(options.map { (Self.key(for: $0), criteria[$0] ?? NSNull()) })
+                body[id] = ["type": "choice", "instructions": instructions, "criteria": placeholder]
             case .structuredNoul(let instructions):
                 body[id] = ["type": "noul", "instructions": instructions, "criteria": NSNull()]
             }
         }
-        let data = try await post(["model": "jev-latest", "state": state, "questions": body])
+        let data = try await post(["model": "jev-latest", "state": state, "questions": body], ordered: ordered)
         guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let answers = json["answers"] as? [String: Any] else { throw Failure.invalidAnswer("Unexpected answer from TypeSafe") }
         var out: [String: Answer] = [:]
@@ -134,12 +138,36 @@ struct JevClient {
         return choice
     }
 
-    private func post(_ body: [String: Any]) async throws -> Data {
+    /// A JSON object with its keys in the order given.
+    static func orderedObject(_ pairs: [(String, Any)]) throws -> Data {
+        var out = Data("{".utf8)
+        for (i, (key, value)) in pairs.enumerated() {
+            if i > 0 { out.append(contentsOf: Array(",".utf8)) }
+            out.append(try JSONSerialization.data(withJSONObject: key, options: .fragmentsAllowed))
+            out.append(contentsOf: Array(":".utf8))
+            out.append(try JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed))
+        }
+        out.append(contentsOf: Array("}".utf8))
+        return out
+    }
+
+    /// The body as JSON, each placeholder string of `ordered` replaced by its ordered object.
+    static func encode(_ body: [String: Any], ordered: [String: Data] = [:]) throws -> Data {
+        var data = try JSONSerialization.data(withJSONObject: body)
+        for (placeholder, object) in ordered {
+            let quoted = try JSONSerialization.data(withJSONObject: placeholder, options: .fragmentsAllowed)
+            guard let range = data.range(of: quoted) else { continue }
+            data.replaceSubrange(range, with: object)
+        }
+        return data
+    }
+
+    private func post(_ body: [String: Any], ordered: [String: Data] = [:]) async throws -> Data {
         var request = URLRequest(url: endpoint, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try Self.encode(body, ordered: ordered)
         let data: Data, response: URLResponse
         do {
             if let transport { (data, response) = try await transport(request) } else { (data, response) = try await session.data(for: request) }

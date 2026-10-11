@@ -454,10 +454,24 @@ import Testing
         #expect((criteria["Update the docs"] as? [String: Any])?["now"] as? String == "finished 1m ago")
         #expect(names.contains("new session in lookout") && names.contains("new session in docs"))
         #expect(Set(["change_lookout", "question", "compound", "unclear"]).isSubset(of: Set(names)))
-        // Asked beside it: whether it answers the waiting card, and the gates.
-        #expect(Set(call.questions.keys) == ["route", "answers0", "gate_setting", "gate_compound"])
+        // Asked beside it: whether it answers the waiting card, the gates, and whether it is the next message of the
+        // latest session's conversation (the one waiting on you; the docs session said nothing to go on).
+        #expect(Set(call.questions.keys) == ["route", "answers0", "gate_setting", "gate_compound", "gate_compound2", "gate_you", "next0"])
         guard case .structuredNoul(let instructions) = call.questions["answers0"] else { Issue.record("no check"); return }
         #expect(((instructions as? [String: Any])?["card"] as? [String: Any])?["asks"] as? String == "Which database?")
+        guard case .structuredNoul(let next) = call.questions["next0"] else { Issue.record("no next check"); return }
+        #expect((next as? [String: Any])?["conversation"] as? [[String: String]] == [["session": "Which database?"]])
+        // In Lookout's order: sessions first, then new sessions, then Lookout's own.
+        #expect(names.first == "Fix the login bug" && names.last == "unclear")
+    }
+
+    @Test func theOptionsReachJevInTheirOrder() throws {
+        let names = ["b", "a.1", "c"]
+        let data = try JevClient.encode(["questions": ["route": ["criteria": "\u{1}p\u{1}"]]],
+                                        ordered: ["\u{1}p\u{1}": try JevClient.orderedObject(names.map { (JevClient.key(for: $0), 1) })])
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#"{"b":1,"a_1":1,"c":1}"#), "\(text)")
+        #expect((try JSONSerialization.jsonObject(with: data) as? [String: Any]) != nil)
     }
 
     @Test func whatYouLastToldASessionIsOnItsOption() async {
@@ -496,19 +510,51 @@ import Testing
              "gate_setting": .noul(0.01), "gate_compound": .noul(0.01)]
         }
         #expect(call.found?.top?.target == "answer:local_a#w1" && call.found?.sure == true)
-        // A setting turned off: Lookout's, whatever session works on it.
+        // A setting turned off: Lookout's, when the route leans that way too…
+        d.forgetLive()
+        call = await routed(d, "turn off the docs notifications") { _, _ in
+            ["route": Self.choice(["Update the docs": 0.4, "change_lookout": 0.6]), "answers0": .noul(0.01),
+             "gate_setting": .noul(0.9), "gate_compound": .noul(0.01), "gate_you": .noul(0.05)]
+        }
+        #expect(call.found?.top?.target == "change_lookout" && call.found?.sure == true)
+        // …but you pick when the route is sure it is for the session working on it.
         d.forgetLive()
         call = await routed(d, "turn off the docs notifications") { _, _ in
             ["route": Self.choice(["Update the docs": 0.9, "change_lookout": 0.1]), "answers0": .noul(0.01),
-             "gate_setting": .noul(0.9), "gate_compound": .noul(0.01)]
+             "gate_setting": .noul(0.9), "gate_compound": .noul(0.01), "gate_you": .noul(0.05)]
         }
-        #expect(call.found?.top?.target == "change_lookout" && call.found?.sure == true)
+        #expect(call.found?.sure == false)
+        // Spoken to an agent as "you": never one of Lookout's own.
+        d.forgetLive()
+        call = await routed(d, "did you turn off the docs notifications?") { _, _ in
+            ["route": Self.choice(["question": 0.9, "Update the docs": 0.1]), "answers0": .noul(0.01),
+             "gate_setting": .noul(0.01), "gate_compound": .noul(0.01), "gate_you": .noul(0.9)]
+        }
+        #expect(call.found?.top?.target != "question" || call.found?.sure == false)
+    }
+
+    @Test func theFusionWeighsTheBoardWithJev() {
+        var facts = RouterTools.Facts()
+        facts.latest = ["a", "b"]
+        facts.idleMinutes = ["a": 1, "b": 30]
+        facts.targetOf = ["a": "session:a", "b": "session:b"]
+        facts.message = "and add the date"
+        let sessionOf: (String) -> String? = { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil }
+        // Unsure between the two, Jev's reading of `unclear` hands it to the one that just finished: sure enough to send.
+        var s = RouteFusion.Signals(route: ["session:a": 0.2, "session:b": 0.2, "unclear": 0.6])
+        s.next = ["a": 0.9, "b": 0.1]
+        let v = RouteFusion.decide(s, facts: facts, answers: [], sessionOf: sessionOf)
+        #expect(v.ranked.first?.target == "session:a" && v.sure)
+        // A bare "ok" never goes anywhere on the board alone.
+        facts.message = "ok"
+        s.next = [:]
+        #expect(RouteFusion.decide(s, facts: facts, answers: [], sessionOf: sessionOf).sure == false)
     }
 
     @Test func theVerdictActsByWhatAWrongPickCosts() {
         func verdict(_ route: [String: Double], answers: [(target: String, session: String, p: Double)] = [],
-                     gates: [String: Double] = [:]) -> (top: String?, sure: Bool) {
-            let v = RouterTools.verdict(route: route, answers: answers, gates: gates) {
+                     gates: [String: Double] = [:], next: [(target: String, p: Double)] = []) -> (top: String?, sure: Bool) {
+            let v = RouterTools.verdict(route: route, answers: answers, gates: gates, next: next) {
                 $0.hasPrefix("session:") ? String($0.dropFirst(8)) : $0.hasPrefix("answer:") ? String($0.dropFirst(7).prefix { $0 != "#" }) : nil
             }
             return (v.ranked.first?.target, v.sure)
@@ -528,6 +574,14 @@ import Testing
         #expect(verdict(["session:a": 0.9], gates: ["gate_compound": 0.8]) == ("compound", true))
         #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.8, "gate_compound": 0.1]) == ("change_lookout", true))
         #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.7]) == ("session:a", true))
+        // Several points for one session aren't several things; a message spoken to an agent isn't Lookout's.
+        #expect(verdict(["session:a": 0.9], gates: ["gate_compound": 0.8, "gate_compound2": 0.2]) == ("session:a", true))
+        #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.9, "gate_you": 0.8]) == ("session:a", true))
+        #expect(verdict(["question": 0.9], gates: ["gate_you": 0.8]) == ("question", false))
+        // One latest session's conversation standing out, the route not sure of another: there.
+        #expect(verdict(["unclear": 0.8, "session:b": 0.2], next: [("session:a", 0.8), ("session:b", 0.2)]) == ("session:a", true))
+        #expect(verdict(["session:b": 0.9], next: [("session:a", 0.8)]) == ("session:b", true))
+        #expect(verdict(["unclear": 1], next: [("session:a", 0.8), ("session:b", 0.6)]) == ("unclear", false))
     }
 
     @Test func anAskAnsweredWithJevsSuggestionConfirmsIt() async {

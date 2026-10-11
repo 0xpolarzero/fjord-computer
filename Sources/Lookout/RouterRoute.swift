@@ -26,10 +26,12 @@ extension RouterTools {
         var card: [String: Any]
     }
 
+    /// Lookout's own destinations, each worded by who the message is for: worded as "a question about what is going on",
+    /// `question` caught questions you ask a session about its own work, p > 0.95, on 1 real message in 10.
     static let intentCriteria: [(name: String, criteria: String)] = [
-        ("change_lookout", "The user wants to change Lookout itself: its inbox categories, groups or settings"),
-        ("question", "A question about what is going on now (cards, working sessions, the inbox, settings), not for any session"),
-        ("compound", "Several different things in one message, such as changing Lookout and telling a session something"),
+        ("change_lookout", "Change how Lookout itself behaves: its settings, notifications, inbox categories, rules or groups. Not asking a session to build or change code"),
+        ("question", "A question to Lookout, the assistant that watches the board, about the board: which sessions are working, done or waiting on the user, or what a session named in the third person is doing. Not a question for a session about its own work or what it said"),
+        ("compound", "Requests meant for two or more different places in one message: Lookout itself and a session, or two different sessions. Not one long message with several points for one session"),
         ("unclear", "none of these: small talk, a fragment, or nothing says where it goes"),
     ]
 
@@ -42,10 +44,18 @@ extension RouterTools {
 
     /// Checks that decide an intent before the route does: the route alone sent "turn off jev labels" to the session
     /// building that feature, and "commit it and add a category" to the session as a whole.
+    /// `gate_compound2` keeps one long message with several points for one session from reading as several things;
+    /// `gate_you` (it speaks to one agent as "you") vetoes Lookout's intents.
     static let gates: [String: JevClient.Question] = [
         "gate_setting": .structuredNoul(instructions: ["question": "Does `message` ask to change how Lookout behaves for the user (a setting turned on or off, its notifications, an inbox category, a rule or a group), rather than for code to be written or for a session to do something?"]),
         "gate_compound": .structuredNoul(instructions: ["question": "Does `message` ask for two or more different things, meant for different places (sessions or Lookout itself)?"]),
+        "gate_compound2": .structuredNoul(instructions: ["question": "Does `message` ask for things meant for two or more different places: Lookout itself and a session, or two different sessions it names? A message with several points or steps for one session is no."]),
+        "gate_you": .structuredNoul(instructions: ["question": "Does `message` speak to one agent as \"you\" about its own work (\"did you…\", \"your end\", \"what are you waiting for\", \"you said…\"), or reply to something it just said?"]),
     ]
+
+    static let nextInstructions = "Is `message` the user's next message in `conversation`: what the user says back to it?"
+    /// How many of the latest sessions get the next-message check.
+    static let nextLatest = 3
 
     private static let waitsOnYou: Set<RouterCard.Kind> = [.question, .plan, .asks, .approval]
 
@@ -139,11 +149,58 @@ extension RouterTools {
         return "\(what): \(text)"
     }
 
-    /// The questions of one routing call, and which target each route option and each card's check stands for.
-    static func routingQuestions(_ destinations: [Destination], waiting: [Waiting])
-        -> (questions: [String: JevClient.Question], route: [String: String], answers: [String: Waiting]) {
+    /// What the board says about the offered sessions, beside what Jev reads: where a real message goes is most often the
+    /// session that just finished (60% of 550 of yours; evals/router/real).
+    struct Facts {
+        /// The sessions not running, latest to finish first.
+        var latest: [String] = []
+        var running: Set<String> = []
+        var idleMinutes: [String: Double] = [:]
+        /// The session your last message went to.
+        var lastTold: String?
+        /// Each session's target (its card's when it has one).
+        var targetOf: [String: String] = [:]
+        var message = ""
+    }
+
+    func facts(_ store: Store, destinations: [Destination], message: String, now: Date = Date()) -> Facts {
+        var f = Facts(message: message)
+        var sessions: [ClaudeSession] = []
+        for d in destinations {
+            guard let id = d.sessionID, f.targetOf[id] == nil else { continue }
+            f.targetOf[id] = d.target
+            if let s = store.claudeSessions[id] { sessions.append(s) }
+        }
+        // A session stopped on what it asks you (its turn still open) waits on you: not working.
+        let waits = Set(store.routerShownOpenCards.filter { Self.waitsOnYou.contains($0.kind) }.map(\.sessionID))
+        f.running = Set(sessions.filter { $0.running && !waits.contains($0.id) }.map(\.id))
+        f.latest = sessions.filter { !f.running.contains($0.id) }.sorted { $0.lastActivity > $1.lastActivity }.map(\.id)
+        for s in sessions { f.idleMinutes[s.id] = max(0, now.timeIntervalSince(s.lastActivity) / 60) }
+        f.lastTold = store.lastTold().filter { f.targetOf[$0.key] != nil }.max { $0.value.at < $1.value.at }?.key
+        return f
+    }
+
+    /// The latest sessions' conversations, for the next-message check: what you last told each and what it last said.
+    func conversations(_ store: Store, facts: Facts) -> [(session: String, conversation: [[String: String]])] {
+        let told = store.lastTold()
+        let cards = store.routerShownOpenCards
+        return facts.latest.prefix(Self.nextLatest).compactMap { id in
+            var conversation: [[String: String]] = []
+            if let last = told[id] { conversation.append(["user": Self.hinted(last.text, 300)]) }
+            let said = cards.filter { $0.sessionID == id }.max { $0.createdAt < $1.createdAt }?.text
+                ?? store.claudeSessions[id]?.summary?.detail ?? store.claudeActivity[id]?.text ?? ""
+            if !said.isEmpty { conversation.append(["session": Self.hinted(said, 400)]) }
+            return conversation.isEmpty ? nil : (id, conversation)
+        }
+    }
+
+    /// The questions of one routing call, and which target each route option, each card's check and each session's
+    /// next-message check stands for.
+    static func routingQuestions(_ destinations: [Destination], waiting: [Waiting],
+                                 conversations: [(session: String, conversation: [[String: String]])] = [])
+        -> (questions: [String: JevClient.Question], route: [String: String], answers: [String: Waiting], next: [String: String]) {
         var questions = gates
-        var criteria: [String: Any] = [:], route: [String: String] = [:], answers: [String: Waiting] = [:]
+        var criteria: [String: Any] = [:], route: [String: String] = [:], answers: [String: Waiting] = [:], next: [String: String] = [:]
         for d in destinations {
             criteria[d.name] = d.criteria
             route[d.name] = d.target
@@ -153,7 +210,11 @@ extension RouterTools {
             questions["answers\(i)"] = .structuredNoul(instructions: ["question": answersInstructions, "card": w.card])
             answers["answers\(i)"] = w
         }
-        return (questions, route, answers)
+        for (i, c) in conversations.enumerated() {
+            questions["next\(i)"] = .structuredNoul(instructions: ["question": nextInstructions, "conversation": c.conversation])
+            next["next\(i)"] = c.session
+        }
+        return (questions, route, answers, next)
     }
 
     // MARK: When to act
@@ -170,21 +231,41 @@ extension RouterTools {
     static let answersConflict = 0.5
     /// A gate that decides its intent first.
     static let gateSure = 0.75
+    /// The tight compound gate's bar beside it, and the second-person gate's veto of Lookout's intents.
+    static let compound2Sure = 0.5
+    static let youVeto = 0.5
+    /// A latest session's next-message yes that stands out (this sure, ahead of the others by `nextLead`) sends there
+    /// when the route agrees, reads the message as unclear, or is under `nextAgree` sure of anything.
+    static let nextSure = 0.5
+    static let nextLead = 0.3
+    static let nextAgree = 0.4
 
     /// Jev's answers made a ranking, and whether its first is sure enough to act on:
-    /// 1. a gate sure enough: its intent;
-    /// 2. one card's check standing out: that card, unless the route is sure of another session (then you pick);
-    /// 3. the route's pick, against the bar of what it is.
+    /// 1. one latest session's next-message yes standing out, the route not sure of anything else: that session;
+    /// 2. a gate sure enough: its intent (not when the message speaks to one agent as "you");
+    /// 3. one card's check standing out: that card, unless the route is sure of another session (then you pick);
+    /// 4. the route's pick, against the bar of what it is; one of Lookout's intents never when it speaks to an agent.
     static func verdict(route: [String: Double], answers: [(target: String, session: String, p: Double)],
-                        gates: [String: Double], sessionOf: (String) -> String?) -> (ranked: [RouterDispatcher.Scored], sure: Bool) {
+                        gates: [String: Double], next: [(target: String, p: Double)] = [],
+                        sessionOf: (String) -> String?) -> (ranked: [RouterDispatcher.Scored], sure: Bool) {
         var ranked = route.map { RouterDispatcher.Scored(target: $0.key, p: $0.value) }
             .sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
         func first(_ target: String, _ p: Double) {
             ranked.removeAll { $0.target == target }
             ranked.insert(.init(target: target, p: p), at: 0)
         }
-        if let p = gates["gate_compound"], p >= gateSure { first("compound", p); return (ranked, true) }
-        if let p = gates["gate_setting"], p >= gateSure { first("change_lookout", p); return (ranked, true) }
+        let nexts = next.sorted { $0.p > $1.p }
+        if let best = nexts.first, best.p >= nextSure, best.p - (nexts.dropFirst().first?.p ?? 0) >= nextLead,
+           let top = ranked.first, top.target == best.target || top.target == "unclear" || top.p < nextAgree {
+            first(best.target, best.p)
+            return (ranked, true)
+        }
+        let vetoed = (gates["gate_you"] ?? 0) >= youVeto
+        if !vetoed, let p = gates["gate_compound"], p >= gateSure, (gates["gate_compound2"] ?? 1) >= compound2Sure {
+            first("compound", p)
+            return (ranked, true)
+        }
+        if !vetoed, let p = gates["gate_setting"], p >= gateSure { first("change_lookout", p); return (ranked, true) }
         // A session's cards are one: its surest check stands for it.
         var surest: [String: (target: String, session: String, p: Double)] = [:]
         for a in answers where a.p > (surest[a.session]?.p ?? -1) { surest[a.session] = a }
@@ -197,8 +278,133 @@ extension RouterTools {
             return (ranked, true)
         }
         guard let top = ranked.first, top.target != "unclear" else { return (ranked, false) }
-        let bar = top.target.hasPrefix("new:") ? newSure : RouterRun.Intent(rawValue: top.target) != nil ? intentSure : sessionSure
+        let intent = RouterRun.Intent(rawValue: top.target) != nil
+        if intent && vetoed { return (ranked, false) }
+        let bar = top.target.hasPrefix("new:") ? newSure : intent ? intentSure : sessionSure
         return (ranked, top.p >= bar)
+    }
+}
+
+// MARK: - Jev's answers and the board, fused
+
+/// Jev reads the message well and the board's recency poorly (minutes and order are his weak spots), and his sureness
+/// was 97% right on written cases but 63% on real ones. A small model weighs his answers with what the board says, fitted
+/// on real moments and written cases (evals/router/explore/fuse2.py): P(destination) = softmax of `weights` · features;
+/// the fused pick's chance of being right is a logistic on the moment (`sureness`).
+@MainActor
+enum RouteFusion {
+    static let weights: [String: Double] = [
+        "lp": 0.86,                                   // Jev's route probability (log, floored at 0.001)
+        "fin0": 0.83, "fin1": 1.32, "fin2": 0.49,     // 1st / 2nd / 3rd most recently finished session
+        "run": -1.5,                                  // still running
+        "reply": 1.03,                                // "is it the answer to this session's card?" yes
+        "told0": 0.88,                                // the session your last message went to
+        "fin0u": 1.26, "idle5u": 2.41,                // latest / finished ≤ 5 min ago, times Jev's `unclear` p
+        "nxt": 0.95,                                  // "is it your next message in this conversation?" yes
+        "new": -0.01,
+        "question": -0.83, "compound": 0.58, "change_lookout": 0.39,
+        "g_c": 1.94, "g_s": 2.52, "c2": 0.08,         // an intent's own gate
+        "you": -1.57,                                 // "does it speak to one agent as you?" yes, against intents
+        "ilong": -1.87,                               // an intent for a message over 80 characters
+    ]
+    static let sureness: [String: Double] = [
+        "bias": 1.58, "lPtop": 0.83, "lgap": 0.12, "agree": 0.3, "u": -0.99, "lenlog": -0.28, "recent2": -0.33,
+        "top_fin0": 0.04, "top_intent": 0.14, "top_new": 0.47, "top_reply": 0.39,
+    ]
+    /// The rules' send stands when the fused P gives it at least this; else the fused pick is sent at this sureness.
+    static let agrees = 0.5
+    static let sure = 0.9
+    /// The fused pick alone sends no message shorter than this ("ok" goes nowhere on recency alone), and never to one of
+    /// Lookout's intents.
+    static let fusedWords = 3
+
+    struct Signals {
+        var route: [String: Double]
+        /// Per session: its card's answer check, its next-message check.
+        var reply: [String: Double] = [:]
+        var next: [String: Double] = [:]
+        var gates: [String: Double] = [:]
+    }
+
+    static func features(_ s: Signals, facts f: RouterTools.Facts, sessionOf: (String) -> String?) -> [String: [String: Double]] {
+        let u = s.route["unclear"] ?? 0
+        var out: [String: [String: Double]] = [:]
+        for (target, p) in s.route where target != "unclear" {
+            var x: [String: Double] = ["lp": log(max(p, 0.001))]
+            if let id = sessionOf(target) {
+                let rank = f.latest.firstIndex(of: id)
+                if let rank, rank <= 2 { x["fin\(rank)"] = 1 }
+                if f.running.contains(id) { x["run"] = 1 }
+                let idle5 = !f.running.contains(id) && (f.idleMinutes[id] ?? .infinity) <= 5
+                x["reply"] = s.reply[id] ?? 0
+                if f.lastTold == id { x["told0"] = 1 }
+                x["fin0u"] = (rank == 0 ? 1 : 0) * u
+                x["idle5u"] = (idle5 ? 1 : 0) * u
+                x["nxt"] = s.next[id] ?? 0
+                x["session"] = 1
+            } else if target.hasPrefix("new:") {
+                x["new"] = 1
+            } else if RouterRun.Intent(rawValue: target) != nil {
+                x[target] = 1
+                x["ilong"] = f.message.count > 80 ? 1 : 0
+                x["you"] = s.gates["gate_you"] ?? 0
+                if target == "compound" {
+                    x["g_c"] = s.gates["gate_compound"] ?? 0
+                    x["c2"] = s.gates["gate_compound2"] ?? 0
+                }
+                if target == "change_lookout" { x["g_s"] = s.gates["gate_setting"] ?? 0 }
+            }
+            out[target] = x
+        }
+        return out
+    }
+
+    static func probabilities(_ features: [String: [String: Double]]) -> [String: Double] {
+        let scores = features.mapValues { x in x.reduce(0) { $0 + (weights[$1.key] ?? 0) * $1.value } }
+        guard let top = scores.values.max() else { return [:] }
+        let e = scores.mapValues { exp($0 - top) }
+        let z = e.values.reduce(0, +)
+        return e.mapValues { $0 / z }
+    }
+
+    /// The fused pick and its chance of being right.
+    static func pick(_ P: [String: Double], features: [String: [String: Double]], signals s: Signals,
+                     facts f: RouterTools.Facts) -> (target: String, sure: Double)? {
+        let ranked = P.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+        guard let (top, p) = ranked.first else { return nil }
+        let second = ranked.dropFirst().first?.value ?? 0
+        let jev = s.route.filter { $0.key != "unclear" }.max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key
+        let x = features[top] ?? [:]
+        let recent = f.idleMinutes.filter { !f.running.contains($0.key) && $0.value <= 5 }.count
+        let moment: [String: Double] = [
+            "bias": 1, "lPtop": log(p / max(1 - p, 1e-4)), "lgap": log(max(p - second, 1e-3)),
+            "agree": jev == top ? 1 : 0, "u": s.route["unclear"] ?? 0, "lenlog": log(1 + Double(f.message.count)),
+            "recent2": recent >= 2 ? 1 : 0, "top_fin0": x["fin0"] ?? 0,
+            "top_intent": RouterRun.Intent(rawValue: top) != nil ? 1 : 0, "top_new": x["new"] ?? 0, "top_reply": x["reply"] ?? 0,
+        ]
+        let z = moment.reduce(0) { $0 + (sureness[$1.key] ?? 0) * $1.value }
+        return (top, 1 / (1 + exp(-z)))
+    }
+
+    /// The decision: the rules' send (`RouterTools.verdict`) when the fused P agrees with it; else the fused pick when
+    /// it is sure, a message of a few words, and not one of Lookout's intents; else you pick, among the fused top three.
+    static func decide(_ s: Signals, facts f: RouterTools.Facts, answers: [(target: String, session: String, p: Double)],
+                       sessionOf: (String) -> String?) -> (ranked: [RouterDispatcher.Scored], sure: Bool) {
+        let next = s.next.compactMap { id, p in f.targetOf[id].map { (target: $0, p: p) } }
+        let rules = RouterTools.verdict(route: s.route, answers: answers, gates: s.gates, next: next, sessionOf: sessionOf)
+        let x = features(s, facts: f, sessionOf: sessionOf)
+        let P = probabilities(x)
+        let fused = P.map { RouterDispatcher.Scored(target: $0.key, p: $0.value) }
+            .sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
+        // A card's check names its card; the fused P names the session's own target.
+        if rules.sure, let d = rules.ranked.first?.target, (P[sessionOf(d).flatMap { f.targetOf[$0] } ?? d] ?? 0) >= agrees {
+            return (rules.ranked, true)
+        }
+        if let (top, sure) = pick(P, features: x, signals: s, facts: f), sure >= Self.sure,
+           f.message.split(whereSeparator: \.isWhitespace).count >= fusedWords, RouterRun.Intent(rawValue: top) == nil {
+            return (fused, true)
+        }
+        return (fused.isEmpty ? rules.ranked : fused, false)
     }
 }
 

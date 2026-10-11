@@ -49,3 +49,37 @@ What moved it, and what did not:
 9. Latency: one call, median 0.24 s, p95 0.3–0.4 s, about 1–2k input tokens.
 
 Differences under ~5 points between similar variants are noise at this size (bootstrap 95% intervals ±5–7).
+
+## Round 2 (2026-10-11): real moments
+
+Written cases misled. `real/` rebuilds 611 moments from your own Claude Code transcripts (the message you typed into
+a session, the board as Lookout would have shown it then, where it went; labelled by whether the board alone shows
+it; keys and tokens redacted before anything reaches Jev; data stays in gitignored `real/data/`), and 332 Router-style
+messages were written on those boards (`style`). `bench.py` scores every set; tune on `realA`, judge on `realB`
+(sessions never tuned on) and `heldout`. On real moments round 1's router was right 15% of the time and wrong 20%.
+
+| set (right / wrong) | round 1 | now (`combo` + `explore.fuse2:guarded`) |
+|---|---|---|
+| synth | 64.3 / 2.4 | 58.6 / 1.4 |
+| heldout | 75.3 / 1.3 | 68.0 / 2.0 |
+| style | 70.8 / 1.8 | 69.6 / 0.9 |
+| realB | 14.5 / 21.5 | 34.6 / 4.7 |
+
+Every real wrong send left is one the labellers found ambiguous (mostly a session's first message where a near-identical
+session existed). What did it (explore/, one module per explorer):
+1. `question` caught questions you ask a session about its own work (p > 0.95); worded as "a question to Lookout
+   about the board, not to a session about its own work", plus a gate on whether the message speaks to one agent as
+   "you" that vetoes Lookout's intents, and a compound gate that says one long message for one session is no:
+   real wrong 20% → 9%.
+2. Recency: a real message went to the session that just finished 60% of the time; Jev reads "3m ago" poorly. A
+   yes/no per latest session ("is `message` your next message in this conversation?") is right 91 of 95 times when one
+   stands out and the route doesn't disagree; a small fitted model (P ∝ exp(w·features): Jev's log p, recency ranks,
+   running, the checks, the gates) weighs Jev with the board, and a logistic on the moment says how sure its pick is.
+3. The decision: the rules' send when the fusion agrees (P ≥ 0.5), else the fusion's own pick at sureness 0.9, for
+   three words or more, never Lookout's own.
+4. Order: jev.py used to sort keys, so named options were never shuffled; shuffled for real, the decision changed on
+   14% of real moments, and Lookout's own order (working, then latest finished) was the best. Lookout now sends them in
+   that order (JevClient.orderedObject).
+5. Not worth it: categorical recency words, a "latest" field (Jev obeys it as an instruction: 32% wrong), richer
+   context (+4–5 top1 at +40% tokens), fewer options, a second verification call.
+Swift (RouteFusion) decides exactly as the measured policy on all 360 written cases (RouterFusionParityTests).
