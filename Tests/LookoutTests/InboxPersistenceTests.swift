@@ -175,6 +175,34 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: other.path).contains { $0.hasPrefix("state.json.bak-") })
     }
 
+    @Test func theSameDamagedFileIsKeptAsideOnceAndOnlyTheLatestCopiesStay() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        func backups() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }.sorted()
+        }
+        // Launch after launch with the same damaged file: one copy.
+        for _ in 0..<3 {
+            try Data("not json".utf8).write(to: file)
+            let store = Store()
+            store.stateFile = file
+            store.load()
+        }
+        #expect(try backups().count == 1)
+        // Distinct damaged files: the latest five stay.
+        for n in 0..<7 {
+            try Data("not json \(n)".utf8).write(to: file)
+            let store = Store()
+            store.stateFile = file
+            store.load()
+        }
+        let kept = try backups()
+        #expect(kept.count == Store.maxBackups)
+        #expect(try kept.map { String(decoding: try Data(contentsOf: folder.appendingPathComponent($0)), as: UTF8.self) }.sorted()
+                == (2..<7).map { "not json \($0)" })
+    }
+
     @Test func oneElementThatNoLongerDecodesIsLostAloneNotItsWholeList() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

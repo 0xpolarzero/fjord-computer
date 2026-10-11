@@ -628,17 +628,43 @@ final class Store {
     /// build couldn't read (a newer build's, or a damaged part) can still be brought back by hand.
     private func keepAside(_ file: URL, _ data: Data, dropped: [String]) {
         guard persists else { return }
-        let format = DateFormatter()
-        format.locale = Locale(identifier: "en_US_POSIX")
-        format.dateFormat = "yyyy-MM-dd-HHmmss"
-        let stamp = format.string(from: Date())
-        let backup = file.deletingLastPathComponent().appendingPathComponent("\(file.lastPathComponent).bak-\(stamp)")
         do {
-            try data.write(to: backup, options: .withoutOverwriting)
-            Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup.lastPathComponent, privacy: .public)")
+            let backup = try Self.keepAside(data, of: file)
+            Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup, privacy: .public)")
         } catch {
             Self.stateLog.error("the saved state was read only in part, and keeping it aside failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Distinct copies kept aside of a file, at most: the oldest go first.
+    static let maxBackups = 5
+
+    /// Copies `data` (what `file` held) beside it as `<name>.bak-<date>`, unless a copy with the same bytes is already
+    /// there (the same damaged file, launch after launch, is kept once); past `maxBackups` copies the oldest go. Returns
+    /// the copy's name.
+    nonisolated static func keepAside(_ data: Data, of file: URL, now: Date = Date()) throws -> String {
+        let fm = FileManager.default
+        let folder = file.deletingLastPathComponent()
+        let prefix = file.lastPathComponent + ".bak-"
+        // Oldest first.
+        func made(_ name: String) -> Date {
+            ((try? fm.attributesOfItem(atPath: folder.appendingPathComponent(name).path))?[.creationDate] as? Date) ?? .distantPast
+        }
+        let kept = ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasPrefix(prefix) }
+            .map { ($0, made($0)) }.sorted { ($0.1, $0.0) < ($1.1, $1.0) }.map(\.0)
+        if let same = kept.first(where: { (try? Data(contentsOf: folder.appendingPathComponent($0))) == data }) { return same }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy-MM-dd-HHmmss"
+        var name = prefix + format.string(from: now)
+        var n = 1
+        while kept.contains(name) || fm.fileExists(atPath: folder.appendingPathComponent(name).path) {
+            n += 1
+            name = prefix + format.string(from: now) + "-\(n)"
+        }
+        try data.write(to: folder.appendingPathComponent(name), options: .withoutOverwriting)
+        for old in kept.dropLast(max(0, maxBackups - 1)) { try? fm.removeItem(at: folder.appendingPathComponent(old)) }
+        return name
     }
 
     private static let writer = DispatchQueue(label: "lookout.save")
