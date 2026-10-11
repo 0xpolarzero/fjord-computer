@@ -128,6 +128,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// Open, or on its way in (its morph plays before the window itself is in); one on its way out is closed already (a
     /// toggle opens it again).
     var isOpen: Bool { phase == .opening || (phase != .closing && window?.isVisible == true) }
+    /// What the window shortcut does: close the window you are looking at (or one on its way in), else bring it in front.
+    /// A window open behind another app or minimized comes forward: closing it would leave nothing to see.
+    var shortcutCloses: Bool { Self.shortcutCloses(phase: phase, front: isFront) }
+
+    static func shortcutCloses(phase: Phase, front: Bool) -> Bool { phase == .opening || (phase == .idle && front) }
     /// The window's content, kept while the window is closed: out of the window it stands still (no body runs, no clock,
     /// timeline or animation ticks, its tasks are cancelled), and back in it picks up where it was, its scroll positions and
     /// the rest of its state kept, its appearing (`onAppear`, `.task`, `onChange(initial:)`) run again as on a first open.
@@ -445,6 +450,18 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         watch(NSWindow.didChangeOcclusionStateNotification, object: window)
         watch(NSWindow.didMiniaturizeNotification, object: window)
         watch(NSWindow.didDeminiaturizeNotification, object: window)
+        // Lookout made active (⌘-Tab) while the window is open behind another app or minimized: the window comes in front,
+        // as any app's does. The bar never makes the app active, so this is the user asking for Lookout.
+        observers.append(center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
+            [weak self] _ in
+            MainActor.assumeIsolated { self?.raise() }
+        })
+    }
+
+    private func raise() {
+        guard phase == .idle, pending == nil, let window, window.isVisible || window.isMiniaturized,
+              !window.isKeyWindow else { return }
+        window.makeKeyAndOrderFront(nil)
     }
 
     /// Opening puts the window on the bar's screen, where it was left if that is the one, else at the same place relative

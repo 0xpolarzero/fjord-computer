@@ -481,9 +481,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hub?.setWindowOpen(true)
     }
 
-    /// The window shortcut: opens the window where it was left, or closes it (the bar comes back).
+    /// The window shortcut: closes the window you are looking at (the bar comes back), else brings it in front where it
+    /// was left, whether it was closed, minimized or behind another app.
     private func toggleWindow() {
-        if appWindow?.isOpen == true { appWindow?.close() } else { showWindow(nil) }
+        if appWindow?.shortcutCloses == true { appWindow?.close() } else { showWindow(nil) }
+    }
+
+    /// The Dock icon (there while the window is open): the window in front, whatever was in front of it.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow(nil)
+        return false
     }
 
     @objc private func openSettings() { showWindow(.settings) }
