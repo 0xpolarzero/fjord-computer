@@ -209,7 +209,8 @@ struct RouterAskBack: Identifiable, Equatable {
     @discardableResult
     func submit(_ text: String, context: RouterContext = RouterContext()) -> UUID? {
         guard let store, store.routerOn else { return nil }
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Sent as written (`RouterModel.sendable`): code keeps the indentation of its first line. Trimmed only to see it isn't empty.
+        let text = RouterModel.sendable(text)
         guard !text.isEmpty else { return nil }
         // Typing the name of a target answers an ask-back; nothing else is made of it. Not when a reply or a pinned target
         // already fixes where this message goes: it is a message of its own.

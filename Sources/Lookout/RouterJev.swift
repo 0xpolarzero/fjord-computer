@@ -229,9 +229,20 @@ extension RouterModel {
         return context
     }
 
-    /// The draft's words as they will be sent (pills written as @name).
+    /// The draft's words as they will be sent (pills written as @name): as written, the first line's indentation kept (code
+    /// pasted), only blank lines before it and whitespace after the end left out.
     func plainDraft(_ store: Store) -> String {
-        MentionText.plain(draft, tokens: tokens, name: store.folderName).trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.sendable(MentionText.plain(draft, tokens: tokens, name: store.folderName))
+    }
+
+    /// `text` without the blank lines it starts with or the whitespace it ends with; the rest (the first line's indentation)
+    /// as written. Empty when it is only whitespace.
+    static func sendable(_ text: String) -> String {
+        guard let first = text.firstIndex(where: { !$0.isWhitespace }) else { return "" }
+        let lineStart = text[..<first].lastIndex(where: \.isNewline).map(text.index(after:)) ?? text.startIndex
+        var out = String(text[lineStart...])
+        while let last = out.last, last.isWhitespace { out.removeLast() }
+        return out
     }
 
     /// The draft changed: Jev's pick follows it.

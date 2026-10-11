@@ -112,6 +112,14 @@ import Testing
         #expect(model.live.prediction == nil, "a waved-off target stays away for this draft")
     }
 
+    @Test func theDraftIsSentAsWrittenWithItsFirstLinesIndentation() {
+        let (s, model, _) = setup()
+        model.draft = "\n  \n    let x = 1\n    let y = 2\n  "
+        #expect(model.plainDraft(s) == "    let x = 1\n    let y = 2")
+        model.draft = " \n "
+        #expect(model.plainDraft(s).isEmpty)
+    }
+
     @Test func aSessionsPickIsPinnedAndSentWithTheMessage() async {
         let (s, model, _) = setup()
         model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "session “Update the docs” in docs",

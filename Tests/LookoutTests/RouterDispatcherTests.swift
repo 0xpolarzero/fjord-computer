@@ -184,6 +184,15 @@ import Testing
         #expect(decision(s, a)?.decision.confirmed == true)
     }
 
+    @Test func pastedCodeKeepsTheIndentationOfItsFirstLine() async {
+        let (s, d, f) = setup()
+        let code = "    guard let x else { return }\n    print(x)"
+        let a = d.submit("\n" + code + "\n\n", context: RouterContext(target: "session:local_b"))
+        await finish(d, f, a)
+        #expect(decision(s, a)?.trigger == .you(code), "as written, only the blank lines around it left out")
+        #expect(d.submit(" \n\t ") == nil)
+    }
+
     @Test func aPinnedTargetGoesWithoutJevAndAWavedOffOneIsNeverSentToUnasked() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
