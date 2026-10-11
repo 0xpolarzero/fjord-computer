@@ -137,6 +137,31 @@ import Testing
         #expect(posted().count == 2)
     }
 
+    @Test func withTheRouterOffComingBackSaysOnlyWhatCameInTheInbox() {
+        let (s, idle, _) = store()
+        var bodies: [String] = []
+        s.notifier.onPost = { bodies.append($0.content.body) }
+        let ask = card("ask", .asks, urgency: 1, minutes: -1)
+        s.router.cards = [ask]
+        idle.seconds = 400
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        #expect(!s.routerAttention.admitInbox(.low))
+        // Off while you're away: its card is not said when you're back, the inbox still is.
+        s.router.enabled = false
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(bodies == ["1 in your inbox"])
+        // Nothing but its cards: nothing at all.
+        idle.seconds = 400
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        s.router.enabled = true
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        s.router.enabled = false
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(bodies == ["1 in your inbox"])
+    }
+
     @Test func aLockedScreenIsAwayAndNothingCameMeansNoSummary() {
         let (s, _, posted) = store()
         s.routerAttention.locked = true

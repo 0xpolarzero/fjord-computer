@@ -146,9 +146,11 @@ enum RouterBanners {
     }
 
     /// Back after being away: one banner for what came meanwhile, opening on the most urgent of it.
+    /// With the Router off, its cards are left out: only what came in the inbox is said.
     static func postBack(_ strip: AwayStrip, store: Store, windowIsKey: Bool) {
-        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(store.routerShownCards) else { return }
-        let first = strip.listed(store.routerShownCards).first
+        let cards = store.router.enabled ? store.routerShownCards : []
+        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(cards) else { return }
+        let first = strip.listed(cards).first
         store.notifier.post(id: first.map { prefix + $0.id } ?? Notifier.summaryPrefix + UUID().uuidString,
                             title: "While you were away", subtitle: "", body: line, quiet: false)
     }
