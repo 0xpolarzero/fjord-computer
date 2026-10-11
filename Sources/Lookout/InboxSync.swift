@@ -706,6 +706,7 @@ enum InboxSync {
                               createdAt: at, updatedAt: at)
             thing.workflowName = workflow.name
             thing.branch = branch
+            if status.branch != branch, !status.branch.isEmpty { thing.ciBranch = status.branch }
             thing.failingJobs = workflow.failing
             thing.ciRun = workflow.run
             thing.ciRunning = workflow.running ?? false

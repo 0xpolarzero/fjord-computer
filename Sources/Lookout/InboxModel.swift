@@ -519,6 +519,9 @@ struct Thing: Codable, Hashable, Identifiable {
     // Workflows
     var workflowName: String?
     var branch: String?
+    /// The name its branch has on GitHub now, when it isn't `branch`: a rule that names `master` keeps its things as
+    /// `@master` (`branch`), while master renamed main is read, named and re-run as main.
+    var ciBranch: String?
     /// The repo's default branch, when known: what a rule that names no branch watches.
     var defaultBranch: String?
     var failingJobs: [String] = []
@@ -533,6 +536,9 @@ struct Thing: Codable, Hashable, Identifiable {
 }
 
 extension Thing {
+    /// A workflow's branch by the name it has on GitHub now (`ciBranch`), else as its rule names it.
+    var currentBranch: String? { ciBranch ?? branch }
+
     /// Tolerant of a file from an older build: a field added since it was written (`behindBase`, `reviewRequests`…) takes
     /// its default, where the synthesized decoding lost the thing (and, with it, every thing).
     init(from decoder: Decoder) throws {
@@ -571,6 +577,7 @@ extension Thing {
         greptileScore = try c.decodeIfPresent(Int.self, forKey: .greptileScore)
         workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName)
         branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        ciBranch = try c.decodeIfPresent(String.self, forKey: .ciBranch)
         defaultBranch = try c.decodeIfPresent(String.self, forKey: .defaultBranch)
         failingJobs = try c.decodeIfPresent([String].self, forKey: .failingJobs) ?? []
         additions = try c.decodeIfPresent(Int.self, forKey: .additions)

@@ -234,7 +234,7 @@ import Testing
             case "/repos/a/x/branches/master", "/repos/a/x/branches/main":
                 return .init(200, #"{"name":"main","commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
             case "/repos/a/x/actions/runs":
-                let run = #"{"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"failure","check_suite_id":5}"#
+                let run = #"{"id":7,"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"failure","check_suite_id":5}"#
                 return .init(200, query["branch"] == "main" ? #"{"workflow_runs":[\#(run)]}"# : #"{"workflow_runs":[]}"#)
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
             case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
@@ -244,7 +244,20 @@ import Testing
         let asked = try await store.fetchBranchCI("a/x", branch: "master")
         #expect(asked.branch == "main" && asked.workflows.map(\.name) == ["CI"] && asked.workflows.map(\.state) == [.failure])
         // A rule's branch keeps its things as it names them.
-        #expect(InboxSync.workflowThings(repo: "a/x", branch: "master", status: asked).map(\.id) == ["workflow:a/x:11@master"])
+        let things = InboxSync.workflowThings(repo: "a/x", branch: "master", status: asked)
+        #expect(things.map(\.id) == ["workflow:a/x:11@master"])
+        // Named, labeled and re-run by the name it has now.
+        let thing = try #require(things.first)
+        #expect(thing.branch == "master" && thing.ciBranch == "main" && RouterWaits.ciLabel(thing) == "CI: CI on main in a/x")
+        #expect(InboxActions.reference(thing) == "a/x · CI on main")
+        let rerun = try await StoreActionPerformer(store: store).failedRuns(for: thing)
+        #expect(rerun.map(\.name) == ["CI"])
+        store.things = [thing.id: thing]
+        let session = ClaudeSession(id: "s", title: "t", folder: "/x", completedTurns: 1, lastActivity: Date())
+        let watch = RouterTriage.Watch(target: .ci(thing: thing.id), label: "", ref: "a/x")
+        #expect(store.waitNamed(watch, in: "Waiting for the CI workflow on main in a/x.", by: session))
+        #expect(store.waitNamed(watch, in: "Waiting for the CI workflow on master in a/x.", by: session))
+        #expect(!store.waitNamed(watch, in: "Waiting for the CI workflow on dev in a/x.", by: session))
         // The default branch found as master before the rename is main now.
         let main = try await store.fetchCI("a/x")
         #expect(main.branch == "main" && main.workflows.map(\.name) == ["CI"] && store.defaultBranches["a/x"] == "main")

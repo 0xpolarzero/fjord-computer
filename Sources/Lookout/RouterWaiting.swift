@@ -82,7 +82,7 @@ enum RouterWaits {
     /// workflows can share a name and a branch).
     static func ciLabel(_ thing: Thing) -> String {
         if thing.kind == .workflow {
-            return "CI: \(thing.workflowName ?? thing.title) on \(thing.branch ?? "the default branch") in \(thing.repo)"
+            return "CI: \(thing.workflowName ?? thing.title) on \(thing.currentBranch ?? "the default branch") in \(thing.repo)"
         }
         return "CI on \(thing.repo)\(thing.number.map { "#\($0)" } ?? "")"
     }
@@ -199,12 +199,15 @@ extension Store {
                       let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty,
                       lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w])"#,
                                   options: .regularExpression) != nil,
-                      let branch = thing.branch, Self.namesBranch(lower, branch: branch) else { return false }
+                      // By the name its branch has now, or as its rule names it (master renamed main).
+                      case let branches = Set([thing.currentBranch, thing.branch].compactMap { $0?.lowercased() }),
+                      branches.contains(where: { Self.namesBranch(lower, branch: $0) }) else { return false }
                 // The same workflow on another branch named too: which one it waits on isn't clear.
                 return !things.values.contains { other in
                     other.id != thingID && other.kind == .workflow && other.repo.lowercased() == thing.repo.lowercased()
                         && other.workflowName?.lowercased().trimmingCharacters(in: .whitespaces) == name
-                        && other.branch.map { $0.lowercased() != branch.lowercased() && Self.namesBranch(lower, branch: $0) } == true
+                        && [other.currentBranch, other.branch].compactMap { $0?.lowercased() }
+                            .contains { !branches.contains($0) && Self.namesBranch(lower, branch: $0) }
                 }
             }
             if let ref, LookoutGate.mentions(lower, ref: ref) { return true }

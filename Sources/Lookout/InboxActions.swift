@@ -676,7 +676,7 @@ enum InboxActions {
 
     static func reference(_ thing: Thing) -> String {
         switch thing.kind {
-        case .workflow: "\(thing.repo) · \(thing.workflowName ?? "workflow") on \(thing.branch ?? "its branch")"
+        case .workflow: "\(thing.repo) · \(thing.workflowName ?? "workflow") on \(thing.currentBranch ?? "its branch")"
         default: "\(thing.repo)#\(thing.number ?? 0)"
         }
     }
@@ -1329,7 +1329,8 @@ final class StoreActionPerformer: ActionPerformer {
             let id = thing.id.split(separator: ":").last.map { String($0.split(separator: "@").first ?? "") } ?? ""
             guard let number = Int(id) else { throw ActionFailure("checks that aren't GitHub Actions can't be re-run") }
             workflow = number
-            query["branch"] = thing.branch ?? ""
+            // Its runs are listed under the name its branch has now (master renamed main lists none as master).
+            query["branch"] = thing.currentBranch ?? ""
             query["event"] = "push"
         case .issue:
             return []
