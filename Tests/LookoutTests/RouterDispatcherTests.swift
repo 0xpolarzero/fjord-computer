@@ -1202,6 +1202,24 @@ import Testing
         #expect(d.typedPick("Fix the login bug.")?.target == "session:local_a")
     }
 
+    @Test func aTypedNameIsMatchedAsTypedBeforeItsLeadingTheIsDropped() async {
+        let (s, d, f) = setup()
+        s.claudeSessions["local_t"] = ClaudeSession(id: "local_t", title: "The API", folder: "/code/lookout", lastActivity: Date())
+        s.claudeSessions["local_p"] = ClaudeSession(id: "local_p", title: "API", folder: "/code/other", lastActivity: Date())
+        f.ranked = [.init(target: "session:local_t", p: 0.4), .init(target: "session:local_p", p: 0.3),
+                    .init(target: "session:local_a", p: 0.2), .init(target: "unclear", p: 0.1)]
+        let ask = d.submit("rotate the production token")
+        await finish(d, f, ask)
+        // The name as typed is an option's: that one, never another the name fits once "the" is dropped.
+        #expect(d.typedPick("The API")?.target == "session:local_t")
+        #expect(d.typedPick(" the api. ")?.target == "session:local_t")
+        #expect(d.typedPick("API")?.target == "session:local_p")
+        // Nothing fits it as typed: "to" dropped, it fits one.
+        #expect(d.typedPick("to API")?.target == "session:local_p")
+        #expect(d.typedPick("to the login bug") == nil)
+        #expect(d.typedPick("to Fix the login bug")?.target == "session:local_a")
+    }
+
     @Test func somethingElseCanPickAProjectToStartIn() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "unclear", p: 1)]
