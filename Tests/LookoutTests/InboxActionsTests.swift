@@ -101,6 +101,30 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(saved.runs.values.contains { $0.thing == "pr:a/one#3" && $0.state == .done })
     }
 
+    @Test func eachJobIsOnDiskAsRunningOnlyWhileItRunsSoAQuitInterruptsOnlyThatOne() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, performer) = store([], actions: [CategoryAction.make(.comment("hi"))])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        let file = try #require(store.actionsFile)
+        await store.runActions()
+        add(store, InboxFixture.pr(4))
+        add(store, InboxFixture.pr(5))
+        // As each comment is posted, what a quit would leave on disk: that one running, the other not yet recorded.
+        var onDisk: [Int] = []
+        performer.onAct = {
+            let dec = JSONDecoder()
+            dec.dateDecodingStrategy = .iso8601
+            let saved = try? dec.decode(ActionLedger.self, from: Data(contentsOf: file))
+            onDisk.append(saved?.runs.values.filter { $0.state == .running }.count ?? -1)
+        }
+        await store.runActions()
+        #expect(performer.comments.count == 2)
+        #expect(onDisk == [1, 1])
+    }
+
     @Test func nothingRunsWhileItsRecordCannotBeSavedAndItRunsOnceItCan() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: folder) }

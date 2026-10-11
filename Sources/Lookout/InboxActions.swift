@@ -336,7 +336,8 @@ enum InboxActions {
     }
 
     /// A job planned before others ran, as it stands now: nil when it is no longer due (its action deleted or edited, its
-    /// category's rules or groups changed, the thing out of the category or Done), else for the facts it still has.
+    /// category's rules or groups changed, the thing out of the category or Done, its run recorded meanwhile), else for the
+    /// facts it still has.
     static func stillDue(_ job: Job, entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup],
                          ledger: ActionLedger, me: String) -> Job? {
         guard let category = categories.first(where: { $0.id == job.category.id }),
@@ -347,11 +348,13 @@ enum InboxActions {
         else { return nil }
         let facts = triggering(entry, me: me)
         guard !facts.isEmpty else { return nil }
+        func unrecorded(_ key: String) -> Bool { ledger.run(category.id, entry.id, job.action.id, key) == nil }
+        if job.keys == ["enter"], !unrecorded("enter") { return nil }
         var now = job
         now.category = category
         now.entry = entry
         if job.keys != ["enter"] {
-            now.facts = facts.filter { job.keys.contains($0.key) }
+            now.facts = facts.filter { job.keys.contains($0.key) && unrecorded($0.key) }
             now.keys = now.facts.map(\.key)
             if now.keys.isEmpty { return nil }
         } else {
@@ -775,46 +778,36 @@ extension Store {
             var ledger = actionLedger
             let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
                                          known: Set(things.keys), now: now)
-            let batch = Array(jobs.prefix(InboxActions.perSync))
-            let planned = ledger
-            for job in batch {
-                for key in job.keys {
-                    ledger.set(ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
-                                         state: .running, at: now))
-                }
-            }
             if ledger != actionLedger { actionLedger = ledger }
-            // Nothing reaches outside before its record is on disk: a failed write is tried again now, and if that fails
-            // too the runs are not made, and their records go back to what they were (due again at a later refresh).
-            if !batch.isEmpty, await !actionsWritten() {
-                saveActions()
+            for queued in jobs.prefix(InboxActions.perSync) {
+                // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
+                guard !baselinePending,
+                      let job = InboxActions.stillDue(queued, entries: entries, categories: categories, groups: groups,
+                                                      ledger: actionLedger, me: me) else { continue }
+                // Each job is recorded as running just before it reaches outside, and nothing reaches outside before that
+                // record is on disk: a quit during one leaves only that one interrupted, not those still waiting. A failed
+                // write is tried again now, and if that fails too the run isn't made, and its record goes back to what it
+                // was (due again at a later refresh).
+                let before = actionLedger
+                var running = before
+                for key in job.keys {
+                    running.set(ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
+                                          state: .running, at: now))
+                }
+                actionLedger = running
                 if await !actionsWritten() {
-                    Self.actionsLog.error("\(batch.count, privacy: .public) actions not run: their record couldn't be saved")
-                    var back = actionLedger
-                    for job in batch {
+                    saveActions()
+                    if await !actionsWritten() {
+                        Self.actionsLog.error("An action wasn't run: its record couldn't be saved")
+                        var back = actionLedger
                         for key in job.keys {
                             let id = ActionLedger.key(job.category.id, job.entry.id, job.action.id, key)
-                            back.runs[id] = planned.runs[id]
+                            back.runs[id] = before.runs[id]
                         }
+                        actionLedger = back
+                        return
                     }
-                    actionLedger = back
-                    return
                 }
-            }
-            for queued in batch {
-                // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
-                let current = baselinePending ? nil : InboxActions.stillDue(queued, entries: entries, categories: categories,
-                                                                             groups: groups, ledger: actionLedger, me: me)
-                let dropped = queued.keys.filter { !(current?.keys.contains($0) ?? false) }
-                if !dropped.isEmpty {
-                    var back = actionLedger
-                    for key in dropped {
-                        let id = ActionLedger.key(queued.category.id, queued.entry.id, queued.action.id, key)
-                        if back.runs[id]?.state == .running { back.runs[id] = planned.runs[id] }
-                    }
-                    actionLedger = back
-                }
-                guard let job = current else { continue }
                 let result = await InboxActions.perform(job, with: performer, now: now)
                 var next = actionLedger
                 for key in job.keys {
