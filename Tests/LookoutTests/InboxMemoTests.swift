@@ -25,7 +25,7 @@ import Testing
         let thing = InboxFixture.pr(1, updated: Date().addingTimeInterval(-86_400 + 0.5))
         let store = InboxFixture.store([thing], category: stale(days: 1))
         #expect(store.entries.isEmpty)
-        try await Task.sleep(for: .seconds(1))
+        await waitUntil(within: 30) { !store.entries.isEmpty }
         #expect(store.entries.map(\.id) == [thing.id])
     }
 
@@ -36,7 +36,7 @@ import Testing
         store.notifier.onPost = { posted.append($0.identifier) }
         store.announceInbox()
         let revision = store.inboxRevision
-        try await Task.sleep(for: .seconds(1.5))
+        await waitUntil(within: 30) { store.inboxRevision != revision && !posted.isEmpty }
         #expect(store.inboxRevision != revision)
         #expect(posted == ["inbox:\(thing.id)"])
     }
