@@ -203,6 +203,33 @@ import Testing
                 == (2..<7).map { "not json \($0)" })
     }
 
+    @Test func aFileThatCouldNotBeKeptAsideIsNotWrittenOverUntilItIs() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let original = Data(#"{"settings": {"pollInterval": 45, "notifications": true}, "categories": [{"name": 5}]}"#.utf8)
+        try original.write(to: file)
+        struct Full: Error {}
+        let store = Store()
+        store.stateFile = file
+        store.keepAsideStandIn = { _, _ in throw Full() }
+        store.load()
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        // The copy failed, launch and save alike: the original stays as it was, and the change waits in memory.
+        #expect(try Data(contentsOf: file) == original)
+        #expect(store.marks.keys.sorted() == ["pr:a/one#1"])
+        // The copy can be made: it is, then the change is written.
+        store.keepAsideStandIn = nil
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
+    }
+
     @Test func oneElementThatNoLongerDecodesIsLostAloneNotItsWholeList() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

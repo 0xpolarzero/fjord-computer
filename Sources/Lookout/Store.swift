@@ -626,15 +626,24 @@ final class Store {
 
     /// A file read only in part is copied aside (`state.json.bak-<date>`) before anything is written over it: what this
     /// build couldn't read (a newer build's, or a damaged part) can still be brought back by hand.
+    /// Until that copy is made, nothing is written over the file: each write tries the copy again first, and the changes
+    /// wait in memory (see `writeSnapshot`).
     private func keepAside(_ file: URL, _ data: Data, dropped: [String]) {
         guard persists else { return }
         do {
-            let backup = try Self.keepAside(data, of: file)
+            let backup = try (keepAsideStandIn ?? { try Self.keepAside($0, of: $1) })(data, file)
+            unkept = nil
             Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup, privacy: .public)")
         } catch {
-            Self.stateLog.error("the saved state was read only in part, and keeping it aside failed: \(error.localizedDescription, privacy: .public)")
+            unkept = (file, data, dropped)
+            Self.stateLog.error("the saved state was read only in part, and keeping it aside failed (it isn't written over until it is): \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    /// A file read only in part not yet kept aside: what it held, and what was lost of it.
+    @ObservationIgnored private var unkept: (file: URL, data: Data, dropped: [String])?
+    /// Stands in for `Store.keepAside(_:of:)` (tests).
+    @ObservationIgnored var keepAsideStandIn: ((Data, URL) throws -> String)?
 
     /// Distinct copies kept aside of a file, at most: the oldest go first.
     static let maxBackups = 5
@@ -702,6 +711,13 @@ final class Store {
         }
         guard let url = file else { return }
         let revision = persistedRevision
+        if let unkept {
+            keepAside(unkept.file, unkept.data, dropped: unkept.dropped)
+            guard self.unkept == nil else {
+                wrote(revision, failure: "the file read only in part isn't kept aside yet, so it isn't written over", retry: !wait)
+                return
+            }
+        }
         let box = SnapshotBox(state: PersistedState(settings: settings, agents: agents, router: router, categories: categories,
                                                        groups: groups, categorySections: categorySections, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
