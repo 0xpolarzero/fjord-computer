@@ -28,8 +28,10 @@ What moved it, and what did not:
 1. A card and its session were two options, so Jev's sureness of the session was split between them (p 0.5 + 0.4
    reads as unsure). One option per destination: +18 points of right sends on the first set, no new call.
 2. Opaque keys whose descriptions sat in a fenced state blob flipped the top answer with the options' order in 38 of
-   210 cases; options named by the session, described in their own criteria, in 0–8. TypeSafe's guidance says the
-   same: option names are read, indirection costs accuracy.
+   210 cases. Options named by the session, described in their own criteria, ranked better (top1 89% vs 85%).
+   Correction (round 2): jev.py sends `json.dumps(sort_keys=True)`, so named options always reached Jev in the same
+   (alphabetical) order and their "0–8 flips" measured nothing; only v0's flips are real, as its keys change with the
+   order. Lookout sends the options in Swift dictionary order, which varies from run to run.
 3. Context: what you last told a session belongs on that session's option. The global list of your last 10 messages
    was worse with it (61% vs 69% right) and caused the worst errors: "yes" sent to the session you last messaged
    instead of the one asking. Examples of past routings had no measurable effect on these sets and were dropped.
