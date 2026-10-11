@@ -213,8 +213,11 @@ extension RouterModel {
     func context(_ store: Store) -> RouterContext {
         let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
         var context = RouterContext(replyTo: reply, projects: projects, target: live.pinned, notTo: live.dismissed)
-        // Jev's pick shown over the composer for the draft as it is now: sending it goes with it.
-        context.shown = live.valid(text: plainDraft(store), context: context, store: store)?.target
+        // Jev's pick shown over the composer for the draft as it is now: sending it goes with it, as it was shown (the
+        // dispatcher's copy of it may have expired, and asking again could go elsewhere).
+        let shown = live.valid(text: plainDraft(store), context: context, store: store)
+        context.shown = shown?.target
+        context.jev = shown?.found
         // Jev's pick you clicked, while the draft still goes there (as the pinned target or the reply to its card).
         if let chosen = live.chosen, chosen.target == live.pinned || reply.map({ "answer:\($0)" }) == chosen.target {
             context.predicted = chosen.target

@@ -172,6 +172,18 @@ import Testing
         #expect(f.prepared.isEmpty && decision(s, b)?.decision.confirmed == nil)
     }
 
+    @Test func aPickShownOverTheComposerIsSentAsShownAfterItsCopyExpired() async {
+        let (s, d, f) = setup()
+        // Asked again now (the copy kept from typing expired), Jev would go elsewhere.
+        f.ranked = [.init(target: "session:local_a", p: 0.9), .init(target: "unclear", p: 0.1)]
+        let shown = RouterDispatcher.Classification(ranked: [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)],
+                                                    sure: true, assisted: true)
+        let a = d.submit("add a changelog entry to the docs", context: RouterContext(jev: shown, shown: "session:local_b"))
+        await finish(d, f, a)
+        #expect(f.ranks == 0 && f.prepared == ["local_b"], "the chip you saw is where it goes")
+        #expect(decision(s, a)?.decision.confirmed == true)
+    }
+
     @Test func aPinnedTargetGoesWithoutJevAndAWavedOffOneIsNeverSentToUnasked() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]

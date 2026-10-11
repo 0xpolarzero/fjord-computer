@@ -506,7 +506,13 @@ struct RouterAskBack: Identifiable, Equatable {
         stage(job, "classifying")
         let narrowed = job.context.projects
         let history = store.recentDecisions(10, excluding: job.id)
-        var found = await classify(job, projects: narrowed, history: history)
+        // The pick shown over the composer for these words is the decision: sent as shown, not asked again.
+        var found: Classification
+        if let shown = job.context.shown, let carried = job.context.jev, carried.assisted, carried.sure, carried.top?.target == shown {
+            found = carried
+        } else {
+            found = await classify(job, projects: narrowed, history: history)
+        }
         try Task.checkCancellation()
         // Only the pick you saw over the composer, for these words, is one you went with; a pick read while you typed (and
         // kept for the send) that you never saw is Jev's like any other.
