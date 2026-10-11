@@ -445,7 +445,8 @@ enum InboxEngine {
             return thing.reviews.filter { $0.at > cutoff && matches(by, $0.author, r) }
                 .map { Fact(key: "review:\($0.id)", label: "review by @\($0.author.login)", tint: .attention) }
         case .newCommits(let by, _):
-            return thing.commits.filter { $0.at > cutoff && matches(by, login: $0.author, r) }
+            // By when it came to the PR: committed before Done and pushed after it is new.
+            return thing.commits.filter { $0.arrived > cutoff && matches(by, login: $0.author, r) }
                 .map { Fact(key: "commit:\($0.id)", label: "commit by @\($0.author)", tint: .neutral) }
         case .mentions(let pick, _):
             // In comments, and in review threads (inline, on a line of the diff).

@@ -31,10 +31,14 @@ final class Store {
             inboxRevision &+= 1; persistedRevision &+= 1
             // Only when CI was seen to change was set below: nothing else changed.
             guard !stampingCI else { return }
-            if !loading, let stamped = Self.stampingCIChanges(things, before: oldValue, now: Date()) {
-                stampingCI = true
-                things = stamped
-                stampingCI = false
+            if !loading {
+                let now = Date()
+                let ci = Self.stampingCIChanges(things, before: oldValue, now: now)
+                if let stamped = Self.stampingCommitArrivals(ci ?? things, before: oldValue, now: now) ?? ci {
+                    stampingCI = true
+                    things = stamped
+                    stampingCI = false
+                }
             }
             resolveWaits(); if !loading { carryAssignmentStamps(seenBefore: oldValue) }
         }
@@ -58,6 +62,26 @@ final class Store {
             let at = same ? thing.ciChangedAt ?? old.ciChangedAt
                 : thing.ciChangedAt == nil || thing.ciChangedAt == old.ciChangedAt ? now : thing.ciChangedAt
             if at != thing.ciChangedAt { stamped[id]?.ciChangedAt = at; moved = true }
+        }
+        return moved ? stamped : nil
+    }
+
+    /// The things with when each commit came to its PR (`ThingCommit.seenAt`): kept from before for one it had, `now` for
+    /// one first seen on a PR read before (pushed since, though committed earlier); nil when none moved. What a PR has when
+    /// it is first read (or read again after it was gone) isn't stamped: it was all there before.
+    nonisolated static func stampingCommitArrivals(_ things: [String: Thing], before: [String: Thing], now: Date) -> [String: Thing]? {
+        var stamped = things
+        var moved = false
+        for (id, thing) in things where thing.kind == .pr && !thing.commits.isEmpty {
+            guard let old = before[id], !old.commits.isEmpty else { continue }
+            let seen = Dictionary(old.commits.map { ($0.id, $0.seenAt) }, uniquingKeysWith: { a, _ in a })
+            var commits = thing.commits
+            for i in commits.indices {
+                // One it had keeps what it had (nil when it was there when the PR was first read).
+                let at: Date? = if let had = seen[commits[i].id] { had } else { commits[i].seenAt ?? now }
+                if at != commits[i].seenAt { commits[i].seenAt = at; moved = true }
+            }
+            stamped[id]?.commits = commits
         }
         return moved ? stamped : nil
     }

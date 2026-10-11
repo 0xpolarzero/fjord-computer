@@ -466,7 +466,14 @@ struct ThreadsTail: Codable, Hashable {
 struct ThingCommit: Codable, Hashable, Identifiable {
     var id: String
     var author: String
+    /// When it was committed, as GitHub says: pushed later, it reaches the PR only then.
     var at: Date
+    /// When it was first seen on a PR read before without it (`Store.stampingCommitArrivals`); nil for what a PR had when
+    /// it was first read, or in an older file.
+    var seenAt: Date? = nil
+
+    /// When it came to the PR, as far as Lookout knows: what counts it as new since Done or your review.
+    var arrived: Date { max(at, seenAt ?? at) }
 }
 
 /// A review someone was asked for, and when: a new request after a review is a new fact.

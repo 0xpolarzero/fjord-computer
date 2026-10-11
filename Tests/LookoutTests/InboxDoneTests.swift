@@ -21,6 +21,33 @@ import Testing
         return (s, comments.id, all.id)
     }
 
+    @Test func aCommitPushedAfterDoneIsNewThoughItWasMadeBefore() {
+        var thing = InboxFixture.pr(1)
+        thing.commits = [ThingCommit(id: "c0", author: "alice", at: Date().addingTimeInterval(-3600))]
+        thing.headSha = "c0"
+        let commits = InboxCategory(name: "Commits", symbol: "arrow.up", color: .blue,
+                                    rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.newCommits(by: Pick())], createdAt: .distantPast)])
+        let s = InboxFixture.store([thing], category: commits)
+        #expect(s.entries.map { $0.facts.map(\.key) } == [["commit:c0"]])
+        s.markDone(s.entries[0])
+        #expect(s.entries.map(\.isDone) == [true])
+        // Gone from a refresh, then back with the commits it had: those were there before, and it stays Done.
+        s.applyThings([:])
+        s.applyThings([thing.id: thing])
+        #expect(s.entries.map(\.isDone) == [true])
+        // Alice committed five minutes before Done, and pushed only now: it is new since Done.
+        var pushed = thing
+        pushed.commits.append(ThingCommit(id: "c1", author: "alice", at: Date().addingTimeInterval(-300)))
+        pushed.headSha = "c1"
+        s.applyThings([thing.id: pushed])
+        #expect(s.entries.first?.isDone == false)
+        #expect(s.entries.first?.facts.map(\.key).contains("commit:c1") == true)
+        // Read again, it arrived when it was first seen.
+        let seen = s.things[thing.id]?.commits.last?.seenAt
+        s.applyThings([thing.id: pushed])
+        #expect(seen != nil && s.things[thing.id]?.commits.last?.seenAt == seen)
+    }
+
     @Test func anAssignmentWhoseTimeBecomesKnownStaysDoneRatedAndActedOn() {
         // An issue assigned to you, rated before GitHub said when (`assigned`), and Done.
         var issue = Thing(id: "issue:a/one#2", kind: .issue, repo: "a/one", number: 2, title: "t",
