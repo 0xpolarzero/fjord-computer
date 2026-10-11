@@ -703,8 +703,23 @@ final class RouterMCPServer: @unchecked Sendable {
     /// A session's words in one of Jev's hints: one line, without control or hidden characters, bounded, unable to open or
     /// close a session fence.
     static func hinted(_ text: String, _ limit: Int) -> String {
-        SessionFence.neutralized(UntrustedText.clean(text, limit: limit))
+        SessionFence.neutralized(UntrustedText.clean(redacted(text), limit: limit))
     }
+
+    /// Keys and tokens out of what goes to Jev: what you told a session and what it said can hold them (two live keys
+    /// in transcripts reached TypeSafe through the evals before this; evals/router/real/boards.py has the same patterns).
+    static func redacted(_ text: String) -> String {
+        var out = text
+        for pattern in secretPatterns {
+            out = pattern.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: "[redacted]")
+        }
+        return out
+    }
+
+    private static let secretPatterns: [NSRegularExpression] = [
+        #"(sk-[A-Za-z0-9_-]{16,}|sk_(live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|(?i:(api[_-]?key|token|secret|password|passwd|bearer)\s*[:=]\s*\S{8,}))"#,
+        #"\b(?=[A-Za-z0-9._\-]*\d)(?=[A-Za-z0-9._\-]*[A-Za-z])[A-Za-z0-9._\-]{28,}\b"#,
+    ].map { try! NSRegularExpression(pattern: $0) }
 
     /// `projects`: folders the user tagged; only their cards, sessions and new-session targets are offered then.
     func targets(_ store: Store, projects: Set<String>? = nil) -> [Target] {

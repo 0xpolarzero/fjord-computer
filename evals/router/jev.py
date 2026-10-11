@@ -27,10 +27,15 @@ def key():
     return _key
 
 
+ordered = os.environ.get("JEV_ORDERED") == "1"
+
+
 def ask(state, questions, model="jev-latest", cache=True, sample=0):
     """One call. Cached on disk by request and sample index (a new index asks the same request again on purpose)."""
     body = {"model": model, "state": state, "questions": questions}
-    raw = json.dumps(body, sort_keys=True)
+    # Sent in the order given (Jev leans toward the first option; Lookout's order varies), cached by that order. Before
+    # round 2 this sorted keys, so shuffled named options reached Jev identical.
+    raw = json.dumps(body, sort_keys=not ordered)
     digest = hashlib.sha256((raw + f"#{sample}").encode()).hexdigest()
     path = CACHE / digest[:2] / f"{digest}.json"
     if cache and path.exists():

@@ -383,6 +383,27 @@ def swift_keys(fmt):
 FORMATS["swift"] = swift_keys("v3-told+g")
 
 
+_explored = False
+
+
+def _explorations():
+    """Formats explorers add in explore/<name>.py: each module's FORMATS dict joins this one. Loaded on first need,
+    not at import: explorer modules import run and formats themselves."""
+    global _explored
+    if _explored:
+        return
+    _explored = True
+    import importlib
+    import pathlib
+    for path in sorted((pathlib.Path(__file__).parent / "explore").glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        mod = importlib.import_module(f"explore.{path.stem}")
+        FORMATS.update(getattr(mod, "FORMATS", {}))
+
+
 def build(name, case, shuffle_seed=None):
+    if name not in FORMATS:
+        _explorations()
     rng = random.Random(shuffle_seed) if shuffle_seed is not None else None
     return FORMATS[name](case, rng=rng)
