@@ -46,10 +46,12 @@ enum RouterDepends {
 }
 
 extension Store {
-    /// Asked only when the message names another session at work.
-    func dependsExtra(_ session: ClaudeSession, message: String) async -> TriageExtra? {
+    /// Asked only when the message names another session at work. Its keys are those of `options`, the wait options Jev is
+    /// shown (read once, before the turn's earlier messages were): read again after, the sessions' order may have changed,
+    /// and a key would name another session than the one he was shown under it.
+    func dependsExtra(_ session: ClaudeSession, message: String, options all: [RouterTriage.WaitOption]) -> TriageExtra? {
         var options: [RouterTriage.WaitOption] = []
-        for option in await waitOptions(for: session) {
+        for option in all {
             guard case .session(let id, _) = option.watch.target, let other = claudeSessions[id], other.running,
                   RouterDepends.names(message, title: other.title, project: other.folderName, ownProject: session.folderName) else { continue }
             options.append(option)

@@ -61,6 +61,22 @@ import Testing
         #expect(s.router.cards[0].triage?.ready != nil && ready == ["a#t2"])
     }
 
+    @Test func jevsAnswerIsReadThroughTheOptionsHeWasShown() async {
+        // Two sessions at work, both named; the newer one is s0 when the options are read. While the earlier turns are read,
+        // the other one moves ahead: Jev's s0 is still the session he was shown under s0.
+        let (s, _) = store(message: "Once the schema migration and the schema indexes land I'll wire the endpoints.", pick: "s0", p: 0.9)
+        s.claudeSessions["b"]?.lastActivity = Date()
+        s.claudeSessions["c"] = ClaudeSession(id: "c", title: "Schema indexes", folder: "/code/idx", completedTurns: 3,
+                                              lastActivity: Date().addingTimeInterval(-60), running: true)
+        s.routerTriager.earlier = { _ in
+            s.claudeSessions["c"]?.lastActivity = Date().addingTimeInterval(60)
+            return []
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(s.router.cards[0].triage?.watch?.target == .session(id: "b", turns: 6))
+    }
+
     @Test func aSessionWhoseTurnWasCountedBeforeItsSummaryIsWaitedOnForThatTurn() async {
         // The migration's turn ended (8 counted) but it still shows running, its summary not written yet, as the link forms.
         let (s, _) = store(message: "The API side is ready; once the schema migration lands I'll wire the endpoints.", pick: "s0", p: 0.9)

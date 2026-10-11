@@ -631,7 +631,7 @@ extension Store {
                                            summary: session.summary?.detail, candidates: candidates)
             var questions = RouterTriage.questions(candidates: candidates, options: options)
             // More questions in the same call (RouterTriageExtras.swift); none looking back at launch.
-            let extras = rescue ? [] : await self.triageExtras(session, message: message)
+            let extras = rescue ? [] : await self.triageExtras(session, message: message, options: options)
             for extra in extras {
                 questions.merge(extra.questions) { a, _ in a }
                 state.merge(extra.state) { a, _ in a }

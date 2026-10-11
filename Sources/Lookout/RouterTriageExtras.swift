@@ -11,10 +11,10 @@ struct TriageExtra {
 
 extension Store {
     /// The extras for this turn: only those whose cheap look says they may apply.
-    func triageExtras(_ session: ClaudeSession, message: String) async -> [TriageExtra] {
+    func triageExtras(_ session: ClaudeSession, message: String, options: [RouterTriage.WaitOption]) async -> [TriageExtra] {
         var extras = [RouterAttention.trivialExtra]
         if let circles = await circlesExtra(session, message: message) { extras.append(circles) }
-        if let depends = await dependsExtra(session, message: message) { extras.append(depends) }
+        if let depends = dependsExtra(session, message: message, options: options) { extras.append(depends) }
         return extras
     }
 }
