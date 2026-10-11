@@ -104,5 +104,8 @@ struct RouterFusionParityTests {
         let out = RouterTools.redacted(text)
         #expect(!out.contains("sk-or") && !out.contains("AbCdEfGh") && out.hasPrefix("use [redacted] and [redacted]"))
         #expect(RouterTools.hinted("Fix the login bug", 80) == "Fix the login bug")
+        let invoice = RouterTools.redacted("pay to FR76 3000 6000 0112 3456 7890 189, card 4970 1012 3456 7890, acct 0123456789")
+        let digits = invoice.filter(\.isNumber)
+        #expect(digits.isEmpty, "\(invoice)")
     }
 }

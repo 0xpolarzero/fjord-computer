@@ -30,9 +30,14 @@ SECRET = re.compile(
 LONG_TOKEN = re.compile(r"\b(?=[A-Za-z0-9._\-]*\d)(?=[A-Za-z0-9._\-]*[A-Za-z])[A-Za-z0-9._\-]{28,}\b")
 
 
+# Account, card and routing numbers and IBANs (a pasted invoice put a bank account in a final message that stage A's
+# triage sent to Jev before this). Long run ids go too.
+NUMBERS = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b|\b\d{9,}\b|\b\d{4}(?:[ -]\d{3,4}){2,4}\b")
+
+
 def redact(text):
-    """Keys and tokens out of anything that may go to Jev: your transcripts can hold them."""
-    return LONG_TOKEN.sub("[redacted]", SECRET.sub("[redacted]", text or ""))
+    """Keys, tokens and account numbers out of anything that may go to Jev: your transcripts can hold them."""
+    return NUMBERS.sub("[redacted]", LONG_TOKEN.sub("[redacted]", SECRET.sub("[redacted]", text or "")))
 
 
 def ts(s):

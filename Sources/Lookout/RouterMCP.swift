@@ -719,6 +719,8 @@ final class RouterMCPServer: @unchecked Sendable {
     private static let secretPatterns: [NSRegularExpression] = [
         #"(sk-[A-Za-z0-9_-]{16,}|sk_(live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|(?i:(api[_-]?key|token|secret|password|passwd|bearer)\s*[:=]\s*\S{8,}))"#,
         #"\b(?=[A-Za-z0-9._\-]*\d)(?=[A-Za-z0-9._\-]*[A-Za-z])[A-Za-z0-9._\-]{28,}\b"#,
+        // Account, card and routing numbers and IBANs (one in a pasted invoice reached TypeSafe through the evals).
+        #"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b|\b\d{9,}\b|\b\d{4}(?:[ -]\d{3,4}){2,4}\b"#,
     ].map { try! NSRegularExpression(pattern: $0) }
 
     /// `projects`: folders the user tagged; only their cards, sessions and new-session targets are offered then.
