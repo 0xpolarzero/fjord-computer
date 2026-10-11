@@ -110,6 +110,28 @@ import Testing
         #expect(posted().count == 1)
     }
 
+    @Test func aFinishedTurnWhoseLateSummarySaysBlockedIsBanneredOnce() {
+        let (s, _, posted) = store()
+        s.claudeLink = .ok
+        s.agents.enabled = true
+        s.claudeIsFrontmost = { false }
+        s.onNewRouterCards = { [weak s] in if let s { RouterBanners.post($0, store: s, windowIsKey: false) } }
+        var session = ClaudeSession(id: "a", title: "Deploy", folder: "/code/a", completedTurns: 2, lastActivity: Date(), cliID: "cli-a")
+        s.claudeSessions = ["a": session]
+        s.router.cards = [RouterCard(id: "a#t2", sessionID: "a", kind: .done, title: "Deploy", folder: "/code/a",
+                                     text: RouterFeed.placeholder, createdAt: Date())]
+        s.feedRouter()
+        #expect(s.router.cards[0].kind == .done && posted().isEmpty)
+        // Its summary comes after, blocked: the card that was there needs you now, and says so (no key, no triage to wait for).
+        session.summary = .init(blocked: true, detail: "Can't reach the server")
+        s.claudeSessions = ["a": session]
+        s.feedRouter()
+        #expect(s.router.cards[0].kind == .stuck && posted() == [RouterBanners.prefix + "a#t2"])
+        // Once.
+        s.feedRouter()
+        #expect(posted().count == 1)
+    }
+
     @Test func whatTheSummaryToldOfAsYouCameBackGetsNoBannerOfItsOwn() {
         let (s, idle, posted) = store()
         var waiting = card("wait", .waiting)

@@ -827,9 +827,13 @@ extension Store {
                           inventory: claudeTaskInventory, listed: claudeSessionsListed, now: now)
         applyTurnSummaries(&state)
         if state != router {
-            let known = Set(router.cards.map(\.id))
+            let known = Dictionary(router.cards.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             router = state
-            let fresh = state.cards.filter { $0.isOpen && !known.contains($0.id) }
+            // New cards, and open ones that need you only now (a turn's summary came late, blocked): announced once.
+            let fresh = state.cards.filter { card in
+                guard card.isOpen, let was = known[card.id] else { return card.isOpen }
+                return card.kind.needsYou && was.isOpen && !was.kind.needsYou && !routerAttention.delivered.contains(card.id)
+            }
             if !fresh.isEmpty { announceRouterCards(fresh) }
         }
         // What the turns ended on (Jev), and the waits that are over.
