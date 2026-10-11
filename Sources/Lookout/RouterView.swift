@@ -295,10 +295,14 @@ final class RouterModel {
     func show(message: UUID) {
         selection = nil
         replyTo = nil
+        pane = .history
         messageRequest = ScrollRequest(id: message.uuidString, seq: (messageRequest?.seq ?? 0) + 1)
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
     var replyTo: String?
+    /// In a narrow window, the side of the page shown: it follows what you pick (an open card is in Now, an addressed one and
+    /// the Router's conversation in History). A wide window shows both.
+    var pane: RouterPane = .now
     /// Jev's pick for the draft while you type, and the target you fixed from it (see RouterJev.swift).
     let live = RouterLiveTarget()
     /// The pills in the draft (their projects' folders), one for each `MentionText.mark` in it, in order.
@@ -354,9 +358,10 @@ final class RouterModel {
     /// The cards listed at the last reconcile, in order: where a picked card that left the list was.
     @ObservationIgnored private var listed: [String] = []
 
-    /// The cards the keys walk, in the order the page shows them top to bottom: the addressed ones as the history above
-    /// draws them (oldest first, the older ones it hasn't drawn yet before them); then the finished turns worth a look, and
-    /// what needs you (see `RouterPage.ranked`), both open. Sessions waiting are with the working ones.
+    /// The cards the keys walk, in the order the page shows them: the addressed ones as the history draws them (oldest
+    /// first, the older ones it hasn't drawn yet before them); then Now top to bottom, what needs you (see
+    /// `RouterPage.ranked`) and the finished turns worth a look, both open. Sessions waiting are with the working ones. Past
+    /// either end of a side, the keys go on to the other, which shows.
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
         // Only what the page shows, as it shows it: a finished turn whose session still runs things isn't there yet; a wait
         // over that is yours to continue is at the end of Needs you.
@@ -372,7 +377,7 @@ final class RouterModel {
     /// Every card the keys walk, top to bottom.
     func cards(_ store: Store) -> [RouterCard] {
         let s = sections(store)
-        return s.earlier + s.done + s.needs
+        return s.earlier + s.needs + s.done
     }
 
     /// Whether a message can go to the Router now: it is on (with the sessions extension) and Claude Code is there.
@@ -433,6 +438,7 @@ final class RouterModel {
     private func showPick(_ id: String, store: Store, reveal shows: Bool) {
         if let card = store.router.cards.first(where: { $0.id == id }) {
             // A session waiting is a row under Working; one whose wait is over and is yours to continue, a row of Needs you.
+            pane = card.isOpen ? .now : .history
             if card.isOpen, card.kind == .waiting {
                 if shows { reveal(store.routerTier(card) == .needsYou ? id : Self.workingID(card.sessionID)) }
                 return
@@ -445,6 +451,13 @@ final class RouterModel {
     /// What the page scrolls to for the bottom of the history, and the id of a working session's card.
     static let endID = "end"
     static func workingID(_ session: String) -> String { "working#" + session }
+
+    /// A section of Now asked for (its chip): opened, and scrolled to.
+    var zoneRequest: ScrollRequest?
+    func jump(to zone: RouterZone) {
+        pane = .now
+        zoneRequest = ScrollRequest(id: zone.rawValue, seq: (zoneRequest?.seq ?? 0) + 1)
+    }
 
     /// Asks the page to scroll to an item (a card, a message, a working session's card) and, for a moment, to mark it.
     var revealRequest: ScrollRequest?
@@ -546,6 +559,7 @@ final class RouterModel {
     func send(store: Store) {
         let text = plainDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
+        let toRouter = replyTo == nil
         guard store.sendToRouter(text, context: context(store)) else {
             sendRefused = Self.goneTarget
             Announce.say(Self.goneTarget)
@@ -556,6 +570,8 @@ final class RouterModel {
         draft = ""
         replyTo = nil
         live.reset()
+        // The Router answers in its conversation, in the history.
+        if toRouter { pane = .history }
     }
 
     /// A card clicked: its session opens in Claude, and the card is picked (it stays open).

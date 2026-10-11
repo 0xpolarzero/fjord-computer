@@ -1,8 +1,8 @@
 import SwiftUI
 
-// The Router's main page: one bottom-anchored page, newest nearest the composer. Scrolling up is the history (the
-// conversation with the Router and the items already addressed, one timeline); pinned above the composer are what runs on
-// its own (Working: calm, live) and what needs you (Needs you: warm, the loudest thing on the page).
+// The Router's main page, over the composer: Now (what needs you, what's worth a look, what waits and what works, one
+// scroll of sections that fold) and History (the conversation with the Router and the items already addressed, one
+// timeline, opening at its newest). Side by side in a wide window, one at a time with a switch in a narrow one.
 
 // MARK: - Model
 
@@ -189,21 +189,17 @@ private extension EnvironmentValues {
     }
 }
 
+/// Now and History: side by side in a wide window, one at a time with a switch over them in a narrow one. Each scrolls on
+/// its own and nothing inside them does: a section of Now is as tall as it is, folded to its header line when you want it out
+/// of the way.
 struct RouterPageView: View {
     let store: Store
     @Bindable var model: RouterModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var ns
-    /// The zones' height as shown (the Router's line with them): only the line between them and the history reads it.
-    @State private var shown = ZonesShown()
-    /// While the line between the history and the zones is dragged: the zones' height when it began, and the share it is at.
-    @State private var dragBase: CGFloat?
-    @State private var dragShare: CGFloat?
 
-    private var spring: Animation? { Theme.Motion.spring.resolved(reduce: reduceMotion) }
-
-    /// The zones' share of the page: the line being dragged, else as last set.
-    private var share: CGFloat { dragShare ?? store.router.zonesShare.map { CGFloat($0) } ?? RouterSplit.initial }
+    /// Now's share of a wide page.
+    static let nowShare: CGFloat = 0.55
 
     var body: some View {
         let page = store.routerZones
@@ -211,87 +207,213 @@ struct RouterPageView: View {
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let bothZones = Set(page.working.map(\.id))
         let travelling = Set(once).subtracting(bothZones)
-        // The page's size as it is laid out, not measured after: the zones' room and the column's width are right on the first
-        // layout, rather than on a second one once a measured size comes back.
+        let travellingWorking = Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID)))
+        // The page's size as it is laid out, not measured after: the column's width is right on the first layout.
         GeometryReader { geometry in
             let height = geometry.size.height, width = geometry.size.width
-            let gutter = Self.gutter(width)
-            layout(page, room: RouterSplit.room(page: height, share: share), height: height, gutter: gutter,
-                 travelling: travelling)
-                .frame(width: width, height: height)
-                .environment(\.routerGutter, gutter)
-                .environment(\.cdsColumnWidth, min(CDS.Transcript.measure, max(0, width - 2 * gutter)))
+            let now = { (width: CGFloat) in
+                RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
+                          travellingWorking: travellingWorking)
+                    .column(width)
+            }
+            if RouterZone.sideBySide(width: width) {
+                let nowWidth = (width * Self.nowShare).rounded()
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        ZoneChips(store: store, model: model, page: page).column(nowWidth).measured().padding(.top, 10)
+                        now(nowWidth)
+                    }
+                    .frame(width: nowWidth)
+                    Rectangle().fill(CDS.border).frame(width: CDS.hairline)
+                    RouterHistory(store: store, model: model).column(width - nowWidth - CDS.hairline)
+                }
+            } else {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        PaneSwitch(store: store, model: model, page: page)
+                        if model.pane == .now { ZoneChips(store: store, model: model, page: page, compact: true) }
+                        Spacer(minLength: 0)
+                    }
+                    .column(width)
+                    .measured()
+                    .padding(.top, 10)
+                    ZStack {
+                        if model.pane == .now { now(width).transition(.opacity) } else {
+                            RouterHistory(store: store, model: model).column(width).transition(.opacity)
+                        }
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .animation(Theme.Motion.hover.resolved(reduce: reduceMotion), value: model.pane)
+            }
         }
-    }
-
-    private func layout(_ page: RouterPage, room: CGFloat, height: CGFloat, gutter: CGFloat,
-                      travelling: Set<String>) -> some View {
-        VStack(spacing: 0) {
-            RouterHistory(store: store, model: model)
-            divider(height: height, gutter: gutter)
-                .frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter)
-                .frame(maxWidth: .infinity)
-                .zIndex(1)
-            RouterZones(store: store, model: model, page: page, room: room, ns: ns, travelling: travelling,
-                        travellingWorking: Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID))))
-            .frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter)
-            .frame(maxWidth: .infinity)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if shown.height != $0 { shown.height = $0 } }
-        }
-        .motion(Theme.Motion.spring, value: page.needs.map(\.id) + page.working.map(\.id))
-    }
-
-    private func divider(height: CGFloat, gutter: CGFloat) -> some View {
-        let shown = shown
-        return PageDivider(shown: shown, height: height, share: share, trailing: max(4, gutter - 22),
-                      drag: { dy in
-                          let base = dragBase ?? shown.height
-                          dragBase = base
-                          dragShare = RouterSplit.dragged(from: base, by: dy, page: height)
-                      },
-                      dragEnded: {
-                          if let dragShare { store.setZonesShare(dragShare) }
-                          dragBase = nil
-                          dragShare = nil
-                      },
-                      toggle: {
-                          let next = RouterSplit.toggled(share: share)
-                          withAnimation(spring) { store.setZonesShare(next) }
-                      },
-                      adjust: { up in store.setZonesShare(RouterSplit.adjusted(shown: shown.height, page: height, up: up)) })
     }
 
     static func gutter(_ width: CGFloat) -> CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
 }
 
-/// The zones' height as shown. Kept apart from the page's state: it is measured once the zones are laid out, and only the
-/// line over them draws from it (the line's drag and keys read it when used), so measuring it redraws nothing else.
-@Observable private final class ZonesShown {
-    var height: CGFloat = 0
+private extension View {
+    /// A column of the page `width` wide: its margin and its text's measure.
+    func column(_ width: CGFloat) -> some View {
+        let gutter = RouterPageView.gutter(width)
+        return self
+            .environment(\.routerGutter, gutter)
+            .environment(\.cdsColumnWidth, min(CDS.Transcript.measure, max(0, width - 2 * gutter)))
+    }
+
+    /// Centred in the page at the transcript's measure, its margin inside.
+    func measured() -> some View {
+        frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter).frame(maxWidth: .infinity)
+    }
 }
 
-/// The line between the history and the zones, drawn from the zones' height as shown.
-private struct PageDivider: View {
-    let shown: ZonesShown
-    let height: CGFloat
-    /// The zones' share as set (or being dragged), until their height is known.
-    let share: CGFloat
-    let trailing: CGFloat
-    let drag: (CGFloat) -> Void
-    let dragEnded: () -> Void
-    let toggle: () -> Void
-    let adjust: (_ up: Bool) -> Void
+/// Now or History, in a narrow window: what's live with what needs you counted, and the history with its unread.
+private struct PaneSwitch: View {
+    let store: Store
+    let model: RouterModel
+    let page: RouterPage
+    @Environment(\.routerGutter) private var gutter
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var thumb
+    @State private var hovered: RouterPane?
 
     var body: some View {
-        RouterDivider(zonesBig: RouterSplit.zonesAreBig(share: share),
-                      share: height > 0 ? shown.height / height : share, trailing: trailing,
-                      drag: drag, dragEnded: dragEnded, toggle: toggle, adjust: adjust)
+        HStack(spacing: 0) {
+            segment(.now, "Now", count: page.needs.count + page.ready.count + page.asks.count, tint: CDS.Fill.warning)
+            segment(.history, "History", count: store.routerUnread.count, tint: CDS.Fill.accent)
+        }
+        .padding(1)
+        .frame(height: CDS.Segmented.height)
+        .background(RoundedRectangle(cornerRadius: CDS.Segmented.radius, style: .continuous).fill(CDS.Segmented.track))
+        .animation(Theme.Motion.hover.resolved(reduce: reduceMotion), value: model.pane)
+        .padding(.leading, gutter)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Show")
+    }
+
+    private func segment(_ pane: RouterPane, _ title: String, count: Int, tint: Color) -> some View {
+        let picked = model.pane == pane
+        return Button { model.pane = pane } label: {
+            HStack(spacing: 5) {
+                Text(title).cdsText((12, 16), .medium, picked || hovered == pane ? CDS.Text.primary : CDS.Text.muted)
+                if count > 0 {
+                    Text("\(count)").cdsText((11, 14), .semibold, tint).monospacedDigit()
+                }
+            }
+            .padding(.horizontal, CDS.Segmented.padX)
+            .frame(maxHeight: .infinity)
+            .background {
+                if picked {
+                    RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous).fill(CDS.Segmented.thumb)
+                        .overlay(RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous)
+                            .strokeBorder(CDS.border, lineWidth: 1))
+                        .matchedGeometryEffect(id: "thumb", in: thumb)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 ? pane : (hovered == pane ? nil : hovered) }
+        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+        .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+}
+
+/// A chip for each section of Now with something in it, its count: a click opens it and takes the page there.
+private struct ZoneChips: View {
+    let store: Store
+    let model: RouterModel
+    let page: RouterPage
+    /// Beside the switch: the sections' names go first when there's no room for them.
+    var compact = false
+    @Environment(\.routerGutter) private var gutter
+
+    var body: some View {
+        let zones = RouterZone.allCases.filter { page.count($0) > 0 }
+        if !zones.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                row(zones, named: true)
+                row(zones, named: false)
+            }
+            .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
+            .padding(.leading, compact ? 0 : gutter)
+            .padding(.trailing, gutter)
+        }
+    }
+
+    private func row(_ zones: [RouterZone], named: Bool) -> some View {
+        HStack(spacing: 4) {
+            ForEach(zones) { zone in
+                ZoneChip(zone: zone, count: page.count(zone), named: named) { model.jump(to: zone) }
+            }
+        }
+        .fixedSize()
+    }
+}
+
+private struct ZoneChip: View {
+    let zone: RouterZone
+    let count: Int
+    let named: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: zone.symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(zone.tint)
+                if named { Text(zone.title).cdsText((12, 16), .regular, hovered ? CDS.Text.primary : CDS.Text.secondary) }
+                Text("\(count)").cdsText((12, 16), .medium, zone == .needs ? CDS.Fill.warning : CDS.Text.muted).monospacedDigit()
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(Capsule().fill(hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("Go to \(zone.title)")
+        .accessibilityLabel("\(zone.title), \(count)")
+        .accessibilityHint("Goes to it")
+    }
+}
+
+extension RouterZone {
+    var tint: Color {
+        switch self {
+        case .needs: CDS.Fill.warning
+        case .notes: CDS.Text.secondary
+        case .waiting: RouterTriage.waitingTint
+        case .working: CDS.Text.muted
+        }
+    }
+}
+
+extension RouterPage {
+    /// What a section of Now holds.
+    func count(_ zone: RouterZone) -> Int {
+        switch zone {
+        case .needs: needs.count + ready.count + asks.count
+        case .notes: notes.count
+        case .waiting: waiting.count
+        case .working: working.count
+        }
+    }
+
+    /// The section of Now an item is drawn in (a card, an ask, a working or waiting session's row), if any.
+    @MainActor func zone(of id: String) -> RouterZone? {
+        if needs.contains(where: { $0.id == id }) || ready.contains(where: { $0.id == id })
+            || asks.contains(where: { $0.id.uuidString == id }) { return .needs }
+        if notes.contains(where: { $0.id == id }) { return .notes }
+        if waiting.contains(where: { RouterModel.workingID($0.sessionID) == id }) { return .waiting }
+        if working.contains(where: { RouterModel.workingID($0.id) == id }) { return .working }
+        return nil
     }
 }
 
 // MARK: - History
 
-/// The timeline above the zones: opens at the bottom and follows what arrives while you are there; scrolled up, nothing
+/// The history: opens at the bottom and follows what arrives while you are there; scrolled up, nothing
 /// moves what you read. Only the newest lines are drawn, Show earlier draws more. A line is drawn from its own values (what
 /// it shows, whether it is open or picked, the minute), so it redraws only when one of them changes; what it shows of a
 /// session is in small views of their own, which redraw as the sessions do.
@@ -925,14 +1047,15 @@ private extension View {
 
 // MARK: - Zones
 
-/// Working over Needs you, pinned above the composer (under the Router's working line while it works). Each caps at a part of
-/// `room` and scrolls inside; together they stay within it, and take only what they need of it.
-private struct RouterZones: View {
+/// What's live, top to bottom by whose move is next: Needs you, Worth a look, Waiting, Working. One scroll: a section is as
+/// tall as it is, and its header stays at the top while you are in it. A click on a header folds the section to that line
+/// (what it holds said on it) or opens it, the sections under it moving up or down with it; kept as you leave them.
+private struct RouterNow: View {
     let store: Store
     @Bindable var model: RouterModel
     let page: RouterPage
-    /// The height the zones may take (their share of the page, the floors kept).
-    let room: CGFloat
+    /// The page's height: what an open form may take is worked out from it.
+    let height: CGFloat
     let ns: Namespace.ID
     /// Sessions whose card moves between the zones (matched geometry), from the needs side and from the working side.
     let travelling: Set<String>
@@ -940,251 +1063,318 @@ private struct RouterZones: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
-    /// The zones' height and their two scrolls' as last measured (kept out of the view's state: they change with every layout).
-    @State private var heights = RouterSplit.ZoneHeights()
-    /// What the caps read of them: the headers and margins, and Working's scroll, changed only by a point or more, so the caps
-    /// never chase their own rounding.
-    @State private var chrome: CGFloat = 0
-    @State private var workingShown: CGFloat = 0
-    /// The Router's working line over the zones, as tall as it shows (written only when it changes).
-    @State private var statusHeight: CGFloat = 0
     /// Every card of Worth a look shown, not the first few.
     @State private var showAllNotes = false
+    /// A scroll asked for, made once the page has laid out what it opened for it.
+    @State private var pending: Pending?
+    /// Where each section starts, as last laid out (above the top: you are inside it). Not view state: nothing is drawn
+    /// from it, a fold reads it.
+    @State private var tops = Tops()
     static let notesShown = 3
-    static let notesCap: CGFloat = 220
 
-    /// Working's and Needs you's caps: the room less the Router's working line, the headers and margins, shared between
-    /// the two.
-    private var caps: (working: CGFloat, needs: CGFloat) {
-        RouterSplit.caps(room: room - statusHeight, chrome: chrome, workingShown: workingShown,
-                         needsEmpty: page.needs.isEmpty && page.ready.isEmpty && page.asks.isEmpty)
+    private final class Tops { var y: [RouterZone: CGFloat] = [:] }
+
+    private struct Pending: Equatable {
+        var id: String
+        var anchor: UnitPoint
+        private let token = UUID()
+        init(_ id: String, anchor: UnitPoint) { self.id = id; self.anchor = anchor }
     }
-    private var needsCap: CGFloat { caps.needs }
 
-    private func measured(_ set: (RouterSplit.ZoneHeights) -> Void) {
-        set(heights)
-        let needsEmpty = page.needs.isEmpty && page.ready.isEmpty && page.asks.isEmpty
-        let working = page.working.isEmpty && page.waiting.isEmpty ? 0 : heights.working
-        let rest = max(0, heights.total - working - (needsEmpty ? 0 : heights.needs))
-        if abs(rest - chrome) >= 1 { chrome = rest }
-        if abs(working - workingShown) >= 1 { workingShown = working }
+    private var spring: Animation? { Theme.Motion.spring.resolved(reduce: reduceMotion) }
+
+    private var zones: [RouterZone] {
+        RouterZone.allCases.filter { $0 == .needs || page.count($0) > 0 }
     }
 
     var body: some View {
+        let folded = store.routerFolded
         VStack(spacing: 0) {
-            VStack(spacing: 0) { routerStatus }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if statusHeight != $0 { statusHeight = $0 } }
-            VStack(alignment: .leading, spacing: 10) {
-                if !page.working.isEmpty || !page.waiting.isEmpty { working }
-                AwayStripView(store: store, model: model)
-                if !page.notes.isEmpty { notes }
-                needs
+            routerStatus
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        AwayStripView(store: store, model: model).padding(.bottom, 4)
+                        ForEach(zones) { zone in
+                            let isFolded = folded.contains(zone) && page.count(zone) > 0
+                            Color.clear.frame(height: 0).id(zone.anchorID)
+                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { tops.y[zone] = $0 }
+                            Section {
+                                if !isFolded {
+                                    content(zone)
+                                        .padding(.bottom, 16)
+                                        .transition(.asymmetric(
+                                            insertion: .opacity.combined(with: .offset(y: reduceMotion ? 0 : -6)),
+                                            removal: .opacity))
+                                }
+                            } header: {
+                                header(zone, folded: isFolded, proxy: proxy)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, gutter)
+                    .padding(.top, 6)
+                    .padding(.bottom, 12)
+                    .measured()
+                    .motion(Theme.Motion.spring, value: page.needs.map(\.id) + page.working.map(\.id))
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                // A card picked (with the keys, a banner, the away strip): its section opens, and the page goes to it.
+                .onChange(of: model.revealRequest, initial: true) { _, request in
+                    guard let request, let zone = page.zone(of: request.id),
+                          let taken = model.takeReveal(request, by: "now") else { return }
+                    open(zone)
+                    pending = Pending(taken.id, anchor: .center)
+                }
+                // A section's chip: opened, its header at the top.
+                .onChange(of: model.zoneRequest, initial: true) { _, request in
+                    guard let request, let zone = RouterZone(rawValue: request.id),
+                          model.takeReveal(request, by: "zone") != nil else { return }
+                    open(zone)
+                    pending = Pending(zone.anchorID, anchor: .top)
+                }
+                .onChange(of: pending) { perform(proxy) }
             }
-            .padding(.horizontal, gutter)
-            .padding(.top, 8)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.total = h } }
         }
     }
 
-    /// While the Router itself works: one slim line over the zones.
+    private func open(_ zone: RouterZone) {
+        guard store.routerFolded.contains(zone) else { return }
+        withAnimation(spring) { store.setRouterZone(zone, folded: false) }
+    }
+
+    /// The scroll asked for, once what was opened for it is laid out.
+    private func perform(_ proxy: ScrollViewProxy) {
+        guard let request = pending else { return }
+        DispatchQueue.main.async {
+            guard pending == request else { return }
+            pending = nil
+            withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: request.anchor) }
+        }
+    }
+
+    /// Folds a section or opens it. Folding the one whose header is held at the top (you are inside it) takes the page back
+    /// to its start, so the header stays where you clicked it and the next section comes up under it.
+    private func toggle(_ zone: RouterZone, proxy: ScrollViewProxy) {
+        let folding = !store.routerFolded.contains(zone)
+        let inside = (tops.y[zone] ?? 0) < -1
+        withAnimation(spring) {
+            store.setRouterZone(zone, folded: folding)
+            if folding && inside { proxy.scrollTo(zone.anchorID, anchor: .top) }
+        }
+        Announce.say(folding ? "\(zone.title) folded" : "\(zone.title) open")
+    }
+
+    /// While the Router itself works: one slim line over the page.
     @ViewBuilder private var routerStatus: some View {
         if store.routerDispatcher.isBusy {
             WorkingStatus(label: "The Router is working")
                 .padding(.horizontal, gutter + CDS.Transcript.textInset)
-                .padding(.bottom, 6)
+                .padding(.vertical, 6)
+                .measured()
                 .transition(.opacity)
         }
     }
 
-    // MARK: Working
+    // MARK: Headers
 
-    private var working: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !page.working.isEmpty {
+    @ViewBuilder private func header(_ zone: RouterZone, folded: Bool, proxy: ScrollViewProxy) -> some View {
+        let count = page.count(zone)
+        HStack(spacing: 6) {
+            if zone == .needs && count == 0 {
                 HStack(spacing: 6) {
-                    WorkingMark()
-                    Text("Working").cdsText((12, 16), .medium, CDS.Text.muted)
-                    Text("· \(page.working.count)").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                    Image(systemName: "checkmark.circle").font(.system(size: 12, weight: .medium))
+                    Text("Nothing needs you").cdsText((13, 18), .regular, CDS.Text.muted)
                 }
+                .foregroundStyle(CDS.Text.muted)
                 .padding(.leading, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityLabel("Working, \(page.working.count)")
-                overview
-            }
-            // Working, then the sessions waiting on something else, under their own header: one scroll for both.
-            ZoneScroll(maxHeight: caps.working, model: model, zone: "working",
-                       ids: Set(page.working.map { RouterModel.workingID($0.id) } + page.waiting.map { RouterModel.workingID($0.sessionID) })) {
-                VStack(alignment: .leading, spacing: 8) {
-                    if !page.working.isEmpty {
-                        VStack(spacing: 0) {
-                            ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
-                                if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
-                                WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id])
-                                    .id(RouterModel.workingID(row.id))
-                                    .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
-                                    .transition(.asymmetric(insertion: .opacity, removal: .opacity))
-                            }
-                        }
-                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(CDS.alpha(0.03)))
-                        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
-                    }
-                    if !page.waiting.isEmpty { waitingList }
+            } else {
+                ZoneHeaderButton(zone: zone, count: count, folded: folded, preview: { preview(zone) }) {
+                    toggle(zone, proxy: proxy)
                 }
-            }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.working = h } }
-        }
-    }
-
-    /// The sessions whose move is something else's (CI, a deploy, another session): cool, under the working ones.
-    private var waitingList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "hourglass").font(.system(size: 10, weight: .semibold))
-                Text("Waiting").cdsText((12, 16), .medium, RouterTriage.waitingTint)
-                Text("· \(page.waiting.count)").cdsText((12, 16), .regular, RouterTriage.waitingTint).monospacedDigit()
-            }
-            .foregroundStyle(RouterTriage.waitingTint)
-            .padding(.leading, 2)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityLabel("Waiting, \(page.waiting.count)")
-            VStack(spacing: 0) {
-                ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
-                    if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
-                    WaitingCard(store: store, card: card)
-                        .id(RouterModel.workingID(card.sessionID))
-                        .transition(.asymmetric(insertion: .opacity, removal: .opacity))
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-    }
-
-    // MARK: Worth a look
-
-    /// Finished turns with nothing to do but something to tell: quieter than Needs you, a line each, the first few shown.
-    @ViewBuilder private var notes: some View {
-        let open = model.expandedNeed
-        // One picked past the first few shows them all, so the keys never land on a card that isn't drawn.
-        let picked = [model.selection, model.highlighted, open].compactMap { $0 }
-        let all = showAllNotes || page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
-        let shown = all ? page.notes : Array(page.notes.prefix(Self.notesShown))
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "eye").font(.system(size: 10, weight: .semibold)).foregroundStyle(CDS.Text.secondary)
-                Text("Worth a look").cdsText((12, 16), .medium, CDS.Text.secondary)
-                Text("· \(page.notes.count)").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
-                Spacer(minLength: 4)
-                if page.notes.count > Self.notesShown {
-                    Button(all ? "Show fewer" : "Show all") {
-                        withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { showAllNotes = !all }
-                    }
-                    .buttonStyle(.link).font(CDS.sans(12))
-                }
-            }
-            .padding(.leading, 2)
-            .accessibilityElement(children: .contain)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityLabel("Worth a look, \(page.notes.count)")
-            // Capped: past it, it scrolls inside, and Working and Needs you keep their room.
-            ZoneScroll(maxHeight: Self.notesCap, model: model, zone: "notes", ids: Set(shown.map(\.id))) {
-                VStack(spacing: 6) {
-                    ForEach(shown) { card in
-                        CardView(store: store, model: model, card: card, expanded: card.id == open, form: nil,
-                                 project: store.routerProject(card), quiet: true)
-                            .id(card.id)
-                            .transition(.asymmetric(insertion: .opacity, removal: .scaleFade(0.97, reduce: reduceMotion)))
-                    }
-                }
-                .padding(.vertical, 1)
+                accessory(zone, folded: folded)
             }
         }
+        .padding(.vertical, 7)
+        // Held at the top over what scrolls under it: the page's own ground, out to the column's edges.
+        .background(CDS.Surface.s1.padding(.horizontal, -gutter))
     }
 
-    /// One line over all the working sessions, and the button that summarizes each of them (under its row).
-    private var overview: some View {
-        let summarizer = model.summarizer
-        let ids = Set(page.working.map(\.id))
-        return MinuteTicking { now in
-            let items = store.overviewItems(now: now)
-            HStack(spacing: 8) {
+    /// What a folded section holds, on its header line.
+    @ViewBuilder private func preview(_ zone: RouterZone) -> some View {
+        switch zone {
+        case .needs: previewText((page.asks.map { _ in "Where to send it" } + (page.needs + page.ready).map(\.title)))
+        case .notes: previewText(page.notes.map(\.title))
+        case .waiting: previewText(page.waiting.map(\.title))
+        case .working:
+            MinuteTicking { now in
+                let items = store.overviewItems(now: now)
                 if let line = RouterOverviewLine.text(items) {
-                    Text(line).cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
+                    Text(line).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
                         .help(RouterOverviewLine.tooltip(items))
                 }
-                Spacer(minLength: 4)
-                SparklesButton(busy: !summarizer.batch.isEmpty, done: ids.isSubset(of: summarizer.busy),
-                               label: "Summarize what's running") { summarizer.requestAll(store: store) }
             }
-            .padding(.horizontal, 2)
         }
     }
 
-    // MARK: Needs you
+    private func previewText(_ titles: [String]) -> some View {
+        Text(titles.joined(separator: " · ")).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
+    }
 
-    @ViewBuilder private var needs: some View {
+    @ViewBuilder private func accessory(_ zone: RouterZone, folded: Bool) -> some View {
+        switch zone {
+        case .notes where !folded && page.notes.count > Self.notesShown:
+            let all = showsAllNotes
+            Button(all ? "Show fewer" : "Show all") {
+                withAnimation(spring) { showAllNotes = !all }
+            }
+            .buttonStyle(.link).font(CDS.sans(12))
+        case .working:
+            let summarizer = model.summarizer
+            SparklesButton(busy: !summarizer.batch.isEmpty, done: Set(page.working.map(\.id)).isSubset(of: summarizer.busy),
+                           label: "Summarize what's running") { summarizer.requestAll(store: store) }
+        default: EmptyView()
+        }
+    }
+
+    // MARK: Sections
+
+    @ViewBuilder private func content(_ zone: RouterZone) -> some View {
+        switch zone {
+        case .needs: needs
+        case .notes: notes
+        case .waiting: waitingList
+        case .working: workingList
+        }
+    }
+
+    private var workingList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
+                if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
+                WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id])
+                    .id(RouterModel.workingID(row.id))
+                    .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
+                    .transition(.asymmetric(insertion: .opacity, removal: .opacity))
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(CDS.alpha(0.03)))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
+    }
+
+    /// The sessions whose move is something else's (CI, a deploy, another session): cool and quiet.
+    private var waitingList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
+                if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
+                WaitingCard(store: store, card: card)
+                    .id(RouterModel.workingID(card.sessionID))
+                    .transition(.asymmetric(insertion: .opacity, removal: .opacity))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    /// One picked past the first few of Worth a look shows them all, so the keys never land on a card that isn't drawn.
+    private var showsAllNotes: Bool {
+        let picked = [model.selection, model.highlighted, model.expandedNeed].compactMap { $0 }
+        return showAllNotes || page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
+    }
+
+    /// Finished turns with nothing to do but something to tell: quieter than Needs you, a line each, the first few shown.
+    private var notes: some View {
+        let open = model.expandedNeed
+        let shown = showsAllNotes ? page.notes : Array(page.notes.prefix(Self.notesShown))
+        return VStack(spacing: 6) {
+            ForEach(shown) { card in
+                CardView(store: store, model: model, card: card, expanded: card.id == open, form: nil,
+                         project: store.routerProject(card), quiet: true)
+                    .id(card.id)
+                    .transition(.asymmetric(insertion: .opacity, removal: .scaleFade(0.97, reduce: reduceMotion)))
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var needs: some View {
         let open = page.openNeed(preferred: model.expandedNeed)
         let wide = columnWidth >= 620
-        // What an open form may take: as much of Needs you's height as leaves the open card's own lines whole in it (the
-        // other cards scroll).
-        let formCap = max(120, min(400, needsCap - (wide ? 52 : 100) - 24))
-        if page.needs.isEmpty && page.ready.isEmpty && page.asks.isEmpty {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle").font(.system(size: 12, weight: .medium))
-                Text("Nothing needs you").cdsText((13, 18), .regular, CDS.Text.muted)
+        // What an open form may take: enough of the page that the open card's own lines and its section's header stay in
+        // view with it.
+        let formCap = max(160, min(400, height - (wide ? 52 : 100) - 120))
+        return VStack(spacing: 6) {
+            ForEach(page.asks) { ask in
+                AskBackCard(store: store, ask: ask)
+                    .id(ask.id.uuidString)
+                    .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
+                                            removal: .scaleFade(0.97, reduce: reduceMotion)))
             }
-            .foregroundStyle(CDS.Text.muted)
-            .padding(.leading, 2)
-            .accessibilityElement(children: .combine)
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 7) {
-                    Text("Needs you").cdsText((14, 20), .semibold, CDS.Fill.warning)
-                    Text("\(page.needs.count + page.ready.count + page.asks.count)")
+            ForEach(page.needs) { card in
+                // Only the open card shows a form.
+                CardView(store: store, model: model, card: card, expanded: card.id == open,
+                         form: store.pendingForm(for: card), project: store.routerProject(card),
+                         formCap: card.id == open ? formCap : CardView.closedFormCap)
+                    .id(card.id)
+                    .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
+                    .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
+                                            removal: .scaleFade(0.97, reduce: reduceMotion)))
+            }
+            // A wait that is over, that nothing continues on its own: yours to continue.
+            ForEach(page.ready) { card in
+                WaitingCard(store: store, card: card)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .id(card.id)
+                    .transition(.opacity)
+            }
+        }
+        // The cards' rings and shadows need a little room.
+        .padding(.vertical, 1)
+    }
+}
+
+/// A section's header line: its caret, its name and count, and folded, what it holds; a click folds or opens it.
+private struct ZoneHeaderButton<Preview: View>: View {
+    let zone: RouterZone
+    let count: Int
+    let folded: Bool
+    @ViewBuilder let preview: () -> Preview
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(hovered ? CDS.Text.secondary : CDS.Text.muted)
+                    .rotationEffect(.degrees(folded ? 0 : 90))
+                    .frame(width: 12)
+                if zone == .needs {
+                    Text(zone.title).cdsText((14, 20), .semibold, CDS.Fill.warning)
+                    Text("\(count)")
                         .cdsText((12, 16), .semibold, Color.black.opacity(0.8)).monospacedDigit()
                         .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 18)
                         .background(Capsule().fill(CDS.Fill.warning))
+                } else {
+                    Image(systemName: zone.symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(zone.tint)
+                    Text(zone.title).cdsText((12, 16), .medium, zone == .waiting ? zone.tint : CDS.Text.secondary)
+                    Text("· \(count)").cdsText((12, 16), .regular, zone == .waiting ? zone.tint : CDS.Text.muted).monospacedDigit()
                 }
-                .padding(.leading, 2)
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityLabel("Needs you, \(page.needs.count + page.ready.count + page.asks.count)")
-                ZoneScroll(maxHeight: needsCap, model: model, zone: "needs",
-                           ids: Set(page.needs.map(\.id) + page.ready.map(\.id) + page.asks.map { $0.id.uuidString })) {
-                    VStack(spacing: 6) {
-                        ForEach(page.asks) { ask in
-                            AskBackCard(store: store, ask: ask)
-                                .id(ask.id.uuidString)
-                                .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
-                                                        removal: .scaleFade(0.97, reduce: reduceMotion)))
-                        }
-                        ForEach(page.needs) { card in
-                            // Only the open card shows a form: the others aren't redrawn as its cap is worked out.
-                            CardView(store: store, model: model, card: card, expanded: card.id == open,
-                                     form: store.pendingForm(for: card), project: store.routerProject(card),
-                                     formCap: card.id == open ? formCap : CardView.closedFormCap)
-                                .id(card.id)
-                                .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
-                                .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
-                                                        removal: .scaleFade(0.97, reduce: reduceMotion)))
-                        }
-                        // A wait that is over, that nothing continues on its own: yours to continue.
-                        ForEach(page.ready) { card in
-                            WaitingCard(store: store, card: card)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .id(card.id)
-                                .transition(.opacity)
-                        }
-                    }
-                    // The card's ring and shadow need a little room inside the scroll.
-                    .padding(.vertical, 1)
-                }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.needs = h } }
+                if folded { preview().padding(.leading, 4) }
+                Spacer(minLength: 4)
             }
+            .frame(minHeight: 20)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(folded ? "Show \(zone.title)" : "Fold \(zone.title)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(zone.title), \(count)")
+        .accessibilityValue(folded ? "Folded" : "Open")
+        .accessibilityHint(folded ? "Opens it" : "Folds it")
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -1251,66 +1441,6 @@ private struct WorkingSummary: View {
 private extension View {
     @ViewBuilder func matched(_ id: String?, in ns: Namespace.ID) -> some View {
         if let id { matchedGeometryEffect(id: id, in: ns, properties: .position) } else { self }
-    }
-}
-
-/// A scroll view as tall as its content up to `maxHeight`, scrolling to a requested id inside it. Its height is worked out as
-/// it is laid out (the scroll view's ideal height is its content's), so the first layout has it right.
-private struct ZoneScroll<Content: View>: View {
-    let maxHeight: CGFloat
-    let model: RouterModel
-    /// Which zone it is: what it went to of what was asked (`RouterModel.takeReveal`).
-    let zone: String
-    let ids: Set<String>
-    @ViewBuilder let content: () -> Content
-    /// The content's height, for the fade alone: kept out of the view's state, which holds only whether it overflows.
-    @State private var natural = Natural()
-    @State private var overflows = false
-    /// A scroll asked for, made once the zone is laid out.
-    @State private var pending: ScrollRequest?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private final class Natural { var height: CGFloat = 0 }
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                content().frame(maxWidth: .infinity).onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                    natural.height = $0
-                    fade()
-                    perform(proxy)
-                }
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .scrollIndicators(.never)
-            .frame(maxHeight: maxHeight)
-            .fixedSize(horizontal: false, vertical: true)
-            // More below than fits: the last 18 points fade out, so it reads as scrollable.
-            .mask(VStack(spacing: 0) {
-                Rectangle()
-                LinearGradient(colors: [.black, overflows ? .clear : .black], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 18)
-            })
-            .onChange(of: maxHeight) { fade() }
-            // Asked for before the zone was drawn too (a banner's card below what fits): it goes there once laid out.
-            .onChange(of: model.revealRequest, initial: true) { _, request in
-                guard let request, ids.contains(request.id) else { return }
-                pending = model.takeReveal(request, by: zone)
-            }
-            .onChange(of: pending) { perform(proxy) }
-        }
-    }
-
-    private func fade() {
-        let over = natural.height > maxHeight + 1
-        if over != overflows { overflows = over }
-    }
-
-    /// The scroll asked for, once the zone has been laid out (its content measured).
-    private func perform(_ proxy: ScrollViewProxy) {
-        guard natural.height > 0, let request = pending else { return }
-        pending = nil
-        withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: .center) }
     }
 }
 

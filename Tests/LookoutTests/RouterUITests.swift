@@ -74,21 +74,22 @@ import UserNotifications
         reopenTransfer(store)
         // Two addressed cards in the history, the one addressed now below the older one.
         store.setCardAddressed(store.openRouterCards.first { $0.kind == .stuck }!.id, true)
-        // Down the page: the history's addressed cards as it draws them (oldest first, above), then the finished turns
-        // worth a look, then what needs you. Not the newest first, which walks the history upwards.
+        // The history's addressed cards as it draws them (oldest first), then Now top to bottom: what needs you, then the
+        // finished turns worth a look. Not the newest first, which walks the history upwards.
         let (needs, done, earlier) = model.sections(store)
-        let listed = (earlier + done + needs).map(\.id)
+        let listed = (earlier + needs + done).map(\.id)
         #expect(!needs.isEmpty && !done.isEmpty && earlier.count > 1)
         #expect(earlier.map(\.id) == store.routerHistory.compactMap { if case .card(let c) = $0 { c.id } else { nil } })
         #expect(earlier.map(\.addressedAt!) == earlier.map(\.addressedAt!).sorted())
         #expect(model.cards(store).map(\.id) == listed)
-        // None picked, ↓ starts at the top of the open cards (Worth a look) and goes down the screen.
+        // None picked, ↓ starts at the top of Now (Needs you) and goes down it.
         var walked: [String] = []
-        for _ in done + needs {
+        for _ in needs + done {
             #expect(keys.key(key(kVK_DownArrow), responder: nil))
             walked += model.selection.map { [$0] } ?? []
+            #expect(model.pane == .now)
         }
-        #expect(walked == (done + needs).map(\.id))
+        #expect(walked == (needs + done).map(\.id))
         // At the bottom it stays there; ↑ walks back up the same way, into the history up to its oldest card.
         #expect(keys.key(key(kVK_DownArrow), responder: nil) && model.selection == listed.last)
         walked = []
@@ -98,6 +99,10 @@ import UserNotifications
         }
         #expect(walked == listed.dropLast().reversed())
         #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed.first)
+        // Up past the top of Now, the keys went on into the history, which shows; back down, Now shows again.
+        #expect(model.pane == .history)
+        for _ in earlier { model.move(down: true, store: store) }
+        #expect(model.selection == needs.first?.id && model.pane == .now)
     }
 
     /// The demo's finished turn whose session is idle, open again: its only open one is from a session still running things.

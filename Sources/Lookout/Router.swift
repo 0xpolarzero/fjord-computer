@@ -18,8 +18,9 @@ struct RouterState: Codable, Equatable {
     /// The sessions' summaries you asked for, oldest first (see RouterSummary.swift); kept under the key of the overviews of
     /// every session that came before them, which read as summaries of none.
     var summaries: [RouterSummary] = []
-    /// The share of the Router's page the live zones may take, as you last set it (see `RouterSplit`); nil until you do.
-    var zonesShare: Double?
+    /// The sections of the Router's page you folded (`RouterZone` raw values), as you last left them; nil until you fold or
+    /// unfold one (Waiting and Working start folded).
+    var foldedZones: [String]?
     /// What the feed last saw of each session (see `RouterFeed.Stamp`): a change is an event, the same is not.
     var seen: [String: String] = [:]
     /// The question or plan each session is stopped on, by when it began (ms since 1970, exactly as the transcript says):
@@ -105,7 +106,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions, handledTurns, replies, style
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, foldedZones, autoContinue, autoContinueSessions, handledTurns, replies, style
     }
 
     func encode(to encoder: Encoder) throws {
@@ -124,7 +125,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(origins, forKey: .origins)
         try c.encode(heldWaits, forKey: .heldWaits)
         try c.encode(lookoutStarted, forKey: .lookoutStarted)
-        try c.encodeIfPresent(zonesShare, forKey: .zonesShare)
+        try c.encodeIfPresent(foldedZones, forKey: .foldedZones)
         try c.encode(autoContinue, forKey: .autoContinue)
         try c.encode(autoContinueSessions, forKey: .autoContinueSessions)
         try c.encode(handledTurns, forKey: .handledTurns)
@@ -175,7 +176,7 @@ struct RouterState: Codable, Equatable {
         origins = map(.origins)
         heldWaits = map(.heldWaits)
         lookoutStarted = map(.lookoutStarted)
-        zonesShare = value(.zonesShare)
+        foldedZones = value(.foldedZones)
         autoContinue = value(.autoContinue) ?? false
         autoContinueSessions = map(.autoContinueSessions)
         handledTurns = map(.handledTurns)
