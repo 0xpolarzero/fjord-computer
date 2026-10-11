@@ -261,7 +261,7 @@ import Testing
         #expect(s.routerTriager.telling.isEmpty)
     }
 
-    @Test func theInboxsChecksTurnedOffWhileATurnIsReadGoNowhereAndComeOfNothing() async {
+    @Test func theInboxsChecksTurnedOffWhileATurnIsReadGoNowhereAndAreBoundOnlyByLookout() async {
         for when in ["reading", "answering"] {
             let (s, _) = store(watch: ciWatch, things: [ci(.pending)])
             s.router.cards = [RouterCard(id: "a#t3", sessionID: "a", kind: .done, title: "Deploy fix", folder: "/code/app",
@@ -284,8 +284,10 @@ import Testing
             await s.routerTriager.idle()
             #expect(offered.count == 1)
             #expect(offered.first?.contains("c0") == (when == "answering"))
+            // Not from Jev's answer: Lookout's own reading of the message binds the PR it names, sending nothing.
             let card = s.router.cards[0]
-            #expect(card.triage?.state == .waiting && card.triage?.watch == nil)
+            #expect(card.triage?.state == .waiting && card.triage?.watch?.target == .ci(thing: "pr:o/app#1"))
+            #expect(card.triage?.watch?.named == true && offered.count == 1)
         }
     }
 

@@ -695,10 +695,10 @@ extension Store {
     /// PR and ended waiting on its checks before the inbox had it. Once a PR or workflow of the session's repo comes whose
     /// CI runs, or changed since the turn ended, and the turn's final message names it, by Lookout's own reading (its ref,
     /// its link or number for a PR, as `waitNamed` reads a workflow) and names no other, it is watched, named: no call to
-    /// Jev. The message is kept from the triage (read again once, when it isn't: after a relaunch). As the inbox's CI is
-    /// offered to Jev only while he may read the inbox, it is bound only then too.
+    /// Jev. The message is kept from the triage (read again once, when it isn't: after a relaunch). Nothing of the inbox
+    /// goes to TypeSafe here, so it is bound whether or not Jev may read the inbox.
     func bindUnwatchedWaits() {
-        guard router.enabled, jevReadsInbox, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch == nil })
+        guard router.enabled, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch == nil })
         else { return }
         var state = router
         var kept: [String: String] = [:]
