@@ -580,7 +580,13 @@ struct RouterAskBack: Identifiable, Equatable {
         if found.sure, let top = found.top, !eligible(top.target, store: store) { found.sure = false }
         var job = job
         job.jev = found
-        if found.sure, let top = found.top { return try await route(job, to: top.target) }
+        if found.sure, let top = found.top {
+            // Where your own words send it, resolved here and not by Jev ("start a session in lookout …", "tell CI to …"):
+            // yours, as a pin is, so a follow-up may go there.
+            let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
+            if RouterTools.destination(job.text, targets) == top.target { chosen(job) }
+            return try await route(job, to: top.target)
+        }
         askBack(job, found)
     }
 

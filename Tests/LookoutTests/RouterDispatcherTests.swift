@@ -488,6 +488,31 @@ import Testing
         #expect(RouterDispatcher.evidenced("also lint", target: "session:local_new", store: s))
     }
 
+    @Test func aDestinationYourOwnWordsNameIsWhereAFollowUpGoes() async {
+        let (s, d, f) = setup()
+        s.router.cards = []
+        // Started where you said, in words: "also lint" follows it there.
+        f.ranked = [.init(target: "new:/code/lookout", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let a = d.submit("start a session in lookout to fix tests with opus")
+        await finish(d, f, a)
+        #expect(f.started.map(\.folder) == ["/code/lookout"])
+        s.claudeSessions["local_new"] = ClaudeSession(id: "local_new", title: "fix tests", folder: "/code/lookout", lastActivity: Date())
+        #expect(RouterDispatcher.evidenced("also lint", target: "session:local_new", store: s))
+        // Told by name.
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "CI", folder: "/code/infra", lastActivity: Date(), running: true)
+        f.ranked = [.init(target: "session:local_c", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let b = d.submit("tell CI to rerun the flaky job")
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_c"])
+        #expect(RouterDispatcher.evidenced("and the e2e too", target: "session:local_c", store: s))
+        // Jev's pick where the words name another: not yours.
+        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let c = d.submit("tell CI to update the docs")
+        await finish(d, f, c)
+        #expect(f.prepared == ["local_c", "local_b"])
+        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
+    }
+
     @Test func aShortNameOfItsOwnPointsAtATarget() {
         let (s, _, _) = setup()
         s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix CI", folder: "/code/infra", lastActivity: Date(), running: true)
