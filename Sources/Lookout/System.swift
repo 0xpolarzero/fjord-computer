@@ -445,7 +445,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Self.preparationIsBlocked(mouseButtons: NSEvent.pressedMouseButtons, modifiers: NSEvent.modifierFlags,
                                               barInteracting: hub?.isInteracting == true)
                 }, prepare: { [weak window, weak hub, weak self] in
-                    guard let window, let hub else { return }
+                    // Short of memory: none of it (the overlay, once made, is kept for good).
+                    guard let window, let hub, !window.memoryShort else { return }
                     if self?.store.router.enabled == true { _ = SessionIcons.drawable }
                     window.prepare()
                     AppTransition.prepareOverlay(on: hub.dockedScreen)
