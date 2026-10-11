@@ -219,9 +219,11 @@ enum InboxJev {
         let before = all.last { $0.at < m.at && $0.path == m.path }
         var out: [String: Any] = [
             "on": name(thing), "your part": role(thing, context), "from": who(m.author),
-            "kind": m.path.map { $0.isEmpty ? "reply in a review thread" : "reply in a review thread on \($0)" } ?? (m.isReview ? "review" : "comment"),
+            "kind": m.path != nil ? "reply in a review thread" : (m.isReview ? "review" : "comment"),
             "text": github(m.text, 2000), "mentions you": m.text.lowercased().contains("@" + context.me.lowercased()) ? "yes" : "no",
         ]
+        // A file's name is the PR's (anyone's) words: in a field of its own, cleaned, bounded and fenced; `kind` stays fixed.
+        if let path = m.path, !path.isEmpty { out["file of the review thread"] = UntrustedFence.github.fence(UntrustedText.clean(path, limit: 200)) }
         if let before { out["just before, \(who(before.author))"] = github(before.text, 200) }
         return out
     }
