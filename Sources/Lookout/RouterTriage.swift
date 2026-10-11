@@ -504,8 +504,18 @@ extension Store {
     /// now, if it still needs you and isn't its circles streak again.
     private func releaseBanner(_ id: String) {
         guard routerTriager.heldBanners.remove(id) != nil, router.enabled, let card = router.cards.first(where: { $0.id == id }), card.isOpen,
-              card.kind.needsYou, !RouterCircles.again(card, in: router.cards) else { return }
-        onNewRouterCards?([card])
+              card.kind.needsYou else { return }
+        announceTurn(card, in: router.cards)
+    }
+
+    /// A turn card that needs you, to announce: going in circles, said once per streak (not again while its turns keep at
+    /// it, once a banner of it was shown), but still one of what came while you were away.
+    private func announceTurn(_ card: RouterCard, in cards: [RouterCard]) {
+        if RouterCircles.again(card, in: cards, announced: routerAttention.delivered) {
+            _ = routerAttention.admit([card])
+        } else {
+            onNewRouterCards?([card])
+        }
     }
 
     /// Triages each open turn card that has none yet (one call per card; never again for the same text), and once after
@@ -632,10 +642,8 @@ extension Store {
         guard state != router || held else { return }
         router = state
         let card = state.cards[i]
-        // Going in circles is said once per streak: not again while its turns keep at it.
-        if card.kind.needsYou, held || !before.kind.needsYou || !routerAttention.delivered.contains(id),
-           !RouterCircles.again(card, in: state.cards) {
-            onNewRouterCards?([card])
+        if card.kind.needsYou, held || !before.kind.needsYou || !routerAttention.delivered.contains(id) {
+            announceTurn(card, in: state.cards)
         }
         resolveWaits()
     }

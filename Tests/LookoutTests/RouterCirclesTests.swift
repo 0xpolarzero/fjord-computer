@@ -100,11 +100,39 @@ import Testing
         before.addressedAt = Date().addingTimeInterval(-60)
         before.addressedBy = .superseded
         s.router.cards = [before, card(4)]
+        s.routerAttention.posted("a#t3")
+        // Away: no banner, but it is one of what came.
+        s.routerAttention.locked = true
         var announced: [String] = []
         s.onNewRouterCards = { announced += $0.map(\.id) }
         s.triageTurns()
         await s.routerTriager.idle()
-        #expect(s.router.cards[1].kind == .stuck && announced.isEmpty)
+        #expect(s.router.cards[1].kind == .stuck && announced.isEmpty && s.routerAttention.heldCards == ["a#t4"])
+    }
+
+    @Test func aStreakWithNoBannerYetIsAnnounced() async {
+        // a#t3 went in circles while you were away, at an urgency that waits: it had no banner, and is superseded.
+        let (s, _) = store(earlier: alike, circles: 0.9)
+        var before = card(3, minutes: -5)
+        before.triage = RouterTriage(state: .done, urgency: 2)
+        before.triage?.circles = true
+        before.kind = .stuck
+        before.addressedAt = Date().addingTimeInterval(-60)
+        before.addressedBy = .superseded
+        s.router.cards = [before, card(4)]
+        var announced: [String] = []
+        s.onNewRouterCards = { announced += $0.map(\.id) }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(s.router.cards[1].kind == .stuck && announced == ["a#t4"])
+        // Shown: the next turn of the streak is not said again.
+        s.routerAttention.posted("a#t4")
+        #expect(RouterCircles.again(s.router.cards[1], in: s.router.cards, announced: s.routerAttention.delivered) == false)
+        var next = card(5, minutes: 1)
+        next.kind = .stuck
+        next.triage = RouterTriage(state: .done)
+        next.triage?.circles = true
+        #expect(RouterCircles.again(next, in: s.router.cards + [next], announced: s.routerAttention.delivered))
     }
 
     @Test func aQuestionOrAnOKAskedInAStreakIsAnnouncedAllTheSame() async {
