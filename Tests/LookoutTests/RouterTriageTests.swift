@@ -314,6 +314,40 @@ import Testing
         #expect(s.router.cards.first { $0.id == "a#t2" }?.kind == .asks && s.router.cards.contains { $0.id == "b#t2" && $0.isOpen })
     }
 
+    @Test func aCallThatFailedIsMadeAgainWithANewKeyOnly() async {
+        let a = session("a")
+        let s = InboxFixture.store([])
+        s.router.enabled = true
+        s.agents.enabled = true
+        s.claudeLink = .ok
+        s.claudeSessions = ["a": a, "b": session("b", minutes: -9)]
+        s.router.cards = [turnCard(a)]
+        s.keychainWrite = { _, _ in true }
+        #expect(s.setTypesafeKey("sk-refused"))
+        var refuse = true
+        var asked: [String] = []
+        s.routerTriager.reader = { _ in "Should I push to main?" }
+        s.routerTriager.asker = { _, state in
+            asked.append(state["session"] ?? "")
+            if refuse { throw JevClient.Failure.transport("401") }
+            return self.answers(sentences: [0.9])
+        }
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(!asked.isEmpty && s.router.cards.count == 1 && s.router.cards[0].triage == nil)
+        // The same key: not asked again.
+        let calls = asked.count
+        s.triageTurns()
+        await s.routerTriager.idle()
+        #expect(asked.count == calls)
+        // A new key: the card and the look back are asked again.
+        refuse = false
+        #expect(s.setTypesafeKey("sk-good"))
+        await s.routerTriager.idle()
+        #expect(asked.suffix(2).sorted() == ["T a", "T b"] && s.router.cards.first { $0.id == "a#t2" }?.kind == .asks)
+        #expect(s.router.cards.contains { $0.id == "b#t2" && $0.isOpen })
+    }
+
     @Test func aCardOfAnOlderTurnOrARunningSessionIsLeft() async {
         let a = session("a", turns: 3)
         let b = session("b", running: true)

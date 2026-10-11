@@ -385,6 +385,10 @@ extension Claude {
     /// Sessions the look back was stopped for before Jev answered (the Router turned off, the key changed): looked back at
     /// again once he can be asked.
     var unrescued: Set<String> = []
+    /// Per card, and per session for the look back, the key generation (`JevGate.generation`) its call failed under (a
+    /// refused key, say): asked again with a new key only.
+    private(set) var failedUnder: [String: Int] = [:]
+    private(set) var unrescuedUnder: [String: Int] = [:]
     /// Stuck turns whose banner waits for Jev's triage (`Store.announceRouterCards`).
     var heldBanners: Set<String> = []
     /// How long a stuck turn's banner waits for the triage at most.
@@ -420,7 +424,25 @@ extension Claude {
         for task in tasks.values { task.cancel() }
     }
 
-    fileprivate func forget(_ id: String) { attempted[id] = nil }
+    fileprivate func forget(_ id: String) {
+        attempted[id] = nil
+        failedUnder[id] = nil
+    }
+
+    /// The call for a card failed with the key of `generation`; looking back, its session is kept to look at again.
+    fileprivate func failed(_ id: String, session: String?, generation: Int) {
+        failedUnder[id] = generation
+        if let session { unrescuedUnder[session] = generation }
+    }
+
+    /// The sessions to look back at again now, with the key of `generation`: those stopped, and those that failed with
+    /// another key.
+    fileprivate func takeUnrescued(generation: Int) -> Set<String> {
+        let failed = unrescuedUnder.filter { $0.value != generation }.keys
+        for session in failed { unrescuedUnder[session] = nil }
+        defer { unrescued = [] }
+        return unrescued.union(failed)
+    }
 
     /// The Router was turned off: the triages under way are stopped (asked again once it is on), and no banner held for
     /// one comes.
@@ -429,10 +451,12 @@ extension Claude {
         heldBanners = []
     }
 
-    /// Whether this text was asked about for the card already; records it as asked if not.
-    fileprivate func firstAsk(_ id: String, source: String) -> Bool {
-        guard attempted[id] != source else { return false }
+    /// Whether this text was asked about for the card already (with this key, when that call failed); records it as asked
+    /// if not.
+    fileprivate func firstAsk(_ id: String, source: String, generation: Int) -> Bool {
+        guard attempted[id] != source || failedUnder[id].map({ $0 != generation }) == true else { return false }
         attempted[id] = source
+        failedUnder[id] = nil
         return true
     }
 }
@@ -495,10 +519,9 @@ extension Store {
         if !routerTriager.rescanned {
             routerTriager.rescanned = true
             rescanTurns()
-        } else if !routerTriager.unrescued.isEmpty {
-            let again = routerTriager.unrescued
-            routerTriager.unrescued = []
-            rescanTurns(only: again)
+        } else {
+            let again = routerTriager.takeUnrescued(generation: jevGate.generation)
+            if !again.isEmpty { rescanTurns(only: again) }
         }
     }
 
@@ -539,6 +562,7 @@ extension Store {
     /// turn needs you).
     private func triage(_ id: String, session: ClaudeSession, rescue: Bool) {
         guard let ask = triageAsker, routerTriager.begin(id) else { return }
+        let generation = jevGate.generation
         routerTriager.tasks[id] = Task { [weak self] in
             guard let self else { return }
             // Stopped, or the key or switch changed: nothing was learned, so the text may be asked about again.
@@ -554,7 +578,7 @@ extension Store {
             }
             let message = await self.finalMessage(session)
             let source = message.map(RouterTriage.hash) ?? ""
-            guard self.routerTriager.firstAsk(id, source: source), let message else { return }
+            guard self.routerTriager.firstAsk(id, source: source, generation: generation), let message else { return }
             let candidates = RouterTriage.candidates(RouterTriage.sentences(message))
             // Looking back, only a turn that ended on what looks like an ask is worth a call.
             if rescue, candidates.isEmpty { return }
@@ -580,6 +604,7 @@ extension Store {
                 answers = try await ask(questions, state)
             } catch {
                 stopped = error is CancellationError || error as? JevClient.Failure == .cancelled
+                if !stopped { self.routerTriager.failed(id, session: rescue ? session.id : nil, generation: generation) }
                 return
             }
             if !self.jevReadsInbox { options.removeAll(where: \.fromInbox) }
