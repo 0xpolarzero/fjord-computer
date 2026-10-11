@@ -400,16 +400,22 @@ enum InboxSync {
               let lastID = last["id"] as? String, let at = date(last["createdAt"]) else { return nil }
         // Its first comment too: you started it, and ten replies from others since are all of its last ones fetched.
         var latestBy: [String: Date] = [:]
+        var mentioned: [ThreadMention] = []
         for reply in [first] + replies {
             guard let when = date(reply["createdAt"]) else { continue }
-            let who = person(reply["author"], association: nil).login.lowercased()
-            if latestBy[who].map({ $0 < when }) ?? true { latestBy[who] = when }
+            let who = person(reply["author"], association: reply["authorAssociation"])
+            if latestBy[who.login.lowercased()].map({ $0 < when }) ?? true { latestBy[who.login.lowercased()] = when }
+            let logins = mentions(reply["body"] as? String)
+            if let replyID = reply["id"] as? String, !logins.isEmpty, !mentioned.contains(where: { $0.id == replyID }) {
+                mentioned.append(ThreadMention(id: replyID, author: who, at: when, logins: logins))
+            }
         }
         return (ThingThread(
             id: id, isResolved: t["isResolved"] as? Bool ?? false,
             startedBy: person(first["author"], association: first["authorAssociation"]),
             lastReplyBy: person(last["author"], association: last["authorAssociation"]), lastReplyID: lastID,
-            lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String), latestBy: latestBy),
+            lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String), latestBy: latestBy,
+            mentions: mentioned),
                 mentions(last["body"] as? String))
     }
 
@@ -815,6 +821,7 @@ enum InboxSync {
         switch parts[0] {
         case "comment", "mention", "last", "asks", "noise", "person":
             return thing.comments.contains { $0.id == id } || thing.threads.contains { $0.lastReplyID == id }
+                || (parts[0] == "mention" && thing.threads.contains { $0.mentions?.contains { $0.id == id } == true })
         case "review", "approved", "changes":
             return thing.reviews.contains { $0.id == id }
         case "commit":

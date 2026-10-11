@@ -429,6 +429,18 @@ struct ThingThread: Codable, Hashable, Identifiable {
     /// Each author's latest comment in the thread among its last ones fetched (by login, lowercased): your answer in the
     /// middle of a thread is your latest word there though others replied after it. Nil in an older file.
     var latestBy: [String: Date]?
+    /// The comments among those fetched (its first and last ones) that @-mention someone: a mention in the middle of a
+    /// thread is one, though a later reply's text is the thread's. Nil in an older file.
+    var mentions: [ThreadMention]?
+}
+
+/// A review-thread comment's @-mentions, with what makes it an event: its id, who wrote it and when.
+struct ThreadMention: Codable, Hashable, Identifiable {
+    var id: String
+    var author: Person
+    var at: Date
+    /// Lowercased, as `ThingComment.mentions`.
+    var logins: [String]
 }
 
 /// A PR's review threads past the first page, as last read: how many threads it had and when it was last updated then, when

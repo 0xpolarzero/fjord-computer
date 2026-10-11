@@ -194,6 +194,7 @@ enum InboxActions {
         switch parts[0] {
         case "comment", "mention", "last":
             return thing.comments.first { $0.id == id }?.author.login
+                ?? thing.threads.lazy.compactMap { $0.mentions?.first { $0.id == id }?.author.login }.first
         case "review", "approved", "changes":
             return thing.reviews.first { $0.id == id }?.author.login ?? thing.comments.first { $0.id == id }?.author.login
         case "commit":
@@ -214,6 +215,7 @@ enum InboxActions {
         switch parts[0] {
         case "comment", "mention", "last", "person", "noise", "asks":
             return !thing.comments.contains { $0.id == id } && !thing.threads.contains { $0.lastReplyID == id }
+                && !(parts[0] == "mention" && thing.threads.contains { $0.mentions?.contains { $0.id == id } == true })
         case "review", "approved", "changes":
             return !thing.reviews.contains { $0.id == id } && !thing.comments.contains { $0.id == id }
         case "commit":

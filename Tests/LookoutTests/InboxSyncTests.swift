@@ -243,6 +243,31 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     }
 }
 
+extension InboxSyncMapping {
+    @Test func aMentionInAReviewThreadMatchesMentionsMeAfterTheCutoff() throws {
+        let threads: [String: Any] = ["nodes": [
+            ["id": "t1", "isResolved": false, "path": "a.swift",
+             "first": ["nodes": [["id": "x", "createdAt": "2026-10-02T10:00:00Z", "body": "a", "authorAssociation": "MEMBER",
+                                 "author": ["login": "bob", "__typename": "User"]]]],
+             "last": ["nodes": [
+                ["id": "m1", "createdAt": "2026-10-03T10:00:00Z", "body": "@me what do you think?", "authorAssociation": "MEMBER",
+                 "author": ["login": "bob", "__typename": "User"]],
+                ["id": "y", "createdAt": "2026-10-04T10:00:00Z", "body": "agreed", "authorAssociation": "NONE",
+                 "author": ["login": "carol", "__typename": "User"]]]]],
+        ]]
+        let thing = try #require(InboxSync.thing(node(["author": ["login": "alice", "__typename": "User"], "body": "",
+                                                       "comments": ["nodes": []], "reviewThreads": threads])))
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.mentions(Pick(include: [.me]))], createdAt: .distantPast)
+        let context = InboxContext(me: "me", now: iso("2026-10-10T10:00:00Z")!)
+        let keys = InboxEngine.facts(rule, thing, marks: nil, context: context)?.map(\.key)
+        #expect(keys == ["mention:m1"])
+        #expect(InboxSync.isEvent("mention:m1", of: thing))
+        // Kept as the thing is, and only what is after the cutoff counts.
+        let saved = try JSONDecoder().decode(Thing.self, from: JSONEncoder().encode(thing))
+        #expect(InboxEngine.facts(rule, saved, marks: EntryMarks(doneAt: iso("2026-10-03T12:00:00Z")!), context: context) == nil)
+    }
+}
+
 @Suite struct InboxSyncQueries {
     private func rule(_ scope: Scope, _ conditions: [Condition] = []) -> InboxCategory {
         InboxCategory(name: "x", symbol: "star", color: .blue, rules: [Rule(scope: scope, conditions: conditions)])

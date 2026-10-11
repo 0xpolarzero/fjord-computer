@@ -441,9 +441,11 @@ enum InboxEngine {
             return thing.commits.filter { $0.at > cutoff && matches(by, login: $0.author, r) }
                 .map { Fact(key: "commit:\($0.id)", label: "commit by @\($0.author)", tint: .neutral) }
         case .mentions(let pick, _):
-            return thing.comments.filter { c in
-                c.at > cutoff && c.mentions.contains { matches(pick, login: $0, r) }
-            }.map { Fact(key: "mention:\($0.id)", label: "mentioned by @\($0.author.login)", tint: .attention) }
+            // In comments, and in review threads (inline, on a line of the diff).
+            let inline = thing.threads.flatMap { $0.mentions ?? [] }.map { ($0.id, $0.author, $0.at, $0.logins) }
+            return (thing.comments.map { ($0.id, $0.author, $0.at, $0.mentions) } + inline).filter { _, _, at, logins in
+                at > cutoff && logins.contains { matches(pick, login: $0, r) }
+            }.map { Fact(key: "mention:\($0.0)", label: "mentioned by @\($0.1.login)", tint: .attention) }
         case .lastComment(let by):
             guard let last = thing.comments.max(by: { $0.at < $1.at }), matches(by, last.author, r) else { return [] }
             return [Fact(key: "last:\(last.id)", label: "last comment: @\(last.author.login)", tint: .attention)]
