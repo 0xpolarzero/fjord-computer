@@ -37,7 +37,7 @@ import Testing
 
     private func settle() async { for _ in 0..<20 { await Task.yield() } }
 
-    private let ciWatch = RouterTriage.Watch(target: .ci(thing: "pr:o/app#1"), label: "CI on o/app#1", ref: "o/app#1")
+    private let ciWatch = RouterTriage.Watch(target: .ci(thing: "pr:o/app#1"), label: "CI on o/app#1", ref: "o/app#1", named: true)
 
     @Test func ciGoingGreenMakesTheSessionReadyAndSaysSo() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.pending)])
@@ -274,6 +274,30 @@ import Testing
         #expect(sent.messages.count == 1 && ready == 0)
         let entry = s.router.decisions.last!
         #expect(entry.trigger == .system && entry.done.count == 1 && entry.reply != nil)
+    }
+
+    @Test func aWaitItsMessageDidntNameIsNeverContinuedOnItsOwn() async {
+        var unnamed = ciWatch
+        unnamed.named = false
+        let (s, sent) = store(watch: unnamed, things: [ci(.pending)], auto: true)
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        s.things["pr:o/app#1"]?.checks = .passing
+        await settle()
+        // Ready, with Tell it, but not sent: Jev alone tied it to this.
+        #expect(sent.messages.isEmpty && ready == 1 && s.router.cards[0].triage?.ready != nil)
+        s.tellWaiting("a#t3")
+        await settle()
+        #expect(sent.messages.count == 1)
+        // What names it, as Lookout reads the message itself.
+        let a = s.claudeSessions["a"]!
+        #expect(s.waitNamed(ciWatch, in: "Pushed; waiting on CI for o/app#1.", by: a))
+        #expect(s.waitNamed(ciWatch, in: "Waiting for #1 to go green", by: a))
+        #expect(!s.waitNamed(ciWatch, in: "Waiting for #12 to go green", by: a))
+        #expect(!s.waitNamed(ciWatch, in: "Waiting on CI.", by: a))
+        let other = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "session “Migration”")
+        #expect(s.waitNamed(other, in: "Waiting for the migration session to finish", by: a))
+        #expect(!s.waitNamed(other, in: "Waiting for the other session to finish", by: a))
     }
 
     @Test func aSessionsOwnChoiceOverridesTheDefault() async {
