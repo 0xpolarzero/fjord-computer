@@ -145,7 +145,10 @@ something new).
   Fixed (`JEV_ORDERED=1`), and Lookout itself was found to send options in random dictionary order (fixed).
 - **Two live keys reached TypeSafe** inside eval requests: an OpenRouter key and a z.ai key from transcripts, before
   redaction existed and then past the first pattern. Redaction now also strips any long letters-and-digits token, in
-  the evals and in Lookout (`RouterTools.redacted`). Both keys should be rotated.
+  the evals and in Lookout (`RouterTools.redacted`). Both keys should be rotated. Later (v2 stage A) a bank account
+  number from an invoice pasted into a scratch session reached TypeSafe through the triage calls on finished turns;
+  redaction (evals and Lookout) now also strips IBANs, card and account numbers and long digit runs. Lesson: personal
+  data isn't only keys; every new path to a model needs the same scrub, and a scan of each derived file.
 - **Porting slips caught only by parity tests** (`RouterFusionParityTests`, fixture from `evals/router/parity.py`):
   a gate the format asked but Swift didn't (`gate_question`), a BM25 quirk (a zero-weight field's words still count for
   IDF), weights rounded in Swift but not in Python, and "Jev's top" breaking ties by dictionary order (now: a tie counts
