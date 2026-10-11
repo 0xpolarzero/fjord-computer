@@ -148,6 +148,8 @@ final class HubController {
     /// Whether the bar is away from the edge now: the window is open and in front.
     var barAway: Bool { BarPresence(windowOpen: windowOpen, windowFront: windowFront).barAway }
     private var barApplied = false
+    /// Which departure or return a fade completion belongs to.
+    private(set) var barGeneration = 0
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
 
     fileprivate static let debug = ProcessInfo.processInfo.environment["LOOKOUT_DEBUG"] != nil
@@ -194,7 +196,7 @@ final class HubController {
         window.onDragEnded = { [weak self] in self?.dragEnded(at: $0) }
         dock()
         window.orderFrontRegardless()
-        watchMouse()
+        if !UnderTest.isRunning { watchMouse() }
         syncTrigger()
         observe()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -211,7 +213,8 @@ final class HubController {
 
     /// The window along the edge, deep enough for the bar's peek and its shadow.
     private func dockFrame() -> NSRect {
-        let vf = screen.visibleFrame
+        var vf = screen.visibleFrame
+        if UnderTest.isRunning { vf.origin = UnderTest.away }
         switch ui.edge {
         case .right, .left:
             let depth = LookoutHub.cell + LookoutHub.detail + 40
@@ -340,7 +343,6 @@ final class HubController {
 
     /// A click on an item of the bar (or one of its peek's): the app window opens on it.
     private func opened(_ destination: AppDestination, card: String? = nil) {
-        hub.section = nil
         hub.cancelDwell()
         if let card { pickRouterCard(card) }
         openApp(destination)
@@ -348,7 +350,6 @@ final class HubController {
 
     /// Check for Updates, from the bar's menu: the app window opens on Settings, scrolled to Updates.
     private func openedUpdates() {
-        hub.section = nil
         hub.cancelDwell()
         openUpdates()
     }
@@ -409,20 +410,19 @@ final class HubController {
         let away = barAway
         let leaving = away && away != barApplied
         if away != barApplied {
+            barGeneration += 1
             barApplied = away
             hub.barHidden = away
             hoverTask?.cancel()
             pendingHover = nil
             hub.cancelDwell()
-            hub.section = nil
-            hub.hovering = false
-            hub.selection = nil
             if away {
                 setAcceptsMouse(false)
                 trigger.orderOut(nil)
                 if let global = globalMouse { NSEvent.removeMonitor(global); globalMouse = nil }
                 fadeOut()
             } else {
+                clearPeek()
                 hub.quiet = true
                 fadeIn()
                 syncTrigger()
@@ -436,17 +436,35 @@ final class HubController {
         }
     }
 
+    /// Clear the peek only out of sight, so opening can capture the bar before its layout changes.
+    private func clearPeek() {
+        var instant = Transaction(animation: nil)
+        instant.disablesAnimations = true
+        withTransaction(instant) {
+            hub.section = nil
+            hub.hovering = false
+            hub.selection = nil
+        }
+    }
+
     private func fadeOut() {
-        guard AppTransition.enabled else { window.orderOut(nil); return }
+        let mine = barGeneration
+        guard AppTransition.enabled else { finishFadeOut(mine); return }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.12
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.barApplied else { return }
-                self.window.orderOut(nil)
+                self?.finishFadeOut(mine)
             }
         })
+    }
+
+    /// A completion from an older departure cannot hide a bar that returned and has begun leaving again.
+    func finishFadeOut(_ mine: Int) {
+        guard barApplied, barGeneration == mine else { return }
+        window.orderOut(nil)
+        clearPeek()
     }
 
     private func fadeIn() {
