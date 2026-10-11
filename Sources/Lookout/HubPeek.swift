@@ -299,12 +299,12 @@ extension LookoutHub {
     /// scroll view inside it (the inbox list), with the pointer still on the panel.
     func hoverChanged() {
         peekLeave?.cancel()
-        guard !overBar, !overPanel else { return }
+        guard !hub.barHidden, !hub.quiet, !hub.dragging, !overBar, !overPanel else { return }
         let hub = hub
         hub.cancelDwell()
         peekLeave = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
-            if !Task.isCancelled, !hub.hovering {
+            if !Task.isCancelled, !hub.barHidden, !hub.quiet, !hub.dragging, !hub.hovering {
                 hub.section = nil
                 hub.quiet = false
             }

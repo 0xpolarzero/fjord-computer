@@ -5,6 +5,8 @@ import ApplicationServices
 /// label, a muted description and a control on the trailing edge, split by faint lines and never boxed; lists in a nest
 /// card. Straight on the island's black.
 struct SettingsView: View {
+    /// The account's picture in the GitHub section (warmed at that size when the hub opens).
+    static let accountAvatar: CGFloat = 32
     @Bindable var store: Store
     let hub: HubState
     @Environment(\.accessibilityReduceMotion) private var reduce
@@ -44,6 +46,19 @@ struct SettingsView: View {
             .onAppear { Task { scroll(proxy, animated: false) } }
             .onChange(of: hub.settingsScroll) { scroll(proxy, animated: true) }
         }
+        // The page is kept while the window is closed: what the system holds is read again when it is back, and a pasted
+        // secret that wasn't saved doesn't wait behind a closed window. A login item that failed to change says so only
+        // until then: what the system now holds is what the switch shows (it may have been fixed in System Settings).
+        .onAppear {
+            launchAtLogin = LaunchAtLogin.isEnabled
+            launchError = nil
+            accessibilityTrusted = AXIsProcessTrusted()
+        }
+        .onDisappear {
+            token = ""
+            tokenError = nil
+            typesafeKey = ""
+        }
     }
 
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -61,7 +76,7 @@ struct SettingsView: View {
         SettingsSection("GitHub") {
             // The row's `leading` slot: the avatar, 12 before the text.
             HStack(spacing: 12) {
-                Avatar(url: store.me?.avatarUrl, size: 32)
+                Avatar(url: store.me?.avatarUrl, size: Self.accountAvatar)
                 SettingsRow(store.me.map { "@\($0.login)" } ?? "Not connected",
                             description: store.unreachable ? "Couldn't reach GitHub"
                                 : store.tokenSource.map { "Token from \($0.rawValue)" } ?? (store.authError ?? ""),
@@ -231,13 +246,14 @@ struct SettingsView: View {
     /// The Router, which reads your Claude Code sessions (never writing to the desktop app's files): its switch, then what it
     /// needs and how each part is doing (the hook, Claude Code, routing).
     @ViewBuilder private var router: some View {
+        let needsClaude = !store.router.enabled && !Claude.isInstalled
         SettingsRow("Router",
-                    description: !Claude.isInstalled && !store.router.enabled ? "Needs the Claude desktop app" : nil,
+                    description: needsClaude ? "Needs the Claude desktop app" : nil,
                     adornment: AnyView(Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(CDS.Text.secondary)),
                     info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Lookout or answers a question. Messages reach your sessions through Lookout's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
             SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.switchRouter($0) }))
-                .disabled(!Claude.isInstalled && !store.router.enabled)
+                .disabled(needsClaude)
         }
         .id(Self.routerID)
         // Off, but taking the hook or the plugin out failed: that stays in sight, with a way to try again.
@@ -454,10 +470,11 @@ struct SettingsView: View {
             }
             SettingsDivider()
             SettingsRow("Launch at login", description: launchError, descriptionColor: CDS.Text.danger) {
-                SettingsSwitch("Launch at login", isOn: $launchAtLogin)
-            }
-            .onChange(of: launchAtLogin) { _, on in
-                launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
+                // Your switch changes the login item; the page reading it again from the system (back after a close) doesn't.
+                SettingsSwitch("Launch at login", isOn: Binding(get: { launchAtLogin }, set: { on in
+                    launchAtLogin = on
+                    launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
+                }))
             }
             SettingsDivider()
             SettingsRow("Center the bar on its edge") {
@@ -695,7 +712,8 @@ struct CDSFieldChrome: ViewModifier {
                     RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius + 1, style: .continuous)
                         .strokeBorder(invalid ? CDS.Fill.danger : CDS.Fill.accent, lineWidth: 1)
                         .padding(-1)
-                        .shadow(color: invalid ? CDS.Settings.focusGlowDanger : CDS.Settings.focusGlow, radius: 3)
+                        .bakedShadow(invalid ? CDS.Settings.focusGlowDanger : CDS.Settings.focusGlow,
+                                     .ring(CDS.Settings.fieldRadius + 1, lineWidth: 1), radius: 3)
                         .allowsHitTesting(false)
                 }
             }
@@ -773,7 +791,7 @@ private struct CDSSwitch: View {
             .overlay {
                 Circle().fill(.white)
                     .frame(width: CDS.Settings.knob, height: CDS.Settings.knob)
-                    .shadow(color: .black.opacity(0.24), radius: 2, y: 1)
+                    .bakedShadow(.black.opacity(0.24), .circle, radius: 2, y: 1)
                     .offset(x: on ? travel / 2 : -travel / 2)
             }
             .animation(reduce ? nil : .timingCurve(0.34, 1.3, 0.64, 1, duration: 0.12), value: on)
@@ -829,7 +847,8 @@ struct SettingsSegmented<Value: Hashable>: View {
                                     .fill(CDS.Fill.secondary)
                                     .overlay(RoundedRectangle(cornerRadius: CDS.Settings.segmentThumbRadius, style: .continuous)
                                         .strokeBorder(CDS.border, lineWidth: 1))
-                                    .shadow(color: CDS.fieldShadow, radius: 1, y: 1)
+                                    .bakedShadow(CDS.fieldShadow, .rounded(CDS.Settings.segmentThumbRadius), radius: 1, y: 1,
+                                                 fill: CDS.Fill.secondary)
                                     .matchedGeometryEffect(id: "thumb", in: thumb)
                             }
                         }
@@ -929,7 +948,7 @@ struct SettingsButtonStyle: ButtonStyle {
                 .frame(width: style.iconOnly ? size.height : nil, height: size.height)
                 .background {
                     shape.fill(fill)
-                        .shadow(color: style.variant == .secondary ? CDS.fieldShadow : .clear, radius: 1, y: 1)
+                        .bakedShadow(style.variant == .secondary ? CDS.fieldShadow : .clear, .rounded(size.radius), radius: 1, y: 1, fill: fill)
                         .scaleEffect(pressed ? 0.975 : 1)
                         .animation(pressed ? .easeOut(duration: 0.06) : .spring(duration: 0.45, bounce: 0.35), value: pressed)
                 }

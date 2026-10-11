@@ -397,8 +397,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.appWindow?.showUpdates()
             self?.hub?.setWindowOpen(true)
         }
-        hub.pickRouterCard = { [weak window, weak store] id in if let store { window?.routerModel.select(id, store: store) } }
-        hub.pickRouterMessage = { [weak window] id in window?.routerModel.show(message: id) }
+        hub.pickRouterCard = { [weak window] id in window?.pick(card: id) }
+        hub.pickRouterMessage = { [weak window] id in window?.pick(message: id) }
+        hub.windowPlace = { [weak window] in window?.navigator.selection }
         // Banners for new cards that need you; a demo posts none.
         if !demo {
             RouterBanners.attach(store: store, windowIsKey: { [weak window] in window?.isKey == true && window?.navigator.selection == .router }) {
@@ -433,7 +434,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         globals.start()
         globalShortcuts = globals
         if CommandLine.arguments.contains("--open") { toggleWindow() }
-        if CommandLine.arguments.contains(Lifecycle.flag) { Lifecycle.start(store) }
+        if CommandLine.arguments.contains(Lifecycle.flag) {
+            Lifecycle.start(store)
+        } else {
+            // The window's content built once at idle, out of sight, so the first open only brings it in. Not under
+            // `--lifecycle`, whose idle measurement wants nothing done after launch.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window, weak hub, weak self] in
+                guard let window, let hub else { return }
+                Self.prepareWhenIdle(interacting: { [weak hub] in
+                    Self.preparationIsBlocked(mouseButtons: NSEvent.pressedMouseButtons, modifiers: NSEvent.modifierFlags,
+                                              barInteracting: hub?.isInteracting == true)
+                }, prepare: { [weak window, weak hub, weak self] in
+                    // Short of memory: none of it (the overlay, once made, is kept for good).
+                    guard let window, let hub, !window.memoryShort else { return }
+                    if self?.store.router.enabled == true { _ = SessionIcons.drawable }
+                    window.prepare()
+                    AppTransition.prepareOverlay(on: hub.dockedScreen)
+                })
+            }
+        }
+    }
+
+    /// How long after launch the window's content is built (`AppWindowController.prepare`): past the store's first load
+    /// and the bar's first draw.
+    static let prepareDelay: TimeInterval = 2
+
+    static func preparationIsBlocked(mouseButtons: Int, modifiers: NSEvent.ModifierFlags, barInteracting: Bool) -> Bool {
+        mouseButtons != 0 || !modifiers.intersection(Shortcut.relevant).isEmpty || barInteracting
+    }
+
+    /// A busy user gets another chance at idle in 250 ms; the scheduler is replaceable so tests can step retries.
+    static func prepareWhenIdle(interacting: @escaping () -> Bool, prepare: @escaping () -> Void,
+                                schedule: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, block in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, qos: .utility) { MainActor.assumeIsolated { block() } }
+    }) {
+        if interacting() {
+            schedule(0.25) { prepareWhenIdle(interacting: interacting, prepare: prepare, schedule: schedule) }
+        } else {
+            prepare()
+        }
     }
 
     /// Opens the app window on `destination` (the bar leaves the edge), or on a Router card.

@@ -158,6 +158,19 @@ extension CappedScroll {
     }
 }
 
+extension Thing {
+    /// Who acted last on it: the latest of the comments, reviews and thread replies; the author when nothing has happened.
+    /// The face a row shows, and so the avatar to warm before rows show (`Store.avatarsToWarm`).
+    var latestActor: Person? {
+        var latest: (Person, Date)?
+        func consider(_ p: Person, _ at: Date) { if latest == nil || at > latest!.1 { latest = (p, at) } }
+        for c in comments { consider(c.author, c.at) }
+        for r in reviews { consider(r.author, r.at) }
+        for t in threads { consider(t.lastReplyBy, t.lastReplyAt) }
+        return latest?.0 ?? author
+    }
+}
+
 /// A thing in the inbox on three short lines, as Claude's two-line rows (search-tabs-avatars.md §5.1) with a third for the
 /// facts: 13/16 title over a 12/16 muted `repo#number · @author`, over the facts as compact chips; Claude's Avatar (sm, 20) in a
 /// 24 slot, the unread dot cut into its corner (a workflow has its state's glyph instead); its actions (Claude's 24pt row
@@ -179,9 +192,12 @@ struct EntryRow: View {
     static let line: CGFloat = 16
 
     var body: some View {
+        // Worked out once per redraw: the subtitle and the avatar both name who acted; the chips are drawn and read out.
+        let actor = actor
+        let chips = chips
         Button { store.open(entry) } label: {
             HStack(alignment: .top, spacing: CDS.Sidebar.rowGap) {
-                lead.frame(width: CDS.Sidebar.leadingSlot, height: Self.line * 2 + 2)
+                lead(actor).frame(width: CDS.Sidebar.leadingSlot, height: Self.line * 2 + 2)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 6) {
                         Text(thing.title)
@@ -196,7 +212,7 @@ struct EntryRow: View {
                     }
                     .frame(height: Self.line)
                     HStack(spacing: 6) {
-                        Text(subtitle)
+                        Text(subtitle(actor))
                             .font(Theme.Typography.meta)
                             .foregroundStyle(CDS.Text.muted)
                             .lineLimit(1)
@@ -244,17 +260,9 @@ struct EntryRow: View {
         return out
     }
 
-    /// Who acted last on it: the latest of the comments, reviews and thread replies; the author when nothing has happened.
-    private var actor: Person? {
-        var latest: (Person, Date)?
-        func consider(_ p: Person, _ at: Date) { if latest == nil || at > latest!.1 { latest = (p, at) } }
-        for c in thing.comments { consider(c.author, c.at) }
-        for r in thing.reviews { consider(r.author, r.at) }
-        for t in thing.threads { consider(t.lastReplyBy, t.lastReplyAt) }
-        return latest?.0 ?? thing.author
-    }
+    private var actor: Person? { thing.latestActor }
 
-    private var subtitle: String {
+    private func subtitle(_ actor: Person?) -> String {
         let name = String(thing.repo.split(separator: "/").last ?? "")
         switch thing.kind {
         case .workflow:
@@ -265,7 +273,7 @@ struct EntryRow: View {
         }
     }
 
-    @ViewBuilder private var lead: some View {
+    @ViewBuilder private func lead(_ actor: Person?) -> some View {
         if thing.kind == .workflow {
             let color = switch thing.checks {
             case .failing?: Theme.red
@@ -280,25 +288,26 @@ struct EntryRow: View {
                 .overlay(alignment: .topTrailing) { if unread { Circle().fill(tint).frame(width: CDS.Dot.size, height: CDS.Dot.size).offset(x: 3, y: -1) } }
                 .frame(maxHeight: .infinity, alignment: .center)
         } else {
-            avatar.frame(maxHeight: .infinity, alignment: .center)
+            avatar(actor).frame(maxHeight: .infinity, alignment: .center)
         }
     }
 
     /// The author's avatar; unread, Claude's 6pt status dot at its top-right corner, cut out of it (2pt clear around), in
     /// the category's colour.
-    private var avatar: some View {
+    private func avatar(_ actor: Person?) -> some View {
         let size = Self.avatar
         let r = CDS.Dot.size / 2
         let centre = CGPoint(x: size - r + 1, y: r - 1)
         return Avatar(url: actor?.avatar, size: size, name: actor?.login)
+            // Read, a plain mask: the cut-out's blend needs a layer of its own, drawn offscreen, so only an unread row pays it.
             .mask {
-                Rectangle()
-                    .overlay {
-                        if unread {
-                            Circle().frame(width: 2 * (r + 2), height: 2 * (r + 2)).position(centre).blendMode(.destinationOut)
-                        }
-                    }
-                    .compositingGroup()
+                if unread {
+                    Rectangle()
+                        .overlay { Circle().frame(width: 2 * (r + 2), height: 2 * (r + 2)).position(centre).blendMode(.destinationOut) }
+                        .compositingGroup()
+                } else {
+                    Rectangle()
+                }
             }
             .overlay {
                 if unread {

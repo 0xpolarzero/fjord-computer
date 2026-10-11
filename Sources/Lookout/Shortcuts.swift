@@ -236,7 +236,7 @@ final class GlobalShortcuts {
     private let hotKeys: HotKeys
     private let perform: (ShortcutAction) -> Void
 
-    /// `perform` runs on the main queue when a global shortcut is pressed.
+    /// `perform` runs on the main actor before the global shortcut's callback returns.
     init(store: Store, hotKeys: HotKeys, perform: @escaping (ShortcutAction) -> Void) {
         self.store = store
         self.hotKeys = hotKeys
@@ -289,7 +289,8 @@ final class GlobalShortcuts {
         let off = action.isRouter && !store.routerOn
         let wanted = off ? nil : shortcut
         let taken = hotKeys.set(action.hotKeyID, wanted.flatMap { $0.isUnassigned ? nil : $0 }) { [perform] in
-            DispatchQueue.main.async { perform(action) }
+            // Carbon targets the application's main event loop; AppKit's modifier monitors run on the main thread.
+            MainActor.assumeIsolated { perform(action) }
         }
         if taken {
             store.refusedShortcuts[action] = nil

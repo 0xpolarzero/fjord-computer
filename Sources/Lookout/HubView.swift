@@ -71,7 +71,7 @@ final class HubState {
     /// opens nothing); once one is open, moving to another section switches at once, with no transition.
     func enter(_ next: HubSection) {
         dwell?.cancel()
-        guard !dragging else { return }
+        guard !barHidden, !quiet, !dragging else { return }
         if section != nil {
             guard section != next else { return }
             var instant = Transaction(animation: nil)
@@ -81,7 +81,8 @@ final class HubState {
         }
         dwell = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
-            if !Task.isCancelled, self?.dragging == false { self?.section = next }
+            guard let self, !Task.isCancelled, !barHidden, !quiet, !dragging else { return }
+            section = next
         }
     }
 

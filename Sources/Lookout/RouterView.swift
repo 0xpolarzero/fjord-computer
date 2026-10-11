@@ -190,9 +190,14 @@ struct KindTag: View {
 
 /// Card text is the app's own summary or the session's question: inline Markdown (**bold**, `code`) as the sessions show it.
 enum RouterText {
+    /// Parsed once per text: cards, the page and the transcript ask again on every redraw. Up to 1000 texts, 4 MB of them.
+    private static let parsed = RenderCache<AttributedString>(countLimit: 1000, totalCostLimit: 4 << 20)
+
     static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
+        parsed.value(text, cost: text.utf8.count) {
+            (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                ?? AttributedString(text)
+        }
     }
 
     /// A plan's Markdown, line by line as written: headings in bold without their #, the rest with its inline styles.
@@ -768,6 +773,8 @@ final class RouterModel {
 struct RouterSetupNotice: View {
     let store: Store
     let model: RouterModel
+    /// The view the notice is in, to know whether its window is on screen.
+    @State private var place = ShownProbe.Place()
 
     var body: some View {
         Group {
@@ -794,8 +801,33 @@ struct RouterSetupNotice: View {
             .padding(.vertical, Theme.Space.md)
             Hairline()
         }
-        .onAppear { Announce.say(text) }
+        .background(ShownProbe(place: place))
+        // Said once its window is on screen, a moment after: not while the window's content is prepared out of sight, nor
+        // once it has left the window again (the task is cancelled then).
+        .task(id: text) {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, place.isShown else { return }
+            Announce.say(text, after: .zero)
+        }
     }
+}
+
+/// Finds the window a SwiftUI view is in: whether it is on screen.
+struct ShownProbe: NSViewRepresentable {
+    @MainActor final class Place {
+        weak var view: NSView?
+        var isShown: Bool { view?.window?.isVisible == true }
+    }
+
+    let place: Place
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        place.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) { place.view = view }
 }
 
 /// The projects an @ word matches: names that start with it first, then ones that contain it, then ones that hold its

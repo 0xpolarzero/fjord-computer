@@ -179,18 +179,38 @@ struct WorkingStatus: View {
 struct WorkingMark: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// How long each dot stays the bright one.
+    static let step: TimeInterval = 0.35
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 15, paused: reduceMotion)) { context in
-            let lit = reduceMotion ? 1 : Int(context.date.timeIntervalSinceReferenceDate / 0.35) % 3
-            HStack(spacing: CDS.Transcript.markDots.pitch - CDS.Transcript.markDots.size) {
-                ForEach(0..<3) { i in
-                    Circle().fill(CDS.clay.opacity(i == lit ? 1 : 0.55))
-                        .frame(width: CDS.Transcript.markDots.size, height: CDS.Transcript.markDots.size)
-                }
+        Group {
+            if reduceMotion {
+                dots(lit: 1)
+            } else {
+                // Drawn again when the bright dot moves, not on every frame in between.
+                TimelineView(Self.schedule(from: .now)) { context in dots(lit: Self.lit(at: context.date)) }
             }
-            .frame(width: CDS.Transcript.markBox, height: CDS.Transcript.markBox, alignment: .leading)
         }
         .accessibilityHidden(true)
+    }
+
+    /// A step at each moment the bright dot moves, from the last one before `date`.
+    static func schedule(from date: Date) -> PeriodicTimelineSchedule {
+        .periodic(from: Date(timeIntervalSinceReferenceDate: (date.timeIntervalSinceReferenceDate / step).rounded(.down) * step),
+                  by: step)
+    }
+
+    /// The bright dot at `date` (a step's own moment counts as the step, rounding aside).
+    static func lit(at date: Date) -> Int { Int((date.timeIntervalSinceReferenceDate + 0.001) / step) % 3 }
+
+    private func dots(lit: Int) -> some View {
+        HStack(spacing: CDS.Transcript.markDots.pitch - CDS.Transcript.markDots.size) {
+            ForEach(0..<3) { i in
+                Circle().fill(CDS.clay.opacity(i == lit ? 1 : 0.55))
+                    .frame(width: CDS.Transcript.markDots.size, height: CDS.Transcript.markDots.size)
+            }
+        }
+        .frame(width: CDS.Transcript.markBox, height: CDS.Transcript.markBox, alignment: .leading)
     }
 }
 

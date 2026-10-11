@@ -208,6 +208,7 @@ struct MentionField: NSViewRepresentable {
             view.textStorage?.setAttributedString(text)
             view.setSelectedRange(NSRange(location: min(keep.location, text.length), length: 0))
             view.typingAttributes = base
+            c.fits.removeAll()
             c.syncing = false
         }
         if c.focusTick != focusTick {
@@ -221,9 +222,21 @@ struct MentionField: NSViewRepresentable {
         guard let view = scroll.documentView as? MentionTextView, let layout = view.layoutManager,
               let container = view.textContainer else { return nil }
         let width = proposal.width ?? 300
-        container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-        layout.ensureLayout(for: container)
-        let content = max(20, ceil(layout.usedRect(for: container).height))
+        // A layout asks for the same sizes over and over (the page around it settling): the text is laid out once per width
+        // and text, not on every ask.
+        let key = Coordinator.Fit(width: width, text: view.string)
+        let content: CGFloat
+        if let known = context.coordinator.fits[key] {
+            content = known
+            // The container at the width asked for, as a fresh layout leaves it (laid out again only when drawn).
+            if container.size.width != width { container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude) }
+        } else {
+            container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            layout.ensureLayout(for: container)
+            content = max(20, ceil(layout.usedRect(for: container).height))
+            if context.coordinator.fits.count >= 16 { context.coordinator.fits.removeAll() }
+            context.coordinator.fits[key] = content
+        }
         let height = min(content, maxHeight)
         scroll.hasVerticalScroller = false
         scroll.verticalScrollElasticity = content > maxHeight ? .allowed : .none
@@ -247,6 +260,13 @@ struct MentionField: NSViewRepresentable {
         var store: Store?
         var focusTick = 0
         var syncing = false
+        /// The text's height at a width, for the text it had then (a pill is one character of it; pills made anew clear it).
+        var fits: [Fit: CGFloat] = [:]
+
+        struct Fit: Hashable {
+            var width: CGFloat
+            var text: String
+        }
 
         func textDidChange(_ notification: Notification) {
             guard !syncing, let view, let model else { return }

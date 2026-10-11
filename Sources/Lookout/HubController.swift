@@ -147,7 +147,13 @@ final class HubController {
     private(set) var windowFront = false
     /// Whether the bar is away from the edge now: the window is open and in front.
     var barAway: Bool { BarPresence(windowOpen: windowOpen, windowFront: windowFront).barAway }
+    /// Launch preparation waits for both reported hover and a pointer that has not reached its tracking callback yet.
+    var isInteracting: Bool {
+        hub.hovering || hub.dragging || (!barAway && layout.frame != .zero && hubScreenFrame.contains(NSEvent.mouseLocation))
+    }
     private var barApplied = false
+    /// Which departure or return a fade completion belongs to.
+    private(set) var barGeneration = 0
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
 
     fileprivate static let debug = ProcessInfo.processInfo.environment["LOOKOUT_DEBUG"] != nil
@@ -167,6 +173,10 @@ final class HubController {
     }
     /// Scrolls the Router's conversation to a message, before the window opens on it.
     var pickRouterMessage: (UUID) -> Void = { _ in }
+    /// The avatars about to be shown. Replaceable so tests can observe when and in what order they are warmed.
+    var prefetchAvatars: ([URL]) -> Void = { ImageCache.shared.prefetch($0) }
+    /// The place the app window shows (or opens on).
+    var windowPlace: () -> AppDestination? = { nil }
 
     /// The edge `--edge` names, if it names one.
     nonisolated static func edge(in arguments: [String]) -> DockEdge? {
@@ -192,7 +202,7 @@ final class HubController {
         window.onDragEnded = { [weak self] in self?.dragEnded(at: $0) }
         dock()
         window.orderFrontRegardless()
-        watchMouse()
+        if !UnderTest.isRunning { watchMouse() }
         syncTrigger()
         observe()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -209,7 +219,8 @@ final class HubController {
 
     /// The window along the edge, deep enough for the bar's peek and its shadow.
     private func dockFrame() -> NSRect {
-        let vf = screen.visibleFrame
+        var vf = screen.visibleFrame
+        if UnderTest.isRunning { vf.origin = UnderTest.away }
         switch ui.edge {
         case .right, .left:
             let depth = LookoutHub.cell + LookoutHub.detail + 40
@@ -338,7 +349,6 @@ final class HubController {
 
     /// A click on an item of the bar (or one of its peek's): the app window opens on it.
     private func opened(_ destination: AppDestination, card: String? = nil) {
-        hub.section = nil
         hub.cancelDwell()
         if let card { pickRouterCard(card) }
         openApp(destination)
@@ -346,7 +356,6 @@ final class HubController {
 
     /// Check for Updates, from the bar's menu: the app window opens on Settings, scrolled to Updates.
     private func openedUpdates() {
-        hub.section = nil
         hub.cancelDwell()
         openUpdates()
     }
@@ -405,40 +414,63 @@ final class HubController {
     /// Puts the bar where `barAway` says: off the edge (faded out) or on it (faded in).
     private func applyBar() {
         let away = barAway
+        let leaving = away && away != barApplied
         if away != barApplied {
+            barGeneration += 1
             barApplied = away
             hub.barHidden = away
             hoverTask?.cancel()
             pendingHover = nil
             hub.cancelDwell()
-            hub.section = nil
-            hub.hovering = false
-            hub.selection = nil
             if away {
                 setAcceptsMouse(false)
                 trigger.orderOut(nil)
                 if let global = globalMouse { NSEvent.removeMonitor(global); globalMouse = nil }
                 fadeOut()
             } else {
+                clearPeek()
                 hub.quiet = true
                 fadeIn()
                 syncTrigger()
             }
         }
-        reportOpen()
+        // Leaving for the window: the store's refresh waits for the turn after the morph started.
+        if leaving {
+            AppTransition.nextTurn { [weak self] in self?.reportOpen() }
+        } else {
+            reportOpen()
+        }
+    }
+
+    /// Clear the peek only out of sight, so opening can capture the bar before its layout changes.
+    private func clearPeek() {
+        var instant = Transaction(animation: nil)
+        instant.disablesAnimations = true
+        withTransaction(instant) {
+            hub.section = nil
+            hub.hovering = false
+            hub.selection = nil
+        }
     }
 
     private func fadeOut() {
-        guard AppTransition.enabled else { window.orderOut(nil); return }
+        let mine = barGeneration
+        guard AppTransition.enabled else { finishFadeOut(mine); return }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.12
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.barApplied else { return }
-                self.window.orderOut(nil)
+                self?.finishFadeOut(mine)
             }
         })
+    }
+
+    /// A completion from an older departure cannot hide a bar that returned and has begun leaving again.
+    func finishFadeOut(_ mine: Int) {
+        guard barApplied, barGeneration == mine else { return }
+        window.orderOut(nil)
+        clearPeek()
     }
 
     private func fadeIn() {
@@ -469,19 +501,19 @@ final class HubController {
     }
 
     /// Tells the store when the hub is more than the bare bar (a peek or the app window), so it refreshes stale
-    /// data and polls faster meanwhile; warms the avatars the inbox is about to show.
+    /// data and polls faster meanwhile; warms the avatars the inbox is about to show, those of the page opened first (the
+    /// window's place, or the peek's tab).
     private func reportOpen() {
         let open = windowOpen || (hub.section != nil && !hub.quiet)
         guard open != reportedOpen else { return }
         reportedOpen = open
         store.setHubOpen(open)
         if open {
-            // Every author in the inbox (not just the newest items: the view may list another filter), and the
-            // account's own picture in Settings.
-            var urls = Array(Set(store.things.values.compactMap { $0.author?.avatar })).prefix(60)
-                .compactMap { Avatar.sizedURL($0, size: 22) }
-            if let me = Avatar.sizedURL(store.me?.avatarUrl, size: 30) { urls.append(me) }
-            ImageCache.shared.prefetch(urls)
+            // A frame later: the opening's own work comes first.
+            AppTransition.nextFrame(screen) { [weak self] in
+                guard let self, self.reportedOpen else { return }
+                self.prefetchAvatars(self.store.avatarsToWarm(first: self.windowOpen ? self.windowPlace()?.tab : self.hub.tab))
+            }
         }
     }
 
@@ -566,4 +598,26 @@ struct BarPresence: Equatable {
     mutating func opened(_ open: Bool) { windowOpen = open; windowFront = open }
     /// The open window came to the front or went out of sight.
     mutating func front(_ front: Bool) { if windowOpen { windowFront = front } }
+}
+
+extension Store {
+    /// The pictures the rows are about to show, at the URLs they ask for (the latest actor's, at a row's size): `first`'s
+    /// (the page opened, else the tab the inbox opens on) first, then the other categories in order, at most `limit`; and
+    /// the account's, at Settings' size. Done's only when it is `first`.
+    func avatarsToWarm(first: InboxTab? = nil, limit: Int = 60) -> [URL] {
+        var seen = Set<URL>()
+        var urls: [URL] = []
+        let lead = first ?? tabNeedingYou
+        let tabs = [lead] + shownCategories.map { InboxTab.category($0.id) }.filter { $0 != lead }
+        scan: for tab in tabs {
+            for entry in entries(in: tab) where entry.thing.kind != .workflow {
+                guard let url = Avatar.sizedURL(entry.thing.latestActor?.avatar, size: EntryRow.avatar),
+                      seen.insert(url).inserted else { continue }
+                urls.append(url)
+                if urls.count >= limit { break scan }
+            }
+        }
+        if let account = Avatar.sizedURL(me?.avatarUrl, size: SettingsView.accountAvatar) { urls.append(account) }
+        return urls
+    }
 }

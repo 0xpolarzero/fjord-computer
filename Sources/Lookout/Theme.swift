@@ -154,10 +154,17 @@ struct Avatar: View {
         }
     }
 
-    /// The avatar URL asking GitHub for twice the point size, in pixels.
+    private static let sizedURLs = RenderCache<URL?>(countLimit: 1000)
+
+    /// The avatar URL asking GitHub for twice the point size, in pixels; made once per URL and size (rows ask on every redraw).
     static func sizedURL(_ url: URL?, size: CGFloat) -> URL? {
-        guard let url, var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
-        comps.queryItems = (comps.queryItems ?? []).filter { $0.name != "s" } + [URLQueryItem(name: "s", value: "\(Int(size * 2))")]
+        guard let url else { return nil }
+        return sizedURLs.value("\(Int(size * 2)) \(url.absoluteString)") { resized(url, pixels: Int(size * 2)) }
+    }
+
+    private static func resized(_ url: URL, pixels: Int) -> URL? {
+        guard var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        comps.queryItems = (comps.queryItems ?? []).filter { $0.name != "s" } + [URLQueryItem(name: "s", value: "\(pixels)")]
         return comps.url
     }
 }
@@ -515,6 +522,10 @@ private struct TipSpaceModifier: ViewModifier {
 extension View {
     /// Hosts tooltips for everything inside (use once, at the root of the panel).
     func tipSpace() -> some View { modifier(TipSpaceModifier()) }
+    /// A tip space only where `on`: inside a view that has one already, that one draws the tips.
+    @ViewBuilder func tipSpace(_ on: Bool) -> some View {
+        if on { tipSpace() } else { self }
+    }
 
     /// A tooltip for a control: on hover, and after a second on keyboard focus when it hands over its own `focused`.
     func tip(_ title: String, _ detail: String? = nil, focused: Bool = false) -> some View {

@@ -150,10 +150,11 @@ struct RuleEditor: View {
         }
     }
 
-    @ViewBuilder private func stringScope(_ word: String, placeholder: String, _ slot: Binding<[String]?>, pool: [String]) -> some View {
+    @ViewBuilder private func stringScope(_ word: String, placeholder: String, _ slot: Binding<[String]?>,
+                                         pool: @autoclosure @escaping () -> [String]) -> some View {
         if slot.wrappedValue != nil {
             StringSlot(pick: Binding(get: { Pick(include: slot.wrappedValue ?? []) }, set: { slot.wrappedValue = $0.include }),
-                       store: store, placeholder: placeholder, pool: pool, allowsExcept: false, tone: tone(word))
+                       store: store, placeholder: placeholder, pool: pool(), allowsExcept: false, tone: tone(word))
                 .slotWord(SlotWord(name: word, text: word, tone: tone(word), remove: { slot.wrappedValue = nil }))
         }
     }

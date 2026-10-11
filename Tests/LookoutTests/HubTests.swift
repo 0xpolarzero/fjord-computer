@@ -5,6 +5,81 @@ import Testing
 @testable import Lookout
 
 @MainActor
+@Suite struct HubHover {
+    enum Block: CaseIterable {
+        case hidden, quiet, dragging
+
+        @MainActor func set(_ value: Bool, on hub: HubState) {
+            switch self {
+            case .hidden: hub.barHidden = value
+            case .quiet: hub.quiet = value
+            case .dragging: hub.dragging = value
+            }
+        }
+    }
+
+    @Test(arguments: Block.allCases) func aBlockedBarDoesNotSwitchItsPeek(_ block: Block) {
+        let hub = HubState()
+        hub.section = .inbox
+        block.set(true, on: hub)
+        hub.enter(.router)
+        #expect(hub.section == .inbox)
+    }
+
+    @Test(arguments: Block.allCases) func aBlockedBarDoesNotStartADwell(_ block: Block) async {
+        let hub = HubState()
+        block.set(true, on: hub)
+        hub.enter(.inbox)
+        block.set(false, on: hub)
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(hub.section == nil)
+        hub.cancelDwell()
+    }
+
+    @Test(arguments: Block.allCases) func aDwellDoesNotOpenAPeekAfterTheBarBecomesBlocked(_ block: Block) async {
+        let hub = HubState()
+        hub.enter(.inbox)
+        block.set(true, on: hub)
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(hub.section == nil)
+        hub.cancelDwell()
+    }
+
+    @Test func hoveringTheCurrentTabKeepsItsPickedRowAndScrollRequest() {
+        let store = InboxFixture.store([])
+        let hub = HubState()
+        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: hub)
+        let tab = store.hubTab(hub)
+        // With no explicit tab, the first category is already shown.
+        hub.selection = "i:a"
+        hub.requestScroll("i:a")
+        let scroll = hub.keyboardSelection
+        view.hoverTab(tab)
+        #expect(hub.selection == "i:a" && hub.keyboardSelection == scroll && hub.tab == nil)
+        hub.tab = tab
+        hub.selection = "i:b"
+        hub.requestScroll("i:b")
+        let explicitScroll = hub.keyboardSelection
+        view.hoverTab(tab)
+        #expect(hub.selection == "i:b" && hub.keyboardSelection == explicitScroll)
+        view.hoverTab(.done)
+        #expect(hub.tab == .done && hub.selection == nil && hub.keyboardSelection == nil)
+    }
+
+    @Test(arguments: Block.allCases) func aBlockedBarDoesNotChangeItsTab(_ block: Block) {
+        let store = InboxFixture.store([])
+        let hub = HubState()
+        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: hub)
+        hub.selection = "i:a"
+        hub.requestScroll("i:a")
+        let scroll = hub.keyboardSelection
+        block.set(true, on: hub)
+        view.hoverTab(.done)
+        #expect(hub.tab == nil && hub.selection == "i:a" && hub.keyboardSelection == scroll)
+    }
+}
+
+@MainActor
 @Suite struct HubCI {
     private func workflow(_ id: Int, _ state: CheckState, repo: String = "a/one") -> Thing {
         var thing = Thing(id: "workflow:\(repo):\(id)@main", kind: .workflow, repo: repo, number: nil, title: "Fix",

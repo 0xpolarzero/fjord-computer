@@ -27,7 +27,7 @@ extension LookoutHub {
         }
         .onHover { over in
             guard over, let first = part.categories.first(where: { store.badge($0) > 0 }) ?? part.categories.first else { return }
-            hub.tab = .category(first.id)
+            hoverTab(.category(first.id))
         }
     }
 
@@ -37,8 +37,14 @@ extension LookoutHub {
             CategoryCell(category: category, badge: store.badge(category), vertical: !edge.isHorizontal) {
                 openApp(.category(category.id))
             }
-            .onHover { if $0 { hub.tab = .category(category.id) } }
+            .onHover { if $0 { hoverTab(.category(category.id)) } }
         }
+    }
+
+    /// A bar hover changes tabs only when it shows a different list, keeping the current row picked otherwise.
+    func hoverTab(_ tab: InboxTab) {
+        guard !hub.barHidden, !hub.quiet, !hub.dragging, store.hubTab(hub) != tab else { return }
+        hub.tab = tab
     }
 
     /// The peek's header: the inbox's tabs.

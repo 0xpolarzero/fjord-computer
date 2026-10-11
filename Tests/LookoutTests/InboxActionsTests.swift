@@ -1232,6 +1232,118 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(store.actionChips(for: store.entries[0]).first?.target == .session("local_1"))
     }
 
+    /// The row's previous per-action scan, retained to check the latest-run and queue selection together.
+    private func previousChips(for entry: InboxEntry, category: InboxCategory, groups: [InboxGroup], ledger: ActionLedger,
+                               now: Date) -> [InboxActions.Chip] {
+        let queued = Set(InboxActions.due(entries: [entry], categories: [category], groups: groups, ledger: ledger, me: "me").map(\.action.id))
+        func ago(_ date: Date) -> String {
+            let s = Int(now.timeIntervalSince(date))
+            if s < 60 { return "just now" }
+            if s < 3600 { return "\(s / 60)m ago" }
+            if s < 86400 { return "\(s / 3600)h ago" }
+            return "\(s / 86400)d ago"
+        }
+        return category.actions.items.compactMap { action in
+            guard action.applies(to: entry.thing.kind) else { return nil }
+            let latest = ledger.runs.values
+                .filter { $0.category == category.id && $0.thing == entry.id && $0.action == action.id && $0.state != .baselined }
+                .max { $0.at < $1.at }
+            guard let run = latest else {
+                return queued.contains(action.id)
+                    ? InboxActions.Chip(id: action.id, label: "queued", tint: .neutral, target: nil,
+                                        help: "\(action.title) runs on the next refresh") : nil
+            }
+            switch run.state {
+            case .running, .baselined:
+                return InboxActions.Chip(id: action.id, label: "running…", tint: .neutral, target: nil, help: action.title)
+            case .failed:
+                let reason = run.detail.count > 48 ? String(run.detail.prefix(47)) + "…" : run.detail
+                return InboxActions.Chip(id: action.id, label: "failed: \(reason)", tint: .danger, target: nil,
+                                         help: "\(action.title) failed: \(run.detail)")
+            case .done:
+                switch action.kind {
+                case .askRouter:
+                    if let session = run.sessionID {
+                        return InboxActions.Chip(id: action.id, label: "session started \(ago(run.at))", tint: .neutral,
+                                                 target: .session(session), help: "Open the session in Claude")
+                    }
+                    return InboxActions.Chip(id: action.id, label: "asked the Router", tint: .neutral, target: .router,
+                                             help: "Asked the Router \(ago(run.at)). Open the Router", message: run.message)
+                case .comment:
+                    return InboxActions.Chip(id: action.id, label: "commented", tint: .neutral, target: run.url.map { .url($0) },
+                                             help: "Open the comment on GitHub")
+                case .rerun:
+                    return InboxActions.Chip(id: action.id, label: run.detail.isEmpty ? "re-ran" : run.detail, tint: .neutral,
+                                             target: nil, help: "Failed checks were re-run \(ago(run.at))")
+                }
+            }
+        }
+    }
+
+    @Test(arguments: ThingKind.allCases) func chipsMatchThePreviousScanWithTiedDatesAndMixedStates(kind: ThingKind) {
+        let tied = CategoryAction.make(.askRouter(prompt: "tied"))
+        let comment = CategoryAction.make(.comment("hi"))
+        let running = CategoryAction.make(.askRouter(prompt: "running"))
+        let rerun = CategoryAction.make(.rerun)
+        let queued = CategoryAction.make(.askRouter(prompt: "queued"))
+        let old = CategoryAction.make(.askRouter(prompt: "old"))
+        var eachFact = CategoryAction.make(.askRouter(prompt: "each fact"))
+        eachFact.trigger = .eachFact
+        let fresh = CategoryAction.make(.askRouter(prompt: "not baselined"))
+        let groups = [InboxGroup(name: "Friends", kind: .people, members: ["alice"])]
+        var category = InboxFixture.category()
+        category.rules[0].scope.by = Pick(include: [.group(groups[0].id)])
+        category.actions = ActionList([tied, queued, comment, running, old, rerun, eachFact, fresh])
+        let now = Date(timeIntervalSince1970: 100_000)
+        var thing = InboxFixture.pr(1, updated: now)
+        thing.kind = kind
+        var entry = InboxEntry(thing: thing, categoryID: category.id, facts: [Fact(key: "signal:new", label: "New fact")],
+                               isDone: false, isUnread: true)
+        var ledger = ActionLedger()
+        ledger.baselines[category.id] = .init(rules: InboxActions.fingerprint(category.rules, groups: groups),
+                                               actions: Set(category.actions.items.filter { $0.id != fresh.id }.map(\.id)))
+        func run(_ action: CategoryAction, _ trigger: String, _ state: ActionRun.State, ago: TimeInterval = 7200,
+                 detail: String = "", url: URL? = nil, sessionID: String? = nil, message: UUID? = nil) -> ActionRun {
+            ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: trigger, state: state,
+                      at: now.addingTimeInterval(-ago), detail: detail, url: url, sessionID: sessionID, message: message)
+        }
+        ledger.set(run(tied, "first", .done, sessionID: "session", message: UUID()))
+        ledger.set(run(tied, "second", .failed, detail: "A different run at the same date"))
+        ledger.set(run(comment, "enter", .failed, detail: String(repeating: "reason ", count: 12)))
+        ledger.set(run(comment, "older", .done, ago: 10_800, url: URL(string: "https://github.com/a/one/pull/1#issuecomment-1")))
+        ledger.set(run(comment, "baseline", .baselined, ago: 0))
+        ledger.set(run(running, "older", .failed, ago: 10_800, detail: "An older failure"))
+        ledger.set(run(running, "enter", .running))
+        ledger.set(run(rerun, "enter", .done, detail: "re-ran 2 jobs"))
+        ledger.set(run(old, "enter", .baselined))
+        ledger.set(run(eachFact, "signal:old", .done, message: UUID()))
+        var otherCategory = run(tied, "other category", .failed, ago: 0, detail: "Wrong category")
+        otherCategory.category = UUID()
+        ledger.set(otherCategory)
+        var otherThing = run(tied, "other thing", .failed, ago: 0, detail: "Wrong thing")
+        otherThing.thing = "pr:a/one#2"
+        ledger.set(otherThing)
+
+        for done in [false, true] {
+            entry.isDone = done
+            let chips = InboxActions.chips(for: entry, category: category, groups: groups, ledger: ledger, me: "me", now: now)
+            #expect(chips == previousChips(for: entry, category: category, groups: groups, ledger: ledger, now: now))
+            let visible = [tied, queued, comment, running, rerun, eachFact]
+                .filter { $0.applies(to: kind) && (!done || $0.id != queued.id) }.map(\.id)
+            #expect(chips.map(\.id) == visible)
+            #expect(chips.first { $0.id == queued.id }?.label == (done ? nil : "queued"))
+        }
+
+        // Every applicable action has a visible run, so the row needs no queue planning.
+        entry.isDone = false
+        ledger.set(run(queued, "enter", .done, sessionID: "queued session"))
+        ledger.set(run(old, "signal:old", .done))
+        ledger.set(run(fresh, "enter", .done))
+        let chips = InboxActions.chips(for: entry, category: category, groups: groups, ledger: ledger, me: "me", now: now)
+        #expect(chips == previousChips(for: entry, category: category, groups: groups, ledger: ledger, now: now))
+        #expect(chips.map(\.id) == category.actions.items.filter { $0.applies(to: kind) }.map(\.id))
+    }
+
     @Test func withoutAPerformerNothingHappensInDemoOrWithoutPersistence() async {
         let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
         store.actionPerformer = nil

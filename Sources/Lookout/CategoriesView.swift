@@ -92,7 +92,13 @@ struct CategoriesView: View {
             store.categoriesEdited()
         }
         .onChange(of: store.categorySections) { history.observe(store, field: CategoryHistory.typingField()) }
-        .onAppear(perform: syncHistory)
+        // Kept from a close (see `AppWindowController`), the page comes back with the history it had: what the categories
+        // became meanwhile (the Router's changes) is no step of it, and undoing one from before would undo that too. It
+        // starts afresh, as when the page was made anew on every open.
+        .onAppear {
+            history.reset(to: store)
+            syncHistory()
+        }
         .onDisappear {
             hub?.stepBack = nil
             if store.categoryHistory === history { store.categoryHistory = nil }

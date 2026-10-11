@@ -27,11 +27,12 @@ struct InboxListView: View {
 
     private var entries: [InboxEntry] { store.inboxRows(tab, search: search.query) }
     private var searching: Bool { search.isSearching }
-    private var unread: Int { tab == .done && !searching ? 0 : entries.filter(\.isUnread).count }
 
     var body: some View {
+        // Worked out once per redraw: the header, the list and the toolbar read the same rows.
         let entries = entries
-        AppPage(title: title, subtitle: subtitle, leadingInset: leadingInset) {
+        let unread = unread(entries)
+        AppPage(title: title, subtitle: subtitle(entries, unread: unread), leadingInset: leadingInset) {
             if case .category(let id) = tab, store.rulesOff(id) > 0 {
                 RulesOffMark(count: store.rulesOff(id), size: 12) { store.editCategory(id, go: openApp) }
             }
@@ -68,6 +69,14 @@ struct InboxListView: View {
         .onChange(of: search.query) { hub.selection = searching ? entries.first.map { "i:" + $0.id } : nil }
     }
 
+    /// An unsearched category shares the inbox's count; a query that filters rows counts only what is shown.
+    func unread(_ entries: [InboxEntry]) -> Int {
+        if tab == .done && !searching { return 0 }
+        // The row search splits on spaces, so other whitespace can filter rows even when the header isn't searching.
+        if case .category(let id) = tab, search.query.split(separator: " ").isEmpty { return store.unreadCount(id) }
+        return entries.reduce(0) { $1.isUnread ? $0 + 1 : $0 }
+    }
+
     private func scroll(_ proxy: ScrollViewProxy, to request: ScrollRequest?) {
         guard let id = request?.id.dropFirst(2) else { return }
         DispatchQueue.main.async { withAnimation(Theme.Motion.hover.resolved(reduce: reduce)) { proxy.scrollTo(String(id), anchor: .center) } }
@@ -81,8 +90,7 @@ struct InboxListView: View {
         }
     }
 
-    private var subtitle: String {
-        let all = entries
+    private func subtitle(_ all: [InboxEntry], unread: Int) -> String {
         if searching { return all.isEmpty ? "" : "\(all.count) found" }
         if all.isEmpty { return "" }
         if tab == .done { return "\(all.count) moved to Done" }

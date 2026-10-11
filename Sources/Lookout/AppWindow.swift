@@ -30,8 +30,8 @@ enum AppPolicy {
 final class AppWindowController: NSObject, NSWindowDelegate {
     /// The window the Go menu acts on: the last one made.
     static weak var active: AppWindowController?
-    /// The controllers whose window is open (shown, and not yet closed for good).
-    private static var open: Set<ObjectIdentifier> = []
+    /// The controllers whose window has been brought in: whether another is still open when one's close is tidied.
+    private static let broughtIn = NSHashTable<AppWindowController>.weakObjects()
     static let autosave = "LookoutApp"
     static let minSize = NSSize(width: 1000, height: 600)
 
@@ -80,37 +80,91 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         navigator = AppNavigator(fallback: .category(store.tabNeedingYou.categoryID ?? UUID()),
                                  defaults: remembers ? .standard : nil)
         super.init()
+        // The place changed by whatever changes it (the Go menu, back and forward, a chip) while the window is on its way
+        // in: the overlay shows the new one.
+        navigator.onChange = { [weak self] in self?.contentChanged() }
         Self.active = self
         settle()
+        Self.watchMemory()
     }
 
-    var isOpen: Bool { window?.isVisible == true }
-    /// The frame at the last close: the content goes with the window, and putting it back would shrink it.
-    private var closedFrame: NSRect?
-    /// Whether the window has the keyboard (no banner for the Router then: you are looking at the cards).
-    var isKey: Bool { window?.isKeyWindow == true }
+    /// The system short of memory: the window made last lets go of what it keeps only to open faster (see `releaseKept`),
+    /// and keeps nothing more until memory is back (see `memoryShort`).
+    private static var memoryWatch: DispatchSourceMemoryPressure?
+
+    private static func watchMemory() {
+        guard memoryWatch == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
+        source.setEventHandler {
+            let event = source.data
+            MainActor.assumeIsolated { active?.memoryPressure(elevated: !event.contains(.normal)) }
+        }
+        source.resume()
+        memoryWatch = source
+    }
+
+    /// Whether the system is short of memory (a warning or a critical pressure, until it says normal again): the window
+    /// prepares nothing, keeps no picture at a close, and lets go of its content once a close has taken it out.
+    private(set) var memoryShort = false
+
+    /// The system's memory pressure went up (`elevated`) or back to normal.
+    func memoryPressure(elevated: Bool) {
+        memoryShort = elevated
+        if elevated { releaseKept() }
+    }
+
+    /// Lets go of the picture kept from the last close and, while the window is closed, of its content (a window's worth
+    /// of views, and the picture some 15 MB): the next opening makes them again, as a first one does. Content still in the
+    /// window stays (a close under way takes it out a turn later, and lets go of it then while memory is short).
+    func releaseKept() {
+        closedPicture = nil
+        guard phase == .idle, pending == nil, window?.isVisible != true, window?.contentViewController == nil else { return }
+        content = nil
+    }
+
+    /// Whether a picture from the last close is kept for the next opening.
+    var keepsPicture: Bool { closedPicture != nil }
+
+    /// Open, or on its way in (its morph plays before the window itself is in); one on its way out is closed already (a
+    /// toggle opens it again).
+    var isOpen: Bool { phase == .opening || (phase != .closing && window?.isVisible == true) }
+    /// The window's content, kept while the window is closed: out of the window it stands still (no body runs, no clock,
+    /// timeline or animation ticks, its tasks are cancelled), and back in it picks up where it was, its scroll positions and
+    /// the rest of its state kept, its appearing (`onAppear`, `.task`, `onChange(initial:)`) run again as on a first open.
+    private(set) var content: NSViewController?
+    /// The window's picture at its last close: the next opening starts on it (see `startOpening`).
+    private var closedPicture: AppTransition.Picture?
+    /// An opening whose window is still to be brought in: its generation.
+    private var pending: Int?
+    /// A fresh picture the overlay of an opening still needs, and whether it fades in over the one shown. Taken once the
+    /// window has the keyboard (its buttons as they will be when it takes over), else just before it does.
+    private var owed: (generation: Int, crossFade: Bool)?
+    private var keyWatch: NSObjectProtocol?
+    /// Whether the window has the keyboard, or is about to (no banner for the Router then: you are looking at the cards).
+    var isKey: Bool { window?.isKeyWindow == true || pending != nil }
 
     /// Shows the window in front, on `destination` when one is given (else where it was left). `card`: a Router card to pick
     /// (it opens on the Router).
     func show(_ destination: AppDestination? = nil, card: String? = nil) {
+        // Until the opening's first frame is flushed (see `startOpening`), or at once when there is no morph.
+        let asked = MorphSignposts.signposter.beginInterval("Open to first flush")
+        defer { MorphSignposts.signposter.endInterval("Open to first flush", asked) }
         Self.active = self
         settle()
         var destination = destination
         if card != nil { destination = .router }
         if let card { routerModel.select(card, store: store) }
+        // Another place, while on its way in: the navigator says so (see `init`).
         if let destination { navigator.go(destination.resolved(shown: shownIDs, routerOn: store.routerOn)) }
         let window = self.window ?? makeWindow()
         self.window = window
-        if window.contentViewController == nil {
-            // Setting the content sizes the window to the content's own minimum: put back the frame it had.
-            let frame = closedFrame ?? window.frame
-            window.contentViewController = makeContent()
-            window.setFrame(frame, display: false)
-        }
-        // A window on its way out comes back from where it is; one on its way in just goes on.
+        // A window on its way out comes back from where it is (minimized on its way in included: its close's end would close
+        // it otherwise); one on its way in just goes on.
         let reversing = phase == .closing && run != nil
-        let opening = (reversing || !window.isVisible) && !window.isMiniaturized && AppTransition.enabled
-        if !window.isVisible && !reversing {
+        let arriving = phase == .opening
+        let opening = !arriving && (reversing || (!window.isVisible && !AppTransition.isMiniaturized(window)))
+            && AppTransition.enabled
+        if !window.isVisible && !reversing && !arriving {
             if UnderTest.isRunning { window.setFrameOrigin(UnderTest.away) } else { moveToBarScreen(window) }
         }
         // The bar as it is now, before whoever called us hides it.
@@ -118,41 +172,158 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         if opening {
             window.alphaValue = 0
             window.ignoresMouseEvents = true
+            startOpening(window, bar: morph, reversing: reversing)
+        } else {
+            // One on its way in with its window still to come gets it then.
+            if pending == nil { bringIn(window) }
         }
-        Self.open.insert(ObjectIdentifier(self))
-        AppPolicy.update(windowOpen: true)
-        AppPolicy.activate()
-        window.makeKeyAndOrderFront(nil)
-        if opening { startOpening(window, bar: morph, reversing: reversing) }
+        // A card picked on the way in: the place may be the same, what it shows is not.
+        if card != nil, arriving { contentChanged() }
         watchKeys()
         watchFront()
         reportFront()
     }
 
+    /// The window and its content made ahead of a first open, at idle, so that open only brings them in (see `bringIn`): the
+    /// window is not ordered in, the app's policy and the bar are not told, and the content is built and laid out at the
+    /// window's size, then taken out of it again, where it stands still as after a close. A content that was never in a
+    /// window would not: laid out, it runs its body and appearing and redraws on every change of the store behind it. No-op
+    /// once the content exists or while the window is open or on its way. No close is involved, so nothing a close leaves
+    /// for later (see `windowWillClose`) is either.
+    func prepare() {
+        guard content == nil, phase == .idle, pending == nil, window?.isVisible != true, !memoryShort else { return }
+        settle()
+        let window = self.window ?? makeWindow()
+        self.window = window
+        let content = makeContent(size: window.contentRect(forFrameRect: window.frame).size)
+        self.content = content
+        window.contentViewController = content
+        content.view.layoutSubtreeIfNeeded()
+        window.contentViewController = nil
+    }
+
+    /// What shows the window: its content (built once, kept across closes), the app regular and active, the window in front
+    /// with the keyboard. The heavy part of an opening, which waits until its morph's first frame has been submitted.
+    private func bringIn(_ window: NSWindow) {
+        let signpost = MorphSignposts.signposter.beginInterval("Bring in")
+        defer { MorphSignposts.signposter.endInterval("Bring in", signpost) }
+        if window.contentViewController == nil {
+            // The window takes its content's size: kept content is given the window's as it is now (it may have been fitted
+            // to a smaller screen since), new content is made at it.
+            let size = window.contentRect(forFrameRect: window.frame).size
+            let content = self.content ?? makeContent(size: size)
+            if content.view.frame.size != size { content.view.setFrameSize(size) }
+            self.content = content
+            window.contentViewController = content
+        }
+        Self.broughtIn.add(self)
+        AppPolicy.update(windowOpen: true)
+        AppPolicy.activate()
+        window.makeKeyAndOrderFront(nil)
+    }
+
     /// The window opens: the overlay grows out of the bar's cell (or picks up from where a close had got to) while the real
-    /// window waits at its frame, invisible; then the real window takes over under the overlay.
+    /// window waits at its frame, invisible; then the real window takes over under the overlay. The motion comes first: the
+    /// overlay starts on the picture kept from the last close (or the window's bare surface) and its first frame is flushed
+    /// to the render server (submitted: drawn as soon as the server can) before the window is built and brought in, a turn
+    /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
         generation += 1
         let mine = generation
         let current: AppTransition.Run?
+        let kept = closedPicture.flatMap { $0.fits(window) ? $0 : nil }
         if reversing, let run {
-            run.refresh(window)
+            // Keep the overlay's bounds and coordinate origin for the whole trip, including this reversal.
             current = run
         } else {
             run?.end()
-            current = AppTransition.makeRun(for: window, bar: bar)
+            current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar)
+            current?.shows = kept?.destination
         }
         run = current
         guard let current else {
+            bringIn(window)
             reveal(window)
             finishOpening(mine)
             return
         }
+        // No picture yet, or another place's: the fresh one fades in over it. A close turned round takes a fresh one too,
+        // faded in over the one it shows: what the window shows may have changed while it was on its way out (the store,
+        // a message or a card asked for, another place) with nothing else to say so.
+        let other = current.shows != navigator.selection
+        pending = mine
+        owed = (generation: mine, crossFade: reversing || other || kept == nil)
         current.open(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak window] in
             guard let self, let window, self.generation == mine else { return }
+            // The real window must be in, and the overlay show it as it is now, before it takes over: whatever has not
+            // happened yet happens now (the picture as the window is, key or not, since that is what will be seen).
+            self.bringInPending(mine)
+            if self.owed != nil {
+                self.owed = nil
+                self.stopKeyWatch()
+                self.refresh(current, window)
+            }
             current.handoff(reveal: { self.reveal(window) }, finished: { self.finishOpening(mine) })
         }
+        // The motion submitted to the render server, nothing captured or built yet: the rest waits a turn.
+        AppTransition.flushInitial()
+        AppTransition.nextTurn { [weak self] in self?.bringInPending(mine) }
+    }
+
+    /// The window of the opening `mine` brought in, if it is not yet.
+    private func bringInPending(_ mine: Int) {
+        guard pending == mine, generation == mine, phase == .opening, let window else { return }
+        pending = nil
+        bringIn(window)
+        payPicture(mine)
+    }
+
+    /// The fresh picture the opening `mine` needs, once its window is in and has the keyboard (the app becomes active a
+    /// little after it is asked to: the picture waits for it, rather than being taken twice).
+    private func payPicture(_ mine: Int) {
+        guard let owed, owed.generation == mine, generation == mine, pending == nil, let window, let run else { return }
+        // The overlay has let go of its picture: the real window shows itself, nothing is owed.
+        guard !run.handedOver else {
+            self.owed = nil
+            stopKeyWatch()
+            return
+        }
+        guard AppTransition.isKey(window) else {
+            guard keyWatch == nil else { return }
+            keyWatch = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window,
+                                                              queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.stopKeyWatch()
+                    self?.payPicture(mine)
+                }
+            }
+            return
+        }
+        self.owed = nil
+        stopKeyWatch()
+        refresh(run, window, crossFade: owed.crossFade)
+    }
+
+    /// The overlay's picture taken again, of the place the window shows now.
+    private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false) {
+        run.refresh(window, crossFade: crossFade)
+        run.shows = navigator.selection
+    }
+
+    /// What an opening's window shows changed after its overlay's picture was taken (another place, a card, a row or a
+    /// section asked for): a fresh one fades in over it, a turn later (once the change has been drawn), at the latest as
+    /// the real window takes over. Not once it has (its live pixels show).
+    private func contentChanged() {
+        guard phase == .opening, let run, !run.handedOver else { return }
+        let mine = generation
+        owed = (mine, crossFade: true)
+        AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
+    }
+
+    private func stopKeyWatch() {
+        if let keyWatch { NotificationCenter.default.removeObserver(keyWatch) }
+        keyWatch = nil
     }
 
     /// The real window, shown (under the overlay), with the keyboard.
@@ -164,21 +335,32 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     private func finishOpening(_ mine: Int) {
         guard generation == mine else { return }
+        stopKeyWatch()
         run = nil
         phase = .idle
+        // Used: the next close takes another.
+        closedPicture = nil
         reportFront()
     }
 
-    func close() { window?.performClose(nil) }
+    func close() {
+        // An opening whose window is not in yet: in now, so there is a window to close.
+        if let pending { bringInPending(pending) }
+        window?.performClose(nil)
+    }
 
     /// Closing morphs the window into the bar: an overlay takes the window's place first, then the real window goes and the
     /// overlay shrinks into the bar's cell, then it really closes.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard AppTransition.enabled, phase != .closing, phase == .opening || isFront else { return phase != .closing }
-        let interrupting = phase == .opening
+        // An opening whose overlay has let go of its picture shows the real window already: it closes as an open one does.
+        let interrupting = phase == .opening && run?.handedOver != true
         phase = .closing
         generation += 1
         let mine = generation
+        pending = nil
+        owed = nil
+        stopKeyWatch()
         sender.ignoresMouseEvents = true
         let existing = interrupting ? run : nil
         let current: AppTransition.Run?
@@ -187,20 +369,28 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         } else {
             run?.end()
             current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar())
+            current?.shows = navigator.selection
         }
         guard let current else {
             finishClosing(sender, mine)
             return false
         }
         run = current
+        // Kept for the next opening to start on, when it was taken with the window key, of the place it shows (an opening
+        // cut short may still show the place it started on), unless memory is short.
+        if !memoryShort, let image = current.image, current.imageIsKey, let place = current.shows {
+            closedPicture = AppTransition.Picture(image: image, frame: sender.frame, scale: sender.backingScaleFactor,
+                                                  destination: place)
+        }
         let start = { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }
             sender.orderOut(nil)
-            self.onClosing?()
             current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
                 guard let self, let sender, self.generation == mine else { return }
                 self.finishClosing(sender, mine)
             }
+            guard self.generation == mine else { return }
+            self.onClosing?()
         }
         if interrupting {
             start()
@@ -278,6 +468,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     func showUpdates() {
         show(.settings)
         hub.showUpdates()
+        contentChanged()
     }
 
     /// An inbox entry picked and scrolled to, on its category (Done if it was done since): where a banner's click lands.
@@ -285,6 +476,19 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         show(entry.isDone ? .done : .category(entry.categoryID))
         hub.selection = "i:" + entry.id
         hub.requestScroll("i:" + entry.id)
+        contentChanged()
+    }
+
+    /// A Router card picked from the bar (the window opens on the Router next).
+    func pick(card: String) {
+        routerModel.select(card, store: store)
+        contentChanged()
+    }
+
+    /// A message the Router left asked for from the bar, scrolled to in its conversation (the window opens on the Router next).
+    func pick(message: UUID) {
+        routerModel.show(message: message)
+        contentChanged()
     }
 
     /// The Go menu's destinations with their titles, in the sidebar's order.
@@ -307,12 +511,15 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// Keeps the selection on a place that exists.
     private func settle() { navigator.settle(shown: shownIDs, routerOn: store.routerOn) }
 
-    private func makeContent() -> NSViewController {
+    /// `size`: the window's content size, so that setting the content keeps the window as it is (left alone, the content
+    /// would size it to its own minimum, too small to see).
+    private func makeContent(size: NSSize) -> NSViewController {
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
                                checksClaudeCode: checksClaudeCode)
         let controller = NSHostingController(rootView: root)
         // The window sizes the content, not the other way round.
         controller.sizingOptions = []
+        controller.view.frame = NSRect(origin: .zero, size: size)
         return controller
     }
 
@@ -364,16 +571,28 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         observers = []
         lastFront = nil
         routerModel.composerFocused = false
-        closedFrame = window?.frame
-        // The content goes with the window: no view, nothing ticking behind a closed window.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.window?.isVisible != true else { return }
-            self.window?.contentViewController = nil
-            // Only the last window's close puts the app back to the bar only: one closing late (its work is deferred) must
-            // not take the policy from another that has opened since.
-            Self.open.remove(ObjectIdentifier(self))
-            AppPolicy.update(windowOpen: !Self.open.isEmpty)
+        // The bar returns before taking the content out and changing the policy, so its fade starts before that work.
+        // Not if the window was opened again meanwhile (on its way in, it is not visible yet), or from the callback.
+        let closed = generation
+        AppTransition.nextTurn { [weak self] in
+            guard let self, self.generation == closed, self.phase == .idle, self.pending == nil,
+                  self.window?.isVisible != true else { return }
             self.onClose?()
+            guard self.generation == closed, self.phase == .idle, self.pending == nil,
+                  self.window?.isVisible != true else { return }
+            AppTransition.nextTurn { [weak self] in
+                guard let self, self.generation == closed, self.phase == .idle, self.pending == nil,
+                      self.window?.isVisible != true else { return }
+                // The content leaves the window, which stops it; kept for the next open, it no longer ticks while closed.
+                self.window?.contentViewController = nil
+                // Short of memory: not kept either (it was still in the window as the pressure came).
+                if self.memoryShort { self.releaseKept() }
+                // Only the last window's close puts the app back to the bar only: one closing late (its work is deferred)
+                // must not take the policy from another that has opened since. Asked of the windows themselves, so a close
+                // whose tidying never came (or a controller gone) leaves nothing behind that reads as open.
+                Self.broughtIn.remove(self)
+                AppPolicy.update(windowOpen: Self.broughtIn.allObjects.contains { $0.isOpen })
+            }
         }
     }
 }

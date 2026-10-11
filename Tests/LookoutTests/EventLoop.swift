@@ -62,3 +62,9 @@ struct HostsWindows: SuiteTrait, TestTrait {
 extension Trait where Self == HostsWindows {
     static var hostsWindows: Self { Self() }
 }
+
+/// The suites that touch the app window's process-wide seams: `AppTransition`'s switch, hooks and shared overlay, and
+/// `AppPolicy`. Suites run side by side and `.serialized` orders only what is inside one, so they are all inside this one,
+/// one test at a time: a test switching the morph on, or holding the next turn, is never seen by another's window.
+@MainActor
+@Suite(.serialized, .hostsWindows) enum WindowSeams {}

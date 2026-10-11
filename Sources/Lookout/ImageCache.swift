@@ -44,11 +44,18 @@ final class ImageCache: @unchecked Sendable {
         return await task.value
     }
 
-    /// Warms the cache, e.g. after a sync, so avatars are there the first time the hub opens.
+    /// Warms the cache, e.g. after a sync, so avatars are there the first time the hub opens: in the order given (what
+    /// shows first, first), each once.
     func prefetch(_ urls: [URL]) {
-        for url in Set(urls) where cached(url) == nil {
+        for url in Self.unique(urls) where cached(url) == nil {
             Task.detached(priority: .utility) { _ = await ImageCache.shared.load(url) }
         }
+    }
+
+    /// `urls` without repeats, in their order.
+    static func unique(_ urls: [URL]) -> [URL] {
+        var seen = Set<URL>()
+        return urls.filter { seen.insert($0).inserted }
     }
 
     private static func pixels(_ url: URL) -> Int {
@@ -65,5 +72,28 @@ final class ImageCache: @unchecked Sendable {
         ]
         guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+}
+
+/// What a view would otherwise work out on every redraw (an avatar's sized URL, a card's Markdown), kept by a string key.
+/// Bounded: NSCache lets entries go past its count and cost limits, and under memory pressure.
+final class RenderCache<Value>: @unchecked Sendable {
+    private final class Box {
+        let value: Value
+        init(_ value: Value) { self.value = value }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+
+    init(countLimit: Int, totalCostLimit: Int = 0) {
+        cache.countLimit = countLimit
+        cache.totalCostLimit = totalCostLimit
+    }
+
+    func value(_ key: String, cost: Int = 0, make: () -> Value) -> Value {
+        if let hit = cache.object(forKey: key as NSString) { return hit.value }
+        let value = make()
+        cache.setObject(Box(value), forKey: key as NSString, cost: cost)
+        return value
     }
 }

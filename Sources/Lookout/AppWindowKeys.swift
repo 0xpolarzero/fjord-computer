@@ -54,13 +54,10 @@ extension Store {
     func inboxRows(_ tab: InboxTab, search: String = "") -> [InboxEntry] {
         let words = search.lowercased().split(separator: " ")
         guard !words.isEmpty else { return entries(in: tab) }
-        let names = Dictionary(categories.map { ($0.id, $0.name.lowercased()) }, uniquingKeysWith: { first, _ in first })
+        let keys = inboxSearchKeys
         return entries.filter { entry in
-            let t = entry.thing
-            let key = "\(t.title) \(t.repo) #\(t.number ?? 0) @\(t.author?.login ?? "") \(t.workflowName ?? "") \(names[entry.categoryID] ?? "") "
-                + entry.facts.map(\.label).joined(separator: " ")
-            let lowered = key.lowercased()
-            return words.allSatisfy { lowered.contains($0) }
+            guard let key = keys[entry.id] else { return false }
+            return words.allSatisfy { key.contains($0) }
         }
         .sorted { ($0.isDone ? 1 : 0, $1.thing.updatedAt) < ($1.isDone ? 1 : 0, $0.thing.updatedAt) }
     }

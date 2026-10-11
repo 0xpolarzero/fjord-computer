@@ -172,12 +172,8 @@ struct RouterPageView: View {
     @Bindable var model: RouterModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var ns
-    @State private var height: CGFloat = 700
-    @State private var width = CDS.Transcript.measure
-    /// The Router's working line over the zones, when it shows.
-    @State private var statusHeight: CGFloat = 0
-    /// The zones' height as shown (the Router's line with them).
-    @State private var zonesShown: CGFloat = 0
+    /// The zones' height as shown (the Router's line with them): only the line between them and the history reads it.
+    @State private var shown = ZonesShown()
     /// While the line between the history and the zones is dragged: the zones' height when it began, and the share it is at.
     @State private var dragBase: CGFloat?
     @State private var dragShare: CGFloat?
@@ -193,34 +189,41 @@ struct RouterPageView: View {
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let bothZones = Set(page.working.map(\.id))
         let travelling = Set(once).subtracting(bothZones)
-        let room = RouterSplit.room(page: height, share: share)
+        // The page's size as it is laid out, not measured after: the zones' room and the column's width are right on the first
+        // layout, rather than on a second one once a measured size comes back.
+        GeometryReader { geometry in
+            let height = geometry.size.height, width = geometry.size.width
+            let gutter = Self.gutter(width)
+            layout(page, room: RouterSplit.room(page: height, share: share), height: height, gutter: gutter,
+                 travelling: travelling)
+                .frame(width: width, height: height)
+                .environment(\.routerGutter, gutter)
+                .environment(\.cdsColumnWidth, min(CDS.Transcript.measure, max(0, width - 2 * gutter)))
+        }
+    }
+
+    private func layout(_ page: RouterPage, room: CGFloat, height: CGFloat, gutter: CGFloat,
+                      travelling: Set<String>) -> some View {
         VStack(spacing: 0) {
             RouterHistory(store: store, model: model)
-            divider
+            divider(height: height, gutter: gutter)
                 .frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter)
                 .frame(maxWidth: .infinity)
                 .zIndex(1)
-            VStack(spacing: 0) {
-                VStack(spacing: 0) { routerStatus }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { statusHeight = $0 }
-                RouterZones(store: store, model: model, page: page, room: room - statusHeight, ns: ns, travelling: travelling,
-                            travellingWorking: Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID))))
-            }
+            RouterZones(store: store, model: model, page: page, room: room, ns: ns, travelling: travelling,
+                        travellingWorking: Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID))))
             .frame(maxWidth: CDS.Transcript.measure + 2 * CDS.Transcript.gutter)
             .frame(maxWidth: .infinity)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { zonesShown = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if shown.height != $0 { shown.height = $0 } }
         }
         .motion(Theme.Motion.spring, value: page.needs.map(\.id) + page.working.map(\.id))
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { height = $0.height; width = $0.width }
-        .environment(\.routerGutter, gutter)
-        .environment(\.cdsColumnWidth, min(CDS.Transcript.measure, max(0, width - 2 * gutter)))
     }
 
-    private var divider: some View {
-        RouterDivider(zonesBig: RouterSplit.zonesAreBig(share: share),
-                      share: height > 0 ? zonesShown / height : share, trailing: max(4, gutter - 22),
+    private func divider(height: CGFloat, gutter: CGFloat) -> some View {
+        let shown = shown
+        return PageDivider(shown: shown, height: height, share: share, trailing: max(4, gutter - 22),
                       drag: { dy in
-                          let base = dragBase ?? zonesShown
+                          let base = dragBase ?? shown.height
                           dragBase = base
                           dragShare = RouterSplit.dragged(from: base, by: dy, page: height)
                       },
@@ -233,19 +236,34 @@ struct RouterPageView: View {
                           let next = RouterSplit.toggled(share: share)
                           withAnimation(spring) { store.setZonesShare(next) }
                       },
-                      adjust: { up in store.setZonesShare(RouterSplit.adjusted(shown: zonesShown, page: height, up: up)) })
+                      adjust: { up in store.setZonesShare(RouterSplit.adjusted(shown: shown.height, page: height, up: up)) })
     }
 
-    private var gutter: CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
+    static func gutter(_ width: CGFloat) -> CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
+}
 
-    /// While the Router itself works: one slim line over the zones.
-    @ViewBuilder private var routerStatus: some View {
-        if store.routerDispatcher.isBusy {
-            WorkingStatus(label: "The Router is working")
-                .padding(.horizontal, gutter + CDS.Transcript.textInset)
-                .padding(.bottom, 6)
-                .transition(.opacity)
-        }
+/// The zones' height as shown. Kept apart from the page's state: it is measured once the zones are laid out, and only the
+/// line over them draws from it (the line's drag and keys read it when used), so measuring it redraws nothing else.
+@Observable private final class ZonesShown {
+    var height: CGFloat = 0
+}
+
+/// The line between the history and the zones, drawn from the zones' height as shown.
+private struct PageDivider: View {
+    let shown: ZonesShown
+    let height: CGFloat
+    /// The zones' share as set (or being dragged), until their height is known.
+    let share: CGFloat
+    let trailing: CGFloat
+    let drag: (CGFloat) -> Void
+    let dragEnded: () -> Void
+    let toggle: () -> Void
+    let adjust: (_ up: Bool) -> Void
+
+    var body: some View {
+        RouterDivider(zonesBig: RouterSplit.zonesAreBig(share: share),
+                      share: height > 0 ? shown.height / height : share, trailing: trailing,
+                      drag: drag, dragEnded: dragEnded, toggle: toggle, adjust: adjust)
     }
 }
 
@@ -265,8 +283,10 @@ private struct RouterHistory: View {
     @State private var oldest: HistoryWindow.Boundary?
     /// At the bottom: what arrives, and the zones growing under it, keep it there. Scrolled up, the top holds.
     @State private var pinned = true
-    /// The content has been laid out: a scroll asked for before that waits for it.
-    @State private var laidOut = false
+    /// The content has been laid out: a scroll asked for before that waits for it. Not view state: its turning on draws
+    /// nothing, it only lets a waiting scroll go (`released`, set only when one waits, redraws for it).
+    @State private var laidOut = HistoryAnchoring.LaidOut()
+    @State private var released = false
     @State private var pending: HistoryScroll?
 
     /// Lines drawn at first, and more each time Show earlier is clicked.
@@ -322,7 +342,7 @@ private struct RouterHistory: View {
                     .padding(.top, CDS.Transcript.fade)
                 }
                 .cdsTopFade()
-                .modifier(HistoryAnchoring(pinned: $pinned, laidOut: $laidOut) {
+                .modifier(HistoryAnchoring(pinned: $pinned, laidOut: laidOut, ready: { if pending != nil { released = true } }) {
                     pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
                 })
                 // A card picked (clicked, or with the keys): as little scrolling as shows it whole; the Router picked: the bottom.
@@ -348,7 +368,7 @@ private struct RouterHistory: View {
                     pending = HistoryScroll(id: id, anchor: nil, animated: true)
                 }
                 .onChange(of: pending) { perform(proxy) }
-                .onChange(of: laidOut) { perform(proxy) }
+                .onChange(of: released) { perform(proxy) }
             }
         }
     }
@@ -366,7 +386,7 @@ private struct RouterHistory: View {
     }
 
     private func perform(_ proxy: ScrollViewProxy) {
-        guard laidOut, let scroll = pending else { return }
+        guard laidOut.on, let scroll = pending else { return }
         pending = nil
         // Going to a line leaves the bottom (until the scroll, once done, finds it there after all); going to the bottom pins.
         pinned = scroll.id == RouterModel.endID
@@ -407,8 +427,12 @@ private struct HistoryScroll: Equatable {
 /// under it growing); scrolled up, the top holds, so nothing moves what you read. Only a scroll takes it off the bottom: yours,
 /// or one to a line asked for.
 private struct HistoryAnchoring: ViewModifier {
+    final class LaidOut { var on = false }
+
     @Binding var pinned: Bool
-    @Binding var laidOut: Bool
+    let laidOut: LaidOut
+    /// The content is laid out: a scroll asked for before goes now.
+    let ready: () -> Void
     /// Back to the bottom, after something other than a scroll left it short of it.
     let stick: () -> Void
     /// Whether a scroll is under way (yours, or an animated one asked for); kept out of the view's state, as it changes
@@ -429,13 +453,21 @@ private struct HistoryAnchoring: ViewModifier {
                 .onScrollGeometryChange(for: HistoryPin.Geometry.self) {
                     HistoryPin.Geometry(content: $0.contentSize.height, visibleBottom: $0.visibleRect.maxY)
                 } action: { _, new in
-                    if !laidOut, new.content > 0 { laidOut = true }
+                    if !laidOut.on, new.content > 0 {
+                        laidOut.on = true
+                        ready()
+                    }
                     apply(HistoryPin.next(pinned: pinned, scrolling: scrolling.on, new))
                 }
         } else {
             content
                 .defaultScrollAnchor(.bottom)
-                .onAppear { DispatchQueue.main.async { laidOut = true } }
+                .onAppear {
+                    DispatchQueue.main.async {
+                        laidOut.on = true
+                        ready()
+                    }
+                }
         }
     }
 
@@ -847,8 +879,8 @@ private extension View {
 
 // MARK: - Zones
 
-/// Working over Needs you, pinned above the composer. Each caps at a part of `room` and scrolls inside; together they stay
-/// within it, and take only what they need of it.
+/// Working over Needs you, pinned above the composer (under the Router's working line while it works). Each caps at a part of
+/// `room` and scrolls inside; together they stay within it, and take only what they need of it.
 private struct RouterZones: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -868,10 +900,14 @@ private struct RouterZones: View {
     /// never chase their own rounding.
     @State private var chrome: CGFloat = 0
     @State private var workingShown: CGFloat = 0
+    /// The Router's working line over the zones, as tall as it shows (written only when it changes).
+    @State private var statusHeight: CGFloat = 0
 
-    /// Working's and Needs you's caps: the room less the headers and margins, shared between the two.
+    /// Working's and Needs you's caps: the room less the Router's working line, the headers and margins, shared between
+    /// the two.
     private var caps: (working: CGFloat, needs: CGFloat) {
-        RouterSplit.caps(room: room, chrome: chrome, workingShown: workingShown, needsEmpty: page.needs.isEmpty && page.asks.isEmpty)
+        RouterSplit.caps(room: room - statusHeight, chrome: chrome, workingShown: workingShown,
+                         needsEmpty: page.needs.isEmpty && page.asks.isEmpty)
     }
     private var needsCap: CGFloat { caps.needs }
 
@@ -885,16 +921,30 @@ private struct RouterZones: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if !page.working.isEmpty || !page.waiting.isEmpty { working }
-            AwayStripView(store: store, model: model)
-            needs
+        VStack(spacing: 0) {
+            VStack(spacing: 0) { routerStatus }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if statusHeight != $0 { statusHeight = $0 } }
+            VStack(alignment: .leading, spacing: 10) {
+                if !page.working.isEmpty || !page.waiting.isEmpty { working }
+                AwayStripView(store: store, model: model)
+                needs
+            }
+            .padding(.horizontal, gutter)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.total = h } }
         }
-        .padding(.horizontal, gutter)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
-        .frame(maxWidth: .infinity)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.total = h } }
+    }
+
+    /// While the Router itself works: one slim line over the zones.
+    @ViewBuilder private var routerStatus: some View {
+        if store.routerDispatcher.isBusy {
+            WorkingStatus(label: "The Router is working")
+                .padding(.horizontal, gutter + CDS.Transcript.textInset)
+                .padding(.bottom, 6)
+                .transition(.opacity)
+        }
     }
 
     // MARK: Working
@@ -996,8 +1046,10 @@ private struct RouterZones: View {
                                                         removal: .scaleFade(0.97, reduce: reduceMotion)))
                         }
                         ForEach(page.needs) { card in
+                            // Only the open card shows a form: the others aren't redrawn as its cap is worked out.
                             CardView(store: store, model: model, card: card, expanded: card.id == open,
-                                     form: store.pendingForm(for: card), project: store.routerProject(card), formCap: formCap)
+                                     form: store.pendingForm(for: card), project: store.routerProject(card),
+                                     formCap: card.id == open ? formCap : CardView.closedFormCap)
                                 .id(card.id)
                                 .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
                                 .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
@@ -1079,7 +1131,8 @@ private extension View {
     }
 }
 
-/// A scroll view as tall as its content up to `maxHeight`, scrolling to a requested id inside it.
+/// A scroll view as tall as its content up to `maxHeight`, scrolling to a requested id inside it. Its height is worked out as
+/// it is laid out (the scroll view's ideal height is its content's), so the first layout has it right.
 private struct ZoneScroll<Content: View>: View {
     let maxHeight: CGFloat
     let model: RouterModel
@@ -1087,37 +1140,52 @@ private struct ZoneScroll<Content: View>: View {
     let zone: String
     let ids: Set<String>
     @ViewBuilder let content: () -> Content
-    @State private var natural: CGFloat = 0
+    /// The content's height, for the fade alone: kept out of the view's state, which holds only whether it overflows.
+    @State private var natural = Natural()
+    @State private var overflows = false
     /// A scroll asked for, made once the zone is laid out.
     @State private var pending: ScrollRequest?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private final class Natural { var height: CGFloat = 0 }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                content().frame(maxWidth: .infinity).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { natural = $0 }
+                content().frame(maxWidth: .infinity).onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    natural.height = $0
+                    fade()
+                    perform(proxy)
+                }
             }
             .scrollBounceBehavior(.basedOnSize)
             .scrollIndicators(.never)
-            .frame(height: natural == 0 ? nil : min(natural, maxHeight))
+            .frame(maxHeight: maxHeight)
+            .fixedSize(horizontal: false, vertical: true)
             // More below than fits: the last 18 points fade out, so it reads as scrollable.
             .mask(VStack(spacing: 0) {
                 Rectangle()
-                LinearGradient(colors: [.black, natural > maxHeight + 1 ? .clear : .black], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.black, overflows ? .clear : .black], startPoint: .top, endPoint: .bottom)
                     .frame(height: 18)
             })
+            .onChange(of: maxHeight) { fade() }
             // Asked for before the zone was drawn too (a banner's card below what fits): it goes there once laid out.
             .onChange(of: model.revealRequest, initial: true) { _, request in
                 guard let request, ids.contains(request.id) else { return }
                 pending = model.takeReveal(request, by: zone)
             }
             .onChange(of: pending) { perform(proxy) }
-            .onChange(of: natural) { perform(proxy) }
         }
     }
 
+    private func fade() {
+        let over = natural.height > maxHeight + 1
+        if over != overflows { overflows = over }
+    }
+
+    /// The scroll asked for, once the zone has been laid out (its content measured).
     private func perform(_ proxy: ScrollViewProxy) {
-        guard natural > 0, let request = pending else { return }
+        guard natural.height > 0, let request = pending else { return }
         pending = nil
         withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: .center) }
     }
@@ -1416,7 +1484,8 @@ struct CardView: View {
     let form: PendingForm?
     let project: RouterProject
     /// The tallest an open form or plan gets before it scrolls inside.
-    var formCap: CGFloat = 400
+    var formCap: CGFloat = closedFormCap
+    static let closedFormCap: CGFloat = 400
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1505,6 +1574,9 @@ struct CardView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(warm.opacity(marked || expanded || focused ? 0.8 : 0.4), lineWidth: marked ? 1.5 : 1)
         }
+        // One shadow for the card as a whole: without the group each of its parts (every line of text, every icon) casts its
+        // own, and the window's picture for the opening morph blurs every one of them again.
+        .compositingGroup()
         .shadow(color: warm.opacity(expanded ? 0.10 : 0), radius: 10, y: 2)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(card.kind.label): \(card.title)")

@@ -2,6 +2,10 @@ import Foundation
 
 // The Store's inbox: categories, groups, things fetched from GitHub, and what you did with them.
 enum InboxStore {
+    /// The inbox worked out once per `Store.inboxRevision`, which what it is made of bumps (things, marks, categories and
+    /// their rules, groups, who you are, your repos and teams), and whether Jev's reading counts; the clock only as far as
+    /// a rule on time passing (no activity for some days) goes: it holds until the next such threshold a thing crosses.
+    /// What the window, the bar and the hub read on every redraw.
     struct Memo {
         var revision = -1
         /// Whether what Jev said counted (a setting, not an inbox change).
@@ -9,13 +13,40 @@ enum InboxStore {
         /// When time alone changes what matches: the next `no activity` threshold a thing crosses.
         var expires: Date?
         var entries: [InboxEntry] = []
-        /// Each category's open entries in the order they show, its unread count, and Done's entries: what the bar and the
-        /// lists read on every redraw, grouped once with `entries`.
+        /// Each category's open entries, what Jev rates more important first (unrated counts as normal), then newest first.
         var open: [UUID: [InboxEntry]] = [:]
+        /// How many of those are unread.
         var unread: [UUID: Int] = [:]
+        /// Done entries, most recently done first.
         var done: [InboxEntry] = []
+        /// Each entry's search text, lowercased (see `Store.inboxRows`): made on the first search after a change.
+        var searchKeys: [String: String]?
         /// Waits for `expires`, then makes the change seen (`inboxTimePassed`) and announces what came in.
         var timer: Task<Void, Never>?
+
+        init() {}
+
+        /// Groups and sorts `entries` in one pass.
+        init(revision: Int, jev: Bool, expires: Date?, entries: [InboxEntry], marks: [String: EntryMarks]) {
+            self.revision = revision
+            self.jev = jev
+            self.expires = expires
+            self.entries = entries
+            var doneAt: [(Date, InboxEntry)] = []
+            for entry in entries {
+                if entry.isDone {
+                    doneAt.append((marks[entry.id]?.doneAt ?? .distantPast, entry))
+                } else {
+                    open[entry.categoryID, default: []].append(entry)
+                    if entry.isUnread { unread[entry.categoryID, default: 0] += 1 }
+                }
+            }
+            func rank(_ e: InboxEntry) -> Int { (e.importance ?? .normal).rank }
+            for id in open.keys {
+                open[id]?.sort { rank($0) != rank($1) ? rank($0) > rank($1) : $0.thing.updatedAt > $1.thing.updatedAt }
+            }
+            done = doneAt.sorted { $0.0 > $1.0 }.map(\.1)
+        }
     }
 
     /// Done is always there and isn't a category. A new inbox starts with My repos: the PRs and issues in the repos you own.
@@ -35,56 +66,66 @@ extension Store {
                       myTeams: myTeams, jevSignals: jevReadsInbox)
     }
 
-    /// Every entry, memoized on `inboxRevision` and whether Jev's reading counts, until a thing crosses a `no activity`
-    /// threshold.
-    var entries: [InboxEntry] { inboxEvaluated.entries }
-
-    /// The memo, evaluated again when it is out of date.
-    private var inboxEvaluated: InboxStore.Memo {
-        if inboxMemo.revision == inboxRevision, inboxMemo.jev == jevReadsInbox, inboxMemo.expires.map({ Date() < $0 }) ?? true {
-            return inboxMemo
-        }
-        let context = inboxContext
-        let all = Array(things.values)
-        let result = InboxEngine.evaluate(things: all, categories: categories, marks: marks, context: context)
-        var memo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals,
-                                   expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
-                                   entries: result)
-        // Open: what Jev rates more important first (unrated counts as normal), then newest first. Done: most recently done first.
-        func rank(_ e: InboxEntry) -> Int { (e.importance ?? .normal).rank }
-        memo.open = Dictionary(grouping: result.filter { !$0.isDone }, by: \.categoryID).mapValues {
-            $0.sorted { rank($0) != rank($1) ? rank($0) > rank($1) : $0.thing.updatedAt > $1.thing.updatedAt }
-        }
-        memo.unread = memo.open.mapValues { $0.filter(\.isUnread).count }
-        memo.done = result.filter(\.isDone).sorted { (marks[$0.id]?.doneAt ?? .distantPast) > (marks[$1.id]?.doneAt ?? .distantPast) }
-        // One timer, for the next threshold: what shows the inbox and the notifications see it crossed, with no refresh.
-        if inboxMemo.timer != nil, inboxMemo.expires == memo.expires {
-            memo.timer = inboxMemo.timer
-        } else {
-            inboxMemo.timer?.cancel()
-            if let expires = memo.expires {
-                memo.timer = Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow) + 0.05))
-                    guard !Task.isCancelled, let self else { return }
-                    inboxMemo.timer = nil
-                    inboxTimePassed()
-                    announceInbox()
+    /// The inbox as of `inboxRevision` and whether Jev's reading counts, worked out again when either has moved or a thing
+    /// has crossed a `no activity` threshold since.
+    var inbox: InboxStore.Memo {
+        if inboxMemo.revision != inboxRevision || inboxMemo.jev != jevReadsInbox
+            || inboxMemo.expires.map({ Date() >= $0 }) == true {
+            let context = inboxContext
+            let all = Array(things.values)
+            let result = InboxEngine.evaluate(things: all, categories: categories, marks: marks, context: context)
+            var memo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals,
+                                       expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
+                                       entries: result, marks: marks)
+            // One timer, for the next threshold: what shows the inbox and the notifications see it crossed, with no refresh.
+            if inboxMemo.timer != nil, inboxMemo.expires == memo.expires {
+                memo.timer = inboxMemo.timer
+            } else {
+                inboxMemo.timer?.cancel()
+                if let expires = memo.expires {
+                    memo.timer = Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow) + 0.05))
+                        guard !Task.isCancelled, let self else { return }
+                        inboxMemo.timer = nil
+                        inboxTimePassed()
+                        announceInbox()
+                    }
                 }
             }
+            inboxMemo = memo
         }
-        inboxMemo = memo
-        return memo
+        return inboxMemo
     }
 
+    /// Every entry, memoized (see `inbox`).
+    var entries: [InboxEntry] { inbox.entries }
+
     /// Open entries of a category, what Jev rates more important first (unrated counts as normal), then newest first.
-    func entries(in category: UUID) -> [InboxEntry] { inboxEvaluated.open[category] ?? [] }
+    func entries(in category: UUID) -> [InboxEntry] { inbox.open[category] ?? [] }
 
     /// Done entries, most recently done first.
-    var doneEntries: [InboxEntry] { inboxEvaluated.done }
+    var doneEntries: [InboxEntry] { inbox.done }
 
     /// The bar's number for a category: its open entries.
     func count(_ category: UUID) -> Int { entries(in: category).count }
-    func unreadCount(_ category: UUID) -> Int { inboxEvaluated.unread[category] ?? 0 }
+    func unreadCount(_ category: UUID) -> Int { inbox.unread[category] ?? 0 }
+
+    /// Each entry's search text, lowercased, by entry id: made once per `inboxRevision`, on the first search.
+    var inboxSearchKeys: [String: String] {
+        let memo = inbox
+        if let keys = memo.searchKeys { return keys }
+        let names = Dictionary(categories.map { ($0.id, $0.name.lowercased()) }, uniquingKeysWith: { first, _ in first })
+        var keys: [String: String] = [:]
+        keys.reserveCapacity(memo.entries.count)
+        for entry in memo.entries {
+            let t = entry.thing
+            let key = "\(t.title) \(t.repo) #\(t.number ?? 0) @\(t.author?.login ?? "") \(t.workflowName ?? "") \(names[entry.categoryID] ?? "") "
+                + entry.facts.map(\.label).joined(separator: " ")
+            keys[entry.id] = key.lowercased()
+        }
+        inboxMemo.searchKeys = keys
+        return keys
+    }
 
     func markDone(_ entry: InboxEntry) {
         var m = marks[entry.id] ?? EntryMarks()
@@ -192,7 +233,6 @@ extension Store {
 
     /// Things the fetched cache has that `rule` matches: the editor's live preview.
     func preview(_ rule: Rule) -> [Thing] {
-        let context = inboxContext
-        return things.values.filter { InboxEngine.facts(rule, $0, marks: nil, context: context) != nil }
+        InboxEngine.preview(rule, things: things.values, context: inboxContext)
     }
 }

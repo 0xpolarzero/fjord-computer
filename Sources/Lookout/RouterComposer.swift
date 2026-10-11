@@ -73,11 +73,8 @@ struct RouterComposer: View {
             model.predictTarget(store: store)
         }
         .onChange(of: model.focusRequest) { requestFocus() }
-        .onChange(of: focused) { _, now in
-            model.composerFocused = now
-            if now { DispatchQueue.main.async { typePendingKeys() } }
-        }
         .onDisappear {
+            focused = false
             model.composerFocused = false
             model.markPrediction(from: model.live.prediction?.mark, to: nil)
             // Nothing of the draft goes to Jev while the composer isn't there.
@@ -150,7 +147,7 @@ struct RouterComposer: View {
         .background(AnchorView(anchor: anchor) { windowHeight = $0 })
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
         .overlay(shape.strokeBorder(ring, lineWidth: 1))
-        .shadow(color: focused ? C.dropFocus : C.drop, radius: 10, y: 4)
+        .bakedShadow(focused ? C.dropFocus : C.drop, .rounded(C.radius), radius: 10, y: 4)
         .contentShape(shape)
         .onHover { hovering = $0 }
         .onTapGesture { if on { focusTick &+= 1 } }
@@ -162,8 +159,12 @@ struct RouterComposer: View {
         let limit = min(C.maxHeight, windowHeight > 0 ? windowHeight * C.maxHeightShare : C.maxHeight)
         let lines = max(1, Int((limit - 2 * C.pad - (C.row - 20)) / 20))
         let placeholder = model.replyTo == nil ? "Tell the Router what to pass on, or ask" : "Reply, or tell the Router"
-        return MentionField(store: store, model: model, maxHeight: CGFloat(lines) * 20, editable: on, focusTick: focusTick) {
-            focused = $0
+        // Told on every change of the text view's first responder, not on a change of `focused`: the kept composer given the
+        // keyboard again after a close may still read focused, and the model must hear it has the keyboard again.
+        return MentionField(store: store, model: model, maxHeight: CGFloat(lines) * 20, editable: on, focusTick: focusTick) { now in
+            focused = now
+            model.composerFocused = now
+            if now { DispatchQueue.main.async { typePendingKeys() } }
         }
         .frame(minHeight: 20)
         .background(alignment: .topLeading) {
