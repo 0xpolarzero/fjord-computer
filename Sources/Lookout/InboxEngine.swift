@@ -58,6 +58,12 @@ enum InboxEngine {
         return entries
     }
 
+    /// Things that `rule` matches, in their given order: the editor's preview resolves the context once for all of them.
+    static func preview(_ rule: Rule, things: some Sequence<Thing>, context: InboxContext) -> [Thing] {
+        let resolved = Resolved(context)
+        return things.filter { facts(rule, $0, marks: nil, resolved: resolved) != nil }
+    }
+
     /// The next moment time alone changes what matches: a thing crossing a `no activity` threshold of some rule; nil when
     /// none is ahead.
     static func nextChange(things: [Thing], categories: [InboxCategory], after now: Date) -> Date? {
@@ -216,7 +222,7 @@ enum InboxEngine {
 
     private static let bothReason = "The same value is both included and excepted"
 
-    /// What the context resolves to, built once per evaluate call.
+    /// What the context resolves to, built once per evaluation or preview.
     private struct Resolved {
         var me: String
         var now: Date

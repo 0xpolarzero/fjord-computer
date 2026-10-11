@@ -105,6 +105,34 @@ import Testing
         #expect(matches(.involved, other))
     }
 
+    @Test func previewMatchesPerThingFactsInOrderWithGroups() {
+        let people = InboxGroup(name: "People", kind: .people, members: ["@ME", "TOK", "@greptile"])
+        let repos = InboxGroup(name: "Repos", kind: .repos, members: ["C/*", "D/X"])
+        let ctx = InboxContext(me: "Me", groups: [people, repos], now: now)
+        let scope = Scope(kinds: [.pr, .issue], by: Pick(include: [.group(people.id)]),
+                          in: Pick(include: [.group(repos.id)], except: [.repo("c/private")]))
+        var exact = pr(2, repo: "d/x")
+        exact.comments = [comment("c2", greptile)]
+        var wildcard = pr(1, repo: "c/one", by: maintainer)
+        wildcard.updatedAt = now.addingTimeInterval(-8 * 86_400)
+        var issue = pr(3, repo: "c/two", by: greptile)
+        issue.kind = .issue
+        issue.comments = [comment("c3", me)]
+        let things = [exact, pr(4, repo: "d/y"), wildcard, pr(5, repo: "d/x", status: .closed),
+                      pr(6, repo: "c/private"), issue, pr(7, repo: "c/one", by: stranger)]
+        let open = Rule(scope: scope, createdAt: .distantPast)
+        let activity = Rule(scope: scope, conditions: [.lastComment(by: Pick(include: [.group(people.id)])),
+                                                      .noActivity(days: 7)], createdAt: .distantPast)
+        var all = activity
+        all.match = .all
+        for rule in [open, activity, all] {
+            let perThing = things.filter { InboxEngine.facts(rule, $0, marks: nil, context: ctx) != nil }
+            #expect(InboxEngine.preview(rule, things: things, context: ctx) == perThing)
+        }
+        #expect(InboxEngine.preview(open, things: things, context: ctx).map(\.id) == [exact.id, wildcard.id, issue.id])
+        #expect(InboxEngine.preview(all, things: things, context: ctx).isEmpty)
+    }
+
     @Test func toRolesNarrowTheSlot() {
         var t = pr(by: stranger)
         t.requestedReviewers = ["me"]

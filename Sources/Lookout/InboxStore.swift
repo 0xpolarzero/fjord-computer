@@ -145,7 +145,6 @@ extension Store {
 
     /// Things the fetched cache has that `rule` matches: the editor's live preview.
     func preview(_ rule: Rule) -> [Thing] {
-        let context = inboxContext
-        return things.values.filter { InboxEngine.facts(rule, $0, marks: nil, context: context) != nil }
+        InboxEngine.preview(rule, things: things.values, context: inboxContext)
     }
 }
