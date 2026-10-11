@@ -35,20 +35,33 @@ import UserNotifications
 
     // MARK: Window keys
 
-    @Test func arrowsWalkTheCardsAndSpaceAddressesThePickedOne() {
+    @Test func arrowsWalkTheCardsAndSpaceAddressesThePickedOne() throws {
         let store = demo()
         let model = RouterModel()
         var closed = false
         let keys = RouterKeys(store: store, model: model) { closed = true }
         let open = model.cards(store).filter(\.isOpen).map(\.id)
+        try #require(open.count == 3)
         #expect(keys.key(key(kVK_DownArrow), responder: nil))
         #expect(model.selection == open[0])
         #expect(keys.key(key(kVK_DownArrow), responder: nil))
         #expect(model.selection == open[1])
         #expect(keys.key(key(kVK_Space, " "), responder: nil))
         #expect(store.router.cards.first { $0.id == open[1] }?.addressedBy == .you)
-        // The addressed card goes up to the history: the next open one is picked.
-        #expect(model.selection == open[2])
+        // The addressed card goes up to the history: the next open one is picked, and replied to (nothing was written).
+        #expect(model.selection == open[2] && model.replyTo == open[2])
+        // Words written to the picked card stay its own when it is handled: the pick moves on, the reply doesn't, and the
+        // words go to its session, handled or not. The same with Mark handled.
+        model.draft = "on it"
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(model.selection == open[0] && model.replyTo == open[2])
+        model.send(store: store)
+        #expect(store.router.decisions.last?.links.cards == [open[2]])
+        model.select(open[0], store: store)
+        model.draft = "on it too"
+        model.address(open[0], store: store)
+        #expect(model.selection == nil && model.replyTo == open[0])
+        model.draft = ""
         // The pick is replied to: Esc takes that off, then closes.
         #expect(keys.key(key(kVK_Escape), responder: nil) && model.replyTo == nil && !closed)
         #expect(keys.key(key(kVK_Escape), responder: nil) && closed)

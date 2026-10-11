@@ -393,11 +393,17 @@ final class RouterModel {
         advance(from: id, to: next)
     }
 
-    /// The pick moved on by itself (its card handled or gone from the list): a reply on that card follows it, while no reply
-    /// (one you took off) stays none. Only a card you pick (a click, a banner, the keys) arms a reply.
+    /// The pick moved on by itself (its card handled or gone from the list): a reply on that card follows it while nothing is
+    /// written, while no reply (one you took off) stays none. Only a card you pick (a click, a banner, the keys) arms a reply.
     private func advance(from id: String, to next: String?) {
         selection = next
-        if replyTo == id { replyTo = next }
+        replyTo = followingReply(from: id, to: next)
+    }
+
+    /// The reply once the pick moved on by itself from `id` to `next`: words written to that card stay its own (its session
+    /// still takes them, handled or not), rather than going to the next card's.
+    private func followingReply(from id: String, to next: String?) -> String? {
+        replyTo == id && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? next : replyTo
     }
 
     /// Picks a card, or none (the Router itself), and takes the page there: an addressed card opens in the history, the
@@ -511,9 +517,9 @@ final class RouterModel {
         if card.isOpen { store.logCardAction("Marked handled", card: id) }
         Announce.say(card.isOpen ? "Addressed" : "Open again")
         guard card.isOpen else { return }
-        let reply = replyTo
+        let reply = followingReply(from: id, to: next)
         select(next, store: store)
-        replyTo = reply == id ? next : reply
+        replyTo = reply
     }
 
     /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the
