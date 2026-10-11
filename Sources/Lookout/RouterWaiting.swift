@@ -12,6 +12,7 @@ enum RouterWaits {
         switch watch.target {
         case .session(let id, let turns):
             guard let session = sessions[id], !session.isArchived, session.completedTurns > turns, !session.running else { return nil }
+            if let counted = watch.turnsAtWork, session.completedTurns <= counted, session.summary == nil { return nil }
             return session.summary?.blocked == true ? "it stopped, blocked" : "it finished its turn"
         case .ci(let id):
             guard let thing = things[id] else { return nil }
@@ -76,7 +77,8 @@ extension Store {
     /// the options were read: a session whose latest turn ended since is watched from the turn before it (so it is done
     /// already), and CI whose checks changed since is offered done. A session at work is watched for the turn it is on,
     /// done once it stops: its count of finished turns may already include that turn (it is counted before its summary
-    /// is written, while it still shows running), so it is watched from the turn before that count, never for a turn more.
+    /// is written, while it still shows running), so it is watched from the turn before that count, never for a turn more,
+    /// and done only once that count goes up or its turn ends with a summary (one that just stops, quit mid-turn, isn't).
     func waitOptions(for session: ClaudeSession) async -> [RouterTriage.WaitOption] {
         let since = session.lastActivity
         let repos = await gitRepos(of: session.folder)
@@ -90,7 +92,8 @@ extension Store {
                                            hint: "The Claude session “\(other.title)” in \(other.folderName)"
                                                + (other.running ? ", working now" : finishedSince ? ", finished a turn since" : ""),
                                            watch: .init(target: .session(id: other.id, turns: from),
-                                                        label: "session “\(RouterDecision.clip(other.title, 50))”"))
+                                                        label: "session “\(RouterDecision.clip(other.title, 50))”",
+                                                        turnsAtWork: other.running ? other.completedTurns : nil))
         }
         // The inbox's PRs and workflows go to TypeSafe only while you let Jev read the inbox (Settings).
         guard jevReadsInbox else { return options }

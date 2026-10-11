@@ -53,6 +53,10 @@ struct RouterTriage: Codable, Hashable {
         var label: String
         /// For CI: "owner/repo#12" (or "owner/repo" for a workflow), the only part of it the session is told.
         var ref: String?
+        /// A session at work when it was picked: its count of finished turns then. Its turn is over only once the count
+        /// passes it, or the turn ends with its summary written (it may be counted already): one that just stops (Claude
+        /// quit mid-turn) is not done. Nil for one that wasn't at work, and for older cards.
+        var turnsAtWork: Int? = nil
     }
 
     /// The awaited thing finished: what came of it.

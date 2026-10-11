@@ -112,6 +112,7 @@ import Testing
         let watch = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!.watch
         #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == nil)
         s.claudeSessions["b"]?.running = false
+        s.claudeSessions["b"]?.summary = .init(blocked: false, detail: "Migrated")
         #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == "it finished its turn")
         // Picked mid-turn (5 counted, the 6th under way): done when that turn ends.
         s.claudeSessions["b"] = ClaudeSession(id: "b", title: "Migration", folder: "/code/db", completedTurns: 5, lastActivity: Date(), running: true)
@@ -120,6 +121,27 @@ import Testing
         #expect(RouterWaits.result(mid, sessions: s.claudeSessions, things: s.things) == nil)
         s.claudeSessions["b"]?.running = false
         #expect(RouterWaits.result(mid, sessions: s.claudeSessions, things: s.things) != nil)
+    }
+
+    @Test func aSessionAtWorkThatStopsMidTurnIsNotDone() async {
+        // b at work on its 6th turn (5 counted) when picked; Claude quits: it no longer shows running, but its turn never
+        // ended (no count past 5, no summary of it).
+        let (s, _) = store(watch: ciWatch)
+        let watch = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!.watch
+        #expect(watch.turnsAtWork == 5)
+        s.claudeSessions["b"]?.running = false
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == nil)
+        // Started again, it finishes that turn.
+        s.claudeSessions["b"]?.running = true
+        s.claudeSessions["b"]?.completedTurns = 6
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == nil)
+        s.claudeSessions["b"]?.running = false
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == "it finished its turn")
+        // Saved and read back, it is the same watch; an older card's (none) is as before.
+        let saved = try! JSONDecoder().decode(RouterTriage.Watch.self, from: JSONEncoder().encode(watch))
+        #expect(saved == watch)
+        let old = try! JSONDecoder().decode(RouterTriage.Watch.self, from: Data(#"{"target":{"session":{"id":"b","turns":4}},"label":"x"}"#.utf8))
+        #expect(old.turnsAtWork == nil && RouterWaits.result(old, sessions: s.claudeSessions, things: s.things) != nil)
     }
 
     @Test func tellItSendsOnceLogsItAndAddressesTheCard() async {
