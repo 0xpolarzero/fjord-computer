@@ -675,6 +675,11 @@ import Testing
         #expect(task("fix the tests with opus\n    and the docs") == "fix the tests\n    and the docs")
         #expect(task("start a session in lookout") == "")
         #expect(task("@lookout start a new session with opus") == "")
+        // Pasted under the request: kept exactly, its first line's indentation and its own settings-like words too.
+        #expect(task("@lookout start a session:\n    guard let x else { return }\n    print(x)")
+                == "    guard let x else { return }\n    print(x)")
+        #expect(task("@lookout start a session:\n// use opus to reproduce\nrun()") == "// use opus to reproduce\nrun()")
+        #expect(task("start a session with opus:\n\n\tx = 1 // high effort") == "\tx = 1 // high effort")
         #expect(RouterDispatcher.title(for: task("start a session with haiku, low effort: reply with exactly the word pong"))
                 == "reply with exactly the word pong")
         #expect(RouterDispatcher.title(for: "") == "New session")

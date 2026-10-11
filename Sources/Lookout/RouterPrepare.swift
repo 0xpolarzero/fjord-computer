@@ -503,9 +503,14 @@ enum SessionStart {
     static func task(from text: String, pills: [Range<Int>] = [], projects: [String] = []) -> String {
         // Each pill stands as one character of its own while the request is taken apart, and is put back after.
         let (masked, pilled) = masking(text, pills)
-        var t = masked.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sep = #"^[\s,:;\-–—]*"#
-        func tidy() { _ = strip(sep, from: &t) }
+        // The request is taken from the front of the text only, and only within its envelope (worked out once, on the text
+        // as written): past it is the task's own, kept exactly (a pasted line's indentation, "// use opus to reproduce").
+        let body = RouterModel.sendable(masked)
+        var t = String(body.drop(while: { $0 == " " || $0 == "\t" }))
+        let whole = t.count
+        let request = max(0, envelope(body).count - (body.count - whole))
+        var inRequest: Bool { whole - t.count < request }
+        func tidy() { if inRequest { _ = strip(#"^[ \t,:;\-–—]*"#, from: &t) } }
         let names = projects.filter { !$0.isEmpty && !$0.contains(where: \.isWhitespace) }
             .map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
         let tag = #"[\x{E000}-\x{F8FF}]"#
@@ -514,27 +519,30 @@ enum SessionStart {
         if started {
             let named = names.isEmpty ? "" : #"|(?:\#(names))(?![\w./-])"#
             var moved = true
-            while moved {
+            while moved, inRequest {
                 tidy()
                 moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?(?:\#(tag)\#(named))(?:\s+(?:project|repo|repository|folder))?(?![\w])"#, from: &t)
                     || strip("^" + settingClause, from: &t)
                     || strip("^" + tag, from: &t)
             }
             tidy()
-            _ = strip(#"^(?:to|and|then|that)\s+"#, from: &t)
+            if inRequest { _ = strip(#"^(?:to|and|then|that)\s+"#, from: &t) }
         }
         // Settings words elsewhere in the request's sentence ("fix the tests with opus, low effort"): the plugin applies them,
         // the session never reads them. Never in the code, quotes or lines after it, which are the task's own words.
-        if SessionSettings.parse(envelope(t)) != nil || started {
-            let end = t.index(t.startIndex, offsetBy: envelope(t).count)
+        let left = max(0, request - (whole - t.count))
+        let end = t.index(t.startIndex, offsetBy: min(left, t.count))
+        if SessionSettings.parse(String(t[..<end])) != nil || started {
             var head = String(t[..<end])
             _ = strip(#"[,;]?[ \t]*\b"# + settingClause, from: &head, all: true, joining: true)
             t = head + t[end...]
             if started || SessionSettings.parse(envelope(text)) != nil { tidy() }
         }
-        var task = t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
+        // What is left starts after the request's line breaks: the first line of code under it keeps its indentation.
+        var task = RouterModel.sendable(String(t.drop(while: { $0 == " " || $0 == "\t" || $0 == "," || $0 == ";" })))
+        while let last = task.last, last == "," || last == ";" || last.isWhitespace { task.removeLast() }
         // Nothing taken out: the words as written, the first line's indentation kept (code).
-        if task == masked.trimmingCharacters(in: .whitespacesAndNewlines) { task = RouterModel.sendable(masked) }
+        if task == masked.trimmingCharacters(in: .whitespacesAndNewlines) { task = body }
         return String(task.map { c in c.unicodeScalars.first.flatMap { pilled[$0] } ?? String(c) }.joined())
     }
 
