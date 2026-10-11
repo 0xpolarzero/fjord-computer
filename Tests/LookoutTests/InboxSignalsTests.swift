@@ -364,7 +364,6 @@ import Testing
         s.settings.jevReadsInbox = false
         // As if Jev had said nothing: no "asks you", and a person's comment Jev read as noise is a person's again.
         #expect(s.entries.first?.facts.map(\.key) == ["person:c1"])
-        #expect(!InboxJev.isQuiet(Fact(key: "comment:c1", label: ""), s.things["pr:a/one#1"]!, context: s.inboxContext))
         var next = s.things
         next["pr:a/one#1"]?.comments.append(comment("c2", tok, ago: 5))
         s.applyThings(next)
@@ -442,49 +441,26 @@ import Testing
         #expect(calls.questions.count == 1)
     }
 
-    @Test func aBannerWaitsForJevToReadItsMessageARefreshOrTwoAtMost() async {
+    @Test func aBannerDoesNotWaitForJevToReadItsMessage() async {
         let (s, calls) = store([pr(1, comments: [])], conditions: [.newComment(by: Pick())])
         var posted: [String] = []
         s.notifier.onPost = { posted.append($0.identifier) }
         s.announceInbox()
-        // One more new comment than Jev reads in a call, all of them CI noise: the oldest waits for the next round.
-        s.inboxAsker = { questions, _ in
-            calls.questions.append(questions)
-            return questions.mapValues { _ in .noul(0.95) }
-        }
+        // More new comments than Jev reads in a call: announced at once, before he reads any of them.
         var next = s.things
         next["pr:a/one#1"]?.comments = (0...InboxJev.maxMessages).map { comment("n\($0)", Person(login: "ci-reporter"), ago: Double($0 + 1) * 60) }
         s.applyThings(next)
-        await s.readInbox()
         s.announceInbox()
-        #expect(posted.isEmpty && s.marks["pr:a/one#1"]?.notified.contains("comment:n\(InboxJev.maxMessages)") == false)
-        await s.readInbox()
-        s.announceInbox()
-        #expect(posted.isEmpty && s.marks["pr:a/one#1"]?.notified.contains("comment:n\(InboxJev.maxMessages)") == true)
-        // Jev never gets to it: the banner shows after two refreshes.
-        next = s.things
-        next["pr:a/one#1"]?.comments.append(comment("p1", tok, ago: 1))
-        s.applyThings(next)
-        s.announceInbox()
-        s.announceInbox()
-        #expect(posted.isEmpty)
-        s.announceInbox()
-        #expect(posted == ["inbox:pr:a/one#1"])
-        // Switched off, nothing waits.
-        s.settings.jevReadsInbox = false
-        next = s.things
-        next["pr:a/one#1"]?.comments.append(comment("p2", tok, ago: 0))
-        s.applyThings(next)
-        s.announceInbox()
-        #expect(posted.count == 2)
+        #expect(calls.questions.isEmpty && posted == ["inbox:pr:a/one#1"])
+        #expect(s.marks["pr:a/one#1"]?.notified.contains("comment:n\(InboxJev.maxMessages)") == true)
     }
 
-    @Test func noiseIsNotedButNeverAnnounced() async {
+    @Test func aCommentJevReadsAsNoiseStillShowsTheBannerYourRuleAsksFor() async {
         let (s, calls) = store([pr(1, comments: []), pr(2, comments: [])], yes: 0.9, conditions: [.newComment(by: Pick())])
         var posted: [String] = []
         s.notifier.onPost = { posted.append($0.identifier) }
         s.announceInbox()
-        // A comment Jev reads as noise on #1, one it reads as a person's on #2.
+        // A comment Jev reads as noise on #1, before the refresh announces: your rule matches it, so its banner shows.
         s.inboxAsker = { questions, _ in
             calls.questions.append(questions)
             return questions.mapValues { _ in .noul(0.95) }
@@ -493,14 +469,11 @@ import Testing
         next["pr:a/one#1"]?.comments = [comment("n1", Person(login: "ci-reporter"))]
         s.applyThings(next)
         await s.readInbox()
-        s.inboxAsker = { questions, _ in questions.mapValues { _ in .noul(0.05) } }
-        next = s.things
-        next["pr:a/one#2"]?.comments = [comment("p1", tok)]
-        s.applyThings(next)
-        await s.readInbox()
+        #expect(s.things["pr:a/one#1"]?.signals?.messages["n1"]?.noise == true)
         s.announceInbox()
-        #expect(posted == ["inbox:pr:a/one#2"])
-        #expect(s.marks["pr:a/one#1"]?.notified == ["comment:n1"])
+        #expect(posted == ["inbox:pr:a/one#1"])
+        // Only your own noise condition keeps a banner back.
+        #expect(InboxJev.isQuiet(Fact(key: "noise:n1", label: "")) && !InboxJev.isQuiet(Fact(key: "comment:n1", label: "")))
     }
 }
 

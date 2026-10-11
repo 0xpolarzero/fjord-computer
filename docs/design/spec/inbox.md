@@ -60,7 +60,7 @@ Fact keys are the same whatever `since` says (`comment:<id>`, `review:<id>`, `co
 - Switching kind keeps only supported chips and says which were dropped.
 
 ## Lifecycle (same for every kind)
-- **Notify** when a thing gains a matching fact; the same fact (Fact.key) never notifies twice. CI: one notification per failure, until green.
+- **Notify** when a thing gains a matching fact; the same fact (Fact.key) never notifies twice. CI: one notification per failure, until green. What notifies is decided only by your rules and the category's notifies switch: a banner never waits for Jev's reading, and nothing he says of a message holds one back (only a rule's own *noise* condition makes its facts noted, never announced).
 - **Done** acknowledges the current facts; the item returns only when a new fact matches.
 - **Leaves** quietly when nothing matches anymore (thread resolved, checks green).
 - **Closed/merged** things only show in rules asking for them (is merged / is closed).

@@ -14,9 +14,6 @@ enum InboxJev {
     static let sure = 0.75
     /// A rating whose confidence is lower is no rating.
     static let sureScore = 0.4
-    /// A banner for a message Jev hasn't read yet waits at most this many refreshes for it (beyond the cap, or a slow
-    /// round), so it can still turn out to be noise; then it shows whatever Jev said.
-    static let bannerWaits = 2
 
     typealias Asker = ([String: JevClient.Question], [String: Any]) async throws -> [String: JevClient.Answer]
 
@@ -64,13 +61,6 @@ enum InboxJev {
     /// A message Jev reads once: not yours, and recent.
     private static func unread(_ m: InboxEngine.Message, _ context: InboxContext) -> Bool {
         InboxEngine.viewer(m.author.login) != InboxEngine.viewer(context.me) && context.now.timeIntervalSince(m.at) < horizon
-    }
-
-    /// A fact about a message Jev will read but hasn't yet: its banner waits (see `bannerWaits`).
-    static func awaitsReading(_ fact: Fact, _ thing: Thing, context: InboxContext) -> Bool {
-        guard isRead(thing), let id = messageID(fact),
-              let m = InboxEngine.messages(thing).first(where: { $0.id == id }) else { return false }
-        return InboxEngine.signals(thing, context.me)?.messages[id] == nil && unread(m, context)
     }
 
     /// The message a fact is about, if it is about one.
@@ -168,12 +158,9 @@ enum InboxJev {
             && signals.involvedBy == nil ? nil : signals
     }
 
-    /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).
-    static func isQuiet(_ fact: Fact, _ thing: Thing, context: InboxContext) -> Bool {
-        if fact.key.hasPrefix("noise:") { return true }
-        guard let id = messageID(fact) else { return false }
-        return InboxEngine.signals(thing, context: context)?.messages[id]?.noise == true
-    }
+    /// A fact that never shows a banner: what a rule's own noise condition matched. What Jev says of a message never
+    /// holds back or delays its banner: your rules alone decide what notifies.
+    static func isQuiet(_ fact: Fact) -> Bool { fact.key.hasPrefix("noise:") }
 
     // MARK: What Jev reads
 
@@ -268,8 +255,8 @@ extension Store {
     /// Jev reads the inbox at the next refresh: switched on, with a key (or a test's asker).
     var jevReadsInboxNow: Bool { jevReadsInbox && (inboxAsker != nil || !(typesafeKey ?? "").isEmpty) }
 
-    /// Jev's reading of what is new, in one call: before the refresh announces, so noise is known before it would show a
-    /// banner. Switched off or without a key nothing is asked; a failure leaves everything as it was, and the gate
+    /// Jev's reading of what is new, in one call. Nothing waits for it: a banner shows as your rules say, read or not.
+    /// Switched off or without a key nothing is asked; a failure leaves everything as it was, and the gate
     /// (`JevGate`) says when to ask again. Why he can't read (a rejected key, TypeSafe busy or out of reach) is
     /// `inboxReadError` until he reads again, or has nothing to read.
     func readInbox() async {

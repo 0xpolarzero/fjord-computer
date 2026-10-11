@@ -405,8 +405,6 @@ final class Store {
     @ObservationIgnored var inboxAsker: InboxJev.Asker?
     /// What every call to Jev goes through (JevGate.swift).
     @ObservationIgnored let jevGate = JevGate()
-    /// Banners held back for Jev to read their message first, by thing id and fact key: how many refreshes each has waited.
-    @ObservationIgnored var inboxBannerWaits: [String: Int] = [:]
     /// What keeps a key in the Keychain (tests answer for it).
     @ObservationIgnored var keychainWrite: ((String, String) -> Bool)?
     @ObservationIgnored private var transcriptWatcher: FolderWatcher?

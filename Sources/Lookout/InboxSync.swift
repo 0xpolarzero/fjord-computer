@@ -1370,6 +1370,9 @@ extension Store {
         let before = fetchedScopeKeys() ?? []
         fetchedFor = .keys(before.filter { asked.contains($0) || (searchesKept && $0.hasPrefix("search:")) }.union(answered))
         baselineIfFetched()
+        // Banners don't wait for Jev: what your rules match now is announced now, and what his labels make a rule of
+        // yours match once he has read, then. Actions run once he has.
+        announceInbox(runningActions: false)
         await readInbox()
         guard current() else { return }
         announceInbox()
@@ -1827,16 +1830,13 @@ extension Store {
     /// evaluation (and any with rules it hasn't seen) is a baseline: what is there is noted, not announced. A state that
     /// goes away (checks failing, a label) is forgotten, so it announces again if it comes back; an event (a comment, a
     /// review) is kept while the thing still has it, so a rule that stops matching for a while doesn't announce it twice.
-    func announceInbox() {
-        defer { scheduleActions() }
+    func announceInbox(runningActions: Bool = true) {
+        defer { if runningActions { scheduleActions() } }
         let all = entries
         var updated = marks
         var baselines = categoryBaselines
         var posts: [(category: InboxCategory, entry: InboxEntry, fresh: [Fact])] = []
         let context = inboxContext
-        // Jev reads at each refresh: a banner for a message it hasn't read yet waits for it, a refresh or two at most.
-        let jevReads = jevReadsInboxNow && jevGate.isOpen(for: typesafeKey ?? "")
-        var waits: [String: Int] = [:]
         let byThing = Dictionary(all.map { ($0.thing.id, $0) }, uniquingKeysWith: { a, _ in a })
         for category in categories {
             let ruleIDs = Set(category.rules.map(\.id))
@@ -1844,22 +1844,12 @@ extension Store {
             let silent = baseline || category.hidden || !category.notifies
             for entry in all where entry.categoryID == category.id {
                 var m = updated[entry.id] ?? EntryMarks()
-                var fresh = entry.facts.filter { !m.notified.contains($0.key) }
-                if jevReads, !silent, !entry.isDone {
-                    fresh = fresh.filter { fact in
-                        let key = entry.thing.id + "|" + fact.key
-                        let waited = inboxBannerWaits[key] ?? 0
-                        guard waited < InboxJev.bannerWaits, !InboxJev.isQuiet(fact, entry.thing, context: context),
-                              InboxJev.awaitsReading(fact, entry.thing, context: context) else { return true }
-                        waits[key] = waited + 1
-                        return false
-                    }
-                }
+                let fresh = entry.facts.filter { !m.notified.contains($0.key) }
                 guard !fresh.isEmpty else { continue }
                 m.notified.formUnion(fresh.map(\.key))
                 updated[entry.id] = m
-                // Noise is noted, never announced.
-                let loud = fresh.filter { !InboxJev.isQuiet($0, entry.thing, context: context) }
+                // What your own noise condition matched is noted, never announced; what Jev labels never changes it.
+                let loud = fresh.filter { !InboxJev.isQuiet($0) }
                 if !silent, !entry.isDone, !loud.isEmpty { posts.append((category, entry, loud)) }
             }
             if baseline { baselines[category.id] = ruleIDs }
@@ -1878,7 +1868,6 @@ extension Store {
                 updated[id] = m
             }
         }
-        inboxBannerWaits = waits
         // A deleted category's baseline goes with it.
         baselines = baselines.filter { id, _ in categories.contains { $0.id == id } }
         if baselines != categoryBaselines { categoryBaselines = baselines }
