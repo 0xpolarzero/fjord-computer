@@ -853,6 +853,26 @@ import Testing
         #expect(setting.before == ["notifications: on"] && setting.after == ["notifications: off"])
     }
 
+    @Test func anActionCopiedIsRefusedOrWaitsAsANewOne() async throws {
+        let s = inboxStore()
+        var mine = try #require(s.categories.first { $0.name == "Mine" })
+        let action = CategoryAction.make(.comment("Thanks"))
+        mine.actions = ActionList([action])
+        s.categories[s.categories.firstIndex { $0.id == mine.id }!] = mine
+        let t = tools(s, turn: "tidy Mine")
+        // The same action twice, by its id: refused.
+        let twice = LookoutJSON.object(action)
+        let copied = await call(t, "update_category", ["category": ["id": mine.id.uuidString, "actions": [twice, twice]]])
+        #expect(!copied.ok && copied.text.contains("each action is there once"))
+        // Once more of what is there is as new as one never there: it waits for Apply.
+        var doubled = mine
+        doubled.actions = ActionList([action, action])
+        let change = LookoutChange(title: "x", patch: .category(index: 1, before: mine, after: doubled))
+        #expect(LookoutGate.reason(change, request: "tidy Mine", categories: s.categories)?.contains("runs by itself") == true)
+        let same = LookoutChange(title: "x", patch: .category(index: 1, before: mine, after: mine))
+        #expect(LookoutGate.reason(same, request: "tidy Mine", categories: s.categories) == nil)
+    }
+
     @Test func openGoesToThePlaceTheChangeIsAbout() async throws {
         let s = inboxStore()
         let t = tools(s)

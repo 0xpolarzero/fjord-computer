@@ -314,8 +314,10 @@ enum InboxActions {
             for entry in mine {
                 let facts = triggering(entry, me: me)
                 guard !facts.isEmpty else { continue }
+                // An action is run once per thing and fact however often its id is listed: its runs are kept by that id.
+                var listed = Set<UUID>()
                 for action in category.actions.items where action.applies(to: entry.thing.kind) {
-                    guard baseline.actions.contains(action.id) else { continue }
+                    guard baseline.actions.contains(action.id), listed.insert(action.id).inserted else { continue }
                     switch action.trigger {
                     case .enter:
                         if ledger.run(category.id, entry.id, action.id, "enter") == nil {

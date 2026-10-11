@@ -18,7 +18,13 @@ enum LookoutGate {
         switch change.patch {
         case .category(_, let before, let after):
             guard let after else { return "Deleting a category waits for you" }
-            let new = after.actions.items.filter { action in !(before?.actions.items.contains(action) ?? false) }
+            // By value and by count: an action copied (the same one twice) runs twice, so it is as new as one never there.
+            var had = Dictionary((before?.actions.items ?? []).map { ($0, 1) }, uniquingKeysWith: +)
+            let new = after.actions.items.filter { action in
+                guard let left = had[action], left > 0 else { return true }
+                had[action] = left - 1
+                return false
+            }
             if !new.isEmpty {
                 return "It adds an action that runs by itself (" + new.map(\.title).joined(separator: ", ") + ")"
             }

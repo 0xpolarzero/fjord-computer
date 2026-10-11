@@ -222,6 +222,18 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.asked.count == 2)
     }
 
+    @Test func anActionListedTwiceRunsOnce() {
+        let action = CategoryAction.make(.comment("hi"))
+        var category = InboxFixture.category()
+        category.actions = ActionList([action, action])
+        var ledger = ActionLedger()
+        _ = InboxActions.plan(entries: [], categories: [category], groups: [], ledger: &ledger, me: "me")
+        let entry = InboxEntry(thing: InboxFixture.pr(1, by: Person(login: "alice")), categoryID: category.id,
+                               facts: [Fact(key: "comment:c1", label: "c")], isDone: false, isUnread: true)
+        let jobs = InboxActions.plan(entries: [entry], categories: [category], groups: [], ledger: &ledger, me: "me")
+        #expect(jobs.count == 1 && jobs.first?.action.id == action.id)
+    }
+
     @Test func theCapNeverForgetsTheRunsOfFactsStillThere() {
         var action = CategoryAction.make(.comment("seen"))
         action.trigger = .eachFact
