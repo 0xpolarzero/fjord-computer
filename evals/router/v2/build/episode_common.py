@@ -96,8 +96,8 @@ YES = re.compile(r"^(yes|yep|yeah|yup|y|ok|okay|k|sure|go|go ahead|go for it|do 
 NO = re.compile(r"^(no|nope|nah|non|don'?t|do not|stop|cancel|never mind|nevermind|not now|skip|revert)\b", re.I)
 SMALL = re.compile(r"^(thanks|thank you|thx|ty|merci|lol|haha|hmm+|nice|cool|wow|interesting|good job|well done|"
                    r"great job|awesome|ok thanks|ok cool)[\s!.]*$", re.I)
-QUESTION = re.compile(r"\?\s*$|^(what|how|why|when|where|which|who|is|are|was|were|can|could|would|should|do|does|"
-                      r"did|have|has|will|isn'?t|aren'?t|didn'?t|doesn'?t|any|so (is|are|did|does|what|how)|"
+QUESTION = re.compile(r"\?\s*$|^(what|how|why|when|where|which|who|is|are|was|were|can|could|would|should|does|"
+                      r"did|has|will|(?:do|have) (?:you|we|i|they)|isn'?t|aren'?t|didn'?t|doesn'?t|any|so (is|are|did|does|what|how)|"
                       r"pourquoi|comment|est-ce)\b", re.I)
 ANAPHOR = re.compile(r"^(it|this|that|these|those|yes|no|so|and|then|ok|okay|alright|also|now|but|same|what about|"
                      r"great|perfect|nice|good)\b", re.I)
