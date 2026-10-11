@@ -253,6 +253,11 @@ class RouterSystem:
         return result
 
 
+# Cards skipped because their started session doesn't exist in this replay, by state object (kept out of the state
+# itself, which reaches Jev).
+_SKIPPED_CARDS: dict[int, set] = {}
+
+
 def apply_delta(state, delta):
     """Apply exogenous changes by identity, preserving all unrelated state.
 
@@ -274,13 +279,15 @@ def apply_delta(state, delta):
             if existing is not None:
                 raise ValueError("board delta adds a duplicate identity")
             if collection == "cards" and absent_start(added.get("session")):
+                _SKIPPED_CARDS.setdefault(id(state), set()).add(added["id"])
                 continue
             rows.append(copy.deepcopy(added))
             if collection == "sessions":
                 present.add(added["id"])
         for change in delta.get(collection + "~", []):
             row = next((row for row in rows if row["id"] == change["id"]), None)
-            if row is None and (absent_start(change["id"].split("#")[0]) or absent_start(change.get("session", ""))):
+            if row is None and (absent_start(change["id"].split("#")[0]) or absent_start(change.get("session", ""))
+                                or change["id"] in _SKIPPED_CARDS.get(id(state), ())):
                 continue
             if row is None:
                 raise ValueError("board delta updates an absent identity")
@@ -324,6 +331,7 @@ def play_episode(episode, system):
     Picks deliver the pending original message, never a fabricated utterance.
     """
     validate_episode(episode)
+    _SKIPPED_CARDS.clear()
     state = copy.deepcopy(episode["state"])
     events = episode["events"]
     positions = {event["id"]: index for index, event in enumerate(events)}
@@ -344,9 +352,10 @@ def play_episode(episode, system):
         if event["kind"] == "board":
             apply_delta(state, event["delta"])
             trace["delta"] = copy.deepcopy(event["delta"])
+        elif event["kind"] == "pick" and pending is None:
+            # The script expected an ask card; this policy acted instead, so there is nothing to click.
+            trace.update(decision="pick", reason="no-pending-ask")
         elif event["kind"] == "pick":
-            if pending is None:
-                raise ValueError("pick without a pending ask")
             target = adapter.canonical_target(event["target"], state)
             options = [item["target"] if isinstance(item, dict) else item for item in pending["ranked"]]
             accepted = rules.eligible(state, target)
