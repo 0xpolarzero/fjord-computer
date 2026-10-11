@@ -706,6 +706,16 @@ import Testing
         #expect(!s.waitNamed(one, in: "Waiting for the migration session and the billing rewrite session", by: a))
     }
 
+    @Test func aFolderWithNoRemoteYetIsReadAgainOnceItHasOne() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lk-remotes-\(UUID().uuidString)/app")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        let s = InboxFixture.store([])
+        #expect(await s.gitRepos(of: dir.path).isEmpty)
+        try "[remote \"origin\"]\n\turl = git@github.com:o/app.git\n".write(to: dir.appendingPathComponent(".git/config"), atomically: true, encoding: .utf8)
+        #expect(await s.gitRepos(of: dir.path) == ["o/app"])
+    }
+
     @Test func aRefNamesOnlyItsOwnThingWhole() {
         var twelve = InboxFixture.pr(12, repo: "o/app", title: "Speed up the build")
         twelve.checks = .pending

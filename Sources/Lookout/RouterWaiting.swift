@@ -89,12 +89,13 @@ enum RouterWaits {
 }
 
 extension Store {
-    /// The GitHub repos (`owner/repo`, lowercased) a folder's git remotes name, read once per folder, off the main thread.
+    /// The GitHub repos (`owner/repo`, lowercased) a folder's git remotes name, read off the main thread, kept once found.
     func gitRepos(of folder: String?) async -> Set<String> {
         guard let folder, !folder.isEmpty else { return [] }
         if let known = routerTriager.repos[folder] { return known }
         let repos = await Task.detached(priority: .utility) { Set(LocalClones.remotes(of: folder)) }.value
-        routerTriager.repos[folder] = repos
+        // Nothing found isn't kept: the folder may get its remote later (a turn before `origin` existed), and is read again.
+        if !repos.isEmpty { routerTriager.repos[folder] = repos }
         return repos
     }
 

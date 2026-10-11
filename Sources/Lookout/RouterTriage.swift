@@ -421,6 +421,8 @@ extension Claude {
     var telling: Set<String> = []
     /// The GitHub repos each folder's git remotes name (`Store.gitRepos`), read once; tests fill it in.
     var repos: [String: Set<String>] = [:]
+    /// When a folder with no remotes found was last read again for an unbound wait.
+    var remotesRetried: [String: Date] = [:]
     /// Waiting cards Jev found waiting on CI with nothing Lookout could watch yet (a PR the turn opened, before the inbox
     /// has it), by id: the turn's final message, read for the CI it names as it comes (`Store.bindUnwatchedWaits`).
     var unwatched: [String: String] = [:]
@@ -764,7 +766,17 @@ extension Store {
 
     /// The final message of a waiting card's turn, read again (once) for the CI it names, with its folder's repos.
     private func readUnwatched(_ cardID: String, session: ClaudeSession) {
-        guard routerTriager.unwatchedRead.insert(cardID).inserted else { return }
+        guard routerTriager.unwatchedRead.insert(cardID).inserted else {
+            // Its message is read, but its folder's remotes were found empty: read them again (at most every half minute).
+            guard routerTriager.unwatched[cardID] != nil, routerTriager.repos[session.folder ?? ""] == nil,
+                  Date().timeIntervalSince(routerTriager.remotesRetried[session.folder ?? ""] ?? .distantPast) > 30 else { return }
+            routerTriager.remotesRetried[session.folder ?? ""] = Date()
+            Task { [weak self] in
+                guard let self, !(await self.gitRepos(of: session.folder)).isEmpty else { return }
+                self.resolveWaits()
+            }
+            return
+        }
         Task { [weak self] in
             guard let self else { return }
             let message = await self.finalMessage(session)
