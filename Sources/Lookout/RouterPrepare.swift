@@ -337,8 +337,10 @@ struct Prepared: Equatable, Sendable {
 
 /// The only edit a message gets before it goes to a session as your words: what addresses the session or the Router is
 /// taken out of your own bytes, by fixed rules; nothing is ever added, reworded or reordered (no model writes what is
-/// signed as yours). Taken out: a leading "tell/ask <the session> (to)", "<the session>:" or "for <the session>:", a leading
-/// @project, and `@router` asides (in brackets, or from the marker to the end of its line). Anything else goes verbatim.
+/// signed as yours). Taken out: the leading @project tags, then one outer address ("tell/ask <the session> to",
+/// "<the session>:" or "for <the session>:") and nothing after it, and `@router` asides (in brackets, or from the marker to
+/// the end of its line). A name is only taken out whole and followed by "to" or a colon, and never one holding a "to", a
+/// colon or a negation (a session's title is its own words: it mustn't eat "not"); when in doubt, the words go verbatim.
 enum Addressing {
     /// Everything in the message was for the Router (`@router` asides): nothing to pass on.
     struct NothingLeft: LocalizedError {
@@ -346,14 +348,16 @@ enum Addressing {
     }
 
     /// `message` with its addressing taken out. `names`: what the target goes by (its title, its project's names); a name
-    /// shorter than two characters is ignored.
-    static func edit(_ message: String, names: [String]) throws -> Prepared {
+    /// shorter than two characters is ignored, and so is one that could carry what you meant (`addressable`). `envelope`:
+    /// false for a new session's task, whose request was already taken out (`SessionStart.task`): only the asides go.
+    static func edit(_ message: String, names: [String], envelope: Bool = true) throws -> Prepared {
         var text = withoutAsides(message)
-        let names = Array(Set(names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { $0.count >= 2 }))
-            .sorted { $0.count > $1.count }
-        for _ in 0..<3 {
-            guard let next = withoutLeadingAddress(text, names: names) else { break }
-            text = next
+        if envelope {
+            let names = Array(Set(names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(addressable)))
+                .sorted { $0.count > $1.count }
+            // The @project tags, then a single address: what follows it is the message, however it starts.
+            while let next = withoutTag(text, names: names) { text = next }
+            if let next = withoutLeadingAddress(text, names: names) { text = next }
         }
         guard text != message else { return Prepared(text: message, original: message, rephrased: false) }
         while let last = text.last, last.isWhitespace { text.removeLast() }
@@ -416,26 +420,51 @@ enum Addressing {
 
     // MARK: Leading addressing
 
+    /// Words that turn what follows around: never part of an address taken out.
+    private static let negations: Set<String> = ["not", "never", "no", "nor", "don't", "dont", "don’t", "doesn't",
+                                                "doesnt", "doesn’t", "without", "stop", "cannot", "can't", "can’t", "won't",
+                                                "won’t", "shouldn't", "shouldn’t", "mustn't", "mustn’t", "neither"]
+
+    /// Whether a name may be taken out as an address: two characters or more, and nothing in it that could be the start of
+    /// your message (a "to", a colon or a dash, a negation).
+    static func addressable(_ name: String) -> Bool {
+        guard name.count >= 2, !name.contains(where: { ":,—–\n".contains($0) }) else { return false }
+        let words = name.lowercased().split { !($0.isLetter || $0.isNumber || $0 == "'" || $0 == "’") }.map(String.init)
+        return !words.contains { $0 == "to" || negations.contains($0) }
+    }
+
+    /// One leading @project tag taken out of `text` (a pill: its name whole), or nil when it starts with none.
+    static func withoutTag(_ text: String, names: [String]) -> String? {
+        guard !names.isEmpty else { return nil }
+        let named = names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
+        return firstStripped(text, #"^[ \t]*@(?:\#(named))(?![\w./-])(?:\#(colon)|[ \t]+)?"#)
+    }
+
+    private static func firstStripped(_ text: String, _ pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let r = Range(m.range, in: text), !r.isEmpty, r.upperBound < text.endIndex else { return nil }
+        // What is taken out never holds a negation.
+        let taken = text[r].lowercased().split { !($0.isLetter || $0.isNumber || $0 == "'" || $0 == "’") }
+        guard !taken.contains(where: { negations.contains(String($0)) }) else { return nil }
+        return String(text[r.upperBound...])
+    }
+
     private static let polite = #"(?:(?:please|pls|hey|ok|okay|can\s+you|could\s+you|would\s+you)[,\s]+)?"#
     private static let kind = #"(?:\s+(?:session|chat|project|repo|repository))?"#
     /// After a colon or a dash: spaces, and one line break at most (an indented block after it keeps its indent).
     private static let colon = #"[ \t]*[:,—–][ \t]*(?:\r?\n)?"#
 
-    /// One leading address taken out of `text`, or nil when it starts with none.
+    /// One leading address taken out of `text`, or nil when it starts with none: "tell/ask <the session> to" or with a
+    /// colon, "(for) <the session>:". `names` are those `addressable` already.
     static func withoutLeadingAddress(_ text: String, names: [String]) -> String? {
         let named = names.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
         let target = named.isEmpty ? nil : #"(?:the\s+)?@?(?:\#(named))(?![\w])\#(kind)"#
         let any = #"(?:\#(target.map { $0 + "|" } ?? "")it(?![\w'’])|them(?![\w])|(?:the|this|that)\s+session(?![\w]))"#
-        var patterns = [#"^[ \t]*\#(polite)(?:tell|ask)\s+\#(any)(?:\#(colon)|\s+to\s+|\s+)"#]
-        if let target {
-            patterns.append(#"^[ \t]*\#(polite)(?:for\s+)?\#(target)\#(colon)"#)
-            patterns.append(#"^[ \t]*@(?:\#(named))(?![\w./-])(?:\#(colon)|[ \t]+)?"#)
-        }
+        var patterns = [#"^[ \t]*\#(polite)(?:tell|ask)\s+\#(any)(?:\#(colon)|\s+to\s+)"#]
+        if let target { patterns.append(#"^[ \t]*\#(polite)(?:for\s+)?\#(target)\#(colon)"#) }
         for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-                  let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-                  let r = Range(m.range, in: text), !r.isEmpty, r.upperBound < text.endIndex else { continue }
-            return String(text[r.upperBound...])
+            if let rest = firstStripped(text, pattern) { return rest }
         }
         return nil
     }

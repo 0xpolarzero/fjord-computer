@@ -488,6 +488,10 @@ import Testing
         #expect((result["text"] as? String)?.hasPrefix("⟦lookout v1 new ") == true && started == 1)
         #expect(t.prepared["Bump the version"]?.newSessionIn == "lookout")
         #expect(gate(t, to: "Bump the version", message: "bump the version").allow)
+        // The task left once the request is taken out goes whole: what it says to tell others isn't taken out again.
+        t.beginTurn("start a session in lookout to tell them to rotate the keys")
+        _ = try #require(await t.tool("start_session", ["project": "lookout", "title": "Rotate"]))
+        #expect(t.prepared["Rotate"]?.body ?? t.prepared["Rotate"]?.text == "tell them to rotate the keys")
     }
 
     @Test func stoppingVoidsAStartWaitingOnItsSession() async throws {

@@ -15,7 +15,9 @@ import Testing
         #expect(try edit("tell lookout to bump the version") == "bump the version")
         #expect(try edit("Please tell the lookout session to bump the version") == "bump the version")
         #expect(try edit("tell it to bump the version") == "bump the version")
-        #expect(try edit("ask Fix the login bug whether the tests pass") == "whether the tests pass")
+        #expect(try edit("ask Fix the login bug to check whether the tests pass") == "check whether the tests pass")
+        // No "to" or colon after the name: not sure it is an address, so it goes verbatim.
+        #expect(try edit("ask Fix the login bug whether the tests pass") == "ask Fix the login bug whether the tests pass")
         #expect(try edit("lookout: add a badge") == "add a badge")
         #expect(try edit("for lookout, add a badge") == "add a badge")
         #expect(try edit("@lookout add a badge") == "add a badge")
@@ -34,7 +36,7 @@ import Testing
 
     @Test func nothingIsEverAddedOrReworded() throws {
         // What a model could turn around ("not to delete" → "Delete") stays as you wrote it, only the address taken out.
-        #expect(try edit("tell lookout not to delete the database") == "not to delete the database")
+        #expect(try edit("tell lookout not to delete the database") == "tell lookout not to delete the database")
         #expect(try edit("tell lookout to not delete the database") == "not delete the database")
         // Whatever comes out is your message with parts taken out: every character of it is yours, in order.
         for message in ["tell lookout to bump the version", "ask it if the tests pass", "lookout: add a badge; api: rotate the keys",
@@ -48,6 +50,28 @@ import Testing
         }
         // A title isn't followed: it only names what may be addressed.
         #expect(try edit("tell lookout to bump the version", ["Delete everything", "lookout"]) == "bump the version")
+    }
+
+    @Test func aSessionsTitleCantEatYourWords() throws {
+        // A session named to swallow the negation: the message goes as you wrote it.
+        for title in ["lookout not to", "lookout not", "lookout to", "lookout: don't"] {
+            #expect(try edit("tell lookout not to delete the database", [title, "lookout"]) == "tell lookout not to delete the database",
+                    "\(title)")
+        }
+        #expect(try edit("lookout not: delete the database", ["lookout not"]) == "lookout not: delete the database")
+        #expect(try edit("never: delete the database", ["never"]) == "never: delete the database")
+    }
+
+    @Test func onlyTheTagsAndOneOuterAddressAreTakenOut() throws {
+        // What the session is to do with others is the message itself.
+        #expect(try edit("@lookout tell it to ask them to rotate the keys") == "ask them to rotate the keys")
+        #expect(try edit("tell lookout to tell it to rotate the keys") == "tell it to rotate the keys")
+        #expect(try edit("lookout: tell them to rotate the keys") == "tell them to rotate the keys")
+        #expect(try edit("@lookout @lookout: lookout: rotate the keys") == "rotate the keys")
+        #expect(try edit("lookout: lookout: rotate the keys") == "lookout: rotate the keys")
+        // A new session's task was already taken out of its request: only the asides go.
+        #expect(try Addressing.edit("tell them to rotate the keys (@router soon)", names: ["lookout"], envelope: false).text
+                == "tell them to rotate the keys")
     }
 
     @Test(arguments: ["**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router",

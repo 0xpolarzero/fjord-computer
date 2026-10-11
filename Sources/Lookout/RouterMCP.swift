@@ -870,9 +870,9 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// Your words with the addressing taken out (`Addressing`): never a model's rewrite.
-    private func edited(_ message: String, names: [String]) throws -> Prepared {
+    private func edited(_ message: String, names: [String], envelope: Bool = true) throws -> Prepared {
         do {
-            return try Addressing.edit(message, names: names)
+            return try Addressing.edit(message, names: names, envelope: envelope)
         } catch let nothing as Addressing.NothingLeft {
             throw Failure(nothing.localizedDescription)
         }
@@ -1074,7 +1074,8 @@ final class RouterMCPServer: @unchecked Sendable {
         }
         // Prepared first: if a part for the Router is left in it, no session is made.
         var ready = noTask ? Prepared(text: "", original: "", rephrased: false)
-            : try edited(message, names: [name, (folder as NSString).lastPathComponent])
+            // The task is what is left once the request was taken out: it is not taken apart again (only `@router` asides go).
+            : try edited(message, names: [], envelope: false)
         try noMarker(ready.text)
         try live(ticket)
         let started: SessionStart.Started
