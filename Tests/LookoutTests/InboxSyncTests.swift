@@ -680,6 +680,42 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.entries(in: dev.id).map(\.id).sorted() == ["workflow:a/x:11@dev", "workflow:a/x:12@dev"])
     }
 
+    @Test func anOwnerWhoseReposCouldntBeLookedUpKeepsItsWorkflowsAndSaysSo() async {
+        final class Phase: @unchecked Sendable { var fails = true }
+        let state = State(), phase = Phase()
+        let (s, ci) = store(state) { _ in }
+        s.gh.session = StubbedGitHub.session { request in
+            switch request.url?.path ?? "" {
+            case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
+            case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            case "/graphql":
+                // Owner a's part fails; zz is no one GitHub knows.
+                if phase.fails {
+                    return .init(200, #"{"data":{"o0":null,"o1":null},"errors":[{"type":"FORBIDDEN","path":["o0"],"message":"Resource protected"}]}"#)
+                }
+                return .init(200, #"{"data":{"o0":{"repositories":{"nodes":[{"nameWithOwner":"a/x"}]}},"o1":null}}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        s.categories[0].rules[0].scope = Scope(kinds: [.workflow], in: Pick(include: [.owner("A"), .owner("zz")]))
+        // Kept from the last session: its owner's repos aren't known yet.
+        var kept = InboxSync.workflowThings(repo: "a/x", branch: "main", status: CIStatus(branch: "main", checkedAt: Date(),
+            workflows: [.init(id: "11", name: "CI", state: .failure, failing: ["build"])]))[0]
+        kept.defaultBranch = "main"
+        s.things = [kept.id: kept]
+        await s.syncInbox()
+        #expect(s.things.keys.sorted() == [kept.id] && s.entries(in: ci).map(\.id) == [kept.id])
+        #expect(s.inboxSyncState.ownerRepos == ["zz": []] && s.inboxSyncState.ownerReposAt["a"] == nil)
+        #expect(s.inboxError?.contains("Resource protected") == true)
+        // Asked again at the next refresh, and now known.
+        phase.fails = false
+        await s.syncInbox()
+        #expect(s.inboxSyncState.ownerRepos == ["a": ["a/x"], "zz": []] && s.inboxError == nil)
+        #expect(s.entries(in: ci).map(\.id).sorted() == ["workflow:a/x:11@main", "workflow:a/x:12@main"])
+    }
+
     @Test func anOwnersWildcardIsItsReposAndEmptySlotsAreTheirDefaults() async {
         let (s, ci) = store(State()) { _ in }
         // `on` and `named` added and left empty: the default branch, every workflow.
@@ -838,6 +874,25 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         await s.syncInbox()
         #expect(box.teamAsks == 2 && s.myTeams == ["acme/core"] && box.searches == 1 && s.inboxError == nil)
         #expect(s.inboxSyncState.teamsFailedAt == nil && s.teamsResolvedAt != nil)
+    }
+
+    @Test @MainActor func teamsGivenInPartAreAddedToWhatWasKnownAndAskedAgainSoon() async throws {
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.myTeams = ["other/old"]
+        s.gh.session = StubbedGitHub.session { _ in
+            .init(200, #"{"data":{"viewer":{"organizations":{"nodes":[{"teams":{"nodes":[{"combinedSlug":"acme/core"}]}},{"teams":null}]}}},"errors":[{"type":"FORBIDDEN","path":["viewer","organizations","nodes",1,"teams"],"message":"SAML enforcement"}]}"#)
+        }
+        let failure = await s.resolveTeams(me: "me")
+        #expect(failure == "SAML enforcement")
+        #expect(s.myTeams == ["other/old", "acme/core"] && s.teamsResolvedAt == nil && s.inboxSyncState.teamsFailedAt != nil)
+        // Without read:org, GitHub's answer of none is an answer.
+        s.gh.session = StubbedGitHub.session { _ in
+            .init(200, #"{"data":{"viewer":{"organizations":null}},"errors":[{"type":"INSUFFICIENT_SCOPES","message":"read:org"}]}"#)
+        }
+        #expect(await s.resolveTeams(me: "me") == nil)
+        #expect(s.myTeams.isEmpty && s.teamsResolvedAt != nil)
     }
 
     @Test @MainActor func anotherAccountStartsWithoutTheLastOnesReposAndTeams() async throws {

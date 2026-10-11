@@ -819,11 +819,16 @@ extension Store {
             (rule.scope.in?.include ?? []).contains { $0 == .owned || $0 == .contributed }
         } }
         let needsTeams = InboxSync.needsTeams(categories: categories, jevReads: jevReadsInboxNow)
+        // What couldn't be looked up but left what was known: said once the refresh is done.
+        var scopeFailure: String?
         if needsTeams, InboxSync.teamsDue(resolvedAt: teamsResolvedAt, failedAt: inboxSyncState.teamsFailedAt) {
             // With no teams known, rules naming My teams would search nothing and empty: the refresh says so and waits.
-            if let failure = await resolveTeams(me: me), myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
-                inboxError = "Your teams couldn't be looked up: " + failure
-                return
+            if let failure = await resolveTeams(me: me) {
+                if myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
+                    inboxError = "Your teams couldn't be looked up: " + failure
+                    return
+                }
+                scopeFailure = "Your teams couldn't all be looked up: " + failure
             }
         } else if inboxSyncState.teamsFailedAt != nil, myTeams.isEmpty, InboxSync.needsTeams(categories: categories, jevReads: false) {
             return
@@ -837,10 +842,15 @@ extension Store {
         let plan = InboxSync.searchPlan(categories: categories, groups: groups, me: me, contributed: contributedRepos,
                                         myTeams: myTeams, cursor: inboxSyncState.searchCursor)
         let searches = plan.searches
-        await resolveOwnerRepos(InboxSync.workflowOwners(categories: categories, groups: groups))
+        let owners = InboxSync.workflowOwners(categories: categories, groups: groups)
+        if let failure = await resolveOwnerRepos(owners) {
+            scopeFailure = scopeFailure ?? "The repos of an owner couldn't be looked up: " + failure
+        }
+        // Owners whose repos aren't known (their lookup failed since launch): their workflow things stay as they were.
+        let unknownOwners = Set(owners.filter { inboxSyncState.ownerRepos[$0] == nil })
         let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
                                                 contributed: contributedRepos, ownerRepos: inboxSyncState.ownerRepos)
-        guard !searches.isEmpty || !targets.isEmpty else {
+        guard !searches.isEmpty || !targets.isEmpty || !unknownOwners.isEmpty else {
             // Nothing asked for: every thing is gone, and its marks start their month.
             applyThings([:])
             inboxError = nil
@@ -894,7 +904,7 @@ extension Store {
         for (id, thing) in workflows where thing.defaultBranch == nil {
             workflows[id]?.defaultBranch = defaults[thing.repo.lowercased()] ?? defaultBranches[thing.repo]
         }
-        inboxError = searchFailure ?? fetched.error ?? workflowFailure
+        inboxError = searchFailure ?? fetched.error ?? workflowFailure ?? scopeFailure
         // A search that failed can't say what is gone: the things stay as they were.
         guard searchFailure == nil else { return }
         var next = found
@@ -915,6 +925,11 @@ extension Store {
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
+            next.merge(kept) { a, _ in a }
+        }
+        if !unknownOwners.isEmpty {
+            let kept = things.filter { $0.value.kind == .workflow && next[$0.key] == nil
+                && unknownOwners.contains(String($0.value.repo.lowercased().prefix { $0 != "/" })) }
             next.merge(kept) { a, _ in a }
         }
         applyThings(next)
@@ -1087,17 +1102,36 @@ extension Store {
         reposResolvedAt = Date()
     }
 
-    /// The repos of owners workflow rules name with a wildcard, asked once a day per owner. A failure leaves what was known
-    /// (and is asked again with the next refresh); an owner GitHub doesn't know has none.
-    func resolveOwnerRepos(_ owners: [String], now: Date = Date()) async {
+    /// The repos of owners workflow rules name with a wildcard, asked once a day per owner. A failure (the whole answer, or
+    /// an owner's part of it) leaves what was known for that owner and is asked again with the next refresh; an owner GitHub
+    /// doesn't know has none. What went wrong, if it did.
+    @discardableResult
+    func resolveOwnerRepos(_ owners: [String], now: Date = Date()) async -> String? {
         let due = owners.filter { owner in inboxSyncState.ownerReposAt[owner].map { now.timeIntervalSince($0) > 86400 } ?? true }
-        guard !due.isEmpty, let json = try? await gh.graphql(InboxSync.ownerReposRequest(due)),
-              let data = json["data"] as? [String: Any] else { return }
+        guard !due.isEmpty else { return nil }
+        let json: [String: Any]
+        do { json = try await gh.graphql(InboxSync.ownerReposRequest(due)) } catch { return error.localizedDescription }
+        let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+        guard let data = json["data"] as? [String: Any] else {
+            return (errors.first?["message"] as? String) ?? "GitHub gave no answer"
+        }
+        var failure: String?
         for (i, owner) in due.enumerated() {
-            let repos = ((data["o\(i)"] as? [String: Any])?["repositories"] as? [String: Any])?["nodes"] as? [Any] ?? []
-            inboxSyncState.ownerRepos[owner] = repos.compactMap { ($0 as? [String: Any])?["nameWithOwner"] as? String }
+            let alias = "o\(i)"
+            let error = errors.first { ($0["path"] as? [Any])?.first as? String == alias }
+            let result = data[alias] as? [String: Any]
+            if let repos = (result?["repositories"] as? [String: Any])?["nodes"] as? [Any], error == nil {
+                inboxSyncState.ownerRepos[owner] = repos.compactMap { ($0 as? [String: Any])?["nameWithOwner"] as? String }
+            } else if result == nil, error == nil || error?["type"] as? String == "NOT_FOUND" {
+                // No such owner: none.
+                inboxSyncState.ownerRepos[owner] = []
+            } else {
+                failure = failure ?? (error?["message"] as? String) ?? "GitHub gave part of an answer"
+                continue
+            }
             inboxSyncState.ownerReposAt[owner] = now
         }
+        return failure
     }
 
     /// The teams you're in, asked again in a day. A failure (offline, GitHub's trouble) leaves what was known and is asked
@@ -1115,9 +1149,19 @@ extension Store {
             return ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"
         }
         guard stillSignedIn(as: me) else { return nil }
+        let teams = InboxSync.teams(data)
+        // An answer in part (an organization that couldn't say its teams): what came is added to what was known, and the
+        // rest is asked again soon. Missing read:org is an answer (none), not a failure.
+        let errors = ((json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? [])
+            .filter { $0["type"] as? String != "INSUFFICIENT_SCOPES" }
+        if let error = errors.first {
+            inboxSyncState.teamsFailedAt = Date()
+            let all = myTeams.union(teams)
+            if all != myTeams { myTeams = all }
+            return (error["message"] as? String) ?? "GitHub gave part of an answer"
+        }
         teamsResolvedAt = Date()
         inboxSyncState.teamsFailedAt = nil
-        let teams = InboxSync.teams(data)
         if teams != myTeams { myTeams = teams }
         return nil
     }
