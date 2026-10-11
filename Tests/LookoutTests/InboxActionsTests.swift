@@ -304,7 +304,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         add(store, InboxFixture.pr(2))
         // The disk is slow: the running record's write waits.
         let gate = DispatchSemaphore(value: 0)
-        Store.actionsWriter.async { gate.wait() }
+        store.actionsWriter.async { gate.wait() }
         let run = Task { await store.runActions() }
         var spins = 0
         while !store.actionLedger.runs.values.contains(where: { $0.state == .running }), spins < 10_000 {
@@ -337,7 +337,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         add(store, InboxFixture.pr(2))
         // The disk is slow: the running record's write waits.
         let gate = DispatchSemaphore(value: 0)
-        Store.actionsWriter.async { gate.wait() }
+        store.actionsWriter.async { gate.wait() }
         let run = Task { await store.runActions() }
         var spins = 0
         while !store.actionLedger.runs.values.contains(where: { $0.state == .running }), spins < 10_000 {

@@ -1101,8 +1101,6 @@ extension Store {
         actionLedger = ledger
     }
 
-    /// Where actions.json is written: off the main thread, one write at a time, in the order asked.
-    static let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
 
     nonisolated private static let actionsLog = Logger(subsystem: InboxLog.subsystem, category: "actions")
 
@@ -1113,7 +1111,7 @@ extension Store {
         let ledger = ActionsBox(ledger: actionLedger)
         let disk = actionsDisk
         let revision = disk.ask()
-        Self.actionsWriter.async {
+        actionsWriter.async {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
             do {
@@ -1150,16 +1148,16 @@ extension Store {
     func actionsWritten() async -> Bool {
         guard persists, actionsFile != nil else { return true }
         let wanted = actionsDisk.asked
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in Self.actionsWriter.async { done.resume() } }
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in actionsWriter.async { done.resume() } }
         return actionsDisk.written >= wanted
     }
 
     /// The same, waiting here (quitting): one that failed is tried once more.
     func flushActions() {
-        Self.actionsWriter.sync {}
+        actionsWriter.sync {}
         guard actionsDisk.isBehind else { return }
         saveActions()
-        Self.actionsWriter.sync {}
+        actionsWriter.sync {}
     }
 }
 

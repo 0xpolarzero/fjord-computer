@@ -743,7 +743,10 @@ final class Store {
         return name
     }
 
-    private static let writer = DispatchQueue(label: "lookout.save")
+    /// Each Store writes on queues of its own (production has one Store): another cannot hold this one's writes up.
+    private let writer = DispatchQueue(label: "lookout.save")
+    /// Where actions.json is written: off the main thread, one write at a time, in the order asked.
+    let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
 
     /// Coalesced: the write happens shortly after the last call, off the main thread.
     func save() { scheduleSave(after: .milliseconds(500)) }
@@ -773,7 +776,7 @@ final class Store {
 
     private func writeSnapshot(wait: Bool) {
         guard persistedRevision != savedRevision, persists, !loading else {
-            if wait { Self.writer.sync {} }
+            if wait { writer.sync {} }
             return
         }
         guard let url = file else { return }
@@ -811,9 +814,9 @@ final class Store {
             }
         }
         if wait {
-            wrote(revision, failure: Self.writer.sync(execute: write), retry: false)
+            wrote(revision, failure: writer.sync(execute: write), retry: false)
         } else {
-            Self.writer.async {
+            writer.async {
                 let failure = write()
                 Task { @MainActor [weak self] in self?.wrote(revision, failure: failure, retry: true) }
             }
