@@ -33,11 +33,13 @@ from datetime import datetime, timezone
 import glob
 import hashlib
 import itertools
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import random
 import re
+import threading
 import shutil
 import subprocess
 import sys
@@ -54,6 +56,7 @@ if str(ROUTER) not in sys.path:
 from v2.run import adapter, episodes, rules
 
 FAMILIES = ("claude", "gpt", "gemini")
+GEMINI_JOBS = int(os.environ.get("LABEL_GEMINI_JOBS", "3"))
 ASK = ("required", "allowed", "forbidden")
 VERSION = "blind-router-label-v2"
 SESSION_FIELDS = ("id", "title", "project", "running", "activity", "summary", "idle_min",
@@ -769,6 +772,7 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
     successes, attempted = latest_labels(rows)
     cli = ModelCLI(directory, timeout)
     family_disabled = set()
+    lock = threading.Lock()
 
     def run_batch(family, batch, role, previous=None):
         if family in family_disabled:
@@ -778,6 +782,10 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
             result = cli.call(family, prompt_for(batch, previous), adjudicator=role == "adjudicator")
             if result["status"] == "error" and any(attempt.get("exit_code") in {126, 127} for attempt in result["attempts"]):
                 family_disabled.add(family)
+        with lock:
+            record_batch(family, batch, role, previous, result)
+
+    def record_batch(family, batch, role, previous, result):
         labels, event_errors = {}, {}
         if result["status"] == "ok":
             try:
@@ -808,8 +816,11 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
             # agy (Gemini) given a ~70k-token batch tries to script it with a shell tool, which headless mode denies,
             # and returns nothing; small batches it answers directly.
             size, chars = (min(batch_size, 3), 80_000) if family == "gemini" else (batch_size, 500_000)
-            for batch in batches(missing, size, chars):
-                run_batch(family, batch, "independent")
+            # Gemini takes about a minute an event, so it runs a few calls at once; the others one at a time.
+            with ThreadPoolExecutor(max_workers=GEMINI_JOBS if family == "gemini" else 1) as pool:
+                for future in [pool.submit(run_batch, family, batch, "independent")
+                               for batch in batches(missing, size, chars)]:
+                    future.result()
         if adjudicate:
             candidates, previous = [], {}
             for record in records:
