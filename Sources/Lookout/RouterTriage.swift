@@ -632,7 +632,7 @@ extension Store {
             let candidates = RouterTriage.candidates(RouterTriage.sentences(message))
             // Looking back, only a turn that ended on what looks like an ask is worth a call.
             if rescue, candidates.isEmpty { return }
-            var options = await self.waitOptions(for: session)
+            var options = await self.waitOptions(for: session, message: message)
             var state = RouterTriage.state(message: message, title: session.title, project: session.folderName,
                                            summary: session.summary?.detail, candidates: candidates)
             var questions = RouterTriage.questions(candidates: candidates, options: options)

@@ -669,6 +669,45 @@ import Testing
         #expect(s.things[pr.id]?.ciChangedAt == at)
     }
 
+    @Test func ciJustFinishedOrNamedInTheMessageIsOfferedPastTheNewerRunningOnes() async {
+        // Six PRs updated a minute ago, checks running; an older one, updated an hour ago, still running as the turn ended.
+        let busy = (10..<16).map { n in
+            var thing = InboxFixture.pr(n, repo: "o/app")
+            thing.checks = .pending
+            thing.updatedAt = Date().addingTimeInterval(-60)
+            return thing
+        }
+        var old = ci(.pending)
+        old.ciRun = "ci:h1:aaa"
+        old.updatedAt = Date().addingTimeInterval(-3600)
+        let (s, _) = store(watch: ciWatch, things: busy + [old])
+        s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-1)
+        // Its checks finish now: that change is newer than any of the six.
+        var done = old
+        done.checks = .passing
+        s.things[old.id] = done
+        let offered = await s.waitOptions(for: s.claudeSessions["a"]!).compactMap { option -> String? in
+            if case .ci(let id) = option.watch.target { return id }
+            return nil
+        }
+        #expect(offered.count == 6 && offered.first == old.id)
+        // Seven running, the oldest named by the message: it is offered, the oldest of the others left out.
+        var named = InboxFixture.pr(9, repo: "o/app")
+        named.checks = .pending
+        named.updatedAt = Date().addingTimeInterval(-7200)
+        s.things[old.id] = old
+        s.things[named.id] = named
+        func ids(_ message: String?) async -> [String] {
+            await s.waitOptions(for: s.claudeSessions["a"]!, message: message).compactMap { option in
+                if case .ci(let id) = option.watch.target { return id }
+                return nil
+            }
+        }
+        #expect(await ids(nil).contains(named.id) == false)
+        let kept = await ids("Waiting on CI for o/app#9 before I merge.")
+        #expect(kept.count == 6 && kept.contains(named.id))
+    }
+
     @Test func aForksWorkflowsOfTheSameNameAndBranchAreToldApartByTheirRepo() async {
         // A fork's clone tracks its own repo and the one it was forked from: both run "Test" on main.
         func workflow(_ repo: String) -> Thing {
