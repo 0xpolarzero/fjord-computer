@@ -798,11 +798,13 @@ enum InboxSync {
     }
 
     /// Whether a search would return the thing were you involved there: every qualifier but the one for you (`involves:`,
-    /// `review-requested:`, `reviewed-by:`) says yes. One
+    /// `review-requested:`, `reviewed-by:`) says yes. The places it names (`repo:`, `user:`, `org:`) are one or another,
+    /// as search takes them: one of them is enough. One
     /// that can't be told here (or isn't known) says no, so that its absence never counts.
     static func wouldFind(_ query: String, _ thing: Thing, me: String) -> Bool {
         func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
         let owner = String(thing.repo.split(separator: "/").first ?? "")
+        var places: [Bool] = []
         for token in query.split(separator: " ").map(String.init) {
             let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return false }
@@ -822,6 +824,8 @@ enum InboxSync {
             case "updated":
                 guard value.hasPrefix(">="), let day = try? Date.ISO8601FormatStyle().year().month().day().parse(String(value.dropFirst(2))),
                       thing.updatedAt >= day else { return false }
+            case "repo": places.append(same(value, thing.repo))
+            case "user", "org": places.append(same(value, owner))
             case "-repo": guard !same(value, thing.repo) else { return false }
             case "-user", "-org": guard !same(value, owner) else { return false }
             // Written as the query is (`author(_:)`): a bot is `app/name` there, `name[bot]` on the thing.
@@ -830,7 +834,7 @@ enum InboxSync {
             default: return false
             }
         }
-        return true
+        return places.isEmpty || places.contains(true)
     }
 
     /// When a pending review request was made, as its fact's key has it: the thing's creation when GitHub didn't say.

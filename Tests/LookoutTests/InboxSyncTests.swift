@@ -830,6 +830,19 @@ extension InboxSyncMapping {
         #expect(draft.signals?.involved == false)
     }
 
+    @Test func aSearchInTheThingsRepoOrOwnerWouldFindItAndOneOfSeveralIsEnough() {
+        var pr = InboxFixture.pr(12, repo: "o/r", by: Person(login: "alice"))
+        pr.signals = ThingSignals(viewer: "me", involvedBy: ["mentions": true])
+        #expect(InboxSync.wouldFind("is:pr archived:false mentions:me repo:O/R is:open", pr, me: "me"))
+        #expect(InboxSync.wouldFind("is:pr archived:false mentions:me user:o is:open", pr, me: "me"))
+        #expect(InboxSync.wouldFind("is:pr archived:false mentions:me repo:x/y repo:o/r is:open", pr, me: "me"))
+        #expect(InboxSync.wouldFind("is:pr archived:false mentions:me repo:x/y org:o is:open", pr, me: "me"))
+        #expect(!InboxSync.wouldFind("is:pr archived:false mentions:me repo:x/y user:z is:open", pr, me: "me"))
+        // A repo's mentions search read whole without it: no longer mentioned there.
+        InboxSync.markInvolved(&pr, foundBy: [], complete: ["is:pr archived:false mentions:me repo:o/r is:open"], me: "me")
+        #expect(pr.signals?.involvedBy?["mentions"] == false)
+    }
+
     @Test func aBotsPRIsLeftOutByTheBotsAuthorQualifierAsTheQueryWritesIt() {
         var pr = InboxFixture.pr(12, repo: "o/r", by: Person(login: "renovate[bot]"))
         pr.signals = ThingSignals(viewer: "me", involved: true)
