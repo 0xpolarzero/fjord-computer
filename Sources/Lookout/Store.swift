@@ -27,7 +27,34 @@ final class Store {
     /// Where those log lines go; the tests read them.
     @ObservationIgnored var inboxLog: (String) -> Void = InboxLog.write
     var things: [String: Thing] = [:] {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits(); if !loading { carryAssignmentStamps(seenBefore: oldValue) } }
+        didSet {
+            inboxRevision &+= 1; persistedRevision &+= 1
+            // Only when CI was seen to change was set below: nothing else changed.
+            guard !stampingCI else { return }
+            if !loading, let stamped = Self.stampingCIChanges(things, before: oldValue, now: Date()) {
+                stampingCI = true
+                things = stamped
+                stampingCI = false
+            }
+            resolveWaits(); if !loading { carryAssignmentStamps(seenBefore: oldValue) }
+        }
+    }
+    @ObservationIgnored private var stampingCI = false
+
+    /// The things with when their CI was last seen to change (`Thing.ciChangedAt`): kept from before while it is the same
+    /// (a refresh makes the thing anew), `now` once its state, its run or whether it still runs changed; nil when none moved.
+    nonisolated static func stampingCIChanges(_ things: [String: Thing], before: [String: Thing], now: Date) -> [String: Thing]? {
+        var stamped = things
+        var moved = false
+        for (id, thing) in things where thing.kind == .pr || thing.kind == .workflow {
+            guard let old = before[id] else { continue }
+            let same = thing.checks == old.checks && thing.ciRunning == old.ciRunning && thing.ciCancelled == old.ciCancelled
+                && (old.ciRun == nil || thing.ciRun == old.ciRun)
+            let at = same ? thing.ciChangedAt ?? old.ciChangedAt
+                : thing.ciChangedAt == nil || thing.ciChangedAt == old.ciChangedAt ? now : thing.ciChangedAt
+            if at != thing.ciChangedAt { stamped[id]?.ciChangedAt = at; moved = true }
+        }
+        return moved ? stamped : nil
     }
     var marks: [String: EntryMarks] = [:] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }

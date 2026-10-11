@@ -133,7 +133,9 @@ extension Store {
         guard jevReadsInbox else { return options }
         let ci = things.values.filter { thing in
             // A failure while other checks still run (`ciRunning`) is running CI too: lint failed, the build goes on.
-            (thing.checks == .pending || thing.ciRunning || (thing.checks != nil && thing.updatedAt > since))
+            // Checks finishing don't move a PR's last update: when its CI was seen to change does.
+            (thing.checks == .pending || thing.ciRunning
+                || (thing.checks != nil && max(thing.updatedAt, thing.ciChangedAt ?? .distantPast) > since))
                 && (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
         }.sorted { $0.updatedAt > $1.updatedAt }.prefix(6)
         options += ci.enumerated().map { i, thing in
