@@ -923,6 +923,28 @@ import Testing
         }
     }
 
+    @Test func aMarkJoinedToTheNounMakesItAWordNotTheEndOfARequest() async {
+        for no in ["create a session-based authentication flow", "open session.json and explain its fields", "create a chat_ui component",
+                   "open a session:json parser", "start a session-"] {
+            #expect(!RouterDispatcher.wantsNewSession(no), "\(no)")
+            #expect(RouterTools.startRequest(no) == nil, "\(no)")
+        }
+        for yes in ["start a session. fix it", "start a session - fix it", "start a session — fix it", "start a session (with opus) fix it",
+                    "start a session!", "start a session: fix it"] {
+            #expect(RouterDispatcher.wantsNewSession(yes), "\(yes)")
+        }
+        // With a pill and a session to reply to: the feature goes to the session as written.
+        for text in ["@lookout create a session-based authentication flow", "@lookout open session.json and explain its fields"] {
+            let pills = [0..<8]
+            #expect(SessionStart.task(from: text, pills: pills, projects: ["lookout"]) == String(text.dropFirst(9)), "\(text)")
+            let (_, d, f) = setup()
+            f.ranked = [.init(target: "session:local_a", p: 0.95), .init(target: "unclear", p: 0.05)]
+            let a = d.submit(text, context: RouterContext(projects: ["/code/lookout"], pills: pills))
+            await finish(d, f, a)
+            #expect(f.started.isEmpty && f.prepared == ["local_a"], "\(text)")
+        }
+    }
+
     @Test func settingsAreOnlyAskedForInTheRequestNeverInCodeOrQuotes() async {
         let fenced = "start a session to fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```"
         #expect(SessionStart.task(from: fenced) == "fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```")

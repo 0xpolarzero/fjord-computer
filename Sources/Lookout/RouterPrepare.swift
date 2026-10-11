@@ -663,9 +663,11 @@ enum SessionStart {
     }
     /// What follows the noun of a request to start a session: the end, a mark, or a word that takes the request on
     /// ("to", "in", "for", "about", a settings clause), not another noun: "create a chat widget" and "create a session
-    /// manager" are features to build.
+    /// manager" are features to build. A mark ends it only standing apart: a stop, comma, colon or the like followed by a
+    /// space or the end, a dash or an opening parenthesis after a space. Joined to the noun it makes a word: "session-based",
+    /// "session.json" and "session:json" are names, not the end of a request.
     static let requestBoundary =
-        #"(?=[ \t]*(?:$|\n|[,:;.!?\-–—(]|(?:to|in|on|inside|for|about|and|then|that|at)\b|(?:with|using|use|on)\s+(?:the\s+)?(?:opus|sonnet|haiku|fable|low|medium|high|xhigh|max|effort)\b))"#
+        #"(?=[ \t]*(?:$|\n|[,:;.!?](?=\s|$))|[ \t]+(?:[\-–—](?=[ \t])|\()|[ \t]+(?:(?:to|in|on|inside|for|about|and|then|that|at)\b|(?:with|using|use|on)\s+(?:the\s+)?(?:opus|sonnet|haiku|fable|low|medium|high|xhigh|max|effort)\b))"#
     static let startPhrase =
         #"^(?:(?:please|pls|hey|can\s+you|could\s+you|i\s+want\s+you\s+to|i'd\s+like\s+you\s+to)[,\s]+)?(?:(?:start|open|create|launch|spin\s+up|kick\s+off|begin)\s+(?:up\s+)?(?:an?\s+|the\s+|one\s+)?(?:new\s+|fresh\s+)?(?:claude\s+)?(?:session|chat|conversation)|(?:in\s+)?(?:an?\s+)?(?:new|fresh)\s+(?:claude\s+)?(?:session|chat|conversation))"# + requestBoundary
 
