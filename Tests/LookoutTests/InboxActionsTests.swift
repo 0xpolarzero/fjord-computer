@@ -257,6 +257,39 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(try Data(contentsOf: file) == original)
     }
 
+    @Test func anActionMarkedDoneWhileItsRunningRecordIsWrittenIsNotRun() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        await store.runActions()
+        add(store, InboxFixture.pr(2))
+        // The disk is slow: the running record's write waits.
+        let gate = DispatchSemaphore(value: 0)
+        Store.actionsWriter.async { gate.wait() }
+        let run = Task { await store.runActions() }
+        var spins = 0
+        while !store.actionLedger.runs.values.contains(where: { $0.state == .running }), spins < 10_000 {
+            await Task.yield()
+            spins += 1
+        }
+        #expect(store.actionLedger.runs.values.contains { $0.state == .running })
+        // Meanwhile, Done.
+        store.markDone(try #require(store.entries.first { $0.id == "pr:a/one#2" }))
+        gate.signal()
+        await run.value
+        #expect(performer.asked.isEmpty)
+        #expect(!store.actionLedger.runs.values.contains { $0.thing == "pr:a/one#2" })
+        // The record taken back is what is on disk.
+        store.flushActions()
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let saved = try dec.decode(ActionLedger.self, from: Data(contentsOf: try #require(store.actionsFile)))
+        #expect(!saved.runs.values.contains { $0.thing == "pr:a/one#2" })
+    }
+
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])
         await store.runActions()

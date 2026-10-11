@@ -949,22 +949,37 @@ extension Store {
                                           state: .running, at: now))
                 }
                 actionLedger = running
+                // The ledger as it is now, with `keys` of this job's records back to what they were before it.
+                func undone(_ keys: [String]) -> ActionLedger {
+                    var back = actionLedger
+                    for key in keys {
+                        let id = ActionLedger.key(job.category.id, job.entry.id, job.action.id, key)
+                        back.runs[id] = before.runs[id]
+                    }
+                    return back
+                }
                 if await !actionsWritten() {
                     saveActions()
                     if await !actionsWritten() {
                         Self.actionsLog.error("An action wasn't run: its record couldn't be saved")
-                        var back = actionLedger
-                        for key in job.keys {
-                            let id = ActionLedger.key(job.category.id, job.entry.id, job.action.id, key)
-                            back.runs[id] = before.runs[id]
-                        }
-                        actionLedger = back
+                        actionLedger = undone(job.keys)
                         return
                     }
                 }
-                let result = await InboxActions.perform(job, with: performer, now: now)
+                // The write took a while: deleted, Done or no longer matching meanwhile, it isn't run (its record goes back,
+                // and that is written in turn).
+                guard !baselinePending,
+                      let checked = InboxActions.stillDue(job, entries: entries, categories: categories, groups: groups,
+                                                          ledger: undone(job.keys), me: me)
+                else {
+                    actionLedger = undone(job.keys)
+                    continue
+                }
+                let dropped = job.keys.filter { !checked.keys.contains($0) }
+                if !dropped.isEmpty { actionLedger = undone(dropped) }
+                let result = await InboxActions.perform(checked, with: performer, now: now)
                 var next = actionLedger
-                for key in job.keys {
+                for key in checked.keys {
                     var run = result
                     run.trigger = key
                     next.set(run)
@@ -1065,7 +1080,7 @@ extension Store {
     }
 
     /// Where actions.json is written: off the main thread, one write at a time, in the order asked.
-    private static let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
+    static let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
 
     nonisolated private static let actionsLog = Logger(subsystem: InboxLog.subsystem, category: "actions")
 
