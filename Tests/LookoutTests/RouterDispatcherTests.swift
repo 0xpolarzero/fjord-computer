@@ -593,6 +593,29 @@ import Testing
         await finish(d, f, other)
     }
 
+    @Test func aTypedNameGoesToATargetStillThereAndOnlyAGoneOneSendsNothing() async {
+        let (s, d, f) = setup()
+        s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .question, title: "Docs question",
+                                         folder: "/code/docs", text: "Which page?", createdAt: Date()))
+        // The card and the other session offered; the card (its title the session's) handled since.
+        f.ranked = [.init(target: "answer:local_a#w1", p: 0.5), .init(target: "answer:local_b#w2", p: 0.4), .init(target: "unclear", p: 0.1)]
+        let id = d.submit("ship it")
+        await finish(d, f, id)
+        f.finished = []
+        s.setCardAddressed("local_a#w1", true)
+        // Its name is its session's, which is still there: the session is the pick.
+        #expect(d.typedPick("Fix the login bug")?.target == "session:local_a")
+        // A name only the handled card has: nothing sent, the ask still waits, no message of its own.
+        s.setCardAddressed("local_b#w2", true)
+        let before = s.router.decisions.count
+        #expect(d.submit("Docs question") == nil)
+        #expect(d.askBacks.map(\.id) == [id!] && s.router.decisions.count == before && f.prepared.isEmpty)
+        // The session's name answers it.
+        #expect(d.submit("Fix the login bug") == id)
+        await finish(d, f, id)
+        #expect(f.prepared == ["local_a"] && d.askBacks.isEmpty)
+    }
+
     @Test func somethingElseCanPickAProjectToStartIn() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "unclear", p: 1)]

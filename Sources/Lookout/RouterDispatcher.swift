@@ -203,7 +203,8 @@ struct RouterAskBack: Identifiable, Equatable {
         guard !text.isEmpty else { return nil }
         // Typing the name of a target answers an ask-back; nothing else is made of it.
         if context.replyTo == nil, let ask = typedPick(text) {
-            pick(ask.ask, target: ask.target)
+            // Only a target gone since fits the name: nothing is sent (nil), and the composer keeps the draft.
+            guard let target = ask.target, pick(ask.ask, target: target) else { return nil }
             return ask.ask
         }
         var seen = Set<String>()
@@ -220,10 +221,11 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// You picked where an ask-back goes. Sends as an armed reply or a start would; the entry says it was a correction when
     /// the pick isn't what Jev suggested.
-    func pick(_ id: UUID, target: String) {
-        guard let store, store.routerOn, let i = askBacks.firstIndex(where: { $0.id == id }) else { return }
+    @discardableResult
+    func pick(_ id: UUID, target: String) -> Bool {
+        guard let store, store.routerOn, let i = askBacks.firstIndex(where: { $0.id == id }) else { return false }
         // Offered when it was asked: a card the page has hidden since (or one addressed, a session archived) isn't sent to.
-        guard eligible(target, store: store) else { return }
+        guard eligible(target, store: store) else { return false }
         let ask = askBacks.remove(at: i)
         let chosen = describe(target, store: store)
         let corrected = target != ask.suggestion
@@ -239,6 +241,7 @@ struct RouterAskBack: Identifiable, Equatable {
                stage: "starting") { [self] job in
             try await route(job, to: target)
         }
+        return true
     }
 
     /// You dismissed an ask-back: nothing is sent.
@@ -675,8 +678,8 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     /// Typing a target's name in reply to an ask-back: its title or its project's name, as the whole message (a few words).
-    /// The newest ask that the name fits once.
-    func typedPick(_ text: String) -> (ask: UUID, target: String)? {
+    /// The newest ask that the name fits once, among the targets still there; a nil target when it fits only ones gone since.
+    func typedPick(_ text: String) -> (ask: UUID, target: String?)? {
         guard let store, !askBacks.isEmpty else { return nil }
         var name = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)).lowercased()
         guard !name.isEmpty, name.split(separator: " ").count <= 6 else { return nil }
@@ -687,15 +690,17 @@ struct RouterAskBack: Identifiable, Equatable {
                 || (option.target.hasPrefix("new:") && (name == detail || name == "new session in \(detail)"))
         }
         let everything = pickerOptions()
+        var gone: UUID?
         for ask in askBacks.reversed() {
-            let own = ask.options.filter(fits)
+            let fitting = ask.options.filter(fits)
+            let own = fitting.filter { eligible($0.target, store: store) }
             if own.count == 1 { return (ask.id, own[0].target) }
             guard own.isEmpty else { continue }
             let any = (everything.sessions + everything.projects).filter(fits)
             if any.count == 1 { return (ask.id, any[0].target) }
+            if any.isEmpty, !fitting.isEmpty { gone = gone ?? ask.id }
         }
-        _ = store
-        return nil
+        return gone.map { ($0, nil) }
     }
 }
 

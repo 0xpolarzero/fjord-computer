@@ -181,7 +181,7 @@ struct RouterComposer: View {
             let empty = !on || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             GhostIcon(symbol: "arrow.turn.down.left", label: "Send") { model.send(store: store) }
                 .disabled(empty)
-                .tip("Send", "Return · ⇧Return for a new line")
+                .tip("Send", model.sendRefused ?? "Return · ⇧Return for a new line")
         }
     }
 

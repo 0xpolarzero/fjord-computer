@@ -40,18 +40,19 @@ extension Store {
     var routerIsPretend: Bool { Store.isDemo || !persists }
 
     /// Your message to the Router, with the card it replies to and the projects you tagged; in a demo, a canned reply
-    /// instead of a real process.
-    func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) {
+    /// instead of a real process. Whether it went: an ask-back's target named that is gone since sends nothing.
+    @discardableResult
+    func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else { return false }
         if routerIsPretend {
             var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
                                        links: .init(cards: context.replyTo.map { [$0] } ?? []))
             entry.reply = "In a demo the Router only says what it would do."
             logDecision(entry)
-        } else {
-            routerDispatcher.submit(text, context: context)
+            return true
         }
+        return routerDispatcher.submit(text, context: context) != nil
     }
 
     /// Writes a form's answer for its card's session (the hook passes it on) through the shared `FormWriter`, off the main
@@ -273,8 +274,11 @@ final class RouterModel {
     /// The card the keys act on.
     var selection: String?
     var draft = "" {
-        didSet { if draft != oldValue { mentionChanged() } }
+        didSet { if draft != oldValue { sendRefused = nil; mentionChanged() } }
     }
+    /// Why the draft wasn't sent (it stays in the composer), until it changes.
+    var sendRefused: String?
+    static let goneTarget = "Not sent: what you named was handled or is gone since. Pick where it goes on the ask, or say more."
     /// Asks the Router's conversation to scroll to a message (an inbox action's), selecting no card.
     var messageRequest: ScrollRequest?
     func show(message: UUID) {
@@ -504,7 +508,11 @@ final class RouterModel {
     func send(store: Store) {
         let text = plainDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
-        store.sendToRouter(text, context: context(store))
+        guard store.sendToRouter(text, context: context(store)) else {
+            sendRefused = Self.goneTarget
+            Announce.say(Self.goneTarget)
+            return
+        }
         caret = nil
         tokens = []
         draft = ""
