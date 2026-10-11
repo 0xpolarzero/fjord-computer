@@ -403,6 +403,35 @@ import Testing
         #expect(questions == ["route"])
     }
 
+    @Test func examplesNameTargetsByThemselvesSoTwoOfTheSameTitleStayApart() async {
+        let (s, _, f) = setup()
+        let d = RouterDispatcher(store: s)
+        f.install(d)
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix the login bug", folder: "/code/lookout",
+                                                    lastActivity: Date().addingTimeInterval(-30), running: false)
+        // Asked between two sessions of the same title, and corrected to the other one.
+        f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_c", p: 0.4)]
+        let a = d.submit("ship it")!
+        await finish(d, f, a)
+        d.pick(a, target: "session:local_c")
+        await finish(d, f, a)
+        // An entry from before targets were kept: its description fits both, so it isn't named by either's key.
+        var old = RouterDecision(at: Date().addingTimeInterval(-600), trigger: .you("old words"), outcome: .done)
+        old.decision.target = "session “Fix the login bug” in lookout"
+        old.decision.confirmed = true
+        s.router.decisions.insert(old, at: 0)
+        var state: [String: String] = [:]
+        d.asker = { _, st in state = st; return ["route": .choice(.init(choice: "t1", confidence: 0.2, probabilities: ["t1": 0.4]))] }
+        d.effects = .live(d)
+        _ = await d.predict("where does this go then", projects: [])
+        let examples = state[RouterDispatcher.examplesState] ?? ""
+        let line = examples.split(separator: "\n").first { $0.hasPrefix("“ship it”") }.map(String.init) ?? ""
+        let keys = line.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+            .filter { $0.count > 1 && $0.hasPrefix("t") && $0.dropFirst().allSatisfy(\.isNumber) }
+        #expect(keys.count == 2 && keys[0] != keys[1], "\(line)")
+        #expect(examples.contains("“old words” → session “Fix the login bug” in lookout"))
+    }
+
     @Test func anAskAnsweredWithJevsSuggestionConfirmsIt() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.5), .init(target: "session:local_a", p: 0.4)]

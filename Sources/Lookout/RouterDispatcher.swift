@@ -244,7 +244,11 @@ struct RouterAskBack: Identifiable, Equatable {
         if corrected { forgetLive() }
         store.updateDecision(id) {
             $0.decision.target = chosen
-            if corrected { $0.outcome = .corrected(from: ask.suggestion.map { describe($0, store: store) } ?? "no clear target", to: chosen) }
+            $0.decision.targetID = target
+            if corrected {
+                $0.outcome = .corrected(from: ask.suggestion.map { describe($0, store: store) } ?? "no clear target", to: chosen)
+                $0.decision.fromID = ask.suggestion
+            }
         }
         // A pick that is Jev's own suggestion confirms it: an example for the next ones.
         if !corrected { store.updateDecision(id) { $0.decision.confirmed = true } }
@@ -348,6 +352,7 @@ struct RouterAskBack: Identifiable, Equatable {
         guard let store else { return }
         store.updateDecision(job.id) {
             $0.decision.target = describe(target, store: store)
+            $0.decision.targetID = target
             $0.decision.label = Self.label(target)
             $0.decision.confirmed = true
         }
@@ -515,6 +520,7 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.decision.label = found.top.map { Self.label($0.target) }
             $0.decision.confidence = found.top?.p
             $0.decision.target = found.top.map { describe($0.target, store: store) }
+            $0.decision.targetID = found.top?.target
             // Sent with Jev's pick shown over the composer: you went with it.
             if found.live, found.sure { $0.decision.confirmed = true }
         }
@@ -752,10 +758,14 @@ extension RouterDispatcher.Effects {
                 ]
                 // Opaque keys with fixed criteria; what sessions wrote about each target is only in the fenced state.
                 let options = RouterTools.routingOptions(targets)
-                let named = Dictionary(targets.indices.map { (dispatcher.describe(targets[$0].target, store: store), options.keys[$0]) },
-                                       uniquingKeysWith: { a, _ in a })
+                // Examples name a target by its key now: by the target kept with them, else (older entries) by a
+                // description only one target has, never one two share (two sessions of the same title).
+                let keys = Dictionary(targets.indices.map { (targets[$0].target, options.keys[$0]) }, uniquingKeysWith: { a, _ in a })
+                let described = Dictionary(grouping: targets.indices) { dispatcher.describe(targets[$0].target, store: store) }
+                let legacy = described.compactMapValues { $0.count == 1 ? options.keys[$0[0]] : nil }
                 var state = RouterDispatcher.routingState(message: message, history: history,
-                                                          examples: store.routingExamples(excluding: tools.decision, keys: named))
+                                                          examples: store.routingExamples(excluding: tools.decision, keys: keys,
+                                                                                          legacy: legacy))
                 if !options.described.isEmpty { state[RouterTools.optionsState] = options.described }
                 var questions: [String: JevClient.Question] = [
                     "route": .choice(options.keys, hints: options.criteria, instructions: RouterTools.routeInstructions),
