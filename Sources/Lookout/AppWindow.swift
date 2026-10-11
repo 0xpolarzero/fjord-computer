@@ -30,6 +30,8 @@ enum AppPolicy {
 final class AppWindowController: NSObject, NSWindowDelegate {
     /// The window the Go menu acts on: the last one made.
     static weak var active: AppWindowController?
+    /// The controllers whose window is open (shown, and not yet closed for good).
+    private static var open: Set<ObjectIdentifier> = []
     static let autosave = "LookoutApp"
     static let minSize = NSSize(width: 1000, height: 600)
 
@@ -117,6 +119,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             window.alphaValue = 0
             window.ignoresMouseEvents = true
         }
+        Self.open.insert(ObjectIdentifier(self))
         AppPolicy.update(windowOpen: true)
         AppPolicy.activate()
         window.makeKeyAndOrderFront(nil)
@@ -366,7 +369,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window?.isVisible != true else { return }
             self.window?.contentViewController = nil
-            AppPolicy.update(windowOpen: false)
+            // Only the last window's close puts the app back to the bar only: one closing late (its work is deferred) must
+            // not take the policy from another that has opened since.
+            Self.open.remove(ObjectIdentifier(self))
+            AppPolicy.update(windowOpen: !Self.open.isEmpty)
             self.onClose?()
         }
     }

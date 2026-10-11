@@ -5,7 +5,8 @@ import Testing
 
 /// The app window as the bar's other mode: it opens on a place, and closing it tells the bar to come back.
 @MainActor
-@Suite(.hostsWindows) struct AppWindowTests {
+// Serialized: the app's activation policy is one global, and every test here opens a window that sets it.
+@Suite(.serialized, .hostsWindows) struct AppWindowTests {
     private func controller() -> (AppWindowController, Store) {
         _ = NSApplication.shared
         let store = Store()
@@ -151,124 +152,127 @@ import Testing
 }
 
 /// The bar and the window: the bar is away only while the window is open and in front, and the morph is a no-op under test.
-@MainActor
-@Suite(.hostsWindows) struct BarComesBack {
-    @Test func theBarIsAwayOnlyWhileTheOpenWindowIsInFront() {
-        var presence = BarPresence()
-        #expect(!presence.barAway)
-        presence.opened(true)
-        #expect(presence.barAway)
-        // Another app in front: the bar is back, the window stays open behind.
-        presence.front(false)
-        #expect(!presence.barAway && presence.windowOpen)
-        // The window returns (a click on the bar's item, the Dock icon).
-        presence.front(true)
-        #expect(presence.barAway)
-        presence.opened(false)
-        #expect(!presence.barAway)
-        // A window that is not open is never in front.
-        presence.front(true)
-        #expect(!presence.barAway)
-    }
-
-    @Test func resigningActiveReportsOutOfSightAndBecomingActiveReportsFront() async {
-        _ = NSApplication.shared
-        let store = Store()
-        store.persists = false
-        Demo.populate(store, .router)
-        let controller = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
-        var reports: [Bool] = []
-        controller.onFront = { reports.append($0) }
-        controller.show(.settings)
-        controller.window?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        // The window is on screen; whether the app counts as active depends on the runner, so say it.
-        controller.reportFront(active: true)
-        #expect(reports.last == true || controller.window?.occlusionState.contains(.visible) == false)
-        let seen = reports.count
-        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
-        await waitUntil { reports.count > seen || reports.last == false }
-        #expect(reports.last == false)
-        controller.close()
-        await waitUntil { !controller.isOpen }
-        #expect(!controller.isOpen)
-    }
-
-    @Test func theMorphIsSkippedUnderTestSoTheWindowOpensAndClosesAtOnce() async {
-        #expect(!AppTransition.enabled)
-        _ = NSApplication.shared
-        let store = Store()
-        store.persists = false
-        Demo.populate(store, .router)
-        let controller = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
-        var asked = 0
-        controller.bar = { asked += 1; return BarMorph(frame: NSRect(x: 0, y: 0, width: 50, height: 200)) }
-        var closing = 0
-        var closed = 0
-        controller.onClosing = { closing += 1 }
-        controller.onClose = { closed += 1 }
-        controller.show(.settings)
-        controller.window?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-        #expect(controller.window?.alphaValue == 1 && controller.isOpen)
-        controller.close()
-        await waitUntil { closed == 1 }
-        #expect(closed == 1 && closing == 0 && asked == 0 && !controller.isOpen)
-    }
-
-    private final class Ticks { var blocks: [@MainActor () -> Void] = [] }
-
-    /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on.
-    private func morphing(_ body: (AppWindowController, Ticks) -> Void) {
-        let saved = (AppTransition.enabled, AppTransition.nextFrame)
-        let ticks = Ticks()
-        AppTransition.enabled = true
-        AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
-        defer {
-            AppTransition.enabled = saved.0
-            AppTransition.nextFrame = saved.1
+// Nested, so serialized with the tests above: these open windows too, and the activation policy they set is the one global.
+extension AppWindowTests {
+    @MainActor
+    @Suite struct BarComesBack {
+        @Test func theBarIsAwayOnlyWhileTheOpenWindowIsInFront() {
+            var presence = BarPresence()
+            #expect(!presence.barAway)
+            presence.opened(true)
+            #expect(presence.barAway)
+            // Another app in front: the bar is back, the window stays open behind.
+            presence.front(false)
+            #expect(!presence.barAway && presence.windowOpen)
+            // The window returns (a click on the bar's item, the Dock icon).
+            presence.front(true)
+            #expect(presence.barAway)
+            presence.opened(false)
+            #expect(!presence.barAway)
+            // A window that is not open is never in front.
+            presence.front(true)
+            #expect(!presence.barAway)
         }
-        _ = NSApplication.shared
-        let store = Store()
-        store.persists = false
-        Demo.populate(store, .router)
-        let window = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
-        window.bar = { BarMorph(frame: NSRect(x: 1400, y: 300, width: 46, height: 300)) }
-        body(window, ticks)
-        window.run?.end()
-        window.close()
-    }
 
-    @Test func theRealWindowIsShownBeforeTheOverlayGoes() {
-        morphing { controller, ticks in
+        @Test func resigningActiveReportsOutOfSightAndBecomingActiveReportsFront() async {
+            _ = NSApplication.shared
+            let store = Store()
+            store.persists = false
+            Demo.populate(store, .router)
+            let controller = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
+            var reports: [Bool] = []
+            controller.onFront = { reports.append($0) }
             controller.show(.settings)
-            guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
-            // Waiting at its frame, invisible, while the overlay grows out of the bar.
-            #expect(controller.phase == .opening && window.alphaValue == 0 && run.overlay.isVisible)
-            run.complete()
-            // At the end: the real window is in under the overlay at once, and the overlay stays until two refreshes later.
-            #expect(window.alphaValue == 1 && run.overlay.isVisible && !run.ended)
-            #expect(ticks.blocks.count == 1)
-            ticks.blocks.removeFirst()()
-            #expect(window.alphaValue == 1 && run.overlay.isVisible && ticks.blocks.count == 1)
-            ticks.blocks.removeFirst()()
-            #expect(window.alphaValue == 1 && !run.ended)
-        }
-    }
-
-    @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
-        morphing { controller, ticks in
-            controller.show(.settings)
-            guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
-            let before = run.pose
+            controller.window?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+            // The window is on screen; whether the app counts as active depends on the runner, so say it.
+            controller.reportFront(active: true)
+            #expect(reports.last == true || controller.window?.occlusionState.contains(.visible) == false)
+            let seen = reports.count
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+            await waitUntil { reports.count > seen || reports.last == false }
+            #expect(reports.last == false)
             controller.close()
-            #expect(controller.phase == .closing && controller.run === run)
-            #expect(run.startPose?.rect == before.rect && run.startPose?.radius == before.radius)
-            // The real window is out of the way and the overlay carries the close.
-            #expect(!window.isVisible && run.overlay.isVisible)
-            // Opening again turns it round from there.
-            let now = run.pose
+            await waitUntil { !controller.isOpen }
+            #expect(!controller.isOpen)
+        }
+
+        @Test func theMorphIsSkippedUnderTestSoTheWindowOpensAndClosesAtOnce() async {
+            #expect(!AppTransition.enabled)
+            _ = NSApplication.shared
+            let store = Store()
+            store.persists = false
+            Demo.populate(store, .router)
+            let controller = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
+            var asked = 0
+            controller.bar = { asked += 1; return BarMorph(frame: NSRect(x: 0, y: 0, width: 50, height: 200)) }
+            var closing = 0
+            var closed = 0
+            controller.onClosing = { closing += 1 }
+            controller.onClose = { closed += 1 }
             controller.show(.settings)
-            #expect(controller.phase == .opening && run.startPose?.rect == now.rect)
-            #expect(ticks.blocks.isEmpty)
+            controller.window?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+            #expect(controller.window?.alphaValue == 1 && controller.isOpen)
+            controller.close()
+            await waitUntil { closed == 1 }
+            #expect(closed == 1 && closing == 0 && asked == 0 && !controller.isOpen)
+        }
+
+        private final class Ticks { var blocks: [@MainActor () -> Void] = [] }
+
+        /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on.
+        private func morphing(_ body: (AppWindowController, Ticks) -> Void) {
+            let saved = (AppTransition.enabled, AppTransition.nextFrame)
+            let ticks = Ticks()
+            AppTransition.enabled = true
+            AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
+            defer {
+                AppTransition.enabled = saved.0
+                AppTransition.nextFrame = saved.1
+            }
+            _ = NSApplication.shared
+            let store = Store()
+            store.persists = false
+            Demo.populate(store, .router)
+            let window = AppWindowController(store: store, remembers: false, checksClaudeCode: false)
+            window.bar = { BarMorph(frame: NSRect(x: 1400, y: 300, width: 46, height: 300)) }
+            body(window, ticks)
+            window.run?.end()
+            window.close()
+        }
+
+        @Test func theRealWindowIsShownBeforeTheOverlayGoes() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                // Waiting at its frame, invisible, while the overlay grows out of the bar.
+                #expect(controller.phase == .opening && window.alphaValue == 0 && run.overlay.isVisible)
+                run.complete()
+                // At the end: the real window is in under the overlay at once, and the overlay stays until two refreshes later.
+                #expect(window.alphaValue == 1 && run.overlay.isVisible && !run.ended)
+                #expect(ticks.blocks.count == 1)
+                ticks.blocks.removeFirst()()
+                #expect(window.alphaValue == 1 && run.overlay.isVisible && ticks.blocks.count == 1)
+                ticks.blocks.removeFirst()()
+                #expect(window.alphaValue == 1 && !run.ended)
+            }
+        }
+
+        @Test func closingWhileOpeningPicksUpFromWhereTheOverlayIs() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                let before = run.pose
+                controller.close()
+                #expect(controller.phase == .closing && controller.run === run)
+                #expect(run.startPose?.rect == before.rect && run.startPose?.radius == before.radius)
+                // The real window is out of the way and the overlay carries the close.
+                #expect(!window.isVisible && run.overlay.isVisible)
+                // Opening again turns it round from there.
+                let now = run.pose
+                controller.show(.settings)
+                #expect(controller.phase == .opening && run.startPose?.rect == now.rect)
+                #expect(ticks.blocks.isEmpty)
+            }
         }
     }
 }
