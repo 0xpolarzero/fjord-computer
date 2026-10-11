@@ -232,6 +232,8 @@ struct SettingsView: View {
                 SettingsDivider()
                 autoContinue
                 SettingsDivider()
+                routerStyle
+                SettingsDivider()
                 mutedFolders
                 SettingsDivider()
                 draftsJev
@@ -329,6 +331,16 @@ struct SettingsView: View {
                     info: ("Continue waiting sessions automatically", "When a session's turn ends waiting on something Lookout can see finish (CI on a PR or workflow in your inbox, another session's turn), the Router shows it ready to continue and Tell it sends it a short message such as “The CI on owner/repo#12 finished: passing.” With this on, that message goes on its own, and is logged in the Router's history. Each waiting session's row can turn it on or off for that session. Needs a TypeSafe key: Jev reads how each turn ended.")) {
             SettingsSwitch("Continue waiting sessions automatically",
                            isOn: Binding(get: { store.router.autoContinue }, set: { store.setAutoContinueDefault($0) }))
+        }
+    }
+
+    /// How the cards' briefs and the sessions' summaries are written to you, in your words.
+    private var routerStyle: some View {
+        SettingsRow("How the Router writes to you",
+                    description: "Each card, and each summary of a session, is explained in these words' style.",
+                    info: ("How the Router writes to you", "Claude Haiku explains each card in plain words (what it needs from you and why, what it waits on, what is worth knowing, what was done), and writes the Working sessions' summaries. Both follow what you write here, within the Router's own rules: short, no markdown, and what the sessions wrote is only ever data. Haiku runs through Claude Code and reads the card, its turn's final message and the form it stopped on; nothing of it goes to TypeSafe."),
+                    below: AnyView(RouterStyleField(store: store))) {
+            if store.router.style != nil { ActionButton("Reset") { store.setRouterStyle("") } }
         }
     }
 
@@ -740,6 +752,26 @@ extension View {
             }
         }
     }
+}
+
+/// The Router's style, a few lines: kept as you type, saved when you leave it (or press Return), so the Router's state isn't
+/// written at every key.
+private struct RouterStyleField: View {
+    @Bindable var store: Store
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        CDSTextArea(placeholder: RouterStyle.defaultText, lines: 2...6, text: $text, onSubmit: save)
+            .focused($focused)
+            .accessibilityLabel("How the Router writes to you")
+            .onAppear { text = store.routerStyle }
+            .onChange(of: focused) { if !focused { save() } }
+            .onChange(of: store.router.style) { if !focused { text = store.routerStyle } }
+            .onDisappear(perform: save)
+    }
+
+    private func save() { store.setRouterStyle(text) }
 }
 
 /// A text input with its own focus (§3.1), secure or not.

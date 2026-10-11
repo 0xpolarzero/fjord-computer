@@ -382,12 +382,14 @@ extension Store {
     private static func haiku(store: Store) -> Runner {
         let find = store.routerClaudeBinary ?? { RouterStatus.findDefault() }
         let home = store.routerFiles?.routerHome
+        // Written as you asked the Router to write to you (Settings).
+        let system = RouterStyle.prompt(RouterSummaryContext.rules, style: store.routerStyle)
         return { context in
             guard let binary = find(), let home else { throw RouterTools.Failure("Claude Code wasn't found") }
             try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let output = try await OneShot.run(binary, ["-p", "--model", model, "--tools", "", "--setting-sources", "", "--strict-mcp-config",
                                                         "--no-session-persistence", "--output-format", "json", "--system-prompt",
-                                                        RouterSummaryContext.rules],
+                                                        system],
                                                cwd: home, input: Data(context.utf8), timeout: timeout)
             return try OneShot.result(output)
         }

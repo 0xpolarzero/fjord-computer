@@ -48,6 +48,9 @@ struct RouterState: Codable, Equatable {
     /// By session, a message of yours (ms) its open turn cards are still to be judged against: Jev decides which it settled
     /// (see RouterReplies.swift); none is addressed just for being written after.
     var replies: [String: Int64] = [:]
+    /// How the Router writes to you (Settings), in your words: what the cards' briefs and the sessions' summaries follow.
+    /// Nil for the default (`RouterStyle.defaultText`).
+    var style: String?
 
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
@@ -102,7 +105,7 @@ struct RouterState: Codable, Equatable {
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions, handledTurns, replies
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, zonesShare, autoContinue, autoContinueSessions, handledTurns, replies, style
     }
 
     func encode(to encoder: Encoder) throws {
@@ -126,6 +129,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(autoContinueSessions, forKey: .autoContinueSessions)
         try c.encode(handledTurns, forKey: .handledTurns)
         try c.encode(replies, forKey: .replies)
+        try c.encodeIfPresent(style, forKey: .style)
     }
 
     init(from decoder: Decoder) throws {
@@ -176,6 +180,7 @@ struct RouterState: Codable, Equatable {
         autoContinueSessions = map(.autoContinueSessions)
         handledTurns = map(.handledTurns)
         replies = map(.replies)
+        style = value(.style)
         linkUnlinkedChanges(legacy: legacy)
         dropped = lost
     }
@@ -935,7 +940,7 @@ extension Store {
         }
         router = state
         // Off: a triage under way comes to nothing, and no banner held for one comes.
-        if !on { routerTriager.turnedOff() }
+        if !on { routerTriager.turnedOff(); routerBriefer.cancelAll() }
         applyRouterSwitch(install: true)
         if on {
             feedRouter(now: now)
@@ -989,6 +994,7 @@ extension Store {
                 // A form going away ends its wait (answered, or its hook gave up).
                 self.feedRouter()
                 // A form held only now: its question's or plan's brief is made again from it.
+                self.briefForms()
             }
         } else {
             formBridge.stop()

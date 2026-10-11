@@ -364,7 +364,7 @@ struct CodePlanCard: View {
 // MARK: - Fields
 
 /// CDS TextArea (§5.7): white-5% fill, a 1px white-10% ring (20% on hover), radius 8, 8 × 12, text 14/20, muted placeholder.
-private struct CDSTextArea: View {
+struct CDSTextArea: View {
     let placeholder: String
     let lines: ClosedRange<Int>
     @Binding var text: String

@@ -155,10 +155,17 @@ extension Store {
             case .partly(let left, let total):
                 state.cards[i].left = left
                 state.cards[i].total = total
+                // Its brief told all of them: until the new one, the questions left speak for themselves.
+                state.cards[i].brief = nil
             case .keep: break
             }
         }
+        let partly = verdicts.compactMap { id, verdict in
+            if case .partly = verdict, state.cards.contains(where: { $0.id == id && $0.isOpen }) { id } else { nil }
+        }
         if state != router { router = state }
+        // What is left of them is what their briefs say now.
+        for id in partly { routerBriefer.request(id, message: nil, store: self) }
         guard let decision else { return }
         updateDecision(decision) { entry in
             for card in logged { entry.add(.resolved(card: card.title, message: message), session: session, card: card.id) }

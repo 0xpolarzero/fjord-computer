@@ -45,6 +45,9 @@ The decision log: one entry per run (trigger, decision, what was done, outcome: 
 
 Jev decides 3 and 4 and Finish up with two yes/no questions in the triage's one call: `userStep` (a concrete action left to the user now) and `notable`. A sure step (p ≥ 0.6) is Finish up, trivial or not; the history takes a turn only when Jev is sure it is done (p ≥ 0.7), a step and a note each at most 0.2 likely, and it claims nothing it didn't check; otherwise Worth a look. A trivial turn settles only when done (not partway, not unverified).
 
+## Briefs (RouterBrief.swift)
+Every card is told in your words' style: one Haiku call once its triage lands (a question or plan when it comes, a wait when it is over), saying what is needed from you (Needs you), what it waits on (Waiting), what is notable (Worth a look), or what was done (Done). Its input is the turn's final message, the card, Jev's triage and the form; nothing of it goes to Jev. Trivial finished turns keep Claude's own summary. Your style instructions (Settings, "How the Router writes to you") follow the fixed rules in the system prompt, for the briefs and the working sessions' summaries alike.
+
 ## Page
 Bottom-anchored, the more it matters the nearer the composer: the history (the decision log and addressed cards, one line each, expandable; finished turns unread highlighted), Working (live lines) and Waiting under it, Worth a look (quiet, the first three), Needs you (prominent, one card open). The composer has inline @project pills. The badge counts Needs you (amber) and Worth a look (blue); the history's unread lines count for nothing.
 

@@ -350,6 +350,8 @@ extension Store {
         }
         if state != router { router = state }
         for card in ready {
+            // Over: its brief says what came of it (its tier, and so its source, changed).
+            routerBriefer.request(card.id, message: nil, store: self)
             // On its own only for a wait its message named: one Jev alone tied it to could be something else that is done.
             if continuesAutomatically(card.sessionID), card.triage?.watch?.named == true {
                 tellWaiting(card.id, automatic: true, now: now)

@@ -521,7 +521,8 @@ extension Store {
         return jevAsker(.triage, base: routerTriager.asker)
     }
 
-    private func finalMessage(_ session: ClaudeSession) async -> String? {
+    /// A session's latest final message (the triage's, and a brief's that wasn't given one).
+    func finalMessage(_ session: ClaudeSession) async -> String? {
         if let reader = routerTriager.reader { return await reader(session) }
         let reader = activityReader
         let cli = session.cliID
@@ -541,6 +542,10 @@ extension Store {
     /// little at most: he may find it going in circles, said once per streak, or rate how urgent it is.
     func announceRouterCards(_ fresh: [RouterCard]) {
         var now: [RouterCard] = []
+        // Questions and plans aren't triaged: their brief is made now, from the form if it is held already.
+        for card in fresh where card.kind == .question || card.kind == .plan {
+            routerBriefer.request(card.id, message: nil, store: self)
+        }
         for card in fresh {
             guard triageAsker != nil, card.kind == .stuck, card.triage == nil, let (_, session) = currentTurnCard(card.id),
                   !session.running, routerTriager.heldBanners.insert(card.id).inserted else { now.append(card); continue }
@@ -706,6 +711,7 @@ extension Store {
                     self.routerTriager.unwatched[id] = message
                 }
                 self.applyTriage(triage, to: id)
+                self.routerBriefer.request(id, message: message, store: self)
             }
         }
     }
@@ -858,5 +864,6 @@ extension Store {
         guard let card = RouterFeed.addTurn(&state, current, triage: triage, text: text, at: current.lastActivity) else { return }
         router = state
         onNewRouterCards?([card])
+        routerBriefer.request(card.id, message: message, store: self)
     }
 }
