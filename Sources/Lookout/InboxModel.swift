@@ -502,6 +502,7 @@ extension Thing {
         status = try c.decodeIfPresent(ThingStatus.self, forKey: .status) ?? .open
         labels = try c.decodeIfPresent([String].self, forKey: .labels) ?? []
         assignees = try c.decodeIfPresent([String].self, forKey: .assignees) ?? []
+        assignedAt = try c.decodeIfPresent([String: Date].self, forKey: .assignedAt)
         requestedReviewers = try c.decodeIfPresent([String].self, forKey: .requestedReviewers) ?? []
         mentioned = try c.decodeIfPresent([String].self, forKey: .mentioned) ?? []
         createdAt = try c.decode(Date.self, forKey: .createdAt)

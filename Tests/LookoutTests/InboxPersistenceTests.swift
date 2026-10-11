@@ -115,6 +115,21 @@ import Testing
      "ownedRepos": ["me/own"], "contributedRepos": [], "reposResolvedAt": "2026-10-10T08:00:00Z"}
     """#
 
+    @Test func aThingKeepsEveryFieldThroughAWriteAndARead() throws {
+        var thing = InboxFixture.pr(4, updated: Date(timeIntervalSince1970: 1_700_000_500))
+        thing.assignees = ["me"]
+        thing.assignedAt = ["me": Date(timeIntervalSince1970: 1_700_000_000)]
+        thing.reviewRequests = [ThingReviewRequest(reviewer: "me", at: Date(timeIntervalSince1970: 1_700_000_100))]
+        thing.behindBase = true
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let back = try decoder.decode(Thing.self, from: encoder.encode(thing))
+        #expect(back.assignedAt == thing.assignedAt)
+        #expect(back == thing)
+    }
+
     @Test func theFirstInboxsFileKeepsItsCategoriesThingsAndMarks() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
