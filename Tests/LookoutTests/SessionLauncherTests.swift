@@ -185,6 +185,18 @@ private final class LauncherLog {
         #expect(!asked && log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"] && log.signedSettings == [nil])
     }
 
+    @Test func aSizeJevGivesAfterYouSwitchedToYourDefaultIsNotUsed() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        let launcher = launcher(store, log)
+        launcher.asker = { _, _ in
+            store.settings.jevPicksSessionModels = false
+            return ["scope": .score(3.8, confidence: 0.8)]
+        }
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
+        #expect(log.signedSettings == [nil] && store.router.decisions.last?.decision.settingsBy == nil)
+    }
+
     @Test func aCloneOrASizeJevIsntSureOfIsNotTaken() async throws {
         let store = ready()
         let log = LauncherLog()

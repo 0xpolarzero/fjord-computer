@@ -190,7 +190,8 @@ enum ActionSessions {
         let ask = store.jevAsker(.actions, base: launcher.asker ?? chooser.map(JevClient.asker(choosing:)))
         let (folder, scope) = await pick(clones, for: request, store: store, ask: ask, sized: sized)
         let project = store.folderName(folder)
-        let picked = scope.flatMap(SessionScope.settings)
+        // Switched to "Your default" while Jev was asked: his size isn't used.
+        let picked = (store.jevPicksSessionModels ? scope : nil).flatMap(SessionScope.settings)
         store.updateDecision(id) {
             $0.decision.target = project
             if picked != nil { $0.decision.settingsBy = SessionScope.by }
