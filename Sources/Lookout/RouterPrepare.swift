@@ -462,7 +462,7 @@ enum SessionStart {
     /// "with opus", "using the sonnet model", "with low effort", "high effort", "effort of max": the settings words.
     private static let settingClause =
         #"(?:(?:and\s+)?(?:with|using|use|on)\s+(?:the\s+)?(?:\#(models))(?:\s+model)?|(?:and\s+)?(?:(?:with|at|on)\s+)?(?:\#(efforts))\s+effort|(?:and\s+)?effort\s+(?:of\s+|to\s+|level\s+)?(?:\#(efforts)))\b"#
-    private static let startPhrase =
+    static let startPhrase =
         #"^(?:(?:please|pls|hey|can\s+you|could\s+you|i\s+want\s+you\s+to|i'd\s+like\s+you\s+to)[,\s]+)?(?:(?:start|open|create|launch|spin\s+up|kick\s+off|begin)\s+(?:up\s+)?(?:an?\s+|the\s+|one\s+)?(?:new\s+|fresh\s+)?(?:claude\s+)?(?:session|chat|conversation)|(?:in\s+)?(?:an?\s+)?(?:new|fresh)\s+(?:claude\s+)?(?:session|chat|conversation))\b"#
 
     /// `joining`: the words either side of what is taken out are tidied where they meet (one space between words, none

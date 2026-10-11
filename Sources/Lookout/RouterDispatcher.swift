@@ -383,12 +383,12 @@ struct RouterAskBack: Identifiable, Equatable {
         return .classify
     }
 
-    /// "start a new session…", "new chat about…", "open a session to…".
+    /// "start a new session…", "new chat about…", "open a session to…": said as the message's own request, at its start or
+    /// after its @projects. A session mentioned anywhere else ("don't start a new session; fix it in this one", "fix it in
+    /// a new session") is for Jev.
     static func wantsNewSession(_ text: String) -> Bool {
-        let t = text.lowercased()
-        if t.range(of: #"\bnew\s+(session|chat|conversation)\b"#, options: .regularExpression) != nil { return true }
-        return t.range(of: #"\b(start|open|create|launch|spin\s+up|kick\s+off|begin)\b[^.\n]{0,24}\b(session|chat|conversation)\b"#,
-                       options: .regularExpression) != nil
+        let t = text.replacingOccurrences(of: #"^(?:\s*@[\w.\-/]+[\s,:;]*)*\s*"#, with: "", options: .regularExpression)
+        return t.range(of: SessionStart.startPhrase, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     /// A short title for a new session from its task (`SessionStart.task`): the first few words, without the @project.

@@ -689,11 +689,22 @@ import Testing
         #expect(f.ranks == 1 && f.prepared == ["local_a"])
     }
 
+    @Test func aSessionNotAskedForIsNotStarted() async {
+        let (_, d, f) = setup()
+        f.ranked = [.init(target: "session:local_a", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let a = d.submit("don't start a new session; fix the tests in the existing one", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.started.isEmpty && f.ranks == 1 && f.prepared == ["local_a"], "routed as any message")
+    }
+
     @Test func theRulesForAskingForANewSession() {
         for yes in ["start a new session for the api", "new chat about tests", "open a session to look at the build", "Spin up a session"] {
             #expect(RouterDispatcher.wantsNewSession(yes), "\(yes)")
         }
-        for no in ["the session is stuck", "fix the news feed", "tell it to open the file"] {
+        #expect(RouterDispatcher.wantsNewSession("@lookout start a session to fix it"))
+        for no in ["the session is stuck", "fix the news feed", "tell it to open the file",
+                   "don't start a new session; fix the tests in the existing one", "never open a new chat for this",
+                   "fix it in the session, not a new session"] {
             #expect(!RouterDispatcher.wantsNewSession(no), "\(no)")
         }
         #expect(RouterDispatcher.title(for: "@lookout add a dark mode badge to the settings page please") == "add a dark mode badge to")
