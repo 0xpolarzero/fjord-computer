@@ -1,4 +1,6 @@
 import Foundation
+import Observation
+import SwiftUI
 import Testing
 @testable import Lookout
 
@@ -75,6 +77,56 @@ import Testing
         #expect(data.parsePerson("@greptile") == user)
         #expect(data.parsePerson("@toks") == .user("toks"))
     }
+
+    @Test @MainActor func aClosedStringSlotDoesNotBuildItsSuggestionPool() {
+        let store = Store()
+        store.persists = false
+        var calls = 0
+        func pool() -> [String] { calls += 1; return ["main", "develop", "skip"] }
+        let slot = StringSlot(pick: .constant(Pick()), store: store, placeholder: "branch", pool: pool())
+        _ = slot.body
+        #expect(calls == 0)
+        // The popover asks for options with what is already picked, including exceptions, left out.
+        #expect(slot.options("", Pick(include: ["main"], except: ["skip"])).map(\.value) == ["develop"])
+        #expect(calls == 1)
+        #expect(slot.options(" MAIN ", Pick()).map(\.value) == ["main"])
+        #expect(calls == 2)
+    }
+
+    @Test @MainActor func stringSuggestionsObserveFetchedValuesWhileThePickerIsOpen() {
+        let store = Store()
+        store.persists = false
+        var thing = Thing(id: "wf:a/b#1", kind: .workflow, repo: "a/b", title: "t",
+                          url: URL(string: "https://github.com/a/b/actions/runs/1")!, createdAt: Date(), updatedAt: Date())
+        thing.labels = ["bug"]
+        thing.branch = "main"
+        thing.workflowName = "Build"
+        store.things[thing.id] = thing
+        let data = EditorData(store: store)
+        let slots = [
+            StringSlot(pick: .constant(Pick()), store: store, placeholder: "labels", pool: data.values({ $0.labels })),
+            StringSlot(pick: .constant(Pick()), store: store, placeholder: "branch", pool: data.values({ [$0.branch].compactMap { $0 } })),
+            StringSlot(pick: .constant(Pick()), store: store, placeholder: "workflow", pool: data.values({ [$0.workflowName].compactMap { $0 } }))
+        ]
+        let changes = SuggestionChanges()
+        let before = withObservationTracking { slots.map { $0.options("", Pick()).map(\.value) } }
+            onChange: { changes.record() }
+        #expect(before == [["bug"], ["main"], ["Build"]])
+        thing.labels = ["feature"]
+        thing.branch = "release"
+        thing.workflowName = "Deploy"
+        store.things[thing.id] = thing
+        #expect(changes.count == 1)
+        // The same slots read the new values on the next request, without closing and rebuilding the picker.
+        #expect(slots.map { $0.options("", Pick()).map(\.value) } == [["feature"], ["release"], ["Deploy"]])
+    }
+}
+
+private final class SuggestionChanges: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded = 0
+    func record() { lock.withLock { recorded += 1 } }
+    var count: Int { lock.withLock { recorded } }
 }
 
 private final class RepoCalls: @unchecked Sendable {

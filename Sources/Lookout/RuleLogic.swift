@@ -674,14 +674,28 @@ struct StringSlot: View {
     @Binding var pick: Pick<String>
     let store: Store
     let placeholder: String
-    let pool: [String]
+    let pool: () -> [String]
     var allowsExcept = true
     var tone: ChipTone = .neutral
 
+    init(pick: Binding<Pick<String>>, store: Store, placeholder: String, pool: @autoclosure @escaping () -> [String],
+         allowsExcept: Bool = true, tone: ChipTone = .neutral) {
+        _pick = pick
+        self.store = store
+        self.placeholder = placeholder
+        self.pool = pool
+        self.allowsExcept = allowsExcept
+        self.tone = tone
+    }
+
+    /// Suggestions are read only when the popover asks, from what the Store knows then.
+    func options(_ query: String, _ pick: Pick<String>) -> [SlotOption<String>] {
+        EditorData(store: store).stringOptions(query, pick, from: pool())
+    }
+
     var body: some View {
-        let data = EditorData(store: store)
         SlotField(pick: $pick, placeholder: placeholder, tone: tone, allowsExcept: allowsExcept,
-                  title: { $0 }, options: { q, p in data.stringOptions(q, p, from: pool) },
+                  title: { $0 }, options: options,
                   parse: { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) })
     }
 }
