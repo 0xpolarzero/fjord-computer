@@ -70,6 +70,12 @@ struct CategoriesView: View {
             hub?.categoryRequest = nil
             if store.categories.contains(where: { $0.id == id }) { editing = .existing(id) }
         }
+        // A rule-off mark asked for a category's editor.
+        .onChange(of: store.categoryEditorRequest, initial: true) { _, id in
+            guard let id else { return }
+            store.categoryEditorRequest = nil
+            if store.categories.contains(where: { $0.id == id }) { editing = .existing(id) }
+        }
         .onChange(of: hub?.groupRequest, initial: true) { _, request in
             guard let request, let id = UUID(uuidString: request.id) else { return }
             hub?.groupRequest = nil
@@ -390,5 +396,30 @@ private struct DoneRow: View {
         .padding(.vertical, 8)
         .frame(minHeight: 44)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A category with a rule off (a chip that can never match, a group gone since): a small warning mark wherever the category
+/// shows, so it doesn't look healthy ("All caught up") while a rule matches nothing. Its tooltip says how many; a click opens
+/// the category's editor.
+struct RulesOffMark: View {
+    let count: Int
+    var size: CGFloat = 9
+    let open: () -> Void
+
+    static func tip(_ count: Int) -> String { count == 1 ? "1 rule off · open to fix" : "\(count) rules off · open to fix" }
+
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(CDS.Text.warning)
+            .contentShape(Rectangle())
+            // Over a row or a tab that is itself a button: the mark's click is its own.
+            .highPriorityGesture(TapGesture().onEnded(open))
+            .tip(Self.tip(count))
+            .accessibilityElement()
+            .accessibilityLabel(Self.tip(count))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, open)
     }
 }

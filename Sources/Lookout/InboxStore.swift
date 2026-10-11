@@ -118,6 +118,18 @@ extension Store {
         marks[entry.id] = m
     }
 
+    /// How many of a category's rules are off (a chip that can never match, a group gone), as the engine keeps them.
+    func rulesOff(_ id: UUID) -> Int {
+        guard let category = categories.first(where: { $0.id == id }) else { return 0 }
+        return category.rules.filter { !InboxEngine.problems($0, in: category, groups: groups).isEmpty }.count
+    }
+
+    /// Opens the category's editor: the categories page takes the request when it shows (`go` takes the window there).
+    func editCategory(_ id: UUID, go: (AppDestination) -> Void) {
+        categoryEditorRequest = id
+        go(.categories)
+    }
+
     func moveCategory(from source: IndexSet, to destination: Int) { categories.move(fromOffsets: source, toOffset: destination) }
 
     /// Your assignment rated (and marked, and acted on) before GitHub said when it was made, as `assigned`, is the same

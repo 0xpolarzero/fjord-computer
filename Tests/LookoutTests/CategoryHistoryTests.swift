@@ -133,6 +133,31 @@ import Testing
         #expect(store.baselinePending)
     }
 
+    @Test func aRuleOffIsMarkedOnItsCategoryAndTheMarkOpensItsEditor() async throws {
+        let trusted = InboxGroup(name: "Trusted", kind: .people, members: ["ann"])
+        var category = InboxFixture.category()
+        category.rules.append(Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.me], except: [.group(trusted.id)]))))
+        let store = InboxFixture.store([], category: category)
+        store.gh.session = StubbedGitHub.session { _ in .init(200, "{}") }
+        store.groups = [trusted]
+        #expect(store.rulesOff(category.id) == 0)
+        // The group is deleted: the rule is off, and its category says so where it shows, even with nothing in it.
+        store.groups = []
+        #expect(store.rulesOff(category.id) == 1)
+        let tip = RulesOffMark.tip(1)
+        let list = try await AccessibilityTree.render(InboxListView(store: store, tab: .category(category.id)).tipSpace(),
+                                                      ready: { $0.all.contains { $0.label == tip } })
+        #expect(list.all.contains { $0.label == tip })
+        // Its click asks for the editor, which the categories page opens.
+        var went: [AppDestination] = []
+        store.editCategory(category.id) { went.append($0) }
+        #expect(went == [.categories])
+        let page = try await AccessibilityTree.render(CategoriesView(store: store).tipSpace(),
+                                                      ready: { $0.all.contains { $0.role == "AXButton" && $0.label == "Delete category" } })
+        #expect(page.all.contains { $0.role == "AXButton" && $0.label == "Delete category" })
+        #expect(store.categoryEditorRequest == nil)
+    }
+
     @Test func aRuleWithAnImpossibleChipIsOffUntilFixed() {
         let store = InboxFixture.store([InboxFixture.pr(1)])
         var rule = store.categories[0].rules[0]

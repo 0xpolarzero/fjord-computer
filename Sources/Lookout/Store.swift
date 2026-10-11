@@ -20,6 +20,8 @@ final class Store {
     var categorySections: [CategorySection] = [.github] {
         didSet { persistedRevision &+= 1 }
     }
+    /// A category whose editor the categories page opens when it shows (a rule-off mark's click, from the bar or the window).
+    var categoryEditorRequest: UUID?
     /// Who is changing the categories and groups now, for the log (see `InboxLog`); nil is the editor.
     @ObservationIgnored var inboxSource: InboxChangeSource?
     /// Where those log lines go; the tests read them.

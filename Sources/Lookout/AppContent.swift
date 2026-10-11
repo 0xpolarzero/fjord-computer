@@ -11,6 +11,7 @@ struct InboxListView: View {
     @State private var hub: HubState
     @State private var search: InboxSearch
     @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.openApp) private var openApp
 
     static let column: CGFloat = 880
     /// Room the header leaves at its start (the window's buttons, when the sidebar is away).
@@ -31,6 +32,9 @@ struct InboxListView: View {
     var body: some View {
         let entries = entries
         AppPage(title: title, subtitle: subtitle, leadingInset: leadingInset) {
+            if case .category(let id) = tab, store.rulesOff(id) > 0 {
+                RulesOffMark(count: store.rulesOff(id), size: 12) { store.editCategory(id, go: openApp) }
+            }
             InboxSearchField(search: search)
             if unread > 0 {
                 IconButton(symbol: "checkmark.circle", help: "Mark all as seen", detail: store.shortcut(.markAllRead).display,

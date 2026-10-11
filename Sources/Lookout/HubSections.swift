@@ -133,8 +133,11 @@ extension LookoutHub {
         } else {
             "All caught up"
         }
-        return HStack(spacing: 0) {
+        return HStack(spacing: 6) {
             Text(text).font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
+            if case .category(let id) = tab, store.rulesOff(id) > 0 {
+                RulesOffMark(count: store.rulesOff(id)) { store.editCategory(id, go: openApp) }
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Space.md)
@@ -372,9 +375,14 @@ struct CategoryTab: View {
     let store: Store
     let action: () -> Void
     @State private var target = false
+    @Environment(\.openApp) private var openApp
 
     var body: some View {
-        Button(action: action) { CategoryTabLabel(category: category, selected: selected, badge: badge) }
+        Button(action: action) {
+            CategoryTabLabel(category: category, selected: selected, badge: badge, rulesOff: store.rulesOff(category.id)) {
+                store.editCategory(category.id, go: openApp)
+            }
+        }
             .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
                                               hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostHover,
                                               pressed: CDS.Fill.ghostHover, isActive: selected))
@@ -452,6 +460,8 @@ private struct CategoryTabLabel: View {
     let category: InboxCategory
     let selected: Bool
     let badge: Int
+    var rulesOff = 0
+    var fix: () -> Void = {}
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
@@ -463,6 +473,7 @@ private struct CategoryTabLabel: View {
             if !category.actions.isEmpty {
                 Image(systemName: "bolt.fill").font(.system(size: 8)).foregroundStyle(CDS.Text.muted).accessibilityHidden(true)
             }
+            if rulesOff > 0 { RulesOffMark(count: rulesOff, size: 8, open: fix) }
         }
         .font(CDS.sans(13, .medium))
         .foregroundStyle(selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted)
