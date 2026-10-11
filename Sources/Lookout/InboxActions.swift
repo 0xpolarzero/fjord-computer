@@ -196,6 +196,26 @@ enum InboxActions {
         }
     }
 
+    /// Whether the event a fact is about (a comment, review, commit, thread reply) is no longer on the thing, so the fact can
+    /// never be had again; false for facts about state, which may come back.
+    private static func eventGone(_ key: String, _ thing: Thing) -> Bool {
+        let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2 else { return false }
+        let id = parts[1]
+        switch parts[0] {
+        case "comment", "mention", "last", "person", "noise", "asks":
+            return !thing.comments.contains { $0.id == id } && !thing.threads.contains { $0.lastReplyID == id }
+        case "review", "approved", "changes":
+            return !thing.reviews.contains { $0.id == id } && !thing.comments.contains { $0.id == id }
+        case "commit":
+            return !thing.commits.contains { $0.id == id }
+        case "thread":
+            return !thing.threads.contains { $0.id == id && (parts.count < 3 || $0.lastReplyID == parts[2]) }
+        default:
+            return false
+        }
+    }
+
     /// The facts that may trigger an action: not made by you, so an action's own comment (or any act of yours) never
     /// starts another.
     static func triggering(_ entry: InboxEntry, me: String) -> [Fact] {
@@ -279,19 +299,21 @@ enum InboxActions {
         }
         // Over the cap, only what nothing present can ask about again goes, oldest first: a run for a fact a thing still has
         // is what keeps it from running again, so it stays however many there are, and so do the runs of a thing still
-        // fetched but out of the category for now (it may come back with the same facts). Entering is forgotten only by the
-        // cooldown above.
+        // fetched but out of the category for now (it may come back with the same facts). A fact not shown now (Jev's
+        // reading off hides importance) may be shown again: in the category, only a run whose event (a comment, review,
+        // commit, thread reply) is gone from the thing goes. Entering is forgotten only by the cooldown above.
         if ledger.runs.count > maxRuns {
             var present: Set<String> = []
+            var inCategory: [String: Thing] = [:]
             for entry in entries {
                 let prefix = "\(entry.categoryID.uuidString)\u{1F}\(entry.id)\u{1F}"
                 for fact in entry.facts { present.insert(prefix + fact.key) }
+                inCategory["\(entry.categoryID.uuidString)\u{1F}\(entry.id)"] = entry.thing
             }
-            let inCategory = Set(entries.map { "\($0.categoryID.uuidString)\u{1F}\($0.id)" })
             let drop = ledger.runs.filter { _, run in
                 guard run.state != .running, run.trigger != "enter" else { return false }
-                let thing = "\(run.category.uuidString)\u{1F}\(run.thing)"
-                if inCategory.contains(thing) { return !present.contains(thing + "\u{1F}" + run.trigger) }
+                let key = "\(run.category.uuidString)\u{1F}\(run.thing)"
+                if let thing = inCategory[key] { return !present.contains(key + "\u{1F}" + run.trigger) && eventGone(run.trigger, thing) }
                 return !things.contains(run.thing)
             }
                 .sorted { $0.value.at < $1.value.at }

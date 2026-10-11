@@ -360,6 +360,36 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(ledger.run(category.id, entries[0].id, action.id, "enter") != nil)
     }
 
+    @Test func theCapKeepsTheRunsOfFactsNotShownNowWhoseEventIsStillThere() {
+        var action = CategoryAction.make(.comment("seen"))
+        action.trigger = .eachFact
+        var category = InboxFixture.category()
+        category.actions = ActionList([action])
+        var thing = InboxFixture.pr(1, by: Person(login: "alice"))
+        thing.comments = [ThingComment(id: "c1", author: Person(login: "bob"), at: Date(), snippet: "")]
+        let entry = InboxEntry(thing: thing, categoryID: category.id, facts: [Fact(key: "greptile:3", label: "g")],
+                               isDone: false, isUnread: true)
+        var ledger = ActionLedger()
+        _ = InboxActions.plan(entries: [entry], categories: [category], groups: [], ledger: &ledger, me: "me")
+        // Runs of facts it doesn't show now: an importance rating (Jev's reading off) and a comment still there, the
+        // oldest records; and one of a comment deleted since.
+        let old = Date(timeIntervalSince1970: 1)
+        for trigger in ["importance:high:assigned", "comment:c1", "comment:deleted"] {
+            ledger.set(ActionRun(category: category.id, thing: thing.id, action: action.id, trigger: trigger, state: .done, at: old))
+        }
+        // Over the cap with runs of things no longer fetched, newer.
+        for n in 1...InboxActions.maxRuns {
+            ledger.set(ActionRun(category: category.id, thing: "pr:a/gone#\(n)", action: action.id, trigger: "comment:x",
+                                 state: .done, at: Date(timeIntervalSince1970: TimeInterval(1000 + n))))
+        }
+        _ = InboxActions.plan(entries: [entry], categories: [category], groups: [], ledger: &ledger, me: "me",
+                              known: [thing.id])
+        #expect(ledger.run(category.id, thing.id, action.id, "importance:high:assigned") != nil)
+        #expect(ledger.run(category.id, thing.id, action.id, "comment:c1") != nil)
+        #expect(ledger.run(category.id, thing.id, action.id, "comment:deleted") == nil)
+        #expect(ledger.runs.count == InboxActions.maxRuns)
+    }
+
     @Test func doneThingsDoNotRun() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()
