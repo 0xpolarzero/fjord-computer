@@ -529,10 +529,17 @@ extension WindowSeams {
     @Test func aPeekIsNotShownWhileTheBarIsQuiet() {
         let hub = HubState()
         hub.section = .inbox
-        hub.panelFrame = CGRect(x: 0, y: 0, width: 10, height: 10)
-        #expect(hub.openPanelFrame != nil)
+        // A panel's view in a window never shown.
+        let window = NSWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 100, height: 100)), styleMask: .borderless,
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let piece = HubPieceView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        piece.section = .inbox
+        window.contentView = piece
+        hub.pieces.add(piece)
+        #expect(hub.panelsOnScreen.count == 1)
         hub.quiet = true
-        #expect(hub.openPanelFrame == nil)
+        #expect(hub.panelsOnScreen.isEmpty)
     }
 
     @Test func changingThePeekedTabDropsTheRowPickedInTheOther() {

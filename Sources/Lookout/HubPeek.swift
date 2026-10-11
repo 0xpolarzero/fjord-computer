@@ -98,11 +98,9 @@ extension LookoutHub {
                 // as one shape.
                 .overlay(alignment: seamAlignment) { seam(place) }
                 .fixedSize()
-                .onHover { overPanel = $0; hoverChanged() }
-                // Only the current section's: one still fading out mustn't report where it was.
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.rootSpace)) } action: {
-                    if hub.section == section { hub.panelFrame = $0 }
-                }
+                .onHover { overPanel = $0; hubPointer(overBar || overPanel) }
+                // Where it is drawn, for the controller to tell whether the pointer is on it.
+                .background(HubPiece(hub: hub, section: section))
                 // Hidden until it's been measured and placed, so it never shows up in the wrong spot first.
                 .opacity(place == nil ? 0 : 1)
                 .transition(peekTransition)
@@ -290,23 +288,6 @@ extension LookoutHub {
             CappedScroll(cap: 360, hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
                 AdaptiveStack(count: items.count, spacing: 1) { ForEach(items) { itemRow($0).id("i:" + $0.id) } }
                     .motion(Theme.Motion.fade, value: listKey)
-            }
-        }
-    }
-
-    /// The pointer left the bar and its panel: close the panel (a moment later, so going from one to the other,
-    /// side by side, doesn't count). Not while the hub still has the pointer: a panel's own hover goes false over a
-    /// scroll view inside it (the inbox list), with the pointer still on the panel.
-    func hoverChanged() {
-        peekLeave?.cancel()
-        guard !hub.barHidden, !hub.quiet, !hub.dragging, !overBar, !overPanel else { return }
-        let hub = hub
-        hub.cancelDwell()
-        peekLeave = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(120))
-            if !Task.isCancelled, !hub.barHidden, !hub.quiet, !hub.dragging, !hub.hovering {
-                hub.section = nil
-                hub.quiet = false
             }
         }
     }

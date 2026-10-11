@@ -149,7 +149,7 @@ final class HubController {
     var barAway: Bool { BarPresence(windowOpen: windowOpen, windowFront: windowFront).barAway }
     /// Launch preparation waits for both reported hover and a pointer that has not reached its tracking callback yet.
     var isInteracting: Bool {
-        hub.hovering || hub.dragging || (!barAway && layout.frame != .zero && hubScreenFrame.contains(NSEvent.mouseLocation))
+        hub.hovering || hub.dragging || (!barAway && layout.frame != .zero && hubScreenFrame.contains(mouseLocation()))
     }
     private var barApplied = false
     /// Which departure or return a fade completion belongs to.
@@ -159,6 +159,14 @@ final class HubController {
     fileprivate static let debug = ProcessInfo.processInfo.environment["LOOKOUT_DEBUG"] != nil
     private let trigger = HoverTrigger(size: NSSize(width: 10, height: 10))
     private var globalMouse: Any?
+    /// Where the pointer is and which buttons are down: the system's, or a test's.
+    var mouseLocation: () -> NSPoint = { NSEvent.mouseLocation }
+    var mouseButtons: () -> Int = { NSEvent.pressedMouseButtons }
+    /// What hears the pointer now, for tests: the system-wide monitor, and the arming window's frame while it's up.
+    var watchesGlobally: Bool { globalMouse != nil }
+    var triggerFrame: NSRect? { trigger.isVisible ? trigger.frame : nil }
+    /// The bar's frame on screen.
+    var barScreenFrame: NSRect { barOnScreen ?? hubScreenFrame }
     /// Opens the app window on a place (the app's delegate owns it).
     var openApp: (AppDestination) -> Void = { _ in } {
         didSet { host.rootView.openApp = { [weak self] in self?.opened($0) } }
@@ -196,7 +204,8 @@ final class HubController {
         host.sizingOptions = []
         window.contentView = host
         trigger.onHover = { [weak self] in self?.mouseMoved() }
-        layout.onFrame = { [weak self] in self?.syncTrigger() }
+        // The bar's own view is placed as the frame is reported, and the arming window goes where it is: a turn later.
+        layout.onFrame = { [weak self] in DispatchQueue.main.async { self?.syncTrigger() } }
         window.canDrag = { [weak self] p in self?.isOnBar(p) ?? false }
         window.onDragChanged = { [weak self] in self?.dragChanged(to: $0) }
         window.onDragEnded = { [weak self] in self?.dragEnded(at: $0) }
@@ -266,7 +275,7 @@ final class HubController {
 
     /// The window only takes the mouse over the hub; hovering it opens it after a beat, leaving closes it.
     /// At rest nothing watches the mouse system-wide: a tracking area over the bar (`HoverTrigger`) notices the
-    /// pointer arriving. The global monitor, to notice it leaving, runs only while the window takes the mouse.
+    /// pointer arriving. The global monitor, to notice it leaving (and coming back), runs only while the hub has the pointer.
     private func watchMouse() {
         let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .leftMouseUp]
         if let local = NSEvent.addLocalMonitorForEvents(matching: events, handler: { [weak self] event in
@@ -278,41 +287,55 @@ final class HubController {
     /// Whether the window takes the mouse (the pointer is on the hub). A window-server call, so only on change.
     private func setAcceptsMouse(_ accepts: Bool) {
         if window.ignoresMouseEvents == accepts { window.ignoresMouseEvents = !accepts }
-        syncTrigger()
     }
 
-    /// While the window takes the mouse: the global monitor runs (to notice the pointer leaving) and the arming
-    /// window is away. Otherwise the arming window sits over the hub and nothing else watches.
+    /// While the hub has the pointer (the window takes the mouse, or the pointer left a moment ago and the panel is still
+    /// open for it to come back), the global monitor runs: every move is heard, wherever it goes, until the hub has closed.
+    /// The arming window covers the bar whenever the window lets the mouse through. At rest, the arming window alone.
     private func syncTrigger() {
         guard !barAway else { return }
-        if !window.ignoresMouseEvents {
-            if globalMouse == nil {
-                globalMouse = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseUp]) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.mouseMoved() }
-                }
+        let held = !window.ignoresMouseEvents || hub.hovering || pendingHover != nil
+        if held, globalMouse == nil {
+            globalMouse = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseUp]) { [weak self] _ in
+                MainActor.assumeIsolated { self?.mouseMoved() }
             }
-            if trigger.isVisible { trigger.orderOut(nil) }
-            return
-        }
-        if let global = globalMouse {
+        } else if !held, let global = globalMouse {
             NSEvent.removeMonitor(global)
             globalMouse = nil
         }
-        guard layout.frame != .zero, dragStart == nil else { return }
-        let frame = hubScreenFrame.insetBy(dx: -1, dy: -1)
+        guard window.ignoresMouseEvents else {
+            if trigger.isVisible { trigger.orderOut(nil) }
+            return
+        }
+        guard let bar = barOnScreen, dragStart == nil else { return }
+        let frame = bar.insetBy(dx: -1, dy: -1)
         if trigger.frame != frame { trigger.setFrame(frame, display: false) }
         if !trigger.isVisible { trigger.orderFrontRegardless() }
         // The hub may have grown or moved under a still pointer.
-        if frame.contains(NSEvent.mouseLocation) { mouseMoved() }
+        if !held, frame.contains(mouseLocation()) { mouseMoved() }
     }
 
-    private func mouseMoved() {
+    /// Where the bar is drawn on screen: its own view's frame, else (before it is in the window) its measured frame.
+    private var barOnScreen: NSRect? {
+        if let drawn = hub.barOnScreen { return drawn }
+        return layout.frame == .zero ? nil : hubScreenFrame
+    }
+
+    /// The one place that says whether the pointer is on the hub: on the bar, or on the panel of the section shown, both
+    /// where they are drawn this moment (`HubPiece`). Reaching it takes 1pt of slack; once it has the pointer, 4, so the
+    /// seam between bar and panel, a rounded corner or a pixel's rounding never counts as leaving.
+    func isOnHub(_ p: NSPoint) -> Bool {
+        let slack: CGFloat = hub.hovering ? 4 : 1
+        if let bar = barOnScreen, bar.insetBy(dx: -slack, dy: -slack).contains(p) { return true }
+        return hub.panelsOnScreen.contains { $0.insetBy(dx: -slack, dy: -slack).contains(p) }
+    }
+
+    func mouseMoved() {
         guard dragStart == nil, !barAway else { return }
-        let mouse = NSEvent.mouseLocation
-        let inside = hubScreenFrame.insetBy(dx: -1, dy: -1).contains(mouse)
-            || hub.openPanelFrame.map { screenFrame($0).insetBy(dx: -2, dy: -2).contains(mouse) } == true
+        let inside = isOnHub(mouseLocation())
         // A window-server call, so only when it changes.
         setAcceptsMouse(inside)
+        defer { syncTrigger() }
         if inside == hub.hovering {
             // Closed from the keyboard with the pointer outside: the next entry may show a panel again.
             if !inside, hub.quiet { hub.quiet = false }
@@ -322,7 +345,7 @@ final class HubController {
         if pendingHover == inside { return }
         hoverTask?.cancel()
         // Passing over the bar on the way somewhere else shouldn't open it; nor should a drag from elsewhere.
-        guard !inside || NSEvent.pressedMouseButtons == 0 else { pendingHover = nil; return }
+        guard !inside || mouseButtons() == 0 else { pendingHover = nil; return }
         pendingHover = inside
         let delay: Duration = inside ? .zero : .milliseconds(120)
         hoverTask = Task { [weak self] in
@@ -336,6 +359,8 @@ final class HubController {
                 self.hub.quiet = false
                 self.closedByLeaving()
             }
+            // Closed: back to the arming window alone.
+            self.syncTrigger()
         }
     }
 

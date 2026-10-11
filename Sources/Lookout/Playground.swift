@@ -59,7 +59,7 @@ struct PlaygroundView: View {
     }
 
     @ViewBuilder private var docked: some View {
-        let hubView = LookoutHub(store: store, ui: ui, hub: hub).onHover(perform: hover)
+        let hubView = LookoutHub(store: store, ui: ui, hub: hub).environment(\.hubPointer, hover)
         switch ui.edge {
         case .right: hubView.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(.top, menuBar + 40)
         case .left: hubView.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.top, menuBar + 40)
@@ -68,7 +68,8 @@ struct PlaygroundView: View {
         }
     }
 
-    /// Opens at once; closes a moment after the mouse leaves, so crossing a gap doesn't flicker it shut.
+    /// Opens at once; closes a moment after the mouse leaves the bar and its panel, so crossing a gap doesn't flicker it shut.
+    /// (In the app, `HubController` decides this from where the hub is drawn.)
     private func hover(_ inside: Bool) {
         leaveTask?.cancel()
         if inside {
@@ -76,7 +77,12 @@ struct PlaygroundView: View {
         } else {
             leaveTask = Task {
                 try? await Task.sleep(for: .milliseconds(350))
-                if !Task.isCancelled { hub.hovering = false }
+                guard !Task.isCancelled else { return }
+                hub.hovering = false
+                hub.cancelDwell()
+                hub.section = nil
+                hub.selection = nil
+                hub.quiet = false
             }
         }
     }

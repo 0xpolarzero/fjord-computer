@@ -21,6 +21,9 @@ extension EnvironmentValues {
     @Entry var openRouterMessage: (UUID) -> Void = { _ in }
     /// Picks a card in the Router (window open or not): a click on it in the bar's panel, before the window opens on the Router.
     @Entry var pickRouterCard: (String) -> Void = { _ in }
+    /// Whether SwiftUI has the pointer over the bar or its panel, for a host that has no `HubController` (the playground). The
+    /// app ignores it: the controller alone decides, from where the hub is drawn.
+    @Entry var hubPointer: (Bool) -> Void = { _ in }
 }
 
 @Observable
@@ -89,12 +92,63 @@ final class HubState {
     /// The pointer left a section before it settled: nothing opens.
     func cancelDwell() { dwell?.cancel() }
 
-    /// Where that section's panel is (in the hub's window), so the window takes the mouse there too.
-    @ObservationIgnored var panelFrame: CGRect = .zero
-    /// The panel's frame while one is showing. Not cleared when a panel goes: one closing (still fading out) as the
-    /// next opens would clear the new one's frame, leaving the window deaf to the pointer over most of it.
-    var openPanelFrame: CGRect? {
-        section != nil && !quiet && panelFrame != .zero ? panelFrame : nil
+    /// The bar's and the panels' views (`HubPiece`): where each is drawn, read when the pointer moves.
+    @ObservationIgnored let pieces = NSHashTable<HubPieceView>.weakObjects()
+
+    /// Where the bar is drawn on screen, if it is in a window.
+    var barOnScreen: NSRect? {
+        pieces.allObjects.lazy.filter { $0.section == nil }.compactMap(\.screenFrame).first
+    }
+
+    /// Where the panel of the section shown is drawn on screen: none while quiet; two while one closing (still fading
+    /// out) is drawn under the same section opening again. One fading out after another section opened doesn't count.
+    var panelsOnScreen: [NSRect] {
+        guard let section, !quiet else { return [] }
+        return pieces.allObjects.filter { $0.section == section }.compactMap(\.screenFrame)
+    }
+}
+
+/// An empty AppKit view SwiftUI lays out exactly where a piece of the hub is drawn: the bar, or a section's panel. Whether
+/// the pointer is on the hub is decided from these, read as the pointer moves, so it is always where things are on screen
+/// at that moment. A frame SwiftUI reports (`onGeometryChange`) can come a layout late, or not until something else changes:
+/// the inbox panel, sized from its own measured list, kept the frame of its header alone while its rows were drawn under it,
+/// and moving onto a row closed it.
+final class HubPieceView: NSView {
+    /// nil: the bar; else the section whose panel this is.
+    var section: HubSection?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// Never in the way of the pointer: SwiftUI's own hovers and clicks go on as if it weren't there.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Where it is on screen, if it is in a window.
+    var screenFrame: NSRect? {
+        guard let window, !isHiddenOrHasHiddenAncestor else { return nil }
+        return window.convertToScreen(convert(bounds, to: nil))
+    }
+}
+
+/// Puts a `HubPieceView` behind a piece of the hub, the same size and in the same place.
+struct HubPiece: NSViewRepresentable {
+    let hub: HubState
+    let section: HubSection?
+
+    func makeNSView(context: Context) -> HubPieceView {
+        let view = HubPieceView()
+        view.section = section
+        hub.pieces.add(view)
+        return view
+    }
+
+    func updateNSView(_ view: HubPieceView, context: Context) {
+        view.section = section
+        hub.pieces.add(view)
     }
 }
 
@@ -103,11 +157,11 @@ struct LookoutHub: View {
     let store: Store
     let ui: UIState
     @Bindable var hub: HubState
-    /// Where each section's cells are in the bar, and whether the pointer is on the bar or a section's panel.
+    /// Where each section's cells are in the bar, and whether the pointer is on the bar or a section's panel (for a host
+    /// without the controller, the playground: `hubPointer`).
     @State var sectionFrames: [HubSection: CGRect] = [:]
     @State var overBar = false
     @State var overPanel = false
-    @State var peekLeave: Task<Void, Never>?
     /// The bar's size and the open panel's natural size, to place the panel against the bar's ends.
     @State var barSize: CGSize = .zero
     @State var peekSizes: [HubSection: CGSize] = [:]
@@ -117,6 +171,7 @@ struct LookoutHub: View {
     @Environment(\.openUpdates) var openUpdates
     @Environment(\.openRouter) var openRouter
     @Environment(\.pickRouterCard) var pickRouterCard
+    @Environment(\.hubPointer) var hubPointer
 
     /// The bar's depth: a cell's width on the sides, the strip's height along the top and bottom.
     static let cell = Theme.Metrics.bar
@@ -136,7 +191,9 @@ struct LookoutHub: View {
         }
         .coordinateSpace(.named(Self.barSpace))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in if barSize != size { barSize = size } }
-        .onHover { overBar = $0; hoverChanged() }
+        // Where the bar is drawn, for the controller to tell whether the pointer is on it.
+        .background(HubPiece(hub: hub, section: nil))
+        .onHover { overBar = $0; hubPointer(overBar || overPanel) }
         .background(shape.fill(Theme.bg))
         // Claude's panel ring (`shadow-panel`'s inset white 10%) against the desktop.
         .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
