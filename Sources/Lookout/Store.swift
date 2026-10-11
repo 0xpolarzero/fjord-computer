@@ -458,11 +458,16 @@ final class Store {
     }
 
     /// How soon to read again because a session's background work isn't known yet (see `RouterFeed.update`): only while the
-    /// Router waits on a finished turn of a session that isn't running and the last read couldn't say. Nil otherwise (no tick
-    /// for it at rest).
+    /// Router waits on a finished turn of a session that isn't running, or a waiting card on another session (`resolveWaits`),
+    /// and the last read couldn't say. Nil otherwise (no tick for it at rest).
     var inventoryRecheck: TimeInterval? {
         guard router.enabled, let inventory = claudeTaskInventory else { return nil }
-        let waiting = router.pendingTurns.keys.contains { id in
+        let watched = router.cards.compactMap { card -> String? in
+            guard card.isOpen, card.kind == .waiting, card.triage?.ready == nil,
+                  case .session(let id, _) = card.triage?.watch?.target else { return nil }
+            return id
+        }
+        let waiting = (Array(router.pendingTurns.keys) + watched).contains { id in
             claudeSessions[id].map { !$0.running && !inventory.contains(id) } ?? false
         }
         return waiting ? Self.inventoryRecheckDelay : nil

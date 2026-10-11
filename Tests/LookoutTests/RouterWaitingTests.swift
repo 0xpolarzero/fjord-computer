@@ -134,6 +134,26 @@ import Testing
         #expect(RouterWaits.message(s.router.cards[0].triage!) == "The session you were waiting on finished: it finished its turn.")
     }
 
+    @Test func anotherSessionIsDoneOnlyOnceItsBackgroundWorkIsToo() {
+        let watch = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "session “Migration”")
+        let (s, _) = store(watch: watch)
+        // Its turn is over, but a subagent it started still runs (Working, in Lookout).
+        s.claudeSessions["b"]?.completedTurns = 6
+        s.claudeSessions["b"]?.running = false
+        s.claudeTasks = ["b": [ClaudeTask(id: "t1", kind: .agent, title: "Backfill", since: Date())]]
+        s.claudeTaskInventory = ["b"]
+        s.resolveWaits()
+        #expect(s.router.cards[0].triage?.ready == nil)
+        // Done, but the last read didn't look at its work yet: not known, so read again soon.
+        s.claudeTasks = [:]
+        s.claudeTaskInventory = []
+        s.resolveWaits()
+        #expect(s.router.cards[0].triage?.ready == nil && s.inventoryRecheck != nil)
+        s.claudeTaskInventory = ["b"]
+        s.resolveWaits()
+        #expect(s.router.cards[0].triage?.ready?.result == "it finished its turn" && s.inventoryRecheck == nil)
+    }
+
     @Test func aSessionAtWorkIsDoneOnceItStopsWhateverItsCountShowedWhenItWasPicked() async {
         // b's turn ended and was counted (6) before its summary came, while it still shows running: picked then, it is
         // done when it stops, not one turn later.

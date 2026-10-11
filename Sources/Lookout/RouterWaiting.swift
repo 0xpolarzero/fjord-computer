@@ -7,11 +7,15 @@ import Foundation
 // run of the Router's.
 
 enum RouterWaits {
-    /// What came of the watched thing, once it is done; nil while it isn't (or when Lookout can't tell).
-    static func result(_ watch: RouterTriage.Watch, sessions: [String: ClaudeSession], things: [String: Thing]) -> String? {
+    /// What came of the watched thing, once it is done; nil while it isn't (or when Lookout can't tell). Another session is
+    /// done once its background work is too: `tasks` is what sessions whose turn is over still run (`Store.routerTasks`),
+    /// `inventory` the sessions the last read looked at for it (nil: every one).
+    static func result(_ watch: RouterTriage.Watch, sessions: [String: ClaudeSession], things: [String: Thing],
+                       tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil) -> String? {
         switch watch.target {
         case .session(let id, let turns):
-            guard let session = sessions[id], !session.isArchived, session.completedTurns > turns, !session.running else { return nil }
+            guard let session = sessions[id], !session.isArchived, session.completedTurns > turns, !session.running,
+                  (tasks[id] ?? []).isEmpty, inventory?.contains(id) ?? true else { return nil }
             if let counted = watch.turnsAtWork, session.completedTurns <= counted, session.summary == nil { return nil }
             return session.summary?.blocked == true ? "it stopped, blocked" : "it finished its turn"
         case .ci(let id):
@@ -191,7 +195,8 @@ extension Store {
         for i in state.cards.indices {
             let card = state.cards[i]
             guard card.isOpen, card.kind == .waiting, let watch = card.triage?.watch else { continue }
-            let result = RouterWaits.result(watch, sessions: claudeSessions, things: things)
+            let result = RouterWaits.result(watch, sessions: claudeSessions, things: things, tasks: routerTasks,
+                                            inventory: claudeTaskInventory)
             if let was = card.triage?.ready {
                 guard card.triage?.told == nil, case .ci(let id) = watch.target, things[id] != nil, result != was.result else { continue }
                 state.cards[i].triage?.ready = result.map { .init(result: $0, at: now) }
