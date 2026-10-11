@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fjord — the mark</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #101418; --paper: #F7F8F5; --fonte: #0F9AC3; --amber: #E8A23A; --red: #D9614F;
+          --bg: var(--ink); --text: var(--paper); --sec: #A3AAB0; --line: #2A3138; --panel: #171C21; }
+  [data-theme="light"] { --bg: var(--paper); --text: var(--ink); --sec: #5C636A; --line: #DCDFD9; --panel: #EDEFEA; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 Geist, system-ui, sans-serif; padding: 48px; transition: background .3s, color .3s; }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  h1 { font-weight: 500; font-size: 24px; letter-spacing: -.03em; }
+  h2 { font-weight: 500; font-size: 16px; letter-spacing: -.01em; margin: 56px 0 4px; }
+  p.note { color: var(--sec); max-width: 720px; margin-bottom: 20px; }
+  button { font: inherit; color: var(--text); background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .row { display: flex; gap: 36px; align-items: flex-end; flex-wrap: wrap; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .cap { font: 12px "Geist Mono", monospace; color: var(--sec); text-align: center; }
+  .tile { border-radius: 22.5%; display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(127,140,150,.28); }
+  .menubar { display: flex; align-items: center; gap: 14px; padding: 4px 14px; border-radius: 8px; font: 13px system-ui; }
+  .inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--sec); }
+  svg { display: block; overflow: visible; }
+  .wm { font-family: Geist; font-weight: 500; letter-spacing: -0.012em; }
+</style>
+</head>
+<body>
+<header><h1>Fjord — sun over water</h1><button id="theme">light</button></header>
+<p class="note">One circle cut by a level horizon: the sun above, its reflection below as two bands of water, the second thinner. Every state below is drawn from the same construction and the studio's three colours.</p>
+
+<h2>Logo</h2>
+<p class="note">The mark, the wordmark with its j dotted in water, the lockup, and the studio endorsement.</p>
+<div class="row" id="logos"></div>
+
+<h2>App icon</h2>
+<p class="note">macOS asks for default, dark and a single-tint version (tinted and clear); the tint keeps the shape, so the water is told apart by its cuts alone.</p>
+<div class="row" id="icons"></div>
+
+<h2>Sizes</h2>
+<p class="note">One mark at every size: macOS scales the 1024 px icon down for Finder and Spotlight, and Fjord has no menu bar item, so there is no separate small drawing.</p>
+<div class="row" id="sizes"></div>
+
+<h2>Loading</h2>
+<p class="note">In one colour, as everywhere in the app: the parts fade out one by one from the top, the sun first, then come back in the same order.</p>
+<div class="row" id="loaders"></div>
+
+<h2>States</h2>
+<p class="note">The mark carries no status, and no colour for it: at rest, or working. Needs you and failed stay in the app's own interface, where they already are.</p>
+<div class="row" id="states"></div>
+
+<h2>In context</h2>
+<div class="row" id="context"></div>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+// the construction, in units of the circle's diameter (1): sun to 0.55, then gap 0.072, band 0.2, gap 0.072, band 0.11
+const GAP = 0.072, BANDS = [0.2, 0.11], SPLIT = 0.55;
+let uid = 0;
+const smooth = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+// part i of n: out at its turn, every part gone a moment, back in the same order; 2.6 s
+function level(t, i, n) { const p = (t / 2.6) % 1, step = 0.3 / n; return 1 - smooth((p - 0.04 - i * step) / 0.11) + smooth((p - 0.52 - i * step) / 0.11); }
+const bandsAt = (bs, gap, sp) => { let y = sp; return bs.map((b) => { y += gap; const r = [y, b]; y += b; return r; }); };
+function mark({ size = 120, sun = 'text', water = 'fonte', bands = BANDS, split = SPLIT, anim = null, state = null, mono = null, small = false } = {}) {
+  if (small) { bands = [0.3]; split = 0.56; }
+  const svg = document.createElementNS(NS, 'svg'); const id = 'c' + (uid++);
+  svg.setAttribute('width', size); svg.setAttribute('height', size); svg.setAttribute('viewBox', '0 0 1 1');
+  svg.innerHTML = `<defs><clipPath id="${id}"><circle cx=".5" cy=".5" r=".5"/></clipPath></defs><g clip-path="url(#${id})"></g>`;
+  const g = svg.querySelector('g');
+  function paint(t) {
+    const sunCol = mono || (sun === 'text' ? css('--text') : css(sun));
+    let wCol = mono || css('--' + water);
+    let sp = split, bs = bands.slice(), gap = small ? 0.14 : GAP, alphas = bs.map(() => 1), cols = bs.map(() => wCol);
+    if (anim === 'fade') {
+      // one colour: the parts fade out one by one from the top, then come back in the same order; a faint trace stays
+      const col = mono || css('--text'), parts = [[0, SPLIT], ...bandsAt(bs, gap, sp)];
+      g.innerHTML = parts.map(([y, h], i) => `<rect x="0" y="${y - (i ? 0 : 0.02)}" width="1" height="${h + (i ? 0 : 0.02)}" fill="${col}" opacity="${0.1 + 0.9 * level(t, i, parts.length)}"/>`).join('');
+      return;
+    }
+    let html = `<rect x="0" y="0" width="1" height="${sp}" fill="${sunCol}"/>`, y = sp;
+    bs.forEach((b, i) => { y += gap; if (b > 0.001) html += `<rect x="0" y="${y}" width="1" height="${b}" fill="${cols[i] || wCol}" opacity="${alphas[i]}"/>`; y += b; });
+    g.innerHTML = html;
+  }
+  paint(0);
+  if (anim) { const loop = (now) => { paint(now / 1000); if (!matchMedia('(prefers-reduced-motion: reduce)').matches) requestAnimationFrame(loop); }; requestAnimationFrame(loop); }
+  svg._repaint = () => paint(performance.now() / 1000);
+  return svg;
+}
+function tile(size, bg, opts) {
+  const d = document.createElement('div'); d.className = 'tile'; d.style.cssText = `width:${size}px;height:${size}px;background:${bg}`;
+  d.appendChild(mark({ size: size * 0.6, ...opts })); return d;
+}
+function cell(node, cap) { const c = document.createElement('div'); c.className = 'cell'; c.append(node); const s = document.createElement('div'); s.className = 'cap'; s.textContent = cap; c.append(s); return c; }
+function wordmark(px, color = 'var(--text)') {
+  const s = document.createElementNS(NS, 'svg'); const h = px * 1.25, w = px * 2.6;
+  s.setAttribute('width', w); s.setAttribute('height', h);
+  s.innerHTML = `<text class="wm" x="0" y="${px}" font-size="${px}" fill="${color}">fȷord</text>`;
+  document.body.appendChild(s);                         // measure the dotless j to dot it in water
+  const t = s.querySelector('text'), f = t.getSubStringLength(0, 1), j = t.getSubStringLength(1, 1);
+  const stem = f + j * 0.6, r = px * 0.075;
+  s.insertAdjacentHTML('beforeend', `<circle cx="${stem}" cy="${px * 0.25}" r="${r}" fill="var(--fonte)"/>`);
+  s.setAttribute('width', t.getComputedTextLength() + 2);
+  s.remove(); return s;
+}
+function lockup(px) { const d = document.createElement('div'); d.style.cssText = 'display:flex;align-items:center;gap:' + px * 0.32 + 'px'; d.append(mark({ size: px * 0.82 }), wordmark(px)); return d; }
+function amont(px) {
+  const d = document.createElement('div'); d.style.cssText = `display:flex;align-items:baseline;gap:${px * 0.3}px;color:var(--sec);font-size:${px * 0.42}px`;
+  d.append(lockup(px)); const by = document.createElement('span'); by.innerHTML = 'by <span class="wm" style="color:var(--text)">amont</span><span style="color:var(--fonte)">^</span>'; d.append(by); return d;
+}
+function build() {
+  for (const id of ['logos', 'icons', 'sizes', 'loaders', 'states', 'context']) document.getElementById(id).innerHTML = '';
+  const logos = document.getElementById('logos');
+  logos.append(cell(mark({ size: 140 }), 'mark'), cell(wordmark(72), 'wordmark'), cell(lockup(64), 'lockup'), cell(amont(48), 'with the studio'));
+  const icons = document.getElementById('icons');
+  icons.append(
+    cell(tile(150, 'var(--ink)', { sun: '--paper' }), 'default, dark'),
+    cell(tile(150, 'var(--paper)', { sun: '--ink' }), 'default, light'),
+    cell(tile(150, '#2B3138', { mono: '#D8DCDF' }), 'tinted'),
+    cell(tile(150, 'rgba(160,170,180,.18)', { mono: 'rgba(255,255,255,.85)' }), 'clear'));
+  const sizes = document.getElementById('sizes');
+  for (const s of [128, 64, 32]) sizes.append(cell(tile(s, 'var(--ink)', { sun: '--paper' }), s + ' px'));
+  for (const s of [24, 16]) sizes.append(cell(tile(s, 'var(--ink)', { sun: '--paper' }), s + ' px'));
+
+  const loaders = document.getElementById('loaders');
+  const box = document.createElement('div'); box.style.cssText = 'display:flex;gap:22px;align-items:center';
+  box.append(mark({ size: 120, anim: 'fade' }), mark({ size: 48, anim: 'fade' }), mark({ size: 24, anim: 'fade' }), mark({ size: 16, anim: 'fade' }));
+  loaders.append(cell(box, 'one colour · 120 · 48 · 24 · 16'));
+  const states = document.getElementById('states');
+  states.append(cell(mark({ size: 72 }), 'at rest'), cell(mark({ size: 72, anim: 'fade' }), 'working'));
+  const ctx = document.getElementById('context');
+  const line = document.createElement('div'); line.className = 'inline'; line.append(mark({ size: 16, anim: 'fade' }), document.createTextNode('Syncing 14 repositories…'));
+  const dock = document.createElement('div'); dock.style.cssText = 'display:flex;gap:10px;padding:10px 14px;border-radius:18px;background:var(--panel)';
+  for (const bg of ['#3D6EF5', '#F2F2F2', 'var(--ink)', '#1E1E1E', '#FF6A3D']) {
+    const t = document.createElement('div'); t.className = 'tile'; t.style.cssText = `width:56px;height:56px;background:${bg}`;
+    if (bg === 'var(--ink)') t.append(mark({ size: 34, sun: '--paper' }));
+    dock.append(t);
+  }
+  ctx.append(cell(line, 'inline loader, 16 px'), cell(dock, 'in a Dock, among other apps'));
+}
+build();
+const btn = document.getElementById('theme');
+btn.onclick = () => { const light = document.documentElement.dataset.theme !== 'light'; document.documentElement.dataset.theme = light ? 'light' : 'dark'; btn.textContent = light ? 'dark' : 'light'; build(); };
+</script>
+</body>
+</html>
