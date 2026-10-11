@@ -191,6 +191,34 @@ import Testing
         #expect(s.routerTriager.telling.isEmpty)
     }
 
+    @Test func theInboxsChecksTurnedOffWhileATurnIsReadGoNowhereAndComeOfNothing() async {
+        for when in ["reading", "answering"] {
+            let (s, _) = store(watch: ciWatch, things: [ci(.pending)])
+            s.router.cards = [RouterCard(id: "a#t3", sessionID: "a", kind: .done, title: "Deploy fix", folder: "/code/app",
+                                         text: "Waiting on CI", createdAt: Date())]
+            s.routerTriager.rescanned = true
+            s.routerTriager.reader = { _ in "Pushed the fix; waiting for CI on o/app#1 before merging." }
+            s.routerTriager.earlier = { [weak s] _ in
+                if when == "reading" { s?.settings.jevReadsInbox = false }
+                return []
+            }
+            var offered: [[String]] = []
+            s.routerTriager.asker = { [weak s] questions, _ in
+                if case .choice(let keys, _, _)? = questions["waitTarget"] { offered.append(keys) } else { offered.append([]) }
+                if when == "answering" { s?.settings.jevReadsInbox = false }
+                return ["state": .choice(.init(choice: "waiting", confidence: 0.9, probabilities: ["waiting": 0.9])),
+                        "waitingOn": .choice(.init(choice: "ci", confidence: 0.9, probabilities: ["ci": 0.9])),
+                        "waitTarget": .choice(.init(choice: "c0", confidence: 0.9, probabilities: ["c0": 0.9]))]
+            }
+            s.triageTurns()
+            await s.routerTriager.idle()
+            #expect(offered.count == 1)
+            #expect(offered.first?.contains("c0") == (when == "answering"))
+            let card = s.router.cards[0]
+            #expect(card.triage?.state == .waiting && card.triage?.watch == nil)
+        }
+    }
+
     @Test func aLateDeliveryLeavesACardYouReopenedMeanwhileOpen() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
         var release: CheckedContinuation<Void, Never>?

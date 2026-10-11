@@ -247,6 +247,12 @@ struct RouterTriage: Codable, Hashable {
         var key: String
         var hint: String
         var watch: Watch
+
+        /// The inbox's PR or workflow (what goes to Jev only while he may read the inbox).
+        var fromInbox: Bool {
+            if case .ci = watch.target { return true }
+            return false
+        }
     }
 
     /// The questions of the one call. The sentences are named by index (their text is in the state, fenced).
@@ -542,7 +548,7 @@ extension Store {
             let candidates = RouterTriage.candidates(RouterTriage.sentences(message))
             // Looking back, only a turn that ended on what looks like an ask is worth a call.
             if rescue, candidates.isEmpty { return }
-            let options = await self.waitOptions(for: session)
+            var options = await self.waitOptions(for: session)
             var state = RouterTriage.state(message: message, title: session.title, project: session.folderName,
                                            summary: session.summary?.detail, candidates: candidates)
             var questions = RouterTriage.questions(candidates: candidates, options: options)
@@ -552,6 +558,12 @@ extension Store {
                 questions.merge(extra.questions) { a, _ in a }
                 state.merge(extra.state) { a, _ in a }
             }
+            // "Let Jev read new comments" turned off while the turn was read: the inbox's PRs and workflows among the
+            // options don't go; turned off while he answered, none of them is taken from his answer.
+            if !self.jevReadsInbox, options.contains(where: \.fromInbox) {
+                options.removeAll(where: \.fromInbox)
+                questions["waitTarget"] = RouterTriage.questions(candidates: candidates, options: options)["waitTarget"]
+            }
             let answers: [String: JevClient.Answer]
             do {
                 try Task.checkCancellation()
@@ -560,6 +572,7 @@ extension Store {
                 stopped = error is CancellationError || error as? JevClient.Failure == .cancelled
                 return
             }
+            if !self.jevReadsInbox { options.removeAll(where: \.fromInbox) }
             var triage = RouterTriage.parse(answers, candidates: candidates, options: options, source: source)
             for extra in extras { extra.apply(answers, &triage) }
             if rescue {
