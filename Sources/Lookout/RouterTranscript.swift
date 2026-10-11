@@ -220,17 +220,22 @@ struct ShimmerText: View {
     var role: (CGFloat, CGFloat) = CDS.Transcript.text
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The text is laid out once, and the sheen over it, masked by the same text, is Core Animation's to move: SwiftUI draws
+    /// nothing again as it sweeps. (Driven from SwiftUI, each frame of it laid the whole window out again: a core's worth of
+    /// work for as long as anything was working.)
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { context in
-            let c = reduceMotion ? -1 : Self.centre(context.date.timeIntervalSinceReferenceDate)
-            Text(text)
-                .cdsText(role, .regular, CDS.Text.muted)
-                .foregroundStyle(LinearGradient(
-                    stops: [.init(color: CDS.Text.muted, location: 0), .init(color: CDS.Transcript.shimmerPeak, location: 0.5),
-                            .init(color: CDS.Text.muted, location: 1)],
-                    startPoint: UnitPoint(x: c - 0.5, y: 0.3), endPoint: UnitPoint(x: c + 0.5, y: 0.7)))
-                .lineLimit(1)
+        label.overlay {
+            if !reduceMotion {
+                SheenView()
+                    .mask(alignment: .topLeading) { label }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
+    }
+
+    private var label: some View {
+        Text(text).cdsText(role, .regular, CDS.Text.muted).lineLimit(1)
     }
 
     /// The sheen's centre in text widths: −0.5 to 1.5, eased `cubic-bezier(.714,.121,.211,.888)` over 15–85%.
@@ -248,6 +253,64 @@ struct ShimmerText: View {
             if coord(mid, x1, x2) < x { lo = mid } else { hi = mid }
         }
         return coord((lo + hi) / 2, y1, y2)
+    }
+}
+
+/// The shimmer's sheen: a gradient one width wide sweeping across, `ShimmerText.centre` as a Core Animation keyframe
+/// animation, on the wall clock's phase so every sheen on screen moves together.
+private struct SheenView: NSViewRepresentable {
+    func makeNSView(context: Context) -> SheenNSView { SheenNSView() }
+    func updateNSView(_ view: SheenNSView, context: Context) {}
+}
+
+final class SheenNSView: NSView {
+    private let gradient = CAGradientLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        let peak = NSColor(CDS.Transcript.shimmerPeak)
+        gradient.colors = [peak.withAlphaComponent(0).cgColor, peak.cgColor, peak.withAlphaComponent(0).cgColor]
+        gradient.locations = [0, 0.5, 1]
+        layer?.addSublayer(gradient)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        CATransaction.commit()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        gradient.removeAllAnimations()
+        guard window != nil else { return }
+        let period = CDS.Transcript.shimmerPeriod
+        // The centre (in widths) at rest before 15% and after 85%, eased between: −0.5 → 1.5.
+        func sweep(_ key: String, _ offset: Double) -> CAKeyframeAnimation {
+            let a = CAKeyframeAnimation(keyPath: key)
+            let y = key == "startPoint" ? 0.3 : 0.7
+            a.values = [-0.5, -0.5, 1.5, 1.5].map { NSValue(point: NSPoint(x: $0 + offset, y: y)) }
+            a.keyTimes = [0, 0.15, 0.85, 1]
+            a.timingFunctions = [CAMediaTimingFunction(name: .linear),
+                                 CAMediaTimingFunction(controlPoints: 0.714, 0.121, 0.211, 0.888),
+                                 CAMediaTimingFunction(name: .linear)]
+            a.duration = period
+            a.repeatCount = .infinity
+            a.timeOffset = Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+            a.isRemovedOnCompletion = false
+            return a
+        }
+        gradient.startPoint = NSPoint(x: -1, y: 0.3)
+        gradient.endPoint = NSPoint(x: 0, y: 0.7)
+        gradient.add(sweep("startPoint", -0.5), forKey: "start")
+        gradient.add(sweep("endPoint", 0.5), forKey: "end")
     }
 }
 
