@@ -75,10 +75,16 @@ import Testing
         }
     }
 
-    @Test(arguments: ["**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router",
-                      "Use `@router` here"])
+    @Test(arguments: ["**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router"])
     func aMarkerThatIsntAPlainAsideIsLeftToBeRefused(_ text: String) throws {
         #expect(RouterTools.hasRouterMarker(try edit("Ship it " + text)), "\(text)")
+    }
+
+    @Test func pastedCodeAndQuotesKeepTheirAtRouterText() throws {
+        #expect(try edit("print(\"ask @router for help\")") == "print(\"ask @router for help\")")
+        #expect(try edit("Run `ask @router x` now (@router soon)") == "Run `ask @router x` now")
+        #expect(try edit("Try:\n```\nask @router for help\n```\nthen push @router later") == "Try:\n```\nask @router for help\n```\nthen push")
+        #expect(try edit("Look at\n    echo ask @router help\nplease") == "Look at\n    echo ask @router help\nplease")
     }
 
     // MARK: Running a CLI once

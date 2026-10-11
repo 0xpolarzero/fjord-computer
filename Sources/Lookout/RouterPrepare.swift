@@ -395,9 +395,11 @@ enum Addressing {
         func word(_ c: Character) -> Bool { c.isLetter || c.isNumber }
         var found: [Int] = []
         var i = 0
+        let code = codeMask(text)
         while i + marker.count <= text.count {
             defer { i += 1 }
             guard text[i] == "@", String(text[i..<(i + marker.count)]).lowercased() == "@router" else { continue }
+            if code[i] { continue }
             if i > 0, word(text[i - 1]) { continue }
             let end = i + marker.count
             if end < text.count {
@@ -408,6 +410,60 @@ enum Addressing {
             found.append(i)
         }
         return found
+    }
+
+    /// Which characters are pasted or quoted text rather than the message's own words: fenced code (``` to the closing
+    /// fence or the end), indented code lines (four spaces or a tab), inline code (`…` on a line, matching backtick runs)
+    /// and double-quoted strings ("…" or “…” closed on the same line). A `@router` in them is code, not an aside.
+    static func codeMask(_ text: [Character]) -> [Bool] {
+        var mask = [Bool](repeating: false, count: text.count)
+        var lineStart = 0
+        var fenced = false
+        while lineStart <= text.count {
+            var lineEnd = lineStart
+            while lineEnd < text.count, !text[lineEnd].isNewline { lineEnd += 1 }
+            let line = Array(text[lineStart..<lineEnd])
+            var fences = 0, f = 0
+            while f + 3 <= line.count {
+                if line[f] == "`", line[f + 1] == "`", line[f + 2] == "`" { fences += 1; f += 3 } else { f += 1 }
+            }
+            let isFence = fences % 2 == 1
+            if isFence {
+                fenced.toggle()
+                for k in lineStart..<lineEnd { mask[k] = true }
+            } else if fenced || line.starts(with: Array("    ")) || line.first == "\t" {
+                for k in lineStart..<lineEnd { mask[k] = true }
+            } else {
+                var k = 0
+                while k < line.count {
+                    if line[k] == "`" {
+                        var run = 0
+                        while k + run < line.count, line[k + run] == "`" { run += 1 }
+                        var j = k + run, close: Int?
+                        while j < line.count {
+                            if line[j] == "`" {
+                                var r = 0
+                                while j + r < line.count, line[j + r] == "`" { r += 1 }
+                                if r == run { close = j + r; break }
+                                j += r
+                            } else { j += 1 }
+                        }
+                        if let close {
+                            for m in k..<close { mask[lineStart + m] = true }
+                            k = close
+                        } else { k += run }
+                    } else if line[k] == "\"" || line[k] == "“" {
+                        let closer: Character = line[k] == "“" ? "”" : "\""
+                        if let j = line[(k + 1)...].firstIndex(of: closer) {
+                            for m in k...j { mask[lineStart + m] = true }
+                            k = j + 1
+                        } else { k += 1 }
+                    } else { k += 1 }
+                }
+            }
+            lineStart = lineEnd + 1
+        }
+        return mask
     }
 
     /// The asides taken out: a bracket opened right before the marker, to its close on the same line ("(@router no rush)"),

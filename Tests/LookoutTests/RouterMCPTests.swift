@@ -834,17 +834,25 @@ import Testing
 
     @Test(arguments: [
         "Bump it (@router this one is slow)", "@router what needs me?", "Ship it @router quietly", "Ship it @router.",
-        "Ship it @router, then wait", "Ship it (@router)", "Ship it [@router later]", "say \"@router hi\"", "Bump it @ROUTER",
+        "Ship it @router, then wait", "Ship it (@router)", "Ship it [@router later]", "Bump it @ROUTER",
         "Ship it\n@router: later", "Ship it @router: later", "Ship it {@router note}",
         // After punctuation or formatting.
         "**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router", "x.@router",
         "--@router", "Ship it (@router)!", "``a`` @router b",
-        // In code too: refused, which is safe.
-        "Use `@router` here", "``code with `@router` inside``", "See ```\n@router hi\n```", "Use ``@router`` here",
-        "```swift\nlet a = \"@router\"\n```",
     ])
     func theMarkerIsCaught(_ text: String) {
         #expect(RouterTools.hasRouterMarker(text), "\(text)")
+    }
+
+    /// Pasted code and quoted strings keep their text as it is: a marker there is not one.
+    @Test(arguments: [
+        "Use `@router` here", "``code with `@router` inside``", "See ```\n@router hi\n```", "Use ``@router`` here",
+        "```swift\nlet a = \"@router\"\n```", "say \"@router hi\"", "print(\"ask @router for help\")", "say “ask @router”",
+        "Run:\n    ask @router later\nthen go",
+    ])
+    func aMarkerInCodeOrQuotesIsNotTheMarker(_ text: String) {
+        #expect(!RouterTools.hasRouterMarker(text), "\(text)")
+        #expect(((try? Addressing.edit(text).text) ?? "") == text, "\(text)")
     }
 
     @Test(arguments: [
