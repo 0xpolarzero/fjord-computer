@@ -705,6 +705,22 @@ import Testing
         #expect(!s.waitNamed(other, in: "Waiting for the other session to finish", by: a))
     }
 
+    @Test func aPRIsNamedByItsRefLinkOrNumberNeverByItsTitlesWords() {
+        let login = InboxFixture.pr(12, repo: "o/app", title: "Fix the login redirect")
+        let reset = InboxFixture.pr(13, repo: "o/app", title: "Add password reset")
+        let (s, _) = store(watch: ciWatch, things: [login, reset])
+        let a = s.claudeSessions["a"]!
+        let first = RouterTriage.Watch(target: .ci(thing: login.id), label: "", ref: "o/app#12")
+        let second = RouterTriage.Watch(target: .ci(thing: reset.id), label: "", ref: "o/app#13")
+        // Words of both titles: neither is named, whichever Jev picked.
+        let both = "Waiting for CI on the login redirect and password reset PRs"
+        #expect(!s.waitNamed(first, in: both, by: a))
+        #expect(!s.waitNamed(second, in: both, by: a))
+        // By its number: that one.
+        #expect(s.waitNamed(first, in: "Waiting for CI on #12", by: a))
+        #expect(!s.waitNamed(second, in: "Waiting for CI on #12", by: a))
+    }
+
     @Test func twoWorkflowsOrTwoSessionsNamedAreNeverContinuedOnTheirOwn() {
         var build = InboxFixture.pr(1, repo: "o/app")
         build.id = "workflow:o/app:1@main"

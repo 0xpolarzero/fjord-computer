@@ -179,7 +179,7 @@ extension Store {
 
     /// Whether the waiting session's final message names what it waits on, by Lookout's own reading (not Jev's): the other
     /// session's id, or its title's words or project said of a session (`RouterDepends.namesSession`); the PR's ref (`owner/repo#12`, whole: not
-    /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`), its number (`#12`), or two words of its title, unless the message names another PR by its ref, or two PRs at all; a
+    /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`) or its number (`#12`), never its title's words, unless the message names another PR by its ref, or two PRs at all; a
     /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named on
     /// another branch too is either), from Lookout's own data. A watch whose ref
     /// isn't its thing's names nothing. A wait it doesn't name is never continued on its own.
@@ -242,10 +242,10 @@ extension Store {
             if let number = thing.number, Self.linksPR(lower, repo: thing.repo, number: number) { return true }
             // Another PR named by its ref: this one's number or title words in the same message are about that one.
             if lower.range(of: #"(?<![\w./-])[a-z0-9][a-z0-9-]*/[a-z0-9._-]+#\d"#, options: .regularExpression) != nil { return false }
-            if let number = thing.number,
-               lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil { return true }
-            let titled = RouterDepends.words(thing.workflowName ?? thing.title)
-            return !titled.isEmpty && titled.intersection(RouterDepends.words(message)).count >= min(2, titled.count)
+            // By its number; never by its title's words, which another PR's title can share ("the login redirect and
+            // password reset PRs").
+            guard let number = thing.number else { return false }
+            return lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil
         }
     }
 
