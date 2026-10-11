@@ -321,7 +321,7 @@ import Testing
         #expect(decision(s, a)?.summary == "started in lookout (haiku, low · picked by Jev)")
 
         // Named settings win, and "Your default" asks nothing.
-        await finish(d, f, d.submit("start a new session to refactor the store with opus", context: RouterContext(projects: ["/code/lookout"])))
+        await finish(d, f, d.submit("start a new session to refactor the store, with opus", context: RouterContext(projects: ["/code/lookout"])))
         s.settings.jevPicksSessionModels = false
         await finish(d, f, d.submit("start a new session to refactor the store", context: RouterContext(projects: ["/code/lookout"])))
         #expect(asked.count == 1)
@@ -734,20 +734,20 @@ import Testing
     @Test func aNewSessionTakesTheModelAndEffortYouAskedForAndTheLogSaysWhatWasApplied() async {
         let (s, d, f) = setup()
         f.ack = "ok model=opus effort=high"
-        let a = d.submit("start a new session to add a badge with opus, high effort", context: RouterContext(projects: ["/code/lookout"]))
+        let a = d.submit("start a new session to add a badge, with opus, high effort", context: RouterContext(projects: ["/code/lookout"]))
         await finish(d, f, a)
         #expect(f.startSettings == [SessionSettings(model: "opus", effort: "high")])
         #expect(decision(s, a)?.done == [.started(session: "local_new", project: "lookout", model: "opus", effort: "high")])
         // One setting failed in the session: the other is recorded, and the failure is said.
         f.ack = "ok model=error:no_such_model effort=low"
-        let b = d.submit("start a new session to add a badge using sonnet, low effort", context: RouterContext(projects: ["/code/lookout"]))
+        let b = d.submit("start a new session to add a badge, using sonnet, low effort", context: RouterContext(projects: ["/code/lookout"]))
         await finish(d, f, b)
         #expect(decision(s, b)?.done == [.started(session: "local_new", project: "lookout", model: nil, effort: "low"),
                                          .failed("model/effort: model not set: no such model")])
         // A plugin too old for settings: the message went plain, and the log says why.
         f.settingsSigned = false
         f.ack = "ok"
-        let c = d.submit("start a new session to add a badge with haiku", context: RouterContext(projects: ["/code/lookout"]))
+        let c = d.submit("start a new session to add a badge, with haiku", context: RouterContext(projects: ["/code/lookout"]))
         await finish(d, f, c)
         #expect(decision(s, c)?.done.contains(.failed("model/effort: the session's plugin is older and can't set them")) == true)
         // No words about it: nothing asked.
@@ -762,12 +762,12 @@ import Testing
         func task(_ t: String) -> String { SessionStart.task(from: t, pills: Self.pills(t, p), projects: p) }
         #expect(task("@lookout-live start a session with haiku, low effort: reply with exactly the word pong and nothing else")
                 == "reply with exactly the word pong and nothing else")
-        #expect(task("start a new session to add a badge with opus, high effort") == "add a badge")
+        #expect(task("start a new session to add a badge, with opus, high effort") == "add a badge")
         #expect(task("@lookout start a new session in lookout to fix the Tests") == "fix the Tests")
         #expect(task("New session: fix the flaky test") == "fix the flaky test")
         #expect(task("open a chat in @lookout using sonnet and add a badge") == "add a badge")
         #expect(task("@lookout with opus high effort fix the tests") == "fix the tests")
-        #expect(task("@lookout fix the tests with opus, low effort") == "fix the tests")
+        #expect(task("@lookout fix the tests, with opus, low effort") == "fix the tests")
         #expect(task("please start a session in the lookout project, with xhigh effort: bump the version") == "bump the version")
         #expect(task("fix the tests") == "fix the tests")
         // Code alone keeps the indentation of its first line.
@@ -784,8 +784,8 @@ import Testing
         #expect(task("start a session to move @lookout-live to Swift 6") == "move @lookout-live to Swift 6")
         // Only where a clause was taken out are the spaces tidied: code keeps its indentation and its spacing.
         #expect(task("start a new session with opus to fix this:\n    def f():\n        return  1") == "fix this:\n    def f():\n        return  1")
-        #expect(task("fix  this with opus:\n\tx  =  1") == "fix  this:\n\tx  =  1")
-        #expect(task("fix the tests with opus\n    and the docs") == "fix the tests\n    and the docs")
+        #expect(task("fix  this, with opus:\n\tx  =  1") == "fix  this:\n\tx  =  1")
+        #expect(task("fix the tests, with opus\n    and the docs") == "fix the tests\n    and the docs")
         #expect(task("start a session in lookout") == "")
         #expect(task("@lookout start a new session with opus") == "")
         // Pasted under the request: kept exactly, its first line's indentation and its own settings-like words too.
@@ -819,8 +819,8 @@ import Testing
             #expect(task(text) == String(text.dropFirst("start a session to ".count)), "\(text)")
             #expect(asked(text) == nil, "\(text)")
         }
-        #expect(task("add a settings toggle for high effort using sonnet") == "add a settings toggle for high effort")
-        #expect(asked("add a settings toggle for high effort using sonnet") == SessionSettings(model: "sonnet", effort: nil))
+        #expect(task("add a settings toggle for high effort, using sonnet") == "add a settings toggle for high effort")
+        #expect(asked("add a settings toggle for high effort, using sonnet") == SessionSettings(model: "sonnet", effort: nil))
         // An infinitive ("to use sonnet") and a bare "use" closing the request belong to the task.
         let model = "start a session in lookout to change the default model to use sonnet"
         #expect(task(model) == "change the default model to use sonnet" && asked(model) == nil)
@@ -843,12 +843,30 @@ import Testing
         #expect(f.startSettings == [nil] && f.started.map(\.title) == ["add a settings toggle for high"])
     }
 
+    @Test func aTrailingModelIsSettingsOnlyWhenSetApartFromTheTask() {
+        func asked(_ t: String) -> SessionSettings? { SessionSettings.parse(SessionStart.request(t)) }
+        // Unseparated, "with <model>" ends the task's own words.
+        let whole = "start a session in lookout to replace the default model with sonnet"
+        #expect(SessionStart.task(from: whole, projects: ["lookout"]) == "replace the default model with sonnet")
+        #expect(asked(whole) == nil)
+        #expect(SessionStart.task(from: "fix the tests with opus") == "fix the tests with opus")
+        #expect(asked("fix the tests with opus") == nil)
+        // Set apart by a comma, semicolon, dash or parentheses, they are the request's.
+        let sonnet = SessionSettings(model: "sonnet", effort: nil)
+        for sep in [", with sonnet", "; using sonnet", " \u{2014} with sonnet", " \u{2013} with sonnet", " (with sonnet)"] {
+            let text = "start a session in lookout to replace the default model" + sep
+            #expect(SessionStart.task(from: text, projects: ["lookout"]) == "replace the default model", "\(sep)")
+            #expect(asked(text) == sonnet, "\(sep)")
+        }
+        #expect(asked("start a session to fix it; using haiku, high effort") == SessionSettings(model: "haiku", effort: "high"))
+    }
+
     @Test func aNegationEndsAtButInsteadOrRather() {
-        #expect(SessionSettings.parse("fix the CI, don't use opus but using haiku") == SessionSettings(model: "haiku", effort: nil))
+        #expect(SessionSettings.parse("fix the CI, don't use opus, but using haiku") == SessionSettings(model: "haiku", effort: nil))
         #expect(SessionSettings.parse("fix it, not with opus, rather using sonnet") == SessionSettings(model: "sonnet", effort: nil))
-        #expect(SessionSettings.parse("fix it without opus instead using haiku") == SessionSettings(model: "haiku", effort: nil))
+        #expect(SessionSettings.parse("fix it without opus, instead using haiku") == SessionSettings(model: "haiku", effort: nil))
         #expect(SessionSettings.parse("don't use opus but fix it") == nil)
-        #expect(SessionStart.task(from: "start a session to fix the CI, don't use opus but using haiku") == "fix the CI, don't use opus")
+        #expect(SessionStart.task(from: "start a session to fix the CI, don't use opus, but using haiku") == "fix the CI, don't use opus")
     }
 
     @Test func aSettingSaidNotToBeWantedIsNeitherAppliedNorTakenOut() async {
@@ -902,7 +920,7 @@ import Testing
         #expect(SessionStart.task(from: "Rename the flag. It is set with opus, low effort today")
                 == "Rename the flag. It is set with opus, low effort today")
         // In the request's own sentence, as before.
-        #expect(SessionStart.task(from: "fix the tests with opus, low effort. Then lint") == "fix the tests. Then lint")
+        #expect(SessionStart.task(from: "fix the tests, with opus, low effort. Then lint") == "fix the tests. Then lint")
         let (_, d, f) = setup()
         let a = d.submit(fenced, context: RouterContext(projects: ["/code/lookout"]))
         await finish(d, f, a)
@@ -915,17 +933,17 @@ import Testing
     @Test func codeQuotesAndAnAsideInTheRequestLeaveTheSettingsItEndsWith() {
         func asked(_ t: String) -> SessionSettings? { SessionSettings.parse(SessionStart.request(t)) }
         let opusHigh = SessionSettings(model: "opus", effort: "high")
-        for (text, task) in [("start a session to fix `LoginView` with opus, high effort", "fix `LoginView`"),
-                             ("start a session to rename the \"Save\" button with opus, high effort", "rename the \"Save\" button"),
+        for (text, task) in [("start a session to fix `LoginView`, with opus, high effort", "fix `LoginView`"),
+                             ("start a session to rename the \"Save\" button, with opus, high effort", "rename the \"Save\" button"),
                              ("start a session to rename the “Save” button, with opus and high effort", "rename the “Save” button"),
-                             ("start a session to fix login with opus, high effort (@router no rush)", "fix login (@router no rush)"),
-                             ("start a session to fix `a. b` (@router later. ok) using opus at high effort.", "fix `a. b` (@router later. ok).")] {
+                             ("start a session to fix login, with opus, high effort (@router no rush)", "fix login (@router no rush)"),
+                             ("start a session to fix `a. b` (@router later. ok), using opus at high effort.", "fix `a. b` (@router later. ok).")] {
             #expect(SessionStart.task(from: text) == task, "\(text)")
             #expect(asked(text) == opusHigh, "\(text)")
         }
         // What is in them is never a setting, nor does it end the clause.
-        #expect(asked("start a session to run `claude --model opus` with high effort") == SessionSettings(model: nil, effort: "high"))
-        #expect(SessionStart.task(from: "start a session to run `claude --model opus` with high effort") == "run `claude --model opus`")
+        #expect(asked("start a session to run `claude --model opus`, with high effort") == SessionSettings(model: nil, effort: "high"))
+        #expect(SessionStart.task(from: "start a session to run `claude --model opus`, with high effort") == "run `claude --model opus`")
         for text in ["start a session to set the label to \"with opus, high effort\"", "start a session to fix login (@router use opus)",
                      "start a session to fix `x` and add a toggle for high effort", "start a session to fix `with opus`"] {
             #expect(asked(text) == nil, "\(text)")
@@ -1116,7 +1134,7 @@ import Testing
     @Test func withoutJevAStartRequestStartsInTheProjectItNamesNeverInItsSession() async {
         let (s, d, f) = setup()
         f.rankError = RouterTools.Failure("no TypeSafe key is set")
-        let a = d.submit("start a session in lookout to fix the login bug with opus")
+        let a = d.submit("start a session in lookout to fix the login bug, with opus")
         await finish(d, f, a)
         #expect(f.prepared.isEmpty && f.started.map(\.folder) == ["/code/lookout"])
         #expect(f.startSettings.last! == SessionSettings(model: "opus", effort: nil))

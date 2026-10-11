@@ -598,7 +598,9 @@ enum SessionStart {
     }
 
     /// The settings `text` ends with ("fix the tests with opus, high effort", "…, using sonnet", "…but use haiku"): a clause
-    /// that opens with "with" or "using" (not a bare "use", and not after "to": an infinitive belongs to the task) and holds settings only, with nothing after it but the sentence's closing
+    /// that opens with "with" or "using" (not a bare "use", and not after "to": an infinitive belongs to the task), is set
+    /// apart from the task by a comma, semicolon, dash or parentheses ("…, with opus", "(using haiku)"; unseparated, "replace
+    /// the default model with sonnet" is all task), and holds settings only, with nothing after it but the sentence's closing
     /// mark. Each setting as its words (`item`) and what goes with them when they are taken out (`cut`: the comma or "and"
     /// before it, and, before the first, a "but", "instead" or "rather" leading into the clause). Never one said not to be
     /// wanted (`SessionSettings.negated`).
@@ -631,8 +633,12 @@ enum SessionStart {
     }
 
     private static func trailingSettings(seen text: String) -> [(cut: Range<String.Index>, item: Range<String.Index>)] {
-        let pattern = #"(?:[ \t]*\b(?:but|instead|rather|and))?[,;]?[ \t]*(?<!\bto[ \t]{0,3})\b(?=(?:with|using)\b)"# + settingItem
-            + "(?:" + settingJoin + settingItem + ")*" + #"(?=[ \t]*[.,;:!?]*[ \t]*$)"#
+        // Only a clause set apart from the task counts: after a comma, semicolon or dash, or in parentheses. Without one,
+        // "with <model>" ending a sentence is the task's own words ("replace the default model with sonnet").
+        let body = #"(?:(?:but|instead|rather|and)\b[ \t]*)?(?<!\bto[ \t]{0,3})\b(?=(?:with|using)\b)"# + settingItem
+            + "(?:" + settingJoin + settingItem + ")*"
+        let pattern = #"[ \t]*(?:[,;\x{2014}\x{2013}]|[ \t]-(?=[ \t]))[ \t]*"# + body + #"(?=[ \t]*[.,;:!?]*[ \t]*$)"#
+            + #"|[ \t]*\([ \t]*"# + body + #"[ \t]*\)(?=[ \t]*[.,;:!?]*[ \t]*$)"#
         guard let clause = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
               let one = try? NSRegularExpression(pattern: "(" + settingJoin + ")(" + settingItem + ")", options: [.caseInsensitive])
         else { return [] }
@@ -645,6 +651,10 @@ enum SessionStart {
                 guard let join = Range(im.range(at: 1), in: text), let item = Range(im.range(at: 2), in: text) else { continue }
                 guard !SessionSettings.negated(text, before: item.lowerBound) else { found = []; break }
                 found.append((found.isEmpty ? whole.lowerBound..<item.upperBound : join.lowerBound..<item.upperBound, item))
+            }
+            // A clause in parentheses goes with its closing one.
+            if let last = found.last, text[whole].hasSuffix(")") {
+                found[found.count - 1].cut = last.cut.lowerBound..<whole.upperBound
             }
             if !found.isEmpty { return found }
             from = m.range.location + 1

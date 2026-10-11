@@ -53,7 +53,7 @@ import Testing
         let two = "start a session to fix this;\nlet x = 1;"
         #expect(SessionStart.task(from: two) == "fix this;\nlet x = 1;")
         // A comma left where a settings clause was cut from the end of the request still goes.
-        #expect(SessionStart.task(from: "start a session to fix the tests with opus,") == "fix the tests")
+        #expect(SessionStart.task(from: "start a session to fix the tests, with opus,") == "fix the tests")
     }
 
     @Test func aPillInCodeIsTheCodesTextAndNeverTakenOut() throws {
