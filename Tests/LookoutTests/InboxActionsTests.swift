@@ -233,6 +233,30 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(try Data(contentsOf: file) != original)
     }
 
+    @Test func aLedgerThatCannotBeReadIsKeptEvenWhenTheStateCannotBeReadEither() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, _) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        let state = folder.appendingPathComponent("state.json")
+        let file = try #require(store.actionsFile)
+        let original = Data(#"{"baselines": {}, "runs": {}}"#.utf8)
+        try Data("{}".utf8).write(to: state)
+        try original.write(to: file)
+        for url in [state, file] { try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path) }
+        defer { for url in [state, file] { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) } }
+        store.load()
+        add(store, InboxFixture.pr(2))
+        await store.runActions()
+        store.saveActions()
+        store.flushActions()
+        // The state's file unreadable too: the ledger's only copy still isn't written over.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        #expect(try Data(contentsOf: file) == original)
+    }
+
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])
         await store.runActions()

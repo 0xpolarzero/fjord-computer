@@ -609,19 +609,21 @@ final class Store {
         guard let file else { return }
         let data: Data
         do {
-            guard let read = try Self.readExisting(file) else { return }
+            guard let read = try Self.readExisting(file) else { loadActions(); return }
             data = read
         } catch {
             // There but unreadable (its mode, say): not fresh state. Nothing is written over it until it can be read and
-            // kept aside (see `writeSnapshot`).
+            // kept aside (see `writeSnapshot`). The actions' file is read (and kept from being written over) all the same.
             unreadable = file
             Self.stateLog.error("the saved state can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
+            loadActions()
             return
         }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         guard let state = try? dec.decode(PersistedState.self, from: data) else {
             keepAside(file, data, dropped: ["everything"])
+            loadActions()
             return
         }
         if !state.dropped.isEmpty { keepAside(file, data, dropped: state.dropped) }
