@@ -1,8 +1,7 @@
 import Foundation
 
 // What the Router asks Jev besides where a sent message goes: the same question while you type (the composer shows his
-// pick), and how big a new session's task is (its model and effort). Every call goes through a `JevAsker`, so tests answer
-// for it.
+// pick). Every call goes through a `JevAsker`, so tests answer for it.
 
 /// Typed questions about a state, all in one call (`JevClient.ask`).
 typealias JevAsker = @MainActor ([String: JevClient.Question], [String: String]) async throws -> [String: JevClient.Answer]
@@ -22,42 +21,7 @@ extension JevClient {
     }
 }
 
-// MARK: - A new session's model and effort
-
-/// How big a task is, on Jev's five levels, and the model and effort each level gets: one table.
-enum SessionScope {
-    static let table: [(level: String, model: String, effort: String)] = [
-        ("trivial", "haiku", "low"),
-        ("small", "sonnet", "low"),
-        ("medium", "sonnet", "medium"),
-        ("large", "opus", "high"),
-        ("deep", "opus", "max"),
-    ]
-
-    static let question = JevClient.Question.score(levels: table.map(\.level), instructions: """
-        How big and hard is the task a new Claude Code session is given? trivial: a quick lookup or a one-line change; \
-        small: a focused change in a file or two; medium: a feature or a fix across a few files; large: a multi-part \
-        feature, a refactor or a tricky bug; deep: architecture, research or a hard problem that needs long careful thought.
-        """)
-
-    /// The least confidence a size is used with: below it, the session runs on your defaults.
-    static let sure = 0.4
-
-    /// The settings for Jev's score (0 for the first level to 4 for the last).
-    static func settings(_ score: Double) -> SessionSettings? {
-        guard score.isFinite else { return nil }
-        let row = table[min(max(Int(score.rounded()), 0), table.count - 1)]
-        return SessionSettings(model: row.model, effort: row.effort)
-    }
-
-    /// What the history says picked them.
-    static let by = "Jev"
-}
-
 extension Store {
-    /// Sessions the Router starts without a model or effort named get Jev's pick (Settings → Claude); on unless turned off.
-    var jevPicksSessionModels: Bool { settings.jevPicksSessionModels ?? true }
-
     /// Settings' "Let Jev read what you type": the draft goes to TypeSafe while you type (on unless turned off).
     var jevReadsDrafts: Bool { settings.jevReadsDrafts ?? true }
 }
@@ -77,18 +41,15 @@ final class RouterLiveTarget {
         var text: String
         /// What the page marks: the card's id or the working row's.
         var mark: String?
-        /// What Jev made of the draft (its task's size), for the send to use.
+        /// What Jev made of the draft: sent as shown, the send goes with it without asking him again.
         var found: RouterDispatcher.Classification? = nil
-        /// The @projects it was made with.
-        var projects: [String] = []
     }
 
     private(set) var prediction: Prediction?
     /// A target you fixed by clicking the prediction (a card's goes to `RouterModel.replyTo` instead).
     var pinned: String?
     var pinnedTitle: String?
-    /// The prediction you clicked: while it is still where the draft goes, the send goes with what Jev made of it and logs
-    /// his pick as confirmed.
+    /// The prediction you clicked: while it is still where the draft goes, the send logs his pick as confirmed.
     var chosen: Prediction?
     /// The target you waved off for this draft: it isn't shown again, and the message doesn't go there unasked.
     private(set) var dismissed: String?
@@ -132,7 +93,6 @@ final class RouterLiveTarget {
             self.asking = nil
             self.task = nil
             self.prediction = found.flatMap { self.prediction(from: $0, text: text, store: store) }
-            self.prediction?.projects = context.projects
             self.predicted = self.prediction == nil ? nil : key
         }
     }
@@ -222,10 +182,6 @@ extension RouterModel {
         // Jev's pick you clicked, while the draft still goes there (as the pinned target or the reply to its card).
         if let chosen = live.chosen, chosen.target == live.pinned || reply.map({ "answer:\($0)" }) == chosen.target {
             context.predicted = chosen.target
-            // What he made of the words he read, not of words edited since: the pin stays, his reading of them goes.
-            if RouterDispatcher.liveKey(chosen.text, chosen.projects) == RouterDispatcher.liveKey(plainDraft(store), projects) {
-                context.jev = chosen.found
-            }
         }
         return context
     }

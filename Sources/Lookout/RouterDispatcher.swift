@@ -20,7 +20,7 @@ struct RouterContext: Equatable {
     /// A target you dismissed: the message never goes there without asking you.
     var notTo: String?
     /// Jev's pick you clicked (the pinned target, or `answer:<card>` for the reply), and what he made of the draft: the send
-    /// logs it as confirmed and takes the task's size from it.
+    /// logs it as confirmed, and goes with what was shown without asking him again.
     var predicted: String?
     var jev: RouterDispatcher.Classification?
     /// The target of Jev's pick shown over the composer for these very words as they are sent: only then does a send go
@@ -64,8 +64,6 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's top target (what a different pick corrects).
     var suggestion: String?
     var at: Date
-    /// What Jev made of it besides the target (the size of its task), for the pick to use.
-    var jev: RouterDispatcher.Classification? = nil
 }
 
 // MARK: - Dispatcher
@@ -80,11 +78,6 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's answers to a routing call: the targets, and the questions asked with them in the same call.
     struct Ranking: Equatable {
         var scored: [Scored]
-        /// The task's size on `SessionScope`'s levels, for a session started from it; nil when not asked, or when Jev
-        /// wasn't sure enough of it (`scopeAsked` tells which).
-        var scope: Double? = nil
-        /// The size was asked in this call: a nil `scope` is then Jev's answer (your defaults), not a question still to ask.
-        var scopeAsked = false
     }
 
     /// What Jev (or the words alone) made of a message.
@@ -95,27 +88,22 @@ struct RouterAskBack: Identifiable, Equatable {
         var sure: Bool
         /// Jev answered (else the words alone were matched against titles).
         var assisted: Bool
-        var scope: Double? = nil
-        /// The size was asked with the routing (see `Ranking.scopeAsked`).
-        var scopeAsked = false
         /// Shown over the composer for these words as they were sent (`RouterContext.shown`): you went with it.
         var live = false
 
         var top: Scored? { ranked.first }
 
-        init(ranked: [Scored], sure: Bool, assisted: Bool, scope: Double? = nil, scopeAsked: Bool = false) {
+        init(ranked: [Scored], sure: Bool, assisted: Bool) {
             self.ranked = ranked
             self.sure = sure
             self.assisted = assisted
-            self.scope = scope
-            self.scopeAsked = scopeAsked || scope != nil
         }
 
         /// Jev's answer, best first, sure by `RouterTools.decision`.
         @MainActor init(_ ranking: Ranking) {
             let ranked = ranking.scored.sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
             self.init(ranked: ranked, sure: RouterTools.decision(ranked.map { (target: $0.target, p: $0.p) }) == "send",
-                      assisted: true, scope: ranking.scope, scopeAsked: ranking.scopeAsked)
+                      assisted: true)
         }
     }
 
@@ -197,8 +185,6 @@ struct RouterAskBack: Identifiable, Equatable {
         var text: String
         var context: RouterContext
         var tools: RouterTools
-        /// What Jev made of it, once asked.
-        var jev: Classification? = nil
     }
 
     /// A demo or a shot: an ask waiting for you and runs shown under way, with nothing behind them.
@@ -253,7 +239,7 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         // A pick that is Jev's own suggestion confirms it: an example for the next ones.
         if !corrected { store.updateDecision(id) { $0.decision.confirmed = true } }
-        launch(Job(id: id, text: ask.message, context: ask.context, tools: makeTools(id, ask.message, pills: ask.context.pills), jev: ask.jev),
+        launch(Job(id: id, text: ask.message, context: ask.context, tools: makeTools(id, ask.message, pills: ask.context.pills)),
                stage: "starting") { [self] job in
             try await route(job, to: target)
         }
@@ -333,7 +319,6 @@ struct RouterAskBack: Identifiable, Equatable {
     /// 1. The rules; 2. Jev; 3. a Haiku run.
     private func execute(_ job: Job) async throws {
         guard let store else { return }
-        var job = job
         switch Self.plan(text: job.text, context: job.context, store: store) {
         case .reply(let session, let card):
             // The reply to a card Jev picked while you typed: you went with his pick.
@@ -344,7 +329,6 @@ struct RouterAskBack: Identifiable, Equatable {
             try await start(job, folder: folder)
         case .route(let target):
             confirm(job, target)
-            if job.context.predicted == target { job.jev = job.context.jev }
             try await route(job, to: target)
         case .classify: try await classifyAndAct(job)
         }
@@ -474,16 +458,8 @@ struct RouterAskBack: Identifiable, Equatable {
         let task = SessionStart.task(from: job.text, pills: job.context.pills,
                                      projects: [store.folderName(folder), (folder as NSString).lastPathComponent])
         let project = store.folderName(folder)
-        // "…with opus, high effort": set in the session by its plugin before the first message; else Jev's pick by the size
-        // of the task, when you let him.
-        var settings = SessionSettings.parse(SessionStart.request(job.text, pills: job.context.pills))
-        if settings == nil, store.jevPicksSessionModels, !task.isEmpty,
-           let scope = await scope(of: task, project: project, job: job),
-           // Switched to "Your default" while Jev was asked: his size isn't used.
-           store.jevPicksSessionModels, let picked = SessionScope.settings(scope) {
-            settings = picked
-            store.updateDecision(job.id) { $0.decision.settingsBy = SessionScope.by }
-        }
+        // "…with opus, high effort": set in the session by its plugin before the first message; else your defaults.
+        let settings = SessionSettings.parse(SessionStart.request(job.text, pills: job.context.pills))
         let delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
         if delivery.text.isEmpty {
             // Nothing to send: the settings travel with the first message, so they can't be applied.
@@ -563,8 +539,6 @@ struct RouterAskBack: Identifiable, Equatable {
             ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
         if let named, named != found.top?.target, named != job.context.notTo, eligible(named, store: store) {
             confirm(job, named)
-            var job = job
-            job.jev = found
             return try await route(job, to: named)
         }
         // Wholly for the Router: one of its own runs, never a session or a project; you pick when Jev's pick isn't one.
@@ -596,8 +570,6 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         // Hidden, addressed or gone while Jev was asked: you pick among what is there now.
         if found.sure, let top = found.top, !eligible(top.target, store: store) { found.sure = false }
-        var job = job
-        job.jev = found
         if found.sure, let top = found.top {
             // Where your own words send it: yours, as a pin is, so a follow-up may go there.
             if named == top.target { chosen(job) }
@@ -672,14 +644,6 @@ struct RouterAskBack: Identifiable, Equatable {
         store?.jevAsker(.routing, base: asker ?? tools?.chooser.map(JevClient.asker(choosing:)))
     }
 
-    /// The size of a new session's task: from the routing call when there was one, else a call of its own. A size the
-    /// routing call asked and Jev wasn't sure of is his answer (your defaults), not asked again.
-    private func scope(of task: String, project: String, job: Job) async -> Double? {
-        if let jev = job.jev, jev.scopeAsked { return jev.scope }
-        guard let ask = jev(job.tools) else { return nil }
-        return try? await ask(["scope": SessionScope.question], ["task": task, "project": project])["scope"]?.score(sure: SessionScope.sure)
-    }
-
     /// The label a target stands for: reply (a card or session), start (a project), change_lookout, question, compound.
     static func label(_ target: String) -> String {
         if target.hasPrefix("answer:") || target.hasPrefix("session:") { return "reply" }
@@ -718,7 +682,7 @@ struct RouterAskBack: Identifiable, Equatable {
             options.append(option)
         }
         let ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
-                                suggestion: found.top?.target, at: Date(), jev: found)
+                                suggestion: found.top?.target, at: Date())
         askBacks.append(ask)
         store.updateDecision(job.id) {
             $0.add(.asked(options.map(\.title)))
@@ -809,15 +773,14 @@ extension RouterDispatcher.Effects {
                                                           examples: store.routingExamples(excluding: tools.decision, keys: keys,
                                                                                           legacy: legacy))
                 if !options.described.isEmpty { state[RouterTools.optionsState] = options.described }
-                var questions: [String: JevClient.Question] = [
+                let questions: [String: JevClient.Question] = [
                     "route": .choice(options.keys, hints: options.criteria, instructions: RouterTools.routeInstructions),
                 ]
-                if store.jevPicksSessionModels { questions["scope"] = SessionScope.question }
                 let answers = try await ask(questions, state)
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
                 return RouterDispatcher.Ranking(scored: pick.probabilities.compactMap { key, p -> RouterDispatcher.Scored? in
                     options.keys.firstIndex(of: key).map { RouterDispatcher.Scored(target: targets[$0].target, p: p) }
-                }, scope: answers["scope"]?.score(sure: SessionScope.sure), scopeAsked: questions["scope"] != nil)
+                })
             },
             prepare: { [weak dispatcher] tools, session in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }

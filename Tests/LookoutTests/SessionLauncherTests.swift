@@ -139,29 +139,28 @@ private final class LauncherLog {
         #expect(clones.hasPrefix(SessionFence.open) && clones.contains("c2: x at /code/r/.worktrees/x"))
     }
 
-    @Test func withNoModelNamedTheCloneAndJevsPickOfModelAreOneCallAndTheHistorySaysSo() async throws {
+    @Test func withNoModelNamedJevPicksOnlyTheCloneAndTheSessionRunsOnYourDefaults() async throws {
         let store = ready()
         let log = LauncherLog()
-        log.ack = "ok model=opus effort=max"
         let launcher = launcher(store, log)
         var calls: [(questions: [String], state: [String: String])] = []
+        // Jev would rate anything he were asked as sure as can be: he is asked only the clone.
         launcher.asker = { questions, state in
             calls.append((questions.keys.sorted(), state))
             return ["clone": .choice(.init(choice: "c2", confidence: 0.9, probabilities: ["c1": 0.1, "c2": 0.9])),
-                    "scope": .score(3.8, confidence: 0.8)]
+                    "scope": .score(4, confidence: 1)]
         }
         _ = try await ActionSessions.start(Self.request(message: "Redesign the pool's eviction"), store: store,
                                            clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
-        #expect(calls.map(\.questions) == [["clone", "scope"]])
+        #expect(calls.map(\.questions) == [["clone"]])
         // A message without its GitHub block is read as GitHub's, fenced whole.
         #expect(calls.first?.state["task"] == InboxActions.fenceWarning + "\n" + InboxActions.fenceOpen + "\nRedesign the pool's eviction\n" + InboxActions.fenceClose)
         #expect(log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"])
-        #expect(log.signedSettings == [SessionSettings(model: "opus", effort: "max")])
-        #expect(store.router.decisions.last?.doneLines == ["started a session in x (opus, max · picked by Jev)"])
+        #expect(log.signedSettings == [nil])
+        #expect(store.router.decisions.last?.doneLines == ["started a session in x"])
 
-        // The action's own settings, or "Your default": Jev isn't asked about them.
+        // One clone: nothing to ask; the action's own settings are its own.
         _ = try await ActionSessions.start(Self.request(model: "haiku"), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
-        store.settings.jevPicksSessionModels = false
         _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
         #expect(calls.count == 1)
         #expect(log.signedSettings.dropFirst() == [SessionSettings(model: "haiku", effort: nil), nil])
@@ -175,8 +174,7 @@ private final class LauncherLog {
         var asked = false
         launcher.asker = { _, _ in
             asked = true
-            return ["clone": .choice(.init(choice: "c2", confidence: 0.9, probabilities: ["c1": 0.1, "c2": 0.9])),
-                    "scope": .score(3.8, confidence: 0.8)]
+            return ["clone": .choice(.init(choice: "c2", confidence: 0.9, probabilities: ["c1": 0.1, "c2": 0.9]))]
         }
         store.claudeSessions = ["b": ClaudeSession(id: "b", title: "b", folder: "/code/r/.worktrees/x", completedTurns: 1,
                                                    lastActivity: Date(), lastUserMessage: nil, summary: nil, running: false, cliID: nil)]
@@ -185,26 +183,13 @@ private final class LauncherLog {
         #expect(!asked && log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"] && log.signedSettings == [nil])
     }
 
-    @Test func aSizeJevGivesAfterYouSwitchedToYourDefaultIsNotUsed() async throws {
+    @Test func aCloneJevIsntSureOfIsNotTaken() async throws {
         let store = ready()
         let log = LauncherLog()
         let launcher = launcher(store, log)
+        // A near tie between the clones: the first clone (no session in either).
         launcher.asker = { _, _ in
-            store.settings.jevPicksSessionModels = false
-            return ["scope": .score(3.8, confidence: 0.8)]
-        }
-        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
-        #expect(log.signedSettings == [nil] && store.router.decisions.last?.decision.settingsBy == nil)
-    }
-
-    @Test func aCloneOrASizeJevIsntSureOfIsNotTaken() async throws {
-        let store = ready()
-        let log = LauncherLog()
-        let launcher = launcher(store, log)
-        // A near tie between the clones, and a size he is unsure of: the first clone (no session in either), your defaults.
-        launcher.asker = { _, _ in
-            ["clone": .choice(.init(choice: "c2", confidence: 0.3, probabilities: ["c1": 0.45, "c2": 0.55])),
-             "scope": .score(3.8, confidence: 0.2)]
+            ["clone": .choice(.init(choice: "c2", confidence: 0.3, probabilities: ["c1": 0.45, "c2": 0.55]))]
         }
         _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
         #expect(log.bootstraps.map(\.folder) == ["/code/r"] && log.signedSettings == [nil])
