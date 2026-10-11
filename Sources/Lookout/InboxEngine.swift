@@ -576,6 +576,15 @@ enum InboxEngine {
     }
 
     /// What Jev said that counts: nothing when it was for someone else, or Jev's reading is switched off.
+    /// The thing as Jev would have it rated `level` on `stamp`, for you.
+    static func rated(_ thing: Thing, _ level: Importance, stamp: String, me: String) -> Thing {
+        var copy = thing
+        var signals = signals(thing, me) ?? ThingSignals(viewer: viewer(me))
+        signals.importance = ImportanceSignal(level: level, stamp: stamp)
+        copy.signals = signals
+        return copy
+    }
+
     static func signals(_ thing: Thing, context: InboxContext) -> ThingSignals? {
         context.jevSignals ? signals(thing, context.me) : nil
     }

@@ -168,6 +168,10 @@ struct ActionLedger: Codable, Equatable {
         /// It was in the category then: only its importance facts for that request are old; else its entering and its
         /// facts there are.
         var wasIn: Bool
+        /// By action, what it had in the category when that action was taken in, or would have had there rated (its
+        /// importance aside): only those facts are old once it is rated. One made since (a comment) is new, and so is its
+        /// entering when that brings it in. Nil from a build that didn't note them: all its facts there are old.
+        var facts: [UUID: [String]]? = nil
     }
 
     static func key(_ category: UUID, _ thing: String, _ action: UUID, _ trigger: String) -> String {
@@ -196,6 +200,9 @@ enum InboxActions {
     struct Rating: Equatable {
         var stamp: String
         var rated: Bool
+        /// Not rated yet: by category (one with an importance rule), the facts it would have there once rated, its
+        /// importance aside.
+        var facts: [UUID: [String]] = [:]
     }
 
     /// One action due for one thing.
@@ -451,8 +458,14 @@ enum InboxActions {
                     records[thing] = nil
                     guard let entry = byCategory[category.id]?.first(where: { $0.id == thing }) else { continue }
                     let rated = entry.facts.map(\.key).filter { $0.hasPrefix("importance:") && $0.hasSuffix(":" + record.stamp) }
-                    let keys = record.wasIn ? rated : ["enter"] + entry.facts.map(\.key)
+                    let others = entry.facts.map(\.key).filter { !rated.contains($0) }
                     for action in category.actions.items where record.actions.contains(action.id) && action.applies(to: entry.thing.kind) {
+                        var keys = record.wasIn ? rated : ["enter"] + entry.facts.map(\.key)
+                        // What it had then is old, and its entering if nothing else brings it in; what came since is new.
+                        if let had = record.facts?[action.id].map(Set.init) {
+                            keys = rated + others.filter(had.contains)
+                            if !record.wasIn, others.allSatisfy(had.contains) { keys.insert("enter", at: 0) }
+                        }
                         for key in keys where ledger.run(category.id, entry.id, action.id, key) == nil {
                             ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: key,
                                                  state: .baselined, at: now))
@@ -496,11 +509,16 @@ enum InboxActions {
             let rates = category.rules.contains { $0.conditions.contains { if case .importance = $0 { true } else { false } } }
             if !fresh.isEmpty {
                 var records = !rates || all ? [:] : ledger.awaitedRatings?[category.id] ?? [:]
-                let inside = Set((byCategory[category.id] ?? []).map(\.id))
+                let inside = Dictionary((byCategory[category.id] ?? []).map { ($0.id, $0.facts.map(\.key)) }, uniquingKeysWith: { a, _ in a })
                 for (thing, rating) in ratings where rates && !rating.rated {
                     var record = records[thing].flatMap { $0.stamp == rating.stamp ? $0 : nil }
-                        ?? ActionLedger.AwaitedRating(stamp: rating.stamp, actions: [], wasIn: inside.contains(thing))
+                        ?? ActionLedger.AwaitedRating(stamp: rating.stamp, actions: [], wasIn: inside[thing] != nil, facts: [:])
                     record.actions.formUnion(fresh.map(\.id))
+                    // What it has there now, or would have rated: its importance aside, what a rating then finds old.
+                    var had: [String] = []
+                    for key in (inside[thing] ?? []) + (rating.facts[category.id] ?? [])
+                    where !key.hasPrefix("importance:") && !had.contains(key) { had.append(key) }
+                    if record.facts != nil { for action in fresh { record.facts?[action.id] = had } }
                     records[thing] = record
                 }
                 var awaited = ledger.awaitedRatings ?? [:]
@@ -1201,9 +1219,21 @@ extension Store {
     func actionRatings() -> [String: InboxActions.Rating] {
         let context = inboxContext
         var out: [String: InboxActions.Rating] = [:]
+        // Categories that rate: what a thing not yet rated would have in each once rated (at the most, any importance rule
+        // takes it) is what it has there now, for the actions taken in before its rating.
+        let rates = categories.filter { $0.rules.contains { $0.conditions.contains { if case .importance = $0 { true } else { false } } } }
         for (id, thing) in things {
             guard let stamp = InboxEngine.importanceStamp(thing, context: context) else { continue }
-            out[id] = InboxActions.Rating(stamp: stamp, rated: InboxEngine.signals(thing, context.me)?.importance?.stamp == stamp)
+            let rated = InboxEngine.signals(thing, context.me)?.importance?.stamp == stamp
+            var one = InboxActions.Rating(stamp: stamp, rated: rated)
+            if !rated, context.jevSignals, !rates.isEmpty {
+                let urgent = InboxEngine.rated(thing, .urgent, stamp: stamp, me: context.me)
+                for category in rates {
+                    let entry = InboxEngine.evaluate(things: [urgent], categories: [category], marks: marks, context: context).first
+                    one.facts[category.id] = entry?.facts.map(\.key).filter { !$0.hasPrefix("importance:") } ?? []
+                }
+            }
+            out[id] = one
         }
         return out
     }

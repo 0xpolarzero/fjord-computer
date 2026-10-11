@@ -444,6 +444,55 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.comments.map(\.body).sorted() == ["fact", "high"])
     }
 
+    @Test func aCommentMadeAfterTheBaselineIsNewWhenItsRatingComesWithIt() async {
+        let tok = Person(login: "tok")
+        func requested(_ n: Int, comments: [ThingComment] = []) -> Thing {
+            var t = InboxFixture.pr(n, by: tok, greptile: nil)
+            t.requestedReviewers = ["me"]
+            t.comments = comments
+            return t
+        }
+        func rate(_ store: Store, _ id: String) {
+            let stamp = InboxEngine.importanceStamp(store.things[id]!, context: store.inboxContext)!
+            store.things[id]?.signals = ThingSignals(importance: ImportanceSignal(level: .high, stamp: stamp), viewer: "me")
+        }
+        func comment(_ id: String) -> ThingComment {
+            ThingComment(id: id, author: Person(login: "carol"), at: Date().addingTimeInterval(-60), snippet: "…")
+        }
+        let high = CategoryAction.make(.comment("high"))
+        var each = CategoryAction.make(.comment("fact"))
+        each.trigger = .eachFact
+        let comments = Condition.newComment(by: Pick())
+        // PRs with a new comment, or rated high: taken in while PR 1, unrated and without comments, isn't in.
+        var either = InboxFixture.category()
+        either.rules = [Rule(scope: Scope(kinds: [.pr]), conditions: [comments], createdAt: .distantPast),
+                        Rule(scope: Scope(kinds: [.pr]), conditions: [.importance(.high)], createdAt: .distantPast)]
+        either.actions = ActionList([high, each])
+        let store = InboxFixture.store([requested(1)], category: either)
+        let performer = FakePerformer()
+        store.actionPerformer = performer
+        await store.runActions()
+        #expect(store.entries.isEmpty)
+        // Carol comments since, and Jev's rating comes in the same refresh: her comment brings it in, and is new.
+        store.things["pr:a/one#1"]?.comments = [comment("c1")]
+        rate(store, "pr:a/one#1")
+        await store.runActions()
+        #expect(performer.comments.map(\.body).sorted() == ["fact", "high"])
+        // PRs with a new comment and rated high: one made before it was taken in stays old once rated.
+        var both = either
+        both.rules = [Rule(scope: Scope(kinds: [.pr]), conditions: [comments, .importance(.high)], createdAt: .distantPast)]
+        both.rules[0].match = .all
+        let old = InboxFixture.store([requested(2, comments: [comment("c2")])], category: both)
+        let quiet = FakePerformer()
+        old.actionPerformer = quiet
+        await old.runActions()
+        #expect(old.entries.isEmpty)
+        rate(old, "pr:a/one#2")
+        #expect(old.entries.count == 1)
+        await old.runActions()
+        #expect(quiet.comments.isEmpty)
+    }
+
     @Test func aRatingStillAwaitedIsRememberedAcrossARestart() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
