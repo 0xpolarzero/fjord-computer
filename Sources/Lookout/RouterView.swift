@@ -473,11 +473,17 @@ final class RouterModel {
     static let endID = "end"
     static func workingID(_ session: String) -> String { "working#" + session }
 
-    /// A section of Now asked for (its chip): opened, and scrolled to.
+    /// A section of Now asked for: opened and scrolled to (its id), or folded (`RouterZone.foldPrefix` and its id).
     var zoneRequest: ScrollRequest?
     func jump(to zone: RouterZone) {
         show(.now)
         zoneRequest = ScrollRequest(id: zone.rawValue, seq: (zoneRequest?.seq ?? 0) + 1)
+    }
+
+    /// A section's chip: a folded one opens and the page goes there, an open one folds.
+    func chip(_ zone: RouterZone) {
+        guard !folded.contains(zone) else { return jump(to: zone) }
+        zoneRequest = ScrollRequest(id: RouterZone.foldPrefix + zone.rawValue, seq: (zoneRequest?.seq ?? 0) + 1)
     }
 
     /// Asks the page to scroll to an item (a card, a message, a working session's card) and, for a moment, to mark it.

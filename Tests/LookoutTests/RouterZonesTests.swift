@@ -46,6 +46,17 @@ import Testing
         #expect(model.pane == .history)
     }
 
+    @Test func aSectionsChipOpensItAndGoesThereThenFoldsIt() {
+        let model = RouterModel()
+        model.show(.history)
+        #expect(model.folded.contains(.working))
+        model.chip(.working)
+        #expect(model.pane == .now && model.zoneRequest?.id == "working")
+        model.setFolded(.working, false)
+        model.chip(.working)
+        #expect(model.zoneRequest?.id == RouterZone.foldPrefix + "working")
+    }
+
     @Test func eachItemOfNowIsInItsSection() throws {
         let store = demo()
         Demo.routerTriage(store)

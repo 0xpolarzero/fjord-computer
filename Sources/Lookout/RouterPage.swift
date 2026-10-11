@@ -249,7 +249,7 @@ private struct HistoryColumn: View {
                     Spacer(minLength: 0)
                 }
                 .measured()
-                .padding(.top, 10)
+                .padding(.top, 6)
             }
             RouterHistory(store: store, model: model)
         }
@@ -277,7 +277,8 @@ private struct NowColumn: View {
                 Spacer(minLength: 0)
             }
             .measured()
-            .padding(.top, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
             RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
                       travellingWorking: travellingWorking)
         }
@@ -305,6 +306,7 @@ private struct PaneSwitch: View {
     let model: RouterModel
     @Environment(\.routerGutter) private var gutter
     @State private var hovered: RouterPane?
+    static let height: CGFloat = 24
 
     var body: some View {
         HStack(spacing: 0) {
@@ -312,9 +314,10 @@ private struct PaneSwitch: View {
             segment(.now, "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count, tint: CDS.Fill.warning)
             segment(.history, "History", count: store.routerUnread.count, tint: CDS.Fill.accent)
         }
-        .padding(1)
-        .frame(height: CDS.Segmented.height)
-        .background(RoundedRectangle(cornerRadius: CDS.Segmented.radius, style: .continuous).fill(CDS.Segmented.track))
+        .padding(2)
+        .frame(height: Self.height)
+        .background(RoundedRectangle(cornerRadius: CDS.Segmented.radius + 1, style: .continuous).fill(CDS.Fill.field))
+        .overlay(RoundedRectangle(cornerRadius: CDS.Segmented.radius + 1, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
         .padding(.leading, gutter)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Show")
@@ -333,7 +336,7 @@ private struct PaneSwitch: View {
             .frame(maxHeight: .infinity)
             .background {
                 if picked {
-                    RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous).fill(CDS.Segmented.thumb)
+                    RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous).fill(CDS.Fill.secondary)
                         .overlay(RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous)
                             .strokeBorder(CDS.border, lineWidth: 1))
                 }
@@ -342,12 +345,14 @@ private struct PaneSwitch: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 ? pane : (hovered == pane ? nil : hovered) }
+        .help(pane == .now ? "What's live: what needs you, what waits and what works" : "The Router's conversation and what was handled")
         .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
         .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
 
-/// A chip for each section of Now with something in it, its count: a click opens it and takes the page there.
+/// A chip for each section of Now with something in it, its count, lit while the section is open: a click on a folded one
+/// opens it and takes the page there, on an open one folds it.
 private struct ZoneChips: View {
     let model: RouterModel
     let page: RouterPage
@@ -371,7 +376,9 @@ private struct ZoneChips: View {
     private func row(_ zones: [RouterZone], named: Bool) -> some View {
         HStack(spacing: 4) {
             ForEach(zones) { zone in
-                ZoneChip(zone: zone, count: page.count(zone), named: named) { model.jump(to: zone) }
+                ZoneChip(zone: zone, count: page.count(zone), named: named, open: !model.folded.contains(zone)) {
+                    model.chip(zone)
+                }
             }
         }
         .fixedSize()
@@ -382,6 +389,7 @@ private struct ZoneChip: View {
     let zone: RouterZone
     let count: Int
     let named: Bool
+    let open: Bool
     let action: () -> Void
     @State private var hovered = false
 
@@ -393,15 +401,17 @@ private struct ZoneChip: View {
                 Text("\(count)").cdsText((12, 16), .medium, zone == .needs ? CDS.Fill.warning : CDS.Text.muted).monospacedDigit()
             }
             .padding(.horizontal, 7)
-            .frame(height: 22)
-            .background(Capsule().fill(hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
+            .frame(height: 20)
+            .background(Capsule().fill(open ? CDS.Fill.secondary : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
+            .overlay { if open { Capsule().strokeBorder(CDS.border, lineWidth: 1) } }
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
-        .help("Go to \(zone.title)")
+        .help(open ? "Fold \(zone.title)" : "Show \(zone.title)")
         .accessibilityLabel("\(zone.title), \(count)")
-        .accessibilityHint("Goes to it")
+        .accessibilityValue(open ? "Open" : "Folded")
+        .accessibilityHint(open ? "Folds it" : "Opens it and goes to it")
     }
 }
 
@@ -1153,7 +1163,7 @@ private struct RouterNow: View {
                         }
                     }
                     .padding(.horizontal, gutter)
-                    .padding(.top, 6)
+                    .padding(.top, 2)
                     .padding(.bottom, 12)
                     .measured()
                     .motion(Theme.Motion.spring, value: page.needs.map(\.id) + page.working.map(\.id))
@@ -1168,10 +1178,14 @@ private struct RouterNow: View {
                 }
                 // A section's chip: opened, its header at the top.
                 .onChange(of: model.zoneRequest, initial: true) { _, request in
-                    guard let request, let zone = RouterZone(rawValue: request.id),
-                          model.takeReveal(request, by: "zone") != nil else { return }
-                    open(zone)
-                    pending = Pending(zone.anchorID, anchor: .top)
+                    guard let request, model.takeReveal(request, by: "zone") != nil else { return }
+                    if let zone = RouterZone(rawValue: request.id) {
+                        open(zone)
+                        pending = Pending(zone.anchorID, anchor: .top)
+                    } else if request.id.hasPrefix(RouterZone.foldPrefix),
+                              let zone = RouterZone(rawValue: String(request.id.dropFirst(RouterZone.foldPrefix.count))) {
+                        if !model.folded.contains(zone) { toggle(zone, proxy: proxy) }
+                    }
                 }
                 .onChange(of: pending) { perform(proxy) }
             }
@@ -1210,7 +1224,7 @@ private struct RouterNow: View {
         if store.routerDispatcher.isBusy {
             WorkingStatus(label: "The Router is working")
                 .padding(.horizontal, gutter + CDS.Transcript.textInset)
-                .padding(.vertical, 6)
+                .padding(.vertical, 2)
                 .measured()
                 .transition(.opacity)
         }
@@ -1237,7 +1251,7 @@ private struct RouterNow: View {
                 accessory(zone, folded: folded)
             }
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 5)
         // Held at the top over what scrolls under it: the page's own ground, out to the column's edges.
         .background(CDS.Surface.s1.padding(.horizontal, -gutter))
     }
