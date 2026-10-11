@@ -250,6 +250,93 @@ import Testing
         #expect(main.branch == "main" && main.workflows.map(\.name) == ["CI"] && store.defaultBranches["a/x"] == "main")
     }
 
+    @Test func anotherDefaultBranchIsFoundDailyAndAtOnceWhenTheOldOneIsGone() async throws {
+        // The repo's default is main, then release; main is deleted after.
+        final class Repo: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _main = "main", _gone: Set<String> = []
+            var main: String { get { lock.withLock { _main } } set { lock.withLock { _main = newValue } } }
+            var gone: Set<String> { get { lock.withLock { _gone } } set { lock.withLock { _gone = newValue } } }
+        }
+        let repo = Repo()
+        let store = Store()
+        store.persists = false
+        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        store.gh.session = StubbedGitHub.session { request in
+            let comps = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let path = comps?.path ?? ""
+            let query = Dictionary(uniqueKeysWithValues: (comps?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            if path == "/repos/a/x" { return .init(200, #"{"full_name":"a/x","default_branch":"\#(repo.main)"}"#) }
+            if path.hasPrefix("/repos/a/x/branches/") {
+                let name = String(path.dropFirst("/repos/a/x/branches/".count))
+                guard !repo.gone.contains(name) else { return .init(404, #"{"message":"Branch not found"}"#) }
+                let sha = name == "main" ? "s1" : "s2"
+                return .init(200, #"{"name":"\#(name)","commit":{"sha":"\#(sha)","commit":{"message":"On \#(name)"}}}"#)
+            }
+            switch path {
+            case "/repos/a/x/actions/runs":
+                let sha = query["branch"] == "main" ? "s1" : "s2"
+                let run = #"{"name":"CI","workflow_id":11,"head_sha":"\#(sha)","display_title":"On \#(query["branch"] ?? "")","status":"completed","conclusion":"success","check_suite_id":5}"#
+                return .init(200, #"{"workflow_runs":[\#(run)]}"#)
+            case "/repos/a/x/commits/s1/check-runs", "/repos/a/x/commits/s2/check-runs":
+                return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "/repos/a/x/commits/s1/status", "/repos/a/x/commits/s2/status":
+                return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        let t = Date()
+        #expect(try await store.fetchCI("a/x", now: t).branch == "main")
+        // release made the default: known as main for the day, then found.
+        repo.main = "release"
+        #expect(try await store.fetchCI("a/x", now: t.addingTimeInterval(3600)).branch == "main")
+        let next = try await store.fetchCI("a/x", now: t.addingTimeInterval(Store.defaultBranchRecheck + 1))
+        #expect(next.branch == "release" && next.title == "On release" && next.workflows.map(\.name) == ["CI"])
+        // main made the default again, then deleted for release, within the day: its head gone, release is found at once.
+        store.defaultBranches["a/x"] = "main"
+        repo.main = "release"
+        repo.gone = ["main"]
+        let found = try await store.fetchCI("a/x", now: t.addingTimeInterval(Store.defaultBranchRecheck + 60))
+        #expect(found.branch == "release" && found.workflows.map(\.name) == ["CI"] && store.defaultBranches["a/x"] == "release")
+        // A branch a rule names, deleted: no CI of it, so what was read of it goes.
+        repo.gone = ["main", "dev"]
+        let dev = try await store.fetchBranchCI("a/x", branch: "dev")
+        #expect(dev.sha == nil && InboxSync.workflowThings(repo: "a/x", branch: "dev", status: dev).isEmpty)
+    }
+
+    @Test func aDeletedBranchsWorkflowsGoFromTheInbox() async {
+        final class Gone: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _dev = false
+            var dev: Bool { get { lock.withLock { _dev } } set { lock.withLock { _dev = newValue } } }
+        }
+        let gone = Gone()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            switch request.url?.path ?? "" {
+            case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/branches/dev":
+                return gone.dev ? .init(404, #"{"message":"Branch not found"}"#) : .init(200, #"{"name":"dev","commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
+            case "/repos/a/x/actions/runs":
+                return .init(200, #"{"workflow_runs":[{"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"failure","check_suite_id":5}]}"#)
+            case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        var ci = InboxStore.ci
+        ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/x")]), on: ["dev"]),
+                         conditions: [.workflow([.failing])], createdAt: .distantPast)]
+        s.categories = [ci]
+        await s.syncInbox()
+        #expect(s.things.keys.sorted() == ["workflow:a/x:11@dev"])
+        gone.dev = true
+        await s.syncInbox()
+        #expect(s.things.isEmpty && s.inboxError == nil)
+    }
+
     @Test func aBranchIsPassingOnlyOnceAllItsChecksAndStatusesAreReadAndDone() async throws {
         let store = Store()
         store.persists = false

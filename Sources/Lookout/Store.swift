@@ -123,8 +123,9 @@ final class Store {
     @ObservationIgnored var teamsResolvedAt: Date?
     /// What the inbox's refreshes keep between them (InboxSync.swift).
     @ObservationIgnored var inboxSyncState = InboxSyncState()
-    /// Default branches found for workflow things, by repo.
+    /// Default branches found for workflow things, by repo, and when each was looked up (again daily: `defaultBranchRecheck`).
     @ObservationIgnored var defaultBranches: [String: String] = [:]
+    @ObservationIgnored var defaultBranchesCheckedAt: [String: Date] = [:]
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()
@@ -1117,31 +1118,57 @@ final class Store {
         await syncInbox(manual: asked)
     }
 
-    /// Asks GitHub for the CI of a repo's default branch (found once, then remembered), and the commit's headline.
-    func fetchCI(_ name: String) async throws -> CIStatus {
+    /// How long a repo's default branch is taken as known before it is looked up again (an unchanged answer is a 304).
+    nonisolated static let defaultBranchRecheck: TimeInterval = 86400
+
+    /// Asks GitHub for the CI of a repo's default branch, and the commit's headline. The default branch is looked up, then
+    /// again daily (another may have been made the default: `main` to `release`), and at once when its head is gone; a
+    /// lookup again that fails leaves the one known.
+    func fetchCI(_ name: String, now: Date = Date()) async throws -> CIStatus {
         var branch = defaultBranches[name]
-        if branch == nil {
-            let info: GHRepo = try await gh.get("/repos/\(name)")
-            defaultBranches[name] = info.defaultBranch
-            branch = info.defaultBranch
+        if branch == nil || defaultBranchesCheckedAt[name].map({ now.timeIntervalSince($0) >= Self.defaultBranchRecheck }) ?? true {
+            do { branch = try await lookUpDefaultBranch(name, now: now) } catch { if branch == nil { throw error } }
         }
-        let status = try await fetchBranchCI(name, branch: branch!)
+        var status = try await fetchBranchCI(name, branch: branch!, now: now)
+        // Gone: the lookup it made says which is the default now, and that one is read.
+        if status.sha == nil, let found = defaultBranches[name], found != branch {
+            branch = found
+            status = try await fetchBranchCI(name, branch: found, now: now)
+        }
         // Renamed since it was found: the name it has now is the default branch.
-        if status.branch != branch { defaultBranches[name] = status.branch }
+        if status.sha != nil, status.branch != branch { defaultBranches[name] = status.branch }
         return status
+    }
+
+    /// A repo's default branch, as GitHub has it now, remembered with when it was looked up.
+    @discardableResult
+    func lookUpDefaultBranch(_ name: String, now: Date = Date()) async throws -> String {
+        let info: GHRepo = try await gh.get("/repos/\(name)")
+        defaultBranches[name] = info.defaultBranch
+        defaultBranchesCheckedAt[name] = now
+        return info.defaultBranch
     }
 
     /// Asks GitHub for the CI of one branch of a repo, and the commit's headline. A branch renamed since (`master` now
     /// `main`) is read as the branch it is now: its head comes under the new name, and so must its Actions runs, filtered by
     /// it. `CIStatus.branch` is that name; a rule's branch keeps its things as it names them (`@master`), so what it, its
     /// marks and waits know them by stays.
-    func fetchBranchCI(_ name: String, branch: String) async throws -> CIStatus {
+    /// A branch that no longer exists (its head not found, its repo found) has no CI: no workflows, no commit (`sha` nil), so
+    /// what was read of it before goes; the repo's default branch is learned again meanwhile.
+    func fetchBranchCI(_ name: String, branch: String, now: Date = Date()) async throws -> CIStatus {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove("/")
         let ref = branch.addingPercentEncoding(withAllowedCharacters: allowed) ?? branch
         // The branch's head is the commit read: the latest Actions run may be on an older one (a docs commit its path filters
         // skip, while external CI runs on it). All three sources are asked about that commit.
-        let head: GHBranch = try await gh.get("/repos/\(name)/branches/\(ref)")
+        let head: GHBranch
+        do {
+            head = try await gh.get("/repos/\(name)/branches/\(ref)")
+        } catch let error as GitHubError where error.status == 404 {
+            // The repo not found either: that is the error, and what was read of it stays.
+            try await lookUpDefaultBranch(name, now: now)
+            return CIStatus(branch: branch, sha: nil, url: nil, checkedAt: Date())
+        }
         let sha = head.commit.sha
         let current = head.name.flatMap { $0.isEmpty ? nil : $0 } ?? branch
         // Only push-triggered Actions runs count: issue/comment-triggered workflows also run against the
