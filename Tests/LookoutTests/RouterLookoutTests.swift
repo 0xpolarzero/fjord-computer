@@ -873,6 +873,42 @@ import Testing
         #expect(LookoutGate.reason(same, request: "tidy Mine", categories: s.categories) == nil)
     }
 
+    @Test func whatAnEarlierCategoryTakesWaitsWhenALaterOneHasActions() throws {
+        let s = inboxStore()
+        s.groups = [InboxGroup(name: "Crew", kind: .people, members: ["a"])]
+        var early = InboxFixture.category()
+        early.name = "Early"
+        early.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.group(s.groups[0].id)])))]
+        var acting = InboxFixture.category()
+        acting.name = "Acting"
+        acting.actions = ActionList([.make(.comment("Thanks"))])
+        s.categories = [early, acting]
+        func reason(_ patch: LookoutChange.Patch) -> String? {
+            LookoutGate.reason(LookoutChange(title: "x", patch: patch), request: "change Early", categories: s.categories)
+        }
+        // Emptied, hidden, or a new one before it: more or fewer things reach Acting.
+        var emptied = early
+        emptied.rules = []
+        #expect(reason(.category(index: 0, before: early, after: emptied))?.contains("Acting") == true)
+        var hidden = early
+        hidden.hidden = true
+        #expect(reason(.category(index: 0, before: early, after: hidden)) != nil)
+        var made = InboxFixture.category()
+        made.name = "New"
+        #expect(reason(.category(index: 0, before: nil, after: made)) != nil)
+        // After it, or only renamed: at once.
+        #expect(reason(.category(index: 2, before: nil, after: made)) == nil)
+        var renamed = early
+        renamed.name = "Earlier"
+        #expect(reason(.category(index: 0, before: early, after: renamed)) == nil)
+        // A group the earlier one uses decides it too.
+        var crew = s.groups[0]
+        crew.members.append("b")
+        #expect(reason(.group(index: 0, before: s.groups[0], after: crew))?.contains("Early") == true)
+        s.categories = [acting, early]
+        #expect(reason(.group(index: 0, before: s.groups[0], after: crew)) == nil)
+    }
+
     @Test func openGoesToThePlaceTheChangeIsAbout() async throws {
         let s = inboxStore()
         let t = tools(s)

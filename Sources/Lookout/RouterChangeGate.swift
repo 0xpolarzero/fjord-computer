@@ -2,7 +2,8 @@ import Foundation
 
 // Which of the Router's changes to Lookout wait for you. A run acts on your message, but it reads what sessions and GitHub
 // wrote, and words there could try to steer it. So a change whose effect reaches outside Lookout (an action that comments on
-// GitHub, starts sessions or re-runs CI by itself; what such a category runs on; session titles sent to TypeSafe), one that
+// GitHub, starts sessions or re-runs CI by itself; what such a category runs on, or what reaches it past the categories
+// before it; session titles sent to TypeSafe), one that
 // takes something away (a category or group deleted, many things marked at once), and one your message didn't speak of (a
 // setting it never named, marks it never asked for) is not applied: its card says why, with Apply and Discard. A local change
 // you asked for applies at once, with Revert.
@@ -16,7 +17,7 @@ enum LookoutGate {
     static func reason(_ change: LookoutChange, request: String, categories: [InboxCategory]) -> String? {
         let said = words(request)
         switch change.patch {
-        case .category(_, let before, let after):
+        case .category(let index, let before, let after):
             guard let after else { return "Deleting a category waits for you" }
             // By value and by count: an action copied (the same one twice) runs twice, so it is as new as one never there.
             var had = Dictionary((before?.actions.items ?? []).map { ($0, 1) }, uniquingKeysWith: +)
@@ -31,12 +32,26 @@ enum LookoutGate {
             if !after.actions.isEmpty, before?.rules != after.rules {
                 return "It changes what a category with actions runs on"
             }
+            // A thing goes to the first category that takes it: what an earlier one takes (its rules, whether it is shown)
+            // decides what reaches a later one with actions.
+            let routes = before.map { $0.rules != after.rules || $0.hidden != after.hidden } ?? !after.rules.isEmpty
+            if routes {
+                let at = categories.firstIndex { $0.id == after.id } ?? min(max(index, 0), categories.count)
+                let later = categories[at...].filter { $0.id != after.id && !$0.actions.isEmpty }
+                if !later.isEmpty {
+                    return "It changes what reaches a later category with actions (" + later.map(\.title).joined(separator: ", ") + ")"
+                }
+            }
             return nil
         case .group(_, let before, let after):
             guard let after else { return "Deleting a group waits for you" }
             guard before != nil else { return nil }
-            let users = categories.filter { !$0.actions.isEmpty && uses($0, group: after.id) }
-            return users.isEmpty ? nil : "Categories with actions use this group (" + users.map(\.title).joined(separator: ", ") + ")"
+            // Those with actions, and those before one: what they take decides what reaches it.
+            let lastActing = categories.lastIndex { !$0.actions.isEmpty } ?? -1
+            let users = categories.enumerated().filter { i, c in
+                uses(c, group: after.id) && (!c.actions.isEmpty || i < lastActing)
+            }.map(\.element)
+            return users.isEmpty ? nil : "Categories with actions, or before one, use this group (" + users.map(\.title).joined(separator: ", ") + ")"
         case .order(let before, let after):
             let acting = Set(categories.filter { !$0.actions.isEmpty }.map(\.id))
             guard !acting.isEmpty else { return nil }
