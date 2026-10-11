@@ -186,6 +186,14 @@ extension Store {
         let lower = message.lowercased()
         switch watch.target {
         case .session(let id, _):
+            // Two sessions named: which it waits on isn't clear, whichever of them Jev picked.
+            let namedSessions = claudeSessions.values.filter { candidate in
+                !candidate.isArchived && candidate.id != session.id
+                    && (lower.range(of: #"(?<![\w-])"# + NSRegularExpression.escapedPattern(for: candidate.id.lowercased()) + #"(?![\w-])"#,
+                                    options: .regularExpression) != nil
+                        || RouterDepends.names(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
+            }
+            guard namedSessions.count <= 1 else { return false }
             if lower.contains(id.lowercased()) { return true }
             guard let other = claudeSessions[id] else { return false }
             return RouterDepends.names(message, title: other.title, project: other.folderName, ownProject: session.folderName)
@@ -202,6 +210,15 @@ extension Store {
                       // By the name its branch has now, or as its rule names it (master renamed main).
                       case let branches = Set([thing.currentBranch, thing.branch].compactMap { $0?.lowercased() }),
                       branches.contains(where: { Self.namesBranch(lower, branch: $0) }) else { return false }
+                // Another workflow of the repo named too ("Build and Deploy"): which one it waits on isn't clear.
+                let namedWorkflows = Set(things.values.compactMap { other -> String? in
+                    guard other.kind == .workflow, other.repo.lowercased() == thing.repo.lowercased(),
+                          let otherName = other.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !otherName.isEmpty,
+                          lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: otherName) + #"(?![\w])"#,
+                                      options: .regularExpression) != nil else { return nil }
+                    return otherName
+                })
+                guard namedWorkflows.count <= 1 else { return false }
                 // The same workflow on another branch named too: which one it waits on isn't clear.
                 return !things.values.contains { other in
                     other.id != thingID && other.kind == .workflow && other.repo.lowercased() == thing.repo.lowercased()

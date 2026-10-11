@@ -685,6 +685,27 @@ import Testing
         #expect(!s.waitNamed(other, in: "Waiting for the other session to finish", by: a))
     }
 
+    @Test func twoWorkflowsOrTwoSessionsNamedAreNeverContinuedOnTheirOwn() {
+        var build = InboxFixture.pr(1, repo: "o/app")
+        build.id = "workflow:o/app:1@main"
+        build.kind = .workflow
+        build.number = nil
+        build.workflowName = "Build"
+        build.branch = "main"
+        var deploy = build
+        deploy.id = "workflow:o/app:2@main"
+        deploy.workflowName = "Deploy"
+        let (s, _) = store(watch: ciWatch, things: [build, deploy])
+        let a = s.claudeSessions["a"]!
+        let wf = RouterTriage.Watch(target: .ci(thing: build.id), label: "", ref: "o/app")
+        #expect(s.waitNamed(wf, in: "Waiting for the Build workflow in o/app on main", by: a))
+        #expect(!s.waitNamed(wf, in: "Waiting for the Build and Deploy workflows in o/app on main before I continue", by: a))
+        s.claudeSessions["c"] = ClaudeSession(id: "c", title: "Billing rewrite", folder: "/x/billing", completedTurns: 1, lastActivity: Date())
+        let one = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "")
+        #expect(s.waitNamed(one, in: "Waiting for the migration session to finish", by: a))
+        #expect(!s.waitNamed(one, in: "Waiting for the migration session and the billing rewrite session", by: a))
+    }
+
     @Test func aRefNamesOnlyItsOwnThingWhole() {
         var twelve = InboxFixture.pr(12, repo: "o/app", title: "Speed up the build")
         twelve.checks = .pending
