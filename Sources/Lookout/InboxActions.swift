@@ -394,7 +394,10 @@ enum InboxActions {
 
         // Forget: runs of a category or action that is gone; entering records of a thing that has been out for a while.
         let actionIDs = Set(categories.flatMap { $0.actions.items.map(\.id) })
-        let inside = Set(entries.filter { !triggering($0, me: me).isEmpty }.map { "\($0.categoryID.uuidString)\u{1F}\($0.id)" })
+        // In the category is in it, whoever's facts hold it there: your own comment (the action's) leaving it in is no exit,
+        // which would let another person's reply after the cooldown run the action again within one visit. Whose facts
+        // they are counts only for what triggers a run.
+        let inside = Set(entries.map { "\($0.categoryID.uuidString)\u{1F}\($0.id)" })
         for (key, run) in ledger.runs {
             if !known.contains(run.category) || !actionIDs.contains(run.action) {
                 ledger.runs[key] = nil

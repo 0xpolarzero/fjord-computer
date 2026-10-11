@@ -387,6 +387,30 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(jobs.count == 1 && jobs.first?.action.id == action.id)
     }
 
+    @Test func aCommentOfMineInTheCategoryIsNoExitFromIt() {
+        let action = CategoryAction.make(.comment("hi"))
+        var category = InboxFixture.category()
+        category.actions = ActionList([action])
+        var ledger = ActionLedger()
+        _ = InboxActions.plan(entries: [], categories: [category], groups: [], ledger: &ledger, me: "me")
+        var thing = InboxFixture.pr(1, by: Person(login: "alice"))
+        func entry(_ id: String, by login: String) -> InboxEntry {
+            thing.comments = [ThingComment(id: id, author: Person(login: login), at: Date(), snippet: "")]
+            return InboxEntry(thing: thing, categoryID: category.id, facts: [Fact(key: "comment:\(id)", label: "c")],
+                              isDone: false, isUnread: true)
+        }
+        let t0 = Date()
+        #expect(InboxActions.plan(entries: [entry("c1", by: "bob")], categories: [category], groups: [], ledger: &ledger,
+                                  me: "me", now: t0).count == 1)
+        ledger.set(ActionRun(category: category.id, thing: thing.id, action: action.id, trigger: "enter", state: .done, at: t0))
+        // Only my own comment (the action's, say) holds it there for a while: it never left.
+        _ = InboxActions.plan(entries: [entry("c2", by: "me")], categories: [category], groups: [], ledger: &ledger, me: "me",
+                              now: t0.addingTimeInterval(60))
+        let jobs = InboxActions.plan(entries: [entry("c3", by: "carol")], categories: [category], groups: [], ledger: &ledger,
+                                     me: "me", now: t0.addingTimeInterval(60 + InboxActions.reentryCooldown + 10))
+        #expect(jobs.isEmpty)
+    }
+
     @Test func theCapNeverForgetsTheRunsOfFactsStillThere() {
         var action = CategoryAction.make(.comment("seen"))
         action.trigger = .eachFact
