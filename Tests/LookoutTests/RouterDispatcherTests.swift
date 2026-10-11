@@ -602,6 +602,10 @@ import Testing
         #expect(task("fix the tests") == "fix the tests")
         #expect(task("write about opus the band") == "write about opus the band")
         #expect(task("@router.js is broken, fix it") == "@router.js is broken, fix it")
+        // Only the project's own name is a tag: a decorator is the task's.
+        #expect(task("@MainActor isn't on the store, add it") == "@MainActor isn't on the store, add it")
+        #expect(task("start a session in @lookout @MainActor everywhere") == "@MainActor everywhere")
+        #expect(task("@lookout-live2 is down") == "@lookout-live2 is down")
         // Only where a clause was taken out are the spaces tidied: code keeps its indentation and its spacing.
         #expect(task("start a new session with opus to fix this:\n    def f():\n        return  1") == "fix this:\n    def f():\n        return  1")
         #expect(task("fix  this with opus  now:\n\tx  =  1") == "fix  this now:\n\tx  =  1")

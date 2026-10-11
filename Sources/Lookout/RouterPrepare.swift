@@ -528,23 +528,24 @@ enum SessionStart {
     /// What a new session is for, from the words that asked for it: the request to start one ("start a (new) session (in X)",
     /// "new chat:", "open a session to"), its model and effort settings, and a leading @project (already a pill) are taken
     /// out; the rest stays verbatim, not capitalised or reworded. Empty when nothing is left ("start a session in lookout").
-    /// `projects`: names the project goes by (a plain word after "in" is dropped only if it is one of them).
+    /// `projects`: names the project goes by: only these are taken out, as "@name" or after "in" (any other @word, a
+    /// decorator like `@MainActor`, is the task's own).
     static func task(from text: String, projects: [String] = []) -> String {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let sep = #"^[\s,:;\-–—]*"#
         func tidy() { _ = strip(sep, from: &t) }
-        // A leading @project (never @router, which is for the Router).
-        while strip(#"^@(?!router\b)[\w.\-/]+"#, from: &t) { tidy() }
+        let names = projects.filter { !$0.isEmpty }.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+        // The project as a pill: its name whole (never @router, which is for the Router).
+        let tag = names.isEmpty ? nil : #"@(?:\#(names))(?![\w./-])"#
+        while let tag, strip("^" + tag, from: &t) { tidy() }
         let started = strip(startPhrase, from: &t)
         if started {
-            let names = projects.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
-            let named = names.isEmpty ? "" : "|(?:\(names))"
             var moved = true
             while moved {
                 tidy()
-                moved = strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?(?:@[\w.\-/]+\#(named))(?:\s+(?:project|repo|repository|folder))?\b"#, from: &t)
+                moved = (!names.isEmpty && strip(#"^(?:in|on|for|inside)\s+(?:the\s+)?@?(?:\#(names))(?![\w./-])(?:\s+(?:project|repo|repository|folder))?\b"#, from: &t))
                     || strip("^" + settingClause, from: &t)
-                    || strip(#"^(?:@(?!router\b)[\w.\-/]+)"#, from: &t)
+                    || (tag.map { strip("^" + $0, from: &t) } ?? false)
             }
             tidy()
             _ = strip(#"^(?:to|and|then|that)\s+"#, from: &t)
