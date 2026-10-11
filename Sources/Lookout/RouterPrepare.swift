@@ -594,7 +594,7 @@ enum SessionStart {
             }
         }
         let tail = trailingSettings(request).filter { request.distance(from: request.startIndex, to: $0.item.lowerBound) >= at }
-        return items + tail.map { String(request[$0.item]) }
+        return items + tail.map(\.words)
     }
 
     /// The settings `text` ends with ("fix the tests with opus, high effort", "…, using sonnet", "…but use haiku"): a clause
@@ -602,7 +602,35 @@ enum SessionStart {
     /// mark. Each setting as its words (`item`) and what goes with them when they are taken out (`cut`: the comma or "and"
     /// before it, and, before the first, a "but", "instead" or "rather" leading into the clause). Never one said not to be
     /// wanted (`SessionSettings.negated`).
-    static func trailingSettings(_ text: String) -> [(cut: Range<String.Index>, item: Range<String.Index>)] {
+    static func trailingSettings(_ text: String) -> [(cut: Range<String.Index>, item: Range<String.Index>, words: String)] {
+        // Read on its words alone (`wordsOnly`): code and quotes can't be settings, nor can they or an aside end the clause.
+        let (seen, at) = wordsOnly(text)
+        let chars = Array(text.indices) + [text.endIndex]
+        func original(_ r: Range<String.Index>) -> Range<String.Index> {
+            let a = seen.distance(from: seen.startIndex, to: r.lowerBound), b = seen.distance(from: seen.startIndex, to: r.upperBound)
+            return chars[at[a]]..<(b > a ? text.index(after: chars[at[b - 1]]) : chars[at[a]])
+        }
+        return trailingSettings(seen: seen).map { (original($0.cut), original($0.item), String(seen[$0.item])) }
+    }
+
+    /// `text` as its settings are read: each character of code or of a double-quoted span (`Addressing.codeMask`,
+    /// `quoteMask`) made a stand-in that is no word, space or mark, and its `@router` asides taken out; for each character
+    /// left, and its end, where it is in `text`.
+    static func wordsOnly(_ text: String) -> (String, [Int]) {
+        let chars = Array(text)
+        let code = Addressing.codeMask(chars), quoted = Addressing.quoteMask(chars, code: code)
+        var aside = [Bool](repeating: false, count: chars.count)
+        for r in Addressing.asides(chars) { for k in r { aside[k] = true } }
+        var seen: [Character] = [], at: [Int] = []
+        for k in chars.indices where !aside[k] {
+            seen.append(code[k] || quoted[k] ? "\u{FFFC}" : chars[k])
+            at.append(k)
+        }
+        at.append(chars.count)
+        return (String(seen), at)
+    }
+
+    private static func trailingSettings(seen text: String) -> [(cut: Range<String.Index>, item: Range<String.Index>)] {
         let pattern = #"(?:[ \t]*\b(?:but|instead|rather|and))?[,;]?[ \t]*\b(?=(?:with|using|use)\b)"# + settingItem
             + "(?:" + settingJoin + settingItem + ")*" + #"(?=[ \t]*[.,;:!?]*[ \t]*$)"#
         guard let clause = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
@@ -720,7 +748,7 @@ enum SessionStart {
         let left = max(0, request - (whole - t.count))
         let end = t.index(t.startIndex, offsetBy: min(left, t.count))
         var head = String(t[..<end])
-        let cuts = trailingSettings(head).filter { asked.insert(setting(head[$0.item])).inserted }.map(\.cut)
+        let cuts = trailingSettings(head).filter { asked.insert(setting(Substring($0.words))).inserted }.map(\.cut)
         for r in cuts.reversed() {
             let at = head.distance(from: head.startIndex, to: r.lowerBound)
             head.removeSubrange(r)
@@ -750,17 +778,23 @@ enum SessionStart {
         return RouterModel.sendable(String(body[r.upperBound...]))
     }
 
-    /// Where a message's model and effort may be asked for: its first line up to the end of its first sentence, stopping at a
-    /// quote or code; nothing when it starts as code, a quote or an indented line. What follows is the task's, as written.
+    /// Where a message's model and effort may be asked for: its first line up to the end of its first sentence, past its
+    /// inline code, double-quoted spans and `@router` asides (never read for settings: `wordsOnly`), stopping at a quote or
+    /// code left open; nothing when it starts as code, a quote or an indented line. What follows is the task's, as written.
     static func envelope(_ text: String) -> String {
         let chars = Array(text)
+        let code = Addressing.codeMask(chars), quoted = Addressing.quoteMask(chars, code: code)
+        var aside = [Bool](repeating: false, count: chars.count)
+        for r in Addressing.asides(chars) { for k in r { aside[k] = true } }
         var i = 0
         while i < chars.count, chars[i].isNewline { i += 1 }
-        guard i < chars.count, chars[i] != " ", chars[i] != "\t", chars[i] != ">" else { return "" }
+        guard i < chars.count, chars[i] != " ", chars[i] != "\t", chars[i] != ">", !"\"`“‘".contains(chars[i]) else { return "" }
         var end = i
         while end < chars.count {
             let c = chars[end]
-            if c.isNewline || "\"`“‘".contains(c) { break }
+            if c.isNewline { break }
+            if code[end] || quoted[end] || aside[end] { end += 1; continue }
+            if "\"`“‘".contains(c) { break }
             if c == "'", end == 0 || !chars[end - 1].isLetter { break }
             if ".!?".contains(c), end + 1 == chars.count || chars[end + 1].isWhitespace { end += 1; break }
             end += 1

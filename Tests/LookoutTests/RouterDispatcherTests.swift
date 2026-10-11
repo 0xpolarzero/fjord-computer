@@ -907,6 +907,30 @@ import Testing
         #expect(f.startSettings.last! == SessionSettings(model: "opus", effort: nil))
     }
 
+    @Test func codeQuotesAndAnAsideInTheRequestLeaveTheSettingsItEndsWith() {
+        func asked(_ t: String) -> SessionSettings? { SessionSettings.parse(SessionStart.request(t)) }
+        let opusHigh = SessionSettings(model: "opus", effort: "high")
+        for (text, task) in [("start a session to fix `LoginView` with opus, high effort", "fix `LoginView`"),
+                             ("start a session to rename the \"Save\" button with opus, high effort", "rename the \"Save\" button"),
+                             ("start a session to rename the “Save” button, with opus and high effort", "rename the “Save” button"),
+                             ("start a session to fix login with opus, high effort (@router no rush)", "fix login (@router no rush)"),
+                             ("start a session to fix `a. b` (@router later. ok) using opus at high effort.", "fix `a. b` (@router later. ok).")] {
+            #expect(SessionStart.task(from: text) == task, "\(text)")
+            #expect(asked(text) == opusHigh, "\(text)")
+        }
+        // What is in them is never a setting, nor does it end the clause.
+        #expect(asked("start a session to run `claude --model opus` with high effort") == SessionSettings(model: nil, effort: "high"))
+        #expect(SessionStart.task(from: "start a session to run `claude --model opus` with high effort") == "run `claude --model opus`")
+        for text in ["start a session to set the label to \"with opus, high effort\"", "start a session to fix login (@router use opus)",
+                     "start a session to fix `x` and add a toggle for high effort", "start a session to fix `with opus`"] {
+            #expect(asked(text) == nil, "\(text)")
+            #expect(SessionStart.task(from: text) == String(text.dropFirst("start a session to ".count)), "\(text)")
+        }
+        // Left open, a quote or code still ends the request.
+        #expect(asked("start a session to fix the 5\" pipe with opus") == nil)
+        #expect(asked("start a session to fix the ` key with opus") == nil)
+    }
+
     @Test func aStartPassesTheTitleOfTheTaskNotTheRequest() async {
         let (_, d, f) = setup()
         let a = d.submit("@lookout start a session with haiku, low effort: reply with exactly pong and nothing else",
