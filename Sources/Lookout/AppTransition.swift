@@ -50,8 +50,14 @@ enum AppTransition {
         ProcessInfo.processInfo.environment["LOOKOUT_SLOW_MORPH"].flatMap(Float.init).map { max($0, 1) } ?? 1
     }
 
-    /// Runs `block` on the screen's next refresh. Replaceable, so a test can step the frames itself.
-    static var nextFrame: (NSScreen?, @escaping @MainActor () -> Void) -> Void = { screen, block in FrameTick.next(on: screen, block) }
+    /// Runs `block` once the screen has refreshed `count` times, on one display link. Replaceable, so a test can step the
+    /// frames itself.
+    static var nextFrames: (NSScreen?, Int, @escaping @MainActor () -> Void) -> Void = { screen, count, block in
+        FrameTick.wait(count, on: screen, block)
+    }
+
+    /// Runs `block` on the screen's next refresh.
+    static func nextFrame(_ screen: NSScreen?, _ block: @escaping @MainActor () -> Void) { nextFrames(screen, 1, block) }
     /// Runs `block` on the main queue's next turn (after the current one has committed). Replaceable, as `nextFrame`.
     static var nextTurn: (@escaping @MainActor () -> Void) -> Void = { block in
         DispatchQueue.main.async { MainActor.assumeIsolated { block() } }
@@ -545,11 +551,9 @@ enum AppTransition {
             let screen = self.screen
             // Another animation taking over (a close) calls the handoff off.
             let mine = token
-            AppTransition.nextFrame(screen) { [weak self] in
-                AppTransition.nextFrame(screen) { [weak self] in
-                    guard let self, !self.ended, self.token == mine else { return }
-                    self.letGoWhenStill(mine, finished: finished)
-                }
+            AppTransition.nextFrames(screen, 2) { [weak self] in
+                guard let self, !self.ended, self.token == mine else { return }
+                self.letGoWhenStill(mine, finished: finished)
             }
         }
 
@@ -620,29 +624,39 @@ private extension CGRect {
     var center: CGPoint { CGPoint(x: midX, y: midY) }
 }
 
-/// One display refresh, waited for.
+/// A few display refreshes, waited for on one display link.
 @MainActor
-private final class FrameTick: NSObject {
+final class FrameTick: NSObject {
     private static var live: Set<FrameTick> = []
     private var link: CADisplayLink?
     private var block: (@MainActor () -> Void)?
+    private var left = 1
+    private var fallback: DispatchWorkItem?
 
-    static func next(on screen: NSScreen?, _ block: @escaping @MainActor () -> Void) {
+    static func wait(_ count: Int, on screen: NSScreen?, _ block: @escaping @MainActor () -> Void) {
         let tick = FrameTick()
         tick.block = block
+        tick.left = max(count, 1)
         live.insert(tick)
         if let screen {
             let link = screen.displayLink(target: tick, selector: #selector(fire))
             link.add(to: .main, forMode: .common)
             tick.link = link
         }
-        // A display that is asleep gives no refresh: do not wait for one for ever.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { MainActor.assumeIsolated { tick.finish() } }
+        // A display that is asleep gives no refresh: do not wait for them for ever. Called off once they came.
+        let fallback = DispatchWorkItem { MainActor.assumeIsolated { tick.finish() } }
+        tick.fallback = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 * Double(tick.left), execute: fallback)
     }
 
-    @objc private func fire() { finish() }
+    @objc private func fire() {
+        left -= 1
+        if left <= 0 { finish() }
+    }
 
     private func finish() {
+        fallback?.cancel()
+        fallback = nil
         link?.invalidate()
         link = nil
         FrameTick.live.remove(self)

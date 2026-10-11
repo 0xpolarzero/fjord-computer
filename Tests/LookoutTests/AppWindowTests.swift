@@ -526,6 +526,19 @@ import Testing
         #expect(closed == 1 && closing == 0 && asked == 0 && !controller.isOpen)
     }
 
+    /// A wait for several refreshes runs once, after them (or after its fallback, a display giving none).
+    @Test func aWaitForSeveralRefreshesRunsOnce() async {
+        var runs = 0
+        FrameTick.wait(2, on: NSScreen.main) { runs += 1 }
+        await waitUntil { runs > 0 }
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(runs == 1)
+        var asleep = 0
+        FrameTick.wait(2, on: nil) { asleep += 1 }
+        await waitUntil { asleep > 0 }
+        #expect(asleep == 1)
+    }
+
     private final class Ticks {
         var blocks: [@MainActor () -> Void] = []
         var turns: [@MainActor () -> Void] = []
@@ -534,18 +547,22 @@ import Testing
     /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on. A window under
     /// test never has the keyboard (the test runner is not the active app): `AppTransition.isKey` may say otherwise.
     private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
-        let saved = (AppTransition.enabled, AppTransition.nextFrame, AppTransition.nextTurn, AppTransition.isKey,
+        let saved = (AppTransition.enabled, AppTransition.nextFrames, AppTransition.nextTurn, AppTransition.isKey,
                      AppTransition.isMiniaturized)
         // The app's policy as found: the morph's close never gets to its tidying turn here, which would put it back, and a
         // test awaiting its own close meanwhile reads it.
         let policy = AppPolicy.current
         let ticks = Ticks()
         AppTransition.enabled = true
-        AppTransition.nextFrame = { _, block in ticks.blocks.append(block) }
+        // One block per refresh: a wait for several queues the next as each comes.
+        AppTransition.nextFrames = { _, count, block in
+            func wait(_ left: Int) { ticks.blocks.append { left > 1 ? wait(left - 1) : block() } }
+            wait(count)
+        }
         AppTransition.nextTurn = { block in ticks.turns.append(block) }
         defer {
             AppTransition.enabled = saved.0
-            AppTransition.nextFrame = saved.1
+            AppTransition.nextFrames = saved.1
             AppTransition.nextTurn = saved.2
             AppTransition.isKey = saved.3
             AppTransition.isMiniaturized = saved.4
