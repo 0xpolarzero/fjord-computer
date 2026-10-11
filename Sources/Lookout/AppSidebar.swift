@@ -84,13 +84,23 @@ struct AppSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    // On the rail its label is gone, and its room with it: the icons start under the top bar.
                     InboxHeading(on: navigator.selection == .categories, collapsed: collapsed) { navigator.go(.categories) }
+                        .frame(height: collapsed ? M.rowGap + 2 : InboxHeading.height, alignment: .bottom)
+                        .clipped()
+                        .allowsHitTesting(!collapsed)
                     // Section by section: its row (a caret folds it, its categories' counts then added up on it), then its
-                    // categories while it is open.
+                    // categories while it is open; a section's sit a step in, a guide down from its icon beside them (the
+                    // expanded sidebar only: on the rail they line up as tiles).
                     ForEach(store.barSections) { part in
                         if let section = part.section { sectionRow(section, part) }
-                        if part.section?.isCollapsed != true {
+                        if part.section == nil {
                             ForEach(part.categories) { category in categoryRow(category) }
+                        } else if part.section?.isCollapsed != true {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(part.categories) { category in categoryRow(category, nested: true) }
+                            }
+                            .overlay(alignment: .topLeading) { treeGuide }
                         }
                     }
                     AppSidebarRow(title: "Done", on: navigator.selection == .done,
@@ -110,8 +120,8 @@ struct AppSidebar: View {
                         AppSidebarRow(title: "Router", on: navigator.selection == .router,
                                       badge: routerCounts.needsYou + routerCounts.notes > 0
                                           ? RailBadge(count: routerCounts.needsYou + routerCounts.notes,
-                                                      fill: routerCounts.needsYou > 0 ? CDS.Fill.warning : CDS.Fill.accent,
-                                                      ink: routerCounts.needsYou > 0 ? CDS.Text.onPrimary : .white)
+                                                      fill: CDS.solid(routerCounts.needsYou > 0 ? 0xFAB219 : 0x2A78D6),
+                                                      ink: routerCounts.needsYou > 0 ? CDS.solid(0x0B0B0B) : .white)
                                           : nil,
                                       tip: Self.routerTip(routerCounts),
                                       action: { navigator.go(.router) }) { on in
@@ -155,11 +165,12 @@ struct AppSidebar: View {
         .frame(maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func categoryRow(_ category: InboxCategory) -> some View {
+    private func categoryRow(_ category: InboxCategory, nested: Bool = false) -> some View {
         let badge = store.badge(category)
         let off = store.rulesOff(category.id)
         return AppSidebarRow(title: category.title, on: navigator.selection == .category(category.id),
                              badge: badge > 0 ? RailBadge(count: badge, fill: category.color.swatch, ink: category.color.ink) : nil,
+                             indent: nested ? M.treeIndent : 0,
                              tip: badge == 0 ? category.title : "\(category.title) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
                              action: { navigator.go(.category(category.id)) }) { on in
             Image(systemName: category.symbol)
@@ -238,6 +249,17 @@ struct AppSidebar: View {
             .padding(.leading, collapsed ? 4 : M.labelInset)
     }
 
+    /// A section's tree guide: a hairline on its icon's centre, from just under its row to its last category's (short of the
+    /// gap after it). It goes and comes with the labels, so the rail never shows it.
+    private var treeGuide: some View {
+        Rectangle().fill(CDS.border).frame(width: M.treeGuide)
+            .padding(.bottom, rowGap + 4)
+            .padding(.leading, M.rowPadding + M.railShift + (M.leadingSlot - M.treeGuide) / 2)
+            .sidebarText(collapsed)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
     private static func routerTip(_ c: (needsYou: Int, notes: Int)) -> String {
         let parts = [c.needsYou > 0 ? "\(c.needsYou) need you" : nil, c.notes > 0 ? "\(c.notes) worth a look" : nil].compactMap { $0 }
         return parts.isEmpty ? "Router" : "Router · " + parts.joined(separator: ", ")
@@ -270,6 +292,8 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
     let title: String
     let on: Bool
     let badge: RailBadge?
+    /// How far in its icon sits in the expanded sidebar (a section's categories); none on the rail, where tiles line up.
+    let indent: CGFloat
     let tip: String
     let action: () -> Void
     @ViewBuilder let leading: (_ on: Bool) -> Leading
@@ -278,11 +302,12 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
     @Environment(\.sidebarCollapsed) private var collapsed
     typealias M = CDS.Sidebar
 
-    init(title: String, on: Bool, badge: RailBadge? = nil, tip: String? = nil, action: @escaping () -> Void,
+    init(title: String, on: Bool, badge: RailBadge? = nil, indent: CGFloat = 0, tip: String? = nil, action: @escaping () -> Void,
          @ViewBuilder leading: @escaping (_ on: Bool) -> Leading, @ViewBuilder trailing: @escaping () -> Trailing) {
         self.title = title
         self.on = on
         self.badge = badge
+        self.indent = indent
         self.tip = tip ?? title
         self.action = action
         self.leading = leading
@@ -294,7 +319,8 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
             HStack(spacing: M.rowGap) {
                 leading(on)
                     .frame(width: M.leadingSlot, height: M.leadingSlot)
-                    .padding(.leading, M.railShift)
+                    // The indent eases out with the sidebar's width, so a nested icon reaches its tile as the rail closes.
+                    .padding(.leading, M.railShift + (collapsed ? 0 : indent))
                     .overlay(alignment: .topTrailing) {
                         // The bar's corner count, on the rail only; it comes in after the labels have gone.
                         if let badge {
@@ -375,6 +401,8 @@ private struct InboxHeading: View {
     let edit: () -> Void
     @State private var hovered = false
     typealias M = CDS.Sidebar
+    /// The label's 20 with the room above and below it.
+    static let height: CGFloat = M.groupTop - 2 + 20 + 2
 
     var body: some View {
         HStack(spacing: 4) {
