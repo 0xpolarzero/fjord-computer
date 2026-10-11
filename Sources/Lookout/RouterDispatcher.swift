@@ -1004,13 +1004,19 @@ extension RouterDispatcher {
     }
 
     /// The message is addressed to the session by words you typed: "tell X to …" or "X: …" naming it and nothing else
-    /// (`RouterTools.addressedSession`: its project, with it the only session), or a short name of its project's ("CI"). Never its title: a
-    /// session sets its own.
+    /// (`RouterTools.addressedSession`: its project, with it the only session), or a short name of its project's ("CI"), on
+    /// the same terms: the name is of that one project, and it has that one session. Never its title: a session sets its own.
     static func addressed(_ message: String, to session: String, store: Store) -> Bool {
         guard let s = store.claudeSessions[session] else { return false }
         if RouterTools.addressedSession(message, store: store) == session { return true }
-        let names = [store.folderName(s.folderKey), (s.folderKey as NSString).lastPathComponent]
-        return !shortNames(message).isDisjoint(with: shortNames(names.joined(separator: " ")))
+        let said = shortNames(message)
+        func named(_ folder: String) -> Bool {
+            !folder.isEmpty && !said.isDisjoint(with: shortNames(store.folderName(folder) + " " + (folder as NSString).lastPathComponent))
+        }
+        guard named(s.folderKey) else { return false }
+        let sessions = store.claudeSessions.values.filter { !$0.isArchived }
+        let projects = Set((store.knownFolders + sessions.map(\.folderKey)).filter(named))
+        return projects == [s.folderKey] && sessions.filter { $0.folderKey == s.folderKey }.map(\.id) == [session]
     }
 
     /// Two or three letters, said as a name ("CI", "API", "db"): not a common short word. (Longer words are matched by

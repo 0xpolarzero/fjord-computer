@@ -470,6 +470,26 @@ import Testing
         #expect(RouterDispatcher.addressed("yes, ship it on ci", to: "local_c", store: s))
     }
 
+    @Test func aShortNameOfAProjectWithTwoSessionsDoesntAddressTheOneAskingForAnOK() async {
+        let (s, d, f) = setup()
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix it", folder: "/code/ci", lastActivity: Date(), running: true)
+        s.claudeSessions["local_d"] = ClaudeSession(id: "local_d", title: "Flaky job", folder: "/code/ci", lastActivity: Date(), running: true)
+        s.router.cards = [RouterCard(id: "local_c#w9", sessionID: "local_c", kind: .approval, title: "Fix it",
+                                     folder: "/code/ci", text: "May I force-push to main?", createdAt: Date())]
+        f.ranked = [.init(target: "answer:local_c#w9", p: 0.97), .init(target: "unclear", p: 0.03)]
+        // "ci" names the project, not which of its two sessions: asked, with the card first.
+        #expect(!RouterDispatcher.addressed("yes, ship it on ci", to: "local_c", store: s))
+        let a = d.submit("yes, ship it on ci")
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty && d.askBacks.last?.options.first?.target == "answer:local_c#w9")
+        // One session, but the name is of two projects: not addressed either.
+        s.claudeSessions["local_d"] = ClaudeSession(id: "local_d", title: "Flaky job", folder: "/work/ci", lastActivity: Date(), running: true)
+        #expect(!RouterDispatcher.addressed("yes, ship it on ci", to: "local_c", store: s))
+        // Its project's only session, of the only project by that name: addressed.
+        s.claudeSessions["local_d"] = nil
+        #expect(RouterDispatcher.addressed("yes, ship it on ci", to: "local_c", store: s))
+    }
+
     @Test func anAnswerToASessionsOwnAskGoesOnItsEvidence() async {
         let (s, d, f) = setup()
         s.router.cards = [RouterCard(id: "local_b#w4", sessionID: "local_b", kind: .asks, title: "Update the docs",
