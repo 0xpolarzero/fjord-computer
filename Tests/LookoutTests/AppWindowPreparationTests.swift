@@ -39,22 +39,24 @@ import Testing
     }
 }
 
-@MainActor
-@Suite(.hostsWindows) struct AppWindowOverlayPreparation {
-    @Test func preparingTheOverlayKeepsItHiddenAndTheFirstMorphReusesIt() throws {
-        _ = NSApplication.shared
-        let window = AwayWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 1100, height: 700)),
-                                styleMask: [.titled], backing: .buffered, defer: true)
-        window.isReleasedWhenClosed = false
-        let screen = try #require(window.screen ?? NSScreen.main)
-        let prepared = AppTransition.prepareOverlay(on: screen)
-        let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: nil))
-        defer { run.end() }
-        #expect(prepared === run.overlay && !prepared.isVisible && !window.isVisible)
-        let content = run.overlay.contentView
-        run.show()
-        #expect(!NSScreen.screens.contains { $0.frame.intersects(run.overlay.frame) })
-        #expect(AppTransition.prepareOverlay(on: screen) === prepared)
-        #expect(run.overlay.isVisible && run.overlay.contentView === content)
+extension WindowSeams {
+    @MainActor
+    @Suite(.hostsWindows) struct AppWindowOverlayPreparation {
+        @Test func preparingTheOverlayKeepsItHiddenAndTheFirstMorphReusesIt() throws {
+            _ = NSApplication.shared
+            let window = AwayWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 1100, height: 700)),
+                                    styleMask: [.titled], backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            let screen = try #require(window.screen ?? NSScreen.main)
+            let prepared = AppTransition.prepareOverlay(on: screen)
+            let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: nil))
+            defer { run.end() }
+            #expect(prepared === run.overlay && !prepared.isVisible && !window.isVisible)
+            let content = run.overlay.contentView
+            run.show()
+            #expect(!NSScreen.screens.contains { $0.frame.intersects(run.overlay.frame) })
+            #expect(AppTransition.prepareOverlay(on: screen) === prepared)
+            #expect(run.overlay.isVisible && run.overlay.contentView === content)
+        }
     }
 }
