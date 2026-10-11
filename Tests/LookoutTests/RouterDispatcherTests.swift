@@ -146,13 +146,30 @@ import Testing
         #expect(found?.sure == true && found?.top?.target == "session:local_b" && f.ranks == 1)
         _ = await d.predict("add a changelog entry for this", projects: [])
         #expect(f.ranks == 1, "the same draft is asked once")
-        let a = d.submit("add a changelog entry for this")
+        let a = d.submit("add a changelog entry for this", context: RouterContext(shown: "session:local_b"))
         await finish(d, f, a)
         #expect(f.ranks == 1 && f.prepared == ["local_b"], "sent where it was shown, with no second call")
         #expect(decision(s, a)?.decision.confirmed == true, "going with the live pick is an example for later")
         let b = d.submit("add a changelog entry for this, and a date")
         await finish(d, f, b)
         #expect(f.ranks == 2 && decision(s, b)?.decision.confirmed == nil, "changed words are asked about again")
+    }
+
+    @Test func aPickReadWhileYouTypedButNeverShownConfirmsNothingAndKeepsTheSafeguards() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
+        // Read for words typed, then edited away before Jev answered: nothing was shown for them.
+        _ = await d.predict("add a changelog entry for this", projects: [])
+        // The same words pasted back and sent: his reading is used (no second call), but it isn't yours.
+        let a = d.submit("add a changelog entry for this")
+        await finish(d, f, a)
+        #expect(f.ranks == 1 && f.prepared.isEmpty && d.askBacks.map(\.id) == [a!],
+                "words sharing nothing with the session: asked, not sent")
+        #expect(decision(s, a)?.decision.confirmed == nil)
+        // Shown, but for other words than those sent: the same.
+        let b = d.submit("add a changelog entry for this", context: RouterContext(shown: "session:local_a"))
+        await finish(d, f, b)
+        #expect(f.prepared.isEmpty && decision(s, b)?.decision.confirmed == nil)
     }
 
     @Test func aPinnedTargetGoesWithoutJevAndAWavedOffOneIsNeverSentToUnasked() async {

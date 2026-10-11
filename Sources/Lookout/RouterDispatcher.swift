@@ -23,15 +23,19 @@ struct RouterContext: Equatable {
     /// logs it as confirmed and takes the task's size from it.
     var predicted: String?
     var jev: RouterDispatcher.Classification?
+    /// The target of Jev's pick shown over the composer for these very words as they are sent: only then does a send go
+    /// with it as your confirmation (what was read while you typed but not shown, or shown for other words, is not).
+    var shown: String?
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
-         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil) {
+         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil) {
         self.replyTo = replyTo
         self.projects = projects
         self.target = target
         self.notTo = notTo
         self.predicted = predicted
         self.jev = jev
+        self.shown = shown
     }
 }
 
@@ -90,7 +94,7 @@ struct RouterAskBack: Identifiable, Equatable {
         var scope: Double? = nil
         /// The size was asked with the routing (see `Ranking.scopeAsked`).
         var scopeAsked = false
-        /// Asked while you typed (the composer showed it when sure), not again when sent.
+        /// Shown over the composer for these words as they were sent (`RouterContext.shown`): you went with it.
         var live = false
 
         var top: Scored? { ranked.first }
@@ -499,6 +503,9 @@ struct RouterAskBack: Identifiable, Equatable {
         let history = store.recentDecisions(10, excluding: job.id)
         var found = await classify(job, projects: narrowed, history: history)
         try Task.checkCancellation()
+        // Only the pick you saw over the composer, for these words, is one you went with; a pick read while you typed (and
+        // kept for the send) that you never saw is Jev's like any other.
+        found.live = found.assisted && found.sure && found.top.map { $0.target == job.context.shown } == true
         // Where you waved Jev's pick off isn't gone to without asking you, and his pick for these words is asked again.
         if let notTo = job.context.notTo, found.top?.target == notTo {
             found.sure = false
@@ -547,8 +554,7 @@ struct RouterAskBack: Identifiable, Equatable {
                   self.store?.jevAllows(.drafts) == true else { return nil }
             // Read before a correction or a dismissal: routed as it was then, so it goes.
             guard self.liveGeneration == generation else { return nil }
-            var found = Classification(ranking)
-            found.live = true
+            let found = Classification(ranking)
             self.liveCache = self.liveCache.filter { Date().timeIntervalSince($0.value.at) < Self.liveFor }
             self.liveCache[key] = (Date(), found)
             return found
@@ -612,9 +618,8 @@ struct RouterAskBack: Identifiable, Equatable {
         guard let store else { return Classification(ranked: [], sure: false, assisted: false) }
         let key = Self.liveKey(job.text, projects)
         if let hit = live(key) { return hit }
-        // Still being asked while you typed: its answer, not a second call. It wasn't shown, so sending it confirms nothing.
-        if let pending = livePending[key], var found = await pending.task.value {
-            found.live = false
+        // Still being asked while you typed: its answer, not a second call.
+        if let pending = livePending[key], let found = await pending.task.value {
             if found.top.map({ eligible($0.target, store: store) }) ?? true { return found }
         }
         do {

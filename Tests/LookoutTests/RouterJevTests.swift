@@ -50,6 +50,10 @@ import Testing
         await waitUntil { model.live.prediction != nil }
         #expect(model.live.prediction?.target == "answer:local_a#w1" && model.live.prediction?.title == "Fix the login bug")
         #expect(model.live.prediction?.mark == "local_a#w1")
+        #expect(model.context(s).shown == "answer:local_a#w1", "sending these words goes with the pick shown")
+        model.draft = "use sqlite for the database, or not"
+        #expect(model.context(s).shown == nil, "it was shown for other words")
+        model.draft = "use sqlite for the database"
         model.markPrediction(from: nil, to: model.live.prediction?.mark)
         #expect(model.highlighted == "local_a#w1")
         model.markPrediction(from: "local_a#w1", to: nil)
