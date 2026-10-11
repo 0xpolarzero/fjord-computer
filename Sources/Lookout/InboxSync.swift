@@ -454,7 +454,8 @@ enum InboxSync {
             thing.deletions = node["deletions"] as? Int
             thing.changedFiles = node["changedFiles"] as? Int
 
-            // Each reviewer's latest opinion; a review that only commented stands for reviewers with no opinion.
+            // Each reviewer's latest opinion, and the latest reviews, each once: a review that only comments after an opinion
+            // (changes requested, then a follow-up) is a review too. The opinion a reviewer holds is told from them all.
             var reviews: [ThingReview] = []
             let state: (Any?) -> ReviewState? = {
                 switch $0 as? String {
@@ -469,8 +470,7 @@ enum InboxSync {
                 guard let id = r["id"] as? String, let s = state(r["state"]), let at = date(r["submittedAt"]) else { continue }
                 reviews.append(ThingReview(id: id, author: person(r["author"], association: r["authorAssociation"]), state: s, at: at))
             }
-            let opinionated = Set(reviews.map { $0.author.login.lowercased() })
-            var latestOther: [String: ThingReview] = [:]
+            var reviewIDs = Set(reviews.map(\.id))
             for r in nodes(node["reviews"]) {
                 guard let id = r["id"] as? String, let s = state(r["state"]), let at = date(r["submittedAt"]) else { continue }
                 let who = person(r["author"], association: r["authorAssociation"])
@@ -481,13 +481,9 @@ enum InboxSync {
                     mentioned += found
                     comments.append(ThingComment(id: id, author: who, at: at, snippet: snippet(text), mentions: found, isReview: true))
                 }
-                let key = who.login.lowercased()
-                if !opinionated.contains(key), latestOther[key].map({ $0.at < at }) ?? true {
-                    latestOther[key] = ThingReview(id: id, author: who, state: s, at: at)
-                }
+                if reviewIDs.insert(id).inserted { reviews.append(ThingReview(id: id, author: who, state: s, at: at)) }
             }
-            reviews += latestOther.values.sorted { $0.at < $1.at }
-            thing.reviews = reviews
+            thing.reviews = reviews.sorted { $0.at < $1.at }
 
             for t in nodes(node["reviewThreads"]) {
                 guard let id = t["id"] as? String, let first = nodes(t["first"]).first, let last = nodes(t["last"]).first,

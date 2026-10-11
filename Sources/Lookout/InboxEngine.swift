@@ -596,15 +596,16 @@ enum InboxEngine {
         }
     }
 
-    /// Each reviewer's latest review that states an opinion; commented and dismissed ones don't change it.
+    /// Each reviewer's latest review that states an opinion; commented ones don't change it, and one dismissed takes it
+    /// back (an approval before it doesn't stand again).
     private static func latestOpinions(_ thing: Thing) -> [ThingReview] {
         var latest: [String: ThingReview] = [:]
-        for review in thing.reviews where review.state == .approved || review.state == .changesRequested {
+        for review in thing.reviews where review.state != .commented {
             let who = normalize(review.author.login)
             if let current = latest[who], current.at >= review.at { continue }
             latest[who] = review
         }
-        return latest.values.sorted { $0.at < $1.at }
+        return latest.values.filter { $0.state != .dismissed }.sorted { $0.at < $1.at }
     }
 
     // MARK: - Problems

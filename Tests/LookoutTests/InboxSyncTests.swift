@@ -87,6 +87,41 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(t.reviews.map(\.state) == [.approved, .commented])
     }
 
+    @Test func aReviewThatOnlyCommentsAfterAnOpinionIsAReviewAndTheOpinionStands() throws {
+        let bob: [String: Any] = ["login": "bob", "__typename": "User", "avatarUrl": ""]
+        let changes: [String: Any] = ["id": "r1", "state": "CHANGES_REQUESTED", "submittedAt": "2026-10-06T10:00:00Z", "body": "fix it",
+                                      "authorAssociation": "MEMBER", "author": bob]
+        let followUp: [String: Any] = ["id": "r3", "state": "COMMENTED", "submittedAt": "2026-10-08T10:00:00Z", "body": "",
+                                       "authorAssociation": "MEMBER", "author": bob]
+        let commit: [String: Any] = ["commit": ["oid": "mid", "committedDate": "2026-10-07T10:00:00Z", "author": ["user": ["login": "me"]]]]
+        let t = try #require(InboxSync.thing(node(["latestOpinionatedReviews": ["nodes": [changes]],
+                                                   "reviews": ["nodes": [changes, followUp]], "commits": ["nodes": [commit]]])))
+        #expect(t.reviews.map(\.id) == ["r1", "r3"])
+        var marks = EntryMarks()
+        marks.doneAt = iso("2026-10-07T00:00:00Z")
+        func keys(_ condition: Condition, me: String = "me") -> [String]? {
+            InboxEngine.facts(Rule(scope: Scope(kinds: [.pr]), conditions: [condition], createdAt: .distantPast), t, marks: marks,
+                              context: InboxContext(me: me))?.map(\.key)
+        }
+        // Bob's follow-up is a new review since Done, and his changes requested still stand.
+        #expect(keys(.newReview(by: Pick())) == ["review:r3"])
+        #expect(keys(.changesRequested(by: Pick())) == ["changes:r1"])
+        // For bob, his last review is the follow-up: the commit before it isn't new since.
+        #expect(keys(.newCommits(by: Pick(), since: .myLastReview), me: "bob") == nil)
+    }
+
+    @Test func aDismissedReviewTakesBackTheOpinionBeforeIt() throws {
+        let bob: [String: Any] = ["login": "bob", "__typename": "User", "avatarUrl": ""]
+        let approved: [String: Any] = ["id": "r1", "state": "APPROVED", "submittedAt": "2026-10-06T10:00:00Z", "body": "",
+                                       "authorAssociation": "MEMBER", "author": bob]
+        let dismissed: [String: Any] = ["id": "r3", "state": "DISMISSED", "submittedAt": "2026-10-08T10:00:00Z", "body": "",
+                                        "authorAssociation": "MEMBER", "author": bob]
+        let t = try #require(InboxSync.thing(node(["latestOpinionatedReviews": ["nodes": [dismissed]],
+                                                   "reviews": ["nodes": [approved, dismissed]]])))
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.approved(by: Pick())], createdAt: .distantPast)
+        #expect(InboxEngine.facts(rule, t, marks: nil, context: InboxContext(me: "me")) == nil)
+    }
+
     @Test func threadsKeepWhoStartedWhoRepliedAndWhetherTheyAreResolved() throws {
         let t = try #require(InboxSync.thing(node()))
         #expect(t.threads.map(\.isResolved) == [true, false])
