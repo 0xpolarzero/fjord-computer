@@ -439,7 +439,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             // The window's content built once at idle, out of sight, so the first open only brings it in. Not under
             // `--lifecycle`, whose idle measurement wants nothing done after launch.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window, weak self] in
+                if self?.store.router.enabled == true { _ = SessionIcons.drawable }
                 window?.prepare()
             }
         }
