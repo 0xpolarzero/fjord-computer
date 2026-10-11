@@ -150,8 +150,11 @@ Episodes rather than single messages: a board, then submits, card changes, picks
   the time. They are kept for coverage of flows, weighted to the real mix, and never used for gold on asking.
   Curation drops rewrites that translated an English real message into French (15), and marks a first submit copied
   word for word from a real moment (179) so it plays but isn't scored twice.
-- **Gold comes from blind labels by three model families** (Claude, GPT, Gemini), never the writer's own family.
-  Pilot on 30 events (29 with all three): the same target 66% of the time, pairwise 76%; almost every split is "a
+- **Gold comes from blind labels: Claude and GPT on every event, Gemini as a third vote.** The plan was three
+  families and never the writer's own, but Gemini's subscription quota ran out after about 120 calls ("Individual
+  quota reached", resets every few hours), far short of the ~1,600 written events. So the writer's own family labels
+  too, and a Gemini audit on a sample of written events measures whether that family agrees with its own writing more
+  than the other family does. Pilot on 30 events (29 with all three): the same target 66% of the time, pairwise 76%; almost every split is "a
   target" against "unknown", a split on whether the board is enough. Asking agreement is low (α 0.38): on real
   moments whether to ask is genuinely ambiguous, so asking gold is a majority with adjudication, not one label.
 - **Labelling lessons:** in a batch, Claude put labels on neighbouring keys, and on a shared real board the wrong
