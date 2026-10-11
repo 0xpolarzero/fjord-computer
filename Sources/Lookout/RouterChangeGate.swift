@@ -77,6 +77,19 @@ enum LookoutGate {
         return unnamed == 0 ? nil : "Your message didn't name \(unnamed == 1 ? "a thing" : "\(unnamed) things") it marks"
     }
 
+    /// What your message names, read once as its turn begins, before its run changes anything: the things it names (by
+    /// reference, number or title) and the categories (by name), by id. A mark is bound to these: a name the run gives a
+    /// category, or a title that comes in meanwhile, names nothing.
+    struct Named: Equatable {
+        var things: Set<String> = []
+        var categories: Set<UUID> = []
+    }
+
+    @MainActor static func named(_ request: String, store: Store) -> Named {
+        Named(things: Set(store.things.values.filter { names(request, thing: $0, category: nil) }.map(\.id)),
+              categories: Set(store.categories.filter { calls(request, $0.name) }.map(\.id)))
+    }
+
     /// Whether your message names a thing: its reference (`owner/repo#12`), its number (`#12`), its whole title, or the
     /// category it is marked by (`category`, when the marking is by category).
     static func names(_ request: String, thing: Thing, category: String?) -> Bool {
@@ -85,15 +98,33 @@ enum LookoutGate {
             if mentions(said, ref: "\(thing.repo)#\(number)") { return true }
             if said.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil { return true }
         }
-        let title = (thing.kind == .workflow ? thing.workflowName ?? thing.title : thing.title).lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.count >= 4, said.contains(title) { return true }
-        if let category = category?.lowercased().trimmingCharacters(in: .whitespaces), category.count >= 2,
-           said.range(of: #"\b\#(NSRegularExpression.escapedPattern(for: category))\b"#, options: .regularExpression) != nil {
-            return true
-        }
+        let title = (thing.kind == .workflow ? thing.workflowName ?? thing.title : thing.title)
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).count >= 4, calls(request, title) { return true }
+        if let category, category.trimmingCharacters(in: .whitespaces).count >= 2, calls(request, category) { return true }
         return false
     }
+
+    /// Whether your message says `name` as whole words, outside its references (`owner/repo#12`, `#12`), and with a word of
+    /// its own besides the command's (done, seen, mark…): an issue titled "done", or "123 done", isn't named by "mark
+    /// acme/api#123 done".
+    static func calls(_ request: String, _ name: String) -> Bool {
+        let name = words(name)
+        guard name.contains(where: { !commandWords.contains($0) }) else { return false }
+        let pieces = request.lowercased().replacingOccurrences(of: #"[\w.-]*/[\w.-]+(#\d+)?|#\d+"#, with: "\n",
+                                                               options: .regularExpression).split(separator: "\n")
+        return pieces.contains { piece in
+            let said = words(String(piece))
+            guard said.count >= name.count else { return false }
+            return (0...(said.count - name.count)).contains { Array(said[$0..<($0 + name.count)]) == name }
+        }
+    }
+
+    /// The words of a marking command, which name no thing or category however they are titled.
+    private static let commandWords: Set<String> = [
+        "done", "undone", "seen", "unseen", "read", "unread", "mark", "marked", "marking", "restore", "restored", "clear",
+        "archive", "archived", "dismiss", "ack", "acknowledge", "reopen", "back", "open", "as", "all", "every", "everything",
+        "it", "them", "the", "a", "an", "and", "or", "to", "of", "in", "this", "that", "these", "those", "please", "now", "again",
+    ]
 
     /// Whether `text` says `ref` (`owner/repo#12`, or `owner/repo`) as a whole: not part of a longer one (`acme/api#123` is
     /// not `acme/api#12`, `acme/api-v2` is not `acme/api`, nor is `acme/api#12` the repo alone).

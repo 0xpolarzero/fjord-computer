@@ -681,6 +681,32 @@ import Testing
         #expect(LookoutGate.names("clear out Reviews", thing: InboxFixture.pr(12), category: "Reviews"))
     }
 
+    @Test func marksAreBoundToWhatYourMessageNamedAsTheTurnBegan() async throws {
+        let s = inboxStore()
+        s.things["pr:a/one#4"] = InboxFixture.pr(4, title: "done", greptile: 1)
+        s.things["pr:a/one#5"] = InboxFixture.pr(5, title: "Polish the docs", greptile: 1)
+        let before = s.marks
+        let t = tools(s, turn: "mark a/one#1 done for the release")
+        // A thing titled with the command's own word isn't named by it.
+        let titled = await call(t, "mark_entries", ["state": "done", "entries": ["pr:a/one#4"]])
+        #expect(titled.json["waiting"] != nil && s.marks["pr:a/one#4"] == before["pr:a/one#4"])
+        // A category the run renames to a word of your message, marked by it, then named back: not what you named.
+        let mine = try #require(s.categories.first { $0.name == "Mine" })
+        #expect(await update(t, mine, ["name": "Release"])["changed"] != nil)
+        let byName = await call(t, "mark_entries", ["state": "done", "category": "Release"])
+        #expect(byName.json["waiting"] != nil && s.doneEntries.isEmpty)
+        // Nor a title that came in during the run.
+        s.things["pr:a/one#5"]?.title = "release"
+        let retitled = await call(t, "mark_entries", ["state": "done", "entries": ["pr:a/one#5"]])
+        #expect(retitled.json["waiting"] != nil && s.marks["pr:a/one#5"] == before["pr:a/one#5"])
+        // What it named as the turn began still goes at once: a ref, a title.
+        #expect(await call(t, "mark_entries", ["state": "done", "entries": ["a/one#1"]]).json["waiting"] == nil)
+        s.things["pr:a/one#5"]?.title = "Polish the docs"
+        t.beginTurn("mark Polish the docs done")
+        #expect(await call(t, "mark_entries", ["state": "done", "entries": ["pr:a/one#5"]]).json["waiting"] == nil)
+        #expect(!LookoutGate.names("mark acme/api#123 done", thing: InboxFixture.pr(9, title: "123 done"), category: "done"))
+    }
+
     @Test func knownValuesAreListedForTheRulesToUse() async throws {
         let s = inboxStore()
         let t = tools(s)

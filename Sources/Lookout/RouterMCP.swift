@@ -513,12 +513,15 @@ final class RouterMCPServer: @unchecked Sendable {
     var turnChanges: [UUID] = []
     /// The things this turn marked (or asked to): many at once wait for you however the marking is split.
     var turnMarked: Set<String> = []
+    /// What your message names, read as the turn began, before its run changed anything (`LookoutGate.Named`).
+    var turnNamed = LookoutGate.Named()
 
     /// A turn of yours begins.
     func beginTurn(_ text: String) {
         turnText = text
         turnChanges = []
         turnMarked = []
+        turnNamed = store.map { LookoutGate.named(text, store: $0) } ?? .init()
     }
 
     /// The turn ended or was stopped: unused preparations go, runs under way are stopped, late work acts on nothing.
@@ -527,6 +530,7 @@ final class RouterMCPServer: @unchecked Sendable {
         turnText = nil
         turnChanges = []
         turnMarked = []
+        turnNamed = .init()
         prepared = [:]
         cancelRuns()
     }

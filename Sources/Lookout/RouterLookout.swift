@@ -569,9 +569,10 @@ extension RouterTools {
         let n = changes.count
         let title = state == "restore" ? "Restored \(n)" : "Marked \(n) \(state)"
         let change = LookoutChange(title: title, patch: .marks(state: state, changes))
-        // Bound to what your message names, and counted over the turn: split into small calls, many still wait.
-        let said = turnText ?? ""
-        let named = Set(wanted.filter { LookoutGate.names(said, thing: $0.thing, category: c?.name) }.map(\.id))
+        // Bound to what your message named as the turn began, and counted over the turn: split into small calls, many still wait.
+        let named = Set(wanted.filter { e in
+            turnNamed.things.contains(e.id) || c.map { turnNamed.categories.contains($0.id) } == true
+        }.map(\.id))
         let bound = LookoutGate.marksReason(changes, named: named, markedThisTurn: turnMarked)
         turnMarked.formUnion(changes.map(\.thing))
         let recorded = try commit(store, change, reason: bound) { try store.applyPatch(change.patch); return change }
