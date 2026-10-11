@@ -563,6 +563,9 @@ enum AppTransition {
             }
         }
 
+        /// How long the overlay's shadow takes to give way to the window's own at the handoff.
+        static let shadowHandoff: TimeInterval = 0.1
+
         /// The window's picture goes at once (the real window under it has the same pixels, and its own are live), the
         /// overlay's shadow gives way to the window's own, then the overlay goes.
         private func letGo(_ mine: Int, finished: @escaping () -> Void) {
@@ -583,10 +586,11 @@ enum AppTransition {
             let fade = CABasicAnimation(keyPath: "shadowOpacity")
             fade.fromValue = 1
             fade.toValue = 0
-            fade.duration = 0.1
+            fade.duration = Self.shadowHandoff
             shadow.add(fade, forKey: "handoff")
             CATransaction.commit()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            // The layers run at 1/slowdown: the overlay goes once the fade is over as it is seen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.shadowHandoff * Double(AppTransition.slowdown)) { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, self.token == mine else { return }
                     self.end()
