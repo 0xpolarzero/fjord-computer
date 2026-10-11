@@ -22,7 +22,7 @@ def key():
     global _key
     if _key is None:
         _key = os.environ.get("TYPESAFE_API_KEY") or subprocess.run(
-            ["security", "find-generic-password", "-s", "dev.polarzero.lookout", "-a", "typesafe-key", "-w"],
+            ["security", "find-generic-password", "-s", "com.amontlabs.fjord", "-a", "typesafe-key", "-w"],
             capture_output=True, text=True, check=True).stdout.strip()
     return _key
 

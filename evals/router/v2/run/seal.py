@@ -59,7 +59,7 @@ def evaluator_fingerprint() -> str:
     files.extend(router / name for name in ("run.py", "jev.py", "formats.py", "bench.py", "analyze.py"))
     files.extend(sorted((router / "explore").glob("*.py")))
     repository = router.parents[1]
-    files.append(repository / "Sources" / "Lookout" / "RouterRoute.swift")
+    files.append(repository / "Sources" / "FjordComputer" / "RouterRoute.swift")
     digest = hashlib.sha256()
     for path in sorted(set(files)):
         digest.update(str(path.relative_to(repository)).encode())

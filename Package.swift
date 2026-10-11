@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "Lookout",
+    name: "FjordComputer",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Lookout", path: "Sources/Lookout"),
-        .testTarget(name: "LookoutTests", dependencies: ["Lookout"], path: "Tests/LookoutTests"),
+        .executableTarget(name: "FjordComputer", path: "Sources/FjordComputer"),
+        .testTarget(name: "FjordComputerTests", dependencies: ["FjordComputer"], path: "Tests/FjordComputerTests"),
     ]
 )

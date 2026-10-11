@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.2.0 to build a universal Lookout.app and publish it as a GitHub release.
+# Push a tag like v0.2.0 to build a universal Fjord Computer.app and publish it as a GitHub release.
 on:
   push:
     tags: ["v*"]
@@ -55,17 +55,17 @@ jobs:
       - name: Build universal app
         run: |
           UNIVERSAL=1 ./scripts/build-app.sh
-          codesign -dr - build/Lookout.app
+          codesign -dr - "build/Fjord Computer.app"
           # With a certificate, the updater pins it: a release that slipped back to ad hoc wouldn't install.
-          if [ -n "${SIGN_IDENTITY:-}" ] && ! codesign -dr - build/Lookout.app 2>&1 | grep -q "certificate leaf"; then
+          if [ -n "${SIGN_IDENTITY:-}" ] && ! codesign -dr - "build/Fjord Computer.app" 2>&1 | grep -q "certificate leaf"; then
             echo "::error::Release isn't signed with $SIGN_IDENTITY"
             exit 1
           fi
 
       - name: Package
         run: |
-          ditto -c -k --keepParent build/Lookout.app "Lookout-$VERSION.zip"
-          shasum -a 256 "Lookout-$VERSION.zip" | tee "Lookout-$VERSION.zip.sha256"
+          ditto -c -k --keepParent "build/Fjord Computer.app" "FjordComputer-$VERSION.zip"
+          shasum -a 256 "FjordComputer-$VERSION.zip" | tee "FjordComputer-$VERSION.zip.sha256"
 
       - name: Publish release
         env:
@@ -73,16 +73,16 @@ jobs:
         run: |
           cat > notes.md <<'NOTES'
           ### Install
-          1. Download `Lookout-*.zip`, unzip, and move **Lookout.app** to `/Applications`.
+          1. Download `FjordComputer-*.zip`, unzip, and move **Fjord Computer.app** to `/Applications`.
           2. The app is not notarized yet, so clear the download quarantine once:
              ```
-             xattr -dr com.apple.quarantine /Applications/Lookout.app
+             xattr -dr com.apple.quarantine "/Applications/Fjord Computer.app"
              ```
-          3. Open it. Lookout uses your `gh` login (`gh auth login`), or paste a token in Settings.
+          3. Open it and pick your tools. Triage uses your `gh` login (`gh auth login`), or a token you paste.
 
-          Already installed? Lookout offers the update itself: click the arrow on the pill, then restart.
+          Already installed? Fjord Computer offers the update itself: click the arrow on the bar, then restart.
 
           Requires macOS 14 or later. Universal (Apple Silicon + Intel).
           NOTES
-          gh release create "$TAG" "Lookout-$VERSION.zip" "Lookout-$VERSION.zip.sha256" \
-            --title "Lookout $VERSION" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"
+          gh release create "$TAG" "FjordComputer-$VERSION.zip" "FjordComputer-$VERSION.zip.sha256" \
+            --title "Fjord Computer $VERSION" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"

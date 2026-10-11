@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { abortMacInput, CAPABILITIES, forget, fromBase64, hmac, invalid, keyId, macInput, parse, parseAbort, type Settings } from '../hooks/register.ts'
 
-// The vector Lookout's Swift tests check too (ClaudePluginTests): the same key, fields and body give the same MAC and
+// The vector Fjord Computer's Swift tests check too (ClaudePluginTests): the same key, fields and body give the same MAC and
 // the same wire text.
 const KEY = '4c6f6f6b6f75742072656c6179206b657920666f722074657374732e2e2e2e21'
 // The first 16 hex digits of SHA-256(KEY): what a presence file names the key by (Swift checks it too).
@@ -12,7 +12,7 @@ const NONCE = '123e4567-e89b-12d3-a456-426614174000'
 const TS = 2_000_000_000_000
 const BODY = 'Use Postgres\nand ship ⟦é⟧'
 const MAC = 'a57dcc0fae48cbc4e54b37050acba54b33554025dd5cfeff93c33f7f46f226dd'
-const WIRE = `⟦lookout v1 ${TARGET} ${NONCE} ${TS} ${MAC}⟧\nVXNlIFBvc3RncmVzCmFuZCBzaGlwIOKfpsOp4p+n`
+const WIRE = `⟦fjord v1 ${TARGET} ${NONCE} ${TS} ${MAC}⟧\nVXNlIFBvc3RncmVzCmFuZCBzaGlwIOKfpsOp4p+n`
 
 const enc = new TextEncoder()
 const base64 = (bytes: Uint8Array) => {
@@ -32,11 +32,11 @@ const sign = async (body: string, { target = TARGET, nonce = NONCE, ts = TS, key
   const head = settings
     ? `v2 ${target} ${nonce} ${ts} ${settings.model ?? '-'} ${settings.effort ?? '-'}`
     : `v1 ${target} ${nonce} ${ts}`
-  return `⟦lookout ${head} ${mac}⟧\n${base64(bytes)}`
+  return `⟦fjord ${head} ${mac}⟧\n${base64(bytes)}`
 }
 /** As the peer channel delivers it. */
 const envelope = (text: string) =>
-  `<cross-session-message from="cli-router" from-name="Lookout">\n${text}\n</cross-session-message>`
+  `<cross-session-message from="cli-router" from-name="Fjord">\n${text}\n</cross-session-message>`
 
 /** The world beneath the plugin: this session's id, its files, the registry, the store, the clock, and what reaches the
  * session. */
@@ -67,12 +67,12 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
   const clock = mock.clock(on, { now })
   on('session.id', () => ({ value: w.sessionId }))
   on('fs.read', ($, e) => {
-    if (e.path === '/lookout/relay.key') {
+    if (e.path === '/fjord/relay.key') {
       if (w.key === undefined) throw new Error('no key')
       return { value: `${w.key}\n` }
     }
     if (e.path.endsWith('/config.json')) {
-      return { value: JSON.stringify({ keyPath: '/lookout/relay.key', presenceDir: '/presence', sessionsDir: '/sessions', inboxDir: '/inbox' }) }
+      return { value: JSON.stringify({ keyPath: '/fjord/relay.key', presenceDir: '/presence', sessionsDir: '/sessions', inboxDir: '/inbox' }) }
     }
     if (e.path.startsWith('/inbox/')) {
       const text = w.inbox[e.path.slice('/inbox/'.length)]
@@ -143,7 +143,7 @@ const receive = ($: any, text: string): Promise<{ consumed?: string }> =>
   $.session.receive({ origin: { kind: 'peer' }, text })
 
 describe('the wire format', () => {
-  test('matches the vector Lookout signs with', async () => {
+  test('matches the vector Fjord Computer signs with', async () => {
     expect(await hmac(enc.encode(KEY), macInput(TARGET, NONCE, String(TS), enc.encode(BODY)))).toBe(MAC)
     expect(await sign(BODY)).toBe(WIRE)
     const parsed = parse(envelope(WIRE))
@@ -152,7 +152,7 @@ describe('the wire format', () => {
     })
   })
 
-  test('v2 matches the vector Lookout signs settings with', async () => {
+  test('v2 matches the vector Fjord Computer signs settings with', async () => {
     const mac = 'a6d0f7aec97dfa6bf5f6f11f0bdd229e6d72bdc019132b7265213710c7823bb1'
     const settings = { model: 'opus', effort: 'high' }
     expect(await hmac(enc.encode(KEY), macInput(TARGET, NONCE, String(TS), enc.encode(BODY), settings))).toBe(mac)
@@ -168,7 +168,7 @@ describe('the wire format', () => {
   })
 })
 
-describe('a message Lookout signed', () => {
+describe('a message Fjord Computer signed', () => {
   test('arrives as the person’s own words, and nothing else reaches the session', async ($, on) => {
     const w = world(on)
     const result = await receive($, envelope(WIRE))
@@ -504,16 +504,16 @@ describe('the inbox', () => {
   })
 
   test('a v2 header is unknown to a v1-only reader: the old pattern finds nothing', async () => {
-    expect(/⟦lookout v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧/.test(await sign(BODY, { settings: { model: 'opus' } }))).toBe(false)
+    expect(/⟦fjord v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧/.test(await sign(BODY, { settings: { model: 'opus' } }))).toBe(false)
   })
 })
 
 describe('taking a delivery back', () => {
   const ABORT_NONCE = '323e4567-e89b-12d3-a456-426614174000'
-  // The vector Lookout's Swift tests sign the same abort with (RouterCancelTests.theAbortIsSignedAsThePluginChecksIt).
+  // The vector Fjord Computer's Swift tests sign the same abort with (RouterCancelTests.theAbortIsSignedAsThePluginChecksIt).
   const ABORT_MAC = '0dbaf1b1ec9728c6d3c3e507515ae0c1ba74dccda5c17011ccfb04a3f688a66a'
   const signAbort = async (cancels = NONCE, { target = TARGET, nonce = ABORT_NONCE, ts = TS, key = KEY } = {}) =>
-    `⟦lookout abort v1 ${target} ${nonce} ${ts} ${cancels} ${await hmac(enc.encode(key), abortMacInput(target, nonce, String(ts), cancels))}⟧\n`
+    `⟦fjord abort v1 ${target} ${nonce} ${ts} ${cancels} ${await hmac(enc.encode(key), abortMacInput(target, nonce, String(ts), cancels))}⟧\n`
   const started = new WeakSet<object>()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const look = async ($: any, w: ReturnType<typeof world>) => {
@@ -538,9 +538,9 @@ describe('taking a delivery back', () => {
   }
   const complete = { durationMs: 1, isAborted: false, reason: 'answer' as const, answer: 'done' }
 
-  test('the wire format matches the vector Lookout signs with', async () => {
+  test('the wire format matches the vector Fjord Computer signs with', async () => {
     const text = await signAbort()
-    expect(text).toBe(`⟦lookout abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${ABORT_MAC}⟧\n`)
+    expect(text).toBe(`⟦fjord abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${ABORT_MAC}⟧\n`)
     expect(parseAbort(text)).toEqual({ target: TARGET, nonce: ABORT_NONCE, ts: String(TS), cancels: NONCE, mac: ABORT_MAC })
     // Not a delivery: nothing would be submitted from it, whatever reads it.
     expect(parse(text)).toBeUndefined()
@@ -625,7 +625,7 @@ describe('taking a delivery back', () => {
     w.dropSubmit = true
     await deliver($, w)
     await settle()
-    // The person then types the same words: theirs, not Lookout's.
+    // The person then types the same words: theirs, not Fjord Computer's.
     await $.turn.start({ text: BODY, turnId: 't1' })
     expect(await abort($, w)).toBe('ok unknown\n')
     expect(w.aborted).toEqual([])
@@ -755,7 +755,7 @@ describe('taking back a turn that runs tools', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const abort = async ($: any, w: ReturnType<typeof world>) => {
     const mac = await hmac(enc.encode(KEY), abortMacInput(TARGET, ABORT_NONCE, String(TS), NONCE))
-    w.inbox[`${TARGET}/${ABORT_NONCE}.msg`] = `⟦lookout abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${mac}⟧\n`
+    w.inbox[`${TARGET}/${ABORT_NONCE}.msg`] = `⟦fjord abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${mac}⟧\n`
     await look($, w)
     return w.written[`/inbox/${TARGET}/${ABORT_NONCE}.ack`]
   }
@@ -771,7 +771,7 @@ describe('taking back a turn that runs tools', () => {
     await settle()
     expect(w.ran).toEqual(['toolu_1'])
     expect(await abort($, w)).toBe('ok aborted\n')
-    expect(await pending).toEqual({ deny: 'Stopped: the person cancelled this message from Lookout.' })
+    expect(await pending).toEqual({ deny: 'Stopped: the person cancelled this message from Fjord Computer.' })
     expect(w.aborted).toEqual(['t1'])
   })
 

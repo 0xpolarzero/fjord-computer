@@ -3,7 +3,7 @@
 What we learned making the Router decide where a typed message goes: what was measured, what shipped, what was not
 enough, what was a dead end, and the mistakes made on the way. The code and data live in `evals/router/` (README.md
 has the per-round tables, EXPLORE.md the protocol for explorers); the decision itself is in
-`Sources/Lookout/RouterRoute.swift` (RouteFusion), `RouterLexical.swift` and `RouterDispatcher.swift` (the rank effect).
+`Sources/FjordComputer/RouterRoute.swift` (RouteFusion), `RouterLexical.swift` and `RouterDispatcher.swift` (the rank effect).
 
 ## The problem
 

@@ -1,0 +1,37 @@
+import Foundation
+import Observation
+import Testing
+@testable import FjordComputer
+
+@MainActor
+@Suite struct SnoozeExpiry {
+    @Test func aSnoozeEndsForWhatReadsItAtItsDeadline() async throws {
+        let store = Store()
+        store.persists = false
+        store.settings.snoozeUntil = Date().addingTimeInterval(0.3)
+        let flag = Flag()
+        withObservationTracking { _ = store.isSnoozed } onChange: { flag.set() }
+        #expect(store.isSnoozed)
+        // Other suites keep the main actor busy for a while, which is when the expiry gets to run.
+        await waitUntil { flag.value }
+        // The banner and the Notifications row, which read it, are told once the time has passed.
+        #expect(flag.value && !store.isSnoozed)
+    }
+
+    @Test func resumingEarlyLeavesNothingToFire() async throws {
+        let store = Store()
+        store.persists = false
+        store.settings.snoozeUntil = Date().addingTimeInterval(0.3)
+        store.snooze(for: nil)
+        let flag = Flag()
+        withObservationTracking { _ = store.isSnoozed } onChange: { flag.set() }
+        try await Task.sleep(for: .seconds(0.7))
+        // Nothing redraws what reads it at the old deadline.
+        #expect(!flag.value && !store.isSnoozed)
+    }
+}
+
+private final class Flag: @unchecked Sendable {
+    private(set) var value = false
+    func set() { value = true }
+}

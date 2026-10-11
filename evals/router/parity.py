@@ -16,7 +16,7 @@ from explore import fusion as Fu
 from explore import lexical as L
 from explore import recency as R
 
-OUT = pathlib.Path(__file__).parent.parent.parent / "Tests" / "LookoutTests" / "Fixtures" / "router-fusion-parity.json"
+OUT = pathlib.Path(__file__).parent.parent.parent / "Tests" / "FjordComputerTests" / "Fixtures" / "router-fusion-parity.json"
 
 
 WORD = re.compile(r"[^\W_]+")

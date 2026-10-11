@@ -33,7 +33,7 @@ quiet_for=${QUIET_FOR:-3}   # whole seconds the CPU time must not move before th
 quiet_max=${QUIET_MAX:-40}  # whole seconds that wait takes at most
 window=${WINDOW:-30}    # seconds between the two samples
 edges=${EDGES:-"right top"}
-bin=.build/release/Lookout
+bin=.build/release/FjordComputer
 
 number() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
 for value in "$limit" "$settle" "$window"; do
@@ -117,7 +117,7 @@ sample() {
     pid=$!
     sleep "$settle"
     if ! kill -0 "$pid" 2>/dev/null; then
-        echo "idle-cpu: $label $edge: Lookout exited during the first $settle seconds"
+        echo "idle-cpu: $label $edge: the app exited during the first $settle seconds"
         failed=1
         return
     fi
@@ -152,15 +152,15 @@ sample() {
     fi
     local ws; ws=$(pgrep -x WindowServer | head -1)
     local app0 app1 ws0 ws1
-    app0=$(cpu_seconds "$pid") || { echo "idle-cpu: $label $edge: no CPU sample of Lookout at the start"; failed=1; return; }
+    app0=$(cpu_seconds "$pid") || { echo "idle-cpu: $label $edge: no CPU sample of the app at the start"; failed=1; return; }
     ws0=$(cpu_seconds "${ws:-0}") || ws0=
     sleep "$window"
     if ! kill -0 "$pid" 2>/dev/null; then
-        echo "idle-cpu: $label $edge: Lookout exited while it was measured"
+        echo "idle-cpu: $label $edge: the app exited while it was measured"
         failed=1
         return
     fi
-    app1=$(cpu_seconds "$pid") || { echo "idle-cpu: $label $edge: no CPU sample of Lookout at the end"; failed=1; return; }
+    app1=$(cpu_seconds "$pid") || { echo "idle-cpu: $label $edge: no CPU sample of the app at the end"; failed=1; return; }
     ws1=$(cpu_seconds "${ws:-0}") || ws1=
     # Nothing may have stopped the bar's animation while the window ran: a stretch standing still costs nothing and passes for free.
     if [ "$scenario" = agents ] && problem=$(motion_problem "$reports") && [ -n "$problem" ]; then
@@ -179,7 +179,7 @@ sample() {
         }
         app = (a1 - a0) / window * 100
         verdict = app < limit ? "ok" : "FAIL"
-        printf "%-12s Lookout %.3f%% (limit %s%%)  WindowServer %s%% (all clients)  %s\n", label, app, limit, ws, verdict
+        printf "%-12s app %.3f%% (limit %s%%)  WindowServer %s%% (all clients)  %s\n", label, app, limit, ws, verdict
         exit app < limit ? 0 : 1
     }' || failed=1
 }

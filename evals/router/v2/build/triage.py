@@ -1,4 +1,4 @@
-"""Lookout's turn triage (Sources/Lookout/RouterTriage.swift), ported: when a turn ends, Jev reads its final message and
+"""Lookout's turn triage (Sources/FjordComputer/RouterTriage.swift), ported: when a turn ends, Jev reads its final message and
 answers one bundle of typed questions (what it ended on, which sentences ask you, urgency, unverified, where the work
 stands, what it waits on); the card's kind comes from that (`RouterTriage.kind`).
 

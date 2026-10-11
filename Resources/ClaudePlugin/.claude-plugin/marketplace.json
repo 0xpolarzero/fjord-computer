@@ -1,6 +1,6 @@
 {
-  "name": "lookout",
-  "owner": { "name": "Lookout" },
-  "description": "Lookout's own plugin, kept by the Lookout app.",
-  "plugins": [{ "name": "lookout", "source": "./", "description": "Delivers what you send from Lookout's Router to this session as your own words." }]
+  "name": "fjord",
+  "owner": { "name": "Fjord Computer" },
+  "description": "Fjord Computer's own plugin, kept by the Fjord Computer app.",
+  "plugins": [{ "name": "fjord", "source": "./", "description": "Delivers what you send from Fjord Computer's Router to this session as your own words." }]
 }

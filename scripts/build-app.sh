@@ -1,20 +1,20 @@
 #!/bin/bash
-# Builds build/Lookout.app (a bundle is required for notifications and launch at login).
+# Builds "build/Fjord Computer.app" (a bundle is required for notifications and launch at login).
 # VERSION=1.2.3 sets the bundle version; UNIVERSAL=1 builds for arm64 + x86_64 (used for releases).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.0.0-dev}"
 if [ "${UNIVERSAL:-0}" = "1" ]; then
   swift build -c release --arch arm64 --arch x86_64
-  BIN=.build/apple/Products/Release/Lookout
+  BIN=.build/apple/Products/Release/FjordComputer
 else
   swift build -c release
-  BIN=.build/release/Lookout
+  BIN=.build/release/FjordComputer
 fi
-APP=build/Lookout.app
+APP="build/Fjord Computer.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Lookout"
+cp "$BIN" "$APP/Contents/MacOS/FjordComputer"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 # The layered icon, compiled from the Icon Composer document: light, dark, tinted and clear on macOS 26, its light tile on
 # earlier systems (CFBundleIconName picks the catalog over the .icns, which stays for whatever reads the file alone).
@@ -28,10 +28,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>dev.polarzero.lookout</string>
-  <key>CFBundleName</key><string>Lookout</string>
-  <key>CFBundleDisplayName</key><string>Lookout</string>
-  <key>CFBundleExecutable</key><string>Lookout</string>
+  <key>CFBundleIdentifier</key><string>com.amontlabs.fjord</string>
+  <key>CFBundleName</key><string>Fjord Computer</string>
+  <key>CFBundleDisplayName</key><string>Fjord Computer</string>
+  <key>CFBundleExecutable</key><string>FjordComputer</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
