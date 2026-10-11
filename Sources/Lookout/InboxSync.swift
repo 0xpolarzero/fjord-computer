@@ -567,7 +567,8 @@ enum InboxSync {
         case "commit":
             return thing.commits.contains { $0.id == id }
         case "thread":
-            return thing.threads.contains { "\($0.id):\($0.lastReplyID)" == id }
+            // Unresolved is part of it: resolved, it is gone, and reopened later it is new again.
+            return thing.threads.contains { !$0.isResolved && "\($0.id):\($0.lastReplyID)" == id }
         case "requested":
             return thing.requestedReviewers.contains { id.hasPrefix($0.lowercased() + ":") }
         default:

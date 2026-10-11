@@ -443,6 +443,33 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(InboxSync.isEvent("requested:bob:1", of: t) && !InboxSync.isEvent("checks:failing", of: t))
     }
 
+    @Test func aThreadReopenedIsNewAgain() {
+        var thing = InboxFixture.pr(3)
+        let alice = Person(login: "alice")
+        thing.threads = [ThingThread(id: "t1", isResolved: false, startedBy: alice, lastReplyBy: alice, lastReplyID: "r1",
+                                     lastReplyAt: Date().addingTimeInterval(-60), snippet: "why?")]
+        let category = InboxCategory(name: "Threads", symbol: "star", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.unresolvedThreads(startedBy: Pick(), lastReplyBy: Pick())],
+                                                  createdAt: .distantPast)])
+        let s = InboxFixture.store([thing], category: category)
+        var posted: [String] = []
+        s.notifier.onPost = { posted.append($0.content.body) }
+        s.announceInbox()
+        s.markDone(s.entries[0])
+        #expect(s.marks[thing.id]?.notified.contains("thread:t1:r1") == true)
+        // Resolved: the fact is gone, and so are its marks.
+        thing.threads[0].isResolved = true
+        s.things[thing.id] = thing
+        s.announceInbox()
+        #expect(s.marks[thing.id]?.notified.contains("thread:t1:r1") != true && s.marks[thing.id]?.acked.contains("thread:t1:r1") != true)
+        // Reopened with no new reply: it asks again.
+        thing.threads[0].isResolved = false
+        s.things[thing.id] = thing
+        s.announceInbox()
+        #expect(posted == ["1 unresolved"])
+        #expect(s.entries.first?.isDone == false)
+    }
+
     @Test func pastTheCapTheSearchesTakeTurnsAndWhatTheOthersFoundStays() async {
         final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var firsts: Set<String> = [] }
         let box = Box()
