@@ -720,14 +720,57 @@ enum InboxSync {
     }
 
     /// A thing your `involves:` search found is marked so (for you): GitHub knows you're involved there even once what
-    /// you did is past what is fetched of it (your comment before ten newer ones), and that is kept from now on.
-    static func markInvolved(_ thing: inout Thing, foundBy searches: Set<String>, me: String) {
+    /// you did is past what is fetched of it (your comment before ten newer ones), and that is kept from now on. One such
+    /// search read to its end (`complete`) that would have found it and didn't says you're no longer involved (reassigned
+    /// away): marked `false`, which takes back what was kept. A search cut short, or that failed, says nothing.
+    static func markInvolved(_ thing: inout Thing, foundBy searches: Set<String>, complete: Set<String> = [], me: String) {
         let qualifier = "involves:" + me.lowercased()
-        guard thing.kind != .workflow, !me.isEmpty,
-              searches.contains(where: { $0.lowercased().split(separator: " ").contains { $0 == qualifier } }) else { return }
+        func isInvolves(_ query: String) -> Bool { query.lowercased().split(separator: " ").contains { $0 == qualifier } }
+        guard thing.kind != .workflow, !me.isEmpty else { return }
+        let involved: Bool
+        if searches.contains(where: isInvolves) {
+            involved = true
+        } else if complete.contains(where: { isInvolves($0) && wouldFind($0, thing, me: me) }) {
+            involved = false
+        } else {
+            return
+        }
         var signals = InboxEngine.signals(thing, me) ?? ThingSignals(viewer: InboxEngine.viewer(me))
-        signals.involved = true
+        signals.involved = involved
         thing.signals = signals
+    }
+
+    /// Whether a search would return the thing were you involved there: every qualifier but `involves:` says yes. One
+    /// that can't be told here (or isn't known) says no, so that its absence never counts.
+    static func wouldFind(_ query: String, _ thing: Thing, me: String) -> Bool {
+        func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
+        let owner = String(thing.repo.split(separator: "/").first ?? "")
+        for token in query.split(separator: " ").map(String.init) {
+            let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return false }
+            let (key, value) = (parts[0].lowercased(), parts[1])
+            switch key {
+            case "involves": guard same(value, me) else { return false }
+            case "archived", "sort": continue
+            case "is":
+                switch value.lowercased() {
+                case "pr": guard thing.kind == .pr else { return false }
+                case "issue": guard thing.kind == .issue else { return false }
+                case "open": guard thing.status == .open else { return false }
+                case "closed": guard thing.status == .closed || thing.status == .merged else { return false }
+                default: return false
+                }
+            case "updated":
+                guard value.hasPrefix(">="), let day = try? Date.ISO8601FormatStyle().year().month().day().parse(String(value.dropFirst(2))),
+                      thing.updatedAt >= day else { return false }
+            case "-repo": guard !same(value, thing.repo) else { return false }
+            case "-user", "-org": guard !same(value, owner) else { return false }
+            case "author": guard let a = thing.author?.login, same(value, a) else { return false }
+            case "-author": guard thing.author.map({ !same(value, $0.login) }) ?? true else { return false }
+            default: return false
+            }
+        }
+        return true
     }
 
     /// When a pending review request was made, as its fact's key has it: the thing's creation when GitHub didn't say.
@@ -1087,7 +1130,7 @@ extension Store {
                 fetched = try await fetchThings(searches)
                 for thing in fetched.things {
                     var thing = InboxSync.keepingRequestTimes(thing, from: things[thing.id])
-                    InboxSync.markInvolved(&thing, foundBy: fetched.foundBy[thing.id] ?? [], me: me)
+                    InboxSync.markInvolved(&thing, foundBy: fetched.foundBy[thing.id] ?? [], complete: fetched.complete, me: me)
                     found[thing.id] = thing
                 }
             } catch {
@@ -1186,6 +1229,8 @@ extension Store {
         var foundBy: [String: Set<String>] = [:]
         /// The searches GitHub didn't answer whole (a page of one null, a node of it it couldn't give): they haven't run.
         var failed: Set<String> = []
+        /// The searches read to their last page, whole: what they didn't return, they don't find.
+        var complete: Set<String> = []
     }
 
     /// Searches, a page at a time for those with more, until the caps: what a round asks for is shared out of the things
@@ -1197,6 +1242,7 @@ extension Store {
         var error: String?
         var foundBy: [String: Set<String>] = [:]
         var failed = Set<String>()
+        var complete = Set<String>()
         // PRs with more review threads than came with them: read on before they are taken, unless what was read of them
         // before stands (`keepsTail`).
         var moreThreads: [String: (node: String, cursor: String, total: Int)] = [:]
@@ -1252,7 +1298,11 @@ extension Store {
                         }
                     }
                     let info = result["pageInfo"] as? [String: Any]
-                    if info?["hasNextPage"] as? Bool == true, let end = info?["endCursor"] as? String { next[i] = end }
+                    if info?["hasNextPage"] as? Bool == true, let end = info?["endCursor"] as? String {
+                        next[i] = end
+                    } else if info?["hasNextPage"] as? Bool == false {
+                        complete.insert(searches[i])
+                    }
                 }
             }
             cursors = next
@@ -1297,7 +1347,8 @@ extension Store {
             }
             moreThreads = next
         }
-        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy, failed: failed)
+        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy, failed: failed,
+                       complete: complete.subtracting(failed))
     }
 
     /// Notes which searches found what, and gives back the things this refresh didn't find that a search it didn't run

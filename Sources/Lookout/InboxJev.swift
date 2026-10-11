@@ -155,8 +155,9 @@ enum InboxJev {
         let ids = Set(InboxEngine.messages(thing).map(\.id))
         signals.messages = signals.messages.filter { ids.contains($0.key) }
         signals.answeredAt = [signals.answeredAt, InboxEngine.latestWord(thing, by: me)].compactMap { $0 }.max()
-        // Found by your `involves:` search this time (marked on the fetched thing), or any time before.
-        if thing.signals?.viewer == viewer, thing.signals?.involved == true { signals.involved = true }
+        // Found by your `involves:` search this time (marked on the fetched thing), or any time before; until a search of
+        // yours read whole would have found it and didn't (marked `false`): you're no longer involved.
+        if thing.signals?.viewer == viewer, let involved = thing.signals?.involved { signals.involved = involved ? true : nil }
         thing.signals = signals.messages.isEmpty && signals.importance == nil && signals.answeredAt == nil && signals.involved == nil
             ? nil : signals
     }

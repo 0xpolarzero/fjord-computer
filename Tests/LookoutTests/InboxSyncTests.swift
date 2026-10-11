@@ -658,6 +658,55 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(InboxEngine.evaluate(things: [thing], categories: [category], marks: [:], context: other).isEmpty)
     }
 
+    @Test func reassignedAwayAWholeInvolvesSearchWithoutItTakesBackThatYoureInvolvedButOneCutShortDoesNot() async {
+        final class Phase: @unchecked Sendable { var involves = "found" }
+        let phase = Phase()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            let body = InboxSyncRefresh.body(request)
+            // Someone else's PR, with nothing of yours fetched: only your involves: search ties it to you.
+            let pr = node(["author": ["login": "alice", "__typename": "User"], "body": "", "assignees": ["nodes": []],
+                           "reviewRequests": ["nodes": []], "comments": ["nodes": []], "reviews": ["nodes": []],
+                           "latestOpinionatedReviews": ["nodes": []], "reviewThreads": ["nodes": []]])
+            var data: [String: Any] = [:]
+            for i in 0..<8 {
+                guard let start = body.range(of: "s\(i): search(") else { continue }
+                let query = body[start.upperBound...].prefix { $0 != ")" }
+                if query.contains("involves:me") {
+                    switch phase.involves {
+                    case "found": data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": [pr]]
+                    case "more": data["s\(i)"] = ["pageInfo": ["hasNextPage": true, "endCursor": "c"], "nodes": []]
+                    default: data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": []]
+                    }
+                } else if query.contains("repo:o") {
+                    data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": [pr]]
+                } else {
+                    data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": []]
+                }
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        var involved = InboxCategory(name: "Involved", symbol: "star", color: .blue)
+        involved.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.involved])), conditions: [])]
+        var repo = InboxCategory(name: "Repo", symbol: "star", color: .blue)
+        repo.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("o/r")])), conditions: [])]
+        s.categories = [involved, repo]
+        func category() -> UUID? { s.entries.first { $0.thing.id == "pr:o/r#12" }?.categoryID }
+        await s.syncInbox()
+        #expect(category() == involved.id)
+        // Your involves: search, cut short (more pages than were read), says nothing: it stays involved.
+        phase.involves = "more"
+        await s.syncInbox()
+        #expect(category() == involved.id)
+        // Read whole, without it (you were reassigned away) while the repo's search still brings it: no longer involved.
+        phase.involves = "gone"
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#12"]?.signals?.involved == nil)
+        #expect(category() == repo.id)
+    }
+
     @Test func anEventAnnouncedOnceStaysAnnouncedThoughTheRuleStopsMatchingForAWhile() async {
         final class Checks: @unchecked Sendable { var state = "SUCCESS" }
         let checks = Checks()
