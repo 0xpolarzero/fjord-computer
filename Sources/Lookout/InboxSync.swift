@@ -906,7 +906,9 @@ extension Store {
         let searchesWait = !searches.isEmpty
             && InboxSync.waitsForPoints(remaining: gh.graphqlRemaining, resetsAt: gh.graphqlResetsAt, manual: manual)
         if searchesWait, targets.isEmpty { return }
-        gh.reserveETags(forRepositories: targets.count)
+        // Room for every target's answers, not only this refresh's window: those asked a turn ago are 304s when their turn
+        // comes again.
+        gh.reserveETags(forRepositories: allTargets.count)
 
         var found: [String: Thing] = [:]
         var searchFailure: String?

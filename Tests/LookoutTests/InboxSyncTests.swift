@@ -764,6 +764,40 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.inboxSyncState.teamsFailedAt == nil && s.inboxError == nil)
     }
 
+    @Test func workflowTargetsTakingTurnsAreAnsweredUnchangedOnceEachHadItsTurn() async {
+        final class Count: @unchecked Sendable {
+            private let lock = NSLock()
+            private var n = 0
+            func add() { lock.withLock { n += 1 } }
+            var value: Int { lock.withLock { n } }
+        }
+        let full = Count()
+        let (s, _) = store(State()) { _ in }
+        s.gh.session = StubbedGitHub.session { request in
+            let path = request.url?.path ?? ""
+            let parts = path.split(separator: "/").map(String.init)
+            guard parts.count >= 4, parts[0] == "repos" else { return .init(404, #"{"message":"unrouted"}"#) }
+            let etag = "\"\(path)\""
+            if request.value(forHTTPHeaderField: "If-None-Match") == etag { return .init(304, headers: ["ETag": etag]) }
+            full.add()
+            switch parts.dropFirst(3).joined(separator: "/") {
+            case "actions/runs": return .init(200, Self.runs([11]), headers: ["ETag": etag])
+            case "commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#, headers: ["ETag": etag])
+            case "commits/s1/status":
+                return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#, headers: ["ETag": etag])
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        // Many more repos than a refresh checks: each refresh asks a window of them, in turn.
+        let repos = (0..<100).map { "a/x\($0)" }
+        s.categories[0].rules[0].scope = Scope(kinds: [.workflow], in: Pick(include: repos.map { .repo($0) }), on: ["main"])
+        for _ in 0..<4 { await s.syncInbox() }
+        #expect(full.value == repos.count * 3)
+        // Once every repo had its turn, nothing changed: every answer is a 304, the ones of repos asked a turn ago included.
+        for _ in 0..<4 { await s.syncInbox() }
+        #expect(full.value == repos.count * 3)
+    }
+
     @Test func pastTheCapTheWorkflowTargetsTakeTurnsAndThoseWaitingKeepTheirThings() async {
         final class Asked: @unchecked Sendable {
             private let lock = NSLock()
