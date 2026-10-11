@@ -506,7 +506,7 @@ extension RouterTools {
         for category in store.categories {
             var matched: [[String: Any]] = []
             for (i, rule) in category.rules.enumerated() {
-                let problems = InboxEngine.problems(rule)
+                let problems = InboxEngine.problems(rule, in: category, groups: store.groups)
                 if !problems.isEmpty {
                     off.append(["category": category.title, "rule": i, "summary": words.summary(rule), "reasons": problems.map(\.reason)])
                     continue

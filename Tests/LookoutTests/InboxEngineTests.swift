@@ -219,6 +219,21 @@ import Testing
         #expect(InboxEngine.facts(rule, t, marks: nil, context: context())?.map(\.key) == ["workflow:failing"])
     }
 
+    @Test func aRuleTheEditorFlagsInItsCategoryIsOffThereButCIKeepsEveryWatchedRepo() {
+        // A workflow rule whose last repo was removed: flagged in a category of yours, so it takes nothing.
+        let rule = Rule(scope: Scope(kinds: [.workflow], in: Pick()), conditions: [.workflow([.failing])])
+        let mine = InboxCategory(name: "Mine", symbol: "a", color: .blue, rules: [rule])
+        #expect(InboxEngine.evaluate(things: [workflow(.failing)], categories: [mine], marks: [:], context: context()).isEmpty)
+        // CI's own rule says every watched repo that way.
+        var ci = mine
+        ci.isCI = true
+        #expect(InboxEngine.evaluate(things: [workflow(.failing)], categories: [ci], marks: [:], context: context()).count == 1)
+        // A repo group that no longer exists in its except is flagged too: it doesn't widen the rule.
+        let gone = Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("a/one")], except: [.group(UUID())])))
+        let category = InboxCategory(name: "Gone", symbol: "b", color: .red, rules: [gone])
+        #expect(InboxEngine.evaluate(things: [pr()], categories: [category], marks: [:], context: context()).isEmpty)
+    }
+
     @Test func workflowsScopeByBranchAndName() {
         let rule = { (on: [String]?, named: [String]?) in
             Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/one")]), on: on, named: named),

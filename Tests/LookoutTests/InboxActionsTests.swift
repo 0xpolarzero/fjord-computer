@@ -581,7 +581,7 @@ final class DiskCheckingPerformer: ActionPerformer {
                              url: URL(string: "https://github.com/o/r/actions")!, createdAt: Date(), updatedAt: Date())
         workflow.checks = .failing
         let category = InboxCategory(name: "CI", symbol: "x", color: .red,
-                                     rules: [Rule(scope: Scope(kinds: [.workflow], in: Pick()), conditions: [.workflow([.failing])], createdAt: .distantPast)],
+                                     rules: [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("o/r")])), conditions: [.workflow([.failing])], createdAt: .distantPast)],
                                      actions: ActionList([.make(.comment("x")), .make(.rerun)]))
         let store = InboxFixture.store([], category: category)
         store.actionPerformer = performer

@@ -16,9 +16,12 @@ enum InboxEngine {
     static func evaluate(things: [Thing], categories: [InboxCategory], marks: [String: EntryMarks],
                          context: InboxContext) -> [InboxEntry] {
         let resolved = Resolved(context)
-        // A rule with a chip that can never match is off until it is fixed (edits apply as they are made); judged once here.
+        // A rule with a chip that can never match is off until it is fixed (edits apply as they are made); judged once here,
+        // as the editor judges it in its category (a workflow rule with no repo left is off but in CI, a group gone is off).
         var off = Set<UUID>()
-        for category in categories { for rule in category.rules where !problems(rule).isEmpty { off.insert(rule.id) } }
+        for category in categories {
+            for rule in category.rules where !problems(rule, in: category, groups: context.groups).isEmpty { off.insert(rule.id) }
+        }
         var entries: [InboxEntry] = []
         for thing in things {
             let m = marks[thing.id]
@@ -87,6 +90,11 @@ enum InboxEngine {
     /// notifications have something to hold on to.
     static func facts(_ rule: Rule, _ thing: Thing, marks: EntryMarks?, context: InboxContext) -> [Fact]? {
         facts(rule, thing, marks: marks, resolved: Resolved(context))
+    }
+
+    /// What keeps `rule` off in `category`: what the editor flags there (`RuleEditing.problems`), the same everywhere.
+    static func problems(_ rule: Rule, in category: InboxCategory, groups: [InboxGroup]) -> [Problem] {
+        RuleEditing.problems(rule, groups: groups, isCI: category.isCI)
     }
 
     /// Chips in `rule` that can never match.
