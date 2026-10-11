@@ -414,7 +414,7 @@ enum InboxEngine {
             return (reviews + withText).max()
         case .myLastComment:
             let comments = thing.comments.filter { mine($0.author) }.map(\.at)
-            let replies = thing.threads.filter { mine($0.lastReplyBy) }.map(\.lastReplyAt)
+            let replies = threadWords(thing, by: r.me)
             // Your latest word as kept, Jev's reading on or off: a reply that takes your place at the end of a thread
             // doesn't move it back.
             let kept = signals(thing, r.me)?.answeredAt
@@ -548,8 +548,17 @@ enum InboxEngine {
         let me = normalize(me)
         guard !me.isEmpty else { return nil }
         let comments = thing.comments.filter { normalize($0.author.login) == me }.map(\.at)
-        let replies = thing.threads.filter { normalize($0.lastReplyBy.login) == me }.map(\.lastReplyAt)
-        return (comments + replies).max()
+        return (comments + threadWords(thing, by: me)).max()
+    }
+
+    /// When you (normalized) last replied in each thread: its last reply, or yours among the last ones fetched before
+    /// others replied after it.
+    private static func threadWords(_ thing: Thing, by me: String) -> [Date] {
+        guard !me.isEmpty else { return [] }
+        return thing.threads.flatMap { thread in
+            (normalize(thread.lastReplyBy.login) == me ? [thread.lastReplyAt] : [])
+                + (thread.latestBy ?? [:]).filter { normalize($0.key) == me }.map(\.value)
+        }
     }
 
     /// What Jev said that counts: nothing when it was for someone else, or Jev's reading is switched off.

@@ -154,6 +154,28 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(open.startedBy.login == "greptile-apps[bot]" && open.lastReplyID == "w" && open.path == "b.swift")
     }
 
+    @Test func anAnswerInTheMiddleOfAThreadIsYourLatestWordThere() throws {
+        func comment(_ id: String, _ who: String, _ at: String) -> [String: Any] {
+            ["id": id, "createdAt": at, "body": "…", "authorAssociation": "NONE", "author": ["login": who, "__typename": "User"]]
+        }
+        // Bob asked in a thread, you answered at noon, Carol replied after you: the thread's tail is hers.
+        let thread: [String: Any] = ["id": "t9", "isResolved": false, "path": "a.swift",
+                                     "first": ["nodes": [comment("q", "bob", "2026-10-07T10:00:00Z")]],
+                                     "last": ["nodes": [comment("q", "bob", "2026-10-07T10:00:00Z"), comment("a", "Me", "2026-10-07T12:00:00Z"),
+                                                        comment("c", "carol", "2026-10-07T13:00:00Z")]]]
+        let thing = try #require(InboxSync.thing(node([
+            "comments": ["nodes": [comment("d", "dave", "2026-10-07T11:00:00Z")]], "reviews": ["nodes": []],
+            "latestOpinionatedReviews": ["nodes": []], "reviewThreads": ["nodes": [thread]]])))
+        #expect(thing.threads.first?.lastReplyID == "c" && thing.threads.first?.lastReplyBy.login == "carol")
+        // Dave's comment came before your answer: nothing new since your last comment.
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.newComment(by: Pick(), since: .myLastComment)], createdAt: .distantPast)
+        #expect(InboxEngine.facts(rule, thing, marks: nil, context: InboxContext(me: "me")) == nil)
+        // And it is kept as your latest word there.
+        var kept = thing
+        InboxJev.carry(nil, into: &kept, me: "me")
+        #expect(kept.signals?.answeredAt == iso("2026-10-07T12:00:00Z"))
+    }
+
     @Test func statusesAndAnIssue() throws {
         #expect(InboxSync.thing(node(["isDraft": true]))?.status == .draft)
         #expect(InboxSync.thing(node(["merged": true, "state": "MERGED"]))?.status == .merged)

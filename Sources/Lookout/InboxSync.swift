@@ -267,11 +267,13 @@ enum InboxSync {
     private static let personNode = "login __typename avatarUrl"
     private static let assignEvents = "assignEvents: timelineItems(itemTypes: [ASSIGNED_EVENT], last: 20) { nodes { ... on AssignedEvent { createdAt assignee { ... on User { login } } } } }"
 
-    /// A page of review threads: where the next one starts, and each thread's first and latest comment.
+    /// A page of review threads: where the next one starts, and each thread's first and latest comments (who wrote the
+    /// last few, and when: an answer in the middle of a thread is one; asking more of them costs no more points).
+    static let threadReplies = 10
     private static let threadFields = """
     pageInfo { hasNextPage endCursor } nodes { id isResolved path
         first: comments(first: 1) { nodes { id createdAt body author { \(personNode) } authorAssociation } }
-        last: comments(last: 1) { nodes { id createdAt body author { \(personNode) } authorAssociation } } }
+        last: comments(last: \(threadReplies)) { nodes { id createdAt body author { \(personNode) } authorAssociation } } }
     """
 
     static let fragments = """
@@ -357,13 +359,21 @@ enum InboxSync {
     }
 
     private static func thread(_ t: [String: Any]) -> (thread: ThingThread, mentions: [String])? {
-        guard let id = t["id"] as? String, let first = nodes(t["first"]).first, let last = nodes(t["last"]).first,
+        let replies = nodes(t["last"])
+        guard let id = t["id"] as? String, let first = nodes(t["first"]).first, let last = replies.last,
               let lastID = last["id"] as? String, let at = date(last["createdAt"]) else { return nil }
+        var latestBy: [String: Date] = [:]
+        for reply in replies {
+            guard let when = date(reply["createdAt"]) else { continue }
+            let who = person(reply["author"], association: nil).login.lowercased()
+            if latestBy[who].map({ $0 < when }) ?? true { latestBy[who] = when }
+        }
         return (ThingThread(
             id: id, isResolved: t["isResolved"] as? Bool ?? false,
             startedBy: person(first["author"], association: first["authorAssociation"]),
             lastReplyBy: person(last["author"], association: last["authorAssociation"]), lastReplyID: lastID,
-            lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String)), mentions(last["body"] as? String))
+            lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String), latestBy: latestBy),
+                mentions(last["body"] as? String))
     }
 
     fileprivate static func reposRequest(me: String) -> String {

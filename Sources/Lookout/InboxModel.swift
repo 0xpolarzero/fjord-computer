@@ -426,6 +426,9 @@ struct ThingThread: Codable, Hashable, Identifiable {
     var lastReplyAt: Date
     var path: String?
     var snippet: String
+    /// Each author's latest comment in the thread among its last ones fetched (by login, lowercased): your answer in the
+    /// middle of a thread is your latest word there though others replied after it. Nil in an older file.
+    var latestBy: [String: Date]?
 }
 
 struct ThingCommit: Codable, Hashable, Identifiable {
