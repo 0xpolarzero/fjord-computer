@@ -20,6 +20,8 @@ struct RouterComposer: View {
     /// The @ word's first character in the card (x from its leading edge, y of its line's top from its top), once known.
     @State private var mentionAt: CGPoint?
     @State private var windowHeight: CGFloat = 0
+    /// The card's width: the suggestions stay inside it.
+    @State private var cardWidth: CGFloat = 0
     @State private var hovering = false
     @State private var overButton = false
     @Environment(\.colorSchemeContrast) private var contrast
@@ -40,11 +42,12 @@ struct RouterComposer: View {
                 .overlay(alignment: .topLeading) {
                     if !suggestions.isEmpty {
                         let at = mentionAt ?? CGPoint(x: 0, y: C.pad + (C.row - 20) / 2)
-                        MentionList(suggestions: suggestions, index: model.mentionIndex,
+                        let place = MentionList.place(caretX: at.x, available: cardWidth)
+                        MentionList(suggestions: suggestions, index: model.mentionIndex, width: place.width,
                                     hover: { model.mentionIndex = $0 }) { model.pickMention($0) }
                             .fixedSize()
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
-                            .offset(x: max(0, at.x), y: at.y - C.mentionOffset - listHeight)
+                            .offset(x: place.x, y: at.y - C.mentionOffset - listHeight)
                             .transition(.opacity)
                     }
                 }
@@ -145,6 +148,7 @@ struct RouterComposer: View {
         }
         .background(shape.fill(CDS.Surface.s3))
         .background(AnchorView(anchor: anchor) { windowHeight = $0 })
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
         .overlay(shape.strokeBorder(ring, lineWidth: 1))
         .shadow(color: focused ? C.dropFocus : C.drop, radius: 10, y: 4)
         .contentShape(shape)
@@ -322,8 +326,18 @@ private struct ChipClose: View {
 struct MentionList: View {
     let suggestions: [(folder: String, name: String)]
     let index: Int
+    var width: CGFloat = CDS.Composer.mentionWidth
     var hover: ((Int) -> Void)? = nil
     let pick: (String) -> Void
+
+    /// Where the list goes under a caret at `caretX` in a card `available` wide (0 while that isn't known yet): no wider than
+    /// the card, and moved left as far as it takes to end inside it.
+    static func place(caretX: CGFloat, available: CGFloat, preferred: CGFloat = CDS.Composer.mentionWidth)
+        -> (x: CGFloat, width: CGFloat) {
+        guard available > 0 else { return (max(0, caretX), preferred) }
+        let width = min(preferred, available)
+        return (min(max(0, caretX), available - width), width)
+    }
 
     var body: some View {
         let d = CDS.Density.compact
@@ -355,7 +369,7 @@ struct MentionList: View {
             }
         }
         .padding(d.pad.xs)
-        .frame(width: CDS.Composer.mentionWidth)
+        .frame(width: width)
         .background(shape.fill(CDS.Surface.s3))
         .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
         .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)

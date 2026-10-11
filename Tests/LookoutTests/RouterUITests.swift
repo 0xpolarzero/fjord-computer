@@ -973,6 +973,19 @@ import UserNotifications
         #expect(model.selection == card.id && model.expandedNeed == card.id && !model.expanded.contains(card.id))
     }
 
+    @Test func theMentionListStaysInsideTheCard() {
+        // Room for it: under the caret.
+        #expect(MentionList.place(caretX: 100, available: 800).x == 100)
+        #expect(MentionList.place(caretX: 100, available: 800).width == 420)
+        // Near the right edge: moved left so it ends at the edge.
+        let near = MentionList.place(caretX: 700, available: 800)
+        #expect(near.x == 380 && near.x + near.width == 800)
+        // A card narrower than the list: the list shrinks to it.
+        let narrow = MentionList.place(caretX: 200, available: 300)
+        #expect(narrow.x == 0 && narrow.width == 300)
+        #expect(MentionList.place(caretX: -5, available: 800).x == 0)
+    }
+
     @Test func aSupersededCardIsNotReopened() {
         let store = demo()
         let model = RouterModel()
