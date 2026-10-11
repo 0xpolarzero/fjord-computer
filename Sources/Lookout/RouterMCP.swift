@@ -1014,6 +1014,7 @@ final class RouterMCPServer: @unchecked Sendable {
     /// Claude Code asks before a SendMessage runs (the native permission prompt, answered over stdin): only the
     /// text prepared for that target in this turn goes, once, with no field of its own added. Nil allows; else why not.
     func approveSend(_ input: [String: String], otherFields: [String]) -> String? {
+        guard !Task.isCancelled else { return "Stopped; nothing was sent" }
         guard turnText != nil else { return "Only the user's messages are sent" }
         // Switched off, and the switch not seen yet: nothing goes, nothing is used up.
         guard let store, store.router.enabled, store.agents.enabled else { return "The Router is off" }

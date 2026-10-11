@@ -928,6 +928,48 @@ import Testing
         withExtendedLifetime(f) {}
     }
 
+    /// Stop ends a run's turn at once, not once the run sees it: a send already let through by the approval, on its way
+    /// (its folder made, its inbox looked up), is refused right before it would be written, with no reason of its own.
+    @Test func stopEndsTheTurnAtOnceSoASendOnItsWayIsNeverWritten() async throws {
+        let dir = TempDir()
+        let (s, d, f) = setup()
+        var seen: RouterTools?
+        let prepare = d.effects.prepare
+        d.effects.prepare = { tools, session in
+            seen = tools
+            return try await prepare(tools, session)
+        }
+        f.holdOn = ["local_a"]
+        let id = d.submit("use sqlite", context: RouterContext(replyTo: "local_a#w1"))
+        await waitUntil { f.hold["local_a"] != nil }
+        let tools = try #require(seen)
+        let ticket = tools.ticket()
+        d.stopAll()
+        #expect(throws: (any Error).self) { try tools.live(ticket) }
+        f.release("local_a")
+        await finish(d, f, id)
+
+        // Approved, then its turn ends before the inbox's write: refused there, the plugin never sees it.
+        let signed = RelaySigner.sign(body: "hello", target: "cli-a", key: "k1")
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 0.3
+        let other = RouterTools(store: s)
+        other.beginTurn("hello")
+        other.prepared["cli-a"] = Prepared(text: signed, original: "hello", rephrased: false)
+        let plugin = fakePlugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
+        let send = Task {
+            try await RouterSender.send(binary: "/nonexistent/claude", cwd: dir.url, to: "cli-a", text: signed, tools: other, inbox: inbox)
+        }
+        while other.prepared["cli-a"] != nil { await Task.yield() }
+        other.endTurn()
+        await #expect(throws: (any Error).self) { try await send.value }
+        plugin.cancel()
+        #expect(await plugin.value == nil)
+        #expect(!FileManager.default.fileExists(atPath: inbox.folder(for: "cli-a").appendingPathComponent("\(nonce).msg").path))
+        withExtendedLifetime(f) {}
+    }
+
     /// What the send is for may be over by the time it would go (a wait handled, auto-continue turned off): every gate asks
     /// again, after every wait, so nothing goes then, by the inbox or by the process it falls back to.
     @Test func aSendWhoseReasonIsGoneMeanwhileGoesByNoGate() async throws {

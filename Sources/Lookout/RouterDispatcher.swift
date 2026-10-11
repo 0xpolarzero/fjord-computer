@@ -255,7 +255,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you.
     func stopAll() {
         for task in tasks.values { task.cancel() }
-        for tools in runTools.values { tools.cancelRuns() }
+        // Their turns end now, not once each run sees it was stopped: a send on its way is refused at its last gate.
+        for tools in runTools.values { tools.endTurn() }
         for ask in askBacks { dismiss(ask.id) }
     }
 

@@ -263,10 +263,17 @@ enum RouterSender {
                      inbox: RelayInbox? = nil) async throws -> String? {
         if let inbox {
             let ready = tools.prepared[to]
+            let ticket = tools.ticket()
             if let refusal = tools.approveSend(["to": to, "message": text], otherFields: []) { throw RouterTools.Failure(refusal) }
+            // Asked again right before it is written, every send alike: still its turn (Stop ends it), the Router on, the
+            // send not cancelled, and what it was for not over.
+            let gate: @MainActor () -> String? = {
+                do { try tools.live(ticket) } catch { return error.localizedDescription }
+                return tools.deliveryCheck?()
+            }
             do {
                 // The inbox is the session's, by the CLI session id the text is signed for: `to` is the name the peer channel knows it by.
-                return try await inbox.deliver(text, to: RelayInbox.header(of: text)?.target ?? to, gate: tools.deliveryCheck)
+                return try await inbox.deliver(text, to: RelayInbox.header(of: text)?.target ?? to, gate: gate)
             } catch RelayInbox.Failure.unanswered {
                 tools.prepared[to] = ready
             } catch let failure as RelayInbox.Failure {
