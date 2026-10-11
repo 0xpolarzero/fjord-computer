@@ -128,7 +128,7 @@ extension RouterTools {
             let activity = store.claudeActivity[s.id]?.text ?? ""
             return activity.isEmpty ? "working" : "working: \(hinted(activity, 300))"
         }
-        let last = cards.last { $0.kind == .done || $0.kind == .stuck || $0.kind == .waiting }
+        let last = cards.last { $0.kind == .done || $0.kind == .finish || $0.kind == .stuck || $0.kind == .waiting }
         let said = last?.text ?? s.summary?.detail ?? ""
         let verb = last?.kind == .stuck ? "stuck" : last?.kind == .waiting ? "waiting on something outside it (CI, a deploy…) since" : "finished"
         return "\(verb) \(agoPhrase(s.lastActivity, now: now))" + (said.isEmpty ? "" : ": \(hinted(said, 300))")
@@ -142,7 +142,7 @@ extension RouterTools {
         case .plan: what = "waits for you to approve its plan"
         case .asks: what = "asks you something"
         case .approval: what = "asks your OK"
-        case .done, .stuck, .waiting: return nil
+        case .done, .finish, .stuck, .waiting: return nil
         }
         var text = hinted(card.text, 300)
         let options = store.pendingForm(for: card)?.questions.flatMap { $0.options.map(\.label) } ?? []

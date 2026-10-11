@@ -108,8 +108,8 @@ struct AppSidebar: View {
                         rule.padding(.top, 4)
                         Color.clear.frame(height: M.groupTop - 4)
                         AppSidebarRow(title: "Router", on: navigator.selection == .router,
-                                      badge: routerCounts.needsYou + routerCounts.done > 0
-                                          ? RailBadge(count: routerCounts.needsYou + routerCounts.done,
+                                      badge: routerCounts.needsYou + routerCounts.notes > 0
+                                          ? RailBadge(count: routerCounts.needsYou + routerCounts.notes,
                                                       fill: routerCounts.needsYou > 0 ? CDS.Fill.warning : CDS.Fill.accent,
                                                       ink: routerCounts.needsYou > 0 ? CDS.Text.onPrimary : .white)
                                           : nil,
@@ -121,11 +121,11 @@ struct AppSidebar: View {
                         } trailing: {
                             HStack(spacing: 6) {
                                 if routerCounts.needsYou > 0 { CountText(routerCounts.needsYou, color: CDS.Fill.warning) }
-                                if routerCounts.done > 0 { CountText(routerCounts.done, color: CDS.Text.accent) }
+                                if routerCounts.notes > 0 { CountText(routerCounts.notes, color: CDS.Text.accent) }
                             }
                         }
                         .accessibilityValue([routerCounts.needsYou > 0 ? "\(routerCounts.needsYou) need you" : nil,
-                                             routerCounts.done > 0 ? "\(routerCounts.done) done" : nil]
+                                             routerCounts.notes > 0 ? "\(routerCounts.notes) worth a look" : nil]
                             .compactMap { $0 }.joined(separator: ", ").nonEmpty ?? "Nothing open")
                     }
                 }
@@ -238,8 +238,8 @@ struct AppSidebar: View {
             .padding(.leading, collapsed ? 4 : M.labelInset)
     }
 
-    private static func routerTip(_ c: (needsYou: Int, done: Int)) -> String {
-        let parts = [c.needsYou > 0 ? "\(c.needsYou) need you" : nil, c.done > 0 ? "\(c.done) done" : nil].compactMap { $0 }
+    private static func routerTip(_ c: (needsYou: Int, notes: Int)) -> String {
+        let parts = [c.needsYou > 0 ? "\(c.needsYou) need you" : nil, c.notes > 0 ? "\(c.notes) worth a look" : nil].compactMap { $0 }
         return parts.isEmpty ? "Router" : "Router · " + parts.joined(separator: ", ")
     }
 }

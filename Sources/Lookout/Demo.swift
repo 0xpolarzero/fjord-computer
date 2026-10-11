@@ -290,6 +290,10 @@ enum Demo {
             (session("local_demo-schema", "Schema migration", "microsandbox", minutes: 11,
                      detail: "Waiting for the migration session to finish."), "cylinder.split.1x2"),
             (session("local_demo-bump", "Bump the SDK", "lcu", minutes: 20, detail: "Opened the PR; CI is running."), "arrow.up.circle"),
+            (session("local_demo-theme", "Router theme fix", "lookout", minutes: 1,
+                     detail: "PR #88 is green and ready to merge."), "paintpalette"),
+            (session("local_demo-icons", "Fjord icon set", "lookout", minutes: 9,
+                     detail: "All 24 icons exported, committed and pushed."), "square.grid.3x3"),
         ]
         for (session, icon) in added {
             store.claudeSessions[session.id] = session
@@ -319,6 +323,22 @@ enum Demo {
                                                                    label: "session “Agent completion notifications”")), minutes: 11),
             card(s("local_demo-bump"), RouterTriage(state: .waiting, urgency: 1, work: .pr, waitingOn: .ci), minutes: 20),
         ]
+        // A last step left to you, and a turn with nothing in it for you, gone to the history unread (RouterTiers.swift).
+        var finish = RouterTriage(state: .done, urgency: 2, work: .pr)
+        finish.next = .you
+        var settled = RouterTriage(state: .done, urgency: 0, work: .pushed)
+        settled.next = .nothing
+        var icons = card(s("local_demo-icons"), settled, minutes: 9)
+        icons.addressedAt = now.addingTimeInterval(-8 * 60)
+        icons.addressedBy = .settled
+        icons.unread = true
+        icons.brief = "All 24 icons are exported, committed and pushed; nothing left to do."
+        var theme = card(s("local_demo-theme"), finish, minutes: 1)
+        theme.brief = "PR #88 is green: merge it, then relaunch Lookout to check light mode."
+        store.router.cards += [icons, theme]
+        if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-docs" }) {
+            store.router.cards[i].brief = "The new docs layout is in, but it wasn't checked on mobile widths."
+        }
         store.router.autoContinueSessions["local_demo-schema"] = true
         // The finished CI turn opened a PR, which its chip says.
         if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-ci" && $0.isOpen }) {

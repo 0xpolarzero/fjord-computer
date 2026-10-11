@@ -960,39 +960,39 @@ struct UpdateAnnouncer: View {
 }
 
 /// The Router in the bar: its symbol, and on its corner how many cards are open, amber while one needs you (a question, a
-/// plan, a stuck turn), blue when they are only finished turns, nothing at zero. A click opens the Router in the app window.
+/// plan, a stuck turn, a last step), blue when they are only worth a look, nothing at zero. A click opens the Router in the app window.
 struct RouterCell: View {
     let needsYou: Int
-    let done: Int
+    let notes: Int
     let action: () -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
-        Button(action: action) { RouterCellLabel(needsYou: needsYou, done: done) }
+        Button(action: action) { RouterCellLabel(needsYou: needsYou, notes: notes) }
             .buttonStyle(.plain)
             .focused($focused)
             .accessibilityLabel("Router")
-            .accessibilityValue([needsYou > 0 ? "\(needsYou) need you" : nil, done > 0 ? "\(done) done" : nil]
+            .accessibilityValue([needsYou > 0 ? "\(needsYou) need you" : nil, notes > 0 ? "\(notes) worth a look" : nil]
                 .compactMap { $0 }.joined(separator: ", ").nonEmpty ?? "Nothing open")
             .accessibilityHint("Opens the Router")
-            .motion(.snappy, value: needsYou + done)
+            .motion(.snappy, value: needsYou + notes)
     }
 }
 
 private struct RouterCellLabel: View {
     let needsYou: Int
-    let done: Int
+    let notes: Int
     @State private var hover = false
 
     var body: some View {
-        let open = needsYou + done
+        let open = needsYou + notes
         Image(systemName: "arrow.triangle.branch")
             .font(Theme.Typography.glyph(14))
             .foregroundStyle(hover ? Theme.text : Theme.secondary)
             .frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous)
                 .fill(hover ? Theme.Fill.hover : Theme.Fill.rest))
-            // Awaiting yellow while one needs you, accent blue for finished turns.
+            // Awaiting yellow while one needs you, accent blue for those worth a look.
             .overlay(alignment: .topTrailing) {
                 CornerBadge(count: open, fill: needsYou > 0 ? CDS.Fill.warning : CDS.Fill.accent,
                             ink: needsYou > 0 ? CDS.Text.onPrimary : Color.white)

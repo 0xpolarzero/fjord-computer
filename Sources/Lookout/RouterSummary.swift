@@ -192,6 +192,7 @@ enum RouterSummaryContext {
         case .opened: "you opened the session"
         case .superseded: "a newer card replaced it"
         case .gone: "the session was archived or deleted"
+        case .settled: "it finished with nothing left for you"
         }
     }
 

@@ -221,6 +221,9 @@ struct RouterCard: Codable, Identifiable, Hashable {
         /// Finished its turn waiting on something outside it (CI, a deploy, another session…): shown with the working
         /// sessions, not in Needs you.
         case waiting
+        /// Finished its turn, but left you a last step before the work is really over (merge, relaunch and try it, run
+        /// something, test by hand): Jev's `next` (see RouterTriage.swift).
+        case finish
 
         /// Made when a turn ends (the others while one waits).
         var isTurn: Bool { self != .question && self != .plan }
@@ -230,19 +233,21 @@ struct RouterCard: Codable, Identifiable, Hashable {
             switch self {
             case .question, .plan, .done, .stuck: self
             case .asks, .approval: .stuck
-            case .waiting: .done
+            case .waiting, .finish: .done
             }
         }
         /// Counted as needing you (amber); `done` is only news, and a session `waiting` is still on its way.
         var needsYou: Bool { self != .done && self != .waiting }
-        /// Needs you's order: an OK asked first, then what stops a session on a question, then a stuck one, then news.
+        /// Needs you's order: an OK asked first, then what stops a session on a question, then a stuck one, then a last
+        /// step left to you, then news.
         var rank: Int {
             switch self {
             case .approval: 0
             case .question, .plan, .asks: 1
             case .stuck: 2
-            case .done: 3
-            case .waiting: 4
+            case .finish: 3
+            case .done: 4
+            case .waiting: 5
             }
         }
     }
@@ -264,6 +269,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         case superseded
         /// The session was archived or deleted.
         case gone
+        /// Jev found nothing left to do in it and nothing worth a look: it went straight to the history, unread (`unread`).
+        case settled
     }
 
     /// `<session>#t<completedTurns>` for a turn, `<session>#w<ms of the wait's start>` for a wait.
@@ -292,6 +299,22 @@ struct RouterCard: Codable, Identifiable, Hashable {
     var addressedNote: String?
     /// What Jev made of a finished turn's final message (see RouterTriage.swift); nil until then, or without a key.
     var triage: RouterTriage?
+    /// What the card tells you, in your words' style: one Haiku call (see RouterBrief.swift); nil until then, or when it
+    /// isn't made (a trivial turn, no Claude Code), and the card's own text stands.
+    var brief: String?
+    /// What the brief was made from (a hash): it is made again only when that changes.
+    var briefSource: String?
+    /// A finished turn that went to the history on its own (`settled`) and that you haven't acknowledged yet.
+    var unread: Bool?
+
+    /// The card less how it is told to you (its brief, read or not): what an action on it goes by.
+    var acted: RouterCard {
+        var card = self
+        card.brief = nil
+        card.briefSource = nil
+        card.unread = nil
+        return card
+    }
 
     /// What a message (ms) must come after to be a reply to this card.
     var replyAfter: Int64 { turnMessage ?? createdMs }
@@ -319,7 +342,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage
+        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage, brief, briefSource, unread
     }
 
     /// Files from before `createdMs` have `createdAt` (a date) instead.
@@ -346,6 +369,9 @@ struct RouterCard: Codable, Identifiable, Hashable {
         total = try? c.decodeIfPresent(Int.self, forKey: .total)
         addressedNote = try? c.decodeIfPresent(String.self, forKey: .addressedNote)
         triage = try? c.decodeIfPresent(RouterTriage.self, forKey: .triage)
+        brief = try? c.decodeIfPresent(String.self, forKey: .brief)
+        briefSource = try? c.decodeIfPresent(String.self, forKey: .briefSource)
+        unread = try? c.decodeIfPresent(Bool.self, forKey: .unread)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -367,6 +393,9 @@ struct RouterCard: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(total, forKey: .total)
         try c.encodeIfPresent(addressedNote, forKey: .addressedNote)
         try c.encodeIfPresent(triage, forKey: .triage)
+        try c.encodeIfPresent(brief, forKey: .brief)
+        try c.encodeIfPresent(briefSource, forKey: .briefSource)
+        try c.encodeIfPresent(unread, forKey: .unread)
     }
 
     /// The wait a question or plan card was made for (ms since 1970), from its id.
@@ -731,6 +760,7 @@ enum RouterFeed {
         address(&state, state.cards[i].sessionID, .superseded, now) { $0.id != id }
         state.cards[i].addressedAt = nil
         state.cards[i].addressedBy = nil
+        state.cards[i].unread = nil
     }
 
     /// One open card per session: a new one supersedes the others. A card made before (and reopened, or addressed) is
@@ -773,10 +803,10 @@ enum RouterFeed {
 
 extension Store {
     /// Counts each card's changes (made, addressed, reopened, retitled…), so a late action can tell a card that changed and
-    /// changed back from one that never moved.
+    /// changed back from one that never moved. How it is told to you (its brief, read or not) is no change to act on.
     func countCardChanges(from old: [RouterCard]) {
-        let before = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        for card in router.cards where before[card.id] != card { cardRevisions[card.id, default: 0] &+= 1 }
+        let before = Dictionary(old.map { ($0.id, $0.acted) }, uniquingKeysWith: { a, _ in a })
+        for card in router.cards where before[card.id] != card.acted { cardRevisions[card.id, default: 0] &+= 1 }
     }
 
     /// Open cards first, newest first in each part.
@@ -789,16 +819,21 @@ extension Store {
 
     var openRouterCards: [RouterCard] { routerCards.filter(\.isOpen) }
 
-    /// Open cards that need you (questions, plans, asks, stuck turns) and open finished turns; a session waiting is neither.
-    var routerCounts: (needsYou: Int, done: Int) {
-        // As on the page: a turn whose session still has subagents or commands running isn't counted done yet.
+    /// Open cards whose move is yours (questions, plans, asks, stuck turns, last steps, waits over that nothing continues),
+    /// and those worth a look (finished turns with something to tell); a session waiting is neither, nor a turn that went
+    /// to the history unread (RouterTiers.swift).
+    var routerCounts: (needsYou: Int, notes: Int) {
+        // As on the page: a turn whose session still has subagents or commands running isn't counted yet.
         let tasks = routerTasks
-        var needsYou = 0, done = 0
-        for card in router.cards where card.isOpen {
-            if card.kind.needsYou { needsYou += 1 }
-            if card.kind == .done && RouterPage.shows(card, tasks: tasks) { done += 1 }
+        var needsYou = 0, notes = 0
+        for card in router.cards where card.isOpen && RouterPage.shows(card, tasks: tasks) {
+            switch routerTier(card) {
+            case .needsYou: needsYou += 1
+            case .note, .done: notes += 1
+            case .waiting: break
+            }
         }
-        return (needsYou, done)
+        return (needsYou, notes)
     }
 
     /// The form Lookout's hook holds for this card's own question or plan: the one for the very call the card waits on (an
@@ -953,6 +988,7 @@ extension Store {
                 if forms != self.pendingForms { self.pendingForms = forms }
                 // A form going away ends its wait (answered, or its hook gave up).
                 self.feedRouter()
+                // A form held only now: its question's or plan's brief is made again from it.
             }
         } else {
             formBridge.stop()

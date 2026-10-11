@@ -179,7 +179,9 @@ import Testing
         let busy = AgentRow(session: ClaudeSession(id: "busy", title: "B", lastActivity: Date(), running: true),
                             entry: AgentEntry(id: "busy"), label: "B")
         let page = RouterPage.make(cards: cards, working: [busy])
-        #expect(page.needs.map(\.id) == ["ok", "question", "asks-high", "asks-low", "stuck", "done"])
+        #expect(page.needs.map(\.id) == ["ok", "question", "asks-high", "asks-low", "stuck"])
+        // A finished turn is worth a look, under its own header (RouterTiers.swift).
+        #expect(page.notes.map(\.id) == ["done"])
         #expect(page.waiting.map(\.id) == ["wait"])
     }
 

@@ -112,6 +112,7 @@ extension RouterCard.Kind {
         case .asks: "Asks you"
         case .approval: "Needs your OK"
         case .waiting: "Waiting"
+        case .finish: "Finish up"
         }
     }
 
@@ -124,6 +125,7 @@ extension RouterCard.Kind {
         case .asks: Theme.amber
         case .approval: RouterTriage.approvalTint
         case .waiting: RouterTriage.waitingTint
+        case .finish: Theme.amber
         }
     }
 
@@ -136,6 +138,7 @@ extension RouterCard.Kind {
         case .asks: "bubble.left.and.text.bubble.right.fill"
         case .approval: "hand.raised.fill"
         case .waiting: "hourglass"
+        case .finish: "flag.fill"
         }
     }
 }
@@ -151,6 +154,7 @@ extension RouterCard.Addressed {
         case .opened: "Opened"
         case .superseded: "Followed by a newer card"
         case .gone: "Session archived"
+        case .settled: "Done"
         }
     }
 }
@@ -351,23 +355,24 @@ final class RouterModel {
     @ObservationIgnored private var listed: [String] = []
 
     /// The cards the keys walk, in the order the page shows them top to bottom: the addressed ones as the history above
-    /// draws them (oldest first, the older ones it hasn't drawn yet before them); then what needs you (see
-    /// `RouterPage.ranked`) and the finished turns, both open. Sessions waiting are with the working ones.
+    /// draws them (oldest first, the older ones it hasn't drawn yet before them); then the finished turns worth a look, and
+    /// what needs you (see `RouterPage.ranked`), both open. Sessions waiting are with the working ones.
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
-        // Only what the page shows: a finished turn whose session still runs things isn't there yet.
-        let open = store.routerShownCards.filter { $0.isOpen && $0.kind != .waiting }.sorted(by: RouterPage.ranked)
+        // Only what the page shows, as it shows it: a finished turn whose session still runs things isn't there yet; a wait
+        // over that is yours to continue is at the end of Needs you.
+        let page = store.routerZones
         let byID = Dictionary(store.router.cards.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let earlier = store.routerHistory.compactMap { entry -> RouterCard? in
             guard case .card(let card) = entry, let now = byID[card.id], !now.isOpen else { return nil }
             return now
         }
-        return (open.filter { $0.kind != .done }, open.filter { $0.kind == .done }, earlier)
+        return (page.needs + page.ready, page.notes, earlier)
     }
 
     /// Every card the keys walk, top to bottom.
     func cards(_ store: Store) -> [RouterCard] {
         let s = sections(store)
-        return s.earlier + s.needs + s.done
+        return s.earlier + s.done + s.needs
     }
 
     /// Whether a message can go to the Router now: it is on (with the sessions extension) and Claude Code is there.
@@ -427,8 +432,11 @@ final class RouterModel {
     /// The picked card opened (in full in Needs you, out in the history) and, if `shows`, gone to.
     private func showPick(_ id: String, store: Store, reveal shows: Bool) {
         if let card = store.router.cards.first(where: { $0.id == id }) {
-            // A session waiting is a row of Working.
-            if card.isOpen, card.kind == .waiting { if shows { reveal(Self.workingID(card.sessionID)) }; return }
+            // A session waiting is a row under Working; one whose wait is over and is yours to continue, a row of Needs you.
+            if card.isOpen, card.kind == .waiting {
+                if shows { reveal(store.routerTier(card) == .needsYou ? id : Self.workingID(card.sessionID)) }
+                return
+            }
             if card.isOpen { expandedNeed = id } else { expanded.insert(id) }
         }
         if shows { reveal(id) }

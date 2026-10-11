@@ -204,7 +204,7 @@ extension LookoutHub {
     /// The Router's cell in the bar; a click opens its window.
     var routerCell: some View {
         let counts = store.routerCounts
-        return RouterCell(needsYou: counts.needsYou, done: counts.done) { openApp(.router) }
+        return RouterCell(needsYou: counts.needsYou, notes: counts.notes) { openApp(.router) }
     }
 
     /// "Router", then what's open (amber for what needs you, blue for finished turns). The whole line opens its window.
@@ -228,7 +228,7 @@ extension LookoutHub {
         let counts = store.routerCounts
         var status: [(String, Color)] = []
         if counts.needsYou > 0 { status.append(("\(counts.needsYou) need you", Theme.amber)) }
-        if counts.done > 0 { status.append(("\(counts.done) done", Theme.accent)) }
+        if counts.notes > 0 { status.append(("\(counts.notes) worth a look", Theme.accent)) }
         return status.isEmpty ? [("nothing open", Theme.tertiary)] : status
     }
 

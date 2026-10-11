@@ -34,11 +34,16 @@ struct RouterPage: Equatable {
         }
     }
 
-    /// Open cards as the page shows them (the arrow keys walk the same order, see `ranked`): an OK asked first, then what
-    /// stops a session on you, stuck turns, then the finished ones.
+    /// Open cards whose next move is yours, as the page shows them (the arrow keys walk the same order, see `ranked`): an
+    /// OK asked first, then what stops a session on you, stuck turns, then a last step left to you (RouterTiers.swift).
     var needs: [RouterCard] = []
-    /// Sessions whose turn ended waiting on something (CI, another session…), with the working ones; newest first.
+    /// Sessions whose wait is over and that nothing continues on its own: yours to continue, in Needs you; newest first.
+    var ready: [RouterCard] = []
+    /// Sessions whose turn ended waiting on something (CI, another session…), under the working ones; newest first.
     var waiting: [RouterCard] = []
+    /// Finished turns with nothing to do but something to tell (Worth a look), and those you opened again; most urgent
+    /// first.
+    var notes: [RouterCard] = []
     /// Messages waiting for you to say where they go (nothing is sent until you do), above the cards.
     var asks: [RouterAskBack] = []
     /// Sessions working on their own, the longest running first.
@@ -48,30 +53,39 @@ struct RouterPage: Equatable {
     /// Oldest first: the Router's runs, the summaries and the addressed cards by time.
     var history: [Entry] = []
 
-    /// The card shown in full: the one asked for while it is still waiting, else the newest.
+    /// The card of Needs you shown in full: the one asked for while it is still waiting, else the first; none while the one
+    /// asked for is one of Worth a look's (it is open there).
     func openNeed(preferred: String?) -> String? {
         if let preferred, needs.contains(where: { $0.id == preferred }) { return preferred }
+        if let preferred, notes.contains(where: { $0.id == preferred }) { return nil }
         return needs.first?.id
     }
 
     static func make(cards: [RouterCard], working: [AgentRow],
-                     decisions: [RouterDecision] = [], summaries: [RouterSummary] = [], asks: [RouterAskBack] = []) -> RouterPage {
+                     decisions: [RouterDecision] = [], summaries: [RouterSummary] = [], asks: [RouterAskBack] = [],
+                     autoContinue: @escaping (RouterCard) -> Bool = { _ in false }) -> RouterPage {
         make(cards: cards, working: working, asks: asks, history: history(cards: cards, decisions: decisions, summaries: summaries),
-             summaries: summaries)
+             summaries: summaries, autoContinue: autoContinue)
     }
 
     /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`). `tasks`: what
     /// sessions whose turn is over still run (`Store.routerTasks`, the map the keys and the counts go by too, a muted
     /// project's sessions with the rest); without it, the Working rows'.
+    /// `autoContinue`: whether a waiting card is told on its own once its wait is over (`Store.autoContinues`).
     static func make(cards: [RouterCard], working: [AgentRow], asks: [RouterAskBack], history: [Entry],
-                     summaries: [RouterSummary] = [], tasks: [String: [ClaudeTask]]? = nil) -> RouterPage {
+                     summaries: [RouterSummary] = [], tasks: [String: [ClaudeTask]]? = nil,
+                     autoContinue: (RouterCard) -> Bool = { _ in false }) -> RouterPage {
         let open = cards.filter(\.isOpen)
         var page = RouterPage()
         let tasks = tasks ?? Dictionary(working.map { ($0.id, $0.tasks) }, uniquingKeysWith: +)
-        page.needs = open.filter { $0.kind != .waiting && shows($0, tasks: tasks) }.sorted(by: ranked)
+        let shown = open.filter { $0.kind != .waiting && shows($0, tasks: tasks) }
+        page.needs = shown.filter { $0.kind.needsYou }.sorted(by: ranked)
+        page.notes = shown.filter { !$0.kind.needsYou }.sorted(by: ranked)
         // A session that is working again shows as working.
         let busy = Set(working.map(\.id))
-        page.waiting = open.filter { $0.kind == .waiting && !busy.contains($0.sessionID) }.sorted(by: newestFirst)
+        let waits = open.filter { $0.kind == .waiting && !busy.contains($0.sessionID) }.sorted(by: newestFirst)
+        page.ready = waits.filter { $0.tier(autoContinue: autoContinue($0)) == .needsYou }
+        page.waiting = waits.filter { $0.tier(autoContinue: autoContinue($0)) != .needsYou }
         page.working = working
         page.asks = asks
         page.history = history
@@ -130,7 +144,7 @@ extension Store {
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory,
-              summaries: router.summaries, tasks: routerTasks)
+              summaries: router.summaries, tasks: routerTasks, autoContinue: autoContinues)
     }
 
     /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
@@ -149,17 +163,18 @@ extension Store {
         return openRouterCards.filter { RouterPage.shows($0, tasks: tasks) }
     }
 
-    /// The open cards as the page has them, Needs you then the sessions waiting: what the bar's panel lists. Not a finished
-    /// turn whose session still runs work, nor a wait whose session is working again.
+    /// The open cards as the page has them, Needs you (the waits yours to continue with it), Worth a look, then the
+    /// sessions waiting: what the bar's panel lists. Not a finished turn whose session still runs work, nor a wait whose
+    /// session is working again.
     var routerPanelCards: [RouterCard] {
         let page = routerZones
-        return page.needs + page.waiting
+        return page.needs + page.ready + page.notes + page.waiting
     }
 
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],
-              summaries: router.summaries, tasks: routerTasks)
+              summaries: router.summaries, tasks: routerTasks, autoContinue: autoContinues)
     }
 }
 
@@ -317,10 +332,21 @@ private struct RouterHistory: View {
                             .padding(.bottom, 6)
                         }
                         if !all.isEmpty {
-                            Text("History").cdsText((12, 16), .medium, CDS.Text.muted)
-                                .padding(.leading, CDS.Transcript.textInset)
-                                .padding(.bottom, 12)
-                                .accessibilityAddTraits(.isHeader)
+                            let unread = store.routerUnread.count
+                            HStack(spacing: 6) {
+                                Text("History").cdsText((12, 16), .medium, CDS.Text.muted)
+                                    .accessibilityAddTraits(.isHeader)
+                                if unread > 0 {
+                                    Text("· \(unread) unread").cdsText((12, 16), .regular, CDS.Fill.accent).monospacedDigit()
+                                    Spacer(minLength: 4)
+                                    Button("Mark all read") { store.acknowledgeAllRouterCards() }
+                                        .buttonStyle(.link).font(CDS.sans(12))
+                                        .help("Every finished turn in the history, seen")
+                                }
+                            }
+                            .padding(.leading, CDS.Transcript.textInset)
+                            .padding(.trailing, CDS.Transcript.statusPad)
+                            .padding(.bottom, 12)
                         }
                         ForEach(entries) { entry in
                             row(entry, now: now, open: expanded.contains(entry.id), marked: entry.id == picked || entry.id == highlighted)
@@ -732,19 +758,31 @@ private struct HistoryCardLine: View, Equatable {
     private var when: Date { card.addressedAt ?? card.createdAt }
     private var how: String {
         if let note = card.addressedNote { return "addressed by your message: \(RouterDecision.clip(note, 60))" }
+        // Finished with nothing for you: what it did is the line.
+        if card.addressedBy == .settled { return RouterDecision.clip(card.brief ?? card.text, 140) }
         return card.addressedBy?.label ?? "Addressed"
     }
+    private var unread: Bool { card.unread == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
+                // Opening an unread line is seeing it.
+                if unread { store.acknowledgeRouterCard(card.id) }
                 toggleHistoryLine(reduceMotion: reduceMotion) { model.tap(card.id, store: store) }
             } label: {
                 HStack(spacing: 8) {
+                    if unread { Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6).accessibilityHidden(true) }
                     CardGlyph(store: store, sessionID: card.sessionID, symbol: card.kind.symbol)
-                    Text(card.title).cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
+                    Text(card.title).cdsText(CDS.Transcript.text, unread ? .medium : .regular,
+                                             unread ? CDS.Text.primary : hovered || open ? CDS.Text.secondary : CDS.Text.muted)
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
-                    Text("· \(how)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    Text("· \(how)").cdsText((12, 16), .regular, unread ? CDS.Text.secondary : CDS.Text.muted).lineLimit(1)
+                    if unread {
+                        Button("Got it") { store.acknowledgeRouterCard(card.id) }
+                            .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
+                            .help("Seen: it reads as any other line")
+                    }
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
                     // Open in Claude takes the time's place on hover, so the line lines up with the runs around it.
@@ -757,7 +795,7 @@ private struct HistoryCardLine: View, Equatable {
                 .padding(.horizontal, CDS.Transcript.statusPad)
                 .frame(height: CDS.Transcript.statusRow)
                 .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
+                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : unread ? CDS.Fill.accent.opacity(0.08) : .clear))
                 .contentShape(Rectangle())
                 .overlay {
                     RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
@@ -766,12 +804,13 @@ private struct HistoryCardLine: View, Equatable {
             }
             .buttonStyle(.plain)
             .focused($focused)
-            .accessibilityLabel("\(card.kind.label): \(card.title)")
+            .accessibilityLabel("\(unread ? "Unread, " : "")\(card.kind.label): \(card.title)")
             .accessibilityValue("\(how), \(AgentRow.spokenAge(now.timeIntervalSince(when))) ago, \(open ? "expanded" : "collapsed")")
             .accessibilityAddTraits(open ? .isSelected : [])
             .accessibilityHint("Shows it in full and replies to it")
             .accessibilityAction(named: "Open in Claude") { store.openAgent(card.sessionID) }
             .accessibilityAction(named: "Reopen") { model.reopen(card.id, store: store) }
+            .accessibilityAction(named: "Got it") { store.acknowledgeRouterCard(card.id) }
 
             if open { CardDetails(card: card, store: store, model: model) }
         }
@@ -909,18 +948,22 @@ private struct RouterZones: View {
     @State private var workingShown: CGFloat = 0
     /// The Router's working line over the zones, as tall as it shows (written only when it changes).
     @State private var statusHeight: CGFloat = 0
+    /// Every card of Worth a look shown, not the first few.
+    @State private var showAllNotes = false
+    static let notesShown = 3
+    static let notesCap: CGFloat = 220
 
     /// Working's and Needs you's caps: the room less the Router's working line, the headers and margins, shared between
     /// the two.
     private var caps: (working: CGFloat, needs: CGFloat) {
         RouterSplit.caps(room: room - statusHeight, chrome: chrome, workingShown: workingShown,
-                         needsEmpty: page.needs.isEmpty && page.asks.isEmpty)
+                         needsEmpty: page.needs.isEmpty && page.ready.isEmpty && page.asks.isEmpty)
     }
     private var needsCap: CGFloat { caps.needs }
 
     private func measured(_ set: (RouterSplit.ZoneHeights) -> Void) {
         set(heights)
-        let needsEmpty = page.needs.isEmpty && page.asks.isEmpty
+        let needsEmpty = page.needs.isEmpty && page.ready.isEmpty && page.asks.isEmpty
         let working = page.working.isEmpty && page.waiting.isEmpty ? 0 : heights.working
         let rest = max(0, heights.total - working - (needsEmpty ? 0 : heights.needs))
         if abs(rest - chrome) >= 1 { chrome = rest }
@@ -934,6 +977,7 @@ private struct RouterZones: View {
             VStack(alignment: .leading, spacing: 10) {
                 if !page.working.isEmpty || !page.waiting.isEmpty { working }
                 AwayStripView(store: store, model: model)
+                if !page.notes.isEmpty { notes }
                 needs
             }
             .padding(.horizontal, gutter)
@@ -958,40 +1002,105 @@ private struct RouterZones: View {
 
     private var working: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                WorkingMark()
-                Text("Working").cdsText((12, 16), .medium, CDS.Text.muted)
-                Text("· \(page.working.count)").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
-                if !page.waiting.isEmpty {
-                    Text("· \(page.waiting.count) waiting").cdsText((12, 16), .regular, RouterTriage.waitingTint).monospacedDigit()
+            if !page.working.isEmpty {
+                HStack(spacing: 6) {
+                    WorkingMark()
+                    Text("Working").cdsText((12, 16), .medium, CDS.Text.muted)
+                    Text("· \(page.working.count)").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                }
+                .padding(.leading, 2)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityLabel("Working, \(page.working.count)")
+                overview
+            }
+            // Working, then the sessions waiting on something else, under their own header: one scroll for both.
+            ZoneScroll(maxHeight: caps.working, model: model, zone: "working",
+                       ids: Set(page.working.map { RouterModel.workingID($0.id) } + page.waiting.map { RouterModel.workingID($0.sessionID) })) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !page.working.isEmpty {
+                        VStack(spacing: 0) {
+                            ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
+                                if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
+                                WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id])
+                                    .id(RouterModel.workingID(row.id))
+                                    .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
+                                    .transition(.asymmetric(insertion: .opacity, removal: .opacity))
+                            }
+                        }
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(CDS.alpha(0.03)))
+                        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
+                    }
+                    if !page.waiting.isEmpty { waitingList }
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.working = h } }
+        }
+    }
+
+    /// The sessions whose move is something else's (CI, a deploy, another session): cool, under the working ones.
+    private var waitingList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "hourglass").font(.system(size: 10, weight: .semibold))
+                Text("Waiting").cdsText((12, 16), .medium, RouterTriage.waitingTint)
+                Text("· \(page.waiting.count)").cdsText((12, 16), .regular, RouterTriage.waitingTint).monospacedDigit()
+            }
+            .foregroundStyle(RouterTriage.waitingTint)
             .padding(.leading, 2)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
-            .accessibilityLabel("Working, \(page.working.count)" + (page.waiting.isEmpty ? "" : ", \(page.waiting.count) waiting"))
-            if !page.working.isEmpty { overview }
-            ZoneScroll(maxHeight: caps.working, model: model, zone: "working",
-                       ids: Set(page.working.map { RouterModel.workingID($0.id) } + page.waiting.map { RouterModel.workingID($0.sessionID) })) {
-                VStack(spacing: 0) {
-                    ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
-                        if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
-                        WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id])
-                            .id(RouterModel.workingID(row.id))
-                            .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
-                            .transition(.asymmetric(insertion: .opacity, removal: .opacity))
+            .accessibilityLabel("Waiting, \(page.waiting.count)")
+            VStack(spacing: 0) {
+                ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
+                    if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
+                    WaitingCard(store: store, card: card)
+                        .id(RouterModel.workingID(card.sessionID))
+                        .transition(.asymmetric(insertion: .opacity, removal: .opacity))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    // MARK: Worth a look
+
+    /// Finished turns with nothing to do but something to tell: quieter than Needs you, a line each, the first few shown.
+    @ViewBuilder private var notes: some View {
+        let open = model.expandedNeed
+        // One picked past the first few shows them all, so the keys never land on a card that isn't drawn.
+        let picked = [model.selection, model.highlighted, open].compactMap { $0 }
+        let all = showAllNotes || page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
+        let shown = all ? page.notes : Array(page.notes.prefix(Self.notesShown))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "eye").font(.system(size: 10, weight: .semibold)).foregroundStyle(CDS.Text.secondary)
+                Text("Worth a look").cdsText((12, 16), .medium, CDS.Text.secondary)
+                Text("· \(page.notes.count)").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                Spacer(minLength: 4)
+                if page.notes.count > Self.notesShown {
+                    Button(all ? "Show fewer" : "Show all") {
+                        withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { showAllNotes = !all }
                     }
-                    ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
-                        if i > 0 || !page.working.isEmpty { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
-                        WaitingCard(store: store, card: card)
-                            .id(RouterModel.workingID(card.sessionID))
-                            .transition(.asymmetric(insertion: .opacity, removal: .opacity))
+                    .buttonStyle(.link).font(CDS.sans(12))
+                }
+            }
+            .padding(.leading, 2)
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityLabel("Worth a look, \(page.notes.count)")
+            // Capped: past it, it scrolls inside, and Working and Needs you keep their room.
+            ZoneScroll(maxHeight: Self.notesCap, model: model, zone: "notes", ids: Set(shown.map(\.id))) {
+                VStack(spacing: 6) {
+                    ForEach(shown) { card in
+                        CardView(store: store, model: model, card: card, expanded: card.id == open, form: nil,
+                                 project: store.routerProject(card), quiet: true)
+                            .id(card.id)
+                            .transition(.asymmetric(insertion: .opacity, removal: .scaleFade(0.97, reduce: reduceMotion)))
                     }
                 }
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(CDS.alpha(0.03)))
-                .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
+                .padding(.vertical, 1)
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in measured { $0.working = h } }
         }
     }
 
@@ -1022,7 +1131,7 @@ private struct RouterZones: View {
         // What an open form may take: as much of Needs you's height as leaves the open card's own lines whole in it (the
         // other cards scroll).
         let formCap = max(120, min(400, needsCap - (wide ? 52 : 100) - 24))
-        if page.needs.isEmpty && page.asks.isEmpty {
+        if page.needs.isEmpty && page.ready.isEmpty && page.asks.isEmpty {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.system(size: 12, weight: .medium))
                 Text("Nothing needs you").cdsText((13, 18), .regular, CDS.Text.muted)
@@ -1034,7 +1143,7 @@ private struct RouterZones: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 7) {
                     Text("Needs you").cdsText((14, 20), .semibold, CDS.Fill.warning)
-                    Text("\(page.needs.count + page.asks.count)")
+                    Text("\(page.needs.count + page.ready.count + page.asks.count)")
                         .cdsText((12, 16), .semibold, Color.black.opacity(0.8)).monospacedDigit()
                         .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 18)
                         .background(Capsule().fill(CDS.Fill.warning))
@@ -1042,9 +1151,9 @@ private struct RouterZones: View {
                 .padding(.leading, 2)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
-                .accessibilityLabel("Needs you, \(page.needs.count + page.asks.count)")
+                .accessibilityLabel("Needs you, \(page.needs.count + page.ready.count + page.asks.count)")
                 ZoneScroll(maxHeight: needsCap, model: model, zone: "needs",
-                           ids: Set(page.needs.map(\.id) + page.asks.map { $0.id.uuidString })) {
+                           ids: Set(page.needs.map(\.id) + page.ready.map(\.id) + page.asks.map { $0.id.uuidString })) {
                     VStack(spacing: 6) {
                         ForEach(page.asks) { ask in
                             AskBackCard(store: store, ask: ask)
@@ -1061,6 +1170,13 @@ private struct RouterZones: View {
                                 .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
                                 .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
                                                         removal: .scaleFade(0.97, reduce: reduceMotion)))
+                        }
+                        // A wait that is over, that nothing continues on its own: yours to continue.
+                        ForEach(page.ready) { card in
+                            WaitingCard(store: store, card: card)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .id(card.id)
+                                .transition(.opacity)
                         }
                     }
                     // The card's ring and shadow need a little room inside the scroll.
@@ -1344,33 +1460,42 @@ private struct WaitingCard: View {
     var body: some View {
         let tint = RouterTriage.waitingTint
         let ready = triage.ready != nil
-        HStack(spacing: 8) {
-            Button { store.openAgent(card.sessionID) } label: {
-                HStack(spacing: 8) {
-                    if let row = store.sessionRow(card.sessionID) { SessionGlyph(row: row, size: 18, dot: false) }
-                    Text(card.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
-                    Image(systemName: ready ? "checkmark.circle.fill" : "hourglass").font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(tint)
-                    Text(line).cdsText((12, 16), ready ? .medium : .regular, tint).lineLimit(1).truncationMode(.tail)
-                    Spacer(minLength: 4)
-                    MinuteTicking { now in
-                        Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Button { store.openAgent(card.sessionID) } label: {
+                    HStack(spacing: 8) {
+                        if let row = store.sessionRow(card.sessionID) { SessionGlyph(row: row, size: 18, dot: false) }
+                        Text(card.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
+                        Image(systemName: ready ? "checkmark.circle.fill" : "hourglass").font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(tint)
+                        Text(line).cdsText((12, 16), ready ? .medium : .regular, tint).lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 4)
+                        MinuteTicking { now in
+                            Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                        }
                     }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .help(card.text)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(card.title)
+                .accessibilityValue(line + (card.brief.map { ". " + $0 } ?? ""))
+                .accessibilityHint("Opens it in Claude")
+                if ready, triage.told == nil, let message = RouterWaits.message(triage) {
+                    ClaudeButton("Tell it", variant: .secondary, size: .sm, icon: "arrow.turn.down.right") { store.tellWaiting(card.id) }
+                        .help("Sends it: \(message)")
+                }
+                AutoContinueToggle(on: store.continuesAutomatically(card.sessionID), shown: hovered) {
+                    store.setContinuesAutomatically(card.sessionID, $0)
+                }
             }
-            .buttonStyle(.plain)
-            .help(card.text)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(card.title)
-            .accessibilityValue(line)
-            .accessibilityHint("Opens it in Claude")
-            if ready, triage.told == nil, let message = RouterWaits.message(triage) {
-                ClaudeButton("Tell it", variant: .secondary, size: .sm, icon: "arrow.turn.down.right") { store.tellWaiting(card.id) }
-                    .help("Sends it: \(message)")
-            }
-            AutoContinueToggle(on: store.continuesAutomatically(card.sessionID), shown: hovered) {
-                store.setContinuesAutomatically(card.sessionID, $0)
+            // What it waits on and what comes after, in your words' style (RouterBrief.swift).
+            if let brief = card.brief {
+                Text(RouterText.inline(brief)).cdsText((12, 16), .regular, CDS.Text.secondary)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 26).padding(.trailing, 8)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 9)
@@ -1493,6 +1618,8 @@ struct CardView: View {
     /// The tallest an open form or plan gets before it scrolls inside.
     var formCap: CGFloat = closedFormCap
     static let closedFormCap: CGFloat = 400
+    /// Worth a look's: neutral instead of warm, no shadow, and "Got it" for Mark handled.
+    var quiet = false
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1503,8 +1630,9 @@ struct CardView: View {
     private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
     private var when: Date { card.createdAt }
 
-    /// What the card asks, on one line: the first question still open, else its text (parsed once per text).
+    /// What the card asks, on one line: its brief, else the first question still open, else its text (parsed once per text).
     private var excerpt: AttributedString {
+        if let brief = card.brief { return Self.inline(brief) }
         if let first = openQuestions.first { return Self.inline(first) }
         let flat = card.text.split(whereSeparator: \.isNewline).map { $0.drop { "#-* ".contains($0) } }.joined(separator: " ")
         return Self.inline(flat)
@@ -1554,7 +1682,7 @@ struct CardView: View {
     // MARK: Open
 
     private var open: some View {
-        let warm = card.kind == .approval ? RouterTriage.approvalTint : CDS.Fill.warning
+        let warm = quiet ? CDS.Text.secondary : card.kind == .approval ? RouterTriage.approvalTint : CDS.Fill.warning
         return VStack(alignment: .leading, spacing: 0) {
             header { summary(project: project) }
             if let left = card.left, let total = card.total {
@@ -1562,29 +1690,30 @@ struct CardView: View {
                     .padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
                     .padding(.leading, wide ? 28 : 0)
             }
-            if let origin = card.origin {
+            if let origin = card.origin, !quiet {
                 OriginTag(origin: origin).padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
                     .padding(.leading, wide ? 28 : 0)
             }
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
                     content(form: form)
-                    if !(wide && form != nil) { markHandled(icon: false) }
+                    if !(wide && form != nil) && !(quiet && wide) { markHandled(icon: false) }
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12).padding(.top, 2)
                 .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Brand.wash(warm, expanded ? 0.15 : hovered ? 0.13 : 0.09)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Brand.wash(warm, quiet ? (expanded ? 0.08 : hovered ? 0.07 : 0.04) : expanded ? 0.15 : hovered ? 0.13 : 0.09)))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(warm.opacity(marked || expanded || focused ? 0.8 : 0.4), lineWidth: marked ? 1.5 : 1)
+                .strokeBorder(warm.opacity(quiet ? (marked || expanded || focused ? 0.45 : 0.2) : marked || expanded || focused ? 0.8 : 0.4),
+                              lineWidth: marked ? 1.5 : 1)
         }
         // One shadow for the card as a whole: without the group each of its parts (every line of text, every icon) casts its
         // own, and the window's picture for the opening morph blurs every one of them again.
         .compositingGroup()
-        .shadow(color: warm.opacity(expanded ? 0.10 : 0), radius: 10, y: 2)
+        .shadow(color: warm.opacity(expanded && !quiet ? 0.10 : 0), radius: 10, y: 2)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(card.kind.label): \(card.title)")
         .accessibilityAction(named: "Mark handled") { model.address(card.id, store: store) }
@@ -1592,11 +1721,12 @@ struct CardView: View {
 
     /// Who, what kind, what it asks and when: one line when there is room, else two.
     private func summary(project: RouterProject) -> some View {
-        let title = Text(card.title).cdsText((14, 20), .semibold, CDS.Text.primary).lineLimit(1)
+        let title = Text(card.title).cdsText(quiet ? (13, 18) : (14, 20), quiet ? .medium : .semibold, CDS.Text.primary).lineLimit(1)
         let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
         // A form has its own buttons: Mark handled sits in the header beside it.
-        let handle = expanded && wide && form != nil
+        // Worth a look's Got it is always there, in the header when there's room.
+        let handle = (expanded && wide && form != nil) || (quiet && wide)
         return VStack(alignment: .leading, spacing: 1) {
             if wide {
                 HStack(spacing: 8) {
@@ -1627,7 +1757,11 @@ struct CardView: View {
     }
 
     @ViewBuilder private func markHandled(icon: Bool) -> some View {
-        if icon {
+        if quiet, icon {
+            ClaudeButton(icon: "checkmark", label: "Got it", variant: .ghost, size: .sm) { model.address(card.id, store: store) }
+        } else if quiet {
+            ClaudeButton("Got it", variant: .secondary, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
+        } else if icon {
             ClaudeButton(icon: "checkmark", label: "Mark handled", variant: .ghost, size: .sm) { model.address(card.id, store: store) }
         } else if card.kind.isTurn {
             ClaudeButton("Mark handled", primary: true, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
@@ -1643,8 +1777,12 @@ struct CardView: View {
             .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).fixedSize()
     }
 
-    /// The card's full content: its form or plan (capped, scrolling inside), else what it said.
+    /// The card's full content: its brief over its form or plan (capped, scrolling inside), else over what it said.
     @ViewBuilder private func content(form: PendingForm?) -> some View {
+        if let brief = card.brief {
+            Text(RouterText.inline(brief)).cdsText((13, 18), .medium, CDS.Text.primary)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
         if let form {
             ScrollView {
                 Group {

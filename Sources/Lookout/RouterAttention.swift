@@ -86,7 +86,7 @@ struct AwayStrip: Equatable {
         if away { return RouterPage.urgency(card) >= soon }
         switch card.kind {
         case .question, .plan, .approval, .stuck: return true
-        case .asks: return (card.triage?.urgency ?? 4) >= soon
+        case .asks, .finish: return (card.triage?.urgency ?? 4) >= soon
         case .done, .waiting: return false
         }
     }

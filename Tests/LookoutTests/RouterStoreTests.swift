@@ -40,7 +40,7 @@ import Testing
         s.ingest([session("local_a", turns: 2), session("local_b", turns: 2, summary: nil)], appUnread: [], claudeFrontmost: false, now: now)
         s.feedRouter(now: now.addingTimeInterval(1))
         #expect(fresh.map(\.id).sorted() == ["local_a#t2", "local_b#t2"])
-        #expect(s.routerCounts.done == 2 && s.routerCounts.needsYou == 0)
+        #expect(s.routerCounts.notes == 2 && s.routerCounts.needsYou == 0)
 
         // Not again for the same read; nothing while the sessions extension is off.
         fresh = []
@@ -144,10 +144,10 @@ import Testing
                     open.filter { $0.kind == .done && RouterPage.shows($0, tasks: tasks) }.count)
         }
         #expect(s.routerCounts == filteredCounts())
-        #expect(s.routerCounts.needsYou == 5 && s.routerCounts.done == 1)
+        #expect(s.routerCounts.needsYou == 5 && s.routerCounts.notes == 1)
         s.claudeTasks["busy-done"] = nil
         #expect(s.routerCounts == filteredCounts())
-        #expect(s.routerCounts.needsYou == 5 && s.routerCounts.done == 2)
+        #expect(s.routerCounts.needsYou == 5 && s.routerCounts.notes == 2)
     }
 
     @Test func switchingItOnInstallsTheHookAndOffRemovesIt() async throws {
