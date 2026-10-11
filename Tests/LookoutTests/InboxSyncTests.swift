@@ -918,6 +918,18 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         }
         await s.resolveTeams(me: "me")
         #expect(s.myTeams.isEmpty && s.teamsResolvedAt == nil)
+        // Nor are an owner's repos asked for while the last account was signed in and landing after the switch.
+        final class Ref: @unchecked Sendable { var store: Store?; var answered = false }
+        let ref = Ref()
+        ref.store = s
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { _ in
+            DispatchQueue.main.sync { MainActor.assumeIsolated { ref.store?.me = GHUser(login: "someone", avatarUrl: nil, type: "User") } }
+            ref.answered = true
+            return .init(200, #"{"data":{"o0":{"repositories":{"nodes":[{"nameWithOwner":"acme/x"}]}}}}"#)
+        }
+        await s.resolveOwnerRepos(["acme"])
+        #expect(ref.answered && s.inboxSyncState.ownerRepos.isEmpty && s.inboxSyncState.ownerReposAt.isEmpty)
     }
 
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {

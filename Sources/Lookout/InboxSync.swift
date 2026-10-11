@@ -698,6 +698,8 @@ enum InboxSync {
 
 /// What the inbox's refreshes keep between them this session (InboxSync.swift): all of it about the account signed in.
 struct InboxSyncState {
+    /// Which sign-in this is about: new for each account, so an answer asked for the last one is told apart.
+    var account = UUID()
     /// When looking your teams up last failed: asked again after `InboxSync.teamsRetry`, not a day.
     var teamsFailedAt: Date?
     /// Where the next refresh's window of searches starts (`InboxSync.searchPlan`).
@@ -1109,8 +1111,11 @@ extension Store {
     func resolveOwnerRepos(_ owners: [String], now: Date = Date()) async -> String? {
         let due = owners.filter { owner in inboxSyncState.ownerReposAt[owner].map { now.timeIntervalSince($0) > 86400 } ?? true }
         guard !due.isEmpty else { return nil }
+        let account = inboxSyncState.account
         let json: [String: Any]
         do { json = try await gh.graphql(InboxSync.ownerReposRequest(due)) } catch { return error.localizedDescription }
+        // Asked for an account signed out since: not taken.
+        guard inboxSyncState.account == account else { return nil }
         let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
         guard let data = json["data"] as? [String: Any] else {
             return (errors.first?["message"] as? String) ?? "GitHub gave no answer"
