@@ -756,7 +756,8 @@ enum InboxSync {
                 switch value.lowercased() {
                 case "pr": guard thing.kind == .pr else { return false }
                 case "issue": guard thing.kind == .issue else { return false }
-                case "open": guard thing.status == .open else { return false }
+                // A draft is open to search (`is:open` returns it, and `draft:` tells them apart).
+                case "open": guard thing.status == .open || thing.status == .draft else { return false }
                 case "closed": guard thing.status == .closed || thing.status == .merged else { return false }
                 default: return false
                 }

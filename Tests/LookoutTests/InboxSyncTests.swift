@@ -707,6 +707,16 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(category() == repo.id)
     }
 
+    @Test func aDraftIsOpenToAnInvolvesSearchSoUnassignedFromOneItIsNoLongerInvolved() {
+        var draft = InboxFixture.pr(12, repo: "o/r", by: Person(login: "alice"))
+        draft.status = .draft
+        draft.signals = ThingSignals(viewer: "me", involved: true)
+        let query = "is:pr archived:false involves:me is:open sort:updated-desc"
+        #expect(InboxSync.wouldFind(query, draft, me: "me"))
+        InboxSync.markInvolved(&draft, foundBy: [], complete: [query], me: "me")
+        #expect(draft.signals?.involved == false)
+    }
+
     @Test func anEventAnnouncedOnceStaysAnnouncedThoughTheRuleStopsMatchingForAWhile() async {
         final class Checks: @unchecked Sendable { var state = "SUCCESS" }
         let checks = Checks()
