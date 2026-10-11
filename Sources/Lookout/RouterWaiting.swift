@@ -30,6 +30,14 @@ enum RouterWaits {
         }
     }
 
+    /// Which run of the CI the thing shows: a workflow's last update (a rerun is a new one), a PR's head commit; nil for a
+    /// session, or when unknown.
+    static func run(_ watch: RouterTriage.Watch, things: [String: Thing]) -> String? {
+        guard case .ci(let id) = watch.target, let thing = things[id] else { return nil }
+        if thing.kind == .workflow { return "\(thing.updatedAt.timeIntervalSince1970)" }
+        return thing.headSha
+    }
+
     /// What the session is told: "The CI on owner/repo#12 finished: passing." It goes to the session as your own words
     /// (signed), so nothing free-form goes in, not even what Lookout saw (a workflow's or job's name, a title, another
     /// session's): only a repo and number checked to look like GitHub's, and the outcome in fixed words.
@@ -200,14 +208,21 @@ extension Store {
             guard card.isOpen, card.kind == .waiting, let watch = card.triage?.watch else { continue }
             let result = RouterWaits.result(watch, sessions: claudeSessions, things: things, tasks: routerTasks,
                                             inventory: claudeTaskInventory)
+            let run = RouterWaits.run(watch, things: things)
             if let was = card.triage?.ready {
-                guard card.triage?.told == nil, case .ci(let id) = watch.target, things[id] != nil, result != was.result else { continue }
-                state.cards[i].triage?.ready = result.map { .init(result: $0, at: now) }
+                guard card.triage?.told == nil, case .ci(let id) = watch.target, things[id] != nil else { continue }
+                // The same outcome of another run (a rerun that failed again) is ready again; an older card's, with no run
+                // kept, only learns which run it is.
+                guard result != was.result || (was.run != nil && run != nil && run != was.run) else {
+                    if was.run == nil, run != nil { state.cards[i].triage?.ready?.run = run }
+                    continue
+                }
+                state.cards[i].triage?.ready = result.map { .init(result: $0, at: now, run: run) }
                 if result != nil { ready.append(state.cards[i]) }
                 continue
             }
             guard let result else { continue }
-            state.cards[i].triage?.ready = .init(result: result, at: now)
+            state.cards[i].triage?.ready = .init(result: result, at: now, run: run)
             ready.append(state.cards[i])
         }
         if state != router { router = state }

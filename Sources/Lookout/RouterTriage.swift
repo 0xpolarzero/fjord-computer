@@ -67,6 +67,9 @@ struct RouterTriage: Codable, Hashable {
     struct Ready: Codable, Hashable {
         var result: String
         var at: Date
+        /// Which CI run it came of (a workflow's last update, a PR's head commit), so the same outcome of another run is
+        /// ready again. Nil for older cards.
+        var run: String? = nil
     }
 
     /// Nil when Jev wasn't sure: the card stays what the app's summary made it.

@@ -362,6 +362,32 @@ import Testing
         #expect(ready == 1)
     }
 
+    @Test func aWorkflowRerunThatFailsTheSameWayIsReadyAgain() {
+        var lint = InboxFixture.pr(1, repo: "o/app")
+        lint.id = "workflow:o/app:7@main"
+        lint.kind = .workflow
+        lint.number = nil
+        lint.workflowName = "lint"
+        lint.branch = "main"
+        lint.checks = .failing
+        lint.failingJobs = ["lint"]
+        let watch = RouterTriage.Watch(target: .ci(thing: lint.id), label: "CI: lint on main in o/app", ref: "o/app", named: true)
+        let (s, _) = store(watch: watch, things: [lint])
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        let first = Date(timeIntervalSince1970: 1_000)
+        s.resolveWaits(now: first)
+        #expect(ready == 1 && s.router.cards[0].triage?.ready?.at == first)
+        // Nothing new: not said again.
+        s.resolveWaits(now: first.addingTimeInterval(5))
+        #expect(ready == 1 && s.router.cards[0].triage?.ready?.at == first)
+        // Rerun, and it fails the same way between polls: a new completion of the same outcome.
+        s.things[lint.id]?.updatedAt = lint.updatedAt.addingTimeInterval(600)
+        #expect(ready == 2 && s.router.cards[0].triage?.ready?.at ?? first > first)
+        s.resolveWaits(now: first.addingTimeInterval(700))
+        #expect(ready == 2)
+    }
+
     @Test func aWaitItsMessageDidntNameIsNeverContinuedOnItsOwn() async {
         var unnamed = ciWatch
         unnamed.named = false
