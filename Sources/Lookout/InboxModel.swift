@@ -575,6 +575,10 @@ struct ThingSignals: Codable, Hashable {
     /// GitHub's `involves:` search for this viewer returned it: you're involved, though what you did there (a comment ten
     /// newer ones pushed out of what is fetched) may no longer be among what came with it. Kept, as involvement is.
     var involved: Bool?
+    /// The same for your review searches (`review-requested:`, `reviewed-by:`), by qualifier: a request made only of your
+    /// team, or a review of yours past the latest fetched. Each is kept, or taken back, by its own search only. On a thing
+    /// just fetched, `false` says such a search read whole would have found it and didn't.
+    var involvedBy: [String: Bool]?
 }
 
 /// What Jev said of one message; nil where it wasn't sure.

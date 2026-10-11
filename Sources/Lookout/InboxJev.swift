@@ -158,8 +158,14 @@ enum InboxJev {
         // Found by your `involves:` search this time (marked on the fetched thing), or any time before; until a search of
         // yours read whole would have found it and didn't (marked `false`): you're no longer involved.
         if thing.signals?.viewer == viewer, let involved = thing.signals?.involved { signals.involved = involved ? true : nil }
+        // The same for each of your review searches, by itself.
+        if thing.signals?.viewer == viewer, let marks = thing.signals?.involvedBy {
+            var kept = signals.involvedBy ?? [:]
+            for (search, found) in marks { kept[search] = found ? true : nil }
+            signals.involvedBy = kept.isEmpty ? nil : kept
+        }
         thing.signals = signals.messages.isEmpty && signals.importance == nil && signals.answeredAt == nil && signals.involved == nil
-            ? nil : signals
+            && signals.involvedBy == nil ? nil : signals
     }
 
     /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).

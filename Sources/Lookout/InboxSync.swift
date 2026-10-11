@@ -719,28 +719,36 @@ enum InboxSync {
         return thing
     }
 
+    /// The searches that find what you're involved in, by their qualifier for you: `involves:`, and for PRs those for a
+    /// review asked of you (or your team) and one you made, which `involves:` leaves out.
+    static let involvementSearches = ["involves", "review-requested", "reviewed-by"]
+
     /// A thing your `involves:` search found is marked so (for you): GitHub knows you're involved there even once what
     /// you did is past what is fetched of it (your comment before ten newer ones), and that is kept from now on. One such
     /// search read to its end (`complete`) that would have found it and didn't says you're no longer involved (reassigned
-    /// away): marked `false`, which takes back what was kept. A search cut short, or that failed, says nothing.
+    /// away): marked `false`, which takes back what was kept. A search cut short, or that failed, says nothing. Your review
+    /// searches are marked the same, each on its own (`ThingSignals.involvedBy`): one's absence never takes back another's.
     static func markInvolved(_ thing: inout Thing, foundBy searches: Set<String>, complete: Set<String> = [], me: String) {
-        let qualifier = "involves:" + me.lowercased()
-        func isInvolves(_ query: String) -> Bool { query.lowercased().split(separator: " ").contains { $0 == qualifier } }
         guard thing.kind != .workflow, !me.isEmpty else { return }
-        let involved: Bool
-        if searches.contains(where: isInvolves) {
-            involved = true
-        } else if complete.contains(where: { isInvolves($0) && wouldFind($0, thing, me: me) }) {
-            involved = false
-        } else {
-            return
+        var marks: [String: Bool] = [:]
+        for kind in involvementSearches {
+            let qualifier = kind + ":" + me.lowercased()
+            func isKind(_ query: String) -> Bool { query.lowercased().split(separator: " ").contains { $0 == qualifier } }
+            if searches.contains(where: isKind) {
+                marks[kind] = true
+            } else if complete.contains(where: { isKind($0) && wouldFind($0, thing, me: me) }) {
+                marks[kind] = false
+            }
         }
+        guard !marks.isEmpty else { return }
         var signals = InboxEngine.signals(thing, me) ?? ThingSignals(viewer: InboxEngine.viewer(me))
-        signals.involved = involved
+        if let involved = marks.removeValue(forKey: "involves") { signals.involved = involved }
+        if !marks.isEmpty { signals.involvedBy = (signals.involvedBy ?? [:]).merging(marks) { _, new in new } }
         thing.signals = signals
     }
 
-    /// Whether a search would return the thing were you involved there: every qualifier but `involves:` says yes. One
+    /// Whether a search would return the thing were you involved there: every qualifier but the one for you (`involves:`,
+    /// `review-requested:`, `reviewed-by:`) says yes. One
     /// that can't be told here (or isn't known) says no, so that its absence never counts.
     static func wouldFind(_ query: String, _ thing: Thing, me: String) -> Bool {
         func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
@@ -750,7 +758,7 @@ enum InboxSync {
             guard parts.count == 2 else { return false }
             let (key, value) = (parts[0].lowercased(), parts[1])
             switch key {
-            case "involves": guard same(value, me) else { return false }
+            case "involves", "review-requested", "reviewed-by": guard same(value, me) else { return false }
             case "archived", "sort": continue
             case "is":
                 switch value.lowercased() {

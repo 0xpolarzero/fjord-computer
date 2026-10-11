@@ -316,8 +316,9 @@ enum InboxEngine {
         guard !r.me.isEmpty else { return false }
         func isMe(_ login: String) -> Bool { normalize(login) == r.me }
         if let a = thing.author, isMe(a.login) { return true }
-        // GitHub said so (its `involves:` search for you found it), whatever of yours is still among what was fetched.
-        if signals(thing, r.me)?.involved == true { return true }
+        // GitHub said so (its `involves:` search for you found it, or one for a review asked of you or made by you),
+        // whatever of yours is still among what was fetched.
+        if let said = signals(thing, r.me), said.involved == true || said.involvedBy?.values.contains(true) == true { return true }
         return thing.assignees.contains(where: isMe) || thing.requestedReviewers.contains(where: isMe)
             || thing.mentioned.contains(where: isMe) || thing.comments.contains { isMe($0.author.login) }
             || thing.reviews.contains { isMe($0.author.login) }

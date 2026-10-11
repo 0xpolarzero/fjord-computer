@@ -728,6 +728,52 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(InboxSync.wouldFind("is:pr involves:me author:app/renovate", pr, me: "me"))
     }
 
+    @Test func aReviewSearchOfYoursKeepsYouInvolvedUntilItsOwnWholeSearchNoLongerFindsIt() async {
+        final class Phase: @unchecked Sendable { var requested = true; var reviewed = false }
+        let phase = Phase()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            let body = InboxSyncRefresh.body(request)
+            // Someone else's PR asked of your team only, with nothing of yours fetched (your review is past those fetched):
+            // only your review searches tie it to you; your involves: search, read whole, never finds it.
+            let pr = node(["author": ["login": "alice", "__typename": "User"], "body": "", "assignees": ["nodes": []],
+                           "reviewRequests": ["nodes": [["requestedReviewer": ["combinedSlug": "org/core"]]]],
+                           "comments": ["nodes": []], "reviews": ["nodes": []],
+                           "latestOpinionatedReviews": ["nodes": []], "reviewThreads": ["nodes": []]])
+            var data: [String: Any] = [:]
+            for i in 0..<8 {
+                guard let start = body.range(of: "s\(i): search(") else { continue }
+                let query = body[start.upperBound...].prefix { $0 != ")" }
+                let found = query.contains("repo:o") || (query.contains("review-requested:me") && phase.requested)
+                    || (query.contains("reviewed-by:me") && phase.reviewed)
+                data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": found ? [pr] : []]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        var involved = InboxCategory(name: "Involved", symbol: "star", color: .blue)
+        involved.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.involved])), conditions: [])]
+        var repo = InboxCategory(name: "Repo", symbol: "star", color: .blue)
+        repo.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("o/r")])), conditions: [])]
+        s.categories = [involved, repo]
+        func category() -> UUID? { s.entries.first { $0.thing.id == "pr:o/r#12" }?.categoryID }
+        await s.syncInbox()
+        #expect(category() == involved.id)
+        let saved = try? JSONDecoder().decode(Thing.self, from: JSONEncoder().encode(s.things["pr:o/r#12"]!))
+        #expect(saved?.signals?.involvedBy == ["review-requested": true])
+        // Reviewed: the request is gone, and your reviewed-by: search holds it.
+        phase.requested = false
+        phase.reviewed = true
+        await s.syncInbox()
+        #expect(category() == involved.id)
+        // Neither finds it any more, read whole: no longer involved.
+        phase.reviewed = false
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#12"]?.signals?.involvedBy == nil)
+        #expect(category() == repo.id)
+    }
+
     @Test func anEventAnnouncedOnceStaysAnnouncedThoughTheRuleStopsMatchingForAWhile() async {
         final class Checks: @unchecked Sendable { var state = "SUCCESS" }
         let checks = Checks()
