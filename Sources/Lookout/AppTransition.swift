@@ -73,9 +73,13 @@ enum AppTransition {
         return fallbackRadius
     }
 
+    /// How many pictures of a window were taken (the tests count them).
+    private(set) static var captures = 0
+
     /// The window's pixels as they are now: its whole frame (title bar and buttons included) at the screen's scale.
     static func snapshot(of window: NSWindow) -> CGImage? {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
+        captures += 1
         view.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }

@@ -272,6 +272,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// little after it is asked to: the picture waits for it, rather than being taken twice).
     private func payPicture(_ mine: Int) {
         guard let owed, owed.generation == mine, generation == mine, pending == nil, let window, let run else { return }
+        // The overlay has let go of its picture: the real window shows itself, nothing is owed.
+        guard !run.handedOver else {
+            self.owed = nil
+            stopKeyWatch()
+            return
+        }
         guard AppTransition.isKey(window) else {
             guard keyWatch == nil else { return }
             keyWatch = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window,
@@ -296,9 +302,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     /// What an opening's window shows changed after its overlay's picture was taken (another place, a card, a row or a
     /// section asked for): a fresh one fades in over it, a turn later (once the change has been drawn), at the latest as
-    /// the real window takes over.
+    /// the real window takes over. Not once it has (its live pixels show).
     private func contentChanged() {
-        guard phase == .opening, run != nil else { return }
+        guard phase == .opening, let run, !run.handedOver else { return }
         let mine = generation
         owed = (mine, crossFade: true)
         AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }

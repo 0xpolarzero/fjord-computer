@@ -727,6 +727,28 @@ import Testing
         }
     }
 
+    /// Once the overlay has let go of its picture (the real window's live pixels show), a change of place or a card asked
+    /// for takes no picture any more: nothing would show it.
+    @Test func nothingIsPicturedOnceTheOverlayHasLetGo() throws {
+        try morphing { controller, ticks in
+            AppTransition.isKey = { _ in true }
+            controller.show(.settings)
+            ticks.turns.forEach { $0() }
+            ticks.turns = []
+            guard let run = controller.run else { return #expect(Bool(false), "no morph") }
+            run.complete()
+            ticks.blocks.removeFirst()()
+            ticks.blocks.removeFirst()()
+            try #require(run.handedOver && controller.phase == .opening)
+            let taken = AppTransition.captures
+            controller.navigator.go(.done)
+            controller.showUpdates()
+            if let card = controller.store.openRouterCards.first { controller.pick(card: card.id) }
+            ticks.turns.forEach { $0() }
+            #expect(AppTransition.captures == taken)
+        }
+    }
+
     /// A card or a message of the Router asked for from the bar while the window is on its way in to the Router: the place
     /// is the same, what it shows is not.
     @Test func aRouterPickOnTheWayInRefreshesThePicture() throws {
