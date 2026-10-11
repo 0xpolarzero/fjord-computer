@@ -136,6 +136,38 @@ import UserNotifications
         #expect(model.cards(store).contains { $0.id == hidden.id })
     }
 
+    @Test func aFinishedTurnNotShownIsNeitherASupersededCardsSuccessorNorATargetOfJevsOrASend() {
+        let store = demo()
+        let model = RouterModel()
+        let keys = RouterKeys(store: store, model: model) {}
+        let hidden = store.openRouterCards.first { $0.sessionID == "local_demo-ci" && $0.kind == .done }!
+        var older = hidden
+        older.id = hidden.id + "-older"
+        older.addressedAt = hidden.createdAt
+        older.addressedBy = .superseded
+        store.router.cards.append(older)
+        // Space on the superseded card in the history: its session's newer card isn't on the page, so the pick stays.
+        model.select(older.id, store: store)
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(model.selection == older.id && model.replyTo == nil)
+        // Jev neither offers it nor goes to it, and a pin on it doesn't hold; the history's card is still replied to.
+        let tools = RouterTools(store: store)
+        #expect(!tools.targets(store).contains { $0.target == "answer:\(hidden.id)" })
+        #expect(!store.routerDispatcher.eligible("answer:\(hidden.id)", store: store))
+        #expect(store.routerDispatcher.option("answer:\(hidden.id)", store: store) == nil)
+        #expect(!RouterModel.targets(store).contains(hidden.id))
+        #expect(store.routerDispatcher.option("answer:\(older.id)", store: store) != nil)
+        #expect(RouterDispatcher.plan(text: "hi", context: RouterContext(replyTo: older.id), store: store)
+                == .reply(session: older.sessionID, card: older.id))
+        // Once what it ran ends, it is all of these.
+        store.claudeTasks["local_demo-ci"] = nil
+        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(model.selection == hidden.id)
+        #expect(tools.targets(store).contains { $0.target == "answer:\(hidden.id)" })
+        #expect(store.routerDispatcher.eligible("answer:\(hidden.id)", store: store))
+        #expect(RouterModel.targets(store).contains(hidden.id))
+    }
+
     @Test func returnInTheComposerSendsAndShiftReturnDoesNot() {
         let store = demo()
         let model = RouterModel()

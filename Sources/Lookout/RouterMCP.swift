@@ -704,7 +704,7 @@ final class RouterMCPServer: @unchecked Sendable {
     func targets(_ store: Store, projects: Set<String>? = nil) -> [Target] {
         // The projects narrow first; the limits apply to what's left.
         var out: [Target] = []
-        for card in store.openRouterCards.filter({ projects?.contains($0.folder ?? "") ?? true }).prefix(60) {
+        for card in store.routerShownOpenCards.filter({ projects?.contains($0.folder ?? "") ?? true }).prefix(60) {
             let project = store.folderName(card.folder ?? "")
             out.append(Target(target: "answer:\(card.id)",
                               hint: "Reply to the \(card.kind.rawValue) card of session “\(Self.hinted(card.title, 120))” (project \(Self.hinted(project, 80))): \(Self.hinted(card.text, 300))",

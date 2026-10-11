@@ -142,6 +142,13 @@ extension Store {
         return router.cards.filter { RouterPage.shows($0, tasks: tasks) }
     }
 
+    /// The open cards the page shows, newest first: what Jev offers and a send goes to, and where a superseded card's pick
+    /// moves. An addressed card is still replied to from the history.
+    var routerShownOpenCards: [RouterCard] {
+        let tasks = routerTasks
+        return openRouterCards.filter { RouterPage.shows($0, tasks: tasks) }
+    }
+
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],

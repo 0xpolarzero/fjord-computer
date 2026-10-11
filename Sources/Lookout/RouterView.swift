@@ -446,7 +446,7 @@ final class RouterModel {
         let shown = cards(store)
         guard let id = selection, let card = shown.first(where: { $0.id == id }) else { return }
         if card.addressedBy == .superseded {
-            if let newer = store.openRouterCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
+            if let newer = store.routerShownOpenCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
             return
         }
         let open = shown.filter(\.isOpen).map(\.id)

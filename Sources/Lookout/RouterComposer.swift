@@ -440,7 +440,7 @@ private struct LiveTargetWatch: View {
 extension RouterModel {
     /// What a pick or a pin can go to, and where the page shows it: the open cards, the working sessions, the sessions kept.
     static func targets(_ store: Store) -> [String] {
-        store.openRouterCards.map(\.id) + store.routerWorkingRows.map { workingID($0.id) }
+        store.routerShownOpenCards.map(\.id) + store.routerWorkingRows.map { workingID($0.id) }
             + store.claudeSessions.values.filter { !$0.isArchived }.map(\.id).sorted()
     }
 

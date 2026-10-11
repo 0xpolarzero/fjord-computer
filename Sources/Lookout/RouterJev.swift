@@ -161,7 +161,7 @@ final class RouterLiveTarget {
         guard target.hasPrefix("session:") else { return nil }
         let session = String(target.dropFirst("session:".count))
         if store.routerWorkingRows.contains(where: { $0.id == session }) { return RouterModel.workingID(session) }
-        return store.openRouterCards.first { $0.sessionID == session }?.id
+        return store.routerShownOpenCards.first { $0.sessionID == session }?.id
     }
 
     /// Esc: the prediction goes, and stays away for this draft.

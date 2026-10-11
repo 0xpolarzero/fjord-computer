@@ -557,7 +557,7 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Whether a target can still be sent to: an open card, a session not archived, a known project, or an intent.
     func eligible(_ target: String, store: Store) -> Bool {
-        if target.hasPrefix("answer:") { return store.openRouterCards.contains { $0.id == String(target.dropFirst(7)) } }
+        if target.hasPrefix("answer:") { return store.routerShownOpenCards.contains { $0.id == String(target.dropFirst(7)) } }
         if target.hasPrefix("session:") { return store.claudeSessions[String(target.dropFirst(8))].map { !$0.isArchived } ?? false }
         if target.hasPrefix("new:") { return store.knownFolders.contains(String(target.dropFirst(4))) }
         return true
@@ -627,7 +627,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// A target as a button.
     func option(_ target: String, store: Store, tools: RouterTools? = nil) -> RouterAskBack.Option? {
         if target.hasPrefix("answer:") {
-            guard let card = store.router.cards.first(where: { $0.id == String(target.dropFirst(7)) }) else { return nil }
+            guard let card = store.router.cards.first(where: { $0.id == String(target.dropFirst(7)) }),
+                  RouterPage.shows(card, tasks: store.routerTasks) else { return nil }
             return .init(target: target, title: card.title, detail: "\(card.kind.label) · \(store.folderName(card.folder ?? ""))")
         }
         if target.hasPrefix("session:") {
