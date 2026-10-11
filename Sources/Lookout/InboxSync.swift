@@ -722,6 +722,19 @@ enum InboxSync {
         }
     }
 
+    /// A branch's workflow things with those known before of the same commit that its read didn't reach (its runs past the
+    /// pages read, `CIStatus.runsCapped`): a 31st workflow failing stays failing, not gone. All read, what it has is all.
+    static func keepingUnread(_ read: [Thing], status: CIStatus, known: [String: Thing], repo: String, branch: String) -> [Thing] {
+        guard status.runsCapped == true, let sha = status.sha else { return read }
+        let ids = Set(read.map(\.id))
+        let external = workflowID(repo: repo, workflow: Store.externalWorkflowID, branch: branch)
+        let kept = known.values.filter { thing in
+            thing.kind == .workflow && thing.repo == repo && thing.branch == branch && !ids.contains(thing.id) && thing.id != external
+                && thing.ciRun?.hasPrefix("ci:\(sha):") == true
+        }
+        return read + kept.sorted { $0.id < $1.id }
+    }
+
     static func workflowID(repo: String, workflow: String, branch: String) -> String {
         "workflow:\(repo):\(workflow)@\(branch)"
     }
@@ -1494,7 +1507,8 @@ extension Store {
             status = try await fetchCI(repo)
             branch = status.branch
         }
-        var things = InboxSync.workflowThings(repo: repo, branch: branch, status: status)
+        var things = InboxSync.keepingUnread(InboxSync.workflowThings(repo: repo, branch: branch, status: status),
+                                             status: status, known: self.things, repo: repo, branch: branch)
         if requested == nil { for i in things.indices { things[i].defaultBranch = branch } }
         return things
     }

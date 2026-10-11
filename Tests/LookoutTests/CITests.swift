@@ -370,6 +370,52 @@ import Testing
                     == [[true, true]])
     }
 
+    @Test func aCommitsActionsRunsAreReadPastTheFirstPageAndCappedOnesKeepWhatWasKnown() async throws {
+        let store = Store()
+        store.persists = false
+        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        let total = TotalBox()
+        store.gh.session = StubbedGitHub.session { request in
+            let comps = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (comps?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            let page = Int(query["page"] ?? "1") ?? 1
+            switch comps?.path ?? "" {
+            case "/repos/a/x/branches/main": return .init(200, #"{"commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
+            case "/repos/a/x/actions/runs":
+                // One run per workflow on the head commit, the last of them failing.
+                let n = total.value, size = Int(query["per_page"] ?? "30") ?? 30
+                let start = (page - 1) * size
+                let runs = (start..<min(n, start + size)).map { i in
+                    #"{"id":\#(i),"name":"w\#(i)","workflow_id":\#(i),"head_sha":"s1","status":"completed","conclusion":"\#(i == n - 1 ? "failure" : "success")"}"#
+                }
+                return .init(200, #"{"total_count":\#(n),"workflow_runs":[\#(runs.joined(separator: ","))]}"#)
+            case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"pending","total_count":0,"sha":"s1","statuses":[]}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        // The 31st workflow failing is read, past GitHub's first page of 30.
+        total.value = 31
+        let all = try await store.fetchBranchCI("a/x", branch: "main")
+        #expect(all.workflows.count == 31 && all.workflows.filter { $0.state == .failure }.map(\.name) == ["w30"] && all.runsCapped == nil)
+        // More than the pages read: what isn't read may still run, and what was known of the commit stays.
+        total.value = 1_000
+        let capped = try await store.fetchBranchCI("a/x", branch: "main")
+        #expect(capped.runsCapped == true && capped.workflows.count == 301)
+        #expect(capped.workflows.first { $0.id == Store.externalWorkflowID }?.state == .pending)
+        let read = InboxSync.workflowThings(repo: "a/x", branch: "main", status: capped)
+        var failing = InboxSync.workflowThings(repo: "a/x", branch: "main", status: all).first { $0.checks == .failing }!
+        failing.id = InboxSync.workflowID(repo: "a/x", workflow: "999", branch: "main")
+        var older = failing
+        older.id = InboxSync.workflowID(repo: "a/x", workflow: "998", branch: "main")
+        older.ciRun = "ci:s0:998#1"
+        let known = [failing.id: failing, older.id: older]
+        let kept = InboxSync.keepingUnread(read, status: capped, known: known, repo: "a/x", branch: "main")
+        #expect(kept.count == read.count + 1 && kept.last?.id == failing.id)
+        // All read, what it has is all.
+        #expect(InboxSync.keepingUnread(read, status: all, known: known, repo: "a/x", branch: "main").count == read.count)
+    }
+
     @Test func statusesStillPendingByGitHubsOwnStateOrNotAllReadAreRunning() {
         let passed = GHCombinedStatus.Status(context: "ci/jenkins", state: "success", createdAt: t0, updatedAt: t0)
         let pending = GHCombinedStatus(state: "pending", totalCount: 1, sha: "s", statuses: [passed])

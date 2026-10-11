@@ -47,6 +47,8 @@ struct GHWorkflowRuns: Decodable {
         var runAttempt: Int? = nil
     }
     let workflowRuns: [Run]
+    /// How many runs the query has in all, past this page.
+    var totalCount: Int? = nil
 }
 
 struct GHCheckRuns: Decodable {

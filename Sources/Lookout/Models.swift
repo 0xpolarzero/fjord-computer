@@ -57,6 +57,9 @@ struct CIStatus: Codable, Hashable {
     var updatedAt: Date?
     /// Each workflow on its own (external checks and statuses together are one more).
     var workflows: [Workflow] = []
+    /// The commit's Actions runs were not all read (past the pages read): a workflow not among `workflows` may still be
+    /// on it, so what was known of the commit's workflows before stays.
+    var runsCapped: Bool? = nil
 
     struct Workflow: Codable, Hashable {
         /// The workflow's id on GitHub; `Store.externalWorkflowID` for external checks.

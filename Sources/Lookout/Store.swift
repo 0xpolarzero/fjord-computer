@@ -1189,19 +1189,32 @@ final class Store {
         }
         let sha = head.commit.sha
         let current = head.name.flatMap { $0.isEmpty ? nil : $0 } ?? branch
-        // Only push-triggered Actions runs count: issue/comment-triggered workflows also run against the
-        // default branch HEAD and would otherwise make CI look red.
-        let actions: GHWorkflowRuns = try await gh.get("/repos/\(name)/actions/runs",
-                                                       ["branch": current, "event": "push", "head_sha": sha, "per_page": "30"],
-                                                       lineage: branch)
+        let (runs, runsRead) = try await branchRuns(name, branch: current, sha: sha, lineage: branch)
         async let checksReq = branchCheckRuns(name, target: sha, branch: branch)
         async let statusReq = branchStatuses(name, target: sha, branch: branch)
         let ((checks, checksRead), (combined, statusesRead)) = try await (checksReq, statusReq)
-        let reading = Self.readCI(runs: actions.workflowRuns, sha: sha, checks: checks, combined: combined,
-                                  complete: checksRead && statusesRead)
-        let title = actions.workflowRuns.first { $0.headSha == sha }?.displayTitle ?? head.headline
+        // Runs not all read are like checks not all read: what isn't read may still run.
+        let reading = Self.readCI(runs: runs, sha: sha, checks: checks, combined: combined,
+                                  complete: checksRead && statusesRead && runsRead)
+        let title = runs.first { $0.headSha == sha }?.displayTitle ?? head.headline
         return CIStatus(branch: current, sha: sha, url: URL(string: "https://github.com/\(name)/commit/\(sha)"),
-                        checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows)
+                        checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows,
+                        runsCapped: runsRead ? nil : true)
+    }
+
+    /// A commit's push-triggered Actions runs on a branch, page by page (GitHub gives 30 unless asked, 100 at most), and
+    /// whether all of them were read. Only push-triggered runs count: issue/comment-triggered workflows also run against the
+    /// default branch HEAD and would otherwise make CI look red.
+    func branchRuns(_ name: String, branch: String, sha: String, lineage: String) async throws -> ([GHWorkflowRuns.Run], Bool) {
+        var runs: [GHWorkflowRuns.Run] = []
+        for page in 1...Self.ciPages {
+            let answer: GHWorkflowRuns = try await gh.get("/repos/\(name)/actions/runs",
+                                                          ["branch": branch, "event": "push", "head_sha": sha, "per_page": "100",
+                                                           "page": "\(page)"], lineage: lineage)
+            runs += answer.workflowRuns
+            if answer.workflowRuns.count < 100 || runs.count >= answer.totalCount ?? .max { return (runs, true) }
+        }
+        return (runs, false)
     }
 
     /// The pages of check runs or statuses read at most for one commit (100 each): past them, what isn't read may still run.
