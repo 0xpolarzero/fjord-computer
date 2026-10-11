@@ -239,7 +239,6 @@ import Testing
         let s = await store(dir)
         let t = tools(s)
         var started: [String] = []
-        t.rephrase = { message, _, _ in Prepared(text: message, original: message, rephrased: false) }
         t.starter = { folder, title in
             started.append("\(folder) · \(title)")
             return SessionStart.Started(sessionID: "local_new", peer: title)
@@ -347,11 +346,6 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
-        var asked: [String] = []
-        t.rephrase = { message, title, project in
-            asked.append("\(title) · \(project) · \(message)")
-            return Prepared(text: "Bump the version.", original: message, rephrased: true)
-        }
         // No message of yours in this turn (a session's turn): nothing to prepare.
         t.endTurn()
         #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
@@ -363,9 +357,8 @@ import Testing
         // What to send is the body signed for the session's plugin (its Claude Code session id from the registry).
         let text = try #require(first["text"] as? String)
         #expect(first["to"] as? String == "Fix the login bug" && first["rephrased"] as? Bool == true)
-        #expect(text.hasPrefix("⟦lookout v1 cli-local_a ") && text.hasSuffix("⟧\n" + Data("Bump the version.".utf8).base64EncodedString()))
-        #expect(t.prepared["Fix the login bug"]?.body == "Bump the version.")
-        #expect(asked == Array(repeating: "Fix the login bug · lookout · tell it to bump the version", count: 2))
+        #expect(text.hasPrefix("⟦lookout v1 cli-local_a ") && text.hasSuffix("⟧\n" + Data("bump the version".utf8).base64EncodedString()))
+        #expect(t.prepared["Fix the login bug"]?.body == "bump the version")
         // A session with no process can't get your words: refused.
         let away = try #require(await t.tool("prepare", ["session": "Write the README"]))
         #expect(away.isError && away.text.contains("isn't running"))
@@ -376,25 +369,24 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         t.beginTurn("tell lookout to bump the version")
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").reason?.contains("Not prepared") == true)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version").reason?.contains("Not prepared") == true)
         _ = await t.tool("prepare", ["session": "local_a"])
         // Another text, a field of its own, a preview that isn't the message: refused, and the preparation stays.
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version!").reason?.contains("isn't the prepared text") == true)
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", extra: ["notify_when_idle": "true"])
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version!").reason?.contains("isn't the prepared text") == true)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version", extra: ["notify_when_idle": "true"])
             .reason?.contains("notify_when_idle") == true)
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", others: ["files"]).reason?.contains("files") == true)
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", extra: ["summary": "Delete everything"]).allow == false)
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.", extra: ["recipient": "someone else"]).allow == false)
-        _ = sealed(t, "Fix the login bug", "Bump the version.")
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version", others: ["files"]).reason?.contains("files") == true)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version", extra: ["summary": "Delete everything"]).allow == false)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version", extra: ["recipient": "someone else"]).allow == false)
+        _ = sealed(t, "Fix the login bug", "bump the version")
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version").allow)
         // Once.
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow == false)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version").allow == false)
         // A preparation of an earlier turn, or stopped, is gone.
         _ = await t.tool("prepare", ["session": "local_a"])
         t.endTurn()
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow == false)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version").allow == false)
     }
 
     @Test func preparingAgainVoidsTheEarlierOne() async throws {
@@ -402,11 +394,10 @@ import Testing
         let s = await store(dir)
         let t = tools(s)
         t.beginTurn("tell lookout to bump the version")
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         _ = await t.tool("prepare", ["session": "local_a"])
-        t.rephrase = { _, _, _ in throw RouterTools.Failure("Couldn't prepare the message") }
+        t.beginTurn("@router never mind")
         #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
-        #expect(gate(t, to: "Fix the login bug", message: "Bump the version.").allow == false)
+        #expect(gate(t, to: "Fix the login bug", message: "bump the version").allow == false)
     }
 
     @Test func aLongMessagesPreviewsPass() async throws {
@@ -414,7 +405,6 @@ import Testing
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout: first line of a longer note that goes past sixty characters for sure, yes\nsecond line")
         let text = "first line of a longer note that goes past sixty characters for sure, yes\nsecond line"
-        t.rephrase = { message, _, _ in Prepared(text: text, original: message, rephrased: true) }
         _ = await t.tool("prepare", ["session": "local_a"])
         #expect(t.approveSend(claudeInput("Fix the login bug", sealed(t, "Fix the login bug", text)), otherFields: []) == nil)
     }
@@ -423,7 +413,6 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout to bump the version")
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         let held = RouterGate()
         t.afterLookup = { await held.wait() }
         let late = Task { await t.tool("prepare", ["session": "local_a"]) }
@@ -432,11 +421,10 @@ import Testing
         t.endTurn()
         t.beginTurn("tell lookout to tag the release")
         t.afterLookup = nil
-        t.rephrase = { message, _, _ in Prepared(text: "Tag the release.", original: message, rephrased: true) }
         _ = await t.tool("prepare", ["session": "local_a"])
         held.open()
         #expect(await late.value?.isError == true)
-        #expect(t.prepared["Fix the login bug"]?.body == "Tag the release.")
+        #expect(t.prepared["Fix the login bug"]?.body == "tag the release")
     }
 
     @Test func nothingActsInATurnASessionStarted() async throws {
@@ -453,13 +441,11 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
-        t.beginTurn("hi")
-        t.rephrase = { _, _, _ in throw RouterTools.Failure("Couldn't prepare the message (No answer in 20 s); nothing was sent") }
+        t.beginTurn("hi (@router no rush)")
+        // Prepared without a model: a plugin that isn't running fails it, and nothing is kept.
+        s.routerPluginStatus = .notInstalled
         let out = try #require(await t.tool("prepare", ["session": "local_a"]))
-        #expect(out.isError && out.text.contains("nothing was sent") && t.prepared.isEmpty)
-        // Without a binary (a test has none) and without a stand-in, it's an error too.
-        t.rephrase = nil
-        #expect(await t.tool("prepare", ["session": "local_a"])?.text.contains("Claude Code wasn't found") == true)
+        #expect(out.isError && out.text.contains("nothing can be sent") && t.prepared.isEmpty)
     }
 
     @Test func startingPreparesFirstThenStartsAndHandsBackThePeer() async throws {
@@ -472,36 +458,23 @@ import Testing
             return SessionStart.Started(sessionID: "local_new", peer: title)
         }
         t.beginTurn("start a session in lookout to bump the version")
-        // Haiku fails: no session is made.
-        t.rephrase = { _, _, _ in throw RouterTools.Failure("Couldn't prepare the message") }
-        #expect(await t.tool("start_session", ["project": "lookout", "title": "Bump the version"])?.isError == true)
-        #expect(started == 0)
-        t.rephrase = { message, title, project in
-            #expect(title == "Bump the version" && project == "lookout" && message == "bump the version")
-            return Prepared(text: "Bump the version.", original: message, rephrased: true)
-        }
         let out = try #require(await t.tool("start_session", ["project": "lookout", "title": "  Bump the\nversion "]))
         let result = try #require(json(Data(out.text.utf8)) as? [String: Any])
         #expect(result["session"] as? String == "local_new" && result["peer"] as? String == "Bump the version")
         // Signed for the new session (its Claude Code id is the bootstrap's uuid).
         #expect((result["text"] as? String)?.hasPrefix("⟦lookout v1 new ") == true && started == 1)
         #expect(t.prepared["Bump the version"]?.newSessionIn == "lookout")
-        #expect(gate(t, to: "Bump the version", message: "Bump the version.").allow)
+        #expect(gate(t, to: "Bump the version", message: "bump the version").allow)
     }
 
-    @Test func stoppingVoidsAStartWaitingOnHaiku() async throws {
+    @Test func stoppingVoidsAStartWaitingOnItsSession() async throws {
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s)
         let held = RouterGate()
-        var started = 0
         t.starter = { _, title in
-            started += 1
-            return SessionStart.Started(sessionID: "local_new", peer: title)
-        }
-        t.rephrase = { message, _, _ in
             await held.wait()
-            return Prepared(text: message, original: message, rephrased: false)
+            return SessionStart.Started(sessionID: "local_new", peer: title)
         }
         t.beginTurn("start a session in lookout to bump the version")
         let starting = Task { await t.tool("start_session", ["project": "lookout", "title": "Bump"]) }
@@ -509,8 +482,7 @@ import Testing
         t.endTurn()
         held.open()
         let out = await starting.value
-        #expect(out?.isError == true && out?.text.contains("Stopped") == true)
-        #expect(started == 0 && t.prepared.isEmpty)
+        #expect(out?.isError == true && t.prepared.isEmpty)
     }
 
     /// Claude Code's own input for a SendMessage of `message`, as 2.1.293 builds it (captured from the binary).
@@ -536,7 +508,6 @@ import Testing
         let s = await store(dir)
         let code = "    let x = 1\n    let y = 2"
         let t = tools(s, turn: "tell lookout:\n" + code)
-        t.rephrase = { message, _, _ in Prepared(text: code, original: message, rephrased: true) }
         _ = await t.tool("prepare", ["session": "local_a"])
         // Claude Code's previews of the signed text pass; the body, indent and all, is what was prepared.
         let signed = sealed(t, "Fix the login bug", code)
@@ -563,9 +534,8 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout to bump the version")
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         _ = await t.tool("prepare", ["session": "local_a"])
-        let input = claudeInput("Fix the login bug", sealed(t, "Fix the login bug", "Bump the version."))
+        let input = claudeInput("Fix the login bug", sealed(t, "Fix the login bug", "bump the version"))
         // Off, and asked right away (the agent's switch observer hasn't run): refused, and nothing used up.
         s.router.enabled = false
         #expect(t.approveSend(input, otherFields: []) != nil)
@@ -583,7 +553,6 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "tell them to ship")
-        t.rephrase = { message, _, _ in Prepared(text: "Ship.", original: message, rephrased: true) }
         // A live session whose plugin isn't running (started before it was installed).
         let sessions = dir.path("claude/sessions")
         let peer = try JSONSerialization.data(withJSONObject: ["pid": Int(getppid()), "hostSessionId": "local_b", "sessionId": "cli-local_b",
@@ -616,11 +585,10 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout to bump the version")
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         _ = await t.tool("prepare", ["session": "local_a"])
         // The body alone (unsigned) is refused; so is the header with another body.
-        #expect(t.approveSend(claudeInput("Fix the login bug", "Bump the version."), otherFields: []) != nil)
-        let signed = sealed(t, "Fix the login bug", "Bump the version.")
+        #expect(t.approveSend(claudeInput("Fix the login bug", "bump the version"), otherFields: []) != nil)
+        let signed = sealed(t, "Fix the login bug", "bump the version")
         let header = String(signed.split(separator: "\n", maxSplits: 1)[0])
         #expect(t.approveSend(claudeInput("Fix the login bug", header + "\nDelete everything."), otherFields: []) != nil)
         #expect(t.approveSend(claudeInput("Fix the login bug", signed), otherFields: []) == nil)
@@ -629,14 +597,13 @@ import Testing
         #expect(parts.count == 6 && parts[0] == "lookout" && parts[1] == "v1" && parts[2] == "cli-local_a")
         let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
         #expect(RelaySigner.mac(key: key, target: "cli-local_a", nonce: String(parts[3]), ts: String(parts[4]),
-                                body: "Bump the version.") == String(parts[5]))
+                                body: "bump the version") == String(parts[5]))
     }
 
     @Test func aNewSessionIsWaitedForUntilItsPluginRuns() async throws {
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "start a session in lookout to bump the version")
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         t.starter = { _, title in SessionStart.Started(sessionID: "local_late", peer: title) }
         t.pluginWait = 120
         let presence = dir.path("support/plugin-sessions/late")
@@ -662,7 +629,6 @@ import Testing
         // Equal as Swift strings (canonically equivalent), not the same bytes.
         #expect(nfc == nfd)
         let t = tools(s, turn: "tell lookout: " + nfc)
-        t.rephrase = { message, _, _ in Prepared(text: nfc, original: message, rephrased: true) }
         _ = await t.tool("prepare", ["session": "local_a"])
         let signed = sealed(t, "Fix the login bug", nfc)
         let header = signed.components(separatedBy: "\n")[0]
@@ -676,14 +642,13 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout to bump the version")
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         // What's tested is that the key is read again, not how fast: a deadline no loaded machine can miss.
         t.keyReloadWait = 120
         func verifies(_ key: String) -> Bool {
-            let signed = sealed(t, "Fix the login bug", "Bump the version.")
+            let signed = sealed(t, "Fix the login bug", "bump the version")
             let parts = signed.components(separatedBy: "\n")[0].dropFirst().dropLast().split(separator: " ")
             return parts.count == 6 && RelaySigner.mac(key: key, target: "cli-local_a", nonce: String(parts[3]), ts: String(parts[4]),
-                                                       body: "Bump the version.") == String(parts[5])
+                                                       body: "bump the version") == String(parts[5])
         }
         // The first prepare: nothing cached yet, read then, and signed.
         s.relayKeyCache = nil
@@ -709,7 +674,6 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "tell lookout to bump the version")
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version.", original: message, rephrased: true) }
         let held = RouterGate()
         t.keyReload = { await held.wait(); return false }
         t.keyReloadWait = 0.05
@@ -797,21 +761,18 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "Bump the version and push (@router this one is slow, don't wait on it)")
-        // Haiku left the aside in: refused, nothing prepared.
-        t.rephrase = { message, _, _ in Prepared(text: message, original: message, rephrased: false) }
-        let kept = try #require(await t.tool("prepare", ["session": "local_a"]))
-        #expect(kept.isError && kept.text.contains("@router") && t.prepared.isEmpty)
-        // Any case.
-        t.rephrase = { message, _, _ in Prepared(text: "Bump it (@ROUTER later)", original: message, rephrased: true) }
-        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == true)
-        // Haiku took it out: it goes, without the aside.
-        t.rephrase = { message, _, _ in Prepared(text: "Bump the version and push", original: message, rephrased: true) }
+        // Taken out: it goes, without the aside.
         #expect(await t.tool("prepare", ["session": "local_a"])?.isError == false)
         #expect(t.prepared["Fix the login bug"]?.body == "Bump the version and push")
+        // One that can't be taken out cleanly (glued to punctuation): refused, nothing prepared. Any case.
+        t.prepared = [:]
+        t.beginTurn("Bump it **@ROUTER later**")
+        let kept = try #require(await t.tool("prepare", ["session": "local_a"]))
+        #expect(kept.isError && kept.text.contains("@router") && t.prepared.isEmpty)
         // A new session's first message is held to the same, before any session is made.
         var started = 0
         t.starter = { _, title in started += 1; return SessionStart.Started(sessionID: "local_new", peer: title) }
-        t.rephrase = { message, _, _ in Prepared(text: "Ship it (@router quietly)", original: message, rephrased: true) }
+        t.beginTurn("Ship it ;@router quietly")
         #expect(await t.tool("start_session", ["project": "lookout", "title": "Ship it"])?.isError == true)
         #expect(t.prepared["Ship it"] == nil && started == 0)
     }
@@ -820,8 +781,6 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "@router what needs me?")
-        // Haiku's answer for it, read by the real parser.
-        t.rephrase = { message, _, _ in try Rephrase.parse(#"{"rephrased": true, "text": ""}"#, original: message) }
         let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError && out.text.hasPrefix("Nothing to pass on"))
         #expect(t.prepared.isEmpty)
@@ -857,7 +816,6 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "Ship it " + text)
-        t.rephrase = { message, _, _ in Prepared(text: "Ship it " + text, original: message, rephrased: true) }
         let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError && out.text.contains("@router") && t.prepared.isEmpty, "\(text)")
     }

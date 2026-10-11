@@ -9,7 +9,6 @@ import Testing
     /// What the stand-ins saw and answer.
     @MainActor final class Fakes {
         var ranked: [RouterDispatcher.Scored] = []
-        var rewording: Double?
         var scope: Double?
         var rankError: Error?
         var ranks = 0
@@ -17,8 +16,6 @@ import Testing
         var holdRank = false
         var rankHeld: CheckedContinuation<Void, Never>?
         var prepared: [String] = []
-        /// Per prepare: whether the words went as written (no Haiku run).
-        var verbatim: [Bool] = []
         var sent: [RouterDispatcher.Delivery] = []
         var started: [(folder: String, title: String)] = []
         var startSettings: [SessionSettings?] = []
@@ -44,11 +41,10 @@ import Testing
                     ranks += 1
                     if holdRank { await withCheckedContinuation { rankHeld = $0 } }
                     if let rankError { throw rankError }
-                    return RouterDispatcher.Ranking(scored: ranked, rewording: rewording, scope: scope)
+                    return RouterDispatcher.Ranking(scored: ranked, scope: scope)
                 },
-                prepare: { [unowned self] tools, session in
+                prepare: { [unowned self] _, session in
                     prepared.append(session)
-                    verbatim.append(tools.rephrase != nil)
                     if holdOn.contains(session) { await withCheckedContinuation { hold[session] = $0 } }
                     return RouterDispatcher.Delivery(to: "peer-\(session)", text: "⟦signed⟧\nbody-\(session)", body: "body-\(session)",
                                                      original: "orig", rephrased: true, session: session, newSessionIn: nil)
@@ -218,21 +214,6 @@ import Testing
         #expect(decision(s, c)?.decision.confirmed == nil)
     }
 
-    @Test func wordsJevFindsPlainGoAsWrittenWithoutAHaikuRun() async {
-        let (_, d, f) = setup()
-        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
-        f.rewording = 0.03
-        await finish(d, f, d.submit("add a changelog entry"))
-        f.rewording = 0.6
-        await finish(d, f, d.submit("ask it to add a changelog entry"))
-        #expect(f.verbatim == [true, false])
-        // Never when the words could be addressing, whatever Jev says.
-        #expect(!RouterDispatcher.goesVerbatim("tell docs to add an entry", rewording: 0, title: "Update the docs", project: "docs"))
-        #expect(!RouterDispatcher.goesVerbatim("add an entry (@router no rush)", rewording: 0, title: "Update", project: "x"))
-        #expect(!RouterDispatcher.goesVerbatim("add an entry", rewording: nil, title: "Update", project: "x"))
-        #expect(RouterDispatcher.goesVerbatim("add an entry", rewording: 0.05, title: "Update the docs", project: "docs"))
-    }
-
     // MARK: Jev's model and effort
 
     @Test func aStartWithNoSettingsNamedTakesJevsPickByTheTasksSizeAndSaysSo() async {
@@ -313,10 +294,10 @@ import Testing
         #expect(lines.filter { $0.contains("→ session “C”") }.count == 2, "a few confirmations, the rest corrections")
         #expect(lines.last?.hasPrefix("“long") == true && lines.allSatisfy { $0.count < 200 })
         #expect(lines.contains { $0.contains("“message 19” → session “B” in y, not session “A” in x") })
-        #expect(questions == ["rewording", "route", "scope"], "one call asks all three")
+        #expect(questions == ["route", "scope"], "one call asks both")
         s.settings.jevPicksSessionModels = false
         _ = await d.predict("where does this go now", projects: [])
-        #expect(questions == ["rewording", "route"])
+        #expect(questions == ["route"])
     }
 
     @Test func anAskAnsweredWithJevsSuggestionConfirmsIt() async {

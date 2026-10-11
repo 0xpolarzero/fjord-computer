@@ -484,7 +484,7 @@ final class RouterMCPServer: @unchecked Sendable {
     /// The text of your message the current turn is about; nil once the turn is over. `prepare` and `startSession` take the
     /// words from here, never from the model.
     private(set) var turnText: String?
-    /// Haiku and bootstrap runs under way: ended with their turn.
+    /// Bootstrap runs under way: ended with their turn.
     private var runs: [ObjectIdentifier: OneShot.Handle] = [:]
     /// Called after a target is looked up, before anything is changed (tests hold a call there).
     var afterLookup: (() async -> Void)?
@@ -499,8 +499,8 @@ final class RouterMCPServer: @unchecked Sendable {
     /// Why a send may no longer go, asked at each of its gates right before it is let through (the approval, the inbox's
     /// write, the fallback process's permission): a reason stops it. Nil for the Router's own turns.
     var deliveryCheck: (@MainActor () -> String?)?
-    /// Haiku's rephrasing (message, title, project); tests answer for it.
-    var rephrase: ((String, String, String) async throws -> Prepared)?
+    /// The text goes exactly as given, with nothing taken out (a continuation Lookout wrote itself).
+    var verbatim = false
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
     var starter: ((String, String) async throws -> SessionStart.Started)?
     /// Claude Code's bundled binary, as `RouterStatus` found it.
@@ -829,23 +829,7 @@ final class RouterMCPServer: @unchecked Sendable {
     /// Anything else around it (spaces, brackets, quotes, emphasis, punctuation, backticks) leaves it the marker: one in code
     /// is refused too, which is safe.
     nonisolated static func hasRouterMarker(_ text: String) -> Bool {
-        let plain = Array(text)
-        let marker = Array("@router")
-        func word(_ c: Character) -> Bool { c.isLetter || c.isNumber }
-        var i = 0
-        while i + marker.count <= plain.count {
-            defer { i += 1 }
-            guard plain[i] == "@", String(plain[i..<(i + marker.count)]).lowercased() == "@router" else { continue }
-            if i > 0, word(plain[i - 1]) { continue }
-            let end = i + marker.count
-            if end < plain.count {
-                let after = plain[end]
-                if word(after) || after == "/" { continue }
-                if ".-_@".contains(after), end + 1 < plain.count, word(plain[end + 1]) { continue }
-            }
-            return true
-        }
-        return false
+        !Addressing.markers(Array(text)).isEmpty
     }
 
     /// Refuses a message that still holds the marker (what was said to the Router never goes on).
@@ -855,28 +839,16 @@ final class RouterMCPServer: @unchecked Sendable {
         }
     }
 
-    /// Haiku, through the binary `RouterStatus` found (or what a test put in), stopped with the turn.
-    private func rephrased(_ store: Store, _ message: String, title: String, project: String, starting: Bool = false) async throws -> Prepared {
-        if let rephrase { return try await rephrase(message, title, project) }
-        guard let binary = claudePath(), let home = store.routerFiles?.routerHome else {
-            throw Failure("Claude Code wasn't found, so the message can't be prepared")
-        }
-        await PrivateFile.makeFolder(home)
+    /// Your words with the addressing taken out (`Addressing`): never a model's rewrite.
+    private func edited(_ message: String, names: [String]) throws -> Prepared {
         do {
-            return try await tracked { handle in
-                try await Rephrase.run(binary: binary, cwd: home, message: message, title: title, project: project, starting: starting,
-                                       timeout: rephraseTimeout, handle: handle)
-            }
-        } catch is CancellationError {
-            throw Failure("Stopped; nothing was done")
-        } catch let nothing as Rephrase.NothingLeft {
+            return try Addressing.edit(message, names: names)
+        } catch let nothing as Addressing.NothingLeft {
             throw Failure(nothing.localizedDescription)
-        } catch {
-            throw Failure("Couldn't prepare the message (\(error.localizedDescription)); nothing was sent")
         }
     }
 
-    /// Your message of this turn, which only Lookout hands to Haiku.
+    /// Your message of this turn: what `prepare` and `start_session` send, never the model's words.
     private func yourMessage() throws -> String {
         guard let text = turnText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw Failure("There's no message of the user's in this turn to send")
@@ -1005,8 +977,8 @@ final class RouterMCPServer: @unchecked Sendable {
         // one, which is void even if this one fails.
         try live(ticket)
         prepared[to] = nil
-        let ready = try await rephrased(store, message, title: session.title, project: store.folderName(session.folderKey))
-        try live(ticket)
+        let names = [session.title, store.folderName(session.folderKey), (session.folderKey as NSString).lastPathComponent]
+        let ready = verbatim ? Prepared(text: message, original: message, rephrased: false) : try edited(message, names: names)
         let sealed = try await signed(store, ready, title: session.title, cli: cli, ticket: ticket)
         try live(ticket)
         prepared[to] = sealed
@@ -1069,10 +1041,9 @@ final class RouterMCPServer: @unchecked Sendable {
         guard store.routerPluginStatus == .installed else {
             throw Failure("Lookout's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
-        // Prepared first: if Haiku fails (or you stop), or a part for the Router is left in it, no session is made.
-        // Haiku still checks it; with words of a start left in it that deterministic strip didn't recognise, it is told so.
+        // Prepared first: if a part for the Router is left in it, no session is made.
         var ready = noTask ? Prepared(text: "", original: "", rephrased: false)
-            : try await rephrased(store, message, title: title, project: name, starting: RouterDispatcher.wantsNewSession(message))
+            : try edited(message, names: [name, (folder as NSString).lastPathComponent])
         try noMarker(ready.text)
         try live(ticket)
         let started: SessionStart.Started
@@ -1096,9 +1067,6 @@ final class RouterMCPServer: @unchecked Sendable {
         return Self.json(["session": started.sessionID, "peer": started.peer, "text": ready.text, "rephrased": ready.rephrased,
                           "next": "SendMessage exactly `text` to `peer` (already prepared)."])
     }
-
-    /// How long Haiku has to answer (tests give a helper that never answers more than they need).
-    var rephraseTimeout: TimeInterval = Rephrase.timeout
 
     /// How long a new session's plugin has to say it runs.
     var pluginWait: TimeInterval = SessionStart.wait

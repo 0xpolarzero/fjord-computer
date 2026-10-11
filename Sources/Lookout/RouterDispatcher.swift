@@ -56,7 +56,7 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's top target (what a different pick corrects).
     var suggestion: String?
     var at: Date
-    /// What Jev made of it besides the target (the size of its task, whether it needs rewording), for the pick to use.
+    /// What Jev made of it besides the target (the size of its task), for the pick to use.
     var jev: RouterDispatcher.Classification? = nil
 }
 
@@ -72,9 +72,6 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's answers to a routing call: the targets, and the questions asked with them in the same call.
     struct Ranking: Equatable {
         var scored: [Scored]
-        /// How likely the words need rewording before a session reads them (addressing, indirect speech, parts for others,
-        /// @router asides); nil when not asked.
-        var rewording: Double? = nil
         /// The task's size on `SessionScope`'s levels, for a session started from it; nil when not asked.
         var scope: Double? = nil
     }
@@ -87,18 +84,16 @@ struct RouterAskBack: Identifiable, Equatable {
         var sure: Bool
         /// Jev answered (else the words alone were matched against titles).
         var assisted: Bool
-        var rewording: Double? = nil
         var scope: Double? = nil
         /// Asked while you typed (the composer showed it when sure), not again when sent.
         var live = false
 
         var top: Scored? { ranked.first }
 
-        init(ranked: [Scored], sure: Bool, assisted: Bool, rewording: Double? = nil, scope: Double? = nil) {
+        init(ranked: [Scored], sure: Bool, assisted: Bool, scope: Double? = nil) {
             self.ranked = ranked
             self.sure = sure
             self.assisted = assisted
-            self.rewording = rewording
             self.scope = scope
         }
 
@@ -106,7 +101,7 @@ struct RouterAskBack: Identifiable, Equatable {
         @MainActor init(_ ranking: Ranking) {
             let ranked = ranking.scored.sorted { $0.p != $1.p ? $0.p > $1.p : $0.target < $1.target }
             self.init(ranked: ranked, sure: RouterTools.decision(ranked.map { (target: $0.target, p: $0.p) }) == "send",
-                      assisted: true, rewording: ranking.rewording, scope: ranking.scope)
+                      assisted: true, scope: ranking.scope)
         }
     }
 
@@ -139,7 +134,7 @@ struct RouterAskBack: Identifiable, Equatable {
     struct Effects {
         /// Jev's probabilities over the targets, with the other questions of the same call, or why not.
         var rank: @MainActor (RouterTools, _ message: String, _ projects: [String], _ history: String) async throws -> Ranking
-        /// Haiku's minimal edit of the message for a session, and its signature.
+        /// The message for a session with its addressing taken out (`Addressing`), and its signature.
         var prepare: @MainActor (RouterTools, _ session: String) async throws -> Delivery
         /// A new session in a project (folder) with the prepared first message.
         var start: @MainActor (RouterTools, _ folder: String, _ title: String, _ settings: SessionSettings?) async throws -> Delivery
@@ -392,7 +387,7 @@ struct RouterAskBack: Identifiable, Equatable {
         return [q.question: FormBridge.joined(labels)]
     }
 
-    /// Passes your words to a session: the form's answer when you gave one, else the minimal edit, signed, through the gate.
+    /// Passes your words to a session: the form's answer when you gave one, else your words without their addressing, signed, through the gate.
     private func reply(_ job: Job, session: String, card: String?) async throws {
         guard let store else { return }
         if let card, let c = store.router.cards.first(where: { $0.id == card }), let form = store.pendingForm(for: c),
@@ -403,11 +398,6 @@ struct RouterAskBack: Identifiable, Equatable {
             return
         }
         stage(job, "preparing")
-        // Words Jev is sure need no rewording go as written: no Haiku run.
-        if job.tools.rephrase == nil, let s = store.claudeSessions[session],
-           Self.goesVerbatim(job.text, rewording: job.jev?.rewording, title: s.title, project: store.folderName(s.folderKey)) {
-            job.tools.rephrase = { message, _, _ in Prepared(text: message, original: message, rephrased: false) }
-        }
         let delivery = try await effects.prepare(job.tools, session)
         stage(job, "sending")
         // The cards open now, as they are: one that changes while this goes isn't addressed by it.
@@ -586,22 +576,6 @@ struct RouterAskBack: Identifiable, Equatable {
         return try? await ask(["scope": SessionScope.question], ["task": task, "project": project])["scope"]?.score(sure: SessionScope.sure)
     }
 
-    /// Whether your words go to a session as written, with no Haiku run: Jev is sure they need no rewording, and nothing in
-    /// them could be addressing (no @router, not the session's title or project).
-    static func goesVerbatim(_ text: String, rewording: Double?, title: String, project: String) -> Bool {
-        guard let rewording, rewording <= 0.1, !RouterTools.hasRouterMarker(text) else { return false }
-        let lower = text.lowercased()
-        return [title, project].allSatisfy { name in
-            let name = name.lowercased().trimmingCharacters(in: .whitespaces)
-            return name.count < 3 || !lower.contains(name)
-        }
-    }
-
-    /// Asked with every routing call (input-only billing: one call either way).
-    static let rewordingQuestion = JevClient.Question.noul(instructions: """
-        Does this message need rewording before the session it goes to reads it? Yes when it addresses the session or a         router ("tell lookout to…", "ask it whether…", "@lookout …", "for the api session: …"), speaks about the session         indirectly, holds parts meant for different sessions, or has asides for the router. No when it is plainly words         for the session, as they should be read.
-        """, yes: "It needs rewording", no: "It can be delivered exactly as written")
-
     /// The label a target stands for: reply (a card or session), start (a project), change_lookout, question, compound.
     static func label(_ target: String) -> String {
         if target.hasPrefix("answer:") || target.hasPrefix("session:") { return "reply" }
@@ -750,14 +724,13 @@ extension RouterDispatcher.Effects {
                 let state = RouterDispatcher.routingState(message: message, history: history, examples: store.routingExamples(excluding: tools.decision))
                 var questions: [String: JevClient.Question] = [
                     "route": .choice(keys, hints: hints, instructions: "Which of the user's Claude Code sessions, open cards or projects is this message for? Or is it a request to change Lookout itself, a question about the current state, or several things at once? Follow how the user routed and corrected before. Pick unclear unless the message makes it clear."),
-                    "rewording": RouterDispatcher.rewordingQuestion,
                 ]
                 if store.jevPicksSessionModels { questions["scope"] = SessionScope.question }
                 let answers = try await ask(questions, state)
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
                 return RouterDispatcher.Ranking(scored: pick.probabilities.compactMap { key, p -> RouterDispatcher.Scored? in
                     keys.firstIndex(of: key).map { RouterDispatcher.Scored(target: targets[$0].target, p: p) }
-                }, rewording: answers["rewording"]?.yes, scope: answers["scope"]?.score(sure: SessionScope.sure))
+                }, scope: answers["scope"]?.score(sure: SessionScope.sure))
             },
             prepare: { [weak dispatcher] tools, session in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
