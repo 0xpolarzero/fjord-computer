@@ -216,14 +216,6 @@ struct RouterAskBack: Identifiable, Equatable {
         // Sent as written (`RouterModel.sendable`): code keeps the indentation of its first line. Trimmed only to see it isn't empty.
         let text = RouterModel.sendable(text)
         guard !text.isEmpty else { return nil }
-        // Typing the name of a target answers an ask-back; nothing else is made of it. Not when a reply or a pinned target
-        // already fixes where this message goes, nor when it says something to the Router ("@router what needs me?"): it is
-        // a message of its own.
-        if context.replyTo == nil, context.target == nil, !RouterTools.hasRouterAside(text), let ask = typedPick(text) {
-            // Only a target gone since fits the name: nothing is sent (nil), and the composer keeps the draft.
-            guard let target = ask.target, pick(ask.ask, target: target) else { return nil }
-            return ask.ask
-        }
         var seen = Set<String>()
         let projects = context.projects.filter { seen.insert($0).inserted }
         var context = context
@@ -772,64 +764,6 @@ struct RouterAskBack: Identifiable, Equatable {
         let sessions = store.claudeSessions.values.filter { !$0.isArchived }.sorted { $0.lastActivity > $1.lastActivity }.prefix(30)
         return (sessions.compactMap { option("session:\($0.id)", store: store) },
                 store.knownFolders.filter { !$0.isEmpty }.prefix(30).compactMap { option("new:\($0)", store: store) })
-    }
-
-    /// Typing a target's name in reply to an ask-back: its title or its project's name, as the whole message (a few words).
-    /// The newest ask that the name fits once, among the targets still there; a nil target when it fits only ones gone since.
-    /// Only what that ask offered is picked so: a title is a session's own to set, and one never offered (a session renamed
-    /// "router what needs me") isn't where a message goes for being typed. A card handled since stands for its
-    /// session when the name is the session's too. A name said exactly (case aside) wins, its punctuation kept ("C#" over
-    /// "C"); only else the words alone ("fix the login bug." for "Fix the login bug"), and then only when they fit one
-    /// option offered: "C." fitting "C#" and "C" picks neither. What's typed is matched as it is first: "the", "to" or
-    /// "in" before it is only dropped when nothing fits it so, and then only for one option ("The API" picks "The API",
-    /// never "API"; "to API" picks "API" when it alone fits).
-    func typedPick(_ text: String) -> (ask: UUID, target: String?)? {
-        guard let store, !askBacks.isEmpty else { return nil }
-        let ws = CharacterSet.whitespacesAndNewlines, trim = ws.union(.punctuationCharacters)
-        func said(_ set: CharacterSet, stripped: Bool) -> String {
-            var name = text.trimmingCharacters(in: set).lowercased()
-            guard stripped else { return name }
-            for prefix in ["to ", "the ", "in "] where name.hasPrefix(prefix) { name.removeFirst(prefix.count) }
-            return name.trimmingCharacters(in: set)
-        }
-        let loose = said(trim, stripped: false)
-        guard !loose.isEmpty, loose.split(separator: " ").count <= 6 else { return nil }
-        // What's typed, then its words alone; only then the same with a conversational "the"/"to"/"in" dropped.
-        // Only what's said exactly may fit several options; every fallback fits one thing or none.
-        let tiers: [(name: String, set: CharacterSet, unique: Bool)] = [
-            (said(ws, stripped: false), ws, false), (loose, trim, true),
-            (said(ws, stripped: true), ws, true), (said(trim, stripped: true), trim, true),
-        ]
-        func fits(_ option: RouterAskBack.Option, _ name: String, _ set: CharacterSet) -> Bool {
-            let title = option.title.trimmingCharacters(in: set).lowercased(), detail = option.detail.trimmingCharacters(in: set).lowercased()
-            return name == title || name == "\(title) (\(detail))" || name == "\(title) in \(detail)"
-                || (option.target.hasPrefix("new:") && (name == detail || name == "new session in \(detail)"))
-        }
-        var gone: UUID?
-        for ask in askBacks.reversed() {
-            var fitting: [RouterAskBack.Option] = []
-            var fit: (RouterAskBack.Option) -> Bool = { _ in false }
-            var ambiguous = false
-            for tier in tiers where !tier.name.isEmpty {
-                let f: (RouterAskBack.Option) -> Bool = { fits($0, tier.name, tier.set) }
-                fitting = ask.options.filter(f)
-                fit = f
-                guard fitting.isEmpty else {
-                    // A fallback fitting more than one thing offered (a card and its own session are one): a pick of none.
-                    ambiguous = tier.unique && Set(fitting.map { Self.session(of: $0.target, store: store) ?? $0.target }).count > 1
-                    break
-                }
-            }
-            if ambiguous { continue }
-            let own = fitting.filter { eligible($0.target, store: store) }
-            if own.count == 1 { return (ask.id, own[0].target) }
-            guard own.isEmpty else { continue }
-            let sessions = Set(fitting.compactMap { $0.target.hasPrefix("answer:") ? Self.session(of: $0.target, store: store) : nil })
-                .map { "session:\($0)" }.filter { eligible($0, store: store) && option($0, store: store).map(fit) == true }
-            if sessions.count == 1 { return (ask.id, sessions[0]) }
-            if sessions.isEmpty, !fitting.isEmpty { gone = gone ?? ask.id }
-        }
-        return gone.map { ($0, nil) }
     }
 }
 

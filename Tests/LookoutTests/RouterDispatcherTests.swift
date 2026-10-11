@@ -1112,112 +1112,27 @@ import Testing
         #expect(s.recentDecisions(10).contains("you corrected this: not session “Fix the login bug”"))
     }
 
-    @Test func typingATargetsNameAnswersTheAsk() async {
+    @Test func typingWhileAnAskWaitsIsAMessageOfItsOwnNeverAPick() async {
         let (s, d, f) = setup()
-        f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]
-        let id = d.submit("ship it")
-        await finish(d, f, id)
+        // A session titled after what you'd say to call the stored message off.
+        s.claudeSessions["local_x"] = ClaudeSession(id: "local_x", title: "Don't deploy", folder: "/code/other", lastActivity: Date())
+        f.ranked = [.init(target: "session:local_x", p: 0.5), .init(target: "session:local_a", p: 0.4), .init(target: "unclear", p: 0.1)]
+        let ask = d.submit("deploy to production")
+        await finish(d, f, ask)
+        #expect(d.askBacks.first?.options.map(\.target).contains("session:local_x") == true)
         f.finished = []
-        let before = s.router.decisions.count
-        let by = d.submit("Update the docs")
-        #expect(by == id, "the name is the answer: no new run")
-        await finish(d, f, id)
-        #expect(f.prepared == ["local_b"] && s.router.decisions.count == before)
-        // A name that fits nothing is a message of its own.
+        let asked = decision(s, ask)
+        // Typing its title, or another option's, picks nothing: it is routed as itself, and the ask still waits for a click.
         f.ranked = [.init(target: "unclear", p: 1)]
-        let other = d.submit("Something unrelated")
-        #expect(other != id && other != nil)
-        await finish(d, f, other)
-    }
-
-    @Test func aDraftWithAPinnedTargetIsItsOwnMessageEvenWhenItIsATargetsName() async {
-        let (s, d, f) = setup()
-        f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]
-        let ask = d.submit("ship it")
-        await finish(d, f, ask)
-        // "Update the docs" is a name the ask offers, but you pinned where this draft goes: it goes there, as itself.
-        let id = d.submit("Update the docs", context: RouterContext(target: "session:local_a"))
-        #expect(id != nil && id != ask)
-        await finish(d, f, id)
-        #expect(f.prepared == ["local_a"] && d.askBacks.map(\.id) == [ask!], "the older message still waits for its pick")
-        guard case .you(let text)? = decision(s, id)?.trigger else { Issue.record("no entry of its own"); return }
-        #expect(text == "Update the docs")
-    }
-
-    @Test func aTypedNameGoesToATargetStillThereAndOnlyAGoneOneSendsNothing() async {
-        let (s, d, f) = setup()
-        s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .question, title: "Docs question",
-                                         folder: "/code/docs", text: "Which page?", createdAt: Date()))
-        // The card and the other session offered; the card (its title the session's) handled since.
-        f.ranked = [.init(target: "answer:local_a#w1", p: 0.5), .init(target: "answer:local_b#w2", p: 0.4), .init(target: "unclear", p: 0.1)]
-        let id = d.submit("ship it")
-        await finish(d, f, id)
-        f.finished = []
-        s.setCardAddressed("local_a#w1", true)
-        // Its name is its session's, which is still there: the session is the pick.
-        #expect(d.typedPick("Fix the login bug")?.target == "session:local_a")
-        // A name only the handled card has: nothing sent, the ask still waits, no message of its own.
-        s.setCardAddressed("local_b#w2", true)
-        let before = s.router.decisions.count
-        #expect(d.submit("Docs question") == nil)
-        #expect(d.askBacks.map(\.id) == [id!] && s.router.decisions.count == before && f.prepared.isEmpty)
-        // The session's name answers it.
-        #expect(d.submit("Fix the login bug") == id)
-        await finish(d, f, id)
-        #expect(f.prepared == ["local_a"] && d.askBacks.isEmpty)
-    }
-
-    @Test func aTypedNameOnlyPicksWhatTheAskOffered() async {
-        let (s, d, f) = setup()
-        // A session renamed after what you'd say to the Router, never offered on the ask.
-        s.claudeSessions["local_h"] = ClaudeSession(id: "local_h", title: "router what needs me", folder: "/code/other",
-                                                    lastActivity: Date().addingTimeInterval(-120))
-        s.claudeSessions["local_i"] = ClaudeSession(id: "local_i", title: "Deploy it", folder: "/code/other",
-                                                    lastActivity: Date().addingTimeInterval(-180))
-        f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]
-        let ask = d.submit("rotate the production token")
-        await finish(d, f, ask)
-        let asked = d.submit("@router what needs me?")
-        #expect(asked != nil && asked != ask)
-        await finish(d, f, asked)
-        // A title the ask didn't offer is no answer to it: a message of its own.
-        #expect(d.typedPick("Deploy it") == nil)
-        #expect(!f.prepared.contains("local_h") && !f.prepared.contains("local_i") && d.askBacks.contains { $0.id == ask })
-    }
-
-    @Test func aTypedNamePicksTheOptionItSaysNotOneWhosePunctuationWasTrimmed() async {
-        let (s, d, f) = setup()
-        s.claudeSessions["local_s"] = ClaudeSession(id: "local_s", title: "C#", folder: "/code/lookout", lastActivity: Date())
-        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "C", folder: "/code/other", lastActivity: Date())
-        f.ranked = [.init(target: "session:local_s", p: 0.4), .init(target: "session:local_c", p: 0.3),
-                    .init(target: "session:local_a", p: 0.2), .init(target: "unclear", p: 0.1)]
-        let ask = d.submit("rotate the production token")
-        await finish(d, f, ask)
-        #expect(d.typedPick("C#")?.target == "session:local_s")
-        #expect(d.typedPick(" c# ")?.target == "session:local_s")
-        #expect(d.typedPick("C")?.target == "session:local_c")
-        // Said with punctuation that fits both once trimmed: neither.
-        #expect(d.typedPick("C.") == nil)
-        // The words alone, fitting one: still picked.
-        #expect(d.typedPick("Fix the login bug.")?.target == "session:local_a")
-    }
-
-    @Test func aTypedNameIsMatchedAsTypedBeforeItsLeadingTheIsDropped() async {
-        let (s, d, f) = setup()
-        s.claudeSessions["local_t"] = ClaudeSession(id: "local_t", title: "The API", folder: "/code/lookout", lastActivity: Date())
-        s.claudeSessions["local_p"] = ClaudeSession(id: "local_p", title: "API", folder: "/code/other", lastActivity: Date())
-        f.ranked = [.init(target: "session:local_t", p: 0.4), .init(target: "session:local_p", p: 0.3),
-                    .init(target: "session:local_a", p: 0.2), .init(target: "unclear", p: 0.1)]
-        let ask = d.submit("rotate the production token")
-        await finish(d, f, ask)
-        // The name as typed is an option's: that one, never another the name fits once "the" is dropped.
-        #expect(d.typedPick("The API")?.target == "session:local_t")
-        #expect(d.typedPick(" the api. ")?.target == "session:local_t")
-        #expect(d.typedPick("API")?.target == "session:local_p")
-        // Nothing fits it as typed: "to" dropped, it fits one.
-        #expect(d.typedPick("to API")?.target == "session:local_p")
-        #expect(d.typedPick("to the login bug") == nil)
-        #expect(d.typedPick("to Fix the login bug")?.target == "session:local_a")
+        for typed in ["don't deploy", "Fix the login bug"] {
+            let id = d.submit(typed)
+            #expect(id != nil && id != ask)
+            await finish(d, f, id)
+            guard case .you(let text)? = decision(s, id)?.trigger else { Issue.record("no entry of its own"); return }
+            #expect(text == typed)
+        }
+        #expect(f.prepared.isEmpty && decision(s, ask) == asked)
+        #expect(d.askBacks.first { $0.id == ask }?.message == "deploy to production")
     }
 
     @Test func somethingElseCanPickAProjectToStartIn() async {

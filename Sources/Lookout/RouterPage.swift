@@ -1600,7 +1600,9 @@ struct CardView: View {
 // MARK: - Ask-back card
 
 /// "Where should this go?": a message the Router couldn't place with confidence. The top targets are buttons, "Something else…"
-/// lists every session and project, and typing a target's name in the composer answers it too. Nothing is sent until you pick.
+/// lists every session and project. Only a click answers it: whatever is typed in the composer meanwhile is a message of its
+/// own, even one that reads like a target's name, so a session titled after what you'd say ("Don't deploy") is never picked
+/// for saying it. Nothing is sent until you pick.
 private struct AskBackCard: View {
     let store: Store
     let ask: RouterAskBack
