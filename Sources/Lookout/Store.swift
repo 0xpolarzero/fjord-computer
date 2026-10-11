@@ -125,8 +125,6 @@ final class Store {
     @ObservationIgnored var inboxSyncState = InboxSyncState()
     /// Default branches found for workflow things, by repo.
     @ObservationIgnored var defaultBranches: [String: String] = [:]
-    /// A commit's headline by repo, asked once per commit (see `ciHeadline`).
-    @ObservationIgnored var headlines: [String: (commit: String, title: String)] = [:]
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()
@@ -1135,21 +1133,21 @@ final class Store {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove("/")
         let ref = branch.addingPercentEncoding(withAllowedCharacters: allowed) ?? branch
+        // The branch's head is the commit read: the latest Actions run may be on an older one (a docs commit its path filters
+        // skip, while external CI runs on it). All three sources are asked about that commit.
+        let head: GHBranch = try await gh.get("/repos/\(name)/branches/\(ref)")
+        let sha = head.commit.sha
         // Only push-triggered Actions runs count: issue/comment-triggered workflows also run against the
         // default branch HEAD and would otherwise make CI look red.
         let actions: GHWorkflowRuns = try await gh.get("/repos/\(name)/actions/runs",
-                                                       ["branch": branch, "event": "push", "per_page": "30"])
-        let sha = actions.workflowRuns.first?.headSha
-        let target = sha ?? ref
-        async let checksReq = branchCheckRuns(name, target: target)
-        async let statusReq = branchStatuses(name, target: target)
+                                                       ["branch": branch, "event": "push", "head_sha": sha, "per_page": "30"])
+        async let checksReq = branchCheckRuns(name, target: sha)
+        async let statusReq = branchStatuses(name, target: sha)
         let ((checks, checksRead), (combined, statusesRead)) = try await (checksReq, statusReq)
         let reading = Self.readCI(runs: actions.workflowRuns, sha: sha, checks: checks, combined: combined,
                                   complete: checksRead && statusesRead)
-        let commit = sha ?? combined.sha
-        // The headline comes from the Actions run; a repo with only external CI asks the commit for it (once per commit).
-        let title = await ciHeadline(name, commit: commit, runTitle: actions.workflowRuns.first?.displayTitle)
-        return CIStatus(branch: branch, sha: commit, url: URL(string: "https://github.com/\(name)/commit/\(commit)"),
+        let title = actions.workflowRuns.first { $0.headSha == sha }?.displayTitle ?? head.headline
+        return CIStatus(branch: branch, sha: sha, url: URL(string: "https://github.com/\(name)/commit/\(sha)"),
                         checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows)
     }
 
@@ -1239,16 +1237,6 @@ final class Store {
                                                run: InboxSync.ciRun(sha: sha ?? combined.sha, ids: ids), running: pending))
         }
         return CIReading(changedAt: workflows.compactMap(\.updatedAt).max(), workflows: workflows)
-    }
-
-    /// The commit's headline: the Actions run's title when there is one; else what the commit says, asked once per
-    /// commit (a repo with only external CI has no run to read it from).
-    func ciHeadline(_ name: String, commit: String, runTitle: String?) async -> String? {
-        if let runTitle { return runTitle }
-        if let known = headlines[name], known.commit == commit { return known.title }
-        let found: GHCommit? = try? await gh.get("/repos/\(name)/commits/\(commit)")
-        if let title = found?.headline { headlines[name] = (commit, title) }
-        return found?.headline
     }
 
     // MARK: Notifications

@@ -125,15 +125,6 @@ import Testing
         #expect(commit.headline == "Respect trailing commas (#1042)")
     }
 
-    @Test func aHeadlineIsOnlyAskedForWhenTheRunHasNone() async {
-        let store = Store()
-        store.persists = false
-        #expect(await store.ciHeadline("a/x", commit: "c1", runTitle: "From the run") == "From the run")
-        store.headlines["a/x"] = ("c1", "Known")
-        // Same commit as last time: what was fetched then stands (no request).
-        #expect(await store.ciHeadline("a/x", commit: "c1", runTitle: nil) == "Known")
-    }
-
     // MARK: Per workflow
 
     @Test func eachWorkflowHasItsOwnStateAndFailedJobs() {
@@ -173,6 +164,7 @@ import Testing
             let path = request.url?.path ?? ""
             paths.add(path)
             switch path {
+            case "/repos/a/x/branches/main": return .init(200, #"{"commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
             case "/repos/a/x/actions/runs":
                 return .init(200, #"""
                 {"workflow_runs":[
@@ -196,10 +188,36 @@ import Testing
         #expect(status.workflows.map(\.state) == [.failure, .success])
         #expect(status.workflows.map(\.failing) == [["build"], []])
         #expect(status.workflows[0].url?.absoluteString == "https://github.com/a/x/actions/runs/1")
-        // One list of runs, the commit's checks and statuses: three calls for the repo, however many workflows.
-        #expect(paths.all.count == 3)
+        // The branch's head, one list of runs, the commit's checks and statuses: four calls for the repo, however many workflows.
+        #expect(paths.all.count == 4)
         let things = InboxSync.workflowThings(repo: "a/x", branch: "main", status: status)
         #expect(things.map(\.id) == ["workflow:a/x:11@main", "workflow:a/x:12@main"])
+    }
+
+    @Test func aBranchIsReadAtItsHeadEvenWhenActionsSkippedThatCommit() async throws {
+        let store = Store()
+        store.persists = false
+        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        store.gh.session = StubbedGitHub.session { request in
+            let comps = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (comps?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            switch comps?.path ?? "" {
+            // A docs commit on top: Actions' path filters skip it, an external CI runs on it.
+            case "/repos/a/x/branches/main": return .init(200, #"{"commit":{"sha":"s2","commit":{"message":"Docs\n\nBody"}}}"#)
+            case "/repos/a/x/actions/runs":
+                let run = #"{"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"success","check_suite_id":5}"#
+                return .init(200, query["head_sha"].map { $0 == "s1" } ?? true ? #"{"workflow_runs":[\#(run)]}"# : #"{"workflow_runs":[]}"#)
+            case "/repos/a/x/commits/s2/check-runs":
+                return .init(200, #"{"total_count":1,"check_runs":[{"id":1,"name":"deploy","status":"completed","conclusion":"failure","head_sha":"s2","app":{"slug":"circleci"}}]}"#)
+            case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "/repos/a/x/commits/s1/status", "/repos/a/x/commits/s2/status":
+                return .init(200, #"{"state":"pending","total_count":0,"sha":"x","statuses":[]}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        let status = try await store.fetchBranchCI("a/x", branch: "main")
+        #expect(status.sha == "s2" && status.title == "Docs")
+        #expect(status.workflows.map(\.name) == ["Checks"] && status.workflows.map(\.failing) == [["deploy"]])
     }
 
     @Test func aBranchIsPassingOnlyOnceAllItsChecksAndStatusesAreReadAndDone() async throws {
@@ -215,16 +233,16 @@ import Testing
                 #"{"id":\#(i),"name":"c\#(i)","status":"\#(status)","conclusion":\#(status == "completed" ? #""success""# : "null"),"head_sha":"s1","app":{"slug":"circleci"}}"#
             }
             switch comps?.path ?? "" {
+            case "/repos/a/x/branches/main": return .init(200, #"{"commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
             case "/repos/a/x/actions/runs": return .init(200, #"{"workflow_runs":[]}"#)
-            case "/repos/a/x/commits/s1/check-runs", "/repos/a/x/commits/main/check-runs":
+            case "/repos/a/x/commits/s1/check-runs":
                 // A full page of passing checks, the one past it still running; or more of them than are read.
                 let n = total.value
                 let start = (page - 1) * 100
                 let runs = (start..<min(n, start + 100)).map { check($0, $0 == 100 ? "in_progress" : "completed") }
                 return .init(200, #"{"total_count":\#(n),"check_runs":[\#(runs.joined(separator: ","))]}"#)
-            case "/repos/a/x/commits/main/status":
+            case "/repos/a/x/commits/s1/status":
                 return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
-            case "/repos/a/x/commits/main": return .init(200, #"{"commit":{"message":"Fix"}}"#)
             default: return .init(404, #"{"message":"unrouted"}"#)
             }
         }

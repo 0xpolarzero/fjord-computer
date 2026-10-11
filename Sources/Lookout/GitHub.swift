@@ -93,6 +93,16 @@ struct GHCommit: Decodable {
     }
 }
 
+/// A branch and the commit at its head (`/repos/o/r/branches/{b}`).
+struct GHBranch: Decodable {
+    struct Head: Decodable {
+        let sha: String
+        let commit: GHCommit.Detail
+    }
+    let commit: Head
+    var headline: String? { GHCommit(commit: commit.commit).headline }
+}
+
 struct GitHubError: LocalizedError {
     let message: String
     /// The HTTP status behind it, when there was one.

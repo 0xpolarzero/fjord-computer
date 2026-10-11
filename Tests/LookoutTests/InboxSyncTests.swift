@@ -943,6 +943,9 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         return #"{"workflow_runs":[\#(all.joined(separator: ","))]}"#
     }
 
+    /// Every branch's head, the commit the runs are on.
+    nonisolated private static let branch = #"{"commit":{"sha":"s1","commit":{"message":"Fix"}}}"#
+
     private func store(_ state: State, posted: @escaping (String) -> Void) -> (Store, UUID) {
         let s = Store()
         s.persists = false
@@ -950,6 +953,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         s.gh.session = StubbedGitHub.session { request in
             switch request.url?.path ?? "" {
             case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/branches/main", "/repos/a/x/branches/dev": return .init(200, Self.branch)
             case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
             case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
@@ -997,6 +1001,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         s.gh.session = StubbedGitHub.session { request in
             switch request.url?.path ?? "" {
             case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/branches/main", "/repos/a/x/branches/dev": return .init(200, Self.branch)
             case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
             case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
@@ -1037,6 +1042,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
                 let reply: [String: Any] = ["data": ["s0": ["pageInfo": ["hasNextPage": false], "nodes": [node()]]]]
                 return .init(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
             }
+            if path.hasPrefix("/repos/a/x/branches/") { return .init(200, Self.branch) }
             if path == "/repos/a/x/actions/runs" { switched(); return .init(200, Self.runs([11])) }
             if path.hasSuffix("/check-runs") { return .init(200, #"{"total_count":0,"check_runs":[]}"#) }
             if path.hasSuffix("/status") { return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#) }
@@ -1083,6 +1089,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             if request.value(forHTTPHeaderField: "If-None-Match") == etag { return .init(304, headers: ["ETag": etag]) }
             full.add()
             switch parts.dropFirst(3).joined(separator: "/") {
+            case "branches/main": return .init(200, Self.branch, headers: ["ETag": etag])
             case "actions/runs": return .init(200, Self.runs([11]), headers: ["ETag": etag])
             case "commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#, headers: ["ETag": etag])
             case "commits/s1/status":
@@ -1094,10 +1101,10 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         let repos = (0..<100).map { "a/x\($0)" }
         s.categories[0].rules[0].scope = Scope(kinds: [.workflow], in: Pick(include: repos.map { .repo($0) }), on: ["main"])
         for _ in 0..<4 { await s.syncInbox() }
-        #expect(full.value == repos.count * 3)
+        #expect(full.value == repos.count * 4)
         // Once every repo had its turn, nothing changed: every answer is a 304, the ones of repos asked a turn ago included.
         for _ in 0..<4 { await s.syncInbox() }
-        #expect(full.value == repos.count * 3)
+        #expect(full.value == repos.count * 4)
     }
 
     @Test func pastTheCapTheWorkflowTargetsTakeTurnsAndThoseWaitingKeepTheirThings() async {
@@ -1115,6 +1122,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             let parts = (request.url?.path ?? "").split(separator: "/").map(String.init)
             guard parts.count >= 4, parts[0] == "repos" else { return .init(404, #"{"message":"unrouted"}"#) }
             switch parts.dropFirst(3).joined(separator: "/") {
+            case "branches/main": return .init(200, Self.branch)
             case "actions/runs":
                 asked.repos.insert(parts[2])
                 return .init(200, Self.runs([11]))
@@ -1142,6 +1150,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         s.gh.session = StubbedGitHub.session { request in
             switch request.url?.path ?? "" {
             case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/branches/main", "/repos/a/x/branches/dev": return .init(200, Self.branch)
             case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
             case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
@@ -1183,6 +1192,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         s.gh.session = StubbedGitHub.session { request in
             switch request.url?.path ?? "" {
             case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/branches/main", "/repos/a/x/branches/dev": return .init(200, Self.branch)
             case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
             case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
