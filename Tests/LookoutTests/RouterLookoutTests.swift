@@ -601,6 +601,31 @@ import Testing
         #expect(!failed.ok && failed.text.contains("Couldn't change launchAtLogin"))
     }
 
+    @Test func aFailedApplyOrRevertStaysOnTheCardUntilALaterSuccess() throws {
+        let s = store()
+        var login = false, fails = true
+        let saved = LookoutSetting.launchAtLogin
+        LookoutSetting.launchAtLogin = ({ login }, { if fails { throw CocoaError(.userCancelled) }; login = $0 })
+        defer { LookoutSetting.launchAtLogin = saved }
+        var waiting = LookoutChange(title: "Changed launch at login", patch: .setting(key: "launchAtLogin", before: .on(false), after: .on(true)))
+        waiting.pending = "it changes how the Mac starts Lookout"
+        s.router.changes = [waiting]
+        // Apply refused: the card is still waiting and says why.
+        let refused = try #require(s.applyLookoutChange(waiting.id))
+        #expect(refused.isPending && refused.failureNote?.hasPrefix("Couldn't apply it") == true)
+        // A later Apply that goes through clears it.
+        fails = false
+        let applied = try #require(s.applyLookoutChange(waiting.id))
+        #expect(!applied.isPending && applied.failureNote == nil && login)
+        // Revert refused: still active, says why, and can be tried again.
+        fails = true
+        let stuck = try #require(s.revertLookoutChange(waiting.id))
+        #expect(!stuck.isReverted && stuck.failureNote?.hasPrefix("Couldn't put it back") == true)
+        fails = false
+        let back = try #require(s.revertLookoutChange(waiting.id))
+        #expect(back.isReverted && back.failureNote == nil && back.revertNote == "Reverted" && !login)
+    }
+
     // MARK: The inbox
 
     private func inboxStore() -> Store {

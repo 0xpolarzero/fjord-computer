@@ -45,6 +45,9 @@ struct LookoutChange: Codable, Hashable, Identifiable {
     }
 
     var isReverted: Bool { revertedAt != nil }
+    /// Why the last Apply or Revert didn't go through, for a card still active or waiting (a reverted or discarded one
+    /// shows its note as it is). Cleared by the next success.
+    var failureNote: String? { isReverted ? nil : revertNote }
 
     init(date: Date = Date(), title: String, patch: Patch) {
         self.date = date

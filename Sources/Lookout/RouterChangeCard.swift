@@ -36,9 +36,13 @@ struct ChangeCard: View {
             RoundedRectangle(cornerRadius: CDS.Transcript.cardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1)
         }
         .padding(.trailing, CDS.Transcript.textStop(width))
+        .onChange(of: change.failureNote) { _, note in
+            if let note { AccessibilityNotification.Announcement("\(change.title). \(note)").post() }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(reverted ? "\(change.title). \(change.revertNote ?? "Reverted")"
-                            : change.pending.map { "\(change.title). Not applied yet: \($0)" } ?? change.title)
+                            : (change.pending.map { "\(change.title). Not applied yet: \($0)" } ?? change.title)
+                + (change.failureNote.map { ". \($0)" } ?? ""))
     }
 
     // MARK: Header
@@ -55,15 +59,26 @@ struct ChangeCard: View {
                 Text(change.revertNote ?? "Reverted").cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
                     .lineLimit(2).multilineTextAlignment(.trailing)
             } else if change.isPending {
+                failure
                 ClaudeButton("Discard", variant: .ghost, size: .sm) { store.discardLookoutChange(change.id) }
                 ClaudeButton("Apply", variant: .primary, size: .sm) { store.applyLookoutChange(change.id) }
             } else {
+                failure
                 ClaudeButton("Open", variant: .ghost, size: .sm) { openChange(change) }
                 ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertLookoutChange(change.id) }
             }
         }
         .padding(.horizontal, CDS.Density.compact.pad.xs)
         .frame(minHeight: 36)
+    }
+
+    /// Why the last Apply or Revert failed, in the line's own note place; the buttons stay for another try.
+    @ViewBuilder private var failure: some View {
+        if let note = change.failureNote {
+            Text(note).cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.danger)
+                .lineLimit(2).multilineTextAlignment(.trailing)
+                .help(note)
+        }
     }
 
     /// Why a change waits for you, under its line: nothing of it is applied until Apply. Everything Apply allows (every

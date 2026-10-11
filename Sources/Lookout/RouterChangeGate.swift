@@ -217,6 +217,7 @@ extension Store {
             if now != shown {
                 let what = LookoutGate.groupChanges(from: shown, to: now)
                 change.groups = now
+                change.revertNote = nil
                 change.pending = "A group it uses changed since you could see it (" + what.joined(separator: "; ") + "); check the details again"
                 router.changes[i] = change
                 return change
@@ -231,6 +232,7 @@ extension Store {
             return change
         }
         change.pending = nil
+        change.revertNote = nil
         router.changes[i] = change
         return change
     }
