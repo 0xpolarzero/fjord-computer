@@ -133,7 +133,10 @@ private final class LauncherLog {
         })
         #expect(log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"])
         #expect(state["item"]?.contains("Warm pool") == true)
-        #expect(hints.values.contains { $0.contains("/code/r/.worktrees/x") })
+        // The criteria are Lookout's own, the same whatever the folders are called; names and paths only in the state, fenced.
+        #expect(Set(hints.keys) == ["c1", "c2"] && !hints.values.contains { $0.contains("/code") })
+        let clones = try #require(state.first { $0.key.hasPrefix("clones") }?.value)
+        #expect(clones.hasPrefix(SessionFence.open) && clones.contains("c2: x at /code/r/.worktrees/x"))
     }
 
     @Test func withNoModelNamedTheCloneAndJevsPickOfModelAreOneCallAndTheHistorySaysSo() async throws {
@@ -144,7 +147,7 @@ private final class LauncherLog {
         var calls: [(questions: [String], state: [String: String])] = []
         launcher.asker = { questions, state in
             calls.append((questions.keys.sorted(), state))
-            return ["clone": .choice(.init(choice: "o1", confidence: 0.9, probabilities: ["o0": 0.1, "o1": 0.9])),
+            return ["clone": .choice(.init(choice: "c2", confidence: 0.9, probabilities: ["c1": 0.1, "c2": 0.9])),
                     "scope": .score(3.8, confidence: 0.8)]
         }
         _ = try await ActionSessions.start(Self.request(message: "Redesign the pool's eviction"), store: store,
@@ -170,7 +173,7 @@ private final class LauncherLog {
         let launcher = launcher(store, log)
         // A near tie between the clones, and a size he is unsure of: the first clone (no session in either), your defaults.
         launcher.asker = { _, _ in
-            ["clone": .choice(.init(choice: "o1", confidence: 0.3, probabilities: ["o0": 0.45, "o1": 0.55])),
+            ["clone": .choice(.init(choice: "c2", confidence: 0.3, probabilities: ["c1": 0.45, "c2": 0.55])),
              "scope": .score(3.8, confidence: 0.2)]
         }
         _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)

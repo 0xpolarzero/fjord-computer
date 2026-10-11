@@ -197,10 +197,18 @@ struct RouterDecision: Codable, Identifiable, Equatable {
 // MARK: - Store
 
 extension RouterState {
-    /// Adds an entry, newest last; the oldest go past the cap.
+    /// Adds an entry, newest last; the oldest go past the cap, but never one linking a change still waiting for your Apply
+    /// or Discard (its only place on the page).
     mutating func log(_ decision: RouterDecision) {
         decisions.append(decision)
-        if decisions.count > RouterDecision.maxKept { decisions.removeFirst(decisions.count - RouterDecision.maxKept) }
+        guard decisions.count > RouterDecision.maxKept else { return }
+        let waiting = Set(changes.filter(\.isPending).map(\.id))
+        var over = decisions.count - RouterDecision.maxKept
+        decisions = decisions.filter { entry in
+            guard over > 0, !entry.links.changes.contains(where: waiting.contains) else { return true }
+            over -= 1
+            return false
+        }
     }
 }
 
@@ -232,8 +240,9 @@ extension Store {
     /// something else than his suggestion), then a few targets you went with (his pick shown while you typed, his suggestion
     /// on an ask, a target you pinned). At most `limit` lines, the newest; at most a third of them confirmations. The same
     /// words count once, by their newest example: an entry that is neither (a run under way, an ask waiting) hides nothing.
-    /// `excluding`: the entry of the run asking.
-    func routingExamples(limit: Int = 8, now: Date = Date(), excluding: UUID? = nil) -> String {
+    /// `excluding`: the entry of the run asking. `keys`: a target's option key by its description, said instead of it.
+    func routingExamples(limit: Int = 8, now: Date = Date(), excluding: UUID? = nil, keys: [String: String] = [:]) -> String {
+        func named(_ target: String) -> String { keys[target] ?? RouterDecision.clip(target, 60) }
         var corrections: [(Date, String)] = [], confirmed: [(Date, String)] = []
         var seen = Set<String>()
         for entry in router.decisions.reversed() where corrections.count + confirmed.count < limit && entry.id != excluding {
@@ -241,10 +250,10 @@ extension Store {
             let said = "“\(RouterDecision.clip(text, 60))”"
             if case .corrected(let from, let to) = entry.outcome {
                 guard seen.insert(text.lowercased()).inserted else { continue }
-                corrections.append((entry.at, "\(said) → \(RouterDecision.clip(to, 60)), not \(RouterDecision.clip(from, 60))"))
+                corrections.append((entry.at, "\(said) → \(named(to)), not \(named(from))"))
             } else if entry.decision.confirmed == true, let target = entry.decision.target {
                 guard seen.insert(text.lowercased()).inserted, confirmed.count < max(1, limit / 3) else { continue }
-                confirmed.append((entry.at, "\(said) → \(RouterDecision.clip(target, 60))"))
+                confirmed.append((entry.at, "\(said) → \(named(target))"))
             }
         }
         return (corrections + confirmed).sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n")
