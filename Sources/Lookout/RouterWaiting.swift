@@ -185,6 +185,8 @@ extension Store {
                     $0.add(.sent(to: card.title, text: text, original: nil), session: card.sessionID, card: card.id)
                     $0.outcome = .done
                 }
+                // Delivered (the history says so), but a card you changed meanwhile (reopened, say) is left as you made it.
+                guard self.cardRevisions[card.id, default: 0] == revision else { return }
                 var state = self.router
                 if let j = state.cards.firstIndex(where: { $0.id == card.id }) { state.cards[j].triage?.told = Date() }
                 RouterFeed.address(&state, card.sessionID, .router, Date()) { $0.id == card.id }

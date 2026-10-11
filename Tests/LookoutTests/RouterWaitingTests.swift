@@ -169,6 +169,25 @@ import Testing
         #expect(s.routerTriager.telling.isEmpty)
     }
 
+    @Test func aLateDeliveryLeavesACardYouReopenedMeanwhileOpen() async {
+        let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
+        var release: CheckedContinuation<Void, Never>?
+        s.routerTriager.sender = { session, text in
+            await withCheckedContinuation { release = $0 }
+            sent.messages.append((session, text))
+        }
+        s.resolveWaits()
+        s.tellWaiting("a#t3")
+        await settle()
+        // Past the gate, its answer not back yet: you handle the card and reopen it.
+        s.setCardAddressed("a#t3", true)
+        s.setCardAddressed("a#t3", false)
+        release?.resume()
+        await settle()
+        #expect(sent.messages.count == 1 && s.router.decisions.last?.done == [.sent(to: "Deploy fix", text: "The CI on o/app#1 finished: passing.", original: nil)])
+        #expect(s.router.cards[0].isOpen && s.router.cards[0].addressedBy == nil && s.routerTriager.telling.isEmpty)
+    }
+
     @Test func aSendIsDroppedWhenItsCardChangesBeforeDelivery() async {
         // Handled meanwhile.
         let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
