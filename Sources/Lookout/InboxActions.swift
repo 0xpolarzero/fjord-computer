@@ -154,6 +154,21 @@ struct ActionLedger: Codable, Equatable {
     /// Each such PR as it was last read, with the reviews it had all along back: the categories it was in then, and its
     /// facts there. Only those were there before; what it has besides (a commit pushed while Lookout was closed) is new.
     var restoredBefore: [String: [UUID: Set<String>]]?
+    /// By category, then thing: a review request or assignment of yours that was there, not yet rated by Jev, when the
+    /// category (or an action of it) was taken in. Its rating arriving later doesn't make the thing new (`AwaitedRating`).
+    var awaitedRatings: [UUID: [String: AwaitedRating]]?
+
+    /// A request or assignment (`InboxEngine.importanceStamp`) there when actions were taken in, its rating still to come:
+    /// once rated, what the rating alone brings into the category is old for those actions, as it would have been had Jev
+    /// rated it before.
+    struct AwaitedRating: Codable, Equatable {
+        var stamp: String
+        /// The actions taken in then.
+        var actions: Set<UUID>
+        /// It was in the category then: only its importance facts for that request are old; else its entering and its
+        /// facts there are.
+        var wasIn: Bool
+    }
 
     static func key(_ category: UUID, _ thing: String, _ action: UUID, _ trigger: String) -> String {
         "\(category.uuidString)\u{1F}\(thing)\u{1F}\(action.uuidString)\u{1F}\(trigger)"
@@ -176,6 +191,12 @@ enum InboxActions {
     static let reentryCooldown: TimeInterval = 3600
     /// Runs remembered, beyond those for what is still present (never forgotten while their trigger is there).
     static let maxRuns = 2000
+
+    /// A thing's review request or assignment of yours (`InboxEngine.importanceStamp`), and whether Jev has rated it.
+    struct Rating: Equatable {
+        var stamp: String
+        var rated: Bool
+    }
 
     /// One action due for one thing.
     struct Job: Equatable {
@@ -386,7 +407,7 @@ enum InboxActions {
     /// categories, newest things first.
     /// `known`: the ids of every thing still fetched, in a category now or not.
     static func plan(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: inout ActionLedger,
-                     me: String, known things: Set<String> = [], now: Date = Date()) -> [Job] {
+                     me: String, known things: Set<String> = [], ratings: [String: Rating] = [:], now: Date = Date()) -> [Job] {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
         // Reviews a PR had all along, back since this build reads every latest one: old, as if they had been there.
@@ -419,6 +440,30 @@ enum InboxActions {
             ledger.restoredReviewIDs = nil
             ledger.restoredBefore = nil
         }
+        // Ratings awaited since a baseline that have come: what they alone bring is old for the actions taken in then. One
+        // whose request or assignment is gone, or another now, is no longer awaited.
+        if var awaited = ledger.awaitedRatings {
+            for category in categories {
+                guard var records = awaited[category.id] else { continue }
+                for (thing, record) in records {
+                    guard let rating = ratings[thing], rating.stamp == record.stamp else { records[thing] = nil; continue }
+                    guard rating.rated else { continue }
+                    records[thing] = nil
+                    guard let entry = byCategory[category.id]?.first(where: { $0.id == thing }) else { continue }
+                    let rated = entry.facts.map(\.key).filter { $0.hasPrefix("importance:") && $0.hasSuffix(":" + record.stamp) }
+                    let keys = record.wasIn ? rated : ["enter"] + entry.facts.map(\.key)
+                    for action in category.actions.items where record.actions.contains(action.id) && action.applies(to: entry.thing.kind) {
+                        for key in keys where ledger.run(category.id, entry.id, action.id, key) == nil {
+                            ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: key,
+                                                 state: .baselined, at: now))
+                        }
+                    }
+                }
+                awaited[category.id] = records.isEmpty ? nil : records
+            }
+            for id in awaited.keys where !known.contains(id) { awaited[id] = nil }
+            ledger.awaitedRatings = awaited.isEmpty ? nil : awaited
+        }
         // Baselines: what is there when a category's rules change, or an action is added, is old.
         for category in categories {
             let ruleIDs = fingerprint(category.rules, groups: groups)
@@ -446,6 +491,21 @@ enum InboxActions {
                         }
                     }
                 }
+            }
+            // A request or assignment there now that Jev hasn't rated yet: its rating, when it comes, is old news too.
+            let rates = category.rules.contains { $0.conditions.contains { if case .importance = $0 { true } else { false } } }
+            if !fresh.isEmpty {
+                var records = !rates || all ? [:] : ledger.awaitedRatings?[category.id] ?? [:]
+                let inside = Set((byCategory[category.id] ?? []).map(\.id))
+                for (thing, rating) in ratings where rates && !rating.rated {
+                    var record = records[thing].flatMap { $0.stamp == rating.stamp ? $0 : nil }
+                        ?? ActionLedger.AwaitedRating(stamp: rating.stamp, actions: [], wasIn: inside.contains(thing))
+                    record.actions.formUnion(fresh.map(\.id))
+                    records[thing] = record
+                }
+                var awaited = ledger.awaitedRatings ?? [:]
+                awaited[category.id] = records.isEmpty ? nil : records
+                ledger.awaitedRatings = awaited.isEmpty ? nil : awaited
             }
             let baseline = ActionLedger.Baseline(rules: ruleIDs, actions: actionIDs, sorted: true)
             if ledger.baselines[category.id] != baseline { ledger.baselines[category.id] = baseline }
@@ -984,7 +1044,7 @@ extension Store {
             actionsAgain = false
             var ledger = actionLedger
             let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
-                                         known: Set(things.keys), now: now)
+                                         known: Set(things.keys), ratings: actionRatings(), now: now)
             if ledger != actionLedger { actionLedger = ledger }
             for queued in jobs.prefix(InboxActions.perSync) {
                 // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
@@ -1133,8 +1193,19 @@ extension Store {
         guard let me = me?.login, !me.isEmpty, !onDefaults else { return }
         var ledger = actionLedger
         _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
-                              known: Set(things.keys), now: now)
+                              known: Set(things.keys), ratings: actionRatings(), now: now)
         if ledger != actionLedger { actionLedger = ledger }
+    }
+
+    /// Each thing's review request or assignment of yours, and whether Jev has rated it (`InboxActions.plan`).
+    func actionRatings() -> [String: InboxActions.Rating] {
+        let context = inboxContext
+        var out: [String: InboxActions.Rating] = [:]
+        for (id, thing) in things {
+            guard let stamp = InboxEngine.importanceStamp(thing, context: context) else { continue }
+            out[id] = InboxActions.Rating(stamp: stamp, rated: InboxEngine.signals(thing, context.me)?.importance?.stamp == stamp)
+        }
+        return out
     }
 
     func actionChips(for entry: InboxEntry) -> [InboxActions.Chip] {

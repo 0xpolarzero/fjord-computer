@@ -407,6 +407,43 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.asked.count == 1)
     }
 
+    @Test func aRatingThatComesAfterTheBaselineLeavesWhatWasThereOld() async {
+        let tok = Person(login: "tok")
+        func requested(_ n: Int, greptile: Int? = nil) -> Thing {
+            var t = InboxFixture.pr(n, by: tok, greptile: greptile)
+            t.requestedReviewers = ["me"]
+            return t
+        }
+        func rate(_ store: Store, _ id: String) {
+            let stamp = InboxEngine.importanceStamp(store.things[id]!, context: store.inboxContext)!
+            store.things[id]?.signals = ThingSignals(importance: ImportanceSignal(level: .high, stamp: stamp), viewer: "me")
+        }
+        // PRs with a Greptile score or rated high: commenting on each arrival, and on each fact.
+        let high = CategoryAction.make(.comment("high"))
+        var each = CategoryAction.make(.comment("fact"))
+        each.trigger = .eachFact
+        var mine = InboxFixture.category()
+        mine.rules[0].conditions.append(.importance(.high))
+        mine.actions = ActionList([high, each])
+        // PR 2 is in by its score already, PR 1 only once rated.
+        let store = InboxFixture.store([requested(1), requested(2, greptile: 3)], category: mine)
+        let performer = FakePerformer()
+        store.actionPerformer = performer
+        // Taken in before Jev rated them; his ratings come a refresh or two later (a failure, his cap).
+        await store.runActions()
+        await store.runActions()
+        rate(store, "pr:a/one#1")
+        rate(store, "pr:a/one#2")
+        #expect(store.entries.count == 2 && store.entries.allSatisfy { $0.facts.contains { $0.key.hasPrefix("importance:") } })
+        await store.runActions()
+        #expect(performer.comments.isEmpty)
+        // A request that comes after, rated, is new.
+        add(store, requested(3))
+        rate(store, "pr:a/one#3")
+        await store.runActions()
+        #expect(performer.comments.map(\.body).sorted() == ["fact", "high"])
+    }
+
     @Test func anActionAddedLaterBaselinesOnlyItself() async {
         let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
         await store.runActions()
