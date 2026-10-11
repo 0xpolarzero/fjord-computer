@@ -276,6 +276,22 @@ import Testing
         #expect(entry.trigger == .system && entry.done.count == 1 && entry.reply != nil)
     }
 
+    @Test func aContinuationThatFailsOnItsOwnSaysTheSessionIsReadyOnce() async {
+        let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
+        sent.fail = true
+        var ready = 0
+        s.routerTriager.onReady = { _ in ready += 1 }
+        s.things["pr:o/app#1"]?.checks = .passing
+        await settle()
+        // Not delivered: still ready and untold, so you hear of it, as you would had it not been sent on its own.
+        #expect(sent.messages.isEmpty && ready == 1 && s.router.cards[0].triage?.ready != nil && s.router.cards[0].triage?.told == nil)
+        // Once: neither another look nor Tell it failing again says it again.
+        s.resolveWaits()
+        s.tellWaiting("a#t3")
+        await settle()
+        #expect(ready == 1)
+    }
+
     @Test func aWaitItsMessageDidntNameIsNeverContinuedOnItsOwn() async {
         var unnamed = ciWatch
         unnamed.named = false

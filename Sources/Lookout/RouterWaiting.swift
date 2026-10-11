@@ -257,6 +257,12 @@ extension Store {
                     $0.add(.failed(RouterDecision.clip(error.localizedDescription, 120)), session: card.sessionID, card: card.id)
                     $0.outcome = .done
                 }
+                // Sent on its own, it came with no banner: one that didn't go, still ready and untold, is said as one not
+                // sent on its own is (once: only resolveWaits sends on its own, once per wait), so Tell it isn't missed.
+                if automatic, self.waitStillTellable(card.id, revision: self.cardRevisions[card.id, default: 0], automatic: false),
+                   let current = self.router.cards.first(where: { $0.id == card.id }) {
+                    self.routerTriager.onReady?(current)
+                }
             }
         }
     }
