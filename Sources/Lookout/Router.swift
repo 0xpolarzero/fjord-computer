@@ -87,12 +87,13 @@ struct RouterState: Codable, Equatable {
 
     init() {}
 
-    /// A line of the chat an older file kept: only the change it may hold is read.
+    /// A line of the chat an older file kept: only the change it may hold is read (one there that can't be read fails the
+    /// line, and is counted as lost).
     private struct LegacyLine: Decodable {
         var change: LookoutChange?
         enum CodingKeys: String, CodingKey { case change }
         init(from decoder: Decoder) throws {
-            change = try? decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(LookoutChange.self, forKey: .change)
+            change = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(LookoutChange.self, forKey: .change)
         }
     }
 
@@ -153,7 +154,7 @@ struct RouterState: Codable, Equatable {
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
         var legacy: Set<UUID> = []
         if changes.isEmpty {
-            changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change)
+            changes = (list(.chat) as [LegacyLine]).compactMap(\.change)
             legacy = Set(changes.map(\.id))
         }
         decisions = list(.decisions)

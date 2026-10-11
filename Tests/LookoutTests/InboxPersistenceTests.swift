@@ -338,6 +338,31 @@ import Testing
         #expect(old.decisions.map(\.links.changes) == [[applied.id]])
     }
 
+    @Test func anOlderFilesChatChangeThatCannotBeReadIsSaidLostSoTheFileIsKeptAside() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let good = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
+                                 patch: .order(before: [], after: []))
+        let original = Data("""
+        {"settings": {"pollInterval": 60, "notifications": true},
+         "router": {"chat": [{"text": "hi"}, {"change": \(String(decoding: try enc.encode(good), as: UTF8.self))},
+                             {"change": {"title": 5}}]}}
+        """.utf8)
+        try original.write(to: file)
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        #expect(store.router.changes.map(\.id) == [good.id])
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        // The chat isn't written again: the file as it was is kept aside first.
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+    }
+
     @Test func aRunUnderWayWhenTheAppQuitSaysItWasInterrupted() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
