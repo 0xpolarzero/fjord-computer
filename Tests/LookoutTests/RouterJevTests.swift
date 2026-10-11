@@ -19,11 +19,10 @@ import Testing
         var calls = 0
         s.routerDispatcher.asker = { questions, state in
             calls += 1
-            guard case .choice(let keys, _, _) = questions["route"] else { return [:] }
-            // Sure of the card the options state describes with its question, when the message mentions a database.
-            let options = state[RouterTools.optionsState]?.split(separator: "\n") ?? []
-            let card = keys.first { key in options.contains { $0.hasPrefix("\(key): ") && $0.contains("Which database?") } } ?? keys[0]
-            let sure = state["user message"]?.contains("database") == true
+            guard case .structuredChoice(let keys, _, _) = questions["route"] else { return [:] }
+            // Sure of the session asking which database (its option, named by its title), when the message mentions one.
+            let card = keys.first { $0 == "Fix the login bug" } ?? keys[0]
+            let sure = state["message"]?.contains("database") == true
             var p = Dictionary(uniqueKeysWithValues: keys.map { ($0, sure ? 0.02 / Double(keys.count) : 1 / Double(keys.count)) })
             if sure { p[card] = 0.98 }
             return ["route": .choice(.init(choice: card, confidence: 0.9, probabilities: p))]
@@ -157,12 +156,11 @@ import Testing
         var gate: CheckedContinuation<Void, Never>?
         var held = false
         s.routerDispatcher.asker = { questions, state in
-            guard state["user message"]?.contains("docs") == true else { return try await sure(questions, state) }
+            guard state["message"]?.contains("docs") == true else { return try await sure(questions, state) }
             held = true
             await withCheckedContinuation { gate = $0 }
-            guard case .choice(let keys, _, _) = questions["route"] else { return [:] }
-            let options = state[RouterTools.optionsState]?.split(separator: "\n") ?? []
-            let docs = keys.first { key in options.contains { $0.hasPrefix("\(key): ") && $0.contains("Update the docs") } } ?? keys[0]
+            guard case .structuredChoice(let keys, _, _) = questions["route"] else { return [:] }
+            let docs = keys.first { $0 == "Update the docs" } ?? keys[0]
             var p = Dictionary(uniqueKeysWithValues: keys.map { ($0, 0.0) })
             p[docs] = 1
             return ["route": .choice(.init(choice: docs, confidence: 1, probabilities: p))]

@@ -186,7 +186,9 @@ extension Store {
             ask = base
         } else {
             guard let key = typesafeKey, !key.isEmpty else { return nil }
-            let client = jevClient(key)
+            var client = jevClient(key)
+            // Routing waits for you: Jev answers it in about 0.25 s, so a slow answer is an outage, not a wait.
+            if use == .routing { client.timeout = 2.5 }
             ask = { questions, state in try await client.ask(questions, about: state) }
         }
         return { [weak self] questions, state in

@@ -6,6 +6,9 @@ struct JevClient {
     let key: String
     var endpoint = URL(string: "https://api.typesafe.ai/v1/systemone")!
     var session = Network.session
+    /// How long a call may take. Jev answers in about 0.25 s (p95 under 0.4 s, evals/router): routing waits far less than
+    /// the default.
+    var timeout: TimeInterval = 20
     /// What sends a request (tests answer for TypeSafe); the session otherwise.
     typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
     var transport: Transport? = nil
@@ -53,6 +56,11 @@ struct JevClient {
         case noul(instructions: String, yes: String? = nil, no: String? = nil)
         /// A rating on 2 to 10 ordered levels, lowest first.
         case score(levels: [String], instructions: String)
+        /// One of `options`, each described by its JSON value in `criteria` (an object of named fields reads best), the
+        /// instructions a string or an object (a `question` and the data it names in backticks). Answered as a `choice`.
+        case structuredChoice([String], criteria: [String: Any], instructions: Any)
+        /// Yes or no, the instructions an object holding the question and the data it is about. Answered as a `noul`.
+        case structuredNoul(instructions: Any)
     }
 
     enum Answer {
@@ -87,6 +95,13 @@ struct JevClient {
                 body[id] = ["type": "noul", "instructions": instructions, "criteria": criteria.isEmpty ? NSNull() as Any : criteria as Any]
             case .score(let levels, let instructions):
                 body[id] = ["type": "score", "instructions": instructions, "criteria": levels]
+            case .structuredChoice(let options, let criteria, let instructions):
+                let map = Dictionary(uniqueKeysWithValues: options.map { (Self.key(for: $0), $0) })
+                keys[id] = map
+                body[id] = ["type": "choice", "instructions": instructions,
+                            "criteria": map.mapValues { option -> Any in criteria[option] ?? NSNull() }]
+            case .structuredNoul(let instructions):
+                body[id] = ["type": "noul", "instructions": instructions, "criteria": NSNull()]
             }
         }
         let data = try await post(["model": "jev-latest", "state": state, "questions": body])
@@ -96,9 +111,9 @@ struct JevClient {
         for (id, question) in questions {
             guard let answer = answers[id] as? [String: Any] else { throw Failure.invalidAnswer("TypeSafe left `\(id)` unanswered") }
             switch question {
-            case .choice:
+            case .choice, .structuredChoice:
                 out[id] = .choice(try Self.choice(answer, keys: keys[id] ?? [:]))
-            case .noul:
+            case .noul, .structuredNoul:
                 guard let p = Self.unit(answer["noul"]) else { throw Failure.invalidAnswer("TypeSafe's yes/no for `\(id)` is invalid") }
                 out[id] = .noul(p)
             case .score(let levels, _):
@@ -120,7 +135,7 @@ struct JevClient {
     }
 
     private func post(_ body: [String: Any]) async throws -> Data {
-        var request = URLRequest(url: endpoint, timeoutInterval: 20)
+        var request = URLRequest(url: endpoint, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

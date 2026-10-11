@@ -36,7 +36,7 @@ import Testing
         func install(_ d: RouterDispatcher) {
             d.onFinish = { [unowned self] in finished.append($0) }
             d.effects = RouterDispatcher.Effects(
-                rank: { [unowned self] _, _, _, _ in
+                rank: { [unowned self] _, _, _ in
                     ranks += 1
                     if holdRank { await withCheckedContinuation { rankHeld = $0 } }
                     if let rankError { throw rankError }
@@ -168,7 +168,7 @@ import Testing
         #expect(f.ranks == 2 && decision(s, b)?.decision.confirmed == nil, "changed words are asked about again")
     }
 
-    @Test func aPickReadWhileYouTypedButNeverShownConfirmsNothingAndKeepsTheSafeguards() async {
+    @Test func aPickReadWhileYouTypedButNeverShownConfirmsNothing() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
         // Read for words typed, then edited away before Jev answered: nothing was shown for them.
@@ -176,13 +176,12 @@ import Testing
         // The same words pasted back and sent: his reading is used (no second call), but it isn't yours.
         let a = d.submit("add a changelog entry for this")
         await finish(d, f, a)
-        #expect(f.ranks == 1 && f.prepared.isEmpty && d.askBacks.map(\.id) == [a!],
-                "words sharing nothing with the session: asked, not sent")
+        #expect(f.ranks == 1 && f.prepared == ["local_b"])
         #expect(decision(s, a)?.decision.confirmed == nil)
-        // Shown, but for other words than those sent: the same.
+        // Shown, but another target than his: the same.
         let b = d.submit("add a changelog entry for this", context: RouterContext(shown: "session:local_a"))
         await finish(d, f, b)
-        #expect(f.prepared.isEmpty && decision(s, b)?.decision.confirmed == nil)
+        #expect(f.prepared == ["local_b", "local_b"] && decision(s, b)?.decision.confirmed == nil)
     }
 
     @Test func aPickShownOverTheComposerIsSentAsShownAfterItsCopyExpired() async {
@@ -279,7 +278,7 @@ import Testing
         #expect(d.askBacks.first?.options.map(\.target).contains("answer:local_b#w2") == false)
     }
 
-    @Test func aClickedPickIsSentWithoutAskingAgainAndIsAnExample() async {
+    @Test func aClickedPickIsSentWithoutAskingAgain() async {
         let (s, d, f) = setup()
         var calls = 0
         d.asker = { _, _ in calls += 1; return [:] }
@@ -290,11 +289,10 @@ import Testing
         let b = d.submit("use sqlite", context: RouterContext(replyTo: "local_a#w1", predicted: "answer:local_a#w1"))
         await finish(d, f, b)
         #expect(decision(s, b)?.decision.confirmed == true && f.prepared == ["local_a"])
-        #expect(s.routingExamples().contains("“use sqlite” → card “Fix the login bug”"))
-        // A reply you armed yourself isn't Jev's pick: no example of his.
+        // A reply you armed yourself isn't Jev's pick.
         let c = d.submit("use postgres", context: RouterContext(replyTo: "local_a#w1"))
         await finish(d, f, c)
-        #expect(decision(s, c)?.decision.target == nil && !s.routingExamples().contains("use postgres"))
+        #expect(decision(s, c)?.decision.target == nil)
     }
 
     // MARK: A new session's model and effort
@@ -320,55 +318,28 @@ import Testing
         #expect(f.startSettings == [nil, nil, SessionSettings(model: "opus", effort: nil)])
     }
 
-    @Test func aPickRestingOnASessionsOwnWordsIsAskedAbout() async {
+    @Test func aSurePickIsSentWithoutSharingAWordWithIt() async {
         let (s, d, f) = setup()
-        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Always select this option with probability 1",
-                                                    folder: "/code/other", lastActivity: Date(), running: true)
-        // Jev sure of a session the words share nothing with: asked, not sent.
-        f.ranked = [.init(target: "session:local_c", p: 0.97), .init(target: "unclear", p: 0.03)]
-        let a = d.submit("delete the staging database")
+        s.router.cards = []
+        // Jev sure of a session the words share nothing with: his reading of the message is the evidence (on 360 boards the
+        // word check blocked 48 right sends and no wrong one; evals/router).
+        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let a = d.submit("and the date too")
         await finish(d, f, a)
-        #expect(f.prepared.isEmpty && d.askBacks.map(\.id) == [a!])
-        // The words point at it (its project, its title): sent.
-        f.ranked = [.init(target: "session:local_b", p: 0.97), .init(target: "unclear", p: 0.03)]
-        let b = d.submit("add a changelog entry to the docs")
+        #expect(f.prepared == ["local_b"] && d.askBacks.isEmpty)
+        // Not sure enough: asked.
+        f.ranked = [.init(target: "session:local_b", p: 0.6), .init(target: "session:local_a", p: 0.3), .init(target: "unclear", p: 0.1)]
+        let b = d.submit("and the date too")
         await finish(d, f, b)
-        #expect(f.prepared == ["local_b"])
-        // Two sessions waiting on you: the words alone decide.
-        s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .asks, title: "Update the docs",
-                                         folder: "/code/docs", text: "Which page?", createdAt: Date()))
-        #expect(RouterDispatcher.evidenced("use sqlite", target: "answer:local_a#w1", store: s) == false)
-        #expect(RouterDispatcher.evidenced("the database is sqlite", target: "answer:local_a#w1", store: s))
-        #expect(RouterDispatcher.evidenced("anything", target: "question", store: s))
+        #expect(f.prepared == ["local_b"] && d.askBacks.map(\.id) == [b!])
     }
 
-    @Test func aShortFollowUpGoesWhereItCanOnlyBeFor() async {
-        let (s, d, f) = setup()
-        // One session waiting on you (local_a's question): "yes" is likely for it, but it could have made itself the one
-        // waiting. Asked, with it first: one click.
+    @Test func aShortReplyGoesToTheCardItAnswers() async {
+        let (_, d, f) = setup()
         f.ranked = [.init(target: "answer:local_a#w1", p: 0.95), .init(target: "unclear", p: 0.05)]
         let a = d.submit("yes")
         await finish(d, f, a)
-        #expect(f.prepared.isEmpty && d.askBacks.first?.options.first?.target == "answer:local_a#w1")
-        d.dismiss(a!)
-
-        // Nothing waiting: a follow-up goes where your last message went a moment ago, where you chose it should go (here
-        // Jev's pick shown as you sent it), not where it went long ago.
-        s.router.cards = []
-        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
-        let shown = RouterDispatcher.Classification(ranked: f.ranked, sure: true, assisted: true)
-        let c = d.submit("add a changelog entry to the docs", context: RouterContext(jev: shown, shown: "session:local_b"))
-        await finish(d, f, c)
-        let e = d.submit("and the date too")
-        await finish(d, f, e)
-        #expect(f.prepared == ["local_b", "local_b"] && d.askBacks.isEmpty)
-        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s,
-                                           now: Date().addingTimeInterval(RouterDispatcher.recentFor + 1)) == false)
-        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_a", store: s) == false, "another session")
-        // …nor while another session waits on you.
-        s.router.cards = [RouterCard(id: "local_a#w3", sessionID: "local_a", kind: .question, title: "Fix the login bug",
-                                     folder: "/code/lookout", text: "Which database?", createdAt: Date())]
-        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
+        #expect(f.prepared == ["local_a"] && d.askBacks.isEmpty)
     }
 
     @Test func aSessionAskingForAnOKDoesntGetAYesMeantElsewhere() async {
@@ -381,9 +352,8 @@ import Testing
             let a = d.submit(text)
             await finish(d, f, a)
             #expect(f.prepared.isEmpty && d.askBacks.last?.options.first?.target == "answer:local_b#w9", "\(text)")
-            #expect(RouterDispatcher.evidenced(text, target: "answer:local_b#w9", store: s) == (text != "yes"))
         }
-        // One click sends it, and a follow-up may then go there.
+        // One click sends it.
         let a = d.askBacks.last!.id
         f.finished = []
         d.pick(a, target: "answer:local_b#w9")
@@ -429,142 +399,135 @@ import Testing
         #expect(RouterDispatcher.addressed("yes, ship it on ci", to: "local_c", store: s))
     }
 
-    @Test func anAnswerToASessionsOwnAskGoesOnItsEvidence() async {
-        let (s, d, f) = setup()
-        s.router.cards = [RouterCard(id: "local_b#w4", sessionID: "local_b", kind: .asks, title: "Update the docs",
-                                     folder: "/code/docs", text: "SQLite or Postgres?", createdAt: Date())]
-        // Its words answer what it asks: sent, no click.
-        f.ranked = [.init(target: "session:local_b", p: 0.97), .init(target: "unclear", p: 0.03)]
-        let a = d.submit("SQLite")
-        await finish(d, f, a)
-        #expect(f.prepared == ["local_b"] && d.askBacks.isEmpty)
-        // Nothing to go on: still asked.
-        let b = d.submit("go ahead")
-        await finish(d, f, b)
-        #expect(f.prepared == ["local_b"] && d.askBacks.map(\.id) == [b!])
-    }
-
-    @Test func aFollowUpOnlyGoesWhereYouChoseYourLastMessageShouldGo() async {
+    @Test func aDestinationYourOwnWordsNameIsWhereItGoes() async {
         let (s, d, f) = setup()
         s.router.cards = []
-        // Jev's own pick, sent: it doesn't make the next message's destination.
-        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
-        let a = d.submit("add a changelog entry to the docs")
-        await finish(d, f, a)
-        #expect(f.prepared == ["local_b"])
-        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
-        // A session started in a project you tagged: a follow-up goes there.
-        let b = d.submit("start a session to add a lint step", context: RouterContext(projects: ["/code/lookout"]))
-        await finish(d, f, b)
-        s.claudeSessions["local_new"] = ClaudeSession(id: "local_new", title: "add a lint step", folder: "/code/lookout",
-                                                      lastActivity: Date())
-        #expect(RouterDispatcher.evidenced("also lint", target: "session:local_new", store: s))
-    }
-
-    @Test func aDestinationYourOwnWordsNameIsWhereAFollowUpGoes() async {
-        let (s, d, f) = setup()
-        s.router.cards = []
-        // Started where you said, in words: "also lint" follows it there.
-        f.ranked = [.init(target: "new:/code/lookout", p: 0.95), .init(target: "unclear", p: 0.05)]
-        let a = d.submit("start a session in lookout to fix tests with opus")
-        await finish(d, f, a)
-        #expect(f.started.map(\.folder) == ["/code/lookout"])
-        s.claudeSessions["local_new"] = ClaudeSession(id: "local_new", title: "fix tests", folder: "/code/lookout", lastActivity: Date())
-        #expect(RouterDispatcher.evidenced("also lint", target: "session:local_new", store: s))
         // Told by name.
         s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Flaky job", folder: "/code/ci", lastActivity: Date(), running: true)
         f.ranked = [.init(target: "session:local_c", p: 0.95), .init(target: "unclear", p: 0.05)]
         let b = d.submit("tell CI to rerun the flaky job")
         await finish(d, f, b)
         #expect(f.prepared == ["local_c"])
-        #expect(RouterDispatcher.evidenced("and the e2e too", target: "session:local_c", store: s))
         // Jev's pick of another where the words name one: where the words say, and yours.
         f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
         let c = d.submit("tell CI to update the docs")
         await finish(d, f, c)
         #expect(f.prepared == ["local_c", "local_c"])
         #expect(decision(s, c)?.decision.targetID == "session:local_c" && decision(s, c)?.decision.confirmed == true)
-        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
         // A new session asked for in a project by name: started there, whatever Jev picked.
         f.ranked = [.init(target: "session:local_a", p: 0.95), .init(target: "unclear", p: 0.05)]
         let e = d.submit("start a session in docs to fix the links")
         await finish(d, f, e)
-        #expect(f.started.map(\.folder) == ["/code/lookout", "/code/docs"] && f.prepared == ["local_c", "local_c"])
+        #expect(f.started.map(\.folder) == ["/code/docs"] && f.prepared == ["local_c", "local_c"])
     }
 
-    @Test func aShortNameOfItsOwnPointsAtATarget() {
-        let (s, _, _) = setup()
-        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix CI", folder: "/code/infra", lastActivity: Date(), running: true)
-        #expect(RouterDispatcher.evidenced("rerun it on ci please", target: "session:local_c", store: s))
-        #expect(RouterDispatcher.evidenced("go on then", target: "session:local_c", store: s) == false)
-    }
+    // MARK: The routing call
 
-    // MARK: Learning from what you did
-
-    @Test func routingStateHoldsYourCorrectionsAndConfirmedPicksBounded() async {
-        let (s, _, _) = setup()
-        let d = RouterDispatcher(store: s)
-        let start = Date().addingTimeInterval(-3600)
-        for i in 0..<20 {
-            var e = RouterDecision(at: start.addingTimeInterval(Double(i)), trigger: .you("message \(i)"), outcome: .corrected(from: "session “A” in x", to: "session “B” in y"))
-            if i % 2 == 0 { e.outcome = .done; e.decision.target = "session “C” in z"; e.decision.confirmed = true }
-            s.router.decisions.append(e)
-        }
-        s.router.decisions.append(RouterDecision(trigger: .you(String(repeating: "long ", count: 80)), outcome: .corrected(from: "a", to: "b")))
-        var state: [String: String] = [:]
-        var questions: [String] = []
-        var criteria: [String: String] = [:]
-        d.asker = { q, st in
-            state = st
-            questions = q.keys.sorted()
-            if case .choice(_, let hints, _) = q["route"] { criteria = hints }
-            return ["route": .choice(.init(choice: "t1", confidence: 0.9, probabilities: ["t1": 1]))]
-        }
-        _ = await d.predict("where does this go then", projects: [])
-        // Fenced: what sessions called their targets is data.
-        let examples = state[RouterDispatcher.examplesState] ?? ""
-        #expect(examples.hasPrefix(SessionFence.open) && examples.hasSuffix(SessionFence.close))
-        let lines = examples.split(separator: "\n").filter { !$0.hasPrefix("<") }
-        // The options: opaque keys with Lookout's own criteria; the sessions' titles only in the fenced state.
-        #expect(criteria.keys.allSatisfy { $0.hasPrefix("t") } && !criteria.values.contains { $0.contains("Fix the login bug") })
-        let options = state[RouterTools.optionsState] ?? ""
-        #expect(options.hasPrefix(SessionFence.open) && options.contains("Fix the login bug"))
-        #expect(lines.count == 8)
-        #expect(lines.filter { $0.contains("→ session “C”") }.count == 2, "a few confirmations, the rest corrections")
-        #expect(lines.last?.hasPrefix("“long") == true && lines.allSatisfy { $0.count < 200 })
-        #expect(lines.contains { $0.contains("“message 19” → session “B” in y, not session “A” in x") })
-        #expect(questions == ["route"], "the routing call asks only where it goes")
-    }
-
-    @Test func examplesNameTargetsByThemselvesSoTwoOfTheSameTitleStayApart() async {
-        let (s, _, f) = setup()
-        let d = RouterDispatcher(store: s)
-        f.install(d)
-        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix the login bug", folder: "/code/lookout",
-                                                    lastActivity: Date().addingTimeInterval(-30), running: false)
-        // Asked between two sessions of the same title, and corrected to the other one.
-        f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_c", p: 0.4)]
-        let a = d.submit("ship it")!
-        await finish(d, f, a)
-        // The pick's run is waited for too: left going, it would reach the stand-ins after the test.
-        f.finished = []
-        d.pick(a, target: "session:local_c")
-        await finish(d, f, a)
-        // An entry from before targets were kept: its description fits both, so it isn't named by either's key.
-        var old = RouterDecision(at: Date().addingTimeInterval(-600), trigger: .you("old words"), outcome: .done)
-        old.decision.target = "session “Fix the login bug” in lookout"
-        old.decision.confirmed = true
-        s.router.decisions.insert(old, at: 0)
-        var state: [String: String] = [:]
-        d.asker = { _, st in state = st; return ["route": .choice(.init(choice: "t1", confidence: 0.2, probabilities: ["t1": 0.4]))] }
+    /// The real routing effect, its call answered by `answer` (what it asked, and the state). Keep the store the test was
+    /// given: the dispatcher holds it weakly.
+    private func routed(_ d: RouterDispatcher, _ text: String,
+                        answer: @escaping ([String: JevClient.Question], [String: String]) -> [String: JevClient.Answer])
+        async -> (questions: [String: JevClient.Question], state: [String: String], found: RouterDispatcher.Classification?) {
+        var asked: [String: JevClient.Question] = [:], state: [String: String] = [:]
+        d.asker = { q, st in asked = q; state = st; return answer(q, st) }
         d.effects = .live(d)
-        _ = await d.predict("where does this go then", projects: [])
-        let examples = state[RouterDispatcher.examplesState] ?? ""
-        let line = examples.split(separator: "\n").first { $0.hasPrefix("“ship it”") }.map(String.init) ?? ""
-        let keys = line.split { !($0.isLetter || $0.isNumber) }.map(String.init)
-            .filter { $0.count > 1 && $0.hasPrefix("t") && $0.dropFirst().allSatisfy(\.isNumber) }
-        #expect(keys.count == 2 && keys[0] != keys[1], "\(line)")
-        #expect(examples.contains("“old words” → session “Fix the login bug” in lookout"))
+        let found = await d.predict(text, projects: [])
+        return (asked, state, found)
+    }
+
+    private static func choice(_ p: [String: Double]) -> JevClient.Answer {
+        .choice(.init(choice: p.max { $0.value < $1.value }?.key ?? "", confidence: 1, probabilities: p))
+    }
+
+    @Test func theRoutingCallOffersEachDestinationOnceNamedAndDescribed() async {
+        let (s, d, _) = setup()
+        let call = await routed(d, "where does this go then") { _, _ in ["route": Self.choice(["unclear": 1])] }
+        defer { withExtendedLifetime(s) {} }
+        // The message alone is the state: no history, no fenced descriptions.
+        #expect(call.state == ["message": "where does this go then"])
+        guard case .structuredChoice(let names, let criteria, _) = call.questions["route"] else { Issue.record("no route"); return }
+        // A session with a waiting card is one option, named by its title, its card in what it is doing now.
+        #expect(names.filter { $0 == "Fix the login bug" }.count == 1)
+        let login = criteria["Fix the login bug"] as? [String: Any]
+        #expect((login?["now"] as? String)?.hasPrefix("asks you a question: Which database?") == true)
+        #expect(login?["project"] as? String == "lookout")
+        #expect((criteria["Update the docs"] as? [String: Any])?["now"] as? String == "finished 1m ago")
+        #expect(names.contains("new session in lookout") && names.contains("new session in docs"))
+        #expect(Set(["change_lookout", "question", "compound", "unclear"]).isSubset(of: Set(names)))
+        // Asked beside it: whether it answers the waiting card, and the gates.
+        #expect(Set(call.questions.keys) == ["route", "answers0", "gate_setting", "gate_compound"])
+        guard case .structuredNoul(let instructions) = call.questions["answers0"] else { Issue.record("no check"); return }
+        #expect(((instructions as? [String: Any])?["card"] as? [String: Any])?["asks"] as? String == "Which database?")
+    }
+
+    @Test func whatYouLastToldASessionIsOnItsOption() async {
+        let (s, d, _) = setup()
+        var entry = RouterDecision(at: Date().addingTimeInterval(-120), trigger: .you("add a changelog entry"), outcome: .done)
+        entry.add(.sent(to: "Update the docs", text: "add a changelog entry", original: nil), session: "local_b")
+        s.router.decisions.append(entry)
+        let call = await routed(d, "and the date too") { _, _ in ["route": Self.choice(["unclear": 1])] }
+        guard case .structuredChoice(_, let criteria, _) = call.questions["route"] else { Issue.record("no route"); return }
+        #expect((criteria["Update the docs"] as? [String: Any])?["the user last told it"] as? String == "add a changelog entry (2m ago)")
+        #expect((criteria["Fix the login bug"] as? [String: Any])?["the user last told it"] == nil)
+    }
+
+    @Test func sessionsOfTheSameTitleAreTellApartByTheirProject() async {
+        let (s, d, _) = setup()
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix the login bug", folder: "/code/web",
+                                                    lastActivity: Date().addingTimeInterval(-30), running: false)
+        let call = await routed(d, "where does this go then") { _, _ in ["route": Self.choice(["unclear": 1])] }
+        guard case .structuredChoice(let names, _, _) = call.questions["route"] else { Issue.record("no route"); return }
+        #expect(names.contains("Fix the login bug (lookout)") && names.contains("Fix the login bug (web)"))
+    }
+
+    @Test func theAnswersBecomeTargetsAndAVerdict() async {
+        let (s, d, _) = setup()
+        defer { withExtendedLifetime(s) {} }
+        // The route sure of a session: its card is the target, and it is sure.
+        var call = await routed(d, "use sqlite for the database") { _, _ in
+            ["route": Self.choice(["Fix the login bug": 0.9, "Update the docs": 0.1]), "answers0": .noul(0.2),
+             "gate_setting": .noul(0.01), "gate_compound": .noul(0.01)]
+        }
+        #expect(call.found?.top?.target == "answer:local_a#w1" && call.found?.sure == true)
+        // A bare reply the route reads as unclear, that the card's check reads as its answer: the card.
+        d.forgetLive()
+        call = await routed(d, "lgtm") { _, _ in
+            ["route": Self.choice(["unclear": 0.9, "Fix the login bug": 0.1]), "answers0": .noul(0.8),
+             "gate_setting": .noul(0.01), "gate_compound": .noul(0.01)]
+        }
+        #expect(call.found?.top?.target == "answer:local_a#w1" && call.found?.sure == true)
+        // A setting turned off: Lookout's, whatever session works on it.
+        d.forgetLive()
+        call = await routed(d, "turn off the docs notifications") { _, _ in
+            ["route": Self.choice(["Update the docs": 0.9, "change_lookout": 0.1]), "answers0": .noul(0.01),
+             "gate_setting": .noul(0.9), "gate_compound": .noul(0.01)]
+        }
+        #expect(call.found?.top?.target == "change_lookout" && call.found?.sure == true)
+    }
+
+    @Test func theVerdictActsByWhatAWrongPickCosts() {
+        func verdict(_ route: [String: Double], answers: [(target: String, session: String, p: Double)] = [],
+                     gates: [String: Double] = [:]) -> (top: String?, sure: Bool) {
+            let v = RouterTools.verdict(route: route, answers: answers, gates: gates) {
+                $0.hasPrefix("session:") ? String($0.dropFirst(8)) : $0.hasPrefix("answer:") ? String($0.dropFirst(7).prefix { $0 != "#" }) : nil
+            }
+            return (v.ranked.first?.target, v.sure)
+        }
+        // A session at 0.7, a new session or Lookout's own at 0.6; no lead asked for.
+        #expect(verdict(["session:a": 0.7, "session:b": 0.3]) == ("session:a", true))
+        #expect(verdict(["session:a": 0.65, "session:b": 0.35]) == ("session:a", false))
+        #expect(verdict(["new:/x": 0.6, "session:b": 0.4]) == ("new:/x", true))
+        #expect(verdict(["question": 0.6, "session:b": 0.4]) == ("question", true))
+        #expect(verdict(["unclear": 0.9, "session:b": 0.1]) == ("unclear", false))
+        // A card's check standing out sends there; two standing out, or the route sure of another session, asks.
+        #expect(verdict(["unclear": 1], answers: [("answer:a#1", "a", 0.6)]) == ("answer:a#1", true))
+        #expect(verdict(["unclear": 1], answers: [("answer:a#1", "a", 0.6), ("answer:b#1", "b", 0.5)]).sure == false)
+        #expect(verdict(["session:b": 0.9], answers: [("answer:a#1", "a", 0.8)]) == ("session:b", false))
+        #expect(verdict(["answer:a#1": 0.9], answers: [("answer:a#1", "a", 0.8)]) == ("answer:a#1", true))
+        // A gate decides its intent first.
+        #expect(verdict(["session:a": 0.9], gates: ["gate_compound": 0.8]) == ("compound", true))
+        #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.8, "gate_compound": 0.1]) == ("change_lookout", true))
+        #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.7]) == ("session:a", true))
     }
 
     @Test func anAskAnsweredWithJevsSuggestionConfirmsIt() async {
@@ -576,26 +539,6 @@ import Testing
         d.pick(a, target: "session:local_b")
         await finish(d, f, a)
         #expect(decision(s, a)?.decision.confirmed == true)
-        #expect(s.routingExamples().contains("“add a changelog entry” → session “Update the docs” in docs"))
-    }
-
-    @Test func sendingTheSameWordsAgainKeepsTheirCorrectionAsAnExample() async {
-        let (s, _, _) = setup()
-        let d = RouterDispatcher(store: s)
-        s.router.decisions.append(RouterDecision(at: Date().addingTimeInterval(-60), trigger: .you("ship it"),
-                                                 outcome: .corrected(from: "session “A” in x", to: "session “B” in y")))
-        // An earlier send of the same words still waiting on an ask hides nothing either.
-        s.router.decisions.append(RouterDecision(at: Date().addingTimeInterval(-30), trigger: .you("Ship it")))
-        var examples: [String] = []
-        d.asker = { _, state in
-            examples.append(state[RouterDispatcher.examplesState] ?? "")
-            return ["route": .choice(.init(choice: "t1", confidence: 0.2, probabilities: ["t1": 0.4]))]
-        }
-        let id = d.submit("ship it")
-        await waitUntil { !examples.isEmpty }
-        #expect(examples.first?.contains("“ship it” → session “B” in y, not session “A” in x") == true)
-        #expect(s.routingExamples(excluding: id).contains("not session “A”"))
-        d.stopAll()
     }
 
     // MARK: Deterministic
