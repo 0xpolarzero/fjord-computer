@@ -29,9 +29,21 @@ enum RouterDepends {
     /// session", "session “Schema migration”", "the lookout session"). Words it shares with a session's title said of
     /// anything else ("waiting for tests", another session being "Fix tests") are not, nor is the turn's own ("this session").
     static func namesSession(_ message: String, title: String, project: String, ownProject: String) -> Bool {
+        namesSession(saidOfSessions(message), title: title, project: project, ownProject: ownProject)
+    }
+
+    /// `namesSession` on what `saidOfSessions` read of the message once: a message checked against every session isn't
+    /// read again for each.
+    static func namesSession(_ said: [String], title: String, project: String, ownProject: String) -> Bool {
+        said.contains { names($0, title: title, project: project, ownProject: ownProject) }
+    }
+
+    /// What a message says of a session: the words beside each "session" in it, in the same sentence, up to four each side.
+    static func saidOfSessions(_ message: String) -> [String] {
         let tokens = message.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
         func bare(_ token: String) -> String { token.filter { $0.isLetter } }
         func endsSentence(_ token: String) -> Bool { token.last.map { ".;:!?".contains($0) } ?? false }
+        var said: [String] = []
         for (i, token) in tokens.enumerated() where ["session", "sessions"].contains(bare(token)) {
             if i > 0, ["this", "my", "our", "current"].contains(bare(tokens[i - 1])), !endsSentence(tokens[i - 1]) { continue }
             var window: [String] = []
@@ -45,9 +57,9 @@ enum RouterDepends {
                     k += 1
                 }
             }
-            if names(window.joined(separator: " "), title: title, project: project, ownProject: ownProject) { return true }
+            said.append(window.joined(separator: " "))
         }
-        return false
+        return said
     }
 
     static func extra(_ options: [RouterTriage.WaitOption]) -> TriageExtra {

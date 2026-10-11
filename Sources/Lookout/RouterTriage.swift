@@ -749,11 +749,12 @@ extension Store {
             }
             // Read long ago: read again (an `upstream` added since), and bound by what was read meanwhile.
             if reposExpired(session.folder) { readUnwatched(card.id, session: session) }
+            let reading = waitReading(message, by: session)
             let named = things.values.filter { thing in
                 (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
                     && (thing.checks == .pending || thing.ciRunning
                         || (thing.checks != nil && max(thing.updatedAt, thing.ciChangedAt ?? .distantPast) > session.lastActivity))
-                    && bindsTo(thing, message: message, by: session)
+                    && bindsTo(thing, message: message, reading: reading, by: session)
             }
             guard named.count == 1, let thing = named.first else { continue }
             state.cards[i].triage?.watch = .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing),
@@ -766,8 +767,8 @@ extension Store {
 
     /// Whether a waiting message names this CI well enough to watch it without Jev: as `waitNamed` reads it, and, for a PR,
     /// by its ref, its link or its number (its title's words alone are not enough).
-    private func bindsTo(_ thing: Thing, message: String, by session: ClaudeSession) -> Bool {
-        guard waitNamed(.init(target: .ci(thing: thing.id), label: "", ref: RouterWaits.ref(thing)), in: message, by: session) else {
+    private func bindsTo(_ thing: Thing, message: String, reading: WaitReading, by session: ClaudeSession) -> Bool {
+        guard waitNamed(.init(target: .ci(thing: thing.id), label: "", ref: RouterWaits.ref(thing)), in: reading, by: session) else {
             return false
         }
         guard thing.kind == .pr else { return true }
