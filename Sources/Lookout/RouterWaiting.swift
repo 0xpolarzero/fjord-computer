@@ -120,7 +120,8 @@ extension Store {
     /// Whether the waiting session's final message names what it waits on, by Lookout's own reading (not Jev's): the other
     /// session's id, or its title's words or project (`RouterDepends.names`); the PR's ref (`owner/repo#12`, whole: not
     /// `owner/repo#123`), its number (`#12`), or two words of its title, unless the message names another PR by its ref; a
-    /// workflow's repo and its name together (a repo alone is any of its workflows), from Lookout's own data. A watch whose ref
+    /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named on
+    /// another branch too is either), from Lookout's own data. A watch whose ref
     /// isn't its thing's names nothing. A wait it doesn't name is never continued on its own.
     func waitNamed(_ watch: RouterTriage.Watch, in message: String, by session: ClaudeSession) -> Bool {
         let lower = message.lowercased()
@@ -136,9 +137,16 @@ extension Store {
             if thing.kind == .workflow {
                 if lower.contains(thingID.lowercased()) { return true }
                 guard let ref, LookoutGate.mentions(lower, ref: ref),
-                      let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty else { return false }
-                return lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w])"#,
-                                   options: .regularExpression) != nil
+                      let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty,
+                      lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w])"#,
+                                  options: .regularExpression) != nil,
+                      let branch = thing.branch, Self.namesBranch(lower, branch: branch) else { return false }
+                // The same workflow on another branch named too: which one it waits on isn't clear.
+                return !things.values.contains { other in
+                    other.id != thingID && other.kind == .workflow && other.repo.lowercased() == thing.repo.lowercased()
+                        && other.workflowName?.lowercased().trimmingCharacters(in: .whitespaces) == name
+                        && other.branch.map { $0.lowercased() != branch.lowercased() && Self.namesBranch(lower, branch: $0) } == true
+                }
             }
             if let ref, LookoutGate.mentions(lower, ref: ref) { return true }
             // Another PR named by its ref: this one's number or title words in the same message are about that one.
@@ -148,6 +156,13 @@ extension Store {
             let titled = RouterDepends.words(thing.workflowName ?? thing.title)
             return !titled.isEmpty && titled.intersection(RouterDepends.words(message)).count >= min(2, titled.count)
         }
+    }
+
+    /// Whether a (lowercased) message names a branch, whole: `main` isn't `maintenance`, `dev` isn't `develop` or `x/dev`.
+    static func namesBranch(_ lower: String, branch: String) -> Bool {
+        let branch = branch.lowercased()
+        return !branch.isEmpty && lower.range(of: #"(?<![\w./-])"# + NSRegularExpression.escapedPattern(for: branch) + #"(?![\w/-]|\.\w)"#,
+                                              options: .regularExpression) != nil
     }
 
     /// Whether a session is told on its own when its wait is over: its own choice, else Settings'.

@@ -308,7 +308,11 @@ import Testing
         workflow.kind = .workflow
         workflow.number = nil
         workflow.workflowName = "Release"
-        let (s, _) = store(watch: ciWatch, things: [twelve, workflow])
+        workflow.branch = "main"
+        var dev = workflow
+        dev.id = "workflow:o/app:7@dev"
+        dev.branch = "dev"
+        let (s, _) = store(watch: ciWatch, things: [twelve, workflow, dev])
         let a = s.claudeSessions["a"]!
         let pr = RouterTriage.Watch(target: .ci(thing: "pr:o/app#12"), label: "CI on o/app#12", ref: "o/app#12")
         #expect(s.waitNamed(pr, in: "Waiting for CI on o/app#12.", by: a))
@@ -324,7 +328,14 @@ import Testing
         #expect(!s.waitNamed(wf, in: "Waiting for CI on o/app#12", by: a))
         #expect(!s.waitNamed(wf, in: "Waiting for CI on o/app", by: a))
         #expect(!s.waitNamed(wf, in: "Waiting for the release workflow", by: a))
-        #expect(s.waitNamed(wf, in: "Waiting for the Release workflow on o/app", by: a))
+        #expect(s.waitNamed(wf, in: "Waiting for the Release workflow on o/app on main", by: a))
+        // And its branch: Release on main isn't Release on dev, and a message naming both names neither.
+        #expect(!s.waitNamed(wf, in: "Waiting for the Release workflow on o/app", by: a))
+        let wfDev = RouterTriage.Watch(target: .ci(thing: dev.id), label: "CI: Release on dev", ref: "o/app")
+        #expect(!s.waitNamed(wfDev, in: "Waiting for Release on o/app on main", by: a))
+        #expect(s.waitNamed(wfDev, in: "Waiting for Release on o/app on dev.", by: a))
+        #expect(!s.waitNamed(wfDev, in: "Waiting for Release on o/app on main and dev", by: a))
+        #expect(!s.waitNamed(wfDev, in: "Waiting for Release on o/app on develop", by: a))
         // The gate's own reading of a ref is as whole.
         #expect(LookoutGate.names("mark acme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
         #expect(!LookoutGate.names("mark acme/api#123 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
