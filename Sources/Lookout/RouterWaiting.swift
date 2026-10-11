@@ -195,6 +195,8 @@ extension Store {
                         || RouterDepends.names(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
             }
             guard namedSessions.count <= 1 else { return false }
+            // A workflow or a PR named too: which of them it waits on isn't clear.
+            guard namedCI(lower, excluding: nil).isEmpty else { return false }
             if lower.contains(id.lowercased()) { return true }
             guard let other = claudeSessions[id] else { return false }
             return RouterDepends.names(message, title: other.title, project: other.folderName, ownProject: session.folderName)
@@ -202,7 +204,11 @@ extension Store {
             guard let thing = things[thingID] else { return false }
             let ref = RouterWaits.ref(thing)
             if let given = watch.ref, given.lowercased() != ref?.lowercased() { return false }
+            // A session named too ("the Build workflow … and the Schema migration session"): which it waits on isn't clear.
+            if hasNamedSession(message, lower: lower, by: session) { return false }
             if thing.kind == .workflow {
+                // A PR named too: which it waits on isn't clear.
+                if !Self.prsNamed(lower, repo: thing.repo).isEmpty { return false }
                 if lower.contains(thingID.lowercased()) { return true }
                 guard let ref, LookoutGate.mentions(lower, ref: ref),
                       let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty,
@@ -230,6 +236,8 @@ extension Store {
             }
             // Two PRs named ("#1 and #2"): which it waits on isn't clear, whichever of them Jev picked.
             guard Self.prsNamed(lower, repo: thing.repo).count <= 1 else { return false }
+            // A workflow named too: which it waits on isn't clear.
+            guard namedCI(lower, excluding: nil).subtracting(Self.prsNamed(lower)).isEmpty else { return false }
             if let ref, LookoutGate.mentions(lower, ref: ref) { return true }
             if let number = thing.number, Self.linksPR(lower, repo: thing.repo, number: number) { return true }
             // Another PR named by its ref: this one's number or title words in the same message are about that one.
@@ -239,6 +247,31 @@ extension Store {
             let titled = RouterDepends.words(thing.workflowName ?? thing.title)
             return !titled.isEmpty && titled.intersection(RouterDepends.words(message)).count >= min(2, titled.count)
         }
+    }
+
+    /// Whether the message names another live session, by its id, title words or project.
+    func hasNamedSession(_ message: String, lower: String, by session: ClaudeSession) -> Bool {
+        claudeSessions.values.contains { candidate in
+            !candidate.isArchived && candidate.id != session.id
+                && (lower.range(of: #"(?<![\w-])"# + NSRegularExpression.escapedPattern(for: candidate.id.lowercased()) + #"(?![\w-])"#,
+                                options: .regularExpression) != nil
+                    || RouterDepends.names(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
+        }
+    }
+
+    /// The CI a (lowercased) message names: PRs by ref or link, workflows by repo, name and branch together.
+    func namedCI(_ lower: String, excluding: String?) -> Set<String> {
+        var found = Self.prsNamed(lower)
+        for thing in things.values where thing.kind == .workflow && thing.id != excluding {
+            guard let ref = RouterWaits.ref(thing), LookoutGate.mentions(lower, ref: ref),
+                  let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty,
+                  lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w])"#,
+                              options: .regularExpression) != nil,
+                  [thing.currentBranch, thing.branch].compactMap({ $0?.lowercased() }).contains(where: { Self.namesBranch(lower, branch: $0) })
+            else { continue }
+            found.insert("\(thing.repo.lowercased()):\(name)")
+        }
+        return found
     }
 
     /// Whether a (lowercased) message links the PR: `github.com/owner/repo/pull/12`, not `…/pull/123`.

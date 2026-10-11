@@ -706,6 +706,26 @@ import Testing
         #expect(!s.waitNamed(one, in: "Waiting for the migration session and the billing rewrite session", by: a))
     }
 
+    @Test func aWorkflowAndASessionNamedTogetherAreNeverContinuedOnTheirOwn() {
+        var build = InboxFixture.pr(1, repo: "o/app")
+        build.id = "workflow:o/app:1@main"
+        build.kind = .workflow
+        build.number = nil
+        build.workflowName = "Build"
+        build.branch = "main"
+        let (s, _) = store(watch: ciWatch, things: [build])
+        let a = s.claudeSessions["a"]!
+        let wf = RouterTriage.Watch(target: .ci(thing: build.id), label: "", ref: "o/app")
+        let one = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "")
+        let mixed = "Waiting for the Build workflow in o/app on main and the migration session"
+        #expect(!s.waitNamed(wf, in: mixed, by: a))
+        #expect(!s.waitNamed(one, in: mixed, by: a))
+        #expect(s.waitNamed(wf, in: "Waiting for the Build workflow in o/app on main", by: a))
+        #expect(s.waitNamed(one, in: "Waiting for the migration session to finish", by: a))
+        #expect(!s.waitNamed(ciWatch, in: "Waiting for o/app#1 and the migration session", by: a))
+        #expect(!s.waitNamed(ciWatch, in: "Waiting for o/app#1 and the Build workflow in o/app on main", by: a))
+    }
+
     @Test func aFolderWithNoRemoteYetIsReadAgainOnceItHasOne() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lk-remotes-\(UUID().uuidString)/app")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent(".git"), withIntermediateDirectories: true)
