@@ -163,10 +163,11 @@ extension RouterCard {
 
 extension Store {
     /// `RouterCard.canReopen`, and once the app's sessions have been read, only while its session is still there and not
-    /// archived: a card handled before its session went (only open cards are marked gone) isn't opened again on nothing.
+    /// archived: a card handled before its session went (only open cards are marked gone) isn't opened again on nothing. A
+    /// read failing since goes by the sessions last read.
     func routerCanReopen(_ card: RouterCard) -> Bool {
         guard card.canReopen else { return false }
-        guard claudeLink == .ok else { return true }
+        guard claudeSessionsRead else { return true }
         return claudeSessions[card.sessionID].map { !$0.isArchived } ?? false
     }
 }

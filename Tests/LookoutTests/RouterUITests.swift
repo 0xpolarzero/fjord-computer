@@ -213,8 +213,18 @@ import UserNotifications
         model.select(ids[1], store: store)
         #expect(keys.key(key(kVK_Space, " "), responder: nil))
         #expect(ids.allSatisfy { id in store.router.cards.first { $0.id == id }?.isOpen == false })
+        // A read failing since: the sessions last read still say they are gone, for Reopen and Space alike.
+        for link in [ClaudeLink.unreadable, .missing] {
+            store.claudeLink = link
+            for card in handled { #expect(!store.routerCanReopen(card)) }
+            model.reopen(ids[0], store: store)
+            model.select(ids[1], store: store)
+            #expect(keys.key(key(kVK_Space, " "), responder: nil))
+            #expect(ids.allSatisfy { id in store.router.cards.first { $0.id == id }?.isOpen == false })
+        }
         // Before the sessions are read, nothing is known gone.
         store.claudeLink = .off
+        store.claudeSessionsRead = false
         #expect(store.routerCanReopen(handled[1]))
     }
 

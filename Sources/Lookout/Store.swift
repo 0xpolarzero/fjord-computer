@@ -173,7 +173,12 @@ final class Store {
     /// Filled in right after launch (see `start`): the Keychain read stays off the main thread.
     var hasTypesafeKey = false
     var iconError: String?
-    var claudeLink: ClaudeLink = .off
+    var claudeLink: ClaudeLink = .off {
+        didSet { if claudeLink == .ok { claudeSessionsRead = true } }
+    }
+    /// Claude's sessions have been read since Lookout started reading them: a read failing after that leaves the last ones
+    /// known (`claudeSessions`), not nothing known.
+    var claudeSessionsRead = false
 
     var me: GHUser? {
         didSet {

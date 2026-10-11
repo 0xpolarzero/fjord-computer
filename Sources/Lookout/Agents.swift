@@ -607,6 +607,7 @@ extension Store {
             if persists { watchClaude() }
             claudeSessions = [:]
             claudeLink = .off
+            claudeSessionsRead = false
         }
     }
 }
