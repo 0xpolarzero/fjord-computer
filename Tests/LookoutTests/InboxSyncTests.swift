@@ -440,7 +440,10 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         // Not an event once the thing no longer has it.
         let t = try! #require(InboxSync.thing(node()))
         #expect(InboxSync.isEvent("comment:c1", of: t) && !InboxSync.isEvent("comment:gone", of: t))
-        #expect(InboxSync.isEvent("requested:bob:1", of: t) && !InboxSync.isEvent("checks:failing", of: t))
+        let asked = Int(ISO8601DateFormatter().date(from: "2026-10-04T10:00:00Z")!.timeIntervalSince1970)
+        #expect(InboxSync.isEvent("requested:bob:\(asked)", of: t) && !InboxSync.isEvent("checks:failing", of: t))
+        // An older request of the same reviewer (reviewed since, then asked again) is gone: only the current one stays.
+        #expect(!InboxSync.isEvent("requested:bob:1", of: t))
     }
 
     @Test func aThreadReopenedIsNewAgain() {

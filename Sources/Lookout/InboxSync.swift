@@ -553,6 +553,11 @@ enum InboxSync {
         return thing
     }
 
+    /// When a pending review request was made, as its fact's key has it: the thing's creation when GitHub didn't say.
+    static func requestTime(_ reviewer: String, of thing: Thing) -> Date {
+        thing.reviewRequests.first { $0.reviewer.caseInsensitiveCompare(reviewer) == .orderedSame }?.at ?? thing.createdAt
+    }
+
     /// Whether a fact's key is an event the thing still has (a comment, a review, a commit, a thread's reply, a pending
     /// request by when it was made), rather than a state that comes and goes (checks, a label, a score, conflicts).
     static func isEvent(_ key: String, of thing: Thing) -> Bool {
@@ -570,7 +575,8 @@ enum InboxSync {
             // Unresolved is part of it: resolved, it is gone, and reopened later it is new again.
             return thing.threads.contains { !$0.isResolved && "\($0.id):\($0.lastReplyID)" == id }
         case "requested":
-            return thing.requestedReviewers.contains { id.hasPrefix($0.lowercased() + ":") }
+            // The request as it is now, who and when: a review then a new request is a new one, the old one gone.
+            return thing.requestedReviewers.contains { "\($0.lowercased()):\(Int(requestTime($0, of: thing).timeIntervalSince1970))" == id }
         default:
             return false
         }
