@@ -578,6 +578,17 @@ import Testing
         #expect(await s.waitOptions(for: s.claudeSessions["a"]!).map(\.key) == ["s0"])
     }
 
+    @Test func aFailureWhileOtherChecksStillRunIsOfferedAsRunningCI() async {
+        // Lint failed before the waiting turn ended; the longer build still runs.
+        var pr = ci(.failing)
+        pr.ciRunning = true
+        pr.updatedAt = Date().addingTimeInterval(-3600)
+        let (s, _) = store(watch: ciWatch, things: [pr])
+        let option = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "c0" }
+        #expect(option?.watch.target == .ci(thing: "pr:o/app#1"))
+        #expect(option?.hint.hasSuffix("checks running") == true)
+    }
+
     @Test func aForksWorkflowsOfTheSameNameAndBranchAreToldApartByTheirRepo() async {
         // A fork's clone tracks its own repo and the one it was forked from: both run "Test" on main.
         func workflow(_ repo: String) -> Thing {
