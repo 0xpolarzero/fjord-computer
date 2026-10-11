@@ -882,6 +882,23 @@ import Testing
         #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == b })
     }
 
+    @Test func withoutJevATitleIsTheAddresseeOnlyWhenNoSessionOrProjectPastTheLimitsSharesIt() async {
+        let (s, d, f) = setup()
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        // Newer idle sessions push the only session of the docs project past the ones offered; then one titled "docs".
+        for i in 0..<21 {
+            s.claudeSessions["local_n\(i)"] = ClaudeSession(id: "local_n\(i)", title: "Chore \(i)", folder: "/code/other",
+                                                           lastActivity: Date().addingTimeInterval(-10 - Double(i)))
+        }
+        s.claudeSessions["local_x"] = ClaudeSession(id: "local_x", title: "docs", folder: "/code/evil", lastActivity: Date())
+        let a = d.submit("tell docs to publish the release notes")
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == a })
+        // Only the session's own title, past the limits too: it is the one meant.
+        #expect(RouterTools.addressedSession("tell the Update the docs session to ship", store: s) == "local_b")
+        #expect(RouterTools.addressedSession("tell docs to ship", store: s) == nil)
+    }
+
     @Test func withoutJevAStartRequestStartsInTheProjectItNamesNeverInItsSession() async {
         let (s, d, f) = setup()
         f.rankError = RouterTools.Failure("no TypeSafe key is set")

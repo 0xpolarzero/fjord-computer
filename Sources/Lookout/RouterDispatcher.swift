@@ -585,7 +585,7 @@ struct RouterAskBack: Identifiable, Equatable {
             // Where your own words send it, resolved here and not by Jev ("start a session in lookout …", "tell CI to …"):
             // yours, as a pin is, so a follow-up may go there.
             let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
-            if RouterTools.destination(job.text, targets) == top.target { chosen(job) }
+            if RouterTools.destination(job.text, targets, store: store) == top.target { chosen(job) }
             return try await route(job, to: top.target)
         }
         askBack(job, found)
@@ -685,7 +685,7 @@ struct RouterAskBack: Identifiable, Equatable {
             return Classification(try await effects.rank(job.tools, job.text, projects, history))
         } catch {
             let targets = job.tools.targets(store, projects: projects.isEmpty ? nil : Set(projects))
-            let (ranked, named) = RouterTools.unassisted(job.text, targets)
+            let (ranked, named) = RouterTools.unassisted(job.text, targets, store: store)
             if let named { return Classification(ranked: [Scored(target: named, p: 1)], sure: true, assisted: false) }
             let total = Double(max(1, ranked.reduce(0) { $0 + $1.score }))
             return Classification(ranked: ranked.map { Scored(target: $0.target, p: Double($0.score) / total) }, sure: false, assisted: false)

@@ -770,7 +770,7 @@ final class RouterMCPServer: @unchecked Sendable {
     /// Without Jev: targets ranked by the words the message shares with their titles and projects, for you to pick from.
     /// `named`: where the message's own address sends it (`destination`), the only one gone to without your pick: a title
     /// the words merely mention could be a session's bait ("the tests").
-    static func unassisted(_ message: String, _ targets: [Target]) -> (ranked: [(target: String, score: Int)], named: String?) {
+    static func unassisted(_ message: String, _ targets: [Target], store: Store) -> (ranked: [(target: String, score: Int)], named: String?) {
         let text = message.lowercased()
         let words = Set(text.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
         func mentions(_ name: String) -> Bool {
@@ -782,7 +782,7 @@ final class RouterMCPServer: @unchecked Sendable {
         // right after the request ("start a session in lookout to …"), else you pick among the projects the words mention.
         if startRequest(message) != nil {
             let projects = targets.filter { $0.target.hasPrefix("new:") }
-            return (projects.filter { mentions($0.project) }.map { ($0.target, 3) }, destination(message, targets))
+            return (projects.filter { mentions($0.project) }.map { ($0.target, 3) }, destination(message, targets, store: store))
         }
         var ranked: [(String, Int)] = []
         for t in targets where t.target != "unclear" {
@@ -794,13 +794,13 @@ final class RouterMCPServer: @unchecked Sendable {
             if score > 0 { ranked.append((t.target, score)) }
         }
         ranked.sort { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
-        return (ranked, destination(message, targets))
+        return (ranked, destination(message, targets, store: store))
     }
 
     /// Where the message's own address, at its very start, sends it, resolved here and not by Jev: a request to start a
-    /// session followed by "in <project>" (one word, one project), else "tell/ask (the) X (session) to …" or "X: …" where X
-    /// is exactly one session's title or its project (one session in it). Nil for anything else, or more than one fit.
-    static func destination(_ message: String, _ targets: [Target]) -> String? {
+    /// session followed by "in <project>" (one word, one project), else the session the message is addressed to
+    /// (`addressedSession`) when it is among the targets. Nil for anything else, or more than one fit.
+    static func destination(_ message: String, _ targets: [Target], store: Store) -> String? {
         if let start = startRequest(message) {
             guard let p = start.project else { return nil }
             let fits = targets.filter {
@@ -808,10 +808,25 @@ final class RouterMCPServer: @unchecked Sendable {
             }
             return fits.count == 1 ? fits[0].target : nil
         }
+        guard let id = addressedSession(message, store: store), targets.contains(where: { $0.target == "session:\(id)" }) else { return nil }
+        return "session:\(id)"
+    }
+
+    /// The session a message is addressed to at its start ("tell/ask (the) X (session) to …", "X: …"): X is exactly one
+    /// session's title or its project's name, counted among every session not archived and every project Lookout knows,
+    /// never only the few offered to Jev (an older session of the same title, or a project of that name, past a limit
+    /// would hide that X means two things). A title another session or a project also has, or a project with more than
+    /// one session, names none.
+    static func addressedSession(_ message: String, store: Store) -> String? {
         guard let to = addressee(message) else { return nil }
-        let fits = Set(targets.filter { $0.target.hasPrefix("session:") && ($0.title.lowercased() == to || $0.project.lowercased() == to) }
-            .compactMap(\.sessionID))
-        return fits.count == 1 ? "session:\(fits.first!)" : nil
+        let sessions = store.claudeSessions.values.filter { !$0.isArchived }
+        func named(_ folder: String) -> Bool {
+            !folder.isEmpty && (store.folderName(folder).lowercased() == to || (folder as NSString).lastPathComponent.lowercased() == to)
+        }
+        let projects = Set((store.knownFolders + sessions.map(\.folderKey)).filter(named))
+        let fits = sessions.filter { $0.title.lowercased() == to || projects.contains($0.folderKey) }
+        guard fits.count == 1, let session = fits.first, projects.allSatisfy({ $0 == session.folderKey }) else { return nil }
+        return session.id
     }
 
     /// A message that asks for a new session (`SessionStart.startPhrase`, at its start or after its @projects), and the
