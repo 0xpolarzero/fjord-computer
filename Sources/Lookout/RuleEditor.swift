@@ -115,7 +115,7 @@ struct RuleEditor: View {
             let toMe = rule.scope.to?.include == [.me]
             let offered = roles.filter { !($0 == .reviewRequested && byMe && toMe) }
             PeopleSlot(pick: Binding(get: { rule.scope.to ?? Pick() }, set: { rule.scope.to = $0 }), store: store,
-                       tone: tone("to"), hidden: byMe ? [.me] : [], teams: kinds.contains(.pr))
+                       tone: tone("to"), hidden: EditorData.loginOnlyHidden.union(byMe ? [PersonRef.me] : []), teams: kinds.contains(.pr))
                 .slotWord(SlotWord(
                     name: "to",
                     text: picked.count == roles.count ? "to" : "to (" + picked.map(RuleEditing.roleTitle).joined(separator: ", ") + ")",
@@ -332,12 +332,22 @@ struct ConditionRow: View {
         return items.filter { allowed.contains($0.0) || selected.contains($0.0) }
     }
 
+    /// People a condition's pick never matches, so not offered: yourself for your own PR's reviews; maintainers and bots
+    /// where people are known by login only.
+    private var hiddenPeople: Set<PersonRef> {
+        var hidden: Set<PersonRef> = []
+        let tag = RuleEditing.tag(condition)
+        if byOnlyMe, ["approved", "changesRequested"].contains(tag) { hidden.insert(.me) }
+        if ["newCommits", "mentions"].contains(tag) { hidden.formUnion(EditorData.loginOnlyHidden) }
+        return hidden
+    }
+
     @ViewBuilder private var values: some View {
         switch condition {
         case .newComment, .newReview, .newCommits, .mentions, .lastComment, .approved, .changesRequested:
             PeopleSlot(pick: Binding(get: { condition.people ?? Pick() }, set: { condition = condition.with(people: $0) }),
                        store: store, placeholder: "anyone", tone: tone,
-                       hidden: byOnlyMe && ["approved", "changesRequested"].contains(RuleEditing.tag(condition)) ? [.me] : [])
+                       hidden: hiddenPeople)
             sinceChip
         case .unresolvedThreads(let started, let last):
             if started != nil {

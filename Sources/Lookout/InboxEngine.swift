@@ -122,6 +122,7 @@ enum InboxEngine {
         }
         if let to = scope.to {
             if scope.toRoles.isEmpty { flag("to", "Pick at least one of assigned, review requested, mentioned") }
+            if loginOnly(to) { flag("to", "Who a thing is for is known by login only: maintainers and bots can't be told") }
             if hasTeam(to) {
                 if !kinds.contains(.pr) { flag("to", "Issues aren't assigned to teams") }
                 else if !scope.toRoles.contains(.reviewRequested) { flag("to", "Teams only come with review requested") }
@@ -149,6 +150,8 @@ enum InboxEngine {
                 if overlap(p) { add(bothReason) }
                 if hasTeam(p) { add("Teams don't write comments") }
                 if since == .myLastReview, kinds.contains(.issue) { add("Issues have no reviews") }
+                if case .newCommits = condition, loginOnly(p) { add("Commit authors are known by login only: maintainers and bots can't be told") }
+                if case .mentions = condition, loginOnly(p) { add("Mentioned people are known by login only: maintainers and bots can't be told") }
             case .lastComment(let p):
                 if overlap(p) { add(bothReason) }
             case .approved(let p), .changesRequested(let p):
@@ -611,6 +614,11 @@ enum InboxEngine {
 
     private static func hasTeam(_ pick: Pick<PersonRef>) -> Bool {
         (pick.include + pick.except).contains { if case .team = $0 { true } else { $0 == .myTeams } }
+    }
+
+    /// Names maintainers or bots, which people known by login only (assignees, mentions, commit authors) can't be told to be.
+    private static func loginOnly(_ pick: Pick<PersonRef>) -> Bool {
+        (pick.include + pick.except).contains { $0 == .maintainers || $0 == .bots }
     }
 
     /// The slot or pick names only me.

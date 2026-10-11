@@ -470,6 +470,10 @@ struct EditorData {
         return counts.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
     }
 
+    /// Not offered where people are known by login only (who a thing is for, commit authors, the mentioned): they can't be
+    /// told to be maintainers or bots (`InboxEngine.problems` flags them there).
+    static let loginOnlyHidden: Set<PersonRef> = [.maintainers, .bots]
+
     func peopleOptions(_ query: String, _ pick: Pick<PersonRef>, teams allowsTeams: Bool = false) -> [SlotOption<PersonRef>] {
         var q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.hasPrefix("@") { q.removeFirst() }

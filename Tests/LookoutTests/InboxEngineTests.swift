@@ -234,6 +234,18 @@ import Testing
         #expect(InboxEngine.evaluate(things: [pr()], categories: [category], marks: [:], context: context()).isEmpty)
     }
 
+    @Test func maintainersAndBotsAreFlaggedWherePeopleAreKnownByLoginOnly() {
+        func problems(_ scope: Scope, _ match: MatchMode, _ conditions: [Condition]) -> [InboxEngine.Problem] {
+            InboxEngine.problems(Rule(scope: scope, match: match, conditions: conditions))
+        }
+        let pr = Scope(kinds: [.pr])
+        #expect(problems(pr, .any, [.newCommits(by: Pick(include: [.bots]))]).map(\.condition) == [0])
+        #expect(problems(pr, .any, [.mentions(Pick(include: [.me], except: [.maintainers]))]).map(\.condition) == [0])
+        #expect(problems(Scope(kinds: [.pr], to: Pick(include: [.bots])), .any, []).map(\.slot) == ["to"])
+        // Comment and review authors are known in full.
+        #expect(problems(pr, .any, [.newComment(by: Pick(include: [.bots])), .newReview(by: Pick(include: [.maintainers]))]).isEmpty)
+    }
+
     @Test func workflowsScopeByBranchAndName() {
         let rule = { (on: [String]?, named: [String]?) in
             Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/one")]), on: on, named: named),
