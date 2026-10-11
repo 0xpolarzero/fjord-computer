@@ -301,7 +301,8 @@ enum InboxSync {
       reviews(last: 10) { nodes { id state submittedAt body authorAssociation author { \(personNode) } } }
       reviewThreads(first: \(threadsFirst)) { totalCount \(threadFields) }
       commits(last: 5) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
-      head: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 50) { totalCount nodes {
+      head: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 50) { totalCount
+        checkRunCountsByState { state count } statusContextCountsByState { state count } nodes {
         __typename ... on CheckRun { databaseId status } ... on StatusContext { context state createdAt } } } } } } }
     }
     fragment I on Issue {
@@ -499,7 +500,8 @@ enum InboxSync {
 
     /// Which execution of a commit's checks GitHub shows, and whether any of them still runs: the check runs by id (a rerun
     /// makes new ones; one finishing keeps its own) and the statuses by context and when last posted. Only the first page is
-    /// read: more than that counts in the identity by number.
+    /// read by id; whether any runs comes from GitHub's counts of all of them by state, and past the first page those
+    /// counts are in the identity too (one beyond it failing again where it passed is another outcome).
     static func ciExecution(sha: String, contexts: [String: Any]) -> (run: String, running: Bool) {
         var ids: [String] = []
         var running = false
@@ -513,8 +515,19 @@ enum InboxSync {
                 running = running || checkState(c["state"]) == .pending
             }
         }
+        func counts(_ key: String) -> [(state: String, count: Int)] {
+            (contexts[key] as? [Any] ?? []).compactMap { $0 as? [String: Any] }.compactMap { c in
+                (c["state"] as? String).flatMap { state in (c["count"] as? Int).map { (state, $0) } }
+            }
+        }
+        let runs = counts("checkRunCountsByState"), statuses = counts("statusContextCountsByState")
+        let unfinished: Set<String> = ["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"]
+        running = running || runs.contains { unfinished.contains($0.state) && $0.count > 0 }
+            || statuses.contains { ($0.state == "PENDING" || $0.state == "EXPECTED") && $0.count > 0 }
         let total = contexts["totalCount"] as? Int ?? seen.count
-        return (ciRun(sha: sha, ids: ids) + (total > seen.count ? "+\(total)" : ""), running)
+        guard total > seen.count else { return (ciRun(sha: sha, ids: ids), running) }
+        let tally = (runs.map { "c\($0.state)=\($0.count)" } + statuses.map { "s\($0.state)=\($0.count)" }).sorted()
+        return (ciRun(sha: sha, ids: ids + tally) + "+\(total)", running)
     }
 
     /// `ci:<commit>:<digest of the checks' ids>`, whatever order they came in.

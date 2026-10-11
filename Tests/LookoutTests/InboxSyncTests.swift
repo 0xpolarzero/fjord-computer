@@ -80,6 +80,26 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(try #require(InboxSync.thing(node())).ciRun == nil)
     }
 
+    @Test func checksPastTheFirstPageCountFromGitHubsTallies() throws {
+        // Two of three check runs read by id; the third, past the page, still runs.
+        func head(_ tally: [String: Int]) -> [String: Any] {
+            let runs: [[String: Any]] = [["__typename": "CheckRun", "databaseId": 1, "status": "COMPLETED"],
+                                         ["__typename": "CheckRun", "databaseId": 2, "status": "COMPLETED"]]
+            return ["head": ["nodes": [["commit": ["oid": "abc", "statusCheckRollup": [
+                "state": "FAILURE", "contexts": ["totalCount": 3, "nodes": runs,
+                                                 "checkRunCountsByState": tally.map { ["state": $0.key, "count": $0.value] },
+                                                 "statusContextCountsByState": []]]]]]]]
+        }
+        let going = try #require(InboxSync.thing(node(head(["FAILURE": 1, "SUCCESS": 1, "IN_PROGRESS": 1]))))
+        #expect(going.ciRunning)
+        let done = try #require(InboxSync.thing(node(head(["FAILURE": 1, "SUCCESS": 2]))))
+        #expect(!done.ciRunning && done.ciRun?.hasPrefix("ci:abc:") == true)
+        #expect(try #require(InboxSync.thing(node(head(["SUCCESS": 2, "FAILURE": 1])))).ciRun == done.ciRun)
+        // The one past the page rerun, failing where it passed: another outcome, another execution.
+        let again = try #require(InboxSync.thing(node(head(["FAILURE": 2, "SUCCESS": 1]))))
+        #expect(!again.ciRunning && again.ciRun != done.ciRun)
+    }
+
     @Test func aPullRequestBecomesAThing() throws {
         let t = try #require(InboxSync.thing(node()))
         #expect(t.id == "pr:o/r#12")
