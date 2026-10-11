@@ -30,7 +30,7 @@ struct InboxListView: View {
     var body: some View {
         // Worked out once per redraw: the header, the list and the toolbar read the same rows.
         let entries = entries
-        let unread = tab == .done && !searching ? 0 : entries.reduce(0) { $1.isUnread ? $0 + 1 : $0 }
+        let unread = unread(entries)
         AppPage(title: title, subtitle: subtitle(entries, unread: unread), leadingInset: leadingInset) {
             InboxSearchField(search: search)
             if unread > 0 {
@@ -63,6 +63,14 @@ struct InboxListView: View {
         .motion(Theme.Motion.fade, value: store.inboxRevision)
         // A new search picks its first result, so ↩ opens it straight away.
         .onChange(of: search.query) { hub.selection = searching ? entries.first.map { "i:" + $0.id } : nil }
+    }
+
+    /// An unsearched category shares the inbox's count; a query that filters rows counts only what is shown.
+    func unread(_ entries: [InboxEntry]) -> Int {
+        if tab == .done && !searching { return 0 }
+        // The row search splits on spaces, so other whitespace can filter rows even when the header isn't searching.
+        if case .category(let id) = tab, search.query.split(separator: " ").isEmpty { return store.unreadCount(id) }
+        return entries.reduce(0) { $1.isUnread ? $0 + 1 : $0 }
     }
 
     private func scroll(_ proxy: ScrollViewProxy, to request: ScrollRequest?) {
