@@ -15,6 +15,21 @@ import Testing
         return thing
     }
 
+    @Test func aSaveThatCannotBeMadeIsSaidEvenOfflineOrSignedOut() {
+        let store = InboxFixture.store([])
+        let hub = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: HubState())
+        store.actionsSaveProblem = "Saving actions.json failed: full"
+        store.unreachable = true
+        var s = hub.sync(now: Date())
+        #expect(s.text == "Not saved" && s.detail?.contains("full") == true && s.detail?.contains("couldn't reach GitHub") == true)
+        store.authError = "GitHub rejected the token"
+        s = hub.sync(now: Date())
+        #expect(s.text == "Not saved" && s.detail?.contains("can't sign in to GitHub") == true)
+        // Saved again: GitHub's state is back.
+        store.actionsSaveProblem = nil
+        #expect(hub.sync(now: Date()).text == "Sign-in problem")
+    }
+
     @Test func theCIBadgeCountsFailingWorkflowsNotRepos() {
         var ci = InboxStore.ci
         ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/one"), .repo("b/two")])),

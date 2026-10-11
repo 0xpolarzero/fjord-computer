@@ -311,7 +311,7 @@ extension LookoutHub {
         .tip(s.title, s.detail)
     }
 
-    private struct SyncState {
+    struct SyncState {
         var color: Color
         var text: String
         var title: String
@@ -320,8 +320,13 @@ extension LookoutHub {
         var spinning = false
     }
 
-    private func sync(now: Date) -> SyncState {
+    func sync(now: Date) -> SyncState {
         let refresh = "Click to check now · \(store.shortcut(.refresh).display)"
+        // First: edits being lost at quit are what you can't see otherwise (GitHub's state is said under it).
+        if let problem = store.saveProblem {
+            let also = store.authError != nil ? "\nAlso: can't sign in to GitHub · Click for Settings" : store.unreachable ? "\nAlso: couldn't reach GitHub" : ""
+            return SyncState(color: Theme.amber, text: "Not saved", title: "Changes aren't being saved", detail: problem + also)
+        }
         if let error = store.authError {
             return SyncState(color: Theme.red, text: "Sign-in problem", title: "Can't sign in to GitHub",
                              detail: error + "\nClick for Settings")
@@ -329,9 +334,6 @@ extension LookoutHub {
         if store.unreachable {
             return SyncState(color: Theme.amber, text: "Not syncing", title: "Couldn't reach GitHub",
                              detail: "Check your connection · Lookout tries again on its own\n" + refresh)
-        }
-        if let problem = store.saveProblem {
-            return SyncState(color: Theme.amber, text: "Not saved", title: "Changes aren't being saved", detail: problem)
         }
         if let error = store.inboxError {
             return SyncState(color: Theme.amber, text: "Inbox didn't sync", title: "GitHub didn't answer the inbox's search",
