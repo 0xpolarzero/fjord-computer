@@ -120,6 +120,48 @@ extension Store {
 
     func moveCategory(from source: IndexSet, to destination: Int) { categories.move(fromOffsets: source, toOffset: destination) }
 
+    /// Your assignment rated (and marked, and acted on) before GitHub said when it was made, as `assigned`, is the same
+    /// assignment once its time is known (`assigned:<t>`): its rating, its facts' marks (seen, Done, notified) and its
+    /// actions' records are carried over to that stamp, once, rather than it coming in again as new. Called as things change.
+    func carryAssignmentStamps() {
+        let legacy = ":assigned"
+        func isLegacy(_ key: String) -> Bool { key.hasPrefix("importance:") && key.hasSuffix(legacy) }
+        let candidates = things.values.filter { thing in
+            thing.assignedAt != nil && (thing.signals?.importance?.stamp == "assigned"
+                || marks[thing.id].map { m in (m.seen.union(m.acked).union(m.notified)).contains(where: isLegacy) } ?? false)
+        }
+        guard !candidates.isEmpty else { return }
+        let context = inboxContext
+        var carried: [String: String] = [:]
+        var updated = things, newMarks = marks
+        for thing in candidates {
+            guard let stamp = InboxEngine.importanceStamp(thing, context: context), stamp.hasPrefix("assigned:") else { continue }
+            let suffix = String(stamp.dropFirst("assigned".count))
+            func carry(_ key: String) -> String { isLegacy(key) ? key + suffix : key }
+            carried[thing.id] = suffix
+            if thing.signals?.importance?.stamp == "assigned" { updated[thing.id]?.signals?.importance?.stamp = stamp }
+            if var m = newMarks[thing.id] {
+                m.seen = Set(m.seen.map(carry))
+                m.acked = Set(m.acked.map(carry))
+                m.notified = Set(m.notified.map(carry))
+                m.doneFacts = m.doneFacts?.map { var f = $0; f.key = carry(f.key); return f }
+                newMarks[thing.id] = m
+            }
+        }
+        guard !carried.isEmpty else { return }
+        var ledger = actionLedger
+        for (key, run) in ledger.runs where isLegacy(run.trigger) {
+            guard let suffix = carried[run.thing] else { continue }
+            var moved = run
+            moved.trigger += suffix
+            ledger.runs[key] = nil
+            if ledger.run(moved.category, moved.thing, moved.action, moved.trigger) == nil { ledger.set(moved) }
+        }
+        if updated != things { things = updated }
+        if newMarks != marks { marks = newMarks }
+        if ledger != actionLedger { actionLedger = ledger }
+    }
+
     /// Things the fetched cache has that `rule` matches: the editor's live preview.
     func preview(_ rule: Rule) -> [Thing] {
         let context = inboxContext

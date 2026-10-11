@@ -21,6 +21,34 @@ import Testing
         return (s, comments.id, all.id)
     }
 
+    @Test func anAssignmentWhoseTimeBecomesKnownStaysDoneRatedAndActedOn() {
+        // An issue assigned to you, rated before GitHub said when (`assigned`), and Done.
+        var issue = Thing(id: "issue:a/one#2", kind: .issue, repo: "a/one", number: 2, title: "t",
+                          url: URL(string: "https://github.com/a/one/issues/2")!, author: alice,
+                          createdAt: Date().addingTimeInterval(-1000), updatedAt: Date())
+        issue.assignees = ["me"]
+        issue.signals = ThingSignals(importance: ImportanceSignal(level: .high, stamp: "assigned"), viewer: "me")
+        let rated = InboxCategory(name: "Rated", symbol: "flag", color: .red,
+                                  rules: [Rule(scope: Scope(kinds: [.issue]), conditions: [.importance(.high)], createdAt: .distantPast)])
+        let s = InboxFixture.store([issue], category: rated)
+        #expect(s.entries.map { $0.facts.map(\.key) } == [["importance:high:assigned"]])
+        s.markDone(s.entries[0])
+        let action = UUID()
+        s.actionLedger.set(ActionRun(category: rated.id, thing: issue.id, action: action, trigger: "importance:high:assigned",
+                                     state: .done, at: Date()))
+        // GitHub now says when: the same assignment, still Done, its rating and its action's record carried over.
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        issue.assignedAt = ["me": at]
+        s.things[issue.id] = issue
+        let key = "importance:high:assigned:1800000000"
+        #expect(s.entries.map(\.isDone) == [true])
+        #expect(s.entries.first?.facts.map(\.key) == [key])
+        #expect(s.things[issue.id]?.signals?.importance?.stamp == "assigned:1800000000")
+        #expect(s.marks[issue.id]?.acked == [key])
+        #expect(s.actionLedger.run(rated.id, issue.id, action, key)?.state == .done)
+        #expect(s.actionLedger.run(rated.id, issue.id, action, "importance:high:assigned") == nil)
+    }
+
     @Test func aThingDoneStaysDoneInItsCategoryNotOpenInALaterOne() {
         let (s, comments, all) = store()
         let entry = s.entries(in: comments)[0]
