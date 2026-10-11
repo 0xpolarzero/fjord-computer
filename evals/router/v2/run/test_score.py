@@ -45,6 +45,11 @@ class LossTests(unittest.TestCase):
         result["click_budget"] = 0
         self.assertEqual(episode_score(result)["completion_within_budget"], 0)
 
+    def test_a_submit_copied_from_a_real_moment_is_not_scored_twice(self):
+        result = episode("e", "g", [{**submit(target="session:b"), "duplicate_of_real": True}, submit()])
+        scored = episode_score(result)
+        self.assertEqual((scored["submits"], scored["wrong"], scored["loss"]), (1, 0, 0))
+
     def test_missing_ask_has_two_actual_escape_clicks_and_no_duplicate_base_loss(self):
         result = episode("e", "g", [submit("ask", None), {"kind": "pick", "clicks": 2}])
         scored = episode_score(result)

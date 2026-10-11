@@ -92,8 +92,9 @@ def event_score(trace: dict[str, Any], wrong_cost: float = 25) -> dict[str, Any]
 
 def episode_score(result: dict[str, Any], wrong_cost: float = 25) -> dict[str, Any]:
     """Reduce one replay to additive sufficient statistics for cluster scoring."""
+    # A written episode's first submit copied from a real moment still plays, but the real episode already scores it.
     scores = [event_score(event, wrong_cost) for event in result.get("events", [])
-              if event.get("kind") == "submit"]
+              if event.get("kind") == "submit" and not event.get("duplicate_of_real")]
     totals = {key: sum(score[key] for score in scores) for key in
               ("loss", "wrong", "automatic", "ask", "right", "needless_ask", "consequential_wrong")}
     for rank in (1, 4):

@@ -361,6 +361,8 @@ def play_episode(episode, system):
                          gold=copy.deepcopy(event["gold"]))
             if "tags" in event:
                 trace["tags"] = copy.deepcopy(event["tags"])
+            if event.get("duplicate_of_real"):
+                trace["duplicate_of_real"] = True
             outstanding.add(event["id"])
             if kind == "ask":
                 pending = {**trace, "ranked": decision.get("ranked", [])}
