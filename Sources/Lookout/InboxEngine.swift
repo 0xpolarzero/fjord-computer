@@ -413,7 +413,10 @@ enum InboxEngine {
         case .myLastComment:
             let comments = thing.comments.filter { mine($0.author) }.map(\.at)
             let replies = thing.threads.filter { mine($0.lastReplyBy) }.map(\.lastReplyAt)
-            return (comments + replies).max() ?? thing.createdAt
+            // Your latest word as kept, Jev's reading on or off: a reply that takes your place at the end of a thread
+            // doesn't move it back.
+            let kept = signals(thing, r.me)?.answeredAt
+            return (comments + replies + [kept].compactMap { $0 }).max() ?? thing.createdAt
         }
     }
 

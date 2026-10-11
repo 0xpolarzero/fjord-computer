@@ -47,6 +47,24 @@ import Testing
         #expect(keys([.asksMe], t, marks: EntryMarks(doneAt: now.addingTimeInterval(-50))) == nil)
     }
 
+    @Test func sinceMyLastCommentKeepsMyWordWhenAReplyTakesItsPlaceWithJevOff() {
+        var t = pr()
+        t.comments = [comment("c1", tok, at: -300)]
+        // I answered in a thread at -200; a bot's reply since is the thread's tail GitHub returns.
+        t.threads = [ThingThread(id: "t1", isResolved: false, startedBy: tok, lastReplyBy: bot, lastReplyID: "r2",
+                                 lastReplyAt: now.addingTimeInterval(-100), snippet: "…")]
+        t.signals = ThingSignals(viewer: "me", answeredAt: now.addingTimeInterval(-200))
+        var off = context
+        off.jevSignals = false
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.newComment(by: Pick(), since: .myLastComment)], createdAt: .distantPast)
+        // c1 came before my word: not new since it, Jev's reading on or off.
+        #expect(InboxEngine.facts(rule, t, marks: nil, context: off) == nil)
+        #expect(InboxEngine.facts(rule, t, marks: nil, context: context) == nil)
+        // Kept for someone else, it isn't mine.
+        t.signals?.viewer = "other"
+        #expect(InboxEngine.facts(rule, t, marks: nil, context: off)?.map(\.key) == ["comment:c1"])
+    }
+
     @Test func noiseIsBotsUntilJevReadsItAndAPersonIsTheRest() {
         var t = pr()
         t.comments = [comment("h", tok, at: -30), comment("b", bot, at: -20), comment("c", ci, at: -10), comment("mine", me, at: -5)]
