@@ -439,9 +439,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             // The window's content built once at idle, out of sight, so the first open only brings it in. Not under
             // `--lifecycle`, whose idle measurement wants nothing done after launch.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window, weak self] in
-                if self?.store.router.enabled == true { _ = SessionIcons.drawable }
-                window?.prepare()
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window, weak hub, weak self] in
+                guard let window, let hub else { return }
+                Self.prepareWhenIdle(interacting: { [weak hub] in
+                    Self.preparationIsBlocked(mouseButtons: NSEvent.pressedMouseButtons, modifiers: NSEvent.modifierFlags,
+                                              barInteracting: hub?.isInteracting == true)
+                }, prepare: { [weak window, weak hub, weak self] in
+                    guard let window, let hub else { return }
+                    if self?.store.router.enabled == true { _ = SessionIcons.drawable }
+                    window.prepare()
+                    AppTransition.prepareOverlay(on: hub.dockedScreen)
+                })
             }
         }
     }
@@ -449,6 +457,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// How long after launch the window's content is built (`AppWindowController.prepare`): past the store's first load
     /// and the bar's first draw.
     static let prepareDelay: TimeInterval = 2
+
+    static func preparationIsBlocked(mouseButtons: Int, modifiers: NSEvent.ModifierFlags, barInteracting: Bool) -> Bool {
+        mouseButtons != 0 || !modifiers.intersection(Shortcut.relevant).isEmpty || barInteracting
+    }
+
+    /// A busy user gets another chance at idle in 250 ms; the scheduler is replaceable so tests can step retries.
+    static func prepareWhenIdle(interacting: @escaping () -> Bool, prepare: @escaping () -> Void,
+                                schedule: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, block in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, qos: .utility) { MainActor.assumeIsolated { block() } }
+    }) {
+        if interacting() {
+            schedule(0.25) { prepareWhenIdle(interacting: interacting, prepare: prepare, schedule: schedule) }
+        } else {
+            prepare()
+        }
+    }
 
     /// Opens the app window on `destination` (the bar leaves the edge), or on a Router card.
     private func showWindow(_ destination: AppDestination?, card: String? = nil) {

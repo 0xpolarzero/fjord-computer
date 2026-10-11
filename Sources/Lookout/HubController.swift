@@ -147,6 +147,10 @@ final class HubController {
     private(set) var windowFront = false
     /// Whether the bar is away from the edge now: the window is open and in front.
     var barAway: Bool { BarPresence(windowOpen: windowOpen, windowFront: windowFront).barAway }
+    /// Launch preparation waits for both reported hover and a pointer that has not reached its tracking callback yet.
+    var isInteracting: Bool {
+        hub.hovering || hub.dragging || (!barAway && layout.frame != .zero && hubScreenFrame.contains(NSEvent.mouseLocation))
+    }
     private var barApplied = false
     /// Which departure or return a fade completion belongs to.
     private(set) var barGeneration = 0

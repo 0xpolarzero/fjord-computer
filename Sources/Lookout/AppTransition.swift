@@ -148,6 +148,13 @@ enum AppTransition {
     /// screen.
     private static var sharedOverlay: NSWindow?
 
+    /// Make the shared overlay at idle, without showing it or disturbing a morph already on screen.
+    @discardableResult
+    static func prepareOverlay(on screen: NSScreen) -> NSWindow {
+        if let sharedOverlay, sharedOverlay.isVisible { return sharedOverlay }
+        return overlay(on: screen)
+    }
+
     fileprivate static func overlay(on screen: NSScreen) -> NSWindow {
         // A test run's overlay covers no screen (its layers are laid out on `screen` all the same).
         let frame = UnderTest.isRunning ? NSRect(origin: UnderTest.away, size: screen.frame.size) : screen.frame
