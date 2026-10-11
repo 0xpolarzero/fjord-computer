@@ -472,13 +472,18 @@ enum InboxActions {
     static func chips(for entry: InboxEntry, category: InboxCategory, groups: [InboxGroup], ledger: ActionLedger, me: String,
                       now: Date = Date()) -> [Chip] {
         guard !category.actions.isEmpty else { return [] }
-        let queued = Set(due(entries: [entry], categories: [category], groups: groups, ledger: ledger, me: me).map(\.action.id))
+        let actions = category.actions.items.filter { $0.applies(to: entry.thing.kind) }
+        var latest: [UUID: ActionRun] = [:]
+        for run in ledger.runs.values where run.category == category.id && run.thing == entry.id && run.state != .baselined {
+            // The first run at an equal date wins, as it did with max.
+            if let before = latest[run.action], before.at >= run.at { continue }
+            latest[run.action] = run
+        }
+        let queued: Set<UUID> = !entry.isDone && actions.contains(where: { latest[$0.id] == nil })
+            ? Set(due(entries: [entry], categories: [category], groups: groups, ledger: ledger, me: me).map(\.action.id)) : []
         var out: [Chip] = []
-        for action in category.actions.items where action.applies(to: entry.thing.kind) {
-            let latest = ledger.runs.values
-                .filter { $0.category == category.id && $0.thing == entry.id && $0.action == action.id && $0.state != .baselined }
-                .max { $0.at < $1.at }
-            if let run = latest {
+        for action in actions {
+            if let run = latest[action.id] {
                 out.append(chip(run, action: action, now: now))
             } else if queued.contains(action.id) {
                 out.append(Chip(id: action.id, label: "queued", tint: .neutral, target: nil, help: "\(action.title) runs on the next refresh"))
