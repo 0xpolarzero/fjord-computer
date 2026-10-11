@@ -164,6 +164,11 @@ struct PersistedState: Codable {
         settings = part(.settings) ?? AppSettings()
         agents = part(.agents)
         router = part(.router)
+        // What the Router's state lost on its own (a card, a decision, a map) counts as lost too.
+        if let lost = router?.dropped, !lost.isEmpty {
+            dropped += lost.map { "router: \($0)" }
+            router?.dropped = []
+        }
         categories = each(.categories)
         groups = each(.groups)
         categorySections = each(.categorySections)

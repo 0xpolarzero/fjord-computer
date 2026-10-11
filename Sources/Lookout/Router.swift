@@ -125,29 +125,53 @@ struct RouterState: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? false
-        enabledAt = try? c.decodeIfPresent(Date.self, forKey: .enabledAt)
-        // Card by card: one this version can't read is left out, not every card.
-        cards = ((try? c.decodeIfPresent([Lossy<RouterCard>].self, forKey: .cards)) ?? []).compactMap(\.value)
-        // The same for the changes, decisions and summaries.
-        changes = ((try? c.decodeIfPresent([Lossy<LookoutChange>].self, forKey: .changes)) ?? []).compactMap(\.value)
+        // Each part, and each element of a list or map, on its own: one this version can't read is left out, not the rest,
+        // and is named in `dropped` (the file is then kept aside before it is written over: see `PersistedState`).
+        var lost: [String] = []
+        func value<T: Decodable>(_ key: CodingKeys) -> T? {
+            do { return try c.decodeIfPresent(T.self, forKey: key) } catch {
+                lost.append(key.stringValue)
+                return nil
+            }
+        }
+        func list<T: Decodable>(_ key: CodingKeys) -> [T] {
+            guard let all: [Lossy<T>] = value(key) else { return [] }
+            let read = all.compactMap(\.value)
+            if read.count < all.count { lost.append("\(all.count - read.count) of \(key.stringValue)") }
+            return read
+        }
+        func map<T: Decodable>(_ key: CodingKeys) -> [String: T] {
+            guard let all: [String: Lossy<T>] = value(key) else { return [:] }
+            let read = all.compactMapValues(\.value)
+            if read.count < all.count { lost.append("\(all.count - read.count) of \(key.stringValue)") }
+            return read
+        }
+        enabled = value(.enabled) ?? false
+        enabledAt = value(.enabledAt)
+        cards = list(.cards)
+        changes = list(.changes)
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
         if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
-        decisions = ((try? c.decodeIfPresent([Lossy<RouterDecision>].self, forKey: .decisions)) ?? []).compactMap(\.value)
-        summaries = ((try? c.decodeIfPresent([Lossy<RouterSummary>].self, forKey: .summaries)) ?? []).compactMap(\.value)
-        seen = (try? c.decodeIfPresent([String: String].self, forKey: .seen)) ?? [:]
-        waits = (try? c.decodeIfPresent([String: Int64].self, forKey: .waits)) ?? [:]
-        waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]
-        formSeen = (try? c.decodeIfPresent([String: Int64].self, forKey: .formSeen)) ?? [:]
-        pendingTurns = (try? c.decodeIfPresent([String: PendingTurn].self, forKey: .pendingTurns)) ?? [:]
-        origins = (try? c.decodeIfPresent([String: SessionOrigin].self, forKey: .origins)) ?? [:]
-        heldWaits = (try? c.decodeIfPresent([String: HeldWait].self, forKey: .heldWaits)) ?? [:]
-        lookoutStarted = (try? c.decodeIfPresent([String: Date].self, forKey: .lookoutStarted)) ?? [:]
-        zonesShare = try? c.decodeIfPresent(Double.self, forKey: .zonesShare)
-        autoContinue = (try? c.decodeIfPresent(Bool.self, forKey: .autoContinue)) ?? false
-        autoContinueSessions = (try? c.decodeIfPresent([String: Bool].self, forKey: .autoContinueSessions)) ?? [:]
-        handledTurns = (try? c.decodeIfPresent([String: Int].self, forKey: .handledTurns)) ?? [:]
+        decisions = list(.decisions)
+        summaries = list(.summaries)
+        seen = map(.seen)
+        waits = map(.waits)
+        waitTools = map(.waitTools)
+        formSeen = map(.formSeen)
+        pendingTurns = map(.pendingTurns)
+        origins = map(.origins)
+        heldWaits = map(.heldWaits)
+        lookoutStarted = map(.lookoutStarted)
+        zonesShare = value(.zonesShare)
+        autoContinue = value(.autoContinue) ?? false
+        autoContinueSessions = map(.autoContinueSessions)
+        handledTurns = map(.handledTurns)
+        dropped = lost
     }
+
+    /// What the file had that this version couldn't read ("2 of cards", "waits"): never saved, and handed on to
+    /// `PersistedState.dropped` (empty once loaded).
+    var dropped: [String] = []
 }
 
 /// An element of a saved array read on its own: nil when it can't be, so one bad element doesn't take the rest with it.

@@ -188,6 +188,32 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).contains { $0.hasPrefix("state.json.bak-") })
     }
 
+    @Test func aLossInTheRouterAloneKeepsTheFileAside() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let decision = RouterDecision(at: Date(timeIntervalSince1970: 1_800_000_000), trigger: .you("hi"), outcome: .done)
+        let original = Data("""
+        {"settings": {"pollInterval": 60, "notifications": true},
+         "router": {"enabled": true, "decisions": [\(String(decoding: try enc.encode(decision), as: UTF8.self)), {"at": 5}],
+                    "waits": {"s1": 12, "s2": "late"}}}
+        """.utf8)
+        try original.write(to: file)
+        let state = try { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return try d.decode(PersistedState.self, from: original) }()
+        #expect(state.dropped == ["router: 1 of decisions", "router: 1 of waits"])
+        #expect(state.router?.dropped == [])
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        #expect(store.router.enabled && store.router.decisions == [decision] && store.router.waits == ["s1": 12])
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+    }
+
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
