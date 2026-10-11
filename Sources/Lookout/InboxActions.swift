@@ -1106,7 +1106,8 @@ private struct LossyLedger: Decodable {
             lost.append("baselines")
         }
         do {
-            let all = try c.decodeIfPresent([String: Lossy<ActionRun>].self, forKey: .runs) ?? [:]
+            // Required: a file without them (or with null) has lost every record, not had none.
+            let all = try c.decode([String: Lossy<ActionRun>].self, forKey: .runs)
             ledger.runs = all.compactMapValues(\.value)
             if ledger.runs.count < all.count { lost.append("\(all.count - ledger.runs.count) of runs") }
         } catch {

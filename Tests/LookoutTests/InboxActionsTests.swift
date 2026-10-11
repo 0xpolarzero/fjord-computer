@@ -148,6 +148,32 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(saved.runs.values.contains { $0.thing == "pr:a/one#3" && $0.state == .done })
     }
 
+    @Test func aLedgerWhoseRunsAreMissingHasLostThemIsKeptAsideAndRunsNothingAgain() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        let file = try #require(store.actionsFile)
+        await store.runActions()
+        add(store, InboxFixture.pr(3))
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+        store.flushSave()
+        // The baselines are there, the runs null: every record is lost, not none was made.
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        object["runs"] = NSNull()
+        let damaged = try JSONSerialization.data(withJSONObject: object)
+        try damaged.write(to: file)
+        store.loadActions()
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("actions.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [damaged])
+    }
+
     @Test func aRecordThatCannotBeReadIsLostAloneKeptAsideAndNotRunAgain() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
