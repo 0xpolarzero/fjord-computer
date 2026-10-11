@@ -92,15 +92,22 @@ final class Store {
     /// The categories page's undo history while it is open (⌘Z there is the editor's, not Done's).
     @ObservationIgnored var categoryHistory: CategoryHistory?
     /// Rules were edited and the actions have not yet taken in what they match: nothing runs until they have.
-    @ObservationIgnored var baselinePending = false
+    /// Saved with the state: a quit before it is taken in leaves it waiting at the next launch.
+    @ObservationIgnored var baselinePending = false {
+        didSet { if baselinePending != oldValue { persistedRevision &+= 1 } }
+    }
     @ObservationIgnored var baselineTask: Task<Void, Never>?
     /// The edit's pause is over, but what it asks GitHub for hasn't been fetched yet: it is taken in after the refresh
     /// that has (`baselineIfFetched`).
     @ObservationIgnored var baselineAwaitsFetch = false
     /// What the things were fetched for: the categories they were saved with, then the searches and workflow targets the
     /// refreshes since have answered. Nil when never loaded nor refreshed (the things are taken as they are).
-    @ObservationIgnored var fetchedFor: FetchedScope?
-    enum FetchedScope: Equatable {
+    /// Saved with the state: after a restart, what the things were fetched for is still what was, not what the categories
+    /// ask for now.
+    @ObservationIgnored var fetchedFor: FetchedScope? {
+        didSet { if fetchedFor != oldValue { persistedRevision &+= 1 } }
+    }
+    enum FetchedScope: Equatable, Codable {
         case categories([InboxCategory], [InboxGroup])
         case keys(Set<String>)
     }
@@ -701,7 +708,13 @@ final class Store {
             categorySections = state.categorySections ?? [.github]
         }
         things = state.things ?? [:]
-        if state.things != nil { fetchedFor = .categories(categories, groups) }
+        // (A file from before it was saved: the categories it was saved with.)
+        if state.things != nil { fetchedFor = state.fetchedFor ?? .categories(categories, groups) }
+        // An edit not taken in when the app quit still waits for what it asks for to be fetched.
+        if state.baselinePending == true {
+            baselinePending = true
+            baselineAwaitsFetch = true
+        }
         marks = state.marks ?? [:]
         categoryBaselines = state.categoryBaselines ?? [:]
         ownedRepos = state.ownedRepos ?? []
@@ -845,7 +858,8 @@ final class Store {
                                                        groups: groups, categorySections: categorySections, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
                                                        contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
-                                                       myTeams: myTeams, login: login.isEmpty ? nil : login))
+                                                       myTeams: myTeams, login: login.isEmpty ? nil : login,
+                                                       fetchedFor: fetchedFor, baselinePending: baselinePending ? true : nil))
         let write: @Sendable () -> String? = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601

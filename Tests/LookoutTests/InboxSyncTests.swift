@@ -1230,6 +1230,70 @@ extension InboxSyncMapping {
         await s.runActions()
         #expect(performer.comments.map(\.number) == [2])
     }
+
+    @Test func aNewCategoryForARepoNotYetReadStillWaitsForItsFetchAfterARestart() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-pending-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        final class Box: @unchecked Sendable { var shown: [Int] = [1] }
+        let box = Box()
+        let pattern = try! NSRegularExpression(pattern: #"(s\d+): search\(query: \"([^"]*)\""#)
+        let session = StubbedGitHub.session { request in
+            let body = try JSONSerialization.jsonObject(with: Data(InboxSyncRefresh.body(request).utf8)) as? [String: Any]
+            let text = body?["query"] as? String ?? ""
+            var data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000]]
+            for m in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let part = { (i: Int) in String(text[Range(m.range(at: i), in: text)!]) }
+                let nodes = part(2).contains("repo:o/new") ? box.shown.map {
+                    node(["id": "PR_\($0)", "number": $0, "url": "https://github.com/o/new/pull/\($0)",
+                          "repository": ["nameWithOwner": "o/new"], "author": ["login": "alice", "__typename": "User"]])
+                } : []
+                data[part(1)] = ["pageInfo": ["hasNextPage": false], "nodes": nodes]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        let first = Store()
+        first.stateFile = file
+        first.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        first.actionPerformer = FakePerformer()
+        first.categories = [InboxCategory(name: "Mine", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])))
+        ])]
+        first.gh.session = session
+        await first.syncInbox()
+        // A category with a comment action for a repo not read yet, then a quit before any refresh has read it.
+        var made = InboxCategory(name: "New", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("o/new")])), conditions: [.greptileBelow(5)])
+        ])
+        made.actions = ActionList([CategoryAction.make(.comment("Thanks"))])
+        first.categories.append(made)
+        first.categoriesEdited(delay: .milliseconds(10))
+        await first.baselineTask?.value
+        #expect(first.baselinePending)
+        first.flushSave()
+
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        second.persists = false
+        second.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        let performer = FakePerformer()
+        second.actionPerformer = performer
+        second.gh.session = session
+        // Relaunched: the repo still isn't read, so nothing is taken in yet.
+        await second.runActions()
+        #expect(second.baselinePending)
+        // The refresh that reads it brings its open PR: there already, it is taken in, not acted on.
+        await second.syncInbox()
+        await second.runActions()
+        #expect(second.things["pr:o/new#1"] != nil && !second.baselinePending)
+        #expect(performer.comments.isEmpty)
+        box.shown = [1, 2]
+        await second.syncInbox()
+        await second.runActions()
+        #expect(performer.comments.map(\.number) == [2])
+    }
 }
 
 
