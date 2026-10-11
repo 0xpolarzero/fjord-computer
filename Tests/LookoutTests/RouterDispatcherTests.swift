@@ -994,6 +994,24 @@ import Testing
         #expect(f.prepared == ["local_a"] && d.askBacks.isEmpty)
     }
 
+    @Test func aTypedNameOnlyPicksWhatTheAskOffered() async {
+        let (s, d, f) = setup()
+        // A session renamed after what you'd say to the Router, never offered on the ask.
+        s.claudeSessions["local_h"] = ClaudeSession(id: "local_h", title: "router what needs me", folder: "/code/other",
+                                                    lastActivity: Date().addingTimeInterval(-120))
+        s.claudeSessions["local_i"] = ClaudeSession(id: "local_i", title: "Deploy it", folder: "/code/other",
+                                                    lastActivity: Date().addingTimeInterval(-180))
+        f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]
+        let ask = d.submit("rotate the production token")
+        await finish(d, f, ask)
+        let asked = d.submit("@router what needs me?")
+        #expect(asked != nil && asked != ask)
+        await finish(d, f, asked)
+        // A title the ask didn't offer is no answer to it: a message of its own.
+        #expect(d.typedPick("Deploy it") == nil)
+        #expect(!f.prepared.contains("local_h") && !f.prepared.contains("local_i") && d.askBacks.contains { $0.id == ask })
+    }
+
     @Test func somethingElseCanPickAProjectToStartIn() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "unclear", p: 1)]

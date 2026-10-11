@@ -217,8 +217,9 @@ struct RouterAskBack: Identifiable, Equatable {
         let text = RouterModel.sendable(text)
         guard !text.isEmpty else { return nil }
         // Typing the name of a target answers an ask-back; nothing else is made of it. Not when a reply or a pinned target
-        // already fixes where this message goes: it is a message of its own.
-        if context.replyTo == nil, context.target == nil, let ask = typedPick(text) {
+        // already fixes where this message goes, nor when it says something to the Router ("@router what needs me?"): it is
+        // a message of its own.
+        if context.replyTo == nil, context.target == nil, !RouterTools.hasRouterMarker(text), let ask = typedPick(text) {
             // Only a target gone since fits the name: nothing is sent (nil), and the composer keeps the draft.
             guard let target = ask.target, pick(ask.ask, target: target) else { return nil }
             return ask.ask
@@ -752,6 +753,9 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Typing a target's name in reply to an ask-back: its title or its project's name, as the whole message (a few words).
     /// The newest ask that the name fits once, among the targets still there; a nil target when it fits only ones gone since.
+    /// Only what that ask offered is picked so: a title is a session's own to set, and one never offered (a session renamed
+    /// "router what needs me") isn't where a message goes for being typed. A card handled since stands for its
+    /// session when the name is the session's too.
     func typedPick(_ text: String) -> (ask: UUID, target: String?)? {
         guard let store, !askBacks.isEmpty else { return nil }
         var name = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)).lowercased()
@@ -762,16 +766,16 @@ struct RouterAskBack: Identifiable, Equatable {
             return name == title || name == "\(title) (\(detail))" || name == "\(title) in \(detail)"
                 || (option.target.hasPrefix("new:") && (name == detail || name == "new session in \(detail)"))
         }
-        let everything = pickerOptions()
         var gone: UUID?
         for ask in askBacks.reversed() {
             let fitting = ask.options.filter(fits)
             let own = fitting.filter { eligible($0.target, store: store) }
             if own.count == 1 { return (ask.id, own[0].target) }
             guard own.isEmpty else { continue }
-            let any = (everything.sessions + everything.projects).filter(fits)
-            if any.count == 1 { return (ask.id, any[0].target) }
-            if any.isEmpty, !fitting.isEmpty { gone = gone ?? ask.id }
+            let sessions = Set(fitting.compactMap { $0.target.hasPrefix("answer:") ? Self.session(of: $0.target, store: store) : nil })
+                .map { "session:\($0)" }.filter { eligible($0, store: store) && option($0, store: store).map(fits) == true }
+            if sessions.count == 1 { return (ask.id, sessions[0]) }
+            if sessions.isEmpty, !fitting.isEmpty { gone = gone ?? ask.id }
         }
         return gone.map { ($0, nil) }
     }
