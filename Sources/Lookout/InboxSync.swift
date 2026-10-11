@@ -1279,12 +1279,18 @@ extension Store {
         var workflowFailure: String?
         var failedRepos = Set<String>()
         var workflows: [String: Thing] = [:]
-        await withTaskGroup(of: (repo: String, things: [Thing], error: String?).self) { group in
+        // What a repo's read gives back is a struct, never a tuple: Swift 6.3.2's optimizer drops a tuple a child builds around
+        // a `try await` in a `do` (swiftlang/swift#92698), so `next()` read nil with children still running, the refresh took
+        // no workflows, and the children then finished into a group that was gone, which crashed the app.
+        struct RepoRead { var repo: String; var things: [Thing]; var error: String? }
+        await withTaskGroup(of: RepoRead.self) { group in
             var queue = targets.makeIterator()
             func add(_ target: (repo: String, branch: String?)) {
                 group.addTask { @MainActor in
-                    do { return (target.repo, try await self.workflowThings(target.repo, target.branch), nil) } catch {
-                        return (target.repo, [], error.localizedDescription)
+                    do {
+                        return RepoRead(repo: target.repo, things: try await self.workflowThings(target.repo, target.branch))
+                    } catch {
+                        return RepoRead(repo: target.repo, things: [], error: error.localizedDescription)
                     }
                 }
             }

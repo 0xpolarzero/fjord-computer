@@ -391,6 +391,33 @@ import Testing
         #expect(s.things.isEmpty && s.inboxError == nil)
     }
 
+    /// Optimized, the repos' reads came back as nothing (swiftlang/swift#92698): no workflow was taken, and the reads still
+    /// running finished into a group already gone, which crashed. Only an optimized build shows it
+    /// (`swift test -c release -Xswiftc -enable-testing`).
+    @Test func everyRepoOfARefreshIsReadPastTheFourAtATime() async {
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/branches/main") { return .init(200, #"{"name":"main","commit":{"sha":"s1","commit":{"message":"Fix"}}}"#) }
+            if path.hasSuffix("/actions/runs") {
+                return .init(200, #"{"workflow_runs":[{"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"failure","check_suite_id":5}]}"#)
+            }
+            if path.hasSuffix("/check-runs") { return .init(200, #"{"total_count":0,"check_runs":[]}"#) }
+            if path.hasSuffix("/status") { return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#) }
+            return .init(404, #"{"message":"unrouted"}"#)
+        }
+        let repos = (0..<12).map { "a/r\($0)" }
+        var ci = InboxStore.ci
+        ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: repos.map { .repo($0) }), on: ["main"]),
+                         conditions: [.workflow([.failing])], createdAt: .distantPast)]
+        s.categories = [ci]
+        await s.syncInbox()
+        #expect(s.things.keys.sorted() == repos.map { "workflow:\($0):11@main" }.sorted())
+        #expect(s.inboxError == nil)
+    }
+
     @Test func aBranchIsPassingOnlyOnceAllItsChecksAndStatusesAreReadAndDone() async throws {
         let store = Store()
         store.persists = false
