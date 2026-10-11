@@ -182,20 +182,27 @@ extension Store {
     }
 
     /// The waiting cards whose watched thing is done: ready to continue, with a banner, or told at once when the session
-    /// continues automatically.
+    /// continues automatically. CI ready but not told yet follows its checks: running again (a new push) it waits again,
+    /// and an outcome that changed is the one it is ready with (said again).
     func resolveWaits(now: Date = Date()) {
         guard router.enabled, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch != nil }) else { return }
         var state = router
         var ready: [RouterCard] = []
         for i in state.cards.indices {
             let card = state.cards[i]
-            guard card.isOpen, card.kind == .waiting, let watch = card.triage?.watch, card.triage?.ready == nil,
-                  let result = RouterWaits.result(watch, sessions: claudeSessions, things: things) else { continue }
+            guard card.isOpen, card.kind == .waiting, let watch = card.triage?.watch else { continue }
+            let result = RouterWaits.result(watch, sessions: claudeSessions, things: things)
+            if let was = card.triage?.ready {
+                guard card.triage?.told == nil, case .ci(let id) = watch.target, things[id] != nil, result != was.result else { continue }
+                state.cards[i].triage?.ready = result.map { .init(result: $0, at: now) }
+                if result != nil { ready.append(state.cards[i]) }
+                continue
+            }
+            guard let result else { continue }
             state.cards[i].triage?.ready = .init(result: result, at: now)
             ready.append(state.cards[i])
         }
-        guard !ready.isEmpty else { return }
-        router = state
+        if state != router { router = state }
         for card in ready {
             // On its own only for a wait its message named: one Jev alone tied it to could be something else that is done.
             if continuesAutomatically(card.sessionID), card.triage?.watch?.named == true {
@@ -268,13 +275,16 @@ extension Store {
     }
 
     /// Whether a waiting card can still be told, as it was when the send began (`revision`): open, ready and untold, of
-    /// the session's latest turn, which isn't running, and (`automatic`) still to be continued on its own.
+    /// the session's latest turn, which isn't running, and (`automatic`) still to be continued on its own. CI's outcome is
+    /// still the one it is ready with.
     func waitStillTellable(_ cardID: String, revision: Int, automatic: Bool) -> Bool {
         guard router.enabled, cardRevisions[cardID, default: 0] == revision,
               let card = router.cards.first(where: { $0.id == cardID }), card.isOpen, card.kind == .waiting,
-              card.triage?.ready != nil, card.triage?.told == nil,
+              let ready = card.triage?.ready, card.triage?.told == nil,
               let session = claudeSessions[card.sessionID], !session.isArchived, !session.running,
               card.id == "\(session.id)#t\(session.completedTurns)" else { return false }
+        if let watch = card.triage?.watch, case .ci(let id) = watch.target, things[id] != nil,
+           RouterWaits.result(watch, sessions: claudeSessions, things: things) != ready.result { return false }
         return !automatic || (continuesAutomatically(card.sessionID) && card.triage?.watch?.named == true)
     }
 

@@ -63,6 +63,36 @@ import Testing
         #expect(s.router.cards[0].triage?.ready?.result == "failing (lint, test (macos))")
     }
 
+    @Test func readyCIUntoldFollowsItsChecksUntilItIsTold() async {
+        let (s, sent) = store(watch: ciWatch, things: [ci(.passing)], auto: false)
+        var ready: [String] = []
+        s.routerTriager.onReady = { ready.append($0.triage?.ready?.result ?? "") }
+        s.resolveWaits()
+        #expect(ready == ["passing"])
+        // A push: the checks run again, so it waits again.
+        s.things["pr:o/app#1"]?.checks = .pending
+        #expect(s.router.cards[0].triage?.ready == nil)
+        // They fail: ready with that, said again.
+        s.things["pr:o/app#1"] = ci(.failing, jobs: ["lint"])
+        #expect(s.router.cards[0].triage?.ready?.result == "failing (lint)" && ready == ["passing", "failing (lint)"])
+        s.tellWaiting("a#t3")
+        await settle()
+        #expect(sent.messages.map(\.1) == ["The CI on o/app#1 finished: failing."])
+        // Told: what comes after is the session's to see.
+        s.things["pr:o/app#1"]?.checks = .pending
+        #expect(s.router.cards[0].triage?.ready?.result == "failing (lint)")
+    }
+
+    @Test func aReadyOutcomeThatIsNoLongerTheChecksIsNotSent() async {
+        let (s, sent) = store(watch: ciWatch, things: [ci(.failing)], auto: false)
+        var card = s.router.cards[0]
+        card.triage?.ready = .init(result: "passing", at: Date())
+        s.router.cards = [card]
+        s.tellWaiting("a#t3")
+        await settle()
+        #expect(sent.messages.isEmpty && s.router.cards[0].isOpen && s.router.cards[0].triage?.told == nil)
+    }
+
     @Test func theMessageHoldsNothingFreeFormOnlyACheckedRefAndFixedWords() async {
         // A workflow's name, failing jobs and titles are shown here but never sent: the message goes as your own words.
         var workflow = InboxFixture.pr(1, repo: "o/app")
