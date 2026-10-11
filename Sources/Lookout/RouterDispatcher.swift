@@ -344,15 +344,23 @@ struct RouterAskBack: Identifiable, Equatable {
         switch Self.plan(text: job.text, context: job.context, store: store) {
         case .reply(let session, let card):
             // The reply to a card Jev picked while you typed: you went with his pick.
-            if let card, job.context.predicted == "answer:\(card)" { confirm(job, "answer:\(card)") }
+            if let card, job.context.predicted == "answer:\(card)" { confirm(job, "answer:\(card)") } else { chosen(job) }
             try await reply(job, session: session, card: card)
-        case .start(let folder): try await start(job, folder: folder)
+        case .start(let folder):
+            chosen(job)
+            try await start(job, folder: folder)
         case .route(let target):
             confirm(job, target)
             if job.context.predicted == target { job.jev = job.context.jev }
             try await route(job, to: target)
         case .classify: try await classifyAndAct(job)
         }
+    }
+
+    /// Where it goes is yours (the card you replied to, the project you tagged to start in): where a follow-up may go
+    /// (`evidenced`). No target is named, so it isn't an example for Jev.
+    private func chosen(_ job: Job) {
+        store?.updateDecision(job.id) { $0.decision.confirmed = true }
     }
 
     /// A target you fixed yourself: an example for the next ones.
@@ -543,6 +551,12 @@ struct RouterAskBack: Identifiable, Equatable {
         // tagged its project, or saw it over the composer as you typed and sent.
         if found.sure, found.assisted, !found.live, narrowed.isEmpty, let top = found.top,
            !Self.evidenced(job.text, target: top.target, store: store) {
+            found.sure = false
+        }
+        // A session stopped on a permission or an ask of its own gets words not addressed to it only with your click: it is
+        // the ask's first button. Its card could be what made it the pick ("May I delete the production data?" for a "yes").
+        if found.sure, !found.live, let top = found.top, let session = Self.session(of: top.target, store: store),
+           Self.asksYou(session, store: store), !Self.addressed(job.text, to: session, store: store) {
             found.sure = false
         }
         // Hidden, addressed or gone while Jev was asked: you pick among what is there now.
@@ -855,8 +869,11 @@ extension RouterDispatcher {
     /// Whether there is something to go on for Jev's pick of `target` besides what sessions wrote about themselves:
     /// - the message shares a meaningful word with what the target is (a session's or card's title, its project, what it is
     ///   doing or said), or names its title or project by a short name of its own ("CI");
-    /// - its session is the only one waiting on you (an open question, plan, ask or OK), so a "yes" is for it;
-    /// - your last message went to that session a few minutes ago (`recentFor`) and no other session is waiting on you.
+    /// - your last message went to that session (or started it) a few minutes ago (`recentFor`), where you chose it should
+    ///   go (a reply, a pin, a pick on an ask, a pick shown as you sent, a project you tagged), and no other session is
+    ///   waiting on you.
+    /// A session being the only one waiting on you is not: it can make itself that (a card asking for an OK), and a "yes"
+    /// meant elsewhere would go to it.
     /// A pick with none of these may rest on a session's own words alone (its title asking to be picked), so it isn't acted
     /// on without your pick.
     static func evidenced(_ message: String, target: String, store: Store, now: Date = Date()) -> Bool {
@@ -886,7 +903,6 @@ extension RouterDispatcher {
         }
         if let id = sessionID {
             let waiting = Set(store.routerShownOpenCards.filter { Self.waitsOnYou.contains($0.kind) }.map(\.sessionID))
-            if waiting == [id] { return true }
             if waiting.subtracting([id]).isEmpty, let last = lastSent(store), now.timeIntervalSince(last.at) < recentFor,
                last.links.sessions.last == id { return true }
         }
@@ -904,12 +920,38 @@ extension RouterDispatcher {
     /// The cards of a session stopped on you.
     private static let waitsOnYou: Set<RouterCard.Kind> = [.question, .plan, .asks, .approval]
 
-    /// Your last message that was sent to a session.
+    /// Your last message that was sent to a session, or started one, where you chose it should go (`chosen`, a pin, a
+    /// pick shown or on an ask, a correction): only Jev's own pick never makes a destination one to follow up.
     private static func lastSent(_ store: Store) -> RouterDecision? {
-        store.router.decisions.last { entry in
+        let last = store.router.decisions.last { entry in
             guard case .you = entry.trigger else { return false }
-            return entry.done.contains { if case .sent = $0 { true } else { false } }
+            return entry.done.contains { switch $0 { case .sent, .started: true; default: false } }
         }
+        guard let last else { return nil }
+        if last.decision.confirmed == true { return last }
+        if case .corrected = last.outcome { return last }
+        return nil
+    }
+
+    /// The session a target is for: a session, or a card's.
+    static func session(of target: String, store: Store) -> String? {
+        if target.hasPrefix("session:") { return String(target.dropFirst(8)) }
+        if target.hasPrefix("answer:") { return store.router.cards.first { $0.id == String(target.dropFirst(7)) }?.sessionID }
+        return nil
+    }
+
+    /// The session has an open card asking you for a permission or an ask of its own.
+    static func asksYou(_ session: String, store: Store) -> Bool {
+        store.routerShownOpenCards.contains { $0.sessionID == session && ($0.kind == .approval || $0.kind == .asks) }
+    }
+
+    /// The message is addressed to the session by words you typed: "tell X to …" or "X: …" with its title or project, or
+    /// a short name of its own ("CI").
+    static func addressed(_ message: String, to session: String, store: Store) -> Bool {
+        guard let s = store.claudeSessions[session] else { return false }
+        let names = [s.title, store.folderName(s.folderKey), (s.folderKey as NSString).lastPathComponent]
+        if let to = RouterTools.addressee(message), names.contains(where: { $0.lowercased() == to }) { return true }
+        return !shortNames(message).isDisjoint(with: shortNames(names.joined(separator: " ")))
     }
 
     /// Two or three letters, said as a name ("CI", "API", "db"): not a common short word. (Longer words are matched by

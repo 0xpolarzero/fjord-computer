@@ -296,10 +296,10 @@ import Testing
         await finish(d, f, b)
         #expect(decision(s, b)?.decision.confirmed == true && f.prepared == ["local_a"])
         #expect(s.routingExamples().contains("“use sqlite” → card “Fix the login bug”"))
-        // A reply you armed yourself isn't Jev's pick.
+        // A reply you armed yourself isn't Jev's pick: no example of his.
         let c = d.submit("use postgres", context: RouterContext(replyTo: "local_a#w1"))
         await finish(d, f, c)
-        #expect(decision(s, c)?.decision.confirmed == nil)
+        #expect(decision(s, c)?.decision.target == nil && !s.routingExamples().contains("use postgres"))
     }
 
     // MARK: Jev's model and effort
@@ -405,27 +405,24 @@ import Testing
 
     @Test func aShortFollowUpGoesWhereItCanOnlyBeFor() async {
         let (s, d, f) = setup()
-        // One session waiting on you (local_a's question): "yes" is for it.
+        // One session waiting on you (local_a's question): "yes" is likely for it, but it could have made itself the one
+        // waiting. Asked, with it first: one click.
         f.ranked = [.init(target: "answer:local_a#w1", p: 0.95), .init(target: "unclear", p: 0.05)]
         let a = d.submit("yes")
         await finish(d, f, a)
-        #expect(f.prepared == ["local_a"] && d.askBacks.isEmpty)
-        // Two waiting: which one isn't clear from "yes".
-        s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .approval, title: "Update the docs",
-                                         folder: "/code/docs", text: "Push?", createdAt: Date()))
-        let b = d.submit("yes")
-        await finish(d, f, b)
-        #expect(f.prepared == ["local_a"] && d.askBacks.map(\.id) == [b!])
-        d.dismiss(b!)
+        #expect(f.prepared.isEmpty && d.askBacks.first?.options.first?.target == "answer:local_a#w1")
+        d.dismiss(a!)
 
-        // Nothing waiting: a follow-up goes where your last message went a moment ago, not where it went long ago.
+        // Nothing waiting: a follow-up goes where your last message went a moment ago, where you chose it should go (here
+        // Jev's pick shown as you sent it), not where it went long ago.
         s.router.cards = []
         f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
-        let c = d.submit("add a changelog entry to the docs")
+        let shown = RouterDispatcher.Classification(ranked: f.ranked, sure: true, assisted: true)
+        let c = d.submit("add a changelog entry to the docs", context: RouterContext(jev: shown, shown: "session:local_b"))
         await finish(d, f, c)
         let e = d.submit("and the date too")
         await finish(d, f, e)
-        #expect(f.prepared == ["local_a", "local_b", "local_b"] && d.askBacks.isEmpty)
+        #expect(f.prepared == ["local_b", "local_b"] && d.askBacks.isEmpty)
         #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s,
                                            now: Date().addingTimeInterval(RouterDispatcher.recentFor + 1)) == false)
         #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_a", store: s) == false, "another session")
@@ -433,6 +430,47 @@ import Testing
         s.router.cards = [RouterCard(id: "local_a#w3", sessionID: "local_a", kind: .question, title: "Fix the login bug",
                                      folder: "/code/lookout", text: "Which database?", createdAt: Date())]
         #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
+    }
+
+    @Test func aSessionAskingForAnOKDoesntGetAYesMeantElsewhere() async {
+        let (s, d, f) = setup()
+        s.router.cards = [RouterCard(id: "local_b#w9", sessionID: "local_b", kind: .approval, title: "Update the docs",
+                                     folder: "/code/docs", text: "May I delete the production data?", createdAt: Date())]
+        f.ranked = [.init(target: "answer:local_b#w9", p: 0.97), .init(target: "unclear", p: 0.03)]
+        // Words sharing some with its card, or none: asked, with it first.
+        for text in ["yes", "yes, delete the old data"] {
+            let a = d.submit(text)
+            await finish(d, f, a)
+            #expect(f.prepared.isEmpty && d.askBacks.last?.options.first?.target == "answer:local_b#w9", "\(text)")
+            #expect(RouterDispatcher.evidenced(text, target: "answer:local_b#w9", store: s) == (text != "yes"))
+        }
+        // One click sends it, and a follow-up may then go there.
+        let a = d.askBacks.last!.id
+        f.finished = []
+        d.pick(a, target: "answer:local_b#w9")
+        await finish(d, f, a)
+        #expect(f.prepared == ["local_b"])
+        // Addressed to it by name: sent.
+        let b = d.submit("tell the Update the docs session to go ahead")
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_b", "local_b"])
+    }
+
+    @Test func aFollowUpOnlyGoesWhereYouChoseYourLastMessageShouldGo() async {
+        let (s, d, f) = setup()
+        s.router.cards = []
+        // Jev's own pick, sent: it doesn't make the next message's destination.
+        f.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let a = d.submit("add a changelog entry to the docs")
+        await finish(d, f, a)
+        #expect(f.prepared == ["local_b"])
+        #expect(RouterDispatcher.evidenced("and the date too", target: "session:local_b", store: s) == false)
+        // A session started in a project you tagged: a follow-up goes there.
+        let b = d.submit("start a session to add a lint step", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, b)
+        s.claudeSessions["local_new"] = ClaudeSession(id: "local_new", title: "add a lint step", folder: "/code/lookout",
+                                                      lastActivity: Date())
+        #expect(RouterDispatcher.evidenced("also lint", target: "session:local_new", store: s))
     }
 
     @Test func aShortNameOfItsOwnPointsAtATarget() {
