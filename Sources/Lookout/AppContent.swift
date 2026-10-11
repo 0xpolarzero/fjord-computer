@@ -172,11 +172,10 @@ struct AppPage<Trailing: View, Content: View>: View {
                 Spacer(minLength: 24)
                 trailing
             }
-            // Past the window's buttons: 12 in, three 26pt buttons 4 apart, 12 more.
-            .padding(.leading, leadingInset + 12 + AppNavButtons.width + 14)
+            // 12 in, or 14 past the window's buttons when they are in the header.
+            .padding(.leading, max(CDS.TitleBar.endInset, leadingInset + 14))
             .padding(.trailing, CDS.TitleBar.endInset)
             .frame(height: CDS.TitleBar.header)
-            .overlay(alignment: .bottom) { Rectangle().fill(CDS.border).frame(height: 0.5) }
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -199,7 +198,8 @@ struct AppContent: View {
             case .category(let id): InboxListView(store: store, tab: .category(id), hub: hub, search: search, leadingInset: leadingInset).id(id)
             case .done: InboxListView(store: store, tab: .done, hub: hub, search: search, leadingInset: leadingInset).id("done")
             case .router:
-                RouterCodeView(store: store, model: routerModel, checksClaudeCode: checksClaudeCode, embedded: true)
+                RouterCodeView(store: store, model: routerModel, checksClaudeCode: checksClaudeCode, embedded: true,
+                               leadingInset: leadingInset)
             case .settings:
                 AppPage(title: "Settings", leadingInset: leadingInset, trailing: { EmptyView() }) {
                     column { SettingsView(store: store, hub: hub) }
@@ -211,7 +211,8 @@ struct AppContent: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(CDS.Surface.s1)
+        // Under the window's top bar only: the header shows the bar's ground.
+        .background { CDS.Surface.s1.padding(.top, CDS.TitleBar.header) }
         .clipped()
     }
 

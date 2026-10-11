@@ -564,6 +564,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         window.tabbingMode = .disallowed
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.allowsToolTipsWhenApplicationIsInactive = true
+        TrafficLights.place(window)
     }
 
     /// The Router's keys (see `RouterKeys`) while the window is key and shows the Router; Esc dismisses a tooltip first.
@@ -580,6 +581,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             return consumed ? nil : event
         }
     }
+
+    // AppKit lays the window's three buttons out again on these: they go back on the header's line each time.
+    func windowDidResize(_ notification: Notification) { window.map(TrafficLights.place) }
+    func windowDidBecomeKey(_ notification: Notification) { window.map(TrafficLights.place) }
+    func windowDidExitFullScreen(_ notification: Notification) { window.map(TrafficLights.place) }
 
     func windowWillClose(_ notification: Notification) {
         if let monitor { NSEvent.removeMonitor(monitor) }
@@ -612,6 +618,29 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             }
         }
     }
+}
+
+/// The window's three buttons on the 48pt header's line, where the sidebar toggle, back, forward and the page's title are:
+/// AppKit centres them in its own 28pt title bar, 8pt higher. The title bar's container grows to the header's height and
+/// the buttons sit in its middle, as far from the window's edge as from its top.
+enum TrafficLights {
+    static let spacing: CGFloat = 20
+
+    static func place(_ window: NSWindow) {
+        guard !window.styleMask.contains(.fullScreen),
+              let close = window.standardWindowButton(.closeButton),
+              let container = close.superview?.superview else { return }
+        let height = CDS.TitleBar.header
+        container.frame = NSRect(x: container.frame.minX, y: window.frame.height - height,
+                                 width: container.frame.width, height: height)
+        let inset = ((height - close.frame.height) / 2).rounded()
+        for (i, kind) in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].enumerated() {
+            window.standardWindowButton(kind)?.setFrameOrigin(NSPoint(x: inset + CGFloat(i) * spacing, y: inset))
+        }
+    }
+
+    /// Where the three end, from the window's edge.
+    static var end: CGFloat { ((CDS.TitleBar.header - 14) / 2).rounded() + 2 * spacing + 14 }
 }
 
 /// Where the window goes when it opens on a screen.
@@ -659,25 +688,36 @@ struct AppRootView: View {
 
     var body: some View {
         let collapsed = sidebar.collapsed
-        // The rail is narrower than the window's three buttons; the content starts after what sticks out. It follows the
-        // sidebar's width on the same spring (an implicit animation here would end up fighting the explicit one).
-        let railInset = collapsed ? max(0, AppNavButtons.trafficLights - AppSidebar.railWidth) : 0
+        // The sidebar toggle, back and forward stay put after the window's three buttons: over the sidebar when it is
+        // out, at the content's start when it is a rail, the page's title after them. The room follows the sidebar's width
+        // on the same spring (an implicit animation here would end up fighting the explicit one).
+        let headerInset = collapsed ? AppNavButtons.end - AppSidebar.railWidth : 0
         HStack(spacing: 0) {
             AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
-                .padding(.top, CDS.Sidebar.titleRow)
+                .padding(.top, CDS.TitleBar.header)
                 .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
                 .frame(maxHeight: .infinity)
                 .clipped()
                 .background(CDS.Surface.sidebar)
-                .overlay(alignment: .trailing) { Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge) }
-            AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                       checksClaudeCode: checksClaudeCode, leadingInset: railInset)
-                .overlay(alignment: .topLeading) {
-                    AppNavButtons(navigator: navigator,
-                                  sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
-                        .padding(.leading, 12 + railInset)
-                        .frame(height: CDS.TitleBar.header)
+                // Its edge starts under the top bar: the window's three buttons sit above it.
+                .overlay(alignment: .trailing) {
+                    Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge).padding(.top, CDS.TitleBar.header)
                 }
+            AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                       checksClaudeCode: checksClaudeCode, leadingInset: headerInset)
+        }
+        // The top bar: the sidebar's ground the whole width (the pages draw theirs under it), a rule beneath.
+        .background(alignment: .top) { CDS.Surface.sidebar.frame(height: CDS.TitleBar.header) }
+        .overlay(alignment: .top) {
+            Rectangle().fill(CDS.border).frame(height: CDS.Sidebar.edge)
+                .padding(.top, CDS.TitleBar.header - CDS.Sidebar.edge)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            AppNavButtons(navigator: navigator,
+                          sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
+                .padding(.leading, AppNavButtons.leading)
+                .frame(height: CDS.TitleBar.header)
         }
         .frame(minWidth: 640, minHeight: 600)
         .foregroundStyle(Theme.text)
@@ -726,10 +766,12 @@ struct AppRootView: View {
 struct AppNavButtons: View {
     let navigator: AppNavigator
     @Binding var sidebarShown: Bool
-    /// Room the window's three buttons take at the content's start when the sidebar is away.
-    static let trafficLights: CGFloat = 70
+    /// Their start, from the window's edge: just after the window's three buttons.
+    static var leading: CGFloat { TrafficLights.end + 10 }
     /// What the three buttons take, with the gaps.
     static let width: CGFloat = 3 * CDS.TitleBar.button + 2 * CDS.TitleBar.buttonGap
+    /// Their end, from the window's edge.
+    static var end: CGFloat { leading + width }
 
     var body: some View {
         HStack(spacing: CDS.TitleBar.buttonGap) {
