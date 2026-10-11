@@ -768,6 +768,26 @@ import Testing
         #expect(await s.waitOptions(for: s.claudeSessions["a"]!)[0].watch.target == .session(id: "b", turns: 5))
     }
 
+    @Test func aSessionWhoseBackgroundWorkStillRunsIsWatchedForTheTurnItEnded() async {
+        // b ended its 6th turn before ours, a command of it still running in the background: waiting on b is waiting on
+        // that work, done once it exits, with no 7th turn of b's needed.
+        let (s, _) = store(watch: ciWatch)
+        s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-60)
+        s.claudeSessions["b"]?.running = false
+        s.claudeSessions["b"]?.completedTurns = 6
+        s.claudeSessions["b"]?.lastActivity = Date().addingTimeInterval(-600)
+        s.claudeSessions["b"]?.summary = .init(blocked: false, detail: "Started the backfill")
+        s.claudeTasks = ["b": [ClaudeTask(id: "t1", kind: .command, title: "backfill.sh", since: Date())]]
+        s.claudeTaskInventory = ["b"]
+        let option = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!
+        #expect(option.watch.target == .session(id: "b", turns: 5) && option.hint.contains("background"))
+        #expect(RouterWaits.result(option.watch, sessions: s.claudeSessions, things: s.things, tasks: s.routerTasks,
+                                   inventory: s.claudeTaskInventory) == nil)
+        s.claudeTasks = [:]
+        #expect(RouterWaits.result(option.watch, sessions: s.claudeSessions, things: s.things, tasks: s.routerTasks,
+                                   inventory: s.claudeTaskInventory) == "it finished its turn")
+    }
+
     @Test func aSessionThatQuitMidTurnBeforeTheOptionsWereReadIsNotDone() async {
         // The waiting turn ended a minute ago; since then b, on its 6th turn (5 counted), stopped without a summary (Claude
         // quit), before the options were read: its turn never ended.
