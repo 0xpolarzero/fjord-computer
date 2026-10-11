@@ -386,12 +386,31 @@ import Testing
         s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-60)
         s.claudeSessions["b"]?.running = false
         let option = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!
-        #expect(option.watch.target == .session(id: "b", turns: 5) && !option.hint.contains("finished"))
+        #expect(option.watch.target == .session(id: "b", turns: 4) && option.watch.turnsAtWork == 5 && !option.hint.contains("finished"))
         #expect(RouterWaits.result(option.watch, sessions: s.claudeSessions, things: s.things) == nil)
         // Started again, it finishes that turn.
         s.claudeSessions["b"]?.completedTurns = 6
         s.claudeSessions["b"]?.summary = .init(blocked: false, detail: "Migrated")
         #expect(RouterWaits.result(option.watch, sessions: s.claudeSessions, things: s.things) == "it finished its turn")
+    }
+
+    @Test func aTurnCountedBeforeItsLateSummaryIsDoneWhenTheSummaryComes() async {
+        // b's 6th turn ran past the time a turn without a summary is taken as died: it no longer shows running, counted 6,
+        // its summary yet to come, when the options were read.
+        let (s, _) = store(watch: ciWatch)
+        s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-60)
+        s.claudeSessions["b"]?.running = false
+        s.claudeSessions["b"]?.completedTurns = 6
+        let watch = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!.watch
+        #expect(watch.target == .session(id: "b", turns: 5) && watch.turnsAtWork == 6)
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == nil)
+        // Its summary comes, the count still 6: that turn is done.
+        s.claudeSessions["b"]?.summary = .init(blocked: true, detail: "Needs a password")
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == "it stopped, blocked")
+        // Or, no summary, a later turn is counted: done too.
+        s.claudeSessions["b"]?.summary = nil
+        s.claudeSessions["b"]?.completedTurns = 7
+        #expect(RouterWaits.result(watch, sessions: s.claudeSessions, things: s.things) == "it finished its turn")
     }
 
     @Test func aFoldersReposAreItsGitRemotesOwnerAndName() async throws {
