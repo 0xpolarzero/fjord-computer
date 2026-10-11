@@ -63,6 +63,10 @@ private struct GroupRow: View {
     static func uses(_ rule: Rule, _ id: UUID) -> Bool { GroupUse.uses(rule, id) }
 
     var body: some View {
+        let users = users
+        let count = group.kind == .people ? plural(group.members.count, "person", "people") : plural(group.members.count, "repo")
+        let used = users.isEmpty ? "not used yet" : "used in " + users.joined(separator: ", ")
+        let subtitle = "\(count) · \(used)"
         VStack(alignment: .leading, spacing: 10) {
             Button(action: toggle) {
                 HStack(spacing: 10) {
@@ -83,17 +87,11 @@ private struct GroupRow: View {
             .accessibilityLabel("\(group.name), \(subtitle)")
             .accessibilityAddTraits(.isButton)
             .accessibilityValue(expanded ? "expanded" : "collapsed")
-            if expanded { editor.padding(.bottom, 10).padding(.leading, 34) }
+            if expanded { editor(users).padding(.bottom, 10).padding(.leading, 34) }
         }
     }
 
-    private var subtitle: String {
-        let count = group.kind == .people ? plural(group.members.count, "person", "people") : plural(group.members.count, "repo")
-        let used = users.isEmpty ? "not used yet" : "used in " + users.joined(separator: ", ")
-        return "\(count) · \(used)"
-    }
-
-    @ViewBuilder private var editor: some View {
+    @ViewBuilder private func editor(_ users: [String]) -> some View {
         if let index {
             VStack(alignment: .leading, spacing: 10) {
                 TextField("", text: Binding(get: { store.groups[safe: index]?.name ?? "" }, set: { store.groups[index].name = $0 }))
