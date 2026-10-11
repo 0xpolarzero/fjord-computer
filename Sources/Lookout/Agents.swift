@@ -426,6 +426,7 @@ extension Store {
         }
         // Only on change: the views observing these redraw on every assignment.
         if claudeSessions != byID { claudeSessions = byID }
+        claudeSessionsListed = Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
     }
 
     // MARK: Actions

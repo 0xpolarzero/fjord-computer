@@ -270,6 +270,9 @@ final class Store {
     /// The sessions whose background work the last read looked at (see `ClaudeSnapshot.taskInventory`); nil until a read
     /// has said (a test feeding sessions by hand: every one).
     @ObservationIgnored var claudeTaskInventory: Set<String>?
+    /// Every session the last read listed, archived ones too, with when each was active last: what the Router's memory of
+    /// handled turns is kept for (`RouterFeed.update`). Nil until a read has said.
+    @ObservationIgnored var claudeSessionsListed: [String: Date]?
     @ObservationIgnored let formBridge = FormBridge()
     /// Claude Code's binary, which the Router's runs use.
     @ObservationIgnored lazy var routerStatus = RouterStatus()

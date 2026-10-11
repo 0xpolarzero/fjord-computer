@@ -52,6 +52,22 @@ import Testing
         #expect(s.router.cards.count == 2)
     }
 
+    @Test func aHandledTurnOutlastsItsSessionsArchivingAsTheStoreReadsIt() async {
+        let dir = TempDir()
+        let s = store(dir, [session("local_a", turns: 2)])
+        s.router.handledTurns = ["local_a": 2]
+        // Archived: the store's sessions leave it out, but the read still lists it, so the turn stays handled.
+        var archived = session("local_a", turns: 2)
+        archived.isArchived = true
+        s.ingest([archived], appUnread: [], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(1))
+        #expect(s.claudeSessions["local_a"] == nil && s.router.handledTurns == ["local_a": 2])
+        // Gone for good: forgotten.
+        s.ingest([], appUnread: [], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(2))
+        #expect(s.router.handledTurns.isEmpty)
+    }
+
     @Test func aSessionStillRunningSubagentsGetsItsCardWhenTheyAreDone() async {
         let dir = TempDir()
         let s = store(dir, [session("local_a", turns: 1)])

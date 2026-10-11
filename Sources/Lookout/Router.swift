@@ -451,7 +451,8 @@ enum RouterFeed {
     /// since: with some still running it is work under way, and the card waits until that is done.
     static func update(_ state: inout RouterState, sessions: [ClaudeSession], activity: [String: ClaudeActivity],
                        muted: Set<String>, viewing: String?, unread: Set<String>? = nil, forms: [String: Set<String>]? = nil,
-                       tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, now: Date) {
+                       tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, listed: [String: Date]? = nil,
+                       now: Date) {
         let live = Dictionary(sessions.filter { !$0.isArchived }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
 
         for i in state.cards.indices where state.cards[i].isOpen && live[state.cards[i].sessionID] == nil {
@@ -594,8 +595,9 @@ enum RouterFeed {
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
         state.autoContinueSessions = state.autoContinueSessions.filter { live[$0.key] != nil }
         // A handled turn outlasts its session's archiving (unarchived, it is no new card): forgotten once the session is gone
-        // for good, and past the `maxHandled` sessions active last.
-        let known = Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
+        // for good, and past the `maxHandled` sessions active last. `listed`: every session the read listed, archived ones too
+        // (the store's sessions leave the archived out); nil: `sessions`.
+        let known = listed ?? Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
         state.handledTurns = state.handledTurns.filter { known[$0.key] != nil }
         if state.handledTurns.count > maxHandled {
             let kept = Set(state.handledTurns.keys.sorted { (known[$0] ?? .distantPast, $0) > (known[$1] ?? .distantPast, $1) }.prefix(maxHandled))
@@ -816,7 +818,7 @@ extension Store {
         }
         RouterFeed.update(&state, sessions: Array(claudeSessions.values), activity: claudeActivity,
                           muted: Set(agents.mutedFolders), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
-                          inventory: claudeTaskInventory, now: now)
+                          inventory: claudeTaskInventory, listed: claudeSessionsListed, now: now)
         applyTurnSummaries(&state)
         if state != router {
             let known = Set(router.cards.map(\.id))
