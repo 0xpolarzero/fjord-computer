@@ -155,7 +155,10 @@ enum InboxJev {
         let ids = Set(InboxEngine.messages(thing).map(\.id))
         signals.messages = signals.messages.filter { ids.contains($0.key) }
         signals.answeredAt = [signals.answeredAt, InboxEngine.latestWord(thing, by: me)].compactMap { $0 }.max()
-        thing.signals = signals.messages.isEmpty && signals.importance == nil && signals.answeredAt == nil ? nil : signals
+        // Found by your `involves:` search this time (marked on the fetched thing), or any time before.
+        if thing.signals?.viewer == viewer, thing.signals?.involved == true { signals.involved = true }
+        thing.signals = signals.messages.isEmpty && signals.importance == nil && signals.answeredAt == nil && signals.involved == nil
+            ? nil : signals
     }
 
     /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).

@@ -513,6 +513,41 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.things["pr:o/r#12"]?.threads.contains { $0.id == "t21" } == true && s.inboxError == "Something went wrong")
     }
 
+    @Test func whatYourInvolvesSearchFoundStaysInvolvedOnceYourCommentIsPastWhatIsFetched() async {
+        final class Phase: @unchecked Sendable { var queries: [String] = [] }
+        let phase = Phase()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            let body = InboxSyncRefresh.body(request)
+            phase.queries.append(body)
+            // Someone else's PR, with nothing of yours among the comments fetched: ten newer ones pushed yours out.
+            let pr = node(["author": ["login": "alice", "__typename": "User"], "body": "", "assignees": ["nodes": []],
+                           "reviewRequests": ["nodes": []], "comments": ["nodes": []], "reviews": ["nodes": []],
+                           "latestOpinionatedReviews": ["nodes": []], "reviewThreads": ["nodes": []]])
+            let reply: [String: Any] = ["data": ["s0": ["pageInfo": ["hasNextPage": false], "nodes": [pr]]]]
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        var category = InboxCategory(name: "Involved", symbol: "star", color: .blue)
+        category.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.involved])), conditions: [])]
+        s.categories = [category]
+        await s.syncInbox()
+        #expect(phase.queries.first?.contains("involves:me") == true)
+        // GitHub says you're involved: it is, and stays so across refreshes.
+        #expect(s.entries.contains { $0.thing.id == "pr:o/r#12" })
+        await s.syncInbox()
+        #expect(s.entries.contains { $0.thing.id == "pr:o/r#12" })
+        // Kept as the thing is: written and read back, it still says so.
+        let saved = try? JSONDecoder().decode(Thing.self, from: JSONEncoder().encode(s.things["pr:o/r#12"]!))
+        #expect(saved?.signals?.involved == true)
+        // For you only: signed in as someone else, it isn't theirs.
+        var other = s.inboxContext
+        other.me = "someone"
+        let thing = s.things["pr:o/r#12"]!
+        #expect(InboxEngine.evaluate(things: [thing], categories: [category], marks: [:], context: other).isEmpty)
+    }
+
     @Test func anEventAnnouncedOnceStaysAnnouncedThoughTheRuleStopsMatchingForAWhile() async {
         final class Checks: @unchecked Sendable { var state = "SUCCESS" }
         let checks = Checks()

@@ -650,6 +650,17 @@ enum InboxSync {
         return thing
     }
 
+    /// A thing your `involves:` search found is marked so (for you): GitHub knows you're involved there even once what
+    /// you did is past what is fetched of it (your comment before ten newer ones), and that is kept from now on.
+    static func markInvolved(_ thing: inout Thing, foundBy searches: Set<String>, me: String) {
+        let qualifier = "involves:" + me.lowercased()
+        guard thing.kind != .workflow, !me.isEmpty,
+              searches.contains(where: { $0.lowercased().split(separator: " ").contains { $0 == qualifier } }) else { return }
+        var signals = InboxEngine.signals(thing, me) ?? ThingSignals(viewer: InboxEngine.viewer(me))
+        signals.involved = true
+        thing.signals = signals
+    }
+
     /// When a pending review request was made, as its fact's key has it: the thing's creation when GitHub didn't say.
     static func requestTime(_ reviewer: String, of thing: Thing) -> Date {
         thing.reviewRequests.first { $0.reviewer.caseInsensitiveCompare(reviewer) == .orderedSame }?.at ?? thing.createdAt
@@ -1005,7 +1016,11 @@ extension Store {
         if !searches.isEmpty, !searchesWait {
             do {
                 fetched = try await fetchThings(searches)
-                for thing in fetched.things { found[thing.id] = InboxSync.keepingRequestTimes(thing, from: things[thing.id]) }
+                for thing in fetched.things {
+                    var thing = InboxSync.keepingRequestTimes(thing, from: things[thing.id])
+                    InboxSync.markInvolved(&thing, foundBy: fetched.foundBy[thing.id] ?? [], me: me)
+                    found[thing.id] = thing
+                }
             } catch {
                 searchFailure = error.localizedDescription
             }

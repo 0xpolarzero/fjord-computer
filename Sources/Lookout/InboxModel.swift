@@ -547,6 +547,9 @@ struct ThingSignals: Codable, Hashable {
     /// Your latest word there as ever seen: someone's later reply in a thread takes the place of yours in what GitHub
     /// returns, and must not make a question you answered ask again.
     var answeredAt: Date?
+    /// GitHub's `involves:` search for this viewer returned it: you're involved, though what you did there (a comment ten
+    /// newer ones pushed out of what is fetched) may no longer be among what came with it. Kept, as involvement is.
+    var involved: Bool?
 }
 
 /// What Jev said of one message; nil where it wasn't sure.
