@@ -144,6 +144,9 @@ struct ActionLedger: Codable, Equatable {
 
     var baselines: [UUID: Baseline] = [:]
     var runs: [String: ActionRun] = [:]
+    /// PRs read again with every latest review (`InboxSync.reviewsShape`) since the last plan: the reviews they had all
+    /// along, back now, are taken as old, once.
+    var restoredReviews: Set<String>?
 
     static func key(_ category: UUID, _ thing: String, _ action: UUID, _ trigger: String) -> String {
         "\(category.uuidString)\u{1F}\(thing)\u{1F}\(action.uuidString)\u{1F}\(trigger)"
@@ -377,6 +380,21 @@ enum InboxActions {
                      me: String, known things: Set<String> = [], now: Date = Date()) -> [Job] {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
+        // Reviews a PR had all along, back since this build reads every latest one: old, as if they had been there.
+        if let restored = ledger.restoredReviews {
+            for category in categories {
+                for entry in byCategory[category.id] ?? [] where restored.contains(entry.id) {
+                    for action in category.actions.items where action.trigger == .eachFact && action.applies(to: entry.thing.kind) {
+                        for fact in entry.facts where fact.key.hasPrefix("review:")
+                            && ledger.run(category.id, entry.id, action.id, fact.key) == nil {
+                            ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: fact.key,
+                                                 state: .baselined, at: now))
+                        }
+                    }
+                }
+            }
+            ledger.restoredReviews = nil
+        }
         // Baselines: what is there when a category's rules change, or an action is added, is old.
         for category in categories {
             let ruleIDs = fingerprint(category.rules, groups: groups)

@@ -486,6 +486,8 @@ struct Thing: Codable, Hashable, Identifiable {
     var headSha: String?
     /// PRs: what its review threads past the first page were read for, kept to be read again only once that changes.
     var threadsTail: ThreadsTail?
+    /// PRs: how its reviews were read (`InboxSync.reviewsShape`); nil from a build that kept only each reviewer's latest.
+    var reviewsShape: Int?
     /// Which execution of its CI it shows (`ci:`…): a PR's checks on its head commit by their ids (a rerun's are new ones),
     /// a workflow's run and attempt. Nil when unknown (an older file).
     var ciRun: String?
@@ -539,6 +541,7 @@ extension Thing {
         behindBase = try c.decodeIfPresent(Bool.self, forKey: .behindBase) ?? false
         headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
         threadsTail = try c.decodeIfPresent(ThreadsTail.self, forKey: .threadsTail)
+        reviewsShape = try c.decodeIfPresent(Int.self, forKey: .reviewsShape)
         ciRun = try c.decodeIfPresent(String.self, forKey: .ciRun)
         ciRunning = try c.decodeIfPresent(Bool.self, forKey: .ciRunning) ?? false
         ciCancelled = try c.decodeIfPresent(Bool.self, forKey: .ciCancelled) ?? false

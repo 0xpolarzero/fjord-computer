@@ -651,6 +651,37 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.comments.count == 2)
     }
 
+    @Test func reviewsAPRHadAllAlongAreOldWhenThisBuildReadsThemBackButANewOneRuns() async {
+        func review(_ id: String, _ at: TimeInterval) -> ThingReview {
+            ThingReview(id: id, author: Person(login: "bob"), state: id == "r1" ? .changesRequested : .commented,
+                        at: Date().addingTimeInterval(at))
+        }
+        var action = CategoryAction.make(.comment("thanks"))
+        action.trigger = .eachFact
+        let performer = FakePerformer()
+        let category = InboxCategory(name: "Reviews", symbol: "star", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.newReview(by: Pick())], createdAt: .distantPast)],
+                                     actions: ActionList([action]))
+        // As an earlier build kept it: bob's opinion only.
+        var before = InboxFixture.pr(7)
+        before.reviews = [review("r1", -300)]
+        let store = InboxFixture.store([before], category: category)
+        store.actionPerformer = performer
+        await store.runActions()
+        // Read again by this build: bob's follow-up, there all along, comes back. It isn't new.
+        var after = before
+        after.reviews = [review("r1", -300), review("r2", -200)]
+        after.reviewsShape = InboxSync.reviewsShape
+        store.applyThings([after.id: after])
+        await store.runActions()
+        #expect(performer.comments.isEmpty && store.actionLedger.restoredReviews == nil)
+        // A review made since is.
+        after.reviews.append(review("r3", -10))
+        store.applyThings([after.id: after])
+        await store.runActions()
+        #expect(performer.comments.count == 1)
+    }
+
     @Test func enterModeIgnoresLaterFactsOfAThingAlreadyHandled() async {
         let (store, performer) = watchingComments(.enter, .comment("hi"))
         await store.runActions()

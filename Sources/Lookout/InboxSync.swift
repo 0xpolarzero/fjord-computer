@@ -21,6 +21,9 @@ enum InboxSync {
     /// than an hour's points. With GitHub's points below `tailPoints`, what was read stands until they come back.
     static let threadsTailAge: TimeInterval = 15 * 60
     static let tailPoints = 1000
+    /// How PRs' reviews are read: every latest review, a follow-up after an opinion too (1). A PR last read by a build that
+    /// kept only each reviewer's latest gets back reviews it had all along, and they aren't new to its actions.
+    static let reviewsShape = 1
     /// Searches a refresh makes at most, shared out a turn at a time between the rules so that none goes without.
     static let maxSearches = 16
     /// Workflow targets a refresh checks at most; past it, they take turns (`workflowWindow`).
@@ -606,6 +609,7 @@ enum InboxSync {
                 if reviewIDs.insert(id).inserted { reviews.append(ThingReview(id: id, author: who, state: s, at: at)) }
             }
             thing.reviews = reviews.sorted { $0.at < $1.at }
+            thing.reviewsShape = reviewsShape
 
             for t in nodes(node["reviewThreads"]) {
                 guard let thread = thread(t) else { continue }
@@ -1317,6 +1321,11 @@ extension Store {
         var next = next
         let me = inboxContext.me
         for id in next.keys { InboxJev.carry(things[id]?.signals, into: &next[id]!, me: me) }
+        // Read for the first time as this build reads reviews: those it had all along and that come back now are old.
+        let restored = next.compactMap { id, thing in
+            thing.kind == .pr && thing.reviewsShape != nil && things[id].map { $0.reviewsShape == nil } == true ? id : nil
+        }
+        if !restored.isEmpty { actionLedger.restoredReviews = (actionLedger.restoredReviews ?? []).union(restored) }
         if next != things { things = next }
         // When each thing went missing is kept in its marks (and so across restarts).
         var kept = marks
