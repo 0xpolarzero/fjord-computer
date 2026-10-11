@@ -1076,6 +1076,57 @@ extension InboxSyncMapping {
         second.applyThings(["pr:o/r#1": InboxFixture.pr(1, repo: "o/r")], now: now)
         #expect(second.marks["pr:o/r#1"]?.goneSince == nil)
     }
+
+    @Test func aNewCategoryForARepoNotYetReadTakesInItsOpenPRsOnceTheyAreFetchedAndActsOnlyOnWhatComesAfter() async {
+        final class Box: @unchecked Sendable { var shown: [Int] = [1] }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        let performer = FakePerformer()
+        s.actionPerformer = performer
+        s.categories = [InboxCategory(name: "Mine", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])))
+        ])]
+        let pattern = try! NSRegularExpression(pattern: #"(s\d+): search\(query: \"([^"]*)\""#)
+        s.gh.session = StubbedGitHub.session { request in
+            let body = try JSONSerialization.jsonObject(with: Data(InboxSyncRefresh.body(request).utf8)) as? [String: Any]
+            let text = body?["query"] as? String ?? ""
+            var data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000]]
+            for m in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let part = { (i: Int) in String(text[Range(m.range(at: i), in: text)!]) }
+                // Only the new repo has PRs: open ones, there before the category was made.
+                let nodes = part(2).contains("repo:o/new") ? box.shown.map {
+                    node(["id": "PR_\($0)", "number": $0, "url": "https://github.com/o/new/pull/\($0)",
+                          "repository": ["nameWithOwner": "o/new"], "author": ["login": "alice", "__typename": "User"]])
+                } : []
+                data[part(1)] = ["pageInfo": ["hasNextPage": false], "nodes": nodes]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(s.things.isEmpty)
+        // A category with a comment action for a repo not read yet: its pause passes before any refresh has read it.
+        var made = InboxCategory(name: "New", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("o/new")])), conditions: [.greptileBelow(5)])
+        ])
+        made.actions = ActionList([CategoryAction.make(.comment("Thanks"))])
+        s.categories.append(made)
+        s.categoriesEdited(delay: .milliseconds(10))
+        await s.baselineTask?.value
+        await s.runActions()
+        #expect(s.baselinePending)
+        // The refresh that reads it brings its open PR: there already, it is taken in, not acted on.
+        await s.syncInbox()
+        await s.runActions()
+        #expect(s.things["pr:o/new#1"] != nil && !s.baselinePending)
+        #expect(performer.comments.isEmpty)
+        // A PR opened after is acted on.
+        box.shown = [1, 2]
+        await s.syncInbox()
+        await s.runActions()
+        #expect(performer.comments.map(\.number) == [2])
+    }
 }
 
 

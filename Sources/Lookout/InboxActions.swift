@@ -1052,15 +1052,52 @@ extension Store {
 
     /// The categories were edited: what they match now is taken as old once the edits pause (so typing doesn't thrash), and
     /// no action runs in between.
+    /// What the categories newly ask GitHub for isn't taken in before it has been fetched: a category made for a repo not
+    /// yet read would take in nothing, and the refresh after would bring its open PRs as new arrivals and act on them. It
+    /// waits for refreshes that have answered each of its searches and workflow targets (`baselineIfFetched`).
     func categoriesEdited(delay: Duration = .seconds(1)) {
         baselinePending = true
+        baselineAwaitsFetch = false
         baselineTask?.cancel()
         baselineTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, let self else { return }
-            baselineActions()
-            baselinePending = false
-            scheduleActions()
+            if unfetchedScope().isEmpty {
+                baselineActions()
+                baselinePending = false
+                scheduleActions()
+            } else {
+                baselineAwaitsFetch = true
+            }
+        }
+    }
+
+    /// After a refresh: an edit that waited for what it asks for to be fetched is taken in once it has been.
+    func baselineIfFetched() {
+        guard baselinePending, baselineAwaitsFetch, unfetchedScope().isEmpty else { return }
+        baselineActions()
+        baselineAwaitsFetch = false
+        baselinePending = false
+    }
+
+    /// The searches and workflow targets of the categories with actions that the things weren't fetched for. Nothing when
+    /// it isn't known what they were fetched for (never loaded nor refreshed), or who you are.
+    func unfetchedScope() -> Set<String> {
+        guard let fetched = fetchedScopeKeys(), let me = me?.login, !me.isEmpty else { return [] }
+        return InboxSync.scopeKeys(categories: categories.filter { !$0.actions.isEmpty }, groups: groups, me: me,
+                                   owned: ownedRepos, contributed: contributedRepos, myTeams: myTeams,
+                                   ownerRepos: inboxSyncState.ownerRepos).subtracting(fetched)
+    }
+
+    /// The scope the things were fetched for, as keys (`InboxSync.scopeKeys`).
+    func fetchedScopeKeys() -> Set<String>? {
+        switch fetchedFor {
+        case nil: return nil
+        case .keys(let keys): return keys
+        case .categories(let categories, let groups):
+            guard let me = me?.login, !me.isEmpty else { return [] }
+            return InboxSync.scopeKeys(categories: categories, groups: groups, me: me, owned: ownedRepos,
+                                       contributed: contributedRepos, myTeams: myTeams, ownerRepos: inboxSyncState.ownerRepos)
         }
     }
 

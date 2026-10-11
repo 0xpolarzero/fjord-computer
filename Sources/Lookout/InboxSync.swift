@@ -945,6 +945,15 @@ enum InboxSync {
     /// The key of a workflow target, `repo@branch` lowercased (`repo@` for the default branch).
     static func targetKey(repo: String, branch: String?) -> String { "\(repo.lowercased())@\(branch ?? "")" }
 
+    /// What categories ask GitHub for, as keys: each search (`search:`) and workflow target (`workflow:`).
+    static func scopeKeys(categories: [InboxCategory], groups: [InboxGroup], me: String, owned: Set<String>,
+                          contributed: Set<String>, myTeams: Set<String>, ownerRepos: [String: [String]]) -> Set<String> {
+        let searches = searchPlan(categories: categories, groups: groups, me: me, contributed: contributed, myTeams: myTeams).all
+        let targets = workflowTargets(categories: categories, groups: groups, owned: owned, contributed: contributed,
+                                      ownerRepos: ownerRepos)
+        return Set(searches.map { "search:" + $0 } + targets.map { "workflow:" + targetKey(repo: $0.repo, branch: $0.branch) })
+    }
+
     /// The targets a workflow thing may come from: its branch, and the default one when it is that.
     static func targetKeys(of thing: Thing) -> [String] {
         let branch = thing.branch ?? ""
@@ -1241,6 +1250,15 @@ extension Store {
         }
         inboxSyncState.workflowCursor = window.next
         applyThings(next)
+        // What the things are fetched for now: what was asked for before and still is (dropped, its things went), and
+        // what this refresh answered. Searches kept as they were keep what they had.
+        let asked = Set(plan.all.map { "search:" + $0 } + allTargets.map { "workflow:" + InboxSync.targetKey(repo: $0.repo, branch: $0.branch) })
+        var answered = Set(targets.filter { !failedRepos.contains($0.repo) }
+            .map { "workflow:" + InboxSync.targetKey(repo: $0.repo, branch: $0.branch) })
+        if !searchesKept { answered.formUnion(searches.filter { !fetched.failed.contains($0) }.map { "search:" + $0 }) }
+        let before = fetchedScopeKeys() ?? []
+        fetchedFor = .keys(before.filter { asked.contains($0) || (searchesKept && $0.hasPrefix("search:")) }.union(answered))
+        baselineIfFetched()
         await readInbox()
         guard current() else { return }
         announceInbox()

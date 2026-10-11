@@ -89,6 +89,16 @@ final class Store {
     /// Rules were edited and the actions have not yet taken in what they match: nothing runs until they have.
     @ObservationIgnored var baselinePending = false
     @ObservationIgnored var baselineTask: Task<Void, Never>?
+    /// The edit's pause is over, but what it asks GitHub for hasn't been fetched yet: it is taken in after the refresh
+    /// that has (`baselineIfFetched`).
+    @ObservationIgnored var baselineAwaitsFetch = false
+    /// What the things were fetched for: the categories they were saved with, then the searches and workflow targets the
+    /// refreshes since have answered. Nil when never loaded nor refreshed (the things are taken as they are).
+    @ObservationIgnored var fetchedFor: FetchedScope?
+    enum FetchedScope: Equatable {
+        case categories([InboxCategory], [InboxGroup])
+        case keys(Set<String>)
+    }
     @ObservationIgnored var actionsAgain = false
     /// Which of the ledger's changes are on disk (InboxActions.swift): no action runs before its record is.
     @ObservationIgnored let actionsDisk = ActionsDisk()
@@ -651,6 +661,8 @@ final class Store {
         loading = true
         defer { loading = false }
         guard let file else { return }
+        // Nothing read: nothing was fetched for any category.
+        fetchedFor = .categories([], [])
         let data: Data
         do {
             guard let read = try Self.readExisting(file) else { loadActions(); return }
@@ -684,6 +696,7 @@ final class Store {
             categorySections = state.categorySections ?? [.github]
         }
         things = state.things ?? [:]
+        if state.things != nil { fetchedFor = .categories(categories, groups) }
         marks = state.marks ?? [:]
         categoryBaselines = state.categoryBaselines ?? [:]
         ownedRepos = state.ownedRepos ?? []
