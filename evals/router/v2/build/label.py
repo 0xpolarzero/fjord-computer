@@ -817,7 +817,7 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
             # and returns nothing; small batches it answers directly.
             size, chars = (min(batch_size, 3), 80_000) if family == "gemini" else (batch_size, 500_000)
             # Gemini takes about a minute an event, so it runs a few calls at once; the others one at a time.
-            with ThreadPoolExecutor(max_workers=GEMINI_JOBS if family == "gemini" else 1) as pool:
+            with ThreadPoolExecutor(max_workers=GEMINI_JOBS if family == "gemini" else int(os.environ.get("LABEL_JOBS", "1"))) as pool:
                 for future in [pool.submit(run_batch, family, batch, "independent")
                                for batch in batches(missing, size, chars)]:
                     future.result()
