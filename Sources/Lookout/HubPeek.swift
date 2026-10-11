@@ -268,9 +268,11 @@ extension LookoutHub {
     var peekControls: some View {
         VStack(alignment: .leading, spacing: 0) {
             // As a Claude menu's group label: `px-2 py-1`, footnote, muted.
-            syncStatus
-                .padding(.horizontal, CDS.Menu.itemPadX)
-                .frame(maxWidth: .infinity, minHeight: CDS.Menu.labelHeight, alignment: .leading)
+            if store.triageOn {
+                syncStatus
+                    .padding(.horizontal, CDS.Menu.itemPadX)
+                    .frame(maxWidth: .infinity, minHeight: CDS.Menu.labelHeight, alignment: .leading)
+            }
             MenuRow(symbol: "macwindow", title: "Open window", key: store.shortcut(.togglePanel).display) {
                 openApp(firstDestination)
             }

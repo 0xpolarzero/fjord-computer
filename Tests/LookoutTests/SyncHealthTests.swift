@@ -11,6 +11,7 @@ import Testing
     private func store(asks: OSAllocatedUnfairLock<Int>? = nil, token: String? = "token") -> Store {
         let s = Store()
         s.persists = false
+        s.settings.triage = true
         s.resolveToken = {
             asks?.withLock { $0 += 1 }
             return token.map { ($0, .environment) }

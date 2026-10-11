@@ -10,9 +10,6 @@ struct SettingsView: View {
     @Bindable var store: Store
     let hub: HubState
     @Environment(\.accessibilityReduceMotion) private var reduce
-    @State private var token = ""
-    @State private var tokenError: String?
-    @State private var typesafeKey = ""
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var launchError: String?
     @State private var restoreError: String?
@@ -29,9 +26,10 @@ struct SettingsView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
-                    account
+                    tools
+                    if store.triageOn { account }
                     notifications.id(Self.notificationsID)
-                    claude
+                    if store.router.enabled { claude }
                     shortcuts
                     updates.id(Self.updatesID)
                     general.id(Self.generalID)
@@ -54,11 +52,6 @@ struct SettingsView: View {
             launchError = nil
             accessibilityTrusted = AXIsProcessTrusted()
         }
-        .onDisappear {
-            token = ""
-            tokenError = nil
-            typesafeKey = ""
-        }
     }
 
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -72,45 +65,24 @@ struct SettingsView: View {
 
     // MARK: Sections
 
-    private var account: some View {
-        SettingsSection("GitHub") {
-            // The row's `leading` slot: the avatar, 12 before the text.
-            HStack(spacing: 12) {
-                Avatar(url: store.me?.avatarUrl, size: Self.accountAvatar)
-                SettingsRow(store.me.map { "@\($0.login)" } ?? "Not connected",
-                            description: store.unreachable ? "Couldn't reach GitHub"
-                                : store.tokenSource.map { "Token from \($0.rawValue)" } ?? (store.authError ?? ""),
-                            descriptionColor: store.unreachable ? CDS.Text.warning
-                                : store.authError == nil ? CDS.Text.muted : CDS.Text.danger) {
-                    HStack(spacing: 8) {
-                        if store.authError != nil {
-                            ActionButton("Retry") { store.refreshNow() }
-                        }
-                        if store.tokenSource == .keychain {
-                            ActionButton("Use gh CLI") { store.setToken(nil) }
-                        }
-                    }
-                }
+    /// Each tool's switch: what a tool adds to the app (its sections below included) is there only while it is on.
+    private var tools: some View {
+        SettingsSection("Tools") {
+            SettingsRow("Triage", adornment: Self.toolMark(.triage),
+                        info: ("Triage", "Your GitHub inbox: the pull requests, issues and CI that need you, sorted into categories by your rules, with banners and actions. It signs in to GitHub with `gh auth token`, or a token you paste. Off, GitHub isn't checked.")) {
+                SettingsSwitch("Triage", isOn: Binding(get: { store.triageOn }, set: { store.setTool(.triage, on: $0) }))
             }
             SettingsDivider()
-            // The field goes under the row (its `below`): beside the text it would leave the island no room.
-            SettingsRow("Personal access token",
-                        info: ("Personal access token", "Uses `gh auth token` by default. A pasted token is kept in the Keychain and needs `repo` scope for private repos."),
-                        below: AnyView(VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 8) {
-                                SettingsTextField(placeholder: "Paste a token (optional)", text: $token, secure: true,
-                                                  invalid: tokenError != nil, accessibilityLabel: "GitHub personal access token",
-                                                  onSubmit: saveToken)
-                                ActionButton("Save", height: CDS.Settings.field, action: saveToken)
-                                    .disabled(token.isEmpty)
-                            }
-                            // A refusal keeps the field and what was typed; it is said where it shows.
-                            if let tokenError {
-                                Text(tokenError).cdsText(CDS.Density.comfortable.body, .regular, CDS.Text.danger)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }))
+            router
         }
+    }
+
+    static func toolMark(_ tool: Tool) -> AnyView {
+        AnyView(Image(systemName: tool.symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(CDS.Text.secondary))
+    }
+
+    private var account: some View {
+        SettingsSection("GitHub") { GitHubSignIn(store: store) }
     }
 
     /// Turns Launch at login on or off; what the system refused with shows under the toggle, and is said too.
@@ -122,23 +94,6 @@ struct SettingsView: View {
             Announce.say("Couldn't turn \(on ? "on" : "off") Launch at login")
             return error.localizedDescription
         }
-    }
-
-    private func saveToken() {
-        guard !token.isEmpty else { return }
-        guard store.setToken(token) else {
-            tokenError = "Couldn't save the token in the Keychain"
-            return
-        }
-        tokenError = nil
-        token = ""
-    }
-
-    /// Cleared only once the Keychain has it; a refusal keeps what was typed (and the error shows below it).
-    private func saveTypesafeKey() {
-        let key = typesafeKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty, store.setTypesafeKey(key) else { return }
-        typesafeKey = ""
     }
 
     private var notifications: some View {
@@ -192,7 +147,7 @@ struct SettingsView: View {
     private var shortcuts: some View {
         SettingsSection("Shortcuts",
                         info: ("Shortcuts", "Click one, then press the new keys (Esc cancels, Delete clears). Ones that work from any app also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on.")) {
-            let actions = ShortcutAction.allCases.filter { !$0.isRouter || store.routerOn }
+            let actions = ShortcutAction.allCases.filter { $0.tool.map(store.isOn) ?? true }
             ForEach(actions) { action in
                 if action != actions.first { SettingsDivider() }
                 let needsAccess = action.isGlobal && !accessibilityTrusted
@@ -227,21 +182,19 @@ struct SettingsView: View {
 
     private var claude: some View {
         SettingsSection("Claude") {
-            router
-            if store.router.enabled {
-                SettingsDivider()
-                autoContinue
-                SettingsDivider()
-                routerStyle
-                SettingsDivider()
-                mutedFolders
-                SettingsDivider()
-                draftsJev
+            autoContinue
+            SettingsDivider()
+            routerStyle
+            SettingsDivider()
+            mutedFolders
+            SettingsDivider()
+            draftsJev
+            if store.triageOn {
                 SettingsDivider()
                 inboxJev
-                SettingsDivider()
-                sessionIcons
             }
+            SettingsDivider()
+            sessionIcons
         }
     }
 
@@ -251,10 +204,9 @@ struct SettingsView: View {
         let needsClaude = !store.router.enabled && !Claude.isInstalled
         SettingsRow("Router",
                     description: needsClaude ? "Needs the Claude desktop app" : nil,
-                    adornment: AnyView(Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(CDS.Text.secondary)),
+                    adornment: Self.toolMark(.router),
                     info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Lookout or answers a question. Messages reach your sessions through Lookout's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
-            SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.switchRouter($0) }))
+            SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setTool(.router, on: $0) }))
                 .disabled(needsClaude)
         }
         .id(Self.routerID)
@@ -351,18 +303,7 @@ struct SettingsView: View {
         }
         if store.agents.iconsEnabled {
             SettingsRail {
-                if store.hasTypesafeKey {
-                    SettingsRow("TypeSafe API key", info: ("TypeSafe API key", "Saved in the Keychain")) {
-                        ActionButton("Remove") { store.setTypesafeKey(nil) }
-                    }
-                } else {
-                    HStack(spacing: 8) {
-                        SettingsTextField(placeholder: "Paste a TypeSafe API key", text: $typesafeKey, secure: true,
-                                          accessibilityLabel: "TypeSafe API key", onSubmit: saveTypesafeKey)
-                        ActionButton("Save", height: CDS.Settings.field, action: saveTypesafeKey)
-                            .disabled(typesafeKey.isEmpty)
-                    }
-                }
+                TypeSafeKeyField(store: store)
                 if let error = store.iconError {
                     SettingsNote(error, color: CDS.Text.warning)
                         .onChange(of: error, initial: true) { _, now in Announce.say(now) }
@@ -474,13 +415,15 @@ struct SettingsView: View {
 
     private var general: some View {
         SettingsSection("General") {
-            SettingsRow("Check every") {
-                SettingsSegmented(label: "Check every",
-                                  options: [("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)],
-                                  selection: $store.settings.pollInterval)
-                    .onChange(of: store.settings.pollInterval) { store.restartPolling() }
+            if store.triageOn {
+                SettingsRow("Check every") {
+                    SettingsSegmented(label: "Check every",
+                                      options: [("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)],
+                                      selection: $store.settings.pollInterval)
+                        .onChange(of: store.settings.pollInterval) { store.restartPolling() }
+                }
+                SettingsDivider()
             }
-            SettingsDivider()
             SettingsRow("Launch at login", description: launchError, descriptionColor: CDS.Text.danger) {
                 // Your switch changes the login item; the page reading it again from the system (back after a close) doesn't.
                 SettingsSwitch("Launch at login", isOn: Binding(get: { launchAtLogin }, set: { on in
@@ -504,6 +447,102 @@ struct SettingsView: View {
         }
     }
 
+}
+
+/// GitHub's sign-in, as Settings and the onboarding show it: who is signed in and with what, then a token to paste.
+/// A token pasted and not saved goes with the page.
+struct GitHubSignIn: View {
+    let store: Store
+    @State private var token = ""
+    @State private var tokenError: String?
+
+    var body: some View {
+        // Rows as the section lays them: one under the other, no gap.
+        VStack(alignment: .leading, spacing: 0) {
+            // The row's `leading` slot: the avatar, 12 before the text.
+            HStack(spacing: 12) {
+                Avatar(url: store.me?.avatarUrl, size: SettingsView.accountAvatar)
+                SettingsRow(store.me.map { "@\($0.login)" } ?? "Not connected",
+                            description: store.unreachable ? "Couldn't reach GitHub"
+                                : store.tokenSource.map { "Token from \($0.rawValue)" } ?? (store.authError ?? ""),
+                            descriptionColor: store.unreachable ? CDS.Text.warning
+                                : store.authError == nil ? CDS.Text.muted : CDS.Text.danger) {
+                    HStack(spacing: 8) {
+                        if store.authError != nil {
+                            ActionButton("Retry") { store.refreshNow() }
+                        }
+                        if store.tokenSource == .keychain {
+                            ActionButton("Use gh CLI") { store.setToken(nil) }
+                        }
+                    }
+                }
+            }
+            SettingsDivider()
+            // The field goes under the row (its `below`): beside the text it would leave the island no room.
+            SettingsRow("Personal access token",
+                        info: ("Personal access token", "Uses `gh auth token` by default. A pasted token is kept in the Keychain and needs `repo` scope for private repos."),
+                        below: AnyView(VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                SettingsTextField(placeholder: "Paste a token (optional)", text: $token, secure: true,
+                                                  invalid: tokenError != nil, accessibilityLabel: "GitHub personal access token",
+                                                  onSubmit: saveToken)
+                                ActionButton("Save", height: CDS.Settings.field, action: saveToken)
+                                    .disabled(token.isEmpty)
+                            }
+                            // A refusal keeps the field and what was typed; it is said where it shows.
+                            if let tokenError {
+                                Text(tokenError).cdsText(CDS.Density.comfortable.body, .regular, CDS.Text.danger)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }))
+        }
+        .onDisappear {
+            token = ""
+            tokenError = nil
+        }
+    }
+
+    private func saveToken() {
+        guard !token.isEmpty else { return }
+        guard store.setToken(token) else {
+            tokenError = "Couldn't save the token in the Keychain"
+            return
+        }
+        tokenError = nil
+        token = ""
+    }
+}
+
+/// The TypeSafe API key Jev works with: Remove once the Keychain has one, else a field to paste it. A key pasted and not
+/// saved goes with the page.
+struct TypeSafeKeyField: View {
+    let store: Store
+    @State private var key = ""
+
+    var body: some View {
+        Group {
+            if store.hasTypesafeKey {
+                SettingsRow("TypeSafe API key", info: ("TypeSafe API key", "Saved in the Keychain")) {
+                    ActionButton("Remove") { store.setTypesafeKey(nil) }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    SettingsTextField(placeholder: "Paste a TypeSafe API key", text: $key, secure: true,
+                                      accessibilityLabel: "TypeSafe API key", onSubmit: save)
+                    ActionButton("Save", height: CDS.Settings.field, action: save)
+                        .disabled(key.isEmpty)
+                }
+            }
+        }
+        .onDisappear { key = "" }
+    }
+
+    /// Cleared only once the Keychain has it; a refusal keeps what was typed.
+    private func save() {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, store.setTypesafeKey(trimmed) else { return }
+        key = ""
+    }
 }
 
 // MARK: - Claude's settings primitives (settings.md §2–§3, comfortable)

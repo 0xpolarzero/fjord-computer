@@ -78,11 +78,12 @@ extension Store {
                                        expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
                                        entries: result, marks: marks)
             // One timer, for the next threshold: what shows the inbox and the notifications see it crossed, with no refresh.
+            // None with Triage off (the Router may read the inbox, but nothing of it is announced or run).
             if inboxMemo.timer != nil, inboxMemo.expires == memo.expires {
                 memo.timer = inboxMemo.timer
             } else {
                 inboxMemo.timer?.cancel()
-                if let expires = memo.expires {
+                if let expires = memo.expires, triageOn {
                     memo.timer = Task { @MainActor [weak self] in
                         try? await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow) + 0.05))
                         guard !Task.isCancelled, let self else { return }

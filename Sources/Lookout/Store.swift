@@ -451,7 +451,7 @@ final class Store {
         updater.onSkip = { [weak self] in self?.settings.skippedVersion = $0 }
         updater.start()
         observeSleep()
-        restartPolling()
+        if triageOn { restartPolling() }
         // The Router is the only reader of Claude's sessions, and they have no switch of their own: they follow it.
         if agents.enabled != router.enabled {
             agents.enabled = router.enabled
@@ -606,7 +606,9 @@ final class Store {
         sleeper?.cancel()
     }
 
+    /// A check of GitHub now; nothing with Triage off.
     func refreshNow() {
+        guard triageOn else { return }
         authRetry = true
         // Asked for during a poll: that one may be on its way out with what it knew before, so one more follows it.
         if isSyncing { refreshQueued = true } else { Task { await pollAll() } }
@@ -1135,8 +1137,9 @@ final class Store {
 
     // MARK: Polling
 
+    /// Nothing with Triage off, a refresh asked for meanwhile included.
     func pollAll() async {
-        guard !isSyncing else { return }
+        guard triageOn, !isSyncing else { return }
         isSyncing = true
         defer {
             isSyncing = false
@@ -1169,7 +1172,8 @@ final class Store {
         if me == nil, asked || gh.token != nil || Date().timeIntervalSince(lastAuthAttempt ?? .distantPast) >= Self.authBackoff {
             await authenticate()
         }
-        guard me != nil else { return }
+        // Switched off while it signed in: nothing is fetched.
+        guard me != nil, triageOn else { return }
         defer { if gh.tokenRejected { dropRejectedToken() } }
         await syncInbox(manual: asked)
     }
@@ -1345,8 +1349,9 @@ final class Store {
 
     // MARK: Notifications
 
+    /// The inbox's banners; none with Triage off (a refresh under way when it was switched off).
     func notify(id: String, title: String, subtitle: String, body: String, quiet: Bool, url: URL? = nil) {
-        guard settings.notifications, !isSnoozed else { return }
+        guard triageOn, settings.notifications, !isSnoozed else { return }
         // Away, a thing's banner comes only if Jev rates it high or urgent; the others are counted for when you're back.
         if id.hasPrefix(Self.inboxNotificationPrefix) {
             let thing = things[String(id.dropFirst(Self.inboxNotificationPrefix.count))]

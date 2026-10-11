@@ -77,8 +77,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         self.store = store
         self.routerModel = routerModel ?? RouterModel(defaults: remembers ? .standard : nil)
         self.checksClaudeCode = checksClaudeCode
-        navigator = AppNavigator(fallback: .category(store.tabNeedingYou.categoryID ?? UUID()),
-                                 defaults: remembers ? .standard : nil)
+        navigator = AppNavigator(fallback: store.firstPlace, defaults: remembers ? .standard : nil)
         super.init()
         // The place changed by whatever changes it (the Go menu, back and forward, a chip) while the window is on its way
         // in: the overlay shows the new one.
@@ -160,7 +159,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         if card != nil { destination = .router }
         if let card { routerModel.select(card, store: store) }
         // Another place, while on its way in: the navigator says so (see `init`).
-        if let destination { navigator.go(destination.resolved(shown: shownIDs, routerOn: store.routerOn)) }
+        if let destination { navigator.go(destination.resolved(shown: shownIDs, tools: store.tools)) }
         let window = self.window ?? makeWindow()
         self.window = window
         // A window on its way out comes back from where it is (minimized on its way in included: its close's end would close
@@ -508,9 +507,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         contentChanged()
     }
 
-    /// The Go menu's destinations with their titles, in the sidebar's order.
+    /// The Go menu's destinations with their titles, in the sidebar's order (none during the onboarding).
     var goItems: [GoMenuModel.Item] {
-        GoMenuModel.items(AppDestination.all(shown: shownIDs, routerOn: store.routerOn)) { title(for: $0) }
+        guard store.settings.toolsPicked == true else { return [] }
+        return GoMenuModel.items(AppDestination.all(shown: shownIDs, tools: store.tools)) { title(for: $0) }
     }
 
     func title(for destination: AppDestination) -> String {
@@ -526,7 +526,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private var shownIDs: [UUID] { store.shownCategories.map(\.id) }
 
     /// Keeps the selection on a place that exists.
-    private func settle() { navigator.settle(shown: shownIDs, routerOn: store.routerOn) }
+    private func settle() { navigator.settle(shown: shownIDs, tools: store.tools) }
 
     /// `size`: the window's content size, so that setting the content keeps the window as it is (left alone, the content
     /// would size it to its own minimum, too small to see).
@@ -573,8 +573,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             let consumed = MainActor.assumeIsolated {
+                // The onboarding has no page's keys: only its own fields and button.
                 guard let window = self.window, window.isKeyWindow, event.window === window,
-                      !self.store.isRecordingShortcut else { return false }
+                      !self.store.isRecordingShortcut, self.store.settings.toolsPicked == true else { return false }
                 if TipCenter.dismissVisible(for: event) { return true }
                 return self.navigator.selection == .router ? self.keys.key(event) : self.inboxKeys.key(event)
             }
@@ -692,32 +693,41 @@ struct AppRootView: View {
         // out, at the content's start when it is a rail, the page's title after them. The room follows the sidebar's width
         // on the same spring (an implicit animation here would end up fighting the explicit one).
         let headerInset = collapsed ? AppNavButtons.end - AppSidebar.railWidth : 0
-        HStack(spacing: 0) {
-            AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
-                .padding(.top, CDS.TitleBar.header)
-                .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
-                .frame(maxHeight: .infinity)
-                .clipped()
-                .background(CDS.Surface.sidebar)
-                // Its edge starts under the top bar: the window's three buttons sit above it.
-                .overlay(alignment: .trailing) {
-                    Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge).padding(.top, CDS.TitleBar.header)
+        Group {
+            if store.settings.toolsPicked == true {
+                HStack(spacing: 0) {
+                    AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
+                        .padding(.top, CDS.TitleBar.header)
+                        .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
+                        .frame(maxHeight: .infinity)
+                        .clipped()
+                        .background(CDS.Surface.sidebar)
+                        // Its edge starts under the top bar: the window's three buttons sit above it.
+                        .overlay(alignment: .trailing) {
+                            Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge).padding(.top, CDS.TitleBar.header)
+                        }
+                    AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                               checksClaudeCode: checksClaudeCode, leadingInset: headerInset)
                 }
-            AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                       checksClaudeCode: checksClaudeCode, leadingInset: headerInset)
-        }
-        // The top bar: the sidebar's ground the whole width (the pages draw theirs under it), a rule beneath.
-        .background(alignment: .top) { CDS.Surface.sidebar.frame(height: CDS.TitleBar.header) }
-        .overlay(alignment: .top) {
-            Rectangle().fill(CDS.border).frame(height: CDS.Sidebar.edge)
-                .padding(.top, CDS.TitleBar.header - CDS.Sidebar.edge)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .topLeading) {
-            AppNavButtons(navigator: navigator,
-                          sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
-                .padding(.leading, AppNavButtons.leading)
-                .frame(height: CDS.TitleBar.header)
+                // The top bar: the sidebar's ground the whole width (the pages draw theirs under it), a rule beneath.
+                .background(alignment: .top) { CDS.Surface.sidebar.frame(height: CDS.TitleBar.header) }
+                .overlay(alignment: .top) {
+                    Rectangle().fill(CDS.border).frame(height: CDS.Sidebar.edge)
+                        .padding(.top, CDS.TitleBar.header - CDS.Sidebar.edge)
+                        .allowsHitTesting(false)
+                }
+                .overlay(alignment: .topLeading) {
+                    AppNavButtons(navigator: navigator,
+                                  sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
+                        .padding(.leading, AppNavButtons.leading)
+                        .frame(height: CDS.TitleBar.header)
+                }
+            } else {
+                OnboardingView(store: store) {
+                    store.settings.toolsPicked = true
+                    navigator.go(store.firstPlace.resolved(shown: store.shownCategories.map(\.id), tools: store.tools))
+                }
+            }
         }
         .frame(minWidth: 640, minHeight: 600)
         .foregroundStyle(Theme.text)
@@ -725,7 +735,7 @@ struct AppRootView: View {
         .tipSpace()
         .ignoresSafeArea(.container, edges: .top)
         .background(CDS.Surface.s1)
-        .onChange(of: store.shownCategories.map(\.id)) { _, shown in navigator.settle(shown: shown, routerOn: store.routerOn) }
+        .onChange(of: store.shownCategories.map(\.id)) { _, shown in navigator.settle(shown: shown, tools: store.tools) }
         // Another place has its own pick and search; a row asked for there (a banner's click) stays.
         .onChange(of: navigator.selection) { _, place in
             search.end()
@@ -733,14 +743,14 @@ struct AppRootView: View {
             hub.selection = nil
             hub.keyboardSelection = nil
         }
-        .onChange(of: store.routerOn) { _, on in navigator.settle(shown: store.shownCategories.map(\.id), routerOn: on) }
+        .onChange(of: store.tools) { _, tools in navigator.settle(shown: store.shownCategories.map(\.id), tools: tools) }
         .environment(\.openRouter) { card in
             if let card { routerModel.select(card, store: store) }
             navigator.go(.router)
         }
         .environment(\.pickRouterCard) { card in routerModel.select(card, store: store) }
         // Chips in the window's own lists: a place, or the Router on the message an action left in its conversation.
-        .environment(\.openApp) { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), routerOn: store.routerOn)) }
+        .environment(\.openApp) { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), tools: store.tools)) }
         .environment(\.openRouterMessage) { message in
             routerModel.show(message: message)
             navigator.go(.router)

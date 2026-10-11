@@ -433,7 +433,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         globals.start()
         globalShortcuts = globals
-        if CommandLine.arguments.contains("--open") { toggleWindow() }
+        // The first launch opens on the onboarding, where the tools are picked.
+        if CommandLine.arguments.contains("--open") || store.settings.toolsPicked != true { toggleWindow() }
         if CommandLine.arguments.contains(Lifecycle.flag) {
             Lifecycle.start(store)
         } else {

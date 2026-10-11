@@ -1037,8 +1037,10 @@ enum LocalClones {
 // MARK: - The Store's side
 
 extension Store {
-    /// Called after every inbox refresh: runs the actions that are due, off the refresh.
+    /// Called after every inbox refresh: runs the actions that are due, off the refresh. None with Triage off (a refresh
+    /// that was under way when it was switched off ends without them).
     func scheduleActions() {
+        guard triageOn else { return }
         guard categories.contains(where: { !$0.actions.isEmpty }) || !actionLedger.runs.isEmpty || !actionLedger.baselines.isEmpty
         else { return }
         Task { @MainActor in await runActions() }
@@ -1054,7 +1056,7 @@ extension Store {
 
     /// Takes in what changed (baselines) and runs what is due, at most `InboxActions.perSync` per call.
     func runActions(now: Date = Date()) async {
-        guard let performer = resolvedPerformer, let me = me?.login, !me.isEmpty else { return }
+        guard triageOn, let performer = resolvedPerformer, let me = me?.login, !me.isEmpty else { return }
         // On the defaults (the state couldn't be read): taken in against them, the ledger would forget every run of your
         // categories, and take as new what they hold. Nothing runs, and nothing is taken in, until your categories are back.
         guard !onDefaults else { return }
@@ -1071,7 +1073,8 @@ extension Store {
             if ledger != actionLedger { actionLedger = ledger }
             for queued in jobs.prefix(InboxActions.perSync) {
                 // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
-                guard !baselinePending,
+                // Triage switched off while they run: nothing more reaches GitHub or a session.
+                guard !baselinePending, triageOn,
                       let job = InboxActions.stillDue(queued, entries: entries, categories: categories, groups: groups,
                                                       ledger: actionLedger, me: me) else { continue }
                 // Each job is recorded as running just before it reaches outside, and nothing reaches outside before that
@@ -1110,9 +1113,9 @@ extension Store {
                         return
                     }
                 }
-                // The write took a while: deleted, Done, no longer matching or its rules edited meanwhile, it isn't run (its
-                // record goes back, and that is written in turn).
-                guard !baselinePending, actionLedger.baselines[job.category.id]?.rules == rules,
+                // The write took a while: deleted, Done, no longer matching, its rules edited or Triage switched off meanwhile,
+                // it isn't run (its record goes back, and that is written in turn).
+                guard !baselinePending, triageOn, actionLedger.baselines[job.category.id]?.rules == rules,
                       let checked = InboxActions.stillDue(job, entries: entries, categories: categories, groups: groups,
                                                           ledger: undone(job.keys), me: me)
                 else {
@@ -1518,6 +1521,8 @@ final class StoreActionPerformer: ActionPerformer {
 
     func rerun(repo: String, run: FailedRun) async throws -> Int {
         let jobs: Jobs? = try? await store.gh.get("/repos/\(repo)/actions/runs/\(run.id)/jobs", ["filter": "latest", "per_page": "100"])
+        // Switched off while the jobs were read: CI isn't restarted.
+        guard store.triageOn else { throw ActionFailure("Triage was switched off") }
         try await store.gh.post("/repos/\(repo)/actions/runs/\(run.id)/rerun-failed-jobs")
         return jobs?.jobs.filter { ["failure", "timed_out"].contains($0.conclusion ?? "") }.count ?? 0
     }

@@ -146,8 +146,14 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     /// Works from any app (registered system-wide) rather than only while the panel has focus.
     var isGlobal: Bool { self == .togglePanel || self == .router }
 
-    /// Only meaningful with the Router on (see `Store.routerOn`).
-    var isRouter: Bool { self == .router }
+    /// The tool it belongs to, which must be on for it to show and work; nil for the window's own.
+    var tool: Tool? {
+        switch self {
+        case .togglePanel: nil
+        case .router: .router
+        case .openItem, .toggleRead, .discard, .markAllRead, .refresh: .triage
+        }
+    }
 
     var defaultShortcut: Shortcut {
         switch self {
@@ -286,7 +292,7 @@ final class GlobalShortcuts {
     func register(_ action: ShortcutAction, _ shortcut: Shortcut? = nil) -> Bool {
         guard action.isGlobal else { return true }
         let shortcut = shortcut ?? store.shortcut(action)
-        let off = action.isRouter && !store.routerOn
+        let off = action.tool.map { !store.isOn($0) } ?? false
         let wanted = off ? nil : shortcut
         let taken = hotKeys.set(action.hotKeyID, wanted.flatMap { $0.isUnassigned ? nil : $0 }) { [perform] in
             // Carbon targets the application's main event loop; AppKit's modifier monitors run on the main thread.

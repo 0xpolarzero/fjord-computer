@@ -23,6 +23,9 @@ enum Demo {
 
     static func populate(_ store: Store, _ scenario: Scenario = .busy) {
         store.persists = false
+        // Both tools, picked: the demo shows everything.
+        store.settings.triage = true
+        store.settings.toolsPicked = true
         let now = Date()
         store.me = GHUser(login: "0xpolarzero", avatarUrl: URL(string: "https://avatars.githubusercontent.com/u/0?v=4"), type: "User")
         store.tokenSource = .ghCLI

@@ -220,7 +220,9 @@ struct LookoutHub: View {
                 Button("Open Router") { openApp(.router) }
             }
             Button("Settings…") { openApp(.settings) }
-            Button("Inbox Categories…") { openApp(.categories) }
+            if store.triageOn {
+                Button("Inbox Categories…") { openApp(.categories) }
+            }
             if store.updater.isRelease {
                 // Settings' update row says what the check finds (up to date, or why it failed); the bar has no room to.
                 Button("Check for Updates") {
@@ -235,8 +237,8 @@ struct LookoutHub: View {
         .background(UpdateAnnouncer(updater: store.updater))
     }
 
-    /// Where the GitHub mark leads: the first category with something unread, else the first.
-    var firstDestination: AppDestination { AppDestination(store.tabNeedingYou) }
+    /// Where the GitHub mark and the bar's Open lead (see `Store.firstPlace`).
+    var firstDestination: AppDestination { store.firstPlace }
 
     // MARK: Data
 
@@ -252,7 +254,7 @@ struct LookoutHub: View {
         VStack(spacing: 0) {
             VStack(spacing: 0) { mainRows }
             // Last, the gear: hover for the controls, a click for Settings.
-            sectionDivider
+            if store.triageOn || store.routerOn { sectionDivider }
             controlsCell.padding(.vertical, 9)
                 .frame(width: Self.cell)
                 .modifier(probe(.controls))
@@ -262,33 +264,35 @@ struct LookoutHub: View {
     @ViewBuilder var mainRows: some View {
         // Inbox: each section's well, its icon and its categories' cells under it, apart from the Router. With nothing shown,
         // the GitHub mark alone.
-        let sections = store.barSections
-        VStack(spacing: 6) {
-            if sections.isEmpty { inboxIcon.padding(.vertical, 2).frame(width: Self.cell) }
-            ForEach(Array(sections.enumerated()), id: \.element.id) { i, part in
-                VStack(spacing: 0) {
-                    if let section = part.section {
-                        sectionCell(section, part).padding(.vertical, 2).frame(width: Self.cell)
+        if store.triageOn {
+            let sections = store.barSections
+            VStack(spacing: 6) {
+                if sections.isEmpty { inboxIcon.padding(.vertical, 2).frame(width: Self.cell) }
+                ForEach(Array(sections.enumerated()), id: \.element.id) { i, part in
+                    VStack(spacing: 0) {
+                        if let section = part.section {
+                            sectionCell(section, part).padding(.vertical, 2).frame(width: Self.cell)
+                        }
+                        if part.section?.isCollapsed != true {
+                            VStack(spacing: 0) { categoryCells(part.categories) }.frame(width: Self.cell)
+                        }
                     }
-                    if part.section?.isCollapsed != true {
-                        VStack(spacing: 0) { categoryCells(part.categories) }.frame(width: Self.cell)
+                    .padding(.bottom, 2)
+                    .frame(width: Self.cell)
+                    .background {
+                        if part.section != nil { sectionWell(first: i == 0).fill(CDS.alpha(0.06)).padding(.horizontal, 6) }
                     }
-                }
-                .padding(.bottom, 2)
-                .frame(width: Self.cell)
-                .background {
-                    if part.section != nil { sectionWell(first: i == 0).fill(CDS.alpha(0.06)).padding(.horizontal, 6) }
                 }
             }
+            // Down from the bar's top as far as a well is in from its sides, so the first sits inset all round.
+            .padding(.top, 6)
+            .frame(width: Self.cell)
+            .modifier(probe(.inbox))
         }
-        // Down from the bar's top as far as a well is in from its sides, so the first sits inset all round.
-        .padding(.top, 6)
-        .frame(width: Self.cell)
-        .modifier(probe(.inbox))
-        // The Router: its cell and counts.
+        // The Router: its cell and counts (apart from the inbox, when there is one).
         if store.routerOn {
-            sectionDivider.padding(.vertical, 6)
-            routerCell.frame(width: Self.cell)
+            if store.triageOn { sectionDivider.padding(.vertical, 6) }
+            routerCell.padding(.top, store.triageOn ? 0 : 6).frame(width: Self.cell)
                 .modifier(probe(.router))
         }
         if store.updater.showsInPill {
@@ -324,29 +328,31 @@ struct LookoutHub: View {
 
     /// The bar along the top or bottom: the inbox's segment, the Router's, the gear, the update button.
     @ViewBuilder var strip: some View {
-        let sections = store.barSections
-        HStack(spacing: 12) {
-            if sections.isEmpty { inboxIcon }
-            ForEach(sections) { part in
-                HStack(spacing: 0) {
-                    if let section = part.section { sectionCell(section, part) }
-                    // The categories' cells beside its icon.
-                    if part.section?.isCollapsed != true { HStack(spacing: 0) { categoryCells(part.categories) } }
-                }
-                .background {
-                    if part.section != nil {
-                        RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous).fill(CDS.alpha(0.06))
-                            .padding(.vertical, 5).padding(.horizontal, -3)
+        if store.triageOn {
+            let sections = store.barSections
+            HStack(spacing: 12) {
+                if sections.isEmpty { inboxIcon }
+                ForEach(sections) { part in
+                    HStack(spacing: 0) {
+                        if let section = part.section { sectionCell(section, part) }
+                        // The categories' cells beside its icon.
+                        if part.section?.isCollapsed != true { HStack(spacing: 0) { categoryCells(part.categories) } }
+                    }
+                    .background {
+                        if part.section != nil {
+                            RoundedRectangle(cornerRadius: CDS.Tile.radius + 4, style: .continuous).fill(CDS.alpha(0.06))
+                                .padding(.vertical, 5).padding(.horizontal, -3)
+                        }
                     }
                 }
             }
+            .padding(.leading, Self.inset + 1)
+            .padding(.trailing, Self.inset)
+            .frame(maxHeight: .infinity)
+            .modifier(probe(.inbox))
         }
-        .padding(.leading, Self.inset + 1)
-        .padding(.trailing, Self.inset)
-        .frame(maxHeight: .infinity)
-        .modifier(probe(.inbox))
         if store.routerOn {
-            stripDivider.padding(.horizontal, 6)
+            if store.triageOn { stripDivider.padding(.horizontal, 6) }
             routerCell
                 .padding(.leading, Self.inset + 1)
                 .padding(.trailing, Self.inset)
@@ -356,7 +362,7 @@ struct LookoutHub: View {
                 .onTapGesture { openApp(.router) }
                 .modifier(probe(.router))
         }
-        stripDivider
+        if store.triageOn || store.routerOn { stripDivider }
         controlsCell
             .padding(.horizontal, Self.inset)
             .frame(maxHeight: .infinity)

@@ -1709,12 +1709,15 @@ extension Store {
 
     /// Which sign-in (`InboxSyncState.account`), with which credentials, the inbox's refresh is asking about: an answer
     /// asked for under another is dropped.
+    /// What a refresh was started under: another account, other credentials or Triage switched since, and what it is still
+    /// to do is dropped.
     struct InboxFence: Equatable {
         let account: UUID
         let credentials: Int
+        let triage: Bool
     }
 
-    var inboxFence: InboxFence { InboxFence(account: inboxSyncState.account, credentials: credentialsChanged) }
+    var inboxFence: InboxFence { InboxFence(account: inboxSyncState.account, credentials: credentialsChanged, triage: triageOn) }
 
     /// Whether `me` is still who is signed in (or no one is known yet): an answer about someone else is dropped.
     private func stillSignedIn(as me: String) -> Bool {

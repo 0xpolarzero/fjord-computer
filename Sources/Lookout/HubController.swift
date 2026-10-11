@@ -628,8 +628,9 @@ struct BarPresence: Equatable {
 extension Store {
     /// The pictures the rows are about to show, at the URLs they ask for (the latest actor's, at a row's size): `first`'s
     /// (the page opened, else the tab the inbox opens on) first, then the other categories in order, at most `limit`; and
-    /// the account's, at Settings' size. Done's only when it is `first`.
+    /// the account's, at Settings' size. Done's only when it is `first`. None with Triage off.
     func avatarsToWarm(first: InboxTab? = nil, limit: Int = 60) -> [URL] {
+        guard triageOn else { return [] }
         var seen = Set<URL>()
         var urls: [URL] = []
         let lead = first ?? tabNeedingYou

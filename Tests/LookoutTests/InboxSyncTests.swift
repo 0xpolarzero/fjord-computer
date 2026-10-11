@@ -517,6 +517,7 @@ extension InboxSyncMapping {
     private func store(_ log: Log, notifies: Bool = true) -> (Store, UUID) {
         let s = Store()
         s.persists = false
+        s.settings.triage = true
         s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
         s.gh.session = StubbedGitHub.session { request in
             let text = Self.body(request)
@@ -1040,6 +1041,7 @@ extension InboxSyncMapping {
         let checks = Checks()
         let s = Store()
         s.persists = false
+        s.settings.triage = true
         s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
         s.gh.session = StubbedGitHub.session { _ in
             let pr = node(["commits": ["nodes": [["commit": ["oid": "abc", "committedDate": "2026-10-08T11:00:00Z",
@@ -1446,6 +1448,7 @@ extension InboxSyncMapping {
         let box = Box()
         let s = Store()
         s.persists = false
+        s.settings.triage = true
         s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
         let performer = FakePerformer()
         s.actionPerformer = performer
@@ -1516,6 +1519,7 @@ extension InboxSyncMapping {
         }
         let first = Store()
         first.stateFile = file
+        first.settings.triage = true
         first.me = GHUser(login: "me", avatarUrl: nil, type: "User")
         first.actionPerformer = FakePerformer()
         first.categories = [InboxCategory(name: "Mine", symbol: "star", color: .blue, rules: [
@@ -1586,6 +1590,7 @@ extension InboxSyncMapping {
     private func store(_ state: State, posted: @escaping (String) -> Void) -> (Store, UUID) {
         let s = Store()
         s.persists = false
+        s.settings.triage = true
         s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
         s.gh.session = StubbedGitHub.session { request in
             switch request.url?.path ?? "" {

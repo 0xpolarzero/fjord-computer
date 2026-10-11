@@ -944,8 +944,8 @@ extension Store {
             routerReconcilePending = true
         }
         router = state
-        // Off: a triage under way comes to nothing, and no banner held for one comes.
-        if !on { routerTriager.turnedOff(); routerBriefer.cancelAll() }
+        // Off: a triage under way comes to nothing, and no banner held for one comes; your messages' runs stop.
+        if !on { routerTriager.turnedOff(); routerBriefer.cancelAll(); routerDispatcher.stopAll() }
         applyRouterSwitch(install: true)
         if on {
             feedRouter(now: now)

@@ -49,6 +49,7 @@ final class StubAuthGitHub: URLProtocol, @unchecked Sendable {
     private func store(login: String = "me") -> Store {
         let s = Store()
         s.persists = false
+        s.settings.triage = true
         s.gh.session = StubAuthGitHub.session
         s.gh.token = "token"
         s.me = GHUser(login: login, avatarUrl: nil, type: nil)

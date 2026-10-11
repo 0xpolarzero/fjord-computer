@@ -163,6 +163,9 @@ enum RouterBanners {
     /// With the Router off, its cards are left out: only what came in the inbox is said.
     static func postBack(_ strip: AwayStrip, store: Store, windowIsKey: Bool) {
         let cards = store.router.enabled ? store.routerShownCards : []
+        // With Triage off, what the inbox held back isn't said either.
+        var strip = strip
+        if !store.triageOn { strip.inbox = 0 }
         store.routerAttention.reported(strip.listed(cards))
         guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(cards) else { return }
         let first = strip.listed(cards).first

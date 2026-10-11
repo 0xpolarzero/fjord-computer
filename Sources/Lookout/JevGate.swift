@@ -136,7 +136,7 @@ extension Store {
         case .drafts: routerOn && jevReadsDrafts
         case .triage, .cards: router.enabled
         case .icons: agents.enabled && agents.iconsEnabled
-        case .inbox: jevReadsInbox
+        case .inbox: triageOn && jevReadsInbox
         // It reads the item (its title and what GitHub wrote): only when Jev may read the inbox.
         case .actions: router.enabled && agents.enabled && jevReadsInbox
         case .categoryIcons: true

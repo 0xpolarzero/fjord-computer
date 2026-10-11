@@ -55,11 +55,29 @@ import Testing
     }
 
     @Test func aPlaceThatIsGoneResolvesToTheFirstCategoryShown() {
-        #expect(AppDestination.category(c).resolved(shown: [a, b], routerOn: true) == .category(a))
-        #expect(AppDestination.category(b).resolved(shown: [a, b], routerOn: true) == .category(b))
-        #expect(AppDestination.category(c).resolved(shown: [], routerOn: true) == .done)
-        #expect(AppDestination.router.resolved(shown: [a], routerOn: false) == .category(a))
-        #expect(AppDestination.settings.resolved(shown: [], routerOn: false) == .settings)
+        let both: Set<Tool> = [.triage, .router]
+        #expect(AppDestination.category(c).resolved(shown: [a, b], tools: both) == .category(a))
+        #expect(AppDestination.category(b).resolved(shown: [a, b], tools: both) == .category(b))
+        #expect(AppDestination.category(c).resolved(shown: [], tools: both) == .done)
+        #expect(AppDestination.router.resolved(shown: [a], tools: [.triage]) == .category(a))
+        #expect(AppDestination.settings.resolved(shown: [], tools: [.triage]) == .settings)
+    }
+
+    @Test func aPlaceOfAToolThatIsOffResolvesToATool() {
+        for place in [AppDestination.category(a), .done, .categories] {
+            #expect(place.resolved(shown: [a], tools: [.router]) == .router)
+            #expect(place.resolved(shown: [a], tools: []) == .settings)
+        }
+        #expect(AppDestination.router.resolved(shown: [a], tools: []) == .settings)
+        #expect(AppDestination.settings.resolved(shown: [a], tools: []) == .settings)
+    }
+
+    @Test func theSidebarListsOnlyThePlacesOfToolsThatAreOn() {
+        #expect(AppDestination.all(shown: [a, b], tools: [.triage, .router])
+            == [.category(a), .category(b), .done, .router, .settings, .categories])
+        #expect(AppDestination.all(shown: [a, b], tools: [.triage]) == [.category(a), .category(b), .done, .settings, .categories])
+        #expect(AppDestination.all(shown: [a, b], tools: [.router]) == [.router, .settings])
+        #expect(AppDestination.all(shown: [a, b], tools: []) == [.settings])
     }
 
     @Test func settlingReplacesGonePlacesInTheHistoryToo() throws {
@@ -67,7 +85,7 @@ import Testing
         nav.go(.category(c))
         nav.go(.settings)
         nav.go(.category(c))
-        nav.settle(shown: [a, b], routerOn: true)
+        nav.settle(shown: [a, b], tools: [.triage, .router])
         #expect(nav.selection == .category(a))
         #expect(!nav.history.stack.contains(.category(c)))
         #expect(nav.history.stack == [.category(a), .settings, .category(a)])
@@ -75,7 +93,7 @@ import Testing
 
     @Test func theGoMenuNumbersTheFirstNinePlaces() {
         let ids = (0..<8).map { _ in UUID() }
-        let all = AppDestination.all(shown: ids, routerOn: true)
+        let all = AppDestination.all(shown: ids, tools: [.triage, .router])
         let items = GoMenuModel.items(all) { $0.token }
         #expect(items.prefix(9).map(\.key) == (1...9).map { String($0) })
         #expect(items.dropFirst(9).allSatisfy { $0.key == nil })

@@ -26,10 +26,11 @@ enum InboxFixture {
                                           rules: [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo(repo)])))])]
     }
 
-    /// A store (saving nothing) whose one category holds `things`.
+    /// A store (saving nothing, Triage on) whose one category holds `things`.
     @MainActor static func store(_ things: [Thing], category: InboxCategory = category()) -> Store {
         let store = Store()
         store.persists = false
+        store.settings.triage = true
         store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
         store.categories = [category]
         store.things = Dictionary(uniqueKeysWithValues: things.map { ($0.id, $0) })

@@ -84,39 +84,43 @@ struct AppSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // On the rail its label is gone, and its room with it: the icons start under the top bar.
-                    InboxHeading(on: navigator.selection == .categories, collapsed: collapsed) { navigator.go(.categories) }
-                        .frame(height: collapsed ? M.rowGap + 2 : InboxHeading.height, alignment: .bottom)
-                        .clipped()
-                        .allowsHitTesting(!collapsed)
-                    // Section by section: its row (a caret folds it, its categories' counts then added up on it), then its
-                    // categories while it is open; a section's sit a step in, a guide down from its icon beside them (the
-                    // expanded sidebar only: on the rail they line up as tiles).
-                    ForEach(store.barSections) { part in
-                        if let section = part.section { sectionRow(section, part) }
-                        if part.section == nil {
-                            ForEach(part.categories) { category in categoryRow(category) }
-                        } else if part.section?.isCollapsed != true {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(part.categories) { category in categoryRow(category, nested: true) }
+                    if store.triageOn {
+                        // On the rail its label is gone, and its room with it: the icons start under the top bar.
+                        InboxHeading(on: navigator.selection == .categories, collapsed: collapsed) { navigator.go(.categories) }
+                            .frame(height: collapsed ? M.rowGap + 2 : InboxHeading.height, alignment: .bottom)
+                            .clipped()
+                            .allowsHitTesting(!collapsed)
+                        // Section by section: its row (a caret folds it, its categories' counts then added up on it), then its
+                        // categories while it is open; a section's sit a step in, a guide down from its icon beside them (the
+                        // expanded sidebar only: on the rail they line up as tiles).
+                        ForEach(store.barSections) { part in
+                            if let section = part.section { sectionRow(section, part) }
+                            if part.section == nil {
+                                ForEach(part.categories) { category in categoryRow(category) }
+                            } else if part.section?.isCollapsed != true {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    ForEach(part.categories) { category in categoryRow(category, nested: true) }
+                                }
+                                .overlay(alignment: .topLeading) { treeGuide }
                             }
-                            .overlay(alignment: .topLeading) { treeGuide }
                         }
+                        AppSidebarRow(title: "Done", on: navigator.selection == .done,
+                                      tip: "Done · \(store.doneEntries.count)", action: { navigator.go(.done) }) { on in
+                            Image(systemName: "archivebox")
+                                .font(.system(size: M.symbol, weight: .medium))
+                                .foregroundStyle(on ? CDS.Text.primary : CDS.Text.muted)
+                        } trailing: {
+                            CountText(store.doneEntries.count, color: CDS.Text.muted)
+                        }
+                        .padding(.bottom, rowGap)
                     }
-                    AppSidebarRow(title: "Done", on: navigator.selection == .done,
-                                  tip: "Done · \(store.doneEntries.count)", action: { navigator.go(.done) }) { on in
-                        Image(systemName: "archivebox")
-                            .font(.system(size: M.symbol, weight: .medium))
-                            .foregroundStyle(on ? CDS.Text.primary : CDS.Text.muted)
-                    } trailing: {
-                        CountText(store.doneEntries.count, color: CDS.Text.muted)
-                    }
-                    .padding(.bottom, rowGap)
                     if store.routerOn {
                         let routerCounts = store.routerCounts
                         // The Router stands apart from the inbox: a rule and a gap, no header over a single row.
-                        rule.padding(.top, 4)
-                        Color.clear.frame(height: M.groupTop - 4)
+                        if store.triageOn {
+                            rule.padding(.top, 4)
+                            Color.clear.frame(height: M.groupTop - 4)
+                        }
                         AppSidebarRow(title: "Router", on: navigator.selection == .router,
                                       badge: routerCounts.needsYou + routerCounts.notes > 0
                                           ? RailBadge(count: routerCounts.needsYou + routerCounts.notes,

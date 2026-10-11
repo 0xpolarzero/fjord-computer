@@ -51,19 +51,30 @@ enum AppDestination: Hashable {
         }
     }
 
-    /// The sidebar's destinations in order: the categories shown, Done, the Router when it is on, Settings, Inbox categories.
-    static func all(shown: [UUID], routerOn: Bool) -> [AppDestination] {
-        shown.map { .category($0) } + [.done] + (routerOn ? [.router] : []) + [.settings, .categories]
+    /// The tool whose place this is; nil for Settings, which is always there.
+    var tool: Tool? {
+        switch self {
+        case .category, .done, .categories: .triage
+        case .router: .router
+        case .settings: nil
+        }
     }
 
-    /// Where this really goes: a category that is gone or hidden, or a Router that is off, lands on the first category shown
-    /// (Done when there is none).
-    func resolved(shown: [UUID], routerOn: Bool) -> AppDestination {
-        switch self {
-        case .category(let id): shown.contains(id) ? self : (shown.first.map { .category($0) } ?? .done)
-        case .router: routerOn ? self : (shown.first.map { .category($0) } ?? .done)
-        default: self
+    /// The sidebar's destinations in order: the categories shown, Done, the Router, Settings, Inbox categories; those of a
+    /// tool that is off left out.
+    static func all(shown: [UUID], tools: Set<Tool>) -> [AppDestination] {
+        (shown.map { .category($0) } + [.done, .router, .settings, .categories]).filter { $0.tool.map(tools.contains) ?? true }
+    }
+
+    /// Where this really goes: a category that is gone or hidden lands on the first category shown (Done when there is none);
+    /// a place whose tool is off, on the first place of a tool that is on (Settings when none is).
+    func resolved(shown: [UUID], tools: Set<Tool>) -> AppDestination {
+        let inbox: AppDestination = shown.first.map { .category($0) } ?? .done
+        if let tool, !tools.contains(tool) {
+            return tools.contains(.triage) ? inbox : tools.contains(.router) ? .router : .settings
         }
+        if case .category(let id) = self, !shown.contains(id) { return inbox }
+        return self
     }
 }
 
@@ -160,10 +171,10 @@ final class AppNavigator {
     }
 
     /// A place that no longer exists is replaced by the one it resolves to, in the history too.
-    func settle(shown: [UUID], routerOn: Bool) {
+    func settle(shown: [UUID], tools: Set<Tool>) {
         let was = selection
         for item in Set(history.stack) {
-            let real = item.resolved(shown: shown, routerOn: routerOn)
+            let real = item.resolved(shown: shown, tools: tools)
             if real != item { history.replace(item, with: real) }
         }
         remember(was)
