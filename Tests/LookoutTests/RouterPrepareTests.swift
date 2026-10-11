@@ -104,6 +104,19 @@ import Testing
         #expect(RouterTools.hasRouterAside("Ship it (@router wait on `CI`)"))
     }
 
+    @Test func anAsideOpenedInADoubleQuotedSpanIsTheQuotesText() throws {
+        for text in ["Change the composer placeholder to \"(@router no rush)\"", "Change the placeholder to “(@router no rush)”",
+                     "Set it to \"see [@router later]\" and push"] {
+            #expect(try edit(text) == text, "\(text)")
+            #expect(!RouterTools.hasRouterAside(text), "\(text)")
+        }
+        // Outside the quotes, or with a quote left open or an apostrophe: an aside, as before.
+        #expect(try edit("Change it to \"x\" (@router no rush)") == "Change it to \"x\"")
+        #expect(try edit("Use a 5\" pipe (@router no rush)") == "Use a 5\" pipe")
+        #expect(try edit("Don't ship it (@router no rush)") == "Don't ship it")
+        #expect(try edit("Say \"hi\nthere\" (@router soon)") == "Say \"hi\nthere\"")
+    }
+
     @Test func aRouterMentionThatIsntAnExplicitAsideGoesAsWritten() throws {
         // In code or quotes of any kind, in prose, glued to punctuation, or in a bracket left open: never cut, never refused.
         for text in ["print(f'ask @router for {name}')", "print(‘ask @router’)", "print('ask @router for help')",

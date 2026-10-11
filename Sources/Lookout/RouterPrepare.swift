@@ -458,13 +458,32 @@ enum Addressing {
         return mask
     }
 
+    /// Which characters are quoted in the message's own words: a double-quoted span ("…" or “…”) opened and closed on one
+    /// line, outside code (`code`), its quotes included. Single quotes are never quotes here: they are apostrophes as often.
+    static func quoteMask(_ text: [Character], code: [Bool]) -> [Bool] {
+        var mask = [Bool](repeating: false, count: text.count)
+        var k = 0
+        while k < text.count {
+            let open = text[k]
+            guard !code[k], open == "\"" || open == "“" else { k += 1; continue }
+            let close: Character = open == "\"" ? "\"" : "”"
+            var j = k + 1
+            while j < text.count, !text[j].isNewline, code[j] || text[j] != close { j += 1 }
+            guard j < text.count, !text[j].isNewline else { k += 1; continue }
+            for m in k...j { mask[m] = true }
+            k = j + 1
+        }
+        return mask
+    }
+
     /// The `@router` asides of `text`, as the character ranges they take, in order. Only two forms are asides, both in the
-    /// message's own words (not in code): a bracket opened right before the marker and closed, balanced, on the same line
-    /// ("(@router no rush)", "[@router later]"), with the spaces before it, code inside it included; or a whole line that starts with the marker
+    /// message's own words (not in code, nor opened in a double-quoted span: `quoteMask`): a bracket opened right before the
+    /// marker and closed, balanced, on the same line ("(@router no rush)", "[@router later]"), with the spaces before it,
+    /// code inside it included; or a whole line that starts with the marker
     /// (after up to three spaces), with its line break ("@router what needs me?"). A marker anywhere else ("ask @router",
     /// `print(f'ask @router')`) is text, and goes as written.
     static func asides(_ text: [Character]) -> [Range<Int>] {
-        let code = codeMask(text)
+        let code = codeMask(text), quoted = quoteMask(text, code: code)
         func blank(_ c: Character) -> Bool { c == " " || c == "\t" }
         var found: [Range<Int>] = []
         var lineStart = 0
@@ -484,7 +503,7 @@ enum Addressing {
             var k = lineStart
             while k < lineEnd {
                 defer { k += 1 }
-                guard !code[k], text[k] == "(" || text[k] == "[" else { continue }
+                guard !code[k], !quoted[k], text[k] == "(" || text[k] == "[" else { continue }
                 let open = text[k], close: Character = open == "(" ? ")" : "]"
                 var m = k + 1
                 while m < lineEnd, blank(text[m]) { m += 1 }
