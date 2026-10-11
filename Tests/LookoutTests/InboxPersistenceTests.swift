@@ -311,6 +311,33 @@ import Testing
         #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
     }
 
+    @Test func aChangeWhoseEntryIsLostOrThatAnOlderFileKeptInItsChatGetsAnEntryOfItsOwn() throws {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try enc.encode(value), as: UTF8.self) }
+        var waiting = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
+                                    patch: .order(before: [], after: []))
+        waiting.pending = "made by the Router"
+        let applied = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_100), title: "Changed the order back",
+                                    patch: .order(before: [], after: []))
+        let linked = RouterDecision(at: Date(timeIntervalSince1970: 1_800_000_200), trigger: .you("hi"), outcome: .done)
+        // Its entry can't be read: the change waiting for your Apply is still reached, through an entry of Lookout's.
+        let state = try dec.decode(RouterState.self, from: Data("""
+        {"changes": [\(try json(waiting)), \(try json(applied))], "decisions": [{"at": 5}, \(try json(linked))]}
+        """.utf8))
+        #expect(state.dropped == ["1 of decisions"])
+        #expect(state.decisions.map(\.links.changes) == [[waiting.id], []])
+        #expect(state.decisions.first?.trigger == .system && state.decisions.first?.at == waiting.date)
+        // An older file's chat: each change it kept gets an entry too.
+        let old = try dec.decode(RouterState.self, from: Data("""
+        {"chat": [{"text": "hi"}, {"change": \(try json(applied))}]}
+        """.utf8))
+        #expect(old.changes.map(\.id) == [applied.id])
+        #expect(old.decisions.map(\.links.changes) == [[applied.id]])
+    }
+
     @Test func aRunUnderWayWhenTheAppQuitSaysItWasInterrupted() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

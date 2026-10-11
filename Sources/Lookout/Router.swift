@@ -151,7 +151,11 @@ struct RouterState: Codable, Equatable {
         cards = list(.cards)
         changes = list(.changes)
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
-        if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
+        var legacy: Set<UUID> = []
+        if changes.isEmpty {
+            changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change)
+            legacy = Set(changes.map(\.id))
+        }
         decisions = list(.decisions)
         summaries = list(.summaries)
         seen = map(.seen)
@@ -166,6 +170,7 @@ struct RouterState: Codable, Equatable {
         autoContinue = value(.autoContinue) ?? false
         autoContinueSessions = map(.autoContinueSessions)
         handledTurns = map(.handledTurns)
+        linkUnlinkedChanges(legacy: legacy)
         dropped = lost
     }
 

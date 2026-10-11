@@ -221,6 +221,17 @@ extension RouterState {
             decisions[i].outcome = .done
         }
     }
+
+    /// A change waiting for your Apply or Discard, or one an older file kept in its chat, is reached only through an entry
+    /// linking it: one whose entry was lost (unreadable) or never made gets an entry of Lookout's own, at its date.
+    mutating func linkUnlinkedChanges(legacy: Set<UUID>) {
+        let linked = Set(decisions.flatMap(\.links.changes))
+        for change in changes where !linked.contains(change.id) && (change.isPending || legacy.contains(change.id)) {
+            var entry = RouterDecision(at: change.date, trigger: .system, outcome: change.isReverted ? .reverted : .done)
+            entry.add(.changed(change.id))
+            decisions.insert(entry, at: decisions.firstIndex { $0.at > change.date } ?? decisions.endIndex)
+        }
+    }
 }
 
 extension Store {
