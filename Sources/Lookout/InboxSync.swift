@@ -1334,14 +1334,15 @@ extension Store {
         var next = next
         let me = inboxContext.me
         for id in next.keys { InboxJev.carry(things[id]?.signals, into: &next[id]!, me: me) }
-        // Read for the first time as this build reads reviews: those it had all along and that come back now are old. It
-        // had them by the time it was last read (when it was last updated then, or its newest review): one made after,
+        // Read for the first time as this build reads reviews: those it had all along and that come back now are old (those
+        // it was read with already were never left out). It had them by the time it was last read (when it was last updated then, or its newest review): one made after,
         // while Lookout was closed, is new.
         var restored = actionLedger.restoredReviewIDs ?? [:]
         for (id, thing) in next where thing.kind == .pr && thing.reviewsShape != nil {
             guard let stored = things[id], stored.reviewsShape == nil else { continue }
             let cutoff = max(stored.updatedAt, stored.reviews.map(\.at).max() ?? .distantPast)
-            let old = thing.reviews.filter { $0.at <= cutoff }.map(\.id)
+            let had = Set(stored.reviews.map(\.id))
+            let old = thing.reviews.filter { $0.at <= cutoff && !had.contains($0.id) }.map(\.id)
             if !old.isEmpty { restored[id, default: []].formUnion(old) }
         }
         if !restored.isEmpty, restored != actionLedger.restoredReviewIDs { actionLedger.restoredReviewIDs = restored }

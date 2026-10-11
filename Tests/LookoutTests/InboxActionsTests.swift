@@ -711,6 +711,40 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(ran == ["review:r4"])
     }
 
+    @Test func aPRInANewReviewCategoryOnlyByReviewsItHadAllAlongDoesNotEnterItButOneWithANewReviewDoes() async {
+        func review(_ id: String, _ at: TimeInterval) -> ThingReview {
+            ThingReview(id: id, author: Person(login: "bob"), state: .commented, at: Date().addingTimeInterval(at))
+        }
+        var action = CategoryAction.make(.comment("thanks"))
+        action.trigger = .enter
+        let performer = FakePerformer()
+        let category = InboxCategory(name: "New review", symbol: "star", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.newReview(by: Pick())], createdAt: .distantPast)],
+                                     actions: ActionList([action]))
+        // As an earlier build last read them, 100 seconds ago: no review it kept, so in no category.
+        let quiet = InboxFixture.pr(7, updated: Date().addingTimeInterval(-100))
+        let busy = InboxFixture.pr(8, updated: Date().addingTimeInterval(-100))
+        let store = InboxFixture.store([quiet, busy], category: category)
+        store.actionPerformer = performer
+        await store.runActions()
+        // Read again by this build: a follow-up each had all along comes back; #8 has one made since as well.
+        var quietAfter = quiet, busyAfter = busy
+        quietAfter.reviews = [review("r1", -200)]
+        busyAfter.reviews = [review("r2", -200), review("r3", -50)]
+        for i in [0, 1] {
+            var t = i == 0 ? quietAfter : busyAfter
+            t.updatedAt = Date()
+            t.reviewsShape = InboxSync.reviewsShape
+            if i == 0 { quietAfter = t } else { busyAfter = t }
+        }
+        store.applyThings([quietAfter.id: quietAfter, busyAfter.id: busyAfter])
+        #expect(store.entries.count == 2)
+        await store.runActions()
+        let ran = store.actionLedger.runs.values.filter { $0.state != .baselined }.map(\.thing)
+        #expect(ran == [busyAfter.id])
+        #expect(performer.comments.count == 1)
+    }
+
     @Test func enterModeIgnoresLaterFactsOfAThingAlreadyHandled() async {
         let (store, performer) = watchingComments(.enter, .comment("hi"))
         await store.runActions()
