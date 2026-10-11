@@ -78,7 +78,8 @@ def score(cases, rows, pol):
     for row in rows:
         c = by[row["id"]]
         r = run.reading(row)
-        k, w = pol(r)
+        # A policy that reads the board too (recency) says so with `needs_case`.
+        k, w = pol(r, c) if getattr(pol, "needs_case", False) else pol(r)
         gold = set(c["gold"]["to"])
         ask_ok = c["gold"].get("ask_ok") or not gold
         t["n"] += 1
@@ -109,7 +110,12 @@ def bench(fmt, sets, pol, orders=1, rerun=True):
         cases = load_set(s)
         if not cases:
             continue
-        rows = run.run(fmt, cases, orders) if rerun else run.load(f"{fmt}@{s}")
+        if rerun:
+            rows = run.run(fmt, cases, orders)
+        else:
+            ids = {c["id"] for c in cases}
+            whole = {"realA": "real", "realB": "real", "styleA": "style", "styleB": "style"}.get(s, s)
+            rows = [r for r in run.load(f"{fmt}@{whole}") if r["id"] in ids]
         if rerun:
             run.save(f"{fmt}@{s}", rows)
         out[s] = score(cases, rows, pol)
