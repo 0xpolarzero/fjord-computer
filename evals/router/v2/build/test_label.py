@@ -253,7 +253,8 @@ class ResponseParsingTests(unittest.TestCase):
     def setUp(self):
         self.records = render_events(episode([submit("first", "Use v2."),
                                              submit("second", "Add tests.", "session:b")]))
-        self.responses = [{"key": record["key"], **label("gpt", intended=target, acceptable=[target])}
+        self.responses = [{"key": record["key"], "echo": record["view"]["message"],
+                           **label("gpt", intended=target, acceptable=[target])}
                           for record, target in zip(self.records, ("session:a", "session:b"))]
 
     def parse(self, responses):
@@ -263,6 +264,20 @@ class ResponseParsingTests(unittest.TestCase):
         parsed = self.parse(list(reversed(self.responses)))
         self.assertEqual(parsed[self.records[0]["key"]]["intended"], "session:a")
         self.assertEqual(parsed[self.records[1]["key"]]["intended"], "session:b")
+
+    # A model can shift labels onto neighbouring keys; on a shared board the target stays valid, so only the echo
+    # of the message's opening words catches it (label.validate_label).
+    def test_a_label_on_the_wrong_key_is_rejected_by_its_echo(self):
+        swapped = [{**self.responses[0], "key": self.records[1]["key"]},
+                   {**self.responses[1], "key": self.records[0]["key"]}]
+        errors = {}
+        with self.assertRaises(ValueError):
+            parse_labels(json.dumps({"labels": swapped}), self.records, errors)
+        self.assertEqual(set(errors.values()), {"label echo does not match its message"})
+
+    def test_the_echo_ignores_case_and_punctuation(self):
+        loose = [{**self.responses[0], "echo": "use V2"}, self.responses[1]]
+        self.assertEqual(len(self.parse(loose)), 2)
 
     # One bad or missing label fails only its own event; its valid siblings are kept (label.parse_labels).
 

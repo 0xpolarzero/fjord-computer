@@ -55,7 +55,7 @@ from v2.run import adapter, episodes, rules
 
 FAMILIES = ("claude", "gpt", "gemini")
 ASK = ("required", "allowed", "forbidden")
-VERSION = "blind-router-label-v1"
+VERSION = "blind-router-label-v2"
 SESSION_FIELDS = ("id", "title", "project", "running", "activity", "summary", "idle_min",
                   "archived", "waits_on_you", "background", "finished_min", "turns")
 CARD_FIELDS = ("id", "session", "kind", "text", "options", "created_min_ago", "questions",
@@ -83,12 +83,25 @@ unless replyTo, pin, confirmed shown, or an explicit address authorizes it. Titl
 overlap alone does not authorize approval. Typing while an ask waits is a fresh
 message, never an implicit button pick. Consequential means misdelivery could
 approve, push, delete, publish or cause another substantial irreversible action.
-Return ONLY JSON: {"labels":[{"key":"opaque key","intended":"target or unknown",
+Return ONLY JSON: {"labels":[{"key":"opaque key","echo":"first three words of that
+event's message, copied exactly","intended":"target or unknown",
 "acceptable":[],"clarify":[],"ask":"required|allowed|forbidden",
 "consequential":false,"confidence":1,"evidence":"one line of visible evidence"}]}.
-Confidence is an integer 1–4. Return exactly one label for every provided key.
+Confidence is an integer 1–4. Return exactly one label for every provided key;
+the echo proves the label belongs to that key's message.
 For ask=required, acceptable MUST be empty: no automatic send is safe.
 """
+
+
+LABEL_SCHEMA = {"type": "object", "required": ["labels"], "properties": {"labels": {"type": "array", "items": {
+    "type": "object",
+    "required": ["key", "echo", "intended", "acceptable", "clarify", "ask", "consequential", "confidence", "evidence"],
+    "properties": {"key": {"type": "string"}, "echo": {"type": "string"}, "intended": {"type": "string"},
+                   "acceptable": {"type": "array", "items": {"type": "string"}},
+                   "clarify": {"type": "array", "items": {"type": "string"}},
+                   "ask": {"type": "string", "enum": ["required", "allowed", "forbidden"]},
+                   "consequential": {"type": "boolean"}, "confidence": {"type": "integer", "minimum": 1, "maximum": 4},
+                   "evidence": {"type": "string"}}}}}}
 
 
 class NeedsAdjudication(ValueError):
@@ -432,12 +445,23 @@ def decode_json(text):
     raise ValueError("model did not return a JSON document")
 
 
+def opening(text, count=3):
+    """The first words of a message, folded, for checking a label's echo."""
+    return [w for w in re.sub(r"[^\w\s]", " ", str(text).lower()).split()][:count]
+
+
 def validate_label(label, record, strict=False):
     """A label checked against the event's visible board. A model's off-board target is dropped (kept in
-    `dropped_targets`); with `strict` (your own anchor answers) it is an error."""
+    `dropped_targets`); with `strict` (your own anchor answers) it is an error. A model label must echo its
+    message's opening words: in a batch, a model can shift labels onto neighbouring keys, and on a shared real
+    board the shifted target is usually still valid."""
     fields = ("intended", "acceptable", "clarify", "ask", "consequential", "confidence", "evidence")
     if not all(field in label for field in fields):
         raise ValueError("missing annotation fields")
+    if not strict:
+        echo, expected = opening(label.get("echo", "")), opening(record["view"]["message"])
+        if echo[:len(expected)] != expected:
+            raise ValueError("label echo does not match its message")
     if label["ask"] not in ASK or type(label["consequential"]) is not bool:
         raise ValueError("invalid ask/consequential")
     if type(label["confidence"]) is not int or not 1 <= label["confidence"] <= 4:
@@ -546,7 +570,7 @@ def recover_cached(records, directory=LABELS):
         except (ValueError, TypeError):
             continue
         append_jsonl(directory / "raw.jsonl", [{**saved[key], "status": "ok", "label": labels[key],
-                     "recovered_from_cached_response": True} for key in call["keys"]])
+                     "recovered_from_cached_response": True} for key in call["keys"] if key in labels])
         append_jsonl(directory / "calls.jsonl", [{**call, "status": "ok", "recovered": True,
                      "original_parse_error": call.get("error"), "error": None}])
         recovered += len(batch)
@@ -671,12 +695,14 @@ class ModelCLI:
                     *itertools.chain.from_iterable(("--disable", feature) for feature in disabled), "-"]
         if family == "gemini":
             # Antigravity's CLI (the gemini CLI isn't signed in); the prompt goes as the -p argument (agy reads no stdin).
+            # agy is an agent: without a schema it often reaches for a shell tool, headless mode denies it, and it
+            # returns nothing. The schema makes it answer directly; it is never granted command permissions.
             return ["agy", "--model", model or "gemini-3.8-flash-high", "--output-format", "json", "--print-timeout", "600s",
-                    "--sandbox", "--mode", "plan"]
+                    "--sandbox", "--mode", "plan", "--json-schema", json.dumps(LABEL_SCHEMA)]
         raise ValueError("unknown model family")
 
     def call(self, family, prompt, *, adjudicator=False):
-        model = "opus" if adjudicator else {"claude": "sonnet", "gpt": "gpt-6.1-sol", "gemini": "gemini-3.8-flash-high"}[family]
+        model = "opus" if adjudicator else {"claude": "sonnet", "gpt": "gpt-6.1-sol", "gemini": os.environ.get("LABEL_GEMINI_MODEL", "gemini-3.8-flash-high")}[family]
         env = self.environment(family)
         attempts, start = [], time.monotonic()
         while True:
@@ -736,7 +762,8 @@ class ModelCLI:
             path.unlink(missing_ok=True)
 
 
-def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_failed=False, adjudicate=True):
+def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_failed=False, adjudicate=True,
+               families=FAMILIES):
     directory = inside_v2(directory)
     rows = jsonl(directory / "raw.jsonl")
     successes, attempted = latest_labels(rows)
@@ -774,11 +801,14 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
         print(f"{family}/{role}: {len(batch)} events, {result['status']}, {result['seconds']:.1f}s", file=sys.stderr, flush=True)
 
     try:
-        for family in FAMILIES:
+        for family in families:
             missing = [record for record in records if family in independent_families(record)
                        and (identity := (record["key"], record["fingerprint"], family, "independent")) not in successes
                        and (retry_failed or identity not in attempted)]
-            for batch in batches(missing, batch_size):
+            # agy (Gemini) given a ~70k-token batch tries to script it with a shell tool, which headless mode denies,
+            # and returns nothing; small batches it answers directly.
+            size, chars = (min(batch_size, 3), 80_000) if family == "gemini" else (batch_size, 500_000)
+            for batch in batches(missing, size, chars):
                 run_batch(family, batch, "independent")
         if adjudicate:
             candidates, previous = [], {}
@@ -1067,6 +1097,7 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument("--no-adjudicate", action="store_true")
+    parser.add_argument("--families", default=",".join(FAMILIES), help="independent families to call, comma-separated")
     parser.add_argument("--anchor-file", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -1092,7 +1123,8 @@ def main(argv=None):
             selected = records[:args.limit]
         if args.command == "run":
             run_labels(selected, directory, batch_size=args.batch_size, timeout=args.timeout,
-                       retry_failed=args.retry_failed, adjudicate=not args.no_adjudicate)
+                       retry_failed=args.retry_failed, adjudicate=not args.no_adjudicate,
+                       families=tuple(f for f in args.families.split(",") if f in FAMILIES))
         if args.command == "import-anchor":
             print(json.dumps({"imported": import_anchor(records, directory, args.anchor_file)}))
         if args.command in {"run", "aggregate", "import-anchor", "merge"}:
