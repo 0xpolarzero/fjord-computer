@@ -201,6 +201,57 @@ import Testing
         let things = InboxSync.workflowThings(repo: "a/x", branch: "main", status: status)
         #expect(things.map(\.id) == ["workflow:a/x:11@main", "workflow:a/x:12@main"])
     }
+
+    @Test func aBranchIsPassingOnlyOnceAllItsChecksAndStatusesAreReadAndDone() async throws {
+        let store = Store()
+        store.persists = false
+        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        let total = TotalBox()
+        store.gh.session = StubbedGitHub.session { request in
+            let comps = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (comps?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            let page = Int(query["page"] ?? "1") ?? 1
+            func check(_ i: Int, _ status: String) -> String {
+                #"{"id":\#(i),"name":"c\#(i)","status":"\#(status)","conclusion":\#(status == "completed" ? #""success""# : "null"),"head_sha":"s1","app":{"slug":"circleci"}}"#
+            }
+            switch comps?.path ?? "" {
+            case "/repos/a/x/actions/runs": return .init(200, #"{"workflow_runs":[]}"#)
+            case "/repos/a/x/commits/s1/check-runs", "/repos/a/x/commits/main/check-runs":
+                // A full page of passing checks, the one past it still running; or more of them than are read.
+                let n = total.value
+                let start = (page - 1) * 100
+                let runs = (start..<min(n, start + 100)).map { check($0, $0 == 100 ? "in_progress" : "completed") }
+                return .init(200, #"{"total_count":\#(n),"check_runs":[\#(runs.joined(separator: ","))]}"#)
+            case "/repos/a/x/commits/main/status":
+                return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            case "/repos/a/x/commits/main": return .init(200, #"{"commit":{"message":"Fix"}}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        total.value = 101
+        #expect(try await store.fetchBranchCI("a/x", branch: "main").workflows.map(\.state) == [.pending])
+        total.value = 1_000
+        #expect(try await store.fetchBranchCI("a/x", branch: "main").workflows.map { [$0.state == .pending, $0.running == true] }
+                    == [[true, true]])
+    }
+
+    @Test func statusesStillPendingByGitHubsOwnStateOrNotAllReadAreRunning() {
+        let passed = GHCombinedStatus.Status(context: "ci/jenkins", state: "success", createdAt: t0, updatedAt: t0)
+        let pending = GHCombinedStatus(state: "pending", totalCount: 1, sha: "s", statuses: [passed])
+        #expect(Store.readCI(runs: [], sha: nil, checks: [], combined: pending).workflows.map(\.state) == [.pending])
+        let unread = GHCombinedStatus(state: "success", totalCount: 2, sha: "s", statuses: [passed])
+        #expect(Store.readCI(runs: [], sha: nil, checks: [], combined: unread, complete: false).workflows.map(\.state) == [.pending])
+        // No statuses at all is "pending" to GitHub: nothing runs.
+        let none = GHCombinedStatus(state: "pending", totalCount: 0, sha: "s", statuses: [])
+        #expect(Store.readCI(runs: [], sha: nil, checks: [check("lint")], combined: none).workflows.map(\.state) == [.success])
+    }
+}
+
+/// How many check runs the stub's commit has.
+private final class TotalBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var value: Int { get { lock.withLock { n } } set { lock.withLock { n = newValue } } }
 }
 
 /// Paths a stub was asked for, from whichever thread it answers on.

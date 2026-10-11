@@ -1114,15 +1114,46 @@ final class Store {
                                                        ["branch": branch, "event": "push", "per_page": "30"])
         let sha = actions.workflowRuns.first?.headSha
         let target = sha ?? ref
-        async let checksReq: GHCheckRuns = gh.get("/repos/\(name)/commits/\(target)/check-runs", ["per_page": "100"])
-        async let statusReq: GHCombinedStatus = gh.get("/repos/\(name)/commits/\(target)/status")
-        let (checks, combined) = try await (checksReq, statusReq)
-        let reading = Self.readCI(runs: actions.workflowRuns, sha: sha, checks: checks.checkRuns, combined: combined)
+        async let checksReq = branchCheckRuns(name, target: target)
+        async let statusReq = branchStatuses(name, target: target)
+        let ((checks, checksRead), (combined, statusesRead)) = try await (checksReq, statusReq)
+        let reading = Self.readCI(runs: actions.workflowRuns, sha: sha, checks: checks, combined: combined,
+                                  complete: checksRead && statusesRead)
         let commit = sha ?? combined.sha
         // The headline comes from the Actions run; a repo with only external CI asks the commit for it (once per commit).
         let title = await ciHeadline(name, commit: commit, runTitle: actions.workflowRuns.first?.displayTitle)
         return CIStatus(branch: branch, sha: commit, url: URL(string: "https://github.com/\(name)/commit/\(commit)"),
                         checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows)
+    }
+
+    /// The pages of check runs or statuses read at most for one commit (100 each): past them, what isn't read may still run.
+    nonisolated static let ciPages = 3
+
+    /// A commit's check runs, page by page (GitHub gives 30 unless asked, 100 at most), and whether all of them were read.
+    func branchCheckRuns(_ name: String, target: String) async throws -> ([GHCheckRuns.Run], Bool) {
+        var runs: [GHCheckRuns.Run] = []
+        for page in 1...Self.ciPages {
+            let answer: GHCheckRuns = try await gh.get("/repos/\(name)/commits/\(target)/check-runs",
+                                                       ["per_page": "100", "page": "\(page)"])
+            runs += answer.checkRuns
+            if runs.count >= answer.totalCount || answer.checkRuns.isEmpty { return (runs, runs.count >= answer.totalCount) }
+        }
+        return (runs, false)
+    }
+
+    /// A commit's combined status with all its statuses, page by page, and whether all of them were read.
+    func branchStatuses(_ name: String, target: String) async throws -> (GHCombinedStatus, Bool) {
+        var first: GHCombinedStatus?
+        var statuses: [GHCombinedStatus.Status] = []
+        for page in 1...Self.ciPages {
+            let answer: GHCombinedStatus = try await gh.get("/repos/\(name)/commits/\(target)/status",
+                                                            ["per_page": "100", "page": "\(page)"])
+            if first == nil { first = answer }
+            statuses += answer.statuses
+            if statuses.count >= answer.totalCount || answer.statuses.isEmpty { break }
+        }
+        let combined = GHCombinedStatus(state: first!.state, totalCount: first!.totalCount, sha: first!.sha, statuses: statuses)
+        return (combined, statuses.count >= combined.totalCount)
     }
 
     /// What CI's three sources say about one commit.
@@ -1138,9 +1169,9 @@ final class Store {
 
     /// Folds Actions runs (the latest of each workflow, on `sha`) and their jobs, external check runs and legacy statuses
     /// into each workflow's state and failed names, and when any of them last changed. Any of the three can be all a repo
-    /// has.
+    /// has. Checks or statuses not all read (`complete` false) may still run: they are running, never passing.
     nonisolated static func readCI(runs: [GHWorkflowRuns.Run], sha: String?, checks: [GHCheckRuns.Run],
-                                   combined: GHCombinedStatus) -> CIReading {
+                                   combined: GHCombinedStatus, complete: Bool = true) -> CIReading {
         var latest: [Int: GHWorkflowRuns.Run] = [:]
         for run in runs where run.headSha == sha && latest[run.workflowId] == nil { latest[run.workflowId] = run }
         let external = checks.filter { $0.app?.slug != "github-actions" }
@@ -1162,10 +1193,12 @@ final class Store {
                                                url: run.htmlUrl, updatedAt: run.updatedAt,
                                                run: run.id.map { "ci:\(run.headSha):\($0)#\(run.runAttempt ?? 1)" }))
         }
-        if !external.isEmpty || combined.totalCount > 0 {
+        if !external.isEmpty || combined.totalCount > 0 || !complete {
             let failing = external.filter { bad.contains($0.conclusion ?? "") }.map(\.name)
                 + combined.statuses.filter { $0.state == "failure" || $0.state == "error" }.map(\.context)
-            let pending = external.contains { $0.status != "completed" } || combined.statuses.contains { $0.state == "pending" }
+            // GitHub's own state of all the statuses counts too (it is "pending" with none, so only when there are some).
+            let pending = !complete || external.contains { $0.status != "completed" }
+                || combined.statuses.contains { $0.state == "pending" } || (combined.totalCount > 0 && combined.state == "pending")
             // A check stopped before it finished didn't pass.
             let cancelled = external.contains { $0.status == "completed" && $0.conclusion == "cancelled" }
             let changed = external.compactMap { $0.completedAt ?? $0.startedAt }
