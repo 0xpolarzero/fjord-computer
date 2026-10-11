@@ -667,6 +667,34 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(count.searches == 1 && s.things["pr:o/r#12"] != nil && s.count(ci) == 3)
     }
 
+    @Test func aFailedSearchKeepsThePullRequestsAndTheWorkflowsStillRefresh() async {
+        final class Phase: @unchecked Sendable { var fails = false }
+        let state = State(), phase = Phase()
+        let (s, ci) = store(state) { _ in }
+        s.gh.session = StubbedGitHub.session { request in
+            switch request.url?.path ?? "" {
+            case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/actions/runs": return .init(200, Self.runs(state.failing))
+            case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)
+            case "/repos/a/x/commits/s1/status": return .init(200, #"{"state":"success","total_count":0,"sha":"s1","statuses":[]}"#)
+            case "/graphql":
+                if phase.fails { return .init(502, #"{"message":"Server Error"}"#) }
+                let reply: [String: Any] = ["data": ["s0": ["pageInfo": ["hasNextPage": false], "nodes": [node()]]]]
+                return .init(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        s.categories.append(InboxCategory(name: "Mine", symbol: "star", color: .blue,
+                                          rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.me])))]))
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#12"] != nil && s.count(ci) == 2)
+        // The search fails: the PR stays, it is said, and the CI read with REST still says what failed.
+        phase.fails = true
+        state.failing.insert(13)
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#12"] != nil && s.count(ci) == 3 && s.inboxError != nil)
+    }
+
     @Test func aRuleThatNamesNoBranchTakesOnlyTheDefaultBranchsRuns() async {
         let (s, ci) = store(State()) { _ in }
         // Another category watches dev: its failures are fetched too, and are not the default branch's.

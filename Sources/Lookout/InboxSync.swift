@@ -907,10 +907,11 @@ extension Store {
             workflows[id]?.defaultBranch = defaults[thing.repo.lowercased()] ?? defaultBranches[thing.repo]
         }
         inboxError = searchFailure ?? fetched.error ?? workflowFailure ?? scopeFailure
-        // A search that failed can't say what is gone: the things stay as they were.
-        guard searchFailure == nil else { return }
+        // A search that failed can't say what is gone: the PRs and issues stay as they were, as when the points are spent,
+        // and the workflows read are still taken.
+        let searchesKept = searchesWait || searchFailure != nil
         var next = found
-        if searchesWait {
+        if searchesKept {
             for (id, old) in things where old.kind != .workflow { next[id] = old }
         } else {
             inboxSyncState.searchCursor = plan.next
@@ -923,7 +924,7 @@ extension Store {
             }
         }
         // Past the cap the searches take turns: what those not run this time found stays until they run.
-        if !searchesWait { next.merge(keepingUnvisited(fetched, ran: searches, all: plan.all)) { a, _ in a } }
+        if !searchesKept { next.merge(keepingUnvisited(fetched, ran: searches, all: plan.all)) { a, _ in a } }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
