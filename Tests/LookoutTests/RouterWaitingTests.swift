@@ -369,6 +369,7 @@ import Testing
         let (s, _) = store(watch: ciWatch, things: [done, old])
         s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-60)
         s.claudeSessions["b"]?.running = false
+        s.claudeSessions["b"]?.summary = .init(blocked: false, detail: "Migrated")
         let options = await s.waitOptions(for: s.claudeSessions["a"]!)
         #expect(options.map(\.key) == ["s0", "c0"])
         #expect(options[0].watch.target == .session(id: "b", turns: 4) && options[1].watch.target == .ci(thing: "pr:o/app#1"))
@@ -376,6 +377,21 @@ import Testing
         // One whose latest turn ended before ours is watched for its next.
         s.claudeSessions["b"]?.lastActivity = Date().addingTimeInterval(-600)
         #expect(await s.waitOptions(for: s.claudeSessions["a"]!)[0].watch.target == .session(id: "b", turns: 5))
+    }
+
+    @Test func aSessionThatQuitMidTurnBeforeTheOptionsWereReadIsNotDone() async {
+        // The waiting turn ended a minute ago; since then b, on its 6th turn (5 counted), stopped without a summary (Claude
+        // quit), before the options were read: its turn never ended.
+        let (s, _) = store(watch: ciWatch)
+        s.claudeSessions["a"]?.lastActivity = Date().addingTimeInterval(-60)
+        s.claudeSessions["b"]?.running = false
+        let option = await s.waitOptions(for: s.claudeSessions["a"]!).first { $0.key == "s0" }!
+        #expect(option.watch.target == .session(id: "b", turns: 5) && !option.hint.contains("finished"))
+        #expect(RouterWaits.result(option.watch, sessions: s.claudeSessions, things: s.things) == nil)
+        // Started again, it finishes that turn.
+        s.claudeSessions["b"]?.completedTurns = 6
+        s.claudeSessions["b"]?.summary = .init(blocked: false, detail: "Migrated")
+        #expect(RouterWaits.result(option.watch, sessions: s.claudeSessions, things: s.things) == "it finished its turn")
     }
 
     @Test func aFoldersReposAreItsGitRemotesOwnerAndName() async throws {
