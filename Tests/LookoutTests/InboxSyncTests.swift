@@ -960,6 +960,27 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(ref.answered && s.inboxSyncState.ownerRepos.isEmpty && s.inboxSyncState.ownerReposAt.isEmpty)
     }
 
+    @Test @MainActor func reposGivenInPartKeepWhatDidntComeAndAreAskedAgainAndSaid() async throws {
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        let dayAgo = Date().addingTimeInterval(-2 * 86400)
+        s.ownedRepos = ["me/own"]
+        s.contributedRepos = ["o/old"]
+        s.reposResolvedAt = dayAgo
+        s.categories = [rule(Scope(kinds: [.pr], in: Pick(include: [.owned])))]
+        s.gh.session = StubbedGitHub.session { request in
+            if InboxSyncRefresh.body(request).contains("ownerAffiliations") {
+                return .init(200, #"{"data":{"viewer":{"repositories":null},"merged":{"nodes":[{"repository":{"nameWithOwner":"o/new"}}]},"open":{"nodes":[]}},"errors":[{"path":["viewer","repositories"],"message":"Something went wrong"}]}"#)
+            }
+            return .init(200, #"{"data":{"s0":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}"#)
+        }
+        await s.syncInbox()
+        // The owned repos that didn't come stay, the merged ones that did are taken, and it isn't a day's answer.
+        #expect(s.ownedRepos == ["me/own"] && s.contributedRepos == ["o/old", "o/new"])
+        #expect(s.reposResolvedAt == dayAgo && s.inboxError?.contains("Something went wrong") == true)
+    }
+
     @Test @MainActor func contributedReposAreMergedAndOpenPRsAndTeamsAreKept() async throws {
         let s = Store()
         s.persists = false

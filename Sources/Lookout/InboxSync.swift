@@ -838,7 +838,11 @@ extension Store {
         if needsRepos, reposResolvedAt.map({ Date().timeIntervalSince($0) > 86400 }) ?? true {
             // A failure leaves what was known; with nothing known, the refresh waits: it would read as "nothing there".
             do { try await resolveRepos(me: me) } catch {
-                if ownedRepos.isEmpty && contributedRepos.isEmpty { inboxError = error.localizedDescription; return }
+                // Never looked up whole: a part left empty may be the part that failed.
+                let unknown = reposResolvedAt == nil ? ownedRepos.isEmpty || contributedRepos.isEmpty
+                    : ownedRepos.isEmpty && contributedRepos.isEmpty
+                if unknown { inboxError = error.localizedDescription; return }
+                scopeFailure = scopeFailure ?? "Your repos couldn't all be looked up: " + error.localizedDescription
             }
         }
         let plan = InboxSync.searchPlan(categories: categories, groups: groups, me: me, contributed: contributedRepos,
@@ -1092,16 +1096,26 @@ extension Store {
             Set(((nodes as? [[String: Any]]) ?? []).compactMap(path))
         }
         guard stillSignedIn(as: me) else { return }
+        // An answer in part (`viewer.repositories` null, with an error): what came is taken, what didn't stays as it was,
+        // and it is asked again with the next refresh rather than in a day.
+        let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+        let failed = { (part: String) in errors.contains { ($0["path"] as? [Any])?.first as? String == part } }
         let viewer = data["viewer"] as? [String: Any]
-        let owned = names((viewer?["repositories"] as? [String: Any])?["nodes"]) { $0["nameWithOwner"] as? String }
+        if let repos = viewer?["repositories"] as? [String: Any], !failed("viewer") {
+            let owned = names(repos["nodes"]) { $0["nameWithOwner"] as? String }
+            if owned != ownedRepos { ownedRepos = owned }
+        }
         // A merged or an open PR of yours makes it a repo you contribute to.
         let repoName: ([String: Any]) -> String? = { ($0["repository"] as? [String: Any])?["nameWithOwner"] as? String }
         let merged = names((data["merged"] as? [String: Any])?["nodes"], repoName)
             .union(names((data["open"] as? [String: Any])?["nodes"], repoName))
-        if owned != ownedRepos { ownedRepos = owned }
         // Only grows: an older merge isn't forgotten because newer ones fill the page.
         let all = contributedRepos.union(merged)
         if all != contributedRepos { contributedRepos = all }
+        let parts = [viewer?["repositories"], data["merged"], data["open"]]
+        if let error = errors.first ?? (parts.contains { !($0 is [String: Any]) } ? [:] : nil) {
+            throw GitHubError(message: (error["message"] as? String) ?? "GitHub gave part of an answer")
+        }
         reposResolvedAt = Date()
     }
 
