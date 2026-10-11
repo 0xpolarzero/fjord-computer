@@ -1156,7 +1156,8 @@ final class Store {
                 let failed = jobs.filter { run.checkSuiteId != nil && $0.checkSuite?.id == run.checkSuiteId }.map(\.name)
                 failing = failed.isEmpty ? [run.name] : failed
             }
-            let state: CIState = !failing.isEmpty ? .failure : run.status != "completed" ? .pending : .success
+            let state: CIState = !failing.isEmpty ? .failure : run.status != "completed" ? .pending
+                : run.conclusion == "cancelled" ? .cancelled : .success
             workflows.append(CIStatus.Workflow(id: "\(run.workflowId)", name: run.name, state: state, failing: failing,
                                                url: run.htmlUrl, updatedAt: run.updatedAt,
                                                run: run.id.map { "ci:\(run.headSha):\($0)#\(run.runAttempt ?? 1)" }))
@@ -1165,13 +1166,15 @@ final class Store {
             let failing = external.filter { bad.contains($0.conclusion ?? "") }.map(\.name)
                 + combined.statuses.filter { $0.state == "failure" || $0.state == "error" }.map(\.context)
             let pending = external.contains { $0.status != "completed" } || combined.statuses.contains { $0.state == "pending" }
+            // A check stopped before it finished didn't pass.
+            let cancelled = external.contains { $0.status == "completed" && $0.conclusion == "cancelled" }
             let changed = external.compactMap { $0.completedAt ?? $0.startedAt }
                 + combined.statuses.compactMap { $0.updatedAt ?? $0.createdAt }
             // Another check finishing moves `changed`, not which execution it is: its checks by id, statuses by when posted.
             let ids = external.map { $0.id.map { "c\($0)" } ?? "n\($0.name)" }
                 + combined.statuses.map { "s\($0.context)@\(($0.createdAt ?? .distantPast).timeIntervalSince1970)" }
             workflows.append(CIStatus.Workflow(id: externalWorkflowID, name: "Checks",
-                                               state: !failing.isEmpty ? .failure : pending ? .pending : .success,
+                                               state: !failing.isEmpty ? .failure : pending ? .pending : cancelled ? .cancelled : .success,
                                                failing: failing, url: nil, updatedAt: changed.max(),
                                                run: InboxSync.ciRun(sha: sha ?? combined.sha, ids: ids), running: pending))
         }

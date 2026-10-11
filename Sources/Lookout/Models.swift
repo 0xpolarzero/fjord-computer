@@ -3,6 +3,8 @@ import SwiftUI
 
 enum CIState: String, Codable {
     case success, failure, pending, none
+    /// Stopped before it finished (GitHub's `cancelled`): never passing.
+    case cancelled
 
     var color: Color {
         switch self {
@@ -10,7 +12,7 @@ enum CIState: String, Codable {
         case .success: CDS.Git.added
         case .failure: CDS.Text.danger
         case .pending: CDS.clay
-        case .none: Theme.tertiary
+        case .none, .cancelled: Theme.tertiary
         }
     }
 
@@ -19,6 +21,7 @@ enum CIState: String, Codable {
         case .success: "checkmark.seal.fill"
         case .failure: "xmark.seal.fill"
         case .pending: "clock.fill"
+        case .cancelled: "stop.circle.fill"
         case .none: "seal.fill"
         }
     }
@@ -28,6 +31,7 @@ enum CIState: String, Codable {
         case .success: "Passing"
         case .failure: "Failing"
         case .pending: "Running"
+        case .cancelled: "Cancelled"
         case .none: "No checks"
         }
     }
@@ -37,6 +41,7 @@ enum CIState: String, Codable {
         case .success: "passing"
         case .failure: "failing"
         case .pending: "running"
+        case .cancelled: "cancelled"
         case .none: "no checks"
         }
     }

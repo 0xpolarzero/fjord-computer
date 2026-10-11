@@ -491,6 +491,8 @@ struct Thing: Codable, Hashable, Identifiable {
     var ciRun: String?
     /// A check is still running, though the outcome may already say failing: the CI as a whole isn't done.
     var ciRunning = false
+    /// Workflows: the run (or an external check) was cancelled; `checks` then says failing, never passing.
+    var ciCancelled = false
     /// When each current review request was made (the latest `ReviewRequestedEvent` per reviewer).
     var reviewRequests: [ThingReviewRequest] = []
     var greptileScore: Int?
@@ -539,6 +541,7 @@ extension Thing {
         threadsTail = try c.decodeIfPresent(ThreadsTail.self, forKey: .threadsTail)
         ciRun = try c.decodeIfPresent(String.self, forKey: .ciRun)
         ciRunning = try c.decodeIfPresent(Bool.self, forKey: .ciRunning) ?? false
+        ciCancelled = try c.decodeIfPresent(Bool.self, forKey: .ciCancelled) ?? false
         reviewRequests = try c.decodeIfPresent([ThingReviewRequest].self, forKey: .reviewRequests) ?? []
         greptileScore = try c.decodeIfPresent(Int.self, forKey: .greptileScore)
         workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName)

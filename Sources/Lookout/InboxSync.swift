@@ -649,8 +649,10 @@ enum InboxSync {
             thing.failingJobs = workflow.failing
             thing.ciRun = workflow.run
             thing.ciRunning = workflow.running ?? false
+            // Cancelled isn't passing: it counts as failing (as GitHub's rollup has it), and the wait says it was cancelled.
+            thing.ciCancelled = workflow.state == .cancelled
             thing.checks = switch workflow.state {
-            case .failure: .failing
+            case .failure, .cancelled: .failing
             case .pending: .pending
             case .success: .passing
             case .none: nil

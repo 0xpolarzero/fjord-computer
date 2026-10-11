@@ -462,6 +462,28 @@ import Testing
         #expect(ready == 2)
     }
 
+    @Test func cancelledCIIsSaidCancelledNeverPassing() {
+        let t0 = Date(timeIntervalSince1970: 2_000_000)
+        let none = GHCombinedStatus(state: "success", totalCount: 0, sha: "s", statuses: [])
+        let run = GHWorkflowRuns.Run(name: "build", workflowId: 1, headSha: "s", displayTitle: "Fix", updatedAt: t0, status: "completed",
+                                     conclusion: "cancelled", checkSuiteId: 9, id: 5, runAttempt: 1)
+        let external = GHCheckRuns.Run(app: .init(slug: "circleci"), checkSuite: nil, name: "deploy", status: "completed",
+                                       conclusion: "cancelled", headSha: "s", startedAt: t0, completedAt: t0, id: 7)
+        let passed = GHCheckRuns.Run(app: .init(slug: "circleci"), checkSuite: nil, name: "lint", status: "completed",
+                                     conclusion: "success", headSha: "s", startedAt: t0, completedAt: t0, id: 8)
+        let reading = Store.readCI(runs: [run], sha: "s", checks: [external, passed], combined: none)
+        #expect(reading.workflows.map(\.state) == [.cancelled, .cancelled])
+        let status = CIStatus(branch: "main", sha: "s", url: nil, checkedAt: t0, title: "Fix", updatedAt: t0, workflows: reading.workflows)
+        for thing in InboxSync.workflowThings(repo: "o/app", branch: "main", status: status) {
+            #expect(thing.checks == .failing && thing.ciCancelled)
+            let watch = RouterTriage.Watch(target: .ci(thing: thing.id), label: "CI", ref: "o/app", named: true)
+            #expect(RouterWaits.result(watch, sessions: [:], things: [thing.id: thing]) == "cancelled")
+            var triage = RouterTriage(state: .waiting, waitingOn: .ci, watch: watch)
+            triage.ready = .init(result: "cancelled", at: t0)
+            #expect(RouterWaits.message(triage) == "The CI on o/app finished: cancelled.")
+        }
+    }
+
     @Test func aCardReadyTheOlderWayOnlyLearnsTheRun() {
         var pr = ci(.failing)
         pr.headSha = "h1"

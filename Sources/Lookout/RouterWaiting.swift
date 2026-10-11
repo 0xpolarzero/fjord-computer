@@ -24,6 +24,7 @@ enum RouterWaits {
             switch thing.checks {
             case .passing: return "passing"
             case .failing:
+                if thing.ciCancelled, thing.failingJobs.isEmpty { return "cancelled" }
                 let jobs = thing.failingJobs.prefix(3).map { RouterDecision.clip($0, 40) }
                 return jobs.isEmpty ? "failing" : "failing (\(jobs.joined(separator: ", ")))"
             case .pending, nil: return nil
@@ -48,7 +49,8 @@ enum RouterWaits {
         guard let ready = triage.ready, let target = triage.watch?.target else { return nil }
         switch target {
         case .ci:
-            let outcome = ready.result == "passing" ? "passing" : ready.result.hasPrefix("failing") ? "failing" : "finished"
+            let outcome = ["passing", "cancelled"].contains(ready.result) ? ready.result
+                : ready.result.hasPrefix("failing") ? "failing" : "finished"
             let what = triage.watch?.ref.flatMap(safeRef).map { "CI on \($0)" } ?? "CI you were waiting on"
             return "The \(what) finished: \(outcome)."
         case .session:
