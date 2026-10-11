@@ -57,6 +57,7 @@ from v2.run import adapter, episodes, rules
 
 FAMILIES = ("claude", "gpt", "gemini")
 REQUIRED = ("claude", "gpt")
+CREDENTIAL_LOCK = threading.Lock()
 GEMINI_JOBS = int(os.environ.get("LABEL_GEMINI_JOBS", "3"))
 ASK = ("required", "allowed", "forbidden")
 VERSION = "blind-router-label-v2"
@@ -640,7 +641,9 @@ class ModelCLI:
     def copy_credential(self, source, destination):
         # Credential files are never rendered, logged, or sent to annotators.
         # Claude's prohibited home is never accessed, including for credentials.
-        if source.exists() and not destination.exists():
+        with CREDENTIAL_LOCK:  # parallel calls would race to create the same copy
+            if not source.exists() or destination.exists():
+                return
             destination.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as stream:
