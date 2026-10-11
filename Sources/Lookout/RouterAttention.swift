@@ -67,7 +67,8 @@ struct AwayStrip: Equatable {
     @ObservationIgnored private(set) var summarized: [String: Told] = [:]
 
     /// What a card was told as in the summary.
-    enum Told { case needs, ready, finished }
+    /// A ready card is told as the readiness it had (what came of the wait, and when): a renewed one is news.
+    enum Told: Equatable { case needs, ready(RouterTriage.Ready?), finished }
     /// What came while you were last away, on the Router until dismissed.
     var strip: AwayStrip?
     /// You're back and something came meanwhile (the summary banner).
@@ -105,7 +106,7 @@ struct AwayStrip: Equatable {
     /// A waiting session ready to continue: a banner now, or, away, in the summary (also when it became ready as you came
     /// back, and the summary that coming back makes says so already).
     func admitReady(_ card: RouterCard) -> Bool {
-        guard refresh() else { return summarized[card.id] != .ready }
+        guard refresh() else { return summarized[card.id] != .ready(card.triage?.ready) }
         hold(card.id)
         return false
     }
@@ -160,7 +161,7 @@ struct AwayStrip: Equatable {
     /// The summary said these cards, each as what it is now (those it left out, as the Router's while it is off, are not).
     func reported(_ cards: [RouterCard]) {
         for card in cards {
-            summarized[card.id] = card.kind.needsYou ? .needs : card.kind == .waiting ? .ready : .finished
+            summarized[card.id] = card.kind.needsYou ? .needs : card.kind == .waiting ? .ready(card.triage?.ready) : .finished
         }
     }
 

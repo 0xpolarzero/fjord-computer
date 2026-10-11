@@ -159,6 +159,27 @@ import Testing
         #expect(posted().count == 2)
     }
 
+    @Test func aRenewedCompletionAfterTheSummaryToldOfAnEarlierOneBanners() {
+        let (s, idle, posted) = store()
+        var waiting = card("wait", .waiting)
+        waiting.triage = RouterTriage(state: .waiting, waitingOn: .ci,
+                                      watch: .init(target: .ci(thing: "pr:o/r#1"), label: "CI on o/r#1", ref: "o/r#1"))
+        s.router.cards = [waiting]
+        // CI failed while away: the summary on coming back tells of it.
+        idle.seconds = 400
+        s.routerAttention.refresh()
+        s.router.cards[0].triage?.ready = .init(result: "failed", at: Date())
+        RouterBanners.postReady(s.router.cards[0], store: s, windowIsKey: false)
+        idle.seconds = 1
+        s.routerAttention.refresh()
+        #expect(posted().count == 1)
+        // Rerun: pending, then passing. That is a new completion.
+        s.router.cards[0].triage?.ready = nil
+        s.router.cards[0].triage?.ready = .init(result: "passing", at: Date().addingTimeInterval(60))
+        RouterBanners.postReady(s.router.cards[0], store: s, windowIsKey: false)
+        #expect(posted().count == 2)
+    }
+
     @Test func aCardTheSummaryToldOfAsFinishedStillBannersOnceItNeedsYou() {
         let (s, idle, posted) = store()
         let done = card("done", .done)
