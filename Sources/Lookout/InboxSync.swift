@@ -801,6 +801,38 @@ enum InboxSync {
         thing.signals = signals
     }
 
+    /// People a thing's `mentions:` evidence is kept for, at most: the first of those found this time, then of those before.
+    static let maxSearchMentions = 20
+
+    /// A thing a `mentions:` search for someone found is marked so for them (`Thing.mentionedBySearch`): GitHub knows they
+    /// were mentioned there even once the comment that did is past what is fetched. One such search read to its end that
+    /// would have found it and didn't marks them `false`, which takes it back; one cut short, or that failed, says nothing.
+    static func markMentioned(_ thing: inout Thing, foundBy searches: Set<String>, complete: Set<String> = []) {
+        guard thing.kind != .workflow else { return }
+        func logins(_ query: String) -> [String] {
+            query.split(separator: " ").compactMap { token in
+                let lower = token.lowercased()
+                return lower.hasPrefix("mentions:") && lower.count > 9 ? String(lower.dropFirst(9)) : nil
+            }
+        }
+        var marks: [String: Bool] = [:]
+        for query in searches { for login in logins(query) { marks[login] = true } }
+        for query in complete where !searches.contains(query) {
+            for login in logins(query) where marks[login] == nil && wouldFind(query, thing, me: login) { marks[login] = false }
+        }
+        thing.mentionedBySearch = marks.isEmpty ? nil : marks
+    }
+
+    /// What a thing just fetched says of its `mentions:` searches (`markMentioned`), over what was kept of them before.
+    static func carryMentions(_ old: [String: Bool]?, into thing: inout Thing) {
+        guard thing.kind != .workflow else { return }
+        let marks = thing.mentionedBySearch ?? [:]
+        let now = marks.filter(\.value).keys.sorted()
+        let before = (old ?? [:]).filter { $0.value && marks[$0.key] == nil }.keys.sorted()
+        let kept = Array((now + before).prefix(maxSearchMentions))
+        thing.mentionedBySearch = kept.isEmpty ? nil : Dictionary(uniqueKeysWithValues: kept.map { ($0, true) })
+    }
+
     /// Whether a search would return the thing were you involved there: every qualifier but the one for you (`involves:`,
     /// `review-requested:`, `reviewed-by:`) says yes. The places it names (`repo:`, `user:`, `org:`) are one or another,
     /// as search takes them: one of them is enough. One
@@ -1211,6 +1243,7 @@ extension Store {
                 for thing in fetched.things {
                     var thing = InboxSync.keepingRequestTimes(thing, from: things[thing.id])
                     InboxSync.markInvolved(&thing, foundBy: fetched.foundBy[thing.id] ?? [], complete: fetched.complete, me: me)
+                    InboxSync.markMentioned(&thing, foundBy: fetched.foundBy[thing.id] ?? [], complete: fetched.complete)
                     found[thing.id] = thing
                 }
             } catch {
@@ -1584,7 +1617,10 @@ extension Store {
     func applyThings(_ next: [String: Thing], now: Date = Date()) {
         var next = next
         let me = inboxContext.me
-        for id in next.keys { InboxJev.carry(things[id]?.signals, into: &next[id]!, me: me) }
+        for id in next.keys {
+            InboxJev.carry(things[id]?.signals, into: &next[id]!, me: me)
+            InboxSync.carryMentions(things[id]?.mentionedBySearch, into: &next[id]!)
+        }
         // Read for the first time as this build reads reviews: those it had all along and that come back now are old (those
         // it was read with already were never left out). It had them by the time it was last read (when it was last updated then, or its newest review): one made after,
         // while Lookout was closed, is new.

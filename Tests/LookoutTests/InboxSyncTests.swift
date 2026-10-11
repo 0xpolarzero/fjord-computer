@@ -820,6 +820,81 @@ extension InboxSyncMapping {
         #expect(category() == repo.id)
     }
 
+    @Test func aConversationSomeonesMentionsSearchFindsStaysToThemMentionedPastTenNewerCommentsUntilAWholeSearchNoLongerDoes() async {
+        final class Phase: @unchecked Sendable { var mentions = "found" }
+        let phase = Phase()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            let body = InboxSyncRefresh.body(request)
+            // Bob's PR whose mention of alice came before the ten comments fetched, none of which mentions her.
+            let comments = (0..<10).map { n -> [String: Any] in
+                ["id": "c\(n)", "createdAt": "2026-10-0\(n % 9 + 1)T10:00:00Z", "body": "more", "authorAssociation": "NONE",
+                 "author": ["login": "alice", "__typename": "User", "avatarUrl": ""]]
+            }
+            let pr = node(["author": ["login": "bob", "__typename": "User"], "body": "", "assignees": ["nodes": []],
+                           "reviewRequests": ["nodes": []], "comments": ["nodes": comments], "reviews": ["nodes": []],
+                           "latestOpinionatedReviews": ["nodes": []], "reviewThreads": ["nodes": []]])
+            var data: [String: Any] = [:]
+            for i in 0..<8 {
+                guard let start = body.range(of: "s\(i): search(") else { continue }
+                let query = body[start.upperBound...].prefix { $0 != ")" }
+                if query.contains("mentions:alice") {
+                    switch phase.mentions {
+                    case "found": data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": [pr]]
+                    case "more": data["s\(i)"] = ["pageInfo": ["hasNextPage": true, "endCursor": "c"], "nodes": []]
+                    default: data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": []]
+                    }
+                } else if query.contains("repo:o") {
+                    data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": [pr]]
+                } else {
+                    data["s\(i)"] = ["pageInfo": ["hasNextPage": false], "nodes": []]
+                }
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        var mentioned = InboxCategory(name: "Mentioned", symbol: "star", color: .blue)
+        mentioned.rules = [Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.user("alice")]), toRoles: [.mentioned]), conditions: [])]
+        var repo = InboxCategory(name: "Repo", symbol: "star", color: .blue)
+        repo.rules = [Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("o/r")])), conditions: [])]
+        s.categories = [mentioned, repo]
+        func category() -> UUID? { s.entries.first { $0.thing.id == "pr:o/r#12" }?.categoryID }
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#12"]?.mentioned.isEmpty == true)
+        #expect(category() == mentioned.id)
+        // Kept across refreshes, and as the thing is: written and read back, it still says so.
+        await s.syncInbox()
+        #expect(category() == mentioned.id)
+        let saved = try? JSONDecoder().decode(Thing.self, from: JSONEncoder().encode(s.things["pr:o/r#12"]!))
+        #expect(saved?.mentionedBySearch == ["alice": true])
+        // Her mentions: search, cut short, says nothing: it is still to her (mentioned).
+        phase.mentions = "more"
+        await s.syncInbox()
+        #expect(category() == mentioned.id)
+        // Read whole, without it, while the repo's search still brings it: no longer.
+        phase.mentions = "gone"
+        await s.syncInbox()
+        #expect(category() == repo.id)
+    }
+
+    @Test func mentionsSearchEvidenceIsKeptPerPersonAndBounded() {
+        var pr = InboxFixture.pr(12, repo: "o/r", by: Person(login: "bob"))
+        let found = "is:pr archived:false mentions:Alice repo:o/r is:open"
+        let whole = "is:pr archived:false mentions:carol is:open"
+        InboxSync.markMentioned(&pr, foundBy: [found], complete: [found, whole])
+        #expect(pr.mentionedBySearch == ["alice": true, "carol": false])
+        // Over what was kept: carol's whole search without it takes hers back; dave's, not run, stays.
+        InboxSync.carryMentions(["carol": true, "dave": true], into: &pr)
+        #expect(pr.mentionedBySearch == ["alice": true, "dave": true])
+        // At most so many people: those found this time first.
+        var many = pr
+        many.mentionedBySearch = ["zed": true]
+        let old = Dictionary(uniqueKeysWithValues: (0..<30).map { ("p\($0)", true) })
+        InboxSync.carryMentions(old, into: &many)
+        #expect(many.mentionedBySearch?.count == InboxSync.maxSearchMentions && many.mentionedBySearch?["zed"] == true)
+    }
+
     @Test func aDraftIsOpenToAnInvolvesSearchSoUnassignedFromOneItIsNoLongerInvolved() {
         var draft = InboxFixture.pr(12, repo: "o/r", by: Person(login: "alice"))
         draft.status = .draft

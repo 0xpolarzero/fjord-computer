@@ -533,6 +533,11 @@ struct Thing: Codable, Hashable, Identifiable {
     var nodeID: String?
     /// What Jev made of it (InboxJev.swift), kept across refreshes; nil before it was asked anything.
     var signals: ThingSignals?
+    /// Those (lowercased logins) GitHub's `mentions:` search for them returned it for: mentioned there, though the comment
+    /// that did may be past those fetched (ten newer ones came since). Kept across refreshes, at most
+    /// `InboxSync.maxSearchMentions`; on a thing just fetched, `false` says such a search read whole would have found it and
+    /// didn't (`InboxSync.markMentioned`).
+    var mentionedBySearch: [String: Bool]?
 }
 
 extension Thing {
@@ -585,6 +590,7 @@ extension Thing {
         changedFiles = try c.decodeIfPresent(Int.self, forKey: .changedFiles)
         signals = try c.decodeIfPresent(ThingSignals.self, forKey: .signals)
         nodeID = try c.decodeIfPresent(String.self, forKey: .nodeID)
+        mentionedBySearch = try c.decodeIfPresent([String: Bool].self, forKey: .mentionedBySearch)
     }
 }
 
