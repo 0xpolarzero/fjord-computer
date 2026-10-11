@@ -423,10 +423,18 @@ struct RouterAskBack: Identifiable, Equatable {
     static func formAnswers(_ form: PendingForm, message: String) -> [String: String]? {
         guard !form.isPlan, form.questions.count == 1, let q = form.questions.first else { return nil }
         let trim = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
-        let said = message.trimmingCharacters(in: trim)
+        let said = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The label as said (case aside) wins, its punctuation kept ("C#" vs "C"); only else the words alone ("sqlite."
+        // for "SQLite"), and then only when they fit one option: two fitting ("C." for "C#" and "C") is text for the session.
         func option(_ text: String) -> String? {
+            let ws = CharacterSet.whitespacesAndNewlines
+            let exact = text.trimmingCharacters(in: ws).lowercased()
+            let hits = q.options.filter { $0.label.trimmingCharacters(in: ws).lowercased() == exact }
+            if hits.count == 1 { return hits[0].label }
+            guard hits.isEmpty else { return nil }
             let t = text.trimmingCharacters(in: trim).lowercased()
-            return q.options.first { $0.label.trimmingCharacters(in: trim).lowercased() == t }?.label
+            let loose = q.options.filter { $0.label.trimmingCharacters(in: trim).lowercased() == t }
+            return loose.count == 1 ? loose[0].label : nil
         }
         if let one = option(said) { return [q.question: one] }
         guard q.multiSelect else { return nil }

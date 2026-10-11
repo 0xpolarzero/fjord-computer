@@ -653,6 +653,16 @@ import Testing
         #expect(s.router.cards[0].isOpen)
     }
 
+    @Test func aShortReplyPicksTheOptionItIsNotOneWhosePunctuationWasTrimmed() {
+        let form = PendingForm(id: "f", cliSessionID: "a", transcriptPath: "", questions: [
+            .init(question: "Which language?", header: "L", multiSelect: false,
+                  options: [.init(label: "C#", description: ""), .init(label: "C", description: "")]),
+        ], createdAt: Date(), pid: 1)
+        #expect(RouterDispatcher.formAnswers(form, message: "C") == ["Which language?": "C"])
+        #expect(RouterDispatcher.formAnswers(form, message: " c# ") == ["Which language?": "C#"])
+        #expect(RouterDispatcher.formAnswers(form, message: "C.") == nil, "fits both once trimmed: text for the session")
+    }
+
     @Test func aReplyOnAQuestionCardThatGivesTheAnswerAnswersTheForm() {
         let form = PendingForm(id: "f", cliSessionID: "a", transcriptPath: "", questions: [
             .init(question: "Which database?", header: "DB", multiSelect: false,
