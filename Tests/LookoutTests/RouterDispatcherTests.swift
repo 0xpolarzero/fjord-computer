@@ -912,6 +912,17 @@ import Testing
         #expect(RouterTools.startRequest("start a session in the lookout project, with opus: fix it")?.project == "lookout")
     }
 
+    @Test func aFeatureNamedLikeASessionIsNotARequestToStartOne() {
+        for no in ["create a chat widget with message history", "create a session manager", "open a conversation list view"] {
+            #expect(!RouterDispatcher.wantsNewSession(no), "\(no)")
+            #expect(RouterTools.startRequest(no) == nil, "\(no)")
+        }
+        for yes in ["start a session to fix it", "start a new chat in lookout: fix it", "open a session for the build",
+                    "start a session, fix it", "start a session with opus: fix it", "start a new session"] {
+            #expect(RouterDispatcher.wantsNewSession(yes), "\(yes)")
+        }
+    }
+
     @Test func settingsAreOnlyAskedForInTheRequestNeverInCodeOrQuotes() async {
         let fenced = "start a session to fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```"
         #expect(SessionStart.task(from: fenced) == "fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```")
