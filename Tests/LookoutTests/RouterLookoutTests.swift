@@ -90,7 +90,7 @@ import Testing
                 .mentions(anyone, since: .done), .lastComment(by: anyone), .unresolvedThreads(startedBy: anyone, lastReplyBy: nil),
                 .approved(by: anyone), .changesRequested(by: anyone), .checks([.failing, .pending]), .hasConflicts, .behindBase,
                 .status([.draft, .merged]), .labeled(Pick(include: ["bug"])), .noActivity(days: 3), .greptileBelow(4),
-                .asksMe, .noise(true), .noise(false), .importance(.high), .workflow([.failing])]
+                .commentLabel([.asks, .todo]), .noise(true), .noise(false), .importance(.high), .workflow([.failing])]
     }
 
     @Test func theGrammarHasEveryCaseOfTheModelAndReadsWhatItWrites() throws {

@@ -654,7 +654,7 @@ extension Store {
                 questions.merge(extra.questions) { a, _ in a }
                 state.merge(extra.state) { a, _ in a }
             }
-            // "Let Jev read new comments" turned off while the turn was read: the inbox's PRs and workflows among the
+            // "Let Jev label new comments" turned off while the turn was read: the inbox's PRs and workflows among the
             // options don't go; turned off while he answered, none of them is taken from his answer.
             if !self.jevReadsInbox, options.contains(where: \.fromInbox) {
                 options.removeAll(where: \.fromInbox)

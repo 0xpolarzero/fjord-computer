@@ -407,6 +407,9 @@ struct ConditionRow: View {
                     Toggle("\(n) / 5", isOn: Binding(get: { n == score }, set: { _ in condition = .greptileBelow(n) }))
                 }
             }
+        case .commentLabel(let labels):
+            SetMenu(items: CommentLabel.allCases.map { ($0, $0.title) }, selection: labels, tone: tone,
+                    label: "Comment labels") { condition = .commentLabel($0) }
         case .noise(let noise):
             MenuChip(title: RuleEditing.noiseTitle(noise), tone: tone, label: "Noise or a person") {
                 ForEach([true, false], id: \.self) { option in
@@ -419,7 +422,7 @@ struct ConditionRow: View {
                     Toggle(option.rawValue, isOn: Binding(get: { option == level }, set: { _ in condition = .importance(option) }))
                 }
             }
-        case .hasConflicts, .behindBase, .asksMe:
+        case .hasConflicts, .behindBase:
             EmptyView()
         }
     }

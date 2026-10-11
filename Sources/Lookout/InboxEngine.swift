@@ -55,14 +55,15 @@ enum InboxEngine {
                         var all = Set(still.map(\.key))
                         let shown = still + union.filter { all.insert($0.key).inserted }
                         entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: shown, isDone: true,
-                                                  isUnread: !all.isSubset(of: seen), importance: importance(thing, resolved)))
+                                                  isUnread: !all.isSubset(of: seen), importance: importance(thing, resolved),
+                                                  labels: labels(shown, thing, resolved)))
                         break
                     }
                 }
                 if union.isEmpty { continue }
                 entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: union,
                                           isDone: keys.isSubset(of: acked), isUnread: !keys.isSubset(of: seen),
-                                          importance: importance(thing, resolved)))
+                                          importance: importance(thing, resolved), labels: labels(union, thing, resolved)))
                 break
             }
         }
@@ -172,7 +173,9 @@ enum InboxEngine {
                 else if !kinds.contains(.pr), s.isDisjoint(with: [.open, .closed]) { add("Issues are only open or closed") }
             case .greptileBelow(let n):
                 if n <= 1 { add("Greptile scores start at 1") }
-            case .hasConflicts, .behindBase, .noActivity, .asksMe, .noise, .importance:
+            case .commentLabel(let s):
+                if s.isEmpty { add("Pick at least one label") }
+            case .hasConflicts, .behindBase, .noActivity, .noise, .importance:
                 break
             }
         }
@@ -220,12 +223,12 @@ enum InboxEngine {
              .approved(by: Pick()), .changesRequested(by: Pick()),
              .checks([.failing]), .hasConflicts, .behindBase,
              .status([.draft]), .labeled(Pick()), .noActivity(days: 7),
-             .greptileBelow(5), .asksMe, .noise(true), .importance(.high)]
+             .greptileBelow(5), .commentLabel([.asks, .todo]), .noise(true), .importance(.high)]
         case .issue:
             [.newComment(by: Pick()), .mentions(Pick(include: [.me])),
              .lastComment(by: Pick()),
              .status([.closed]), .labeled(Pick()), .noActivity(days: 7),
-             .asksMe, .noise(true), .importance(.high)]
+             .commentLabel([.asks, .todo]), .noise(true), .importance(.high)]
         case .workflow:
             [.workflow([.failing])]
         }
@@ -504,13 +507,18 @@ enum InboxEngine {
         case .greptileBelow(let n):
             guard let score = thing.greptileScore, score < n else { return [] }
             return [Fact(key: "greptile:\(score)", label: "Greptile \(score)/5", tint: .attention)]
-        case .asksMe:
-            // Answering there is what stops a question asking: only what came after your latest word, and after Done.
-            let after = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast,
-                            signals(thing, r)?.answeredAt ?? .distantPast)
-            return messages(thing).filter { m in
-                m.at > after && !isMe(m.author, r) && signals(thing, r)?.messages[m.id]?.asksMe == true
-            }.map { Fact(key: "asks:\($0.id)", label: "Asks you", tint: .attention) }
+        case .commentLabel(let wanted):
+            // Answering there is what stops a question or a request: those count only after your latest word, and after
+            // Done; the others after Done.
+            let signals = signals(thing, r)
+            let answered = max(cutoff, Self.cutoff(.myLastComment, thing, done: done, r) ?? .distantPast,
+                               signals?.answeredAt ?? .distantPast)
+            return messages(thing).compactMap { m in
+                guard !isMe(m.author, r), let label = signals?.messages[m.id]?.label, wanted.contains(label),
+                      m.at > (label.asksOfYou ? answered : cutoff) else { return nil }
+                return Fact(key: "\(label.rawValue):\(m.id)", label: Self.factLabel(label, m),
+                            tint: label.asksOfYou ? .attention : .neutral)
+            }
         case .noise(let wanted):
             return messages(thing).filter { m in m.at > cutoff && !isMe(m.author, r) && isNoise(m, signals(thing, r)) == wanted }.map {
                 wanted ? Fact(key: "noise:\($0.id)", label: "noise from @\($0.author.login)")
@@ -532,8 +540,8 @@ enum InboxEngine {
 
     // MARK: - Jev's signals
 
-    /// A comment, a review's words or a thread's reply (among its last ones fetched): what Jev reads, and what `asksMe` and
-    /// `noise` are about.
+    /// A comment, a review's words or a thread's reply (among its last ones fetched): what Jev labels, and what
+    /// `commentLabel` and `noise` are about.
     struct Message: Hashable {
         var id: String
         var author: Person
@@ -598,10 +606,45 @@ enum InboxEngine {
 
     private static func signals(_ thing: Thing, _ r: Resolved) -> ThingSignals? { r.jev ? signals(thing, r.me) : nil }
 
-    /// Noise: what Jev said of it once it read it (nil when it wasn't sure); before that, whether a bot wrote it.
+    /// Noise: what Jev labeled it once he read it (nil when he wasn't sure); before that, whether a bot wrote it.
     private static func isNoise(_ m: Message, _ signals: ThingSignals?) -> Bool? {
         guard let signal = signals?.messages[m.id] else { return m.author.isBot }
-        return signal.noise
+        return signal.label.map { $0 == .noise }
+    }
+
+    /// A label's fact, in the chip's words.
+    private static func factLabel(_ label: CommentLabel, _ m: Message) -> String {
+        switch label {
+        case .asks: "Asks you"
+        case .todo: "To do from @\(m.author.login)"
+        case .fyi: "FYI from @\(m.author.login)"
+        case .noise: "noise from @\(m.author.login)"
+        }
+    }
+
+    /// The message a fact is about, if it is about one: a comment, a review's words, a thread's reply.
+    static func messageID(_ key: String) -> String? {
+        let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        switch parts[0] {
+        case "comment", "review", "mention", "last", "person", "asks", "todo", "fyi", "noise": return parts[1]
+        case "thread": return parts[1].split(separator: ":").last.map(String.init)
+        default: return nil
+        }
+    }
+
+    /// Jev's labels of the messages `facts` are about, by fact key, as the inbox counts them (for you, his reading on).
+    static func labels(_ facts: [Fact], _ thing: Thing, context: InboxContext) -> [String: CommentLabel] {
+        labels(facts, thing, Resolved(context))
+    }
+
+    private static func labels(_ facts: [Fact], _ thing: Thing, _ r: Resolved) -> [String: CommentLabel] {
+        guard let messages = signals(thing, r)?.messages, !messages.isEmpty else { return [:] }
+        var out: [String: CommentLabel] = [:]
+        for fact in facts {
+            if let id = messageID(fact.key), let label = messages[id]?.label { out[fact.key] = label }
+        }
+        return out
     }
 
     private static func isMe(_ person: Person, _ r: Resolved) -> Bool { !r.me.isEmpty && normalize(person.login) == r.me }
@@ -675,7 +718,7 @@ enum InboxEngine {
 
     private static func offered(_ condition: Condition) -> Set<ThingKind> {
         switch condition {
-        case .newComment, .mentions, .lastComment, .status, .labeled, .noActivity, .asksMe, .noise, .importance: [.pr, .issue]
+        case .newComment, .mentions, .lastComment, .status, .labeled, .noActivity, .commentLabel, .noise, .importance: [.pr, .issue]
         case .newReview, .newCommits, .unresolvedThreads, .approved, .changesRequested, .checks, .hasConflicts,
              .behindBase, .greptileBelow: [.pr]
         case .workflow: [.workflow]

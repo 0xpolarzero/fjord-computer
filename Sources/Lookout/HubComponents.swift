@@ -186,9 +186,8 @@ struct EntryRow: View {
                     HStack(alignment: .center, spacing: 6) {
                         Text(thing.title)
                             .font(Theme.Typography.body)
-                            .foregroundStyle(unread || open ? CDS.Text.primary : CDS.Text.secondary)
+                            .foregroundStyle((unread && !entry.isNoise) || open ? CDS.Text.primary : CDS.Text.secondary)
                             .lineLimit(1)
-                        if let level = mark { ImportanceMark(level: level) }
                         Spacer(minLength: 0)
                         // The actions take the timestamp's place; the title stops short of them.
                         Text(shortAgo(thing.updatedAt)).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(CDS.Text.muted)
@@ -202,10 +201,11 @@ struct EntryRow: View {
                             .foregroundStyle(CDS.Text.muted)
                             .lineLimit(1)
                         if let tag = ThingStatusTag.shows(thing.status) { ThingStatusTag(status: tag) }
+                        ForEach(jevTags, id: \.self) { JevTag(kind: $0) }
                         ForEach(store.actionChips(for: entry)) { chip in ActionChipView(chip: chip, store: store) }
                     }
                     .frame(height: Self.line)
-                    if !chips.isEmpty { FactChips(facts: chips) }
+                    if !chips.isEmpty { FactChips(facts: chips, labels: entry.labels) }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -213,7 +213,7 @@ struct EntryRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(thing.kind == .workflow ? "\(thing.title), \(thing.repo)" : "\(thing.title), \(thing.repo) #\(thing.number ?? 0)")
-        .accessibilityValue(([unread ? "Unread" : "", mark.map(ImportanceMark.words) ?? ""] + chips.map(\.label))
+        .accessibilityValue(([unread ? "Unread" : ""] + jevTags.map(\.words) + chips.map(\.label))
             .filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHint("Opens it on GitHub")
         .overlay(alignment: .topTrailing) {
@@ -228,8 +228,10 @@ struct EntryRow: View {
         .motion(Theme.Motion.hover, value: open)
     }
 
-    /// Jev's rating, when it is high or urgent.
-    private var mark: Importance? { entry.importance.flatMap { $0 >= .high ? $0 : nil } }
+    /// Jev's tags: his rating when it is high or urgent, and the label that stands out most among the facts' messages.
+    private var jevTags: [JevTag.Kind] {
+        (entry.importance.flatMap { $0 >= .high ? [.importance($0)] : nil } ?? []) + (entry.label.map { [.label($0)] } ?? [])
+    }
 
     /// The facts as chips, each wording once (a thread each says "2 unresolved" twice), and, for a failing workflow, the
     /// jobs that failed.
@@ -360,18 +362,52 @@ struct EntryMenu: View {
     }
 }
 
-/// Jev's rating of a row it rates high (one exclamation mark) or urgent (two), after the title.
-struct ImportanceMark: View {
-    let level: Importance
+/// Jev's word on a row, as a tag beside its status (Claude's Badge, xs): his label of its messages, or his rating of what
+/// it asks of you. Asks you and To do stand out (accent, warning), FYI is plain, Noise is muted; Important (high) and
+/// Urgent stand out too. Emphasis only: a row is there, and notifies, by your rules alone.
+struct JevTag: View {
+    enum Kind: Hashable {
+        case label(CommentLabel)
+        case importance(Importance)
 
-    static func words(_ level: Importance) -> String { "Jev rates this \(level.rawValue)" }
+        var text: String {
+            switch self {
+            case .label(let label): label.tag
+            case .importance(let level): level == .urgent ? "Urgent" : "Important"
+            }
+        }
+
+        var words: String {
+            switch self {
+            case .label(let label): "Jev labels it \(label.title)"
+            case .importance(let level): "Jev rates this \(level.rawValue)"
+            }
+        }
+
+        var colors: (fill: Color, ink: Color) {
+            switch self {
+            case .label(.asks): (CDS.BadgeTint.accentFill, CDS.BadgeTint.accentText)
+            case .label(.todo): (CDS.BadgeTint.warningFill, CDS.BadgeTint.warningText)
+            case .label(.fyi): (CDS.Badge.fill, CDS.Badge.ink)
+            case .label(.noise): (CDS.Badge.fill, CDS.Text.muted)
+            case .importance(let level): level == .urgent ? (CDS.BadgeTint.dangerFill, CDS.BadgeTint.dangerText)
+                : (CDS.BadgeTint.warningFill, CDS.BadgeTint.warningText)
+            }
+        }
+    }
+
+    let kind: Kind
 
     var body: some View {
-        Image(systemName: level == .urgent ? "exclamationmark.2" : "exclamationmark")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(level == .urgent ? CDS.Text.danger : CDS.Text.warning)
-            .accessibilityLabel(Self.words(level))
-            .tip(Self.words(level))
+        let (fill, ink) = kind.colors
+        Text(kind.text)
+            .font(CDS.sans(CDS.Badge.font, .medium))
+            .foregroundStyle(ink)
+            .padding(.horizontal, CDS.Badge.padX)
+            .frame(height: CDS.Badge.height)
+            .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(fill))
+            .fixedSize()
+            .tip(kind.words)
     }
 }
 
@@ -401,13 +437,18 @@ struct FactChip: View {
     }
 }
 
-/// The facts on one line: as many chips as fit, then "···" for the rest (VoiceOver reads them all).
+/// The facts on one line: as many chips as fit, then "···" for the rest (VoiceOver reads them all); a fact about a message
+/// Jev labels noise is muted.
 struct FactChips: View {
     let facts: [Fact]
+    /// Jev's labels of the facts' messages, by fact key: one about noise is muted.
+    var labels: [String: CommentLabel] = [:]
 
     var body: some View {
         ChipLine(spacing: 4) {
-            ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in FactChip(fact: fact) }
+            ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
+                FactChip(fact: fact).opacity(labels[fact.key] == .noise ? 0.55 : 1)
+            }
             Text("···").font(Theme.Typography.caption).foregroundStyle(CDS.Text.muted).fixedSize()
                 .frame(height: CDS.Badge.height).accessibilityHidden(true)
         }

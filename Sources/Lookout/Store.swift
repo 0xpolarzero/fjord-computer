@@ -140,8 +140,8 @@ final class Store {
     @ObservationIgnored let actionsDisk = ActionsDisk()
     /// What the last inbox refresh failed at, if it did (InboxSync.swift); the things it had stay.
     var inboxError: String?
-    /// Why Jev couldn't read the inbox's new comments and requests (InboxJev.swift): what rests on his reading (asks me,
-    /// noise, importance) stays as it was until he can.
+    /// Why Jev couldn't read the inbox's new comments and requests (InboxJev.swift): his labels and ratings stay as they
+    /// were until he can.
     var inboxReadError: String?
     /// Why what is changed isn't being saved, if it isn't (the state's file or the actions'): said where the sync status is,
     /// until a save works.

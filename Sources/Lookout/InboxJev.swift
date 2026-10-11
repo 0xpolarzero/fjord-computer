@@ -1,17 +1,18 @@
 import Foundation
 
 // Jev's reading of the inbox (TypeSafe, with the user's key): each new message (comment, review's words, thread reply) is
-// read once, for whether it asks you something and whether it is noise; each review request to you (or a team of yours) and
-// each assignment is rated once. One call a refresh, every question in it, a few at most; what Jev isn't sure of is kept as
-// unsure (never a fact) and not asked again. Without a key, or when TypeSafe fails, nothing changes.
+// read once and given one label (asks, to do, FYI, noise); each review request to you (or a team of yours) and each
+// assignment is rated once. Labels and ratings only say how a row stands out: what is in a category and what notifies is
+// your rules' alone (a rule may ask for a label). One call a refresh, every question in it, a few at most; what Jev isn't
+// sure of is kept as unsure (no label) and not asked again. Without a key, or when TypeSafe fails, nothing changes.
 enum InboxJev {
     /// Messages read and things rated in one call at most; the rest wait for the next refresh, newest first.
     static let maxMessages = 12
     static let maxRatings = 6
     /// Messages older than this aren't read: they were there before anything Jev could change.
     static let horizon: TimeInterval = 14 * 86400
-    /// A yes is at least this likely, a no at most 1 minus it; between, Jev isn't sure.
-    static let sure = 0.75
+    /// A label is at least this likely; below, Jev isn't sure and gives none.
+    static let sure = 0.6
     /// A rating whose confidence is lower is no rating.
     static let sureScore = 0.4
 
@@ -21,8 +22,6 @@ enum InboxJev {
         struct Read: Equatable {
             var thing: String
             var message: InboxEngine.Message
-            /// Only people are asked whether they ask you something; bots only whether they are noise.
-            var asks: Bool { !message.author.isBot }
         }
         struct Rating: Equatable {
             var thing: String
@@ -63,17 +62,6 @@ enum InboxJev {
         InboxEngine.viewer(m.author.login) != InboxEngine.viewer(context.me) && context.now.timeIntervalSince(m.at) < horizon
     }
 
-    /// The message a fact is about, if it is about one.
-    private static func messageID(_ fact: Fact) -> String? {
-        let parts = fact.key.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return nil }
-        switch parts[0] {
-        case "comment", "review", "mention", "last", "person": return parts[1]
-        case "thread": return parts[1].split(separator: ":").last.map(String.init)
-        default: return nil
-        }
-    }
-
     /// The call: one state with every message (`m1`…) and every thing to rate (`t1`…), and the questions about each.
     static func request(_ work: Work, things: [String: Thing], context: InboxContext) -> (questions: [String: JevClient.Question], state: [String: Any]) {
         let me = "@" + context.me
@@ -83,14 +71,7 @@ enum InboxJev {
             guard let thing = things[read.thing] else { continue }
             let id = "m\(i + 1)"
             messages[id] = messageState(read.message, in: thing, context: context)
-            if read.asks {
-                questions[id + "_asks"] = .noul(
-                    instructions: "Message \(id): does it ask \(me) something, or need their answer, decision or action (a question to them, a request to review or change something, a blocker only they can clear)?",
-                    yes: "It asks \(me) to answer or act", no: "It informs, thanks, agrees, or asks someone else")
-            }
-            questions[id + "_noise"] = .noul(
-                instructions: "Message \(id): is it automated output nobody needs to read (CI or coverage reports, deploy previews, dependency update notes, lint or bot boilerplate)? A person's words, or a code review with findings even from a bot, are not.",
-                yes: "Automated noise", no: "Words for a person to read")
+            questions[id + "_label"] = labelQuestion(id, me: me)
         }
         var rated: [String: Any] = [:]
         for (i, rating) in work.ratings.enumerated() {
@@ -106,6 +87,23 @@ enum InboxJev {
         return (questions, state)
     }
 
+    /// The one choice asked of message `id`: its label, for `me`.
+    static func labelQuestion(_ id: String, me: String) -> JevClient.Question {
+        .choice(CommentLabel.allCases.map(\.rawValue), hints: [
+            CommentLabel.asks.rawValue: "It asks \(me) a question, or for a decision only they can make",
+            CommentLabel.todo.rawValue: "It asks \(me) to change or do something: rebase, fix, address a review, resolve a conflict, review",
+            CommentLabel.fyi.rawValue: "It informs: nothing for \(me) to answer or do, or it asks someone else",
+            CommentLabel.noise.rawValue: "Thanks, +1, an acknowledgement, or automated output nobody needs to read (CI or coverage reports, deploy previews, dependency or lint bots); a code review with findings, even from a bot, is not",
+        ], instructions: "Message \(id): what does it ask of \(me)? Pick the one label that fits best.")
+    }
+
+    /// A label from Jev's answer: the option he picked when it is at least `sure`; nil (unsure) otherwise.
+    static func label(_ answer: JevClient.Answer?) -> CommentLabel? {
+        guard let choice = answer?.choice, let label = CommentLabel(rawValue: choice.choice),
+              (choice.probabilities[choice.choice] ?? 0) >= sure else { return nil }
+        return label
+    }
+
     /// The answers, onto `things`, for `me`: every message asked is read (unsure included), every thing asked is rated.
     /// What was read for someone else is dropped.
     static func apply(_ answers: [String: JevClient.Answer], _ work: Work, for me: String, to things: inout [String: Thing]) {
@@ -113,14 +111,10 @@ enum InboxJev {
         func fresh(_ id: String) -> ThingSignals {
             things[id].flatMap { InboxEngine.signals($0, me) } ?? ThingSignals(viewer: viewer)
         }
-        func verdict(_ key: String) -> Bool? {
-            guard let p = answers[key]?.yes else { return nil }
-            return p >= sure ? true : p <= 1 - sure ? false : nil
-        }
         for (i, read) in work.reads.enumerated() where things[read.thing] != nil {
             let id = "m\(i + 1)"
             var signals = fresh(read.thing)
-            signals.messages[read.message.id] = MessageSignal(asksMe: read.asks ? verdict(id + "_asks") : nil, noise: verdict(id + "_noise"))
+            signals.messages[read.message.id] = MessageSignal(label: label(answers[id + "_label"]))
             things[read.thing]?.signals = signals
         }
         for (i, rating) in work.ratings.enumerated() where things[rating.thing] != nil {
@@ -249,7 +243,7 @@ enum InboxJev {
 }
 
 extension Store {
-    /// Settings' "Let Jev read new comments" (default on).
+    /// Settings' "Let Jev label new comments" (default on).
     var jevReadsInbox: Bool { settings.jevReadsInbox ?? true }
 
     /// Jev reads the inbox at the next refresh: switched on, with a key (or a test's asker).

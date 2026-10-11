@@ -225,7 +225,7 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
                 "comments": ["nodes": []], "reviews": ["nodes": []], "latestOpinionatedReviews": ["nodes": []],
                 "reviewThreads": ["nodes": [thread]]])))
         }
-        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.asksMe], createdAt: .distantPast)
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.commentLabel([.asks, .todo])], createdAt: .distantPast)
         let context = InboxContext(me: "me", now: iso("2026-10-07T14:00:00Z")!)
         func keys(_ thing: Thing, marks: EntryMarks? = nil) -> [String]? {
             InboxEngine.facts(rule, thing, marks: marks, context: context)?.map(\.key)
@@ -233,14 +233,14 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         // Bob asks you in a thread, and Jev reads it as asking you.
         let question = comment("q", "bob", "2026-10-07T10:00:00Z")
         var asked = try fetched([question])
-        asked.signals = ThingSignals(messages: ["q": MessageSignal(asksMe: true, noise: false)], viewer: "me")
+        asked.signals = ThingSignals(messages: ["q": MessageSignal(label: .asks)], viewer: "me")
         #expect(keys(asked) == ["asks:q"])
         // Carol replies after him: his question is still among the thread's messages, Jev's verdict on it kept.
         var later = try fetched([question, comment("c", "carol", "2026-10-07T13:00:00Z")])
         #expect(later.threads.first?.lastReplyID == "c")
         #expect(InboxEngine.messages(later).map(\.id) == ["q", "c"])
         InboxJev.carry(asked.signals, into: &later, me: "me")
-        #expect(later.signals?.messages["q"]?.asksMe == true)
+        #expect(later.signals?.messages["q"]?.label == .asks)
         #expect(keys(later) == ["asks:q"])
         #expect(InboxSync.isEvent("asks:q", of: later))
         // Done after it: it no longer asks; nor once you answer in the thread.
@@ -265,8 +265,8 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             "reviewThreads": ["nodes": [thread]]])))
         #expect(thing.threads.first?.lastReplyID == "r9")
         #expect(InboxEngine.messages(thing).map(\.id).filter { $0 == "q" } == ["q"])
-        thing.signals = ThingSignals(messages: ["q": MessageSignal(asksMe: true, noise: false)], viewer: "me")
-        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.asksMe], createdAt: .distantPast)
+        thing.signals = ThingSignals(messages: ["q": MessageSignal(label: .asks)], viewer: "me")
+        let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [.commentLabel([.asks, .todo])], createdAt: .distantPast)
         let context = InboxContext(me: "me", now: iso("2026-10-07T14:00:00Z")!)
         #expect(InboxEngine.facts(rule, thing, marks: nil, context: context)?.map(\.key) == ["asks:q"])
     }

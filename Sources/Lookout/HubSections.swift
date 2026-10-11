@@ -343,7 +343,7 @@ extension LookoutHub {
         }
         if let error = store.inboxReadError {
             return SyncState(color: Theme.amber, text: "Jev can't read", title: "Jev couldn't read the inbox's new comments",
-                             detail: error + "\nAsks me, noise and importance wait for him\n" + refresh)
+                             detail: error + "\nLabels and importance wait for him; everything else is as your rules say\n" + refresh)
         }
         if store.isSyncing {
             return SyncState(color: Theme.tertiary, text: "Checking…", title: "Checking GitHub",

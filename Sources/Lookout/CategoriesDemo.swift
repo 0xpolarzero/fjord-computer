@@ -193,10 +193,10 @@ enum CategoriesDemo {
             ]), at: 0)
             preview.editing = .existing(switched)
         case .jev:
-            // What Jev reads: a comment that asks you, people rather than noise, and review requests it rates high.
+            // What Jev labels: a comment that asks you or for a change, people rather than noise, and review requests it rates high.
             store.categories.insert(InboxCategory(id: switched, name: "Asks me", symbol: "exclamationmark.bubble", color: .clay, rules: [
                 Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])), match: .any,
-                     conditions: [.asksMe, .noise(false), .importance(.high)]),
+                     conditions: [.commentLabel([.asks, .todo]), .noise(false), .importance(.high)]),
             ]), at: 0)
             preview.editing = .existing(switched)
         case .switched:

@@ -244,7 +244,7 @@ enum InboxActions {
         guard parts.count >= 2 else { return false }
         let id = parts[1]
         switch parts[0] {
-        case "comment", "mention", "last", "person", "noise", "asks":
+        case "comment", "mention", "last", "person", "noise", "asks", "todo", "fyi":
             return !thing.comments.contains { $0.id == id } && !thing.threads.contains { $0.hasReply(id) }
                 && !(parts[0] == "mention" && thing.threads.contains { $0.mentions?.contains { $0.id == id } == true })
         case "review", "approved", "changes":

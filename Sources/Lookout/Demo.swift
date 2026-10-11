@@ -85,7 +85,7 @@ enum Demo {
             store.categories.insert(InboxCategory(id: UUID(uuidString: "00000000-0000-0000-0000-000000000009")!, name: "Asks me",
                 symbol: "exclamationmark.bubble", color: .clay,
                 rules: [Rule(scope: Scope(kinds: [.pr, .issue], in: Pick(include: [.involved])), match: .any,
-                             conditions: [.asksMe, .importance(.high)], createdAt: now.addingTimeInterval(-60 * 86400))]), at: 0)
+                             conditions: [.commentLabel([.asks, .todo]), .importance(.high)], createdAt: now.addingTimeInterval(-60 * 86400))]), at: 0)
         case .sections:
             // Two sections: GitHub's, and CI (its failures) in a section of its own, folded.
             agents(store, now)
@@ -500,23 +500,24 @@ enum Demo {
                                minutes: 4))
         things.append(workflow("amontlabs/lcu", "Release", state: .passing, title: "Release 0.4.2", minutes: 1440))
 
-        // What Jev made of them: the comments that ask you something, the bots' noise, and how much each review asked of
-        // you matters.
+        // What Jev made of them: the comments that ask you something or for a change, the bots' noise, FYI for the rest,
+        // and how much each review asked of you matters.
         let context = InboxContext(me: me.login)
-        func jev(_ id: String, asks: [String] = [], noise: [String] = [], importance: Importance? = nil) {
+        func jev(_ id: String, asks: [String] = [], todo: [String] = [], noise: [String] = [], importance: Importance? = nil) {
             guard let i = things.firstIndex(where: { $0.id == id }) else { return }
             var signals = ThingSignals(viewer: InboxEngine.viewer(me.login))
             for m in InboxEngine.messages(things[i]) where m.author.login != me.login {
-                signals.messages[m.id] = MessageSignal(asksMe: m.author.isBot ? nil : asks.contains(m.id), noise: noise.contains(m.id))
+                signals.messages[m.id] = MessageSignal(label: asks.contains(m.id) ? .asks : todo.contains(m.id) ? .todo
+                                                       : noise.contains(m.id) ? .noise : .fyi)
             }
             if let importance, let stamp = InboxEngine.importanceStamp(things[i], context: context) {
                 signals.importance = ImportanceSignal(level: importance, stamp: stamp)
             }
             things[i].signals = signals
         }
-        jev("pr:0xpolarzero/lookout#15", asks: ["c15-2", "t15-1-r"])
-        jev("pr:apple/swift-format#1042", asks: ["c1042-1"])
-        jev("pr:ziglang/zig#21877")
+        jev("pr:0xpolarzero/lookout#15", asks: ["c15-2"], todo: ["t15-1-r"])
+        jev("pr:apple/swift-format#1042", todo: ["c1042-1"])
+        jev("pr:ziglang/zig#21877", todo: ["c21877-1"])
         jev("pr:apple/swift-format#1051", importance: .urgent)
         jev("pr:ziglang/zig#21840", importance: .high)
         jev("pr:superradcompany/microsandbox#412", importance: .low)

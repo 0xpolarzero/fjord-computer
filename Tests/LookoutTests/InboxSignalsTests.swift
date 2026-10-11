@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Lookout
 
-/// The conditions Jev's signals drive: asks me, noise or a person, importance; and what nothing judged leaves as it was.
+/// The conditions Jev's signals drive: a comment's label, noise or a person, importance; and what nothing judged leaves as it was.
 @Suite struct InboxSignalsEngine {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
     let me = Person(login: "me")
@@ -26,25 +26,31 @@ import Testing
         return InboxEngine.facts(rule, thing, marks: marks, context: context)?.map(\.key)
     }
 
-    @Test func aCommentThatAsksMeIsAFactUntilIAnswerOrMarkItDone() {
+    @Test func aCommentLabeledAsksOrToDoIsAFactUntilIAnswerOrMarkItDone() {
         var t = pr()
         t.comments = [comment("c1", tok, at: -300), comment("c2", tok, at: -200)]
         t.threads = [ThingThread(id: "t1", isResolved: false, startedBy: tok, lastReplyBy: tok, lastReplyID: "r1",
                                  lastReplyAt: now.addingTimeInterval(-100), snippet: "…")]
         // Nothing judged: no fact, never a guess.
-        #expect(keys([.asksMe], t) == nil)
-        t.signals = ThingSignals(messages: ["c1": MessageSignal(asksMe: true, noise: false), "c2": MessageSignal(asksMe: nil),
-                                            "r1": MessageSignal(asksMe: true)], viewer: "me")
-        // Unsure (c2) is no fact; a thread reply asks like a comment.
-        #expect(keys([.asksMe], t) == ["asks:c1", "asks:r1"])
-        let entry = InboxEngine.facts(Rule(scope: Scope(kinds: [.pr]), conditions: [.asksMe], createdAt: .distantPast), t,
+        let asking: Condition = .commentLabel([.asks, .todo])
+        #expect(keys([asking], t) == nil)
+        t.signals = ThingSignals(messages: ["c1": MessageSignal(label: .asks), "c2": MessageSignal(),
+                                            "r1": MessageSignal(label: .todo)], viewer: "me")
+        // Unsure (c2) is no fact; a thread reply counts like a comment.
+        #expect(keys([asking], t) == ["asks:c1", "todo:r1"])
+        #expect(keys([.commentLabel([.todo])], t) == ["todo:r1"])
+        let entry = InboxEngine.facts(Rule(scope: Scope(kinds: [.pr]), conditions: [asking], createdAt: .distantPast), t,
                                       marks: nil, context: context)
         #expect(entry?.first?.label == "Asks you")
         // My reply after c1: only what came after it still asks.
         t.comments.append(comment("c3", me, at: -150))
-        #expect(keys([.asksMe], t) == ["asks:r1"])
+        #expect(keys([asking], t) == ["todo:r1"])
+        // FYI and noise aren't ended by a reply, only by Done.
+        t.signals?.messages["c1"] = MessageSignal(label: .fyi)
+        #expect(keys([.commentLabel([.fyi])], t) == ["fyi:c1"])
         // Done after it: nothing.
-        #expect(keys([.asksMe], t, marks: EntryMarks(doneAt: now.addingTimeInterval(-50))) == nil)
+        #expect(keys([asking], t, marks: EntryMarks(doneAt: now.addingTimeInterval(-50))) == nil)
+        #expect(keys([.commentLabel([.fyi])], t, marks: EntryMarks(doneAt: now.addingTimeInterval(-50))) == nil)
     }
 
     @Test func sinceMyLastCommentKeepsMyWordWhenAReplyTakesItsPlaceWithJevOff() {
@@ -72,7 +78,7 @@ import Testing
         #expect(keys([.noise(true)], t) == ["noise:b"])
         #expect(keys([.noise(false)], t) == ["person:h", "person:c"])
         // Jev reads the CI account as automated; a bot it reads as a person's words is no longer noise; unsure is neither.
-        t.signals = ThingSignals(messages: ["c": MessageSignal(noise: true), "b": MessageSignal(noise: false), "h": MessageSignal()], viewer: "me")
+        t.signals = ThingSignals(messages: ["c": MessageSignal(label: .noise), "b": MessageSignal(label: .fyi), "h": MessageSignal()], viewer: "me")
         #expect(keys([.noise(true)], t) == ["noise:c"])
         #expect(keys([.noise(false)], t) == ["person:b"])
     }
@@ -136,10 +142,10 @@ import Testing
     @Test func theNewConditionsAreOfferedForPRsAndIssuesAndRoundTrip() throws {
         for kinds: Set<ThingKind> in [[.pr], [.issue], [.pr, .issue]] {
             let tags = InboxEngine.conditions(for: kinds).map(RuleEditing.tag)
-            #expect(tags.contains("asksMe") && tags.contains("noise") && tags.contains("importance"))
+            #expect(tags.contains("commentLabel") && tags.contains("noise") && tags.contains("importance"))
         }
-        #expect(!InboxEngine.conditions(for: [.workflow]).contains(.asksMe))
-        for c: Condition in [.asksMe, .noise(false), .importance(.urgent)] {
+        #expect(!InboxEngine.conditions(for: [.workflow]).map(RuleEditing.tag).contains("commentLabel"))
+        for c: Condition in [.commentLabel([.asks, .todo]), .commentLabel([.noise]), .noise(false), .importance(.urgent)] {
             #expect(try JSONDecoder().decode(Condition.self, from: JSONEncoder().encode(c)) == c)
         }
     }
@@ -152,15 +158,75 @@ import Testing
         let old = try JSONDecoder().decode(Thing.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(old.signals == nil && old.additions == nil && old == t)
         var judged = t
-        judged.signals = ThingSignals(messages: ["c": MessageSignal(asksMe: true)], importance: ImportanceSignal(level: .high, stamp: "assigned"),
+        judged.signals = ThingSignals(messages: ["c": MessageSignal(label: .asks), "d": MessageSignal()], importance: ImportanceSignal(level: .high, stamp: "assigned"),
                                       viewer: "me")
         #expect(try JSONDecoder().decode(Thing.self, from: JSONEncoder().encode(judged)) == judged)
     }
 
+    @Test func signalsAndRulesSavedBeforeLabelsReadTheSame() throws {
+        func signal(_ json: String) throws -> MessageSignal { try JSONDecoder().decode(MessageSignal.self, from: Data(json.utf8)) }
+        // Asks me is asks; noise is noise; neither (a person's, or a bot's never asked whether it asks) is FYI; unsure of
+        // noise is unsure.
+        #expect(try signal(#"{"asksMe":true,"noise":false}"#).label == .asks)
+        #expect(try signal(#"{"asksMe":true,"noise":true}"#).label == .asks)
+        #expect(try signal(#"{"asksMe":false,"noise":true}"#).label == .noise)
+        #expect(try signal(#"{"noise":true}"#).label == .noise)
+        #expect(try signal(#"{"asksMe":false,"noise":false}"#).label == .fyi)
+        #expect(try signal(#"{"noise":false}"#).label == .fyi)
+        #expect(try signal(#"{"asksMe":false}"#).label == nil)
+        #expect(try signal("{}") == MessageSignal())
+        // Written as a label only, and read back.
+        let written = String(decoding: try JSONEncoder().encode(MessageSignal(label: .todo)), as: UTF8.self)
+        let back = try signal(written)
+        #expect(written == #"{"label":"todo"}"# && back.label == .todo)
+        // A thing saved with the old readings keeps them.
+        var t = pr()
+        t.comments = [comment("c1", tok, at: -30), comment("c2", ci, at: -20)]
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(t)) as? [String: Any])
+        json["signals"] = ["viewer": "me", "messages": ["c1": ["asksMe": true, "noise": false], "c2": ["noise": true]]]
+        let old = try JSONDecoder().decode(Thing.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(old.signals?.messages == ["c1": MessageSignal(label: .asks), "c2": MessageSignal(label: .noise)])
+        // A rule saved with "a comment asks me" is one for asks or to do, and matches what it did.
+        let saved = try JSONDecoder().decode(Condition.self, from: Data(#"{"asksMe":{}}"#.utf8))
+        #expect(saved == .commentLabel([.asks, .todo]))
+        let resaved = String(decoding: try JSONEncoder().encode(saved), as: UTF8.self)
+        #expect(!resaved.contains("asksMe"))
+        #expect(keys([saved], old) == ["asks:c1"] && keys([.noise(true)], old) == ["noise:c2"])
+    }
+
+    @Test func aRowShowsTheLabelThatStandsOutMostAndIsMutedOnlyWhenAllIsNoise() {
+        var t = pr()
+        t.comments = [comment("c1", tok, at: -30), comment("c2", ci, at: -20), comment("c3", tok, at: -10)]
+        t.signals = ThingSignals(messages: ["c1": MessageSignal(label: .fyi), "c2": MessageSignal(label: .noise),
+                                            "c3": MessageSignal(label: .todo)], viewer: "me")
+        let category = InboxCategory(name: "All", symbol: "tray", color: .blue,
+                                     rules: [Rule(scope: Scope(kinds: [.pr]), conditions: [.newComment(by: Pick())], createdAt: .distantPast)])
+        let entry = InboxEngine.evaluate(things: [t], categories: [category], marks: [:], context: context).first
+        #expect(entry?.labels == ["comment:c1": .fyi, "comment:c2": .noise, "comment:c3": .todo])
+        #expect(entry?.label == .todo && entry?.isNoise == false)
+        // Only noise: dimmed, and still there.
+        t.comments = [comment("c2", ci, at: -20)]
+        let quiet = InboxEngine.evaluate(things: [t], categories: [category], marks: [:], context: context).first
+        #expect(quiet?.label == .noise && quiet?.isNoise == true)
+        // Jev's reading off: no labels.
+        var off = context
+        off.jevSignals = false
+        #expect(InboxEngine.evaluate(things: [t], categories: [category], marks: [:], context: off).first?.labels.isEmpty == true)
+    }
+
+    @Test func aLabelIsJevsPickWhenHeIsSureOfItAndNothingElse() {
+        #expect(InboxJev.label(InboxSignalsJev.pick(.todo, 0.9)) == .todo)
+        #expect(InboxJev.label(InboxSignalsJev.pick(.noise, InboxJev.sure)) == .noise)
+        #expect(InboxJev.label(InboxSignalsJev.pick(.asks, 0.5)) == nil)
+        #expect(InboxJev.label(nil) == nil && InboxJev.label(.noul(0.99)) == nil)
+        // An option outside the labels is none.
+        #expect(InboxJev.label(.choice(JevClient.Choice(choice: "maybe", confidence: 1, probabilities: ["maybe": 1]))) == nil)
+    }
+
     @MainActor @Test func rulesReadNaturally() {
         let words = RuleWords(store: Store())
-        let rule = Rule(scope: Scope(kinds: [.pr, .issue]), conditions: [.asksMe, .noise(false), .importance(.high)])
-        #expect(words.summary(rule) == "PRs and issues · when any of: a comment asks me; new comment is from a person; rated at least high")
+        let rule = Rule(scope: Scope(kinds: [.pr, .issue]), conditions: [.commentLabel([.asks, .todo]), .noise(false), .importance(.high)])
+        #expect(words.summary(rule) == "PRs and issues · when any of: new comment labeled asks me or to do; new comment is from a person; rated at least high")
     }
 }
 
@@ -186,8 +252,17 @@ import Testing
         ThingComment(id: id, author: author, at: now.addingTimeInterval(-ago), snippet: "Could you take a look at \(id)?")
     }
 
-    /// A store whose asker answers every yes/no with `yes` and every score with `score`, and records each call.
-    private func store(_ things: [Thing], yes: Double = 0.9, score: Double = 2, conditions: [Condition] = [.asksMe]) -> (Store, Calls) {
+    /// Jev's pick of `label`, `p` likely.
+    nonisolated static func pick(_ label: CommentLabel, _ p: Double = 0.9) -> JevClient.Answer {
+        let rest = CommentLabel.allCases.filter { $0 != label }
+        var probabilities = Dictionary(uniqueKeysWithValues: rest.map { ($0.rawValue, (1 - p) / Double(rest.count)) })
+        probabilities[label.rawValue] = p
+        return .choice(JevClient.Choice(choice: label.rawValue, confidence: p, probabilities: probabilities))
+    }
+
+    /// A store whose asker labels every message `label`, `p` likely, and rates every thing `score`, and records each call.
+    private func store(_ things: [Thing], label: CommentLabel = .asks, p: Double = 0.9, score: Double = 2,
+                       conditions: [Condition] = [.commentLabel([.asks, .todo])]) -> (Store, Calls) {
         let category = InboxCategory(name: "Mine", symbol: "star", color: .blue,
                                      rules: [Rule(scope: Scope(kinds: [.pr, .issue]), conditions: conditions, createdAt: .distantPast)])
         let s = InboxFixture.store(things, category: category)
@@ -197,7 +272,7 @@ import Testing
             calls.states.append(state)
             return questions.mapValues { q in
                 if case .score = q { return .score(score, confidence: 0.8) }
-                return .noul(yes)
+                return Self.pick(label, p)
             }
         }
         return (s, calls)
@@ -208,11 +283,16 @@ import Testing
         let (s, calls) = store([pr(1, comments: [mine, comment("c1", tok), comment("c2", bot, ago: 120)])])
         await s.readInbox()
         #expect(calls.questions.count == 1)
-        // Mine isn't read; a bot is only asked whether it is noise.
-        #expect(Set(calls.questions[0].keys) == ["m1_asks", "m1_noise", "m2_noise"])
+        // Mine isn't read; a person's and a bot's are each asked for one label.
+        #expect(Set(calls.questions[0].keys) == ["m1_label", "m2_label"])
+        if case .choice(let options, _, _)? = calls.questions[0]["m1_label"] {
+            #expect(options == ["asks", "todo", "fyi", "noise"])
+        } else {
+            Issue.record("A label is one choice")
+        }
         #expect((calls.states[0]["messages"] as? [String: Any])?.count == 2)
         let signals = s.things["pr:a/one#1"]?.signals?.messages
-        #expect(signals?["c1"] == MessageSignal(asksMe: true, noise: true) && signals?["c2"] == MessageSignal(asksMe: nil, noise: true))
+        #expect(signals?["c1"] == MessageSignal(label: .asks) && signals?["c2"] == MessageSignal(label: .asks))
         // Asked once: nothing new, no call.
         await s.readInbox()
         #expect(calls.questions.count == 1)
@@ -223,8 +303,9 @@ import Testing
         s.applyThings(next)
         #expect(s.things["pr:a/one#1"]?.signals?.messages["c1"] != nil)
         await s.readInbox()
-        #expect(calls.questions.count == 2 && Set(calls.questions[1].keys) == ["m1_asks", "m1_noise"])
-        #expect(s.entries.first?.facts.map(\.key) == ["asks:c1", "asks:c3"])
+        #expect(calls.questions.count == 2 && Set(calls.questions[1].keys) == ["m1_label"])
+        // A bot's is labeled like anyone's.
+        #expect(s.entries.first?.facts.map(\.key) == ["asks:c2", "asks:c1", "asks:c3"])
     }
 
     @Test func whatOthersWroteIsFencedForJevAndCannotCloseTheFence() async {
@@ -279,15 +360,15 @@ import Testing
 
     @Test func unsureIsReadButNoFactAndTheCapWaitsForTheNextRound() async {
         let many = (1...(InboxJev.maxMessages + 3)).map { comment("c\($0)", tok, ago: Double($0) * 60) }
-        let (s, calls) = store([pr(1, comments: many)], yes: 0.5)
+        let (s, calls) = store([pr(1, comments: many)], p: 0.5)
         await s.readInbox()
-        #expect(calls.questions[0].count == InboxJev.maxMessages * 2)
+        #expect(calls.questions[0].count == InboxJev.maxMessages)
         #expect(s.things["pr:a/one#1"]?.signals?.messages.count == InboxJev.maxMessages)
         // Newest first: the oldest three wait.
         #expect(s.things["pr:a/one#1"]?.signals?.messages["c\(InboxJev.maxMessages + 1)"] == nil)
         #expect(s.entries.isEmpty)
         await s.readInbox()
-        #expect(calls.questions.count == 2 && calls.questions[1].count == 6)
+        #expect(calls.questions.count == 2 && calls.questions[1].count == 3)
         await s.readInbox()
         #expect(calls.questions.count == 2)
     }
@@ -351,18 +432,18 @@ import Testing
         s.applyThings(next)
         s.inboxAsker = { questions, _ in
             s.me = GHUser(login: "carol", avatarUrl: nil, type: "User")
-            return questions.mapValues { _ in .noul(0.9) }
+            return questions.mapValues { _ in Self.pick(.asks) }
         }
         await s.readInbox()
         #expect(s.things["pr:a/one#1"]?.signals?.messages["c2"] == nil)
     }
 
     @Test func switchedOffNothingIsSentAndWhatJevSaidCountsForNothing() async {
-        let (s, calls) = store([pr(1, comments: [comment("c1", tok)])], conditions: [.asksMe, .noise(false)])
+        let (s, calls) = store([pr(1, comments: [comment("c1", tok)])], label: .noise, conditions: [.commentLabel([.noise]), .noise(false)])
         await s.readInbox()
-        #expect(calls.questions.count == 1 && s.entries.first?.facts.map(\.key) == ["asks:c1"])
+        #expect(calls.questions.count == 1 && s.entries.first?.facts.map(\.key) == ["noise:c1"])
         s.settings.jevReadsInbox = false
-        // As if Jev had said nothing: no "asks you", and a person's comment Jev read as noise is a person's again.
+        // As if Jev had said nothing: no label, and a person's comment Jev labeled noise is a person's again.
         #expect(s.entries.first?.facts.map(\.key) == ["person:c1"])
         var next = s.things
         next["pr:a/one#1"]?.comments.append(comment("c2", tok, ago: 5))
@@ -372,8 +453,8 @@ import Testing
         // Back on: what was read counts again, and only the new comment is asked about.
         s.settings.jevReadsInbox = true
         await s.readInbox()
-        #expect(calls.questions.count == 2 && Set(calls.questions[1].keys) == ["m1_asks", "m1_noise"])
-        #expect(s.entries.first?.facts.map(\.key).contains("asks:c1") == true)
+        #expect(calls.questions.count == 2 && Set(calls.questions[1].keys) == ["m1_label"])
+        #expect(s.entries.first?.facts.map(\.key).contains("noise:c1") == true)
     }
 
     @Test func aQuestionIAnsweredDoesntAskAgainWhenSomeonesReplyTakesThePlaceOfMine() async {
@@ -392,6 +473,7 @@ import Testing
         next = s.things
         next["pr:a/one#1"]?.threads = [thread(bot, "r2", ago: 100)]
         s.applyThings(next)
+        s.inboxAsker = { questions, _ in questions.mapValues { _ in Self.pick(.noise) } }
         await s.readInbox()
         #expect(s.things["pr:a/one#1"]?.signals?.answeredAt == now.addingTimeInterval(-200))
         #expect(s.entries.isEmpty)
@@ -456,22 +538,24 @@ import Testing
     }
 
     @Test func aCommentJevReadsAsNoiseStillShowsTheBannerYourRuleAsksFor() async {
-        let (s, calls) = store([pr(1, comments: []), pr(2, comments: [])], yes: 0.9, conditions: [.newComment(by: Pick())])
+        let (s, calls) = store([pr(1, comments: [])], conditions: [.newComment(by: Pick())])
         var posted: [String] = []
         s.notifier.onPost = { posted.append($0.identifier) }
         s.announceInbox()
-        // A comment Jev reads as noise on #1, before the refresh announces: your rule matches it, so its banner shows.
+        // A comment Jev labels noise, before the refresh announces: your rule matches it, so its banner shows.
         s.inboxAsker = { questions, _ in
             calls.questions.append(questions)
-            return questions.mapValues { _ in .noul(0.95) }
+            return questions.mapValues { _ in Self.pick(.noise, 0.95) }
         }
         var next = s.things
         next["pr:a/one#1"]?.comments = [comment("n1", Person(login: "ci-reporter"))]
         s.applyThings(next)
         await s.readInbox()
-        #expect(s.things["pr:a/one#1"]?.signals?.messages["n1"]?.noise == true)
+        #expect(calls.questions.count == 1 && s.things["pr:a/one#1"]?.signals?.messages["n1"]?.label == .noise)
         s.announceInbox()
         #expect(posted == ["inbox:pr:a/one#1"])
+        // The row is muted by it, nothing more.
+        #expect(s.entries.first?.labels == ["comment:n1": .noise] && s.entries.first?.isNoise == true)
         // Only your own noise condition keeps a banner back.
         #expect(InboxJev.isQuiet(Fact(key: "noise:n1", label: "")) && !InboxJev.isQuiet(Fact(key: "comment:n1", label: "")))
     }

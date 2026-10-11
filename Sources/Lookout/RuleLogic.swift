@@ -36,7 +36,7 @@ enum RuleEditing {
         case .labeled: "labeled"
         case .noActivity: "noActivity"
         case .greptileBelow: "greptileBelow"
-        case .asksMe: "asksMe"
+        case .commentLabel: "commentLabel"
         case .noise: "noise"
         case .importance: "importance"
         case .workflow: "workflow"
@@ -51,7 +51,7 @@ enum RuleEditing {
         case .approved, .changesRequested: "Review"
         case .checks, .hasConflicts, .behindBase: "Checks"
         case .status, .labeled, .noActivity, .workflow: "Status"
-        case .greptileBelow, .asksMe, .noise, .importance: "Signals"
+        case .greptileBelow, .commentLabel, .noise, .importance: "Signals"
         }
     }
 
@@ -73,7 +73,7 @@ enum RuleEditing {
         case .labeled: "Labeled…"
         case .noActivity: "No activity for N days"
         case .greptileBelow: "Greptile score below N"
-        case .asksMe: "A comment asks me"
+        case .commentLabel: "Comment labeled asks me, to do…"
         case .noise: "New comment is noise, or from a person"
         case .importance: "Rated important"
         case .workflow: "Is failing, passing, running"
@@ -98,7 +98,7 @@ enum RuleEditing {
         case .labeled: "labels"
         case .noActivity: "no activity for N days"
         case .greptileBelow: "Greptile score"
-        case .asksMe: "asks me"
+        case .commentLabel: "comment label"
         case .noise: "noise"
         case .importance: "importance"
         case .workflow: "workflow states"
@@ -243,6 +243,7 @@ enum RuleEditing {
             case .status(let s) where s.isEmpty: found.append(.init(condition: i, slot: nil, reason: "Pick at least one status"))
             case .checks(let s) where s.isEmpty, .workflow(let s) where s.isEmpty:
                 found.append(.init(condition: i, slot: nil, reason: "Pick at least one state"))
+            case .commentLabel(let s) where s.isEmpty: found.append(.init(condition: i, slot: nil, reason: "Pick at least one label"))
             default: break
             }
         }
@@ -305,10 +306,10 @@ extension Condition {
         switch self {
         case .behindBase:
             "GitHub only says a PR is behind its base branch when the base has branch protection that requires branches to be up to date before merging"
-        case .asksMe:
-            "Jev (TypeSafe, with your key) reads each new comment, review and thread reply once and says whether it asks you something. A reply of yours there ends it"
+        case .commentLabel:
+            "Jev (TypeSafe, with your key) labels each new comment, review and thread reply once: asks me (a question or a decision), to do (rebase, fix, address a review), FYI, or noise. Unsure, no label. A reply of yours there ends asks me and to do"
         case .noise:
-            "Noise: bots, and what Jev (TypeSafe, with your key) reads as automated: CI, coverage, deploy previews, dependency and lint bots. Jev's noise never shows a banner"
+            "Noise: bots, and what Jev (TypeSafe, with your key) labels noise: thanks, +1, CI and bot chatter. What this matches never shows a banner"
         case .importance:
             "Jev (TypeSafe, with your key) rates each review request to you or your teams, and each assignment, once: from its title, size, who asks, age, labels and checks. At least low is any rating it was sure of"
         default: nil
@@ -333,7 +334,7 @@ extension Condition {
         case .labeled: "labeled"
         case .noActivity: "no activity for"
         case .greptileBelow: "Greptile score below"
-        case .asksMe: "a comment asks me"
+        case .commentLabel: "new comment labeled"
         case .noise: "new comment is"
         case .importance: "rated at least"
         case .workflow: "is"

@@ -102,11 +102,16 @@ struct RuleWords {
             out += [.chip("\(days)"), .word("days")]
         case .greptileBelow(let n):
             out += [.chip("\(n) / 5")]
+        case .commentLabel(let labels):
+            // "asks me or to do": two labels side by side would read as one.
+            for (i, label) in CommentLabel.allCases.filter(labels.contains).enumerated() {
+                out += (i > 0 ? [.word("or")] : []) + [.chip(label.title)]
+            }
         case .noise(let noise):
             out += [.chip(RuleEditing.noiseTitle(noise))]
         case .importance(let level):
             out += [.chip(level.rawValue)]
-        case .hasConflicts, .behindBase, .asksMe:
+        case .hasConflicts, .behindBase:
             break
         }
         return out

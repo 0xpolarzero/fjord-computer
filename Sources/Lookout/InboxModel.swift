@@ -181,15 +181,55 @@ enum Condition: Codable, Hashable {
     case noActivity(days: Int)
     // Signals
     case greptileBelow(Int)
-    /// Jev read a comment, review or thread reply (not yours) since you last answered there or marked it done, and it asks
-    /// you something.
-    case asksMe
+    /// A new comment, review or thread reply (not yours) that Jev labels any of these (InboxJev.swift). Asks and to do count
+    /// only after your latest word there (answering ends them); fyi and noise since Done. Saved as `asksMe` before labels,
+    /// it reads as asks or to do.
+    case commentLabel(Set<CommentLabel>)
     /// A new comment (not yours) is noise (`true`: bots, and what Jev reads as automated) or from a person (`false`).
     case noise(Bool)
     /// Jev rates the review request or assignment at least this important.
     case importance(Importance)
     // Workflows
     case workflow(Set<CheckState>)
+}
+
+/// Jev's one label for a message (InboxJev.swift): what it asks of you, if anything. It changes how a row stands out, never
+/// whether it is there or notifies; only a rule of yours that asks for a label does that.
+enum CommentLabel: String, Codable, CaseIterable, Hashable {
+    /// A question to you, or a decision only you can make.
+    case asks
+    /// A change or an action from you: rebase, fix, address a review, resolve a conflict.
+    case todo
+    /// Informative: nothing to do.
+    case fyi
+    /// Thanks, +1, an acknowledgement, bot chatter.
+    case noise
+
+    /// How it reads in a rule, a tag and the Router's tools.
+    var title: String {
+        switch self {
+        case .asks: "asks me"
+        case .todo: "to do"
+        case .fyi: "FYI"
+        case .noise: "noise"
+        }
+    }
+
+    /// The row's tag.
+    var tag: String {
+        switch self {
+        case .asks: "Asks you"
+        case .todo: "To do"
+        case .fyi: "FYI"
+        case .noise: "Noise"
+        }
+    }
+
+    /// Something for you to do: answering there ends it.
+    var asksOfYou: Bool { self == .asks || self == .todo }
+
+    /// Most attention first: a row with several shows the first.
+    var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
 }
 
 /// How much a review request or an assignment matters, as Jev rates it (InboxJev.swift).
@@ -226,7 +266,9 @@ extension Condition {
         case labeled(Pick<String>)
         case noActivity(days: Int)
         case greptileBelow(Int)
+        /// Saved before labels: read as asks or to do, never written.
         case asksMe
+        case commentLabel(Set<CommentLabel>)
         case noise(Bool)
         case importance(Importance)
         case workflow(Set<CheckState>)
@@ -245,7 +287,7 @@ extension Condition {
             case .labeled(let p): self = .labeled(p)
             case .noActivity(let d): self = .noActivity(days: d)
             case .greptileBelow(let n): self = .greptileBelow(n)
-            case .asksMe: self = .asksMe
+            case .commentLabel(let s): self = .commentLabel(s)
             case .noise(let b): self = .noise(b)
             case .importance(let i): self = .importance(i)
             case .workflow(let s): self = .workflow(s)
@@ -265,7 +307,8 @@ extension Condition {
             case .labeled(let p): .labeled(p)
             case .noActivity(let d): .noActivity(days: d)
             case .greptileBelow(let n): .greptileBelow(n)
-            case .asksMe: .asksMe
+            case .asksMe: .commentLabel([.asks, .todo])
+            case .commentLabel(let s): .commentLabel(s)
             case .noise(let b): .noise(b)
             case .importance(let i): .importance(i)
             case .workflow(let s): .workflow(s)
@@ -634,10 +677,31 @@ struct ThingSignals: Codable, Hashable {
     var involvedBy: [String: Bool]?
 }
 
-/// What Jev said of one message; nil where it wasn't sure.
+/// What Jev said of one message: its label, nil where he wasn't sure (read all the same).
 struct MessageSignal: Codable, Hashable {
-    var asksMe: Bool?
-    var noise: Bool?
+    var label: CommentLabel?
+
+    init(label: CommentLabel? = nil) { self.label = label }
+
+    private enum CodingKeys: String, CodingKey { case label, asksMe, noise }
+
+    /// Saved before labels, as two readings: asks me (asks), noise (noise), and not noise nor asking (FYI); unsure of
+    /// noise, unsure.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if c.contains(.label) {
+            label = try c.decodeIfPresent(String.self, forKey: .label).flatMap(CommentLabel.init(rawValue:))
+            return
+        }
+        let asks = try c.decodeIfPresent(Bool.self, forKey: .asksMe)
+        let noise = try c.decodeIfPresent(Bool.self, forKey: .noise)
+        label = asks == true ? .asks : noise == true ? .noise : noise == false ? .fyi : nil
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(label, forKey: .label)
+    }
 }
 
 struct ImportanceSignal: Codable, Hashable {
@@ -673,7 +737,13 @@ struct InboxEntry: Hashable, Identifiable {
     var isUnread: Bool
     /// Jev's rating of what it asks of you (a review request, an assignment), when it rated it.
     var importance: Importance?
+    /// Jev's labels of the messages its facts are about, by fact key: how the row stands out, never whether it is here.
+    var labels: [String: CommentLabel] = [:]
     var id: String { thing.id }
+    /// The label that stands out most among its facts'.
+    var label: CommentLabel? { labels.values.min { $0.rank < $1.rank } }
+    /// Every fact is about a message Jev labels noise: the row is dimmed.
+    var isNoise: Bool { !facts.isEmpty && facts.allSatisfy { labels[$0.key] == .noise } }
 }
 
 /// What the user did with a thing, persisted by thing id.
@@ -716,6 +786,6 @@ struct InboxContext {
     /// `org/team` of every team you're in.
     var myTeams: Set<String> = []
     var now = Date()
-    /// What Jev said of things counts (Settings' "Let Jev read new comments"); off, it is as if Jev had said nothing.
+    /// What Jev said of things counts (Settings' "Let Jev label new comments"); off, it is as if Jev had said nothing.
     var jevSignals = true
 }
