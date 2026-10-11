@@ -1141,12 +1141,22 @@ private extension String {
 }
 
 extension FormWriter {
-    /// The answer file, written whole and only if there's none yet (renamed into place with RENAME_EXCL).
-    fileprivate static func exclusive(_ form: PendingForm, data: Data, dir: URL) throws {
+    /// The answer file, written whole and only if there's none yet (renamed into place with RENAME_EXCL). It is written aside
+    /// first; `gate` is asked on the main actor right before the rename, in the same step (false throws `Cancelled`, and what
+    /// was written aside is removed).
+    fileprivate static func exclusive(_ form: PendingForm, data: Data, dir: URL, gate: () -> Bool) throws {
         let url = FormBridge.answerURL(form.id, in: dir)
         let temp = try PrivateFile.prepare(data, for: url)
-        guard renamex_np(temp.path, url.path, UInt32(RENAME_EXCL)) == 0 else {
-            let failure = errno
+        let renamed = DispatchQueue.main.sync { () -> Int32? in
+            guard gate() else { return nil }
+            return renamex_np(temp.path, url.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
+        }
+        guard let renamed else {
+            unlink(temp.path)
+            throw Cancelled()
+        }
+        guard renamed == 0 else {
+            let failure = renamed
             unlink(temp.path)
             if failure == EEXIST { throw AlreadyAnswered() }
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
@@ -1204,14 +1214,16 @@ enum FormWriter {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
                 queue.async {
-                    let valid = !cancelled.isSet && DispatchQueue.main.sync { MainActor.assumeIsolated { stillValid() } }
-                    guard valid, !cancelled.isSet else { return done.resume(throwing: Cancelled()) }
+                    guard !cancelled.isSet else { return done.resume(throwing: Cancelled()) }
                     // First answer wins: one claim per form, and the file is never replaced (a late answer can't overwrite
                     // the one already waiting for the hook).
                     let claim = dir.standardizedFileURL.path + "/" + form.id
                     guard !claimed.contains(claim) else { return done.resume(throwing: AlreadyAnswered()) }
                     do {
-                        try exclusive(form, data: data, dir: dir)
+                        // Still valid (not stopped, not cancelled) asked together with the rename that puts it in place.
+                        try exclusive(form, data: data, dir: dir) {
+                            !cancelled.isSet && MainActor.assumeIsolated { stillValid() }
+                        }
                         claimed.append(claim)
                         if claimed.count > 1000 { claimed.removeFirst(claimed.count - 1000) }
                         done.resume()

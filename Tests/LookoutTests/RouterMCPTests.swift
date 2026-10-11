@@ -289,6 +289,29 @@ import Testing
         #expect((json(try Data(contentsOf: file)) as? [String: Any])?["answers"] as? [String: String] == ["Which database?": "SQLite"])
     }
 
+    @Test func theFormWriterAsksWhetherStillValidTogetherWithPuttingTheAnswerInPlace() async throws {
+        let dir = TempDir()
+        let s = await store(dir)
+        let form = try #require(s.pendingForms["cli-local_a"])
+        let forms = dir.path("support/forms")
+        let file = FormBridge.answerURL(form.id, in: forms)
+        // Stopped while the answer was being written aside: asked as it is about to be put in place, it isn't.
+        var seen: [[String]] = []
+        await #expect(throws: FormWriter.Cancelled.self) {
+            try await FormWriter.write(form, answers: ["Which database?": "SQLite"], dir: forms) {
+                let names = (try? FileManager.default.contentsOfDirectory(atPath: forms.path)) ?? []
+                seen.append(names)
+                return !names.contains { $0.hasSuffix(".tmp") }
+            }
+        }
+        #expect(seen.last?.contains { $0.hasSuffix(".tmp") } == true)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: forms.path)) ?? []).allSatisfy { !$0.hasSuffix(".tmp") })
+        // Still free for the next answer.
+        try await FormWriter.write(form, answers: ["Which database?": "Postgres"], dir: forms)
+        #expect(try answer(dir) == ["Which database?": "Postgres"])
+    }
+
     @Test func batchesAndRepliesAreBounded() async throws {
         let ping = ["jsonrpc": "2.0", "id": 1, "method": "ping"] as [String: Any]
         let tooMany = await rpc(Array(repeating: ping, count: RouterRPC.maxBatch + 1))
