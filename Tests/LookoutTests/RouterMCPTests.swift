@@ -810,17 +810,16 @@ import Testing
         // Taken out: it goes, without the aside.
         #expect(await t.tool("prepare", ["session": "local_a"])?.isError == false)
         #expect(t.prepared["Fix the login bug"]?.body == "Bump the version and push")
-        // One that can't be taken out cleanly (glued to punctuation): refused, nothing prepared. Any case.
+        // A mention that isn't an aside is the message's own text: it goes as written. Any case.
         t.prepared = [:]
         t.beginTurn("Bump it **@ROUTER later**")
-        let kept = try #require(await t.tool("prepare", ["session": "local_a"]))
-        #expect(kept.isError && kept.text.contains("@router") && t.prepared.isEmpty)
-        // A new session's first message is held to the same, before any session is made.
-        var started = 0
-        t.starter = { _, title in started += 1; return SessionStart.Started(sessionID: "local_new", peer: title) }
-        t.beginTurn("Ship it ;@router quietly")
-        #expect(await t.tool("start_session", ["project": "lookout", "title": "Ship it"])?.isError == true)
-        #expect(t.prepared["Ship it"] == nil && started == 0)
+        #expect(await t.tool("prepare", ["session": "local_a"])?.isError == false)
+        #expect(t.prepared["Fix the login bug"]?.body == "Bump it **@ROUTER later**")
+        // A new session's first message has its asides taken out too.
+        t.starter = { _, title in SessionStart.Started(sessionID: "local_new", peer: title) }
+        t.beginTurn("start a session in lookout to ship it [@router quietly]")
+        _ = try #require(await t.tool("start_session", ["project": "lookout", "title": "Ship it"]))
+        #expect(t.prepared["Ship it"]?.body ?? t.prepared["Ship it"]?.text == "ship it")
     }
 
     @Test func aMessageThatIsAllAsideHasNothingToPassOn() async throws {
@@ -833,45 +832,32 @@ import Testing
     }
 
     @Test(arguments: [
-        "Bump it (@router this one is slow)", "@router what needs me?", "Ship it @router quietly", "Ship it @router.",
-        "Ship it @router, then wait", "Ship it (@router)", "Ship it [@router later]", "Bump it @ROUTER",
-        "Ship it\n@router: later", "Ship it @router: later", "Ship it {@router note}",
-        // After punctuation or formatting.
-        "**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router", "x.@router",
-        "--@router", "Ship it (@router)!", "``a`` @router b",
+        "Bump it (@router this one is slow)", "@router what needs me?", "Ship it (@router)", "Ship it [@router later]",
+        "Bump it (@ROUTER)", "Ship it\n@router: later", "  @router hi", "Ship it (@router)!", "Ship it ( @router soon )",
+        "``a`` (@router b)",
     ])
-    func theMarkerIsCaught(_ text: String) {
-        #expect(RouterTools.hasRouterMarker(text), "\(text)")
+    func theAsideIsCaught(_ text: String) {
+        #expect(RouterTools.hasRouterAside(text), "\(text)")
     }
 
-    /// Pasted code and quoted strings keep their text as it is: a marker there is not one.
+    /// Pasted code, quoted strings and a mention in the middle of your words keep their text as it is: no aside.
     @Test(arguments: [
-        "Use `@router` here", "``code with `@router` inside``", "See ```\n@router hi\n```", "Use ``@router`` here",
+        "Use `(@router)` here", "``code with `(@router x)` inside``", "See ```\n@router hi\n```", "Use ``@router`` here",
         "```swift\nlet a = \"@router\"\n```", "say \"@router hi\"", "print(\"ask @router for help\")", "say “ask @router”",
-        "Run:\n    ask @router later\nthen go",
+        "Run:\n    @router later\nthen go", "print(f'ask @router for {name}')", "Ship it @router quietly", "Ship it {@router note}",
+        "**@router quietly**", ";@router quietly", "Ship it, @router then wait", "Ship it (@router later",
     ])
-    func aMarkerInCodeOrQuotesIsNotTheMarker(_ text: String) {
-        #expect(!RouterTools.hasRouterMarker(text), "\(text)")
+    func aMentionThatIsntAnAsideGoesAsWritten(_ text: String) {
+        #expect(!RouterTools.hasRouterAside(text), "\(text)")
         #expect(((try? Addressing.edit(text).text) ?? "") == text, "\(text)")
     }
 
     @Test(arguments: [
-        "Fix @router.js", "Edit src/@router/index.ts", "Install @router/core", "Mail user@router.com",
-        "Rename @router-old", "Rename @router_old", "Ping @routers", "Fix @router.js.", "No marker at all", "a@router b",
-        // A name in code is still a name.
-        "Import `@router/core`", "```\nimport x from '@router/core'\n```",
+        "(@router.js)", "Edit src/(@router/index.ts)", "[@router/core]", "Mail user@router.com",
+        "(@router-old)", "@router_old is renamed", "@routers ping", "@router.js is broken", "No marker at all", "(a@router b)",
     ])
     func namesAreNotTheMarker(_ text: String) {
-        #expect(!RouterTools.hasRouterMarker(text), "\(text)")
-    }
-
-    @Test(arguments: ["**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router"])
-    func anEvasionIsRefusedByPrepare(_ text: String) async throws {
-        let dir = TempDir()
-        let s = await store(dir)
-        let t = tools(s, turn: "Ship it " + text)
-        let out = try #require(await t.tool("prepare", ["session": "local_a"]))
-        #expect(out.isError && out.text.contains("@router") && t.prepared.isEmpty, "\(text)")
+        #expect(!RouterTools.hasRouterAside(text), "\(text)")
     }
 
 }

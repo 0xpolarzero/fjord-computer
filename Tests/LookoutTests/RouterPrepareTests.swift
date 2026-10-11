@@ -31,9 +31,10 @@ import Testing
         #expect(try edit("@lookout: add a badge") == "add a badge")
         #expect(try edit("@lookout @lookout: rotate the keys") == "rotate the keys")
         #expect(try edit("Bump the version and push (@router this one is slow, don't wait on it)") == "Bump the version and push")
-        #expect(try edit("Ship it @router quietly") == "Ship it")
-        #expect(try edit("Ship it, @router then wait\nand tag it") == "Ship it\nand tag it")
+        #expect(try edit("Ship it [@router quietly]") == "Ship it")
+        #expect(try edit("Ship it\n@router then wait\nand tag it") == "Ship it\nand tag it")
         #expect(try edit("Ship it (@router)!") == "Ship it!")
+        #expect(try edit("Ship it (@router see (a) first) now") == "Ship it now")
         // An indented block after the colon keeps its indent.
         #expect(try edit("@lookout:\n    let x = 1\n    let y = 2") == "    let x = 1\n    let y = 2")
         // Nothing to take out: byte for byte, unmarked.
@@ -75,33 +76,21 @@ import Testing
         }
     }
 
-    @Test(arguments: ["**@router quietly**", ";@router quietly", "—@router quietly", "_@router_", "\"@router", ",@router"])
-    func aMarkerThatIsntAPlainAsideIsLeftToBeRefused(_ text: String) throws {
-        #expect(RouterTools.hasRouterMarker(try edit("Ship it " + text)), "\(text)")
+    @Test func pastedCodeKeepsItsAsides() throws {
+        #expect(try edit("Run `(@router x)` now (@router soon)") == "Run `(@router x)` now")
+        #expect(try edit("Try:\n```\n@router for help\n```\nthen push (@router later)") == "Try:\n```\n@router for help\n```\nthen push")
+        #expect(try edit("Look at\n    @router help\nplease") == "Look at\n    @router help\nplease")
     }
 
-    @Test func pastedCodeAndQuotesKeepTheirAtRouterText() throws {
-        #expect(try edit("print(\"ask @router for help\")") == "print(\"ask @router for help\")")
-        #expect(try edit("Run `ask @router x` now (@router soon)") == "Run `ask @router x` now")
-        #expect(try edit("Try:\n```\nask @router for help\n```\nthen push @router later") == "Try:\n```\nask @router for help\n```\nthen push")
-        #expect(try edit("Look at\n    echo ask @router help\nplease") == "Look at\n    echo ask @router help\nplease")
-    }
-
-    @Test func singleQuotedCodeKeepsItsAtRouterTextAndAQuoteThatMayBeProseIsRefusedNotCut() throws {
-        // Single-quoted code, its escapes and a double quote escaped in one: verbatim, no marker.
-        for code in ["print('ask @router for help')", "x = 'ask @router'", "print('don\\'t ask @router')",
-                     "f(a, 'b @router c')", "say \"a \\\" @router b\""] {
-            #expect(try edit(code) == code, "\(code)")
-            #expect(!RouterTools.hasRouterMarker(code), "\(code)")
+    @Test func aRouterMentionThatIsntAnExplicitAsideGoesAsWritten() throws {
+        // In code or quotes of any kind, in prose, glued to punctuation, or in a bracket left open: never cut, never refused.
+        for text in ["print(f'ask @router for {name}')", "print(‘ask @router’)", "print('ask @router for help')",
+                     "print(\"ask @router for help\")", "Tell them 'ask @router for help' later", "Ship it @router quietly",
+                     "Ship it, @router then wait", "**@router quietly**", ";@router quietly", "Ship it (@router later",
+                     "Ship it (@router (later)", "f(x, '@router')", "say “ask @router”"] {
+            #expect(try edit(text) == text, "\(text)")
+            #expect(!RouterTools.hasRouterAside(text), "\(text)")
         }
-        // Quoted in prose, maybe code: neither cut nor taken as text; left to be refused.
-        let prose = "Tell them 'ask @router for help' later"
-        #expect(try edit(prose) == prose)
-        #expect(RouterTools.hasRouterMarker(try edit(prose)))
-        // Apostrophes are no quotes: the aside still goes.
-        #expect(try edit("Don't wait @router it's slow") == "Don't wait")
-        #expect(try edit("Check the users' guide @router later, it's long") == "Check the users' guide")
-        #expect(try edit("It's 'fine' now @router no rush") == "It's 'fine' now")
     }
 
     // MARK: Running a CLI once

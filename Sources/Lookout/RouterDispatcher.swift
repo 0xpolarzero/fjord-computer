@@ -219,7 +219,7 @@ struct RouterAskBack: Identifiable, Equatable {
         // Typing the name of a target answers an ask-back; nothing else is made of it. Not when a reply or a pinned target
         // already fixes where this message goes, nor when it says something to the Router ("@router what needs me?"): it is
         // a message of its own.
-        if context.replyTo == nil, context.target == nil, !RouterTools.hasRouterMarker(text), let ask = typedPick(text) {
+        if context.replyTo == nil, context.target == nil, !RouterTools.hasRouterAside(text), let ask = typedPick(text) {
             // Only a target gone since fits the name: nothing is sent (nil), and the composer keeps the draft.
             guard let target = ask.target, pick(ask.ask, target: target) else { return nil }
             return ask.ask
@@ -397,7 +397,7 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Everything in the message is for the Router (`@router`, its asides): nothing of it would go on to a session.
     static func forRouter(_ text: String, pills: [Range<Int>]) -> Bool {
-        guard RouterTools.hasRouterMarker(text) else { return false }
+        guard RouterTools.hasRouterAside(text) else { return false }
         do { _ = try Addressing.edit(text, pills: pills) } catch { return error is Addressing.NothingLeft }
         return false
     }

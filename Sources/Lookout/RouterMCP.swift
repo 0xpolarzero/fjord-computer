@@ -945,18 +945,15 @@ final class RouterMCPServer: @unchecked Sendable {
         throw Failure("Unknown project “\(q)”. Projects: \(all.isEmpty ? "none" : all)")
     }
 
-    /// Whether `text` still holds the marker that addresses the Router: `@router` (any case) anywhere, unless it is part
-    /// of a word or address (a letter or digit right before it: `user@router.com`) or of a name or path (right after it a
-    /// letter, digit or `/`, or `.` `-` `_` `@` followed by a letter or digit: `@router.js`, `@router/core`, `@router-old`).
-    /// Anything else around it (spaces, brackets, quotes, emphasis, punctuation, backticks) leaves it the marker: one in code
-    /// is refused too, which is safe.
-    nonisolated static func hasRouterMarker(_ text: String) -> Bool {
-        !Addressing.markers(Array(text)).isEmpty
+    /// Whether `text` holds an aside for the Router (`Addressing.asides`): `(@router …)`, `[@router …]` or a line starting
+    /// with `@router`. A `@router` anywhere else is text of the message's.
+    nonisolated static func hasRouterAside(_ text: String) -> Bool {
+        !Addressing.asides(Array(text)).isEmpty
     }
 
-    /// Refuses a message that still holds the marker (what was said to the Router never goes on).
-    private func noMarker(_ text: String) throws {
-        guard !Self.hasRouterMarker(text) else {
+    /// Refuses a message that still holds an aside for the Router (what was said to the Router never goes on).
+    private func noAside(_ text: String) throws {
+        guard !Self.hasRouterAside(text) else {
             throw Failure("The message still has a part for the Router (@router); nothing was sent")
         }
     }
@@ -1064,8 +1061,8 @@ final class RouterMCPServer: @unchecked Sendable {
 
     private func signed(_ store: Store, _ ready: Prepared, title: String, cli: String?, ticket: Ticket,
                         settings: SessionSettings? = nil) async throws -> Prepared {
-        // What the user says to the Router with @router never goes on: if any is still there, nothing is sent.
-        try noMarker(ready.text)
+        // What the user says to the Router in an @router aside never goes on: if one is still there, nothing is sent.
+        try noAside(ready.text)
         guard store.routerPluginStatus == .installed else {
             throw Failure("Lookout's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
@@ -1167,7 +1164,7 @@ final class RouterMCPServer: @unchecked Sendable {
         var ready = noTask ? Prepared(text: "", original: "", rephrased: false)
             // The task is what is left once the request was taken out: it is not taken apart again (only `@router` asides go).
             : try edited(message, envelope: false)
-        try noMarker(ready.text)
+        try noAside(ready.text)
         try live(ticket)
         let started: SessionStart.Started
         if let starter {

@@ -339,8 +339,8 @@ struct Prepared: Equatable, Sendable {
 /// taken out of your own bytes, by fixed rules; nothing is ever added, reworded or reordered (no model writes what is
 /// signed as yours). Taken out: the @project pills the message starts with (by where the composer put them, never by
 /// matching words against a project's or a session's name: a session's title is its own words, and could eat a condition
-/// of yours), and `@router` asides (in brackets, or from the marker to the end of its line). Anything else, "tell <the
-/// session> to …" included, goes as you wrote it.
+/// of yours), and `@router` asides (in balanced brackets on one line, or a whole line starting with the marker). Anything
+/// else, "tell <the session> to …" and a `@router` in the middle of your words included, goes as you wrote it.
 enum Addressing {
     /// Everything in the message was for the Router (`@router` asides): nothing to pass on.
     struct NothingLeft: LocalizedError {
@@ -387,51 +387,28 @@ enum Addressing {
 
     // MARK: @router asides
 
-    /// Where the marker that addresses the Router is in `text`, as character offsets: `@router` (any case), unless it is
-    /// part of a word or address (a letter or digit right before it: `user@router.com`) or of a name or path (right after it
-    /// a letter, digit or `/`, or `.` `-` `_` `@` followed by a letter or digit: `@router.js`, `@router/core`, `@router-old`).
-    static func markers(_ text: [Character]) -> [Int] {
-        let marker = Array("@router")
+    /// Whether the marker that addresses the Router starts at `i` of `text`: `@router` (any case), unless it is part of a
+    /// word or address (a letter or digit right before it: `user@router.com`) or of a name or path (right after it a
+    /// letter, digit or `/`, or `.` `-` `_` `@` followed by a letter or digit: `@router.js`, `@router/core`, `@router-old`).
+    static func isMarker(_ text: [Character], at i: Int) -> Bool {
+        let marker = "@router"
         func word(_ c: Character) -> Bool { c.isLetter || c.isNumber }
-        var found: [Int] = []
-        var i = 0
-        let code = codeMask(text)
-        while i + marker.count <= text.count {
-            defer { i += 1 }
-            guard text[i] == "@", String(text[i..<(i + marker.count)]).lowercased() == "@router" else { continue }
-            if code[i] { continue }
-            if i > 0, word(text[i - 1]) { continue }
-            let end = i + marker.count
-            if end < text.count {
-                let after = text[end]
-                if word(after) || after == "/" { continue }
-                if ".-_@".contains(after), end + 1 < text.count, word(text[end + 1]) { continue }
-            }
-            found.append(i)
+        let end = i + marker.count
+        guard i >= 0, end <= text.count, text[i] == "@", String(text[i..<end]).lowercased() == marker else { return false }
+        if i > 0, word(text[i - 1]) { return false }
+        if end < text.count {
+            let after = text[end]
+            if word(after) || after == "/" { return false }
+            if ".-_@".contains(after), end + 1 < text.count, word(text[end + 1]) { return false }
         }
-        return found
+        return true
     }
 
-    /// Which characters are pasted or quoted text rather than the message's own words: fenced code (``` to the closing
-    /// fence or the end), indented code lines (four spaces or a tab), inline code (`…` on a line, matching backtick runs),
-    /// double-quoted strings ("…" or “…” closed on the same line, past a `\"`) and single-quoted strings that read as code
-    /// (`quotes`). A `@router` in them is code, not an aside.
-    static func codeMask(_ text: [Character]) -> [Bool] { quotes(text).code }
-
-    /// `codeMask`, and which characters are in single quotes that may be prose rather than code (`'…'` closed on its line,
-    /// not opened right after a letter or closed right before one, as an apostrophe is: "don't", "users'"). Code when the
-    /// quote opens right after `(` `[` `{` `=` `,` `+` or closes right before `)` `]` `}` `,` `;` `+` (`print('…')`,
-    /// `x = '…'`); else unsure: a `@router` there is left in place to be refused, never cut, as it may be code.
-    static func quotes(_ text: [Character]) -> (code: [Bool], unsure: [Bool]) {
+    /// Which characters are pasted code rather than the message's own words: fenced code (``` to the closing fence or the
+    /// end), indented code lines (four spaces or a tab) and inline code (`…` on a line, matching backtick runs). An aside is
+    /// never looked for there.
+    static func codeMask(_ text: [Character]) -> [Bool] {
         var mask = [Bool](repeating: false, count: text.count)
-        var unsure = mask
-        func word(_ c: Character) -> Bool { c.isLetter || c.isNumber }
-        // The delimiter at `j` of `line` stands for itself, an odd run of backslashes before it.
-        func escaped(_ line: [Character], _ j: Int) -> Bool {
-            var n = 0
-            while j - n - 1 >= 0, line[j - n - 1] == "\\" { n += 1 }
-            return n % 2 == 1
-        }
         var lineStart = 0
         var fenced = false
         while lineStart <= text.count {
@@ -442,8 +419,7 @@ enum Addressing {
             while f + 3 <= line.count {
                 if line[f] == "`", line[f + 1] == "`", line[f + 2] == "`" { fences += 1; f += 3 } else { f += 1 }
             }
-            let isFence = fences % 2 == 1
-            if isFence {
+            if fences % 2 == 1 {
                 fenced.toggle()
                 for k in lineStart..<lineEnd { mask[k] = true }
             } else if fenced || line.starts(with: Array("    ")) || line.first == "\t" {
@@ -451,73 +427,81 @@ enum Addressing {
             } else {
                 var k = 0
                 while k < line.count {
-                    if line[k] == "`" {
-                        var run = 0
-                        while k + run < line.count, line[k + run] == "`" { run += 1 }
-                        var j = k + run, close: Int?
-                        while j < line.count {
-                            if line[j] == "`" {
-                                var r = 0
-                                while j + r < line.count, line[j + r] == "`" { r += 1 }
-                                if r == run { close = j + r; break }
-                                j += r
-                            } else { j += 1 }
-                        }
-                        if let close {
-                            for m in k..<close { mask[lineStart + m] = true }
-                            k = close
-                        } else { k += run }
-                    } else if line[k] == "\"" || line[k] == "“" {
-                        let closer: Character = line[k] == "“" ? "”" : "\""
-                        if let j = line[(k + 1)...].indices.first(where: { line[$0] == closer && (closer != "\"" || !escaped(line, $0)) }) {
-                            for m in k...j { mask[lineStart + m] = true }
-                            k = j + 1
-                        } else { k += 1 }
-                    } else if line[k] == "'", k == 0 || !word(line[k - 1]),
-                              let j = line[(k + 1)...].indices.first(where: {
-                                  line[$0] == "'" && !escaped(line, $0) && ($0 + 1 == line.count || !word(line[$0 + 1]))
-                              }) {
-                        var b = k - 1
-                        while b >= 0, line[b] == " " { b -= 1 }
-                        var a = j + 1
-                        while a < line.count, line[a] == " " { a += 1 }
-                        let code = (b >= 0 && "([{=,+".contains(line[b])) || (a < line.count && ")]},;+".contains(line[a]))
-                        for m in k...j { if code { mask[lineStart + m] = true } else { unsure[lineStart + m] = true } }
-                        k = j + 1
-                    } else { k += 1 }
+                    guard line[k] == "`" else { k += 1; continue }
+                    var run = 0
+                    while k + run < line.count, line[k + run] == "`" { run += 1 }
+                    var j = k + run, close: Int?
+                    while j < line.count {
+                        if line[j] == "`" {
+                            var r = 0
+                            while j + r < line.count, line[j + r] == "`" { r += 1 }
+                            if r == run { close = j + r; break }
+                            j += r
+                        } else { j += 1 }
+                    }
+                    if let close {
+                        for m in k..<close { mask[lineStart + m] = true }
+                        k = close
+                    } else { k += run }
                 }
             }
             lineStart = lineEnd + 1
         }
-        return (mask, unsure)
+        return mask
     }
 
-    /// The asides taken out: a bracket opened right before the marker, to its close on the same line ("(@router no rush)"),
-    /// or, for a marker standing alone (after a space or at a line's start), the rest of its line. A marker anywhere else
-    /// (glued to punctuation, in single quotes that may be code) is left, so the message is refused rather than guessed at.
-    static func withoutAsides(_ message: String) -> String {
-        var chars = Array(message)
-        let closers: [Character: Character] = ["(": ")", "[": "]", "{": "}"]
+    /// The `@router` asides of `text`, as the character ranges they take, in order. Only two forms are asides, both in the
+    /// message's own words (not in code): a bracket opened right before the marker and closed, balanced, on the same line
+    /// ("(@router no rush)", "[@router later]"), with the spaces before it; or a whole line that starts with the marker
+    /// (after up to three spaces), with its line break ("@router what needs me?"). A marker anywhere else ("ask @router",
+    /// `print(f'ask @router')`) is text, and goes as written.
+    static func asides(_ text: [Character]) -> [Range<Int>] {
+        let code = codeMask(text)
         func blank(_ c: Character) -> Bool { c == " " || c == "\t" }
-        let unsure = quotes(chars).unsure
-        for i in markers(chars).reversed() where !unsure[i] {
-            var before = i - 1
-            while before >= 0, blank(chars[before]) { before -= 1 }
-            if before >= 0, let close = closers[chars[before]] {
-                var k = i
-                while k < chars.count, chars[k] != close, !chars[k].isNewline { k += 1 }
-                guard k < chars.count, chars[k] == close else { continue }
-                var start = before
-                while start > 0, blank(chars[start - 1]) { start -= 1 }
-                chars.removeSubrange(start...k)
-            } else if i == 0 || chars[i - 1].isWhitespace {
-                var end = i
-                while end < chars.count, !chars[end].isNewline { end += 1 }
-                var start = i
-                while start > 0, blank(chars[start - 1]) || ",;:—–".contains(chars[start - 1]) { start -= 1 }
-                chars.removeSubrange(start..<end)
+        var found: [Range<Int>] = []
+        var lineStart = 0
+        while lineStart < text.count {
+            var lineEnd = lineStart
+            while lineEnd < text.count, !text[lineEnd].isNewline { lineEnd += 1 }
+            defer { lineStart = lineEnd + 1 }
+            var first = lineStart
+            while first < lineEnd, text[first] == " ", first - lineStart < 3 { first += 1 }
+            if first < lineEnd, !code[first], isMarker(text, at: first) {
+                // The whole line, with its own break (or the one before it, for the last line).
+                if lineEnd < text.count { found.append(lineStart..<(lineEnd + 1)) }
+                else if let last = found.last, last.upperBound == lineStart { found[found.count - 1] = last.lowerBound..<lineEnd }
+                else { found.append((lineStart > 0 ? lineStart - 1 : lineStart)..<lineEnd) }
+                continue
+            }
+            var k = lineStart
+            while k < lineEnd {
+                defer { k += 1 }
+                guard !code[k], text[k] == "(" || text[k] == "[" else { continue }
+                let open = text[k], close: Character = open == "(" ? ")" : "]"
+                var m = k + 1
+                while m < lineEnd, blank(text[m]) { m += 1 }
+                guard m < lineEnd, !code[m], isMarker(text, at: m) else { continue }
+                var depth = 0, j = k, end: Int?
+                while j < lineEnd {
+                    if text[j] == open { depth += 1 } else if text[j] == close { depth -= 1; if depth == 0 { end = j; break } }
+                    j += 1
+                }
+                guard let end, !code[k...end].contains(true) else { continue }
+                var start = k
+                while start > lineStart, blank(text[start - 1]) { start -= 1 }
+                var stop = end + 1
+                if start == lineStart { while stop < lineEnd, blank(text[stop]) { stop += 1 } }
+                found.append(start..<stop)
+                k = stop - 1
             }
         }
+        return found
+    }
+
+    /// The asides taken out (`asides`); every other character is left as it is.
+    static func withoutAsides(_ message: String) -> String {
+        var chars = Array(message)
+        for range in asides(chars).reversed() { chars.removeSubrange(range) }
         return String(chars)
     }
 }
