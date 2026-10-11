@@ -492,6 +492,8 @@ import Testing
         f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_c", p: 0.4)]
         let a = d.submit("ship it")!
         await finish(d, f, a)
+        // The pick's run is waited for too: left going, it would reach the stand-ins after the test.
+        f.finished = []
         d.pick(a, target: "session:local_c")
         await finish(d, f, a)
         // An entry from before targets were kept: its description fits both, so it isn't named by either's key.
