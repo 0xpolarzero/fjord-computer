@@ -220,6 +220,47 @@ import Testing
         #expect(status.workflows.map(\.name) == ["Checks"] && status.workflows.map(\.failing) == [["deploy"]])
     }
 
+    @Test func failedChecksPastTheFirstRunsAreReRunToo() async throws {
+        // 120 workflows ran on the PR's head commit, the 101st failing; a workflow whose repo ran 60 others since it failed.
+        let store = Store()
+        store.persists = false
+        store.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        let run = { (id: Int, workflow: Int, conclusion: String) in
+            #"{"id":\#(id),"name":"W\#(workflow)","workflow_id":\#(workflow),"head_sha":"s1","status":"completed","conclusion":"\#(conclusion)","check_suite_id":\#(id)}"#
+        }
+        let all = (1...120).map { run($0, $0, $0 == 101 ? "failure" : "success") }
+        let others = (200..<260).map { run($0, $0, "success") }
+        store.gh.session = StubbedGitHub.session { request in
+            let comps = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (comps?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            let page = Int(query["page"] ?? "1") ?? 1, size = Int(query["per_page"] ?? "30") ?? 30
+            let slice = { (runs: [String]) in
+                Array(runs.dropFirst((page - 1) * size).prefix(size))
+            }
+            switch comps?.path ?? "" {
+            case "/repos/a/x/actions/runs" where query["head_sha"] == "s1" && query["branch"] == nil:
+                return .init(200, #"{"total_count":120,"workflow_runs":[\#(slice(all).joined(separator: ","))]}"#)
+            case "/repos/a/x/actions/runs":
+                let runs = others + [run(9, 51, "failure")]
+                return .init(200, #"{"total_count":61,"workflow_runs":[\#(slice(runs).joined(separator: ","))]}"#)
+            case "/repos/a/x/actions/workflows/51/runs" where query["branch"] == "main" && query["head_sha"] == "s1":
+                return .init(200, #"{"total_count":1,"workflow_runs":[\#(run(9, 51, "failure"))]}"#)
+            default: return .init(404, #"{"message":"unrouted"}"#)
+            }
+        }
+        var pr = InboxFixture.pr(1, repo: "a/x")
+        pr.headSha = "s1"
+        let performer = StoreActionPerformer(store: store)
+        #expect(try await performer.failedRuns(for: pr).map(\.id) == [101])
+        var workflow = InboxFixture.pr(1, repo: "a/x")
+        workflow.id = "workflow:a/x:51@main"
+        workflow.kind = .workflow
+        workflow.number = nil
+        workflow.branch = "main"
+        workflow.ciRun = "ci:s1:9#1"
+        #expect(try await performer.failedRuns(for: workflow).map(\.id) == [9])
+    }
+
     @Test func aRenamedBranchIsReadAsTheBranchItIsNowActionsAndAll() async throws {
         // master was renamed main: GitHub answers master's head with main's (the redirect followed), and lists Actions runs
         // filtered by main only.
@@ -233,7 +274,7 @@ import Testing
             case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"master"}"#)
             case "/repos/a/x/branches/master", "/repos/a/x/branches/main":
                 return .init(200, #"{"name":"main","commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
-            case "/repos/a/x/actions/runs":
+            case "/repos/a/x/actions/runs", "/repos/a/x/actions/workflows/11/runs":
                 let run = #"{"id":7,"name":"CI","workflow_id":11,"head_sha":"s1","display_title":"Fix","status":"completed","conclusion":"failure","check_suite_id":5}"#
                 return .init(200, query["branch"] == "main" ? #"{"workflow_runs":[\#(run)]}"# : #"{"workflow_runs":[]}"#)
             case "/repos/a/x/commits/s1/check-runs": return .init(200, #"{"total_count":0,"check_runs":[]}"#)

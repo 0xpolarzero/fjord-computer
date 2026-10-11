@@ -1318,29 +1318,43 @@ final class StoreActionPerformer: ActionPerformer {
     }
 
     func failedRuns(for thing: Thing) async throws -> [FailedRun] {
-        var query = ["per_page": "50"]
-        var workflow: Int?
+        let path: String
+        var query = ["per_page": "100"]
+        var pages = Store.ciPages
         switch thing.kind {
         case .pr:
+            // All the head commit's runs, page by page (bounded): a failing 51st workflow is one to re-run too.
             guard let sha = thing.headSha else { throw ActionFailure("its head commit isn't known yet") }
+            path = "/repos/\(thing.repo)/actions/runs"
             query["head_sha"] = sha
         case .workflow:
-            // `workflow:owner/repo:<id>@<branch>`
+            // `workflow:owner/repo:<id>@<branch>`: its own runs, newest first, whatever other workflows ran since.
             let id = thing.id.split(separator: ":").last.map { String($0.split(separator: "@").first ?? "") } ?? ""
             guard let number = Int(id) else { throw ActionFailure("checks that aren't GitHub Actions can't be re-run") }
-            workflow = number
+            path = "/repos/\(thing.repo)/actions/workflows/\(number)/runs"
             // Its runs are listed under the name its branch has now (master renamed main lists none as master).
             query["branch"] = thing.currentBranch ?? ""
             query["event"] = "push"
+            // On the commit its CI was read at (`ci:<sha>:…`), when known.
+            if let run = thing.ciRun, run.hasPrefix("ci:"), case let parts = run.split(separator: ":"), parts.count > 2 {
+                query["head_sha"] = String(parts[1])
+            }
+            query["per_page"] = "1"
+            pages = 1
         case .issue:
             return []
         }
-        let runs: GHWorkflowRuns = try await store.gh.get("/repos/\(thing.repo)/actions/runs", query)
+        var runs: [GHWorkflowRuns.Run] = []
+        for page in 1...pages {
+            query["page"] = "\(page)"
+            let answer: GHWorkflowRuns = try await store.gh.get(path, query)
+            runs += answer.workflowRuns
+            if answer.workflowRuns.count < Int(query["per_page"]!)! || runs.count >= answer.totalCount ?? .max { break }
+        }
         var seen = Set<Int>()
         var out: [FailedRun] = []
         // Newest first: the first of each workflow is its latest run.
-        for run in runs.workflowRuns where seen.insert(run.workflowId).inserted {
-            if let workflow, run.workflowId != workflow { continue }
+        for run in runs where seen.insert(run.workflowId).inserted {
             guard let id = run.id, run.status == "completed", ["failure", "timed_out"].contains(run.conclusion ?? "") else { continue }
             out.append(FailedRun(id: id, name: run.name, url: run.htmlUrl))
         }
