@@ -793,6 +793,51 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(ledger.baselines[category.id]?.rules == InboxActions.fingerprint(category.rules, groups: []))
     }
 
+    @Test func anOldNumberIsFoundByTryingOnlyWhatWasASetNotYourLists() throws {
+        let action = CategoryAction.make(.comment("hi"))
+        var category = InboxFixture.category()
+        // Two lists of five labels after the set: tried in every order, they used up the tries before the set's turn.
+        category.rules[0].conditions = [.checks([.failing, .pending, .passing]),
+                                        .labeled(Pick(include: ["a", "b", "c", "d", "e"])), .labeled(Pick(include: ["f", "g", "h", "i", "j"]))]
+        category.actions = ActionList([action])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        encoder.dateEncodingStrategy = .iso8601
+        let raw = String(decoding: try encoder.encode(category.rules), as: UTF8.self)
+        let set = try #require(raw.range(of: #"\[[^\[\]{}]*"failing"[^\[\]{}]*\]"#, options: .regularExpression))
+        let items = raw[set].dropFirst().dropLast().split(separator: ",").map(String.init)
+        let old = raw.replacingCharacters(in: set, with: "[" + items.sorted().reversed().joined(separator: ",") + "]")
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in Array(old.utf8) { hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3 }
+        #expect(InboxActions.legacyFingerprint(String(hash, radix: 16), of: category.rules, groups: []) == .same)
+    }
+
+    @Test func anOldNumberWithTooManyOrdersToTellIsTakenAsTheSameRulesKeepingWhatWasRun() {
+        let action = CategoryAction.make(.comment("hi"))
+        var category = InboxFixture.category()
+        let all: Set<ThingStatus> = [.draft, .open, .merged, .closed]
+        category.rules[0].conditions = [.status(all), .status(all), .status(all)]
+        category.actions = ActionList([action])
+        var ledger = ActionLedger()
+        // Not this build's number, and more orders than are tried.
+        ledger.baselines[category.id] = .init(rules: "123abc", actions: [action.id])
+        #expect(InboxActions.legacyFingerprint("123abc", of: category.rules, groups: []) == .unknown)
+        func entry(_ n: Int) -> InboxEntry {
+            InboxEntry(thing: InboxFixture.pr(n, by: Person(login: "alice")), categoryID: category.id,
+                       facts: [Fact(key: "greptile:3", label: "g")], isDone: false, isUnread: true)
+        }
+        // PR 1 was acted on; PR 2 came in since.
+        ledger.set(ActionRun(category: category.id, thing: entry(1).id, action: action.id, trigger: "enter", state: .done, at: Date()))
+        let jobs = InboxActions.plan(entries: [entry(1), entry(2)], categories: [category], groups: [], ledger: &ledger, me: "me")
+        #expect(jobs.map(\.entry.id) == [entry(2).id])
+        #expect(ledger.baselines[category.id]?.rules == InboxActions.fingerprint(category.rules, groups: []))
+        // Rules few enough to tell, and not these: changed, what is there is old.
+        category.rules[0].conditions = [.status([.open])]
+        ledger.baselines[category.id] = .init(rules: "123abc", actions: [action.id])
+        #expect(InboxActions.legacyFingerprint("123abc", of: category.rules, groups: []) == .different)
+        #expect(InboxActions.plan(entries: [entry(3)], categories: [category], groups: [], ledger: &ledger, me: "me").isEmpty)
+    }
+
     @Test func atMostTenRunPerRefreshAndTheRestWait() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()

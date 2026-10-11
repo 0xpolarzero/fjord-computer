@@ -237,15 +237,21 @@ enum InboxActions {
         return hash(canonical(json) + appendix)
     }
 
+    /// What a fingerprint saved by an earlier build says of the rules now.
+    enum LegacyMatch { case same, different, unknown }
+
     /// Whether `stored` is the fingerprint of the same rules as written before they were sorted (in any order a launch
-    /// may have given the sets), as ledgers saved by earlier builds hold it. Bounded: rules with too many orders to try
-    /// read as changed, which takes what they match as old (the safe side).
-    static func isLegacyFingerprint(_ stored: String, of rules: [Rule], groups: [InboxGroup], limit: Int = 5_000) -> Bool {
+    /// may have given the sets), as ledgers saved by earlier builds hold it. Only what was a `Set` then is tried in other
+    /// orders: a condition's states or statuses (`checks`, `status`, `workflow`); kinds and roles were already written in
+    /// their cases' order, and a list (labels, people, repos) in yours. Bounded: past `limit` orders it is `unknown`.
+    static func legacyFingerprint(_ stored: String, of rules: [Rule], groups: [InboxGroup], limit: Int = 5_000) -> LegacyMatch {
         let (json, appendix) = fingerprintParts(rules, groups: groups)
-        let arrays = plainArrays(json)
+        let arrays = plainArrays(json).filter { array in
+            setKeys.contains { key in json[..<array.range.lowerBound].reversed().starts(with: key.reversed()) }
+        }
         var budget = limit
         var found = false
-        // Every order of every list of plain values, the text around them kept.
+        // Every order of every set, the text around them kept.
         func walk(_ index: Int, _ built: [UInt8], _ from: Int) {
             guard !found, budget > 0 else { return }
             guard index < arrays.count else {
@@ -261,8 +267,12 @@ enum InboxActions {
             }
         }
         walk(0, [], 0)
-        return found
+        return found ? .same : budget > 0 ? .different : .unknown
     }
+
+    /// How a condition holding a set is written (`{"checks":{"_0":[…]}}`): the text right before the set's `[`. Never inside a
+    /// string, where a quote is escaped.
+    private static let setKeys = ["checks", "status", "workflow"].map { Array("\"\($0)\":{\"_0\":".utf8) }
 
     private static func fingerprintParts(_ rules: [Rule], groups: [InboxGroup]) -> (json: [UInt8], appendix: [UInt8]) {
         let encoder = JSONEncoder()
@@ -371,7 +381,12 @@ enum InboxActions {
             let actionIDs = Set(category.actions.items.map(\.id))
             var before = ledger.baselines[category.id]
             // Saved by a build that didn't sort the sets: the same rules, taken in once under their sorted number.
-            if let stored = before?.rules, stored != ruleIDs, isLegacyFingerprint(stored, of: category.rules, groups: groups) {
+            // Too many orders to tell (several conditions of states): taken as the same rules too, the safer side. Such a
+            // number is almost always the last one the earlier build saved for the rules as they still are; taking it as
+            // changed would make old, silently, everything that came in since, and no action would ever run for it. What
+            // was already run (or taken as old) keeps its record and isn't run again; only what has none is due.
+            if let stored = before?.rules, stored != ruleIDs,
+               legacyFingerprint(stored, of: category.rules, groups: groups) != .different {
                 before?.rules = ruleIDs
             }
             let all = before == nil || before!.rules != ruleIDs
