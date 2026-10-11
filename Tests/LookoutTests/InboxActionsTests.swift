@@ -257,6 +257,42 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(try Data(contentsOf: file) == original)
     }
 
+    @Test func onTheDefaultsBecauseTheStateCannotBeReadTheLedgerIsNeitherForgottenNorWrittenOverWithoutACopy() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        await store.runActions()
+        add(store, InboxFixture.pr(3))
+        await store.runActions()
+        #expect(performer.asked.count == 1)
+        store.flushSave()
+        let state = folder.appendingPathComponent("state.json")
+        let file = try #require(store.actionsFile)
+        let original = try Data(contentsOf: file)
+        // Next launch: the state can't be read, the ledger can. What runs is the default categories.
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: state.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: state.path) }
+        let next = InboxFixture.store([InboxFixture.pr(1), InboxFixture.pr(3), InboxFixture.pr(4)])
+        next.categories = Store().categories
+        next.actionPerformer = performer
+        next.stateFile = state
+        next.persists = true
+        next.load()
+        let ledger = next.actionLedger
+        #expect(ledger.runs.values.contains { $0.thing == "pr:a/one#3" })
+        await next.runActions()
+        next.baselineActions()
+        #expect(next.actionLedger == ledger)
+        // However it comes to be written, what was there is kept aside first.
+        next.saveActions()
+        next.flushActions()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("actions.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+    }
+
     @Test func anActionMarkedDoneWhileItsRunningRecordIsWrittenIsNotRun() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

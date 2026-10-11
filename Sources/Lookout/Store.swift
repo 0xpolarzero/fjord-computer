@@ -77,7 +77,8 @@ final class Store {
     var stateSaveProblem: String?
     var actionsSaveProblem: String?
     /// The saved state couldn't be read at launch: what runs is the defaults, until a save works.
-    @ObservationIgnored private var onDefaults = false
+    /// No action runs meanwhile: the ledger would be taken in against these categories, not yours (InboxActions.swift).
+    @ObservationIgnored private(set) var onDefaults = false
     /// Repos (lowercased) GitHub said don't exist, or can't be seen: their chips are red and block Save.
     var missingRepos: Set<String> = []
     /// What GitHub said of each repo named, this session (lowercased name to its canonical name).
@@ -628,14 +629,14 @@ final class Store {
             onDefaults = true
             stateSaveProblem = "state.json can't be read: \(error.localizedDescription)" + Self.onDefaultsNote
             Self.stateLog.error("the saved state can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
-            loadActions()
+            loadActions(keepingAside: true)
             return
         }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         guard let state = try? dec.decode(PersistedState.self, from: data) else {
             keepAside(file, data, dropped: ["everything"])
-            loadActions()
+            loadActions(keepingAside: true)
             return
         }
         if !state.dropped.isEmpty { keepAside(file, data, dropped: state.dropped) }

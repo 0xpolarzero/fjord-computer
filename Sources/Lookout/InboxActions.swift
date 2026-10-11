@@ -922,6 +922,9 @@ extension Store {
     /// Takes in what changed (baselines) and runs what is due, at most `InboxActions.perSync` per call.
     func runActions(now: Date = Date()) async {
         guard let performer = resolvedPerformer, let me = me?.login, !me.isEmpty else { return }
+        // On the defaults (the state couldn't be read): taken in against them, the ledger would forget every run of your
+        // categories, and take as new what they hold. Nothing runs, and nothing is taken in, until your categories are back.
+        guard !onDefaults else { return }
         // An edit is waiting to be taken in: what it now matches is old news, and must not fire first.
         guard !baselinePending else { return }
         guard !actionsBusy else { actionsAgain = true; return }
@@ -1005,7 +1008,7 @@ extension Store {
 
     /// Takes what is in the categories now as old, for the actions they have.
     func baselineActions(now: Date = Date()) {
-        guard let me = me?.login, !me.isEmpty else { return }
+        guard let me = me?.login, !me.isEmpty, !onDefaults else { return }
         var ledger = actionLedger
         _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
                               known: Set(things.keys), now: now)
@@ -1044,7 +1047,9 @@ extension Store {
 
     var actionsFile: URL? { stateFileURL?.deletingLastPathComponent().appendingPathComponent("actions.json") }
 
-    func loadActions() {
+    /// `keepingAside`: the state wasn't read, so the categories are the defaults: the file is copied aside before it is
+    /// first written over, as one read only in part is.
+    func loadActions(keepingAside: Bool = false) {
         guard persists, let url = actionsFile else { return }
         let data: Data
         do {
@@ -1068,8 +1073,8 @@ extension Store {
         if !lost.isEmpty {
             Self.actionsLog.error("actions.json was read only in part (\(lost.joined(separator: ", "), privacy: .public) lost)")
             ledger.baselines = [:]
-            actionsDisk.keepAside(data)
         }
+        if keepingAside || !lost.isEmpty { actionsDisk.keepAside(data) }
         // Running when the app quit: not retried (it may have happened), said as failed.
         for (key, run) in ledger.runs where run.state == .running {
             var r = run
