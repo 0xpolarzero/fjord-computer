@@ -418,6 +418,17 @@ final class RouterModel {
     }
     @ObservationIgnored private var highlightTask: Task<Void, Never>?
 
+    /// The reveal each of the page's scrolls (the history, each zone) last went to: drawn again (the page left and come back
+    /// to), it doesn't go there again, while one asked for before it was drawn is gone to once it is.
+    @ObservationIgnored private var revealsTaken: [String: Int] = [:]
+
+    /// The request, if the scroll named hasn't gone to it yet (it now has).
+    func takeReveal(_ request: ScrollRequest?, by scroll: String) -> ScrollRequest? {
+        guard let request, revealsTaken[scroll] != request.seq else { return nil }
+        revealsTaken[scroll] = request.seq
+        return request
+    }
+
     func reveal(_ id: String, highlight: Bool = true) {
         revealRequest = ScrollRequest(id: id, seq: (revealRequest?.seq ?? 0) + 1)
         guard highlight else { return }

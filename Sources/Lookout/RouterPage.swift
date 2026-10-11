@@ -326,8 +326,9 @@ private struct RouterHistory: View {
                     pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
                 })
                 // A card picked (clicked, or with the keys): as little scrolling as shows it whole; the Router picked: the bottom.
-                .onChange(of: model.revealRequest) { _, request in
-                    guard let request else { return }
+                // Asked for before the page was drawn too (a banner's card far up the history): it goes there once laid out.
+                .onChange(of: model.revealRequest, initial: true) { _, request in
+                    guard let request = model.takeReveal(request, by: "history") else { return }
                     scroll(to: request.id, anchor: request.id == RouterModel.endID ? .bottom : nil, in: all, drawn: entries)
                 }
                 // A message asked for (an action's chip), the page opening on it or not.
@@ -912,8 +913,7 @@ private struct RouterZones: View {
             .accessibilityAddTraits(.isHeader)
             .accessibilityLabel("Working, \(page.working.count)" + (page.waiting.isEmpty ? "" : ", \(page.waiting.count) waiting"))
             if !page.working.isEmpty { overview }
-            ZoneScroll(maxHeight: caps.working,
-                       reveal: model.revealRequest,
+            ZoneScroll(maxHeight: caps.working, model: model, zone: "working",
                        ids: Set(page.working.map { RouterModel.workingID($0.id) } + page.waiting.map { RouterModel.workingID($0.sessionID) })) {
                 VStack(spacing: 0) {
                     ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
@@ -985,7 +985,7 @@ private struct RouterZones: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityLabel("Needs you, \(page.needs.count + page.asks.count)")
-                ZoneScroll(maxHeight: needsCap, reveal: model.revealRequest,
+                ZoneScroll(maxHeight: needsCap, model: model, zone: "needs",
                            ids: Set(page.needs.map(\.id) + page.asks.map { $0.id.uuidString })) {
                     VStack(spacing: 6) {
                         ForEach(page.asks) { ask in
@@ -1081,10 +1081,14 @@ private extension View {
 /// A scroll view as tall as its content up to `maxHeight`, scrolling to a requested id inside it.
 private struct ZoneScroll<Content: View>: View {
     let maxHeight: CGFloat
-    let reveal: ScrollRequest?
+    let model: RouterModel
+    /// Which zone it is: what it went to of what was asked (`RouterModel.takeReveal`).
+    let zone: String
     let ids: Set<String>
     @ViewBuilder let content: () -> Content
     @State private var natural: CGFloat = 0
+    /// A scroll asked for, made once the zone is laid out.
+    @State private var pending: ScrollRequest?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -1101,11 +1105,20 @@ private struct ZoneScroll<Content: View>: View {
                 LinearGradient(colors: [.black, natural > maxHeight + 1 ? .clear : .black], startPoint: .top, endPoint: .bottom)
                     .frame(height: 18)
             })
-            .onChange(of: reveal) { _, request in
+            // Asked for before the zone was drawn too (a banner's card below what fits): it goes there once laid out.
+            .onChange(of: model.revealRequest, initial: true) { _, request in
                 guard let request, ids.contains(request.id) else { return }
-                withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: .center) }
+                pending = model.takeReveal(request, by: zone)
             }
+            .onChange(of: pending) { perform(proxy) }
+            .onChange(of: natural) { perform(proxy) }
         }
+    }
+
+    private func perform(_ proxy: ScrollViewProxy) {
+        guard natural > 0, let request = pending else { return }
+        pending = nil
+        withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: .center) }
     }
 }
 
