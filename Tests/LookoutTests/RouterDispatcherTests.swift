@@ -806,6 +806,21 @@ import Testing
         #expect(RouterTools.addressee("rerun the lookout tests") == nil)
     }
 
+    @Test func withoutJevAStartRequestStartsInTheProjectItNamesNeverInItsSession() async {
+        let (s, d, f) = setup()
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        let a = d.submit("start a session in lookout to fix the login bug with opus")
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty && f.started.map(\.folder) == ["/code/lookout"])
+        #expect(f.startSettings.last! == SessionSettings(model: "opus", effort: nil))
+        // No project named: you pick, among new sessions only.
+        let b = d.submit("start a new session to fix the login bug in lookout")
+        await finish(d, f, b)
+        #expect(f.prepared.isEmpty && f.started.count == 1)
+        #expect(d.askBacks.first { $0.id == b }?.options.map(\.target) == ["new:/code/lookout"])
+        #expect(s.claudeSessions["local_a"] != nil)
+    }
+
     @Test func pickingTheSuggestionLogsNoCorrectionAndAnotherPickDoes() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]

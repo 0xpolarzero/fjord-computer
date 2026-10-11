@@ -777,6 +777,15 @@ final class RouterMCPServer: @unchecked Sendable {
             guard name.count >= 3 else { return false }
             return text.range(of: "\\b\(NSRegularExpression.escapedPattern(for: name))\\b", options: .regularExpression) != nil
         }
+        // Asked to start a session: a new one, never an existing session the words happen to name. In the project named
+        // right after the request ("start a session in lookout to …"), else you pick among the projects the words mention.
+        if let start = startRequest(message) {
+            let projects = targets.filter { $0.target.hasPrefix("new:") }
+            let named = start.project.map { p in
+                projects.filter { $0.project.lowercased() == p || (($0.folder ?? "") as NSString).lastPathComponent.lowercased() == p }
+            }
+            return (projects.filter { mentions($0.project) }.map { ($0.target, 3) }, named?.count == 1 ? named?.first?.target : nil)
+        }
         var ranked: [(String, Int)] = []
         var titled: Set<String> = []
         var byProject: [String: Set<String>] = [:]
@@ -811,6 +820,17 @@ final class RouterMCPServer: @unchecked Sendable {
             named = "session:\(only.first!)"
         }
         return (ranked, named)
+    }
+
+    /// A message that asks for a new session (`SessionStart.startPhrase`, at its start or after its @projects), and the
+    /// project named by the one word right after it, lowercased: "start a session in lookout to …" → lookout.
+    struct StartRequest { var project: String? }
+    static func startRequest(_ message: String) -> StartRequest? {
+        let t = message.replacingOccurrences(of: #"^(?:\s*@[\w.\-/]+[\s,:;]*)*\s*"#, with: "", options: .regularExpression)
+        guard let regex = try? NSRegularExpression(pattern: SessionStart.startPhrase + #"(?:\s+in\s+(?:the\s+)?([\w.\-]+)(?![\w./-]))?"#,
+                                                   options: [.caseInsensitive]),
+              let m = regex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) else { return nil }
+        return StartRequest(project: Range(m.range(at: 1), in: t).map { t[$0].lowercased() })
     }
 
     /// Who a message is addressed to at its start, lowercased: "tell/ask (the) X (session) to …", "(for) (the) X (session):".
