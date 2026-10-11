@@ -456,6 +456,20 @@ import Testing
         #expect(f.prepared == ["local_b", "local_b"])
     }
 
+    @Test func aSessionAskingForAnOKIsntAddressedByAWordOfTheTitleItGaveItself() async {
+        let (s, d, f) = setup()
+        s.claudeSessions["local_b"]?.title = "Prod db"
+        s.router.cards = [RouterCard(id: "local_b#w9", sessionID: "local_b", kind: .approval, title: "Prod db",
+                                     folder: "/code/docs", text: "May I drop the production db?", createdAt: Date())]
+        f.ranked = [.init(target: "answer:local_b#w9", p: 0.97), .init(target: "unclear", p: 0.03)]
+        let a = d.submit("yes, back up the db first")
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty && d.askBacks.last?.options.first?.target == "answer:local_b#w9")
+        // Its project's short name is yours to have given it.
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Fix it", folder: "/code/ci", lastActivity: Date(), running: true)
+        #expect(RouterDispatcher.addressed("yes, ship it on ci", to: "local_c", store: s))
+    }
+
     @Test func anAnswerToASessionsOwnAskGoesOnItsEvidence() async {
         let (s, d, f) = setup()
         s.router.cards = [RouterCard(id: "local_b#w4", sessionID: "local_b", kind: .asks, title: "Update the docs",

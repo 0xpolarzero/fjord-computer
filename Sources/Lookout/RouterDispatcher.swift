@@ -976,12 +976,13 @@ extension RouterDispatcher {
         store.routerShownOpenCards.contains { $0.sessionID == session && $0.kind == .approval }
     }
 
-    /// The message is addressed to the session by words you typed: "tell X to …" or "X: …" with its title or project, or
-    /// a short name of its own ("CI").
+    /// The message is addressed to the session by words you typed: "tell X to …" or "X: …" naming it and nothing else
+    /// (`RouterTools.addressedSession`), or a short name of its project's ("CI"). Never a word of its title alone: a
+    /// session sets its own.
     static func addressed(_ message: String, to session: String, store: Store) -> Bool {
         guard let s = store.claudeSessions[session] else { return false }
-        let names = [s.title, store.folderName(s.folderKey), (s.folderKey as NSString).lastPathComponent]
-        if let to = RouterTools.addressee(message), names.contains(where: { $0.lowercased() == to }) { return true }
+        if RouterTools.addressedSession(message, store: store) == session { return true }
+        let names = [store.folderName(s.folderKey), (s.folderKey as NSString).lastPathComponent]
         return !shortNames(message).isDisjoint(with: shortNames(names.joined(separator: " ")))
     }
 
