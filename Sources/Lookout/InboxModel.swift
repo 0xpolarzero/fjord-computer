@@ -431,6 +431,15 @@ struct ThingThread: Codable, Hashable, Identifiable {
     var latestBy: [String: Date]?
 }
 
+/// A PR's review threads past the first page, as last read: how many threads it had and when it was last updated then, when
+/// they were read, and the logins their latest replies mention.
+struct ThreadsTail: Codable, Hashable {
+    var total: Int
+    var updatedAt: Date
+    var readAt: Date
+    var mentions: [String] = []
+}
+
 struct ThingCommit: Codable, Hashable, Identifiable {
     var id: String
     var author: String
@@ -475,6 +484,8 @@ struct Thing: Codable, Hashable, Identifiable {
     var behindBase = false
     /// The latest commit's id.
     var headSha: String?
+    /// PRs: what its review threads past the first page were read for, kept to be read again only once that changes.
+    var threadsTail: ThreadsTail?
     /// Which execution of its CI it shows (`ci:`…): a PR's checks on its head commit by their ids (a rerun's are new ones),
     /// a workflow's run and attempt. Nil when unknown (an older file).
     var ciRun: String?
@@ -525,6 +536,7 @@ extension Thing {
         hasConflicts = try c.decodeIfPresent(Bool.self, forKey: .hasConflicts) ?? false
         behindBase = try c.decodeIfPresent(Bool.self, forKey: .behindBase) ?? false
         headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
+        threadsTail = try c.decodeIfPresent(ThreadsTail.self, forKey: .threadsTail)
         ciRun = try c.decodeIfPresent(String.self, forKey: .ciRun)
         ciRunning = try c.decodeIfPresent(Bool.self, forKey: .ciRunning) ?? false
         reviewRequests = try c.decodeIfPresent([ThingReviewRequest].self, forKey: .reviewRequests) ?? []

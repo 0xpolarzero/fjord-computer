@@ -488,7 +488,9 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
     }
 
     @Test func reviewThreadsPastTheFirstPageAreReadAndOneThatCantBeKeepsWhatWasKnown() async {
-        final class Phase: @unchecked Sendable { var fails = false; var pages: [String] = [] }
+        final class Phase: @unchecked Sendable {
+            var fails = false; var pages: [String] = []; var updatedAt = "2026-10-09T10:00:00Z"; var total: Int?
+        }
         let phase = Phase()
         let s = Store()
         s.persists = false
@@ -514,7 +516,9 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
             } else {
                 // The first twenty threads, all resolved, and more to come.
                 let first = (1...20).map { thread("t\($0)", resolved: true) }
-                let pr = node(["reviewThreads": ["pageInfo": ["hasNextPage": true, "endCursor": "c1"], "nodes": first]])
+                var threads: [String: Any] = ["pageInfo": ["hasNextPage": true, "endCursor": "c1"], "nodes": first]
+                if let total = phase.total { threads["totalCount"] = total }
+                let pr = node(["reviewThreads": threads, "updatedAt": phase.updatedAt])
                 reply = ["data": ["s0": ["pageInfo": ["hasNextPage": false], "nodes": [pr]]]]
             }
             return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
@@ -529,10 +533,36 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(s.things["pr:o/r#12"]?.mentioned.contains("carol") == true)
         #expect(phase.pages.count == 2 && phase.pages[0].contains("PR_1") && phase.pages[0].contains("c1"))
         #expect(s.entries.contains { $0.thing.id == "pr:o/r#12" })
+        // The PR unchanged, the threads read a moment ago stand: they aren't read again, mentions and all.
+        await s.syncInbox()
+        #expect(phase.pages.count == 2 && s.things["pr:o/r#12"]?.threads.count == 22)
+        #expect(s.things["pr:o/r#12"]?.mentioned.contains("carol") == true && s.entries.contains { $0.thing.id == "pr:o/r#12" })
+        // Updated since, they are read again, a page sized by what it says it has (22 threads, 20 read).
+        phase.updatedAt = "2026-10-09T11:00:00Z"
+        phase.total = 22
+        await s.syncInbox()
+        #expect(phase.pages.count == 4 && phase.pages[2].contains("reviewThreads(first: 2, after:"))
+        // Read a while ago, they are read again too.
+        s.things["pr:o/r#12"]?.threadsTail?.readAt = Date().addingTimeInterval(-InboxSync.threadsTailAge - 60)
+        await s.syncInbox()
+        #expect(phase.pages.count == 6)
         // The next page can't be read: the PR keeps the threads it had, and it is said.
         phase.fails = true
+        phase.updatedAt = "2026-10-09T12:00:00Z"
         await s.syncInbox()
         #expect(s.things["pr:o/r#12"]?.threads.contains { $0.id == "t21" } == true && s.inboxError == "Something went wrong")
+    }
+
+    @Test func threadsPastTheFirstPageAsReadStandWhileGitHubsPointsAreLow() {
+        let now = Date()
+        var old = InboxSync.thing(node())!
+        old.threadsTail = ThreadsTail(total: 30, updatedAt: old.updatedAt, readAt: now.addingTimeInterval(-3600))
+        // Changed, and read long ago: read again, unless the points are running low.
+        #expect(!InboxSync.keepsTail(old, total: 31, updatedAt: now, now: now, remaining: 4000))
+        #expect(InboxSync.keepsTail(old, total: 31, updatedAt: now, now: now, remaining: InboxSync.tailPoints - 1))
+        // Never read: read, whatever the points.
+        #expect(!InboxSync.keepsTail(InboxSync.thing(node()), total: 30, updatedAt: now, now: now, remaining: 10))
+        #expect(InboxSync.threadsPageSize(read: 20, total: 245) == 100 && InboxSync.threadsPageSize(read: 200, total: 245) == 20)
     }
 
     @Test func whatYourInvolvesSearchFoundStaysInvolvedOnceYourCommentIsPastWhatIsFetched() async {
