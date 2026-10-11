@@ -446,6 +446,15 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(!InboxSync.isEvent("requested:bob:1", of: t))
     }
 
+    @Test func withNothingToAskForTheThingsGoAndTheirMarksStartTheirMonth() async {
+        let s = InboxFixture.store([InboxFixture.pr(1)])
+        s.marks["pr:a/one#1"] = EntryMarks(seen: ["greptile:3"])
+        s.categories = []
+        await s.syncInbox()
+        #expect(s.things.isEmpty)
+        #expect(s.marks["pr:a/one#1"]?.goneSince != nil)
+    }
+
     @Test func aThreadReopenedIsNewAgain() {
         var thing = InboxFixture.pr(3)
         let alice = Person(login: "alice")

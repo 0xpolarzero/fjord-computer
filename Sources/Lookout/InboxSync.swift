@@ -841,7 +841,8 @@ extension Store {
         let targets = InboxSync.workflowTargets(categories: categories, groups: groups, owned: ownedRepos,
                                                 contributed: contributedRepos, ownerRepos: inboxSyncState.ownerRepos)
         guard !searches.isEmpty || !targets.isEmpty else {
-            if !things.isEmpty { things = [:] }
+            // Nothing asked for: every thing is gone, and its marks start their month.
+            applyThings([:])
             inboxError = nil
             announceInbox()
             return
