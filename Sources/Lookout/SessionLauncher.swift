@@ -324,14 +324,16 @@ struct SessionSettings: Equatable, Sendable {
     }
 
     /// A setting at `at` is said not to be wanted: a word of negation (`SessionStart.negations`) comes before it in its
-    /// own part of the sentence, since a comma, a semicolon, a sentence's end or a line break ("don't use opus", "fix it
+    /// own clause, since a comma, a semicolon, a sentence's end, a line break or "but", "instead", "rather" ("don't use opus", "fix it
     /// without using opus").
     static func negated(_ text: String, before at: String.Index) -> Bool {
         let start = text[..<at].lastIndex(where: { ",;.!?\n\r".contains($0) }).map(text.index(after:)) ?? text.startIndex
         let keep = CharacterSet.punctuationCharacters.subtracting(CharacterSet(charactersIn: "'’"))
-        return text[start..<at].lowercased().split(whereSeparator: \.isWhitespace).contains {
-            SessionStart.negations.contains($0.trimmingCharacters(in: keep).replacingOccurrences(of: "’", with: "'"))
-        }
+        let words = text[start..<at].lowercased().split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: keep).replacingOccurrences(of: "’", with: "'") }
+        // "but", "instead" and "rather" begin a new, affirmative clause ("don't use opus but use haiku").
+        let clause = words.lastIndex { ["but", "instead", "rather"].contains($0) }.map { words[($0 + 1)...] } ?? words[...]
+        return clause.contains { SessionStart.negations.contains($0) }
     }
 }
 

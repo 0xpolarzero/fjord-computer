@@ -783,6 +783,14 @@ import Testing
         #expect(f.started.map(\.title) == ["fix login"] && f.startSettings == [SessionSettings(model: "opus", effort: nil)])
     }
 
+    @Test func aNegationEndsAtButInsteadOrRather() {
+        #expect(SessionSettings.parse("fix the CI, don't use opus but use haiku") == SessionSettings(model: "haiku", effort: nil))
+        #expect(SessionSettings.parse("fix it, not with opus, rather using sonnet") == SessionSettings(model: "sonnet", effort: nil))
+        #expect(SessionSettings.parse("fix it without opus instead use haiku") == SessionSettings(model: "haiku", effort: nil))
+        #expect(SessionSettings.parse("don't use opus but fix it") == nil)
+        #expect(SessionStart.task(from: "start a session to fix the CI, don't use opus but use haiku") == "fix the CI, don't use opus")
+    }
+
     @Test func aSettingSaidNotToBeWantedIsNeitherAppliedNorTakenOut() async {
         let text = "start a session in lookout to fix the CI, don't use opus, use haiku"
         #expect(SessionStart.task(from: text, projects: ["lookout"]) == "fix the CI, don't use opus")

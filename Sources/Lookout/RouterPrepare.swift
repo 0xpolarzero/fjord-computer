@@ -563,7 +563,13 @@ enum SessionStart {
                 guard let whole = Range(m.range, in: head), let lead = Range(m.range(at: 1), in: head), !whole.isEmpty,
                       !SessionSettings.negated(head, before: lead.upperBound),
                       asked.insert(setting(head[lead.upperBound..<whole.upperBound])).inserted else { continue }
-                cuts.append(whole)
+                // "…don't use opus but use haiku": the "but" that led into the clause goes with it.
+                var cut = whole
+                if let conn = head[..<whole.lowerBound].range(of: #"[ \t]*\b(?:but|instead|rather)[ \t]*$"#,
+                                                              options: [.regularExpression, .caseInsensitive]) {
+                    cut = conn.lowerBound..<whole.upperBound
+                }
+                cuts.append(cut)
             }
             for r in cuts.reversed() {
                 let at = head.distance(from: head.startIndex, to: r.lowerBound)
