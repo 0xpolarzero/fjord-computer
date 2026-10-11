@@ -155,22 +155,22 @@ def allow(row, fields):
 
 def visible_view(state, event):
     """A positive allowlist, including nested board objects, is the blind seam."""
-    sessions = [allow(s, SESSION_FIELDS) for s in state.get("sessions", []) if not s.get("archived")]
-    cards = [allow(c, CARD_FIELDS) for c in state.get("cards", [])
+    sessions = [allow(s, SESSION_FIELDS) for s in state.get("sessions") or [] if not s.get("archived")]
+    cards = [allow(c, CARD_FIELDS) for c in state.get("cards") or []
              if c.get("shown", True) and not c.get("hidden") and not c.get("closed")
              and not c.get("addressed") and not c.get("addressedAt")]
     for card in cards:
         card["options"] = [allow(o, ("label", "description")) if isinstance(o, dict) else o
-                           for o in card.get("options", [])]
+                           for o in card.get("options") or []]
         if "questions" in card:
             card["questions"] = [allow(q, ("question", "header", "multiSelect", "options"))
                                  if isinstance(q, dict) else q for q in card["questions"]]
             for question in card["questions"]:
                 if isinstance(question, dict):
                     question["options"] = [allow(o, ("label", "description")) if isinstance(o, dict) else o
-                                           for o in question.get("options", [])]
-    board = {"projects": copy.deepcopy(state.get("projects", [])), "sessions": sessions,
-             "cards": cards, "history": [allow(h, HISTORY_FIELDS) for h in state.get("history", [])]}
+                                           for o in question.get("options") or []]
+    board = {"projects": copy.deepcopy(state.get("projects") or []), "sessions": sessions,
+             "cards": cards, "history": [allow(h, HISTORY_FIELDS) for h in state.get("history") or []]}
     if "now" in state:
         board["now"] = state["now"]
     ctx = {"replyTo": None, "pills": [], "pinned": None, "shown": None, "notTo": None, "router_aside": False}
@@ -182,9 +182,9 @@ def deliver(state, event, target, *, action_id=None):
     # Match runner effects without importing its classifier or reading a corpus.
     target = adapter.canonical_target(target, state)
     state.setdefault("history", []).append({"ago_min": 0, "you": event["message"], "to": target})
-    body = rules.edit(event["message"], event.get("context", {}).get("pills", []))
+    body = rules.edit(event["message"], event.get("context", {}).get("pills") or [])
     if target.startswith("session:"):
-        session = next((s for s in state.get("sessions", []) if s["id"] == target[8:]), None)
+        session = next((s for s in state.get("sessions") or [] if s["id"] == target[8:]), None)
         if session:
             session.update(running=True, idle_min=0)
             session.setdefault("turns", []).append([body, ""])
@@ -432,7 +432,9 @@ def decode_json(text):
     raise ValueError("model did not return a JSON document")
 
 
-def validate_label(label, record):
+def validate_label(label, record, strict=False):
+    """A label checked against the event's visible board. A model's off-board target is dropped (kept in
+    `dropped_targets`); with `strict` (your own anchor answers) it is an error."""
     fields = ("intended", "acceptable", "clarify", "ask", "consequential", "confidence", "evidence")
     if not all(field in label for field in fields):
         raise ValueError("missing annotation fields")
@@ -446,17 +448,27 @@ def validate_label(label, record):
     known = {"session:" + s["id"] for s in state["sessions"]} | {"new:" + p for p in state["projects"]} | rules.INTENTS
     result = allow(label, fields)
     def canonical(target):
+        """The target as the board names it; None when it isn't on the board (the model invented or misnamed it)."""
         if not isinstance(target, str):
-            raise ValueError("target must be a string")
+            return None
         target = adapter.canonical_target(target, state)
-        if target not in known:
-            raise ValueError("annotation target is absent from visible board")
-        return target
-    result["intended"] = "unknown" if result["intended"] == "unknown" else canonical(result["intended"])
+        return target if target in known else None
+    dropped = []
+    if result["intended"] != "unknown":
+        intended = canonical(result["intended"])
+        if intended is None:
+            dropped.append(result["intended"])
+        result["intended"] = intended or "unknown"
     for field in ("acceptable", "clarify"):
         if not isinstance(result[field], list):
             raise ValueError(field + " must be an array")
-        result[field] = sorted(set(canonical(target) for target in result[field]))
+        kept = [canonical(target) for target in result[field]]
+        dropped += [t for t, k in zip(result[field], kept) if k is None]
+        result[field] = sorted({k for k in kept if k})
+    if dropped and strict:
+        raise ValueError("annotation target is absent from visible board")
+    if dropped:
+        result["dropped_targets"] = [str(t)[:80] for t in dropped]
     # Retain overlapping soft sets. Aggregation subtracts accepted targets from
     # clarify; rejecting the whole batch would erase the model's judgments.
     if result["ask"] == "required" and result["acceptable"]:
@@ -464,22 +476,27 @@ def validate_label(label, record):
     return result
 
 
-def parse_labels(text, records):
+def parse_labels(text, records, errors=None):
+    """Valid labels by key. One bad or missing label no longer sinks its batch: its error goes to `errors` (key →
+    message) and only that event is retried."""
     document = decode_json(text)
     labels = document.get("labels") if isinstance(document, dict) else document
     if not isinstance(labels, list):
         raise ValueError("response lacks labels array")
     by_key = {record["key"]: record for record in records}
-    output = {}
+    output, errors = {}, errors if errors is not None else {}
     for label in labels:
-        if not isinstance(label, dict):
-            raise ValueError("each response label must be an object")
-        key = label.get("key")
+        key = label.get("key") if isinstance(label, dict) else None
         if key not in by_key or key in output:
-            raise ValueError("extra or duplicate response key")
-        output[key] = validate_label(label, by_key[key])
-    if output.keys() != by_key.keys():
-        raise ValueError("batch response omitted events")
+            continue
+        try:
+            output[key] = validate_label(label, by_key[key])
+        except (ValueError, TypeError) as error:
+            errors[key] = str(error)
+    for key in by_key.keys() - output.keys():
+        errors.setdefault(key, "batch response omitted this event")
+    if not output:
+        raise ValueError("no valid label in the response: " + "; ".join(sorted(set(errors.values())))[:300])
     return output
 
 
@@ -596,6 +613,10 @@ class ModelCLI:
 
     def environment(self, family):
         env = os.environ.copy()
+        # Claude and Antigravity (agy) authenticate from the user's own home; a confined home logs them out. They run
+        # with no tools (claude --tools "") or sandboxed in plan mode (agy), from the empty runtime cwd.
+        if family in ("claude", "gemini"):
+            return env
         # These configure the child CLI's real storage locations. They are not
         # shell scratch variables; the parent process's home remains unchanged.
         child_dirs = {"HOME": "home", "XDG_CACHE_HOME": "cache", "XDG_CONFIG_HOME": "config",
@@ -649,17 +670,22 @@ class ModelCLI:
                     "-c", "tools.experimental_request_user_input.enabled=false",
                     *itertools.chain.from_iterable(("--disable", feature) for feature in disabled), "-"]
         if family == "gemini":
-            return ["gemini", *(["-m", model] if model else []), "-p", "Label the supplied Router data.", "-o", "json"]
+            # Antigravity's CLI (the gemini CLI isn't signed in); the prompt goes as the -p argument (agy reads no stdin).
+            return ["agy", "--model", model or "gemini-3.8-flash-high", "--output-format", "json", "--print-timeout", "600s",
+                    "--sandbox", "--mode", "plan"]
         raise ValueError("unknown model family")
 
     def call(self, family, prompt, *, adjudicator=False):
-        model = "opus" if adjudicator else {"claude": "sonnet", "gpt": "gpt-6.1-sol", "gemini": "gemini-2.5-pro"}[family]
+        model = "opus" if adjudicator else {"claude": "sonnet", "gpt": "gpt-6.1-sol", "gemini": "gemini-3.8-flash-high"}[family]
         env = self.environment(family)
         attempts, start = [], time.monotonic()
         while True:
             command = self.command(family, model)
+            stdin = prompt
+            if family == "gemini":
+                command, stdin = [command[0], "-p", prompt, *command[1:]], None
             try:
-                process = subprocess.run(command, input=prompt, text=True, capture_output=True,
+                process = subprocess.run(command, input=stdin, text=True, capture_output=True,
                                          cwd=self.cwd, env=env, timeout=self.timeout)
                 attempt = {"model": model or "default", "exit_code": process.returncode,
                            "stderr": process.stderr[-6000:], "stdout": process.stdout}
@@ -694,8 +720,8 @@ class ModelCLI:
                     if envelope.get("is_error"):
                         raise ValueError(text)
                 else:
-                    text, usage = envelope.get("response", ""), envelope.get("stats", {})
-                    if envelope.get("error"):
+                    text, usage = envelope.get("response", ""), envelope.get("usage", envelope.get("stats", {}))
+                    if envelope.get("error") or envelope.get("status") == "ERROR":
                         raise ValueError(str(envelope["error"]))
             return {"status": "ok", "text": text, "seconds": elapsed, "model": last["model"],
                     "attempts": attempts, "usage": usage, "cost_usd": cost}
@@ -725,10 +751,10 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
             result = cli.call(family, prompt_for(batch, previous), adjudicator=role == "adjudicator")
             if result["status"] == "error" and any(attempt.get("exit_code") in {126, 127} for attempt in result["attempts"]):
                 family_disabled.add(family)
-        labels = {}
+        labels, event_errors = {}, {}
         if result["status"] == "ok":
             try:
-                labels = parse_labels(result["text"], batch)
+                labels = parse_labels(result["text"], batch, event_errors)
             except (ValueError, TypeError) as error:
                 result.update(status="error", error=str(error))
         call_id = uuid.uuid4().hex
@@ -736,10 +762,12 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
             "keys": [record["key"] for record in batch], "at": datetime.now(timezone.utc).isoformat(), **result}])
         output = []
         for record in batch:
+            ok = result["status"] == "ok" and record["key"] in labels
             output.append({"key": record["key"], "fingerprint": record["fingerprint"], "family": family, "role": role,
-                "model": result["model"], "status": result["status"], "call_id": call_id, "prompt_version": VERSION,
+                "model": result["model"], "status": "ok" if ok else "error", "call_id": call_id, "prompt_version": VERSION,
                 **({"judgments_sha256": digest(previous[record["key"]])} if previous is not None else {}),
-                **({"label": labels[record["key"]]} if result["status"] == "ok" else {"error": result["error"]})})
+                **({"label": labels[record["key"]]} if ok else
+                   {"error": event_errors.get(record["key"]) or result.get("error") or "no label"})})
         append_jsonl(directory / "raw.jsonl", output)
         rows.extend(output)
         successes.update(latest_labels(output)[0])
@@ -981,7 +1009,7 @@ def import_anchor(records, directory=LABELS, path=None):
         if consequence not in {"true", "false"}:
             raise ValueError("human Consequential must be true or false")
         label = validate_label({"intended": intended, "acceptable": accepted, "clarify": clarified, "ask": ask,
-            "consequential": consequence == "true", "confidence": 4, "evidence": answers.get("Evidence") or "Human blind anchor."}, by_key[key])
+            "consequential": consequence == "true", "confidence": 4, "evidence": answers.get("Evidence") or "Human blind anchor."}, by_key[key], strict=True)
         output.append({"key": key, "fingerprint": fingerprint, "family": "human", "role": "human", "model": "human",
                        "consequential_explicit": bool(answers.get("Consequential")),
                        "status": "ok", "label": label, "prompt_version": VERSION})

@@ -264,35 +264,48 @@ class ResponseParsingTests(unittest.TestCase):
         self.assertEqual(parsed[self.records[0]["key"]]["intended"], "session:a")
         self.assertEqual(parsed[self.records[1]["key"]]["intended"], "session:b")
 
-    def test_duplicate_key_does_not_replace_a_missing_event(self):
-        with self.assertRaisesRegex(ValueError, "duplicate"):
-            self.parse([self.responses[0], self.responses[0]])
+    # One bad or missing label fails only its own event; its valid siblings are kept (label.parse_labels).
 
-    def test_missing_event_rejects_the_entire_batch(self):
-        with self.assertRaisesRegex(ValueError, "omitted"):
-            self.parse(self.responses[:1])
+    def parse_with_errors(self, responses):
+        errors = {}
+        parsed = parse_labels(json.dumps({"labels": responses}), self.records, errors)
+        return parsed, errors
 
-    def test_unknown_response_key_rejects_the_batch(self):
+    def test_a_duplicate_key_does_not_replace_a_missing_event(self):
+        parsed, errors = self.parse_with_errors([self.responses[0], self.responses[0]])
+        self.assertEqual(set(parsed), {self.records[0]["key"]})
+        self.assertIn("omitted", errors[self.records[1]["key"]])
+
+    def test_a_missing_event_fails_alone(self):
+        parsed, errors = self.parse_with_errors(self.responses[:1])
+        self.assertEqual(set(parsed), {self.records[0]["key"]})
+        self.assertIn("omitted", errors[self.records[1]["key"]])
+
+    def test_an_unknown_response_key_is_ignored(self):
         responses = deepcopy(self.responses)
         responses[0]["key"] = "unknown-response-key"
-        with self.assertRaises(ValueError):
-            self.parse(responses)
+        parsed, errors = self.parse_with_errors(responses)
+        self.assertNotIn("unknown-response-key", parsed)
+        self.assertIn(self.records[0]["key"], errors)
 
-    def test_destinations_must_exist_on_the_visible_board(self):
+    def test_destinations_off_the_visible_board_are_dropped(self):
         for field in ("intended", "acceptable", "clarify"):
             with self.subTest(field=field):
                 responses = deepcopy(self.responses)
                 responses[0][field] = "session:absent" if field == "intended" else ["session:absent"]
-                with self.assertRaisesRegex(ValueError, "absent"):
-                    self.parse(responses)
+                parsed, _ = self.parse_with_errors(responses)
+                label = parsed[self.records[0]["key"]]
+                self.assertIn("session:absent", label["dropped_targets"])
+                self.assertNotIn("session:absent", [label["intended"], *label["acceptable"], *label["clarify"]])
 
     def test_confidence_is_an_integer_from_one_through_four(self):
         for confidence in (0, 5, True, 2.0, "3"):
             with self.subTest(confidence=confidence):
                 responses = deepcopy(self.responses)
                 responses[0]["confidence"] = confidence
-                with self.assertRaisesRegex(ValueError, "confidence"):
-                    self.parse(responses)
+                parsed, errors = self.parse_with_errors(responses)
+                self.assertNotIn(self.records[0]["key"], parsed)
+                self.assertIn("confidence", errors[self.records[0]["key"]])
 
     def test_unknown_intended_is_permitted_without_fabricating_a_target(self):
         responses = deepcopy(self.responses)
