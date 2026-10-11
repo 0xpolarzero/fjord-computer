@@ -194,6 +194,38 @@ import Testing
         #expect(decision(s, c)?.done.contains { if case .failed = $0 { true } else { false } } == false)
     }
 
+    @Test func aCardHiddenSinceItWasOfferedOrPickedIsNotSentTo() async {
+        let (s, d, f) = setup()
+        s.router.cards.append(RouterCard(id: "local_b#w2", sessionID: "local_b", kind: .done, title: "Update the docs",
+                                         folder: "/code/docs", text: "Updated the docs.", createdAt: Date()))
+        let task = ClaudeTask(id: "t", kind: .agent, title: "Check the links", since: Date())
+        // Offered on an ask-back, then hidden (the session's subagent runs): its button sends nothing.
+        f.ranked = [.init(target: "answer:local_b#w2", p: 0.5), .init(target: "session:local_a", p: 0.5)]
+        let a = d.submit("and the changelog")
+        await finish(d, f, a)
+        #expect(d.askBacks.first?.options.map(\.target).contains("answer:local_b#w2") == true)
+        s.claudeTasks["local_b"] = [task]
+        f.finished = []
+        d.pick(a!, target: "answer:local_b#w2")
+        #expect(f.prepared.isEmpty && d.askBacks.map(\.id) == [a!], "not sent; the ask waits for a pick still there")
+        d.pick(a!, target: "session:local_a")
+        await finish(d, f, a)
+        #expect(f.prepared == ["local_a"])
+
+        // Hidden while Jev was asked: asked back, without it, rather than sent to.
+        s.claudeTasks["local_b"] = nil
+        f.ranked = [.init(target: "answer:local_b#w2", p: 0.97), .init(target: "unclear", p: 0.03)]
+        f.holdRank = true
+        let b = d.submit("update the docs changelog too")
+        await waitUntil { f.rankHeld != nil }
+        s.claudeTasks["local_b"] = [task]
+        f.holdRank = false
+        f.rankHeld?.resume()
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_a"] && d.askBacks.map(\.id) == [b!])
+        #expect(d.askBacks.first?.options.map(\.target).contains("answer:local_b#w2") == false)
+    }
+
     @Test func aClickedPickKeepsWhatJevMadeOfTheDraftAndIsAnExample() async {
         let (s, d, f) = setup()
         var calls = 0

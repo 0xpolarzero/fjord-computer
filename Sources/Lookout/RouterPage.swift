@@ -1604,7 +1604,8 @@ private struct AskBackCard: View {
             Text("“\(RouterDecision.clip(ask.message, 160))”")
                 .cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             FlowLayout(spacing: 6) {
-                ForEach(ask.options) { option in
+                // What can still be sent to: a card hidden since it was offered (its session's tasks running) has no button.
+                ForEach(ask.options.filter { store.routerDispatcher.eligible($0.target, store: store) }) { option in
                     ClaudeButton(option.title + (option.detail.isEmpty ? "" : " · \(option.detail)"), variant: .secondary, size: .sm) {
                         store.routerDispatcher.pick(ask.id, target: option.target)
                     }

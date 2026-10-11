@@ -222,6 +222,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// the pick isn't what Jev suggested.
     func pick(_ id: UUID, target: String) {
         guard let store, store.routerOn, let i = askBacks.firstIndex(where: { $0.id == id }) else { return }
+        // Offered when it was asked: a card the page has hidden since (or one addressed, a session archived) isn't sent to.
+        guard eligible(target, store: store) else { return }
         let ask = askBacks.remove(at: i)
         let chosen = describe(target, store: store)
         let corrected = target != ask.suggestion
@@ -502,6 +504,8 @@ struct RouterAskBack: Identifiable, Equatable {
            !Self.evidenced(job.text, target: top.target, store: store) {
             found.sure = false
         }
+        // Hidden, addressed or gone while Jev was asked: you pick among what is there now.
+        if found.sure, let top = found.top, !eligible(top.target, store: store) { found.sure = false }
         var job = job
         job.jev = found
         if found.sure, let top = found.top { return try await route(job, to: top.target) }
