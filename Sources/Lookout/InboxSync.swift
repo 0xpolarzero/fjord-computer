@@ -1269,7 +1269,8 @@ extension Store {
                 let rechecked = await recheck(Array(unseen.values), me: me,
                                               keepsClosed: plan.all.contains { $0.contains("is:closed") })
                 guard current() else { return }
-                for (id, thing) in rechecked { next[id] = thing }
+                for (id, thing) in rechecked.things { next[id] = thing }
+                if inboxError == nil, let failure = rechecked.error { inboxError = failure }
             }
         }
         for (id, thing) in workflows { next[id] = thing }
@@ -1444,33 +1445,63 @@ extension Store {
     /// Looks again at some of the things kept though no search returned them (`recheckBatch`, in turns): first how each
     /// stands, then, for those changed since, the whole of it. One merged or closed goes (nil) unless a search asks for
     /// closed ones; one changed and still open is taken as it is now. What can't be told (a failed request, a node GitHub
-    /// doesn't give) stays as it was.
-    func recheck(_ kept: [Thing], me: String, keepsClosed: Bool) async -> [String: Thing?] {
+    /// doesn't give, or gives without some of its parts) stays as it was, so it still reads as changed at the next look,
+    /// and the turn doesn't move on past it: the same things are looked at again at the next refresh. `error` says what
+    /// failed.
+    func recheck(_ kept: [Thing], me: String, keepsClosed: Bool) async -> (things: [String: Thing?], error: String?) {
         let sorted = kept.sorted { $0.id < $1.id }
         let start = inboxSyncState.recheckCursor % sorted.count
         let batch = (0..<min(InboxSync.recheckBatch, sorted.count)).map { sorted[(start + $0) % sorted.count] }
-        inboxSyncState.recheckCursor = (start + batch.count) % sorted.count
         let byNode = Dictionary(batch.map { ($0.nodeID!, $0) }, uniquingKeysWith: { a, _ in a })
-        guard let states = try? await gh.graphql(InboxSync.statesRequest(Array(byNode.keys).sorted())),
-              let nodes = (states["data"] as? [String: Any])?["nodes"] as? [Any] else { return [:] }
+        /// The answer's data, and the indexes of the nodes it has errors in (all of them for an error not on one node).
+        func read(_ request: String) async -> (nodes: [Any], errored: Set<Int>?, error: String?) {
+            let json: [String: Any]
+            do { json = try await gh.graphql(request) } catch { return ([], nil, error.localizedDescription) }
+            let errors = (json["errors"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+            guard let nodes = (json["data"] as? [String: Any])?["nodes"] as? [Any] else {
+                return ([], nil, (errors.first?["message"] as? String) ?? "GitHub gave no answer")
+            }
+            var errored = Set<Int>()
+            for e in errors {
+                guard let path = e["path"] as? [Any], path.count > 1, path[0] as? String == "nodes", let i = path[1] as? Int else {
+                    return (nodes, nil, (e["message"] as? String) ?? "GitHub gave part of an answer")
+                }
+                errored.insert(i)
+            }
+            return (nodes, errored, errors.first.map { ($0["message"] as? String) ?? "GitHub gave part of an answer" })
+        }
+        let states = await read(InboxSync.statesRequest(Array(byNode.keys).sorted()))
+        guard let statesErrored = states.errored else { return ([:], states.error) }
+        var error = states.error
         var changed: [String] = []
-        for case let node as [String: Any] in nodes {
-            guard let id = node["id"] as? String, let old = byNode[id], let updated = InboxSync.date(node["updatedAt"]) else { continue }
+        for (i, value) in states.nodes.enumerated() where !statesErrored.contains(i) {
+            guard let node = value as? [String: Any], let id = node["id"] as? String, let old = byNode[id],
+                  let updated = InboxSync.date(node["updatedAt"]) else { continue }
             let status: ThingStatus = node["merged"] as? Bool == true ? .merged : node["state"] as? String == "CLOSED" ? .closed
                 : node["isDraft"] as? Bool == true ? .draft : .open
             if updated != old.updatedAt || status != old.status { changed.append(id) }
         }
-        guard !changed.isEmpty, let whole = try? await gh.graphql(InboxSync.nodesRequest(changed)),
-              let fresh = (whole["data"] as? [String: Any])?["nodes"] as? [Any] else { return [:] }
         var out: [String: Thing?] = [:]
-        for case let node as [String: Any] in fresh {
-            guard var thing = InboxSync.thing(node), let old = byNode[thing.nodeID ?? ""], old.id == thing.id else { continue }
-            if thing.status == .merged || thing.status == .closed, !keepsClosed { out[thing.id] = .some(nil); continue }
-            // Review threads past those read with it: as read before, as a refresh that can't read them on keeps them.
-            if InboxSync.moreThreads(node) != nil, old.threadsTail != nil { InboxSync.takeTail(of: old, into: &thing) }
-            out[thing.id] = InboxSync.keepingRequestTimes(thing, from: old)
+        if !changed.isEmpty {
+            let whole = await read(InboxSync.nodesRequest(changed))
+            guard let wholeErrored = whole.errored else { return ([:], whole.error) }
+            error = error ?? whole.error
+            for (i, value) in whole.nodes.enumerated() where !wholeErrored.contains(i) {
+                guard let node = value as? [String: Any], var thing = InboxSync.thing(node),
+                      let old = byNode[thing.nodeID ?? ""], old.id == thing.id else { continue }
+                if thing.status == .merged || thing.status == .closed, !keepsClosed { out[thing.id] = .some(nil); continue }
+                // Its review requests not given (null): taken as none, a pending request would go. It stays as it was.
+                if thing.kind == .pr, node["reviewRequests"] is NSNull {
+                    error = error ?? "GitHub gave part of an answer"
+                    continue
+                }
+                // Review threads past those read with it: as read before, as a refresh that can't read them on keeps them.
+                if InboxSync.moreThreads(node) != nil, old.threadsTail != nil { InboxSync.takeTail(of: old, into: &thing) }
+                out[thing.id] = InboxSync.keepingRequestTimes(thing, from: old)
+            }
         }
-        return out
+        if error == nil { inboxSyncState.recheckCursor = (start + batch.count) % sorted.count }
+        return (out, error)
     }
 
     /// Notes which searches found what, and gives back the things this refresh didn't find that a search it didn't run

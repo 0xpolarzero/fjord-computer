@@ -1085,6 +1085,64 @@ extension InboxSyncMapping {
         #expect(s.things["pr:o/r#2"] == nil && s.things["pr:o/r#1"] != nil)
     }
 
+    @Test func aKeptPRGitHubGivesInPartWhenLookedAtAgainStaysAsItWasAndIsLookedAtAgain() async {
+        final class Box: @unchecked Sendable { var shown: [Int] = [1, 2]; var updated = "2026-10-09T10:00:00Z"; var broken = false; var looked: [String] = [] }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [InboxCategory(name: "Repo", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u")])))
+        ])]
+        s.gh.session = StubbedGitHub.session { request in
+            let text = InboxSyncRefresh.body(request)
+            func pr(_ n: Int) -> [String: Any] {
+                let updated: String = n == 2 ? box.updated : "2026-10-09T10:00:00Z"
+                return node(["id": "PR_\(n)", "number": n, "url": "https://github.com/o/r/pull/\(n)", "updatedAt": updated])
+            }
+            var data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000]]
+            var errors: [[String: Any]] = []
+            if text.contains("nodes(ids:") {
+                let whole = text.contains("...P")
+                box.looked.append(whole ? "whole" : "states")
+                var full = pr(2)
+                // Its review requests GitHub couldn't give: null, with an error on them.
+                if box.broken { full["reviewRequests"] = NSNull() }
+                let state: [String: Any] = ["__typename": "PullRequest", "id": "PR_2", "state": "OPEN", "merged": false,
+                                            "isDraft": false, "updatedAt": box.updated]
+                data["nodes"] = [whole ? full : state]
+                if whole, box.broken { errors = [["message": "Something went wrong", "path": ["nodes", 0, "reviewRequests"]]] }
+            } else {
+                let first = !text.contains("after:")
+                let info: [String: Any] = box.shown.count == 1 ? ["hasNextPage": true, "endCursor": "c"] : ["hasNextPage": false]
+                data["s0"] = ["pageInfo": info, "nodes": first ? box.shown.map(pr) : []]
+            }
+            var reply: [String: Any] = ["data": data]
+            if !errors.isEmpty { reply["errors"] = errors }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#2"]?.requestedReviewers.contains("bob") == true)
+        let before = s.things["pr:o/r#2"]?.updatedAt
+        // #2 falls past the caps, then changes; the look at it whole comes without its review requests.
+        box.shown = [1]
+        box.updated = "2026-10-10T10:00:00Z"
+        box.broken = true
+        await s.syncInbox()
+        #expect(box.looked == ["states", "whole"])
+        // It stays as it was (its request to bob still pending, its time unchanged), and the failure is said.
+        #expect(s.things["pr:o/r#2"]?.requestedReviewers.contains("bob") == true)
+        #expect(s.things["pr:o/r#2"]?.updatedAt == before)
+        #expect(s.inboxError != nil)
+        // Looked at again at the next refresh: still changed since what is kept, it is read whole, and taken.
+        box.broken = false
+        box.looked = []
+        await s.syncInbox()
+        #expect(box.looked == ["states", "whole"])
+        #expect(s.things["pr:o/r#2"]?.updatedAt != before && s.things["pr:o/r#2"]?.requestedReviewers.contains("bob") == true)
+        #expect(s.inboxError == nil)
+    }
+
     @Test func aSearchGitHubDidntAnswerHasntRunAndWhatItFoundStaysUntilItDoes() async {
         final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var failing: Set<Int> = [] }
         let box = Box()
