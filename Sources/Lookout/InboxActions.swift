@@ -138,6 +138,8 @@ struct ActionLedger: Codable, Equatable {
         /// A fingerprint of the category's rules (see `InboxActions.fingerprint`).
         var rules: String
         var actions: Set<UUID>
+        /// The fingerprint is this build's (its sets sorted). Nil in a ledger saved before: one an earlier build wrote.
+        var sorted: Bool?
     }
 
     var baselines: [UUID: Baseline] = [:]
@@ -385,7 +387,8 @@ enum InboxActions {
             // number is almost always the last one the earlier build saved for the rules as they still are; taking it as
             // changed would make old, silently, everything that came in since, and no action would ever run for it. What
             // was already run (or taken as old) keeps its record and isn't run again; only what has none is due.
-            if let stored = before?.rules, stored != ruleIDs,
+            // A number this build wrote that isn't the rules' is an edit, whatever it is (and it may be too many orders to tell).
+            if let stored = before?.rules, stored != ruleIDs, before?.sorted != true,
                legacyFingerprint(stored, of: category.rules, groups: groups) != .different {
                 before?.rules = ruleIDs
             }
@@ -402,7 +405,7 @@ enum InboxActions {
                     }
                 }
             }
-            let baseline = ActionLedger.Baseline(rules: ruleIDs, actions: actionIDs)
+            let baseline = ActionLedger.Baseline(rules: ruleIDs, actions: actionIDs, sorted: true)
             if ledger.baselines[category.id] != baseline { ledger.baselines[category.id] = baseline }
         }
         for id in ledger.baselines.keys where !known.contains(id) { ledger.baselines[id] = nil }

@@ -951,6 +951,25 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(InboxActions.plan(entries: [entry(3)], categories: [category], groups: [], ledger: &ledger, me: "me").isEmpty)
     }
 
+    @Test func anEditOfRulesWithTooManyOrdersToTellIsAnEditOnceTheirNumberIsThisBuilds() {
+        let action = CategoryAction.make(.comment("hi"))
+        var category = InboxFixture.category()
+        let all: Set<ThingStatus> = [.draft, .open, .merged, .closed]
+        category.rules[0].conditions = [.status(all), .status(all), .status(all)]
+        category.actions = ActionList([action])
+        func entry(_ n: Int) -> InboxEntry {
+            InboxEntry(thing: InboxFixture.pr(n, by: Person(login: "alice")), categoryID: category.id,
+                       facts: [Fact(key: "greptile:3", label: "g")], isDone: false, isUnread: true)
+        }
+        var ledger = ActionLedger()
+        #expect(InboxActions.plan(entries: [entry(1)], categories: [category], groups: [], ledger: &ledger, me: "me").isEmpty)
+        // Edited (a fourth condition, as many orders): what is there now is old, however many orders it would take to tell.
+        category.rules[0].conditions.append(.status(all))
+        #expect(InboxActions.legacyFingerprint(ledger.baselines[category.id]!.rules, of: category.rules, groups: []) == .unknown)
+        #expect(InboxActions.plan(entries: [entry(1), entry(2)], categories: [category], groups: [], ledger: &ledger, me: "me").isEmpty)
+        #expect(ledger.baselines[category.id]?.rules == InboxActions.fingerprint(category.rules, groups: []))
+    }
+
     @Test func atMostTenRunPerRefreshAndTheRestWait() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()
