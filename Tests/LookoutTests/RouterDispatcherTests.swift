@@ -821,6 +821,24 @@ import Testing
         #expect(s.claudeSessions["local_a"] != nil)
     }
 
+    @Test func aMessageWhollyForTheRouterIsAskedOfItEvenWithAReplyArmed() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "question", p: 0.9), .init(target: "unclear", p: 0.1)]
+        let a = d.submit("@router what needs me?", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty && f.runs.map(\.intent) == [.question])
+        #expect(decision(s, a)?.done.contains { if case .failed = $0 { true } else { false } } == false)
+        // Jev can't be asked: you pick among the Router's own runs, nothing goes to the session.
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        let b = d.submit("@router what needs me?", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, b)
+        #expect(f.prepared.isEmpty && d.askBacks.first { $0.id == b }?.options.map(\.target) == ["question", "change_lookout"])
+        // An aside in a reply goes with the reply.
+        let c = d.submit("SQLite (@router no rush)", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, c)
+        #expect(f.prepared == ["local_a"])
+    }
+
     @Test func pickingTheSuggestionLogsNoCorrectionAndAnotherPickDoes() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_a", p: 0.5), .init(target: "session:local_b", p: 0.4), .init(target: "unclear", p: 0.1)]

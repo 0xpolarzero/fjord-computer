@@ -378,6 +378,9 @@ struct RouterAskBack: Identifiable, Equatable {
     /// single typed `@project` fixes a new session there when the message asks for one, or when the project has nothing else
     /// to be for (no open card, no session). Anything else is for Jev.
     static func plan(text: String, context: RouterContext, store: Store) -> Plan {
+        // Wholly for the Router ("@router what needs me?"): asked of it, whatever reply is armed or target pinned (a session
+        // would get nothing of it). An aside in a message for a session goes with that message, taken out.
+        if forRouter(text, pills: context.pills) { return .classify }
         if let id = context.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
             return .reply(session: card.sessionID, card: id)
         }
@@ -389,6 +392,13 @@ struct RouterAskBack: Identifiable, Equatable {
             if !other { return .start(folder: folder) }
         }
         return .classify
+    }
+
+    /// Everything in the message is for the Router (`@router`, its asides): nothing of it would go on to a session.
+    static func forRouter(_ text: String, pills: [Range<Int>]) -> Bool {
+        guard RouterTools.hasRouterMarker(text) else { return false }
+        do { _ = try Addressing.edit(text, pills: pills) } catch { return error is Addressing.NothingLeft }
+        return false
     }
 
     /// "start a new session…", "new chat about…", "open a session to…": said as the message's own request, at its start or
@@ -538,6 +548,12 @@ struct RouterAskBack: Identifiable, Equatable {
         if let notTo = job.context.notTo, found.top?.target == notTo {
             found.sure = false
             liveCache[Self.liveKey(job.text, narrowed)] = nil
+        }
+        // Wholly for the Router: one of its own runs, never a session or a project; you pick when Jev's pick isn't one.
+        if Self.forRouter(job.text, pills: job.context.pills) {
+            let intents = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) != nil }
+            if intents.first?.target != found.top?.target { found.sure = false }
+            found.ranked = intents.isEmpty ? [Scored(target: "question", p: 0), Scored(target: "change_lookout", p: 0)] : intents
         }
         store.updateDecision(job.id) {
             $0.decision.label = found.top.map { Self.label($0.target) }
