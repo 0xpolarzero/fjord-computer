@@ -117,6 +117,7 @@ extension Store {
     func judgeCards(session: String, message: String, eligible: [String: Int], asker: JevAsker?,
                     decision: UUID? = nil, timeout: Duration = CardJudge.timeout) async {
         guard let ask = jevAsker(.cards, base: asker) else { return }
+        let generation = jevGate.generation
         let cards = router.cards.filter { $0.sessionID == session && $0.isOpen && eligible[$0.id] != nil }
         guard !cards.isEmpty else { return }
         var jobs = cards.map { ($0, pendingForm(for: $0)) }[...]
@@ -133,6 +134,8 @@ extension Store {
             }
             return all
         }
+        // A verdict that came back before the key changed, the Router went off or the judging was stopped acts on nothing.
+        guard generation == jevGate.generation, jevAllows(.cards), !Task.isCancelled else { return }
         var state = router
         var logged: [RouterCard] = []
         let now = Date()

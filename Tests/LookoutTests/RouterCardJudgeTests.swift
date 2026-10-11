@@ -178,6 +178,24 @@ import Testing
         #expect(s.router.cards[0].isOpen)
     }
 
+    @Test func aVerdictBackBeforeTheKeyChangedOrTheRouterWentOffClosesNothing() async {
+        for flip in ["key", "off"] {
+            let s = store([card("a#w1", "a", text: "one"), card("a#w2", "a", text: "two")])
+            s.typesafeKeyCache = "sk-old"
+            s.keychainWrite = { _, _ in true }
+            var firstBack = false
+            await judge(s) { _, state in
+                // The first card's verdict is in; the change comes while the second is judged.
+                guard state.values.contains(where: { $0.contains("two") }) else { firstBack = true; return self.choice("resolved") }
+                while !firstBack { await Task.yield() }
+                for _ in 0..<50 { await Task.yield() }
+                if flip == "key" { _ = s.setTypesafeKey("sk-new") } else { s.router.enabled = false }
+                return self.choice("resolved")
+            }
+            #expect(s.router.cards.allSatisfy { $0.isOpen }, Comment(rawValue: flip))
+        }
+    }
+
     @Test func explicitActionsStillAddressWithoutJev() {
         let s = store([card("a#w1", "a")])
         s.setCardAddressed("a#w1", true)
