@@ -667,6 +667,19 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(count.searches == 1 && s.things["pr:o/r#12"] != nil && s.count(ci) == 3)
     }
 
+    @Test func aRuleThatNamesNoBranchTakesOnlyTheDefaultBranchsRuns() async {
+        let (s, ci) = store(State()) { _ in }
+        // Another category watches dev: its failures are fetched too, and are not the default branch's.
+        let dev = InboxCategory(name: "Dev", symbol: "star", color: .blue,
+                                rules: [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/x")]), on: ["dev"]),
+                                             conditions: [.workflow([.failing])], createdAt: .distantPast)])
+        s.categories.append(dev)
+        await s.syncInbox()
+        #expect(s.things["workflow:a/x:11@dev"]?.defaultBranch == "main")
+        #expect(s.entries(in: ci).map(\.id).sorted() == ["workflow:a/x:11@main", "workflow:a/x:12@main"])
+        #expect(s.entries(in: dev.id).map(\.id).sorted() == ["workflow:a/x:11@dev", "workflow:a/x:12@dev"])
+    }
+
     @Test func anOwnersWildcardIsItsReposAndEmptySlotsAreTheirDefaults() async {
         let (s, ci) = store(State()) { _ in }
         // `on` and `named` added and left empty: the default branch, every workflow.

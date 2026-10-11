@@ -888,6 +888,12 @@ extension Store {
                 if let t = queue.next() { add(t) }
             }
         }
+        // Each workflow thing says its repo's default branch, as its default target found it (or as known from before).
+        var defaults: [String: String] = [:]
+        for thing in workflows.values { if let main = thing.defaultBranch { defaults[thing.repo.lowercased()] = main } }
+        for (id, thing) in workflows where thing.defaultBranch == nil {
+            workflows[id]?.defaultBranch = defaults[thing.repo.lowercased()] ?? defaultBranches[thing.repo]
+        }
         inboxError = searchFailure ?? fetched.error ?? workflowFailure
         // A search that failed can't say what is gone: the things stay as they were.
         guard searchFailure == nil else { return }
@@ -1015,7 +1021,9 @@ extension Store {
             status = try await fetchCI(repo)
             branch = status.branch
         }
-        return InboxSync.workflowThings(repo: repo, branch: branch, status: status)
+        var things = InboxSync.workflowThings(repo: repo, branch: branch, status: status)
+        if requested == nil { for i in things.indices { things[i].defaultBranch = branch } }
+        return things
     }
 
     /// Replaces the things in one assignment, keeping what Jev said of them, and forgets marks of things gone for a month.

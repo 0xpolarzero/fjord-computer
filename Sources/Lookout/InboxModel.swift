@@ -478,6 +478,8 @@ struct Thing: Codable, Hashable, Identifiable {
     // Workflows
     var workflowName: String?
     var branch: String?
+    /// The repo's default branch, when known: what a rule that names no branch watches.
+    var defaultBranch: String?
     var failingJobs: [String] = []
     /// PRs: the size of the change, when GitHub said.
     var additions: Int?
@@ -519,6 +521,7 @@ extension Thing {
         greptileScore = try c.decodeIfPresent(Int.self, forKey: .greptileScore)
         workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName)
         branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        defaultBranch = try c.decodeIfPresent(String.self, forKey: .defaultBranch)
         failingJobs = try c.decodeIfPresent([String].self, forKey: .failingJobs) ?? []
         additions = try c.decodeIfPresent(Int.self, forKey: .additions)
         deletions = try c.decodeIfPresent(Int.self, forKey: .deletions)
