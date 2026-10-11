@@ -16,9 +16,12 @@ enum InboxEngine {
     static func evaluate(things: [Thing], categories: [InboxCategory], marks: [String: EntryMarks],
                          context: InboxContext) -> [InboxEntry] {
         let resolved = Resolved(context)
-        // A rule with a chip that can never match is off until it is fixed (edits apply as they are made); judged once here.
+        // A rule with a chip that can never match is off until it is fixed (edits apply as they are made); judged once here,
+        // as the editor judges it in its category (a workflow rule with no repo left is off but in CI, a group gone is off).
         var off = Set<UUID>()
-        for category in categories { for rule in category.rules where !problems(rule).isEmpty { off.insert(rule.id) } }
+        for category in categories {
+            for rule in category.rules where !problems(rule, in: category, groups: context.groups).isEmpty { off.insert(rule.id) }
+        }
         var entries: [InboxEntry] = []
         for thing in things {
             let m = marks[thing.id]
@@ -34,15 +37,23 @@ enum InboxEngine {
                 let seen = m?.seen ?? []
                 // Done here and nothing new since: it stays Done here with what it was Done with, as long as the rules
                 // still take it when Done's cutoff is left aside (an edited rule, or a thing that changed, lets it go).
+                // Of what it was Done with, only what is still so stays: a state gone since (conflicts resolved) goes, so
+                // it is new when it comes back.
                 if category.id == doneIn, keys.isSubset(of: acked), let kept = m?.doneFacts, !kept.isEmpty {
                     var routing = m
                     routing?.doneAt = nil
-                    let stays = category.rules.contains {
-                        !off.contains($0.id) && facts($0, thing, marks: routing, resolved: resolved) != nil
+                    var stays = false
+                    var now: [String: Fact] = [:]
+                    for rule in category.rules where !off.contains(rule.id) {
+                        guard let matched = facts(rule, thing, marks: routing, resolved: resolved) else { continue }
+                        stays = true
+                        for fact in matched where now[fact.key] == nil { now[fact.key] = fact }
                     }
-                    if stays {
-                        var all = Set(kept.map(\.key))
-                        let shown = kept + union.filter { all.insert($0.key).inserted }
+                    // Its identity is the saved fact's, its words today's ("1 unresolved" once one of two is resolved).
+                    let still = kept.compactMap { now[$0.key] }
+                    if stays, !still.isEmpty {
+                        var all = Set(still.map(\.key))
+                        let shown = still + union.filter { all.insert($0.key).inserted }
                         entries.append(InboxEntry(thing: thing, categoryID: category.id, facts: shown, isDone: true,
                                                   isUnread: !all.isSubset(of: seen), importance: importance(thing, resolved)))
                         break
@@ -88,6 +99,11 @@ enum InboxEngine {
         facts(rule, thing, marks: marks, resolved: Resolved(context))
     }
 
+    /// What keeps `rule` off in `category`: what the editor flags there (`RuleEditing.problems`), the same everywhere.
+    static func problems(_ rule: Rule, in category: InboxCategory, groups: [InboxGroup]) -> [Problem] {
+        RuleEditing.problems(rule, groups: groups, isCI: category.isCI)
+    }
+
     /// Chips in `rule` that can never match.
     static func problems(_ rule: Rule) -> [Problem] {
         var out: [Problem] = []
@@ -113,6 +129,7 @@ enum InboxEngine {
         }
         if let to = scope.to {
             if scope.toRoles.isEmpty { flag("to", "Pick at least one of assigned, review requested, mentioned") }
+            if loginOnly(to) { flag("to", "Who a thing is for is known by login only: maintainers and bots can't be told") }
             if hasTeam(to) {
                 if !kinds.contains(.pr) { flag("to", "Issues aren't assigned to teams") }
                 else if !scope.toRoles.contains(.reviewRequested) { flag("to", "Teams only come with review requested") }
@@ -140,6 +157,8 @@ enum InboxEngine {
                 if overlap(p) { add(bothReason) }
                 if hasTeam(p) { add("Teams don't write comments") }
                 if since == .myLastReview, kinds.contains(.issue) { add("Issues have no reviews") }
+                if case .newCommits = condition, loginOnly(p) { add("Commit authors are known by login only: maintainers and bots can't be told") }
+                if case .mentions = condition, loginOnly(p) { add("Mentioned people are known by login only: maintainers and bots can't be told") }
             case .lastComment(let p):
                 if overlap(p) { add(bothReason) }
             case .approved(let p), .changesRequested(let p):
@@ -303,6 +322,9 @@ enum InboxEngine {
         guard !r.me.isEmpty else { return false }
         func isMe(_ login: String) -> Bool { normalize(login) == r.me }
         if let a = thing.author, isMe(a.login) { return true }
+        // GitHub said so (its `involves:` search for you found it, or one for a review asked of you or made by you),
+        // whatever of yours is still among what was fetched.
+        if let said = signals(thing, r.me), said.involved == true || said.involvedBy?.values.contains(true) == true { return true }
         return thing.assignees.contains(where: isMe) || thing.requestedReviewers.contains(where: isMe)
             || thing.mentioned.contains(where: isMe) || thing.comments.contains { isMe($0.author.login) }
             || thing.reviews.contains { isMe($0.author.login) }
@@ -317,7 +339,12 @@ enum InboxEngine {
         case .workflow:
             // The fetched thing already carries its branch (the default one unless the rule says otherwise).
             // An empty `on` or `named` is the slot's default: the default branch, every workflow.
-            if let on = InboxSync.given(scope.on), let branch = thing.branch, !on.contains(branch) { return false }
+            if let on = InboxSync.given(scope.on) {
+                if let branch = thing.branch, !on.contains(branch) { return false }
+            } else if let branch = thing.branch, let main = thing.defaultBranch, branch != main {
+                // Another branch's run, fetched for a rule that names it, isn't the default branch's.
+                return false
+            }
             if let named = InboxSync.given(scope.named) {
                 guard let name = thing.workflowName?.lowercased(), named.contains(where: { $0.lowercased() == name })
                 else { return false }
@@ -330,7 +357,14 @@ enum InboxEngine {
                 var logins: [String] = []
                 if scope.toRoles.contains(.assigned) { logins += thing.assignees }
                 if scope.toRoles.contains(.reviewRequested), thing.kind == .pr { logins += thing.requestedReviewers }
-                if scope.toRoles.contains(.mentioned) { logins += thing.mentioned }
+                if scope.toRoles.contains(.mentioned) {
+                    logins += thing.mentioned
+                    // GitHub's `mentions:` search for you found it: you were mentioned there, though the comment that
+                    // did may be past those fetched (ten newer ones came since).
+                    if signals(thing, r.me)?.involvedBy?["mentions"] == true { logins.append(r.me) }
+                    // The same for anyone a `mentions:` search for them found it for.
+                    logins += (thing.mentionedBySearch ?? [:]).filter(\.value).keys.sorted()
+                }
                 if !logins.contains(where: { matches(to, login: $0, r) }) { return false }
             }
         }
@@ -394,8 +428,11 @@ enum InboxEngine {
             return (reviews + withText).max()
         case .myLastComment:
             let comments = thing.comments.filter { mine($0.author) }.map(\.at)
-            let replies = thing.threads.filter { mine($0.lastReplyBy) }.map(\.lastReplyAt)
-            return (comments + replies).max() ?? thing.createdAt
+            let replies = threadWords(thing, by: r.me)
+            // Your latest word as kept, Jev's reading on or off: a reply that takes your place at the end of a thread
+            // doesn't move it back.
+            let kept = signals(thing, r.me)?.answeredAt
+            return (comments + replies + [kept].compactMap { $0 }).max() ?? thing.createdAt
         }
     }
 
@@ -413,13 +450,23 @@ enum InboxEngine {
         case .newReview(let by, _):
             return thing.reviews.filter { $0.at > cutoff && matches(by, $0.author, r) }
                 .map { Fact(key: "review:\($0.id)", label: "review by @\($0.author.login)", tint: .attention) }
-        case .newCommits(let by, _):
-            return thing.commits.filter { $0.at > cutoff && matches(by, login: $0.author, r) }
+        case .newCommits(let by, let since):
+            // Since your review: the commit it was made on, and those before it, were reviewed, though Lookout first saw
+            // them after (pushed and reviewed while it was closed).
+            var covered = 0
+            if since == .myLastReview, let reviewed = thing.reviews.filter({ isMe($0.author, r) }).max(by: { $0.at < $1.at })?.commitID,
+               let at = thing.commits.firstIndex(where: { $0.id == reviewed }) {
+                covered = at + 1
+            }
+            // By when it came to the PR: committed before Done and pushed after it is new.
+            return thing.commits.dropFirst(covered).filter { $0.arrived > cutoff && matches(by, login: $0.author, r) }
                 .map { Fact(key: "commit:\($0.id)", label: "commit by @\($0.author)", tint: .neutral) }
         case .mentions(let pick, _):
-            return thing.comments.filter { c in
-                c.at > cutoff && c.mentions.contains { matches(pick, login: $0, r) }
-            }.map { Fact(key: "mention:\($0.id)", label: "mentioned by @\($0.author.login)", tint: .attention) }
+            // In comments, and in review threads (inline, on a line of the diff).
+            let inline = thing.threads.flatMap { $0.mentions ?? [] }.map { ($0.id, $0.author, $0.at, $0.logins) }
+            return (thing.comments.map { ($0.id, $0.author, $0.at, $0.mentions) } + inline).filter { _, _, at, logins in
+                at > cutoff && logins.contains { matches(pick, login: $0, r) }
+            }.map { Fact(key: "mention:\($0.0)", label: "mentioned by @\($0.1.login)", tint: .attention) }
         case .lastComment(let by):
             guard let last = thing.comments.max(by: { $0.at < $1.at }), matches(by, last.author, r) else { return [] }
             return [Fact(key: "last:\(last.id)", label: "last comment: @\(last.author.login)", tint: .attention)]
@@ -491,7 +538,8 @@ enum InboxEngine {
 
     // MARK: - Jev's signals
 
-    /// A comment, a review's words or a thread's latest reply: what Jev reads, and what `asksMe` and `noise` are about.
+    /// A comment, a review's words or a thread's reply (among its last ones fetched): what Jev reads, and what `asksMe` and
+    /// `noise` are about.
     struct Message: Hashable {
         var id: String
         var author: Person
@@ -504,9 +552,11 @@ enum InboxEngine {
 
     /// Every message of a thing, oldest first.
     static func messages(_ thing: Thing) -> [Message] {
-        let comments = thing.comments.map { Message(id: $0.id, author: $0.author, at: $0.at, text: $0.snippet, isReview: $0.isReview) }
-        let replies = thing.threads.map {
-            Message(id: $0.lastReplyID, author: $0.lastReplyBy, at: $0.lastReplyAt, text: $0.snippet, path: $0.path ?? "")
+        let comments = thing.comments.map { Message(id: $0.id, author: $0.author, at: $0.at, text: $0.text ?? $0.snippet, isReview: $0.isReview) }
+        let replies = thing.threads.flatMap { thread in
+            (thread.earlier ?? []).map { Message(id: $0.id, author: $0.author, at: $0.at, text: $0.text ?? $0.snippet, path: thread.path ?? "") }
+                + [Message(id: thread.lastReplyID, author: thread.lastReplyBy, at: thread.lastReplyAt, text: thread.text ?? thread.snippet,
+                           path: thread.path ?? "")]
         }
         return (comments + replies).sorted { $0.at < $1.at }
     }
@@ -525,11 +575,29 @@ enum InboxEngine {
         let me = normalize(me)
         guard !me.isEmpty else { return nil }
         let comments = thing.comments.filter { normalize($0.author.login) == me }.map(\.at)
-        let replies = thing.threads.filter { normalize($0.lastReplyBy.login) == me }.map(\.lastReplyAt)
-        return (comments + replies).max()
+        return (comments + threadWords(thing, by: me)).max()
+    }
+
+    /// When you (normalized) last replied in each thread: its last reply, or yours among the last ones fetched before
+    /// others replied after it.
+    private static func threadWords(_ thing: Thing, by me: String) -> [Date] {
+        guard !me.isEmpty else { return [] }
+        return thing.threads.flatMap { thread in
+            (normalize(thread.lastReplyBy.login) == me ? [thread.lastReplyAt] : [])
+                + (thread.latestBy ?? [:]).filter { normalize($0.key) == me }.map(\.value)
+        }
     }
 
     /// What Jev said that counts: nothing when it was for someone else, or Jev's reading is switched off.
+    /// The thing as Jev would have it rated `level` on `stamp`, for you.
+    static func rated(_ thing: Thing, _ level: Importance, stamp: String, me: String) -> Thing {
+        var copy = thing
+        var signals = signals(thing, me) ?? ThingSignals(viewer: viewer(me))
+        signals.importance = ImportanceSignal(level: level, stamp: stamp)
+        copy.signals = signals
+        return copy
+    }
+
     static func signals(_ thing: Thing, context: InboxContext) -> ThingSignals? {
         context.jevSignals ? signals(thing, context.me) : nil
     }
@@ -578,15 +646,16 @@ enum InboxEngine {
         }
     }
 
-    /// Each reviewer's latest review that states an opinion; commented and dismissed ones don't change it.
+    /// Each reviewer's latest review that states an opinion; commented ones don't change it, and one dismissed takes it
+    /// back (an approval before it doesn't stand again).
     private static func latestOpinions(_ thing: Thing) -> [ThingReview] {
         var latest: [String: ThingReview] = [:]
-        for review in thing.reviews where review.state == .approved || review.state == .changesRequested {
+        for review in thing.reviews where review.state != .commented {
             let who = normalize(review.author.login)
             if let current = latest[who], current.at >= review.at { continue }
             latest[who] = review
         }
-        return latest.values.sorted { $0.at < $1.at }
+        return latest.values.filter { $0.state != .dismissed }.sorted { $0.at < $1.at }
     }
 
     // MARK: - Problems
@@ -597,6 +666,11 @@ enum InboxEngine {
 
     private static func hasTeam(_ pick: Pick<PersonRef>) -> Bool {
         (pick.include + pick.except).contains { if case .team = $0 { true } else { $0 == .myTeams } }
+    }
+
+    /// Names maintainers or bots, which people known by login only (assignees, mentions, commit authors) can't be told to be.
+    private static func loginOnly(_ pick: Pick<PersonRef>) -> Bool {
+        (pick.include + pick.except).contains { $0 == .maintainers || $0 == .bots }
     }
 
     /// The slot or pick names only me.

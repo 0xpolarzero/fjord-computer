@@ -264,7 +264,7 @@ struct EntryRow: View {
         let name = String(thing.repo.split(separator: "/").last ?? "")
         switch thing.kind {
         case .workflow:
-            return [name, thing.workflowName, thing.branch].compactMap { $0 }.joined(separator: " · ")
+            return [name, thing.workflowName, thing.currentBranch].compactMap { $0 }.joined(separator: " · ")
         default:
             let by = actor.map { " · @\($0.login)" } ?? ""
             return "\(name)#\(thing.number ?? 0)\(by)"

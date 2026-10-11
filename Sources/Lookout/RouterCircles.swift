@@ -39,13 +39,27 @@ enum RouterCircles {
             apply: { answers, triage in triage.circles = (answers["circles"]?.yes ?? 0) >= floor })
     }
 
-    /// The card is stuck going in circles and so did its session's turn card before it: the same streak, already announced.
-    /// Only that alert is said once: a turn of the streak that asks you something, or asks your OK, is a banner of its own.
-    static func again(_ card: RouterCard, in cards: [RouterCard]) -> Bool {
-        guard card.kind == .stuck, card.triage?.circles == true else { return false }
-        let before = cards.filter { $0.sessionID == card.sessionID && $0.id != card.id && $0.kind.isTurn && $0.createdMs <= card.createdMs }
-            .max { $0.createdMs < $1.createdMs }
-        return before?.triage?.circles == true
+    /// The card is stuck going in circles, and so did its session's turn cards before it, back to one a banner was shown
+    /// for (`announced`): the same streak, already announced. A streak none of whose turns had a banner (they came while you
+    /// were away, at an urgency that waits) is still said. Only that alert is said once: a turn of the streak that asks you
+    /// something, or asks your OK, is a banner of its own. The streak is of turns in a row: one between them with no card (a
+    /// turn that went well, watched in the app) ends it, and what comes after is a new streak.
+    static func again(_ card: RouterCard, in cards: [RouterCard], announced: Set<String>) -> Bool {
+        guard card.kind == .stuck, card.triage?.circles == true, var turn = Self.turn(card.id) else { return false }
+        let earlier = cards.filter { $0.sessionID == card.sessionID && $0.id != card.id && $0.kind.isTurn && $0.createdMs <= card.createdMs }
+            .sorted { $0.createdMs > $1.createdMs }
+        for before in earlier {
+            guard Self.turn(before.id) == turn - 1, before.triage?.circles == true else { return false }
+            if announced.contains(before.id) { return true }
+            turn -= 1
+        }
+        return false
+    }
+
+    /// A turn card's turn (`<session>#t<turns>`); nil for another id.
+    static func turn(_ id: String) -> Int? {
+        guard let mark = id.range(of: "#t", options: .backwards) else { return nil }
+        return Int(id[mark.upperBound...])
     }
 }
 

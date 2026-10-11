@@ -281,11 +281,15 @@ extension RouterTools {
 
     /// A change the Router makes: applied by `apply` (which gives the record, as it came out) and recorded, unless the gate
     /// holds it for the user (`LookoutGate`): then nothing is applied, and the record waits for their Apply.
-    private func commit(_ store: Store, _ change: LookoutChange, apply: () throws -> LookoutChange) throws -> LookoutChange? {
+    /// `reason`: why it waits, worked out by the caller (the gate's own reasons still apply).
+    private func commit(_ store: Store, _ change: LookoutChange, reason given: String? = nil,
+                        apply: () throws -> LookoutChange) throws -> LookoutChange? {
         if !undoesThisTurn(store, change),
-           let reason = LookoutGate.reason(change, request: turnText ?? "", categories: store.categories) {
+           let reason = LookoutGate.reason(change, request: turnText ?? "", categories: store.categories,
+                                           pending: store.router.changes.filter(\.isPending)) ?? given {
             var waiting = change
             waiting.pending = reason
+            if case .category(_, _, let after?) = change.patch { waiting.groups = LookoutGate.groups(of: after, in: store.groups) }
             return record(store, waiting)
         }
         return record(store, try apply())
@@ -506,7 +510,7 @@ extension RouterTools {
         for category in store.categories {
             var matched: [[String: Any]] = []
             for (i, rule) in category.rules.enumerated() {
-                let problems = InboxEngine.problems(rule)
+                let problems = InboxEngine.problems(rule, in: category, groups: store.groups)
                 if !problems.isEmpty {
                     off.append(["category": category.title, "rule": i, "summary": words.summary(rule), "reasons": problems.map(\.reason)])
                     continue
@@ -561,24 +565,50 @@ extension RouterTools {
         }
         guard !wanted.isEmpty else { return Self.json(["changed": "nothing", "note": "Nothing to mark: those are already \(state == "restore" ? "open" : state)."]) }
         guard wanted.count <= 100 else { throw Failure("That is \(wanted.count) things; at most 100 at a time") }
-        var changes: [EntryChange] = []
-        for e in wanted {
-            let before = store.marks[e.id]
-            switch state {
-            case "done": store.markDone(e)
-            case "seen": store.markSeen(e)
-            case "unread": store.markUnread(e)
-            default: store.restore(e)
-            }
-            changes.append(EntryChange(thing: e.id, before: before, after: store.marks[e.id]))
-        }
+        // Worked out without touching anything: whether it waits is known before a mark changes.
+        let now = Date()
+        let changes = wanted.map { e in EntryChange(thing: e.id, before: store.marks[e.id], after: Self.marked(store.marks[e.id], e, state, now)) }
         let n = changes.count
         let title = state == "restore" ? "Restored \(n)" : "Marked \(n) \(state)"
         let change = LookoutChange(title: title, patch: .marks(state: state, changes))
-        // Worked out by marking them: a change that waits puts the marks back as they were.
-        let recorded = try commit(store, change) { change }
-        if recorded?.pending != nil { for item in changes { store.marks[item.thing] = item.before } }
+        // Bound to what your message named as the turn began, and counted over the turn: split into small calls, many still wait.
+        let named = Set(wanted.filter { e in
+            turnNamed.things.contains(e.id) || c.map { turnNamed.categories.contains($0.id) } == true
+        }.map(\.id))
+        let bound = LookoutGate.marksReason(changes, named: named, markedThisTurn: turnMarked)
+        turnMarked.formUnion(changes.map(\.thing))
+        let recorded = try commit(store, change, reason: bound) { try store.applyPatch(change.patch); return change }
         return done(store, recorded, ["things": wanted.prefix(10).map { reference($0.thing) }])
+    }
+
+    /// An entry's marks once marked `state` (as `Store.markDone` and the others make them), the store left as it is.
+    static func marked(_ marks: EntryMarks?, _ entry: InboxEntry, _ state: String, _ now: Date) -> EntryMarks? {
+        let facts = entry.facts.map(\.key)
+        switch state {
+        case "done":
+            var m = marks ?? EntryMarks()
+            m.acked.formUnion(facts)
+            m.seen.formUnion(facts)
+            m.doneAt = now
+            m.doneIn = entry.categoryID
+            m.doneFacts = entry.facts
+            return m
+        case "seen":
+            var m = marks ?? EntryMarks()
+            m.seen.formUnion(facts)
+            return m
+        case "unread":
+            guard var m = marks else { return nil }
+            m.seen.subtract(facts)
+            return m
+        default:
+            var m = marks ?? EntryMarks()
+            m.acked.subtract(facts)
+            m.doneAt = nil
+            m.doneIn = nil
+            m.doneFacts = nil
+            return m
+        }
     }
 
     // MARK: Settings

@@ -19,9 +19,10 @@ import Testing
         var calls = 0
         s.routerDispatcher.asker = { questions, state in
             calls += 1
-            guard case .choice(let keys, let hints, _) = questions["route"] else { return [:] }
-            // Sure of the card whose hint names the login bug, when the message mentions a database.
-            let card = keys.first { hints[$0]?.contains("Which database?") == true } ?? keys[0]
+            guard case .choice(let keys, _, _) = questions["route"] else { return [:] }
+            // Sure of the card the options state describes with its question, when the message mentions a database.
+            let options = state[RouterTools.optionsState]?.split(separator: "\n") ?? []
+            let card = keys.first { key in options.contains { $0.hasPrefix("\(key): ") && $0.contains("Which database?") } } ?? keys[0]
             let sure = state["user message"]?.contains("database") == true
             var p = Dictionary(uniqueKeysWithValues: keys.map { ($0, sure ? 0.02 / Double(keys.count) : 1 / Double(keys.count)) })
             if sure { p[card] = 0.98 }
@@ -43,16 +44,44 @@ import Testing
         try? await Task.sleep(for: .milliseconds(50))
         #expect(calls() == 0 && model.live.prediction == nil, "too short to ask")
         type("I don't know yet, maybe later", model, s)
-        await waitUntil(within: 2) { calls() == 1 }
+        await waitUntil { calls() == 1 }
         #expect(model.live.prediction == nil, "not sure: nothing shown")
         type("use sqlite for the database", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         #expect(model.live.prediction?.target == "answer:local_a#w1" && model.live.prediction?.title == "Fix the login bug")
         #expect(model.live.prediction?.mark == "local_a#w1")
+        #expect(model.context(s).shown == "answer:local_a#w1", "sending these words goes with the pick shown")
+        #expect(model.context(s).jev == model.live.prediction?.found, "and with what Jev made of them, as shown")
+        model.draft = "use sqlite for the database, or not"
+        #expect(model.context(s).shown == nil, "it was shown for other words")
+        model.draft = "use sqlite for the database"
         model.markPrediction(from: nil, to: model.live.prediction?.mark)
         #expect(model.highlighted == "local_a#w1")
         model.markPrediction(from: "local_a#w1", to: nil)
         #expect(model.highlighted == nil)
+    }
+
+    @Test func withJevNotReadingWhatYouTypeNothingIsAskedUntilYouSend() async {
+        let (s, model, calls) = setup()
+        s.settings.jevReadsDrafts = false
+        type("use sqlite for the database", model, s)
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(calls() == 0 && model.live.prediction == nil)
+        #expect(await s.routerDispatcher.predict("use sqlite for the database", projects: []) == nil && calls() == 0)
+        // Switched off while he is asked: what comes back is dropped.
+        s.settings.jevReadsDrafts = true
+        let sure = s.routerDispatcher.asker!
+        s.routerDispatcher.asker = { questions, state in
+            s.settings.jevReadsDrafts = false
+            return try await sure(questions, state)
+        }
+        #expect(await s.routerDispatcher.predict("use sqlite for the database", projects: []) == nil)
+        // Sending still routes it.
+        s.settings.jevReadsDrafts = false
+        s.routerDispatcher.asker = sure
+        #expect(s.routerDispatcher.submit("use sqlite for the database") != nil)
+        await waitUntil { calls() == 2 }
+        #expect(calls() == 2)
     }
 
     @Test func nothingIsAskedWhileAReplyFixesTheTarget() async {
@@ -66,7 +95,7 @@ import Testing
     @Test func clickingACardsPickMakesItTheReplyAndEscWavesItOff() async {
         let (s, model, _) = setup()
         type("use sqlite for the database", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         model.pinPrediction(store: s)
         #expect(model.replyTo == "local_a#w1" && model.live.prediction == nil)
         #expect(model.context(s).predicted == "answer:local_a#w1" && model.context(s).jev?.sure == true,
@@ -74,13 +103,29 @@ import Testing
 
         model.replyTo = nil
         type("use sqlite for the database please", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         model.dismissPrediction()
         #expect(model.live.prediction == nil)
         #expect(model.context(s).notTo == "answer:local_a#w1", "the send won't go there unasked")
         type("use sqlite for the database, thanks", model, s)
         try? await Task.sleep(for: .milliseconds(100))
         #expect(model.live.prediction == nil, "a waved-off target stays away for this draft")
+    }
+
+    @Test func theDraftIsSentAsWrittenWithItsFirstLinesIndentation() {
+        let (s, model, _) = setup()
+        model.draft = "\n  \n    let x = 1\n    let y = 2\n  "
+        #expect(model.plainDraft(s) == "    let x = 1\n    let y = 2")
+        model.draft = " \n "
+        #expect(model.plainDraft(s).isEmpty)
+    }
+
+    @Test func theSendSaysWhereItsPillsAre() {
+        let (s, model, _) = setup()
+        model.draft = "\n  \n\(MentionText.mark) fix it, not @lookout typed"
+        model.tokens = ["/code/lookout"]
+        #expect(model.plainDraft(s) == "@lookout fix it, not @lookout typed")
+        #expect(model.context(s).pills == [0..<8], "only the pill, where it stands in what is sent")
     }
 
     @Test func aSessionsPickIsPinnedAndSentWithTheMessage() async {
@@ -97,7 +142,7 @@ import Testing
     @Test func aPinnedDraftEditedSinceKeepsItsTargetButNotWhatJevMadeOfIt() {
         let (s, model, _) = setup()
         let read = RouterDispatcher.Classification(ranked: [.init(target: "session:local_b", p: 0.9)], sure: true, assisted: true,
-                                                   rewording: 0.02, scope: 4)
+                                                   scope: 4)
         model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "session “Update the docs” in docs",
                                  text: "fix the typo", mark: nil, found: read))
         model.draft = "fix the typo"
@@ -105,7 +150,7 @@ import Testing
         #expect(model.context(s).jev == read)
         model.draft = "fix the typo, then rewrite the whole docs site in another framework"
         #expect(model.context(s).target == "session:local_b" && model.context(s).predicted == "session:local_b")
-        #expect(model.context(s).jev == nil, "its size and rewording were for other words")
+        #expect(model.context(s).jev == nil, "its size was for other words")
         // A project tagged since: the same.
         model.draft = "fix the typo"
         model.tokens = ["/code/docs"]
@@ -121,20 +166,21 @@ import Testing
             guard state["user message"]?.contains("docs") == true else { return try await sure(questions, state) }
             held = true
             await withCheckedContinuation { gate = $0 }
-            guard case .choice(let keys, let hints, _) = questions["route"] else { return [:] }
-            let docs = keys.first { hints[$0]?.contains("Update the docs") == true } ?? keys[0]
+            guard case .choice(let keys, _, _) = questions["route"] else { return [:] }
+            let options = state[RouterTools.optionsState]?.split(separator: "\n") ?? []
+            let docs = keys.first { key in options.contains { $0.hasPrefix("\(key): ") && $0.contains("Update the docs") } } ?? keys[0]
             var p = Dictionary(uniqueKeysWithValues: keys.map { ($0, 0.0) })
             p[docs] = 1
             return ["route": .choice(.init(choice: docs, confidence: 1, probabilities: p))]
         }
         let a = "use sqlite for the database"
         type(a, model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         type("update the docs page for sqlite", model, s)
         #expect(model.live.prediction == nil, "the chip goes as soon as the words change")
-        await waitUntil(within: 2) { held }
+        await waitUntil { held }
         type(a, model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         gate?.resume()
         try? await Task.sleep(for: .milliseconds(100))
         #expect(model.live.prediction?.target == "answer:local_a#w1", "the late answer for other words isn't shown")
@@ -153,7 +199,7 @@ import Testing
         try? await Task.sleep(for: .milliseconds(250))
         #expect(calls() == 0 && model.live.prediction == nil, "the draft wasn't sent to Jev")
         model.predictTarget(store: s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         #expect(calls() == 1 && model.live.prediction?.target == "answer:local_a#w1")
         model.live.suspend()
         #expect(model.live.prediction == nil)
@@ -162,7 +208,7 @@ import Testing
     @Test func aPickWhoseCardIsAddressedGoesWithItsMark() async {
         let (s, model, _) = setup()
         type("use sqlite for the database", model, s)
-        await waitUntil(within: 2) { model.live.prediction != nil }
+        await waitUntil { model.live.prediction != nil }
         let before = RouterModel.targets(s)
         s.setCardAddressed("local_a#w1", true)
         #expect(RouterModel.targets(s) != before, "the composer watches what can be routed to")

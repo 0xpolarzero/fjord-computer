@@ -115,6 +115,21 @@ import Testing
      "ownedRepos": ["me/own"], "contributedRepos": [], "reposResolvedAt": "2026-10-10T08:00:00Z"}
     """#
 
+    @Test func aThingKeepsEveryFieldThroughAWriteAndARead() throws {
+        var thing = InboxFixture.pr(4, updated: Date(timeIntervalSince1970: 1_700_000_500))
+        thing.assignees = ["me"]
+        thing.assignedAt = ["me": Date(timeIntervalSince1970: 1_700_000_000)]
+        thing.reviewRequests = [ThingReviewRequest(reviewer: "me", at: Date(timeIntervalSince1970: 1_700_000_100))]
+        thing.behindBase = true
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let back = try decoder.decode(Thing.self, from: encoder.encode(thing))
+        #expect(back.assignedAt == thing.assignedAt)
+        #expect(back == thing)
+    }
+
     @Test func theFirstInboxsFileKeepsItsCategoriesThingsAndMarks() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -160,6 +175,132 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: other.path).contains { $0.hasPrefix("state.json.bak-") })
     }
 
+    @Test func theSameDamagedFileIsKeptAsideOnceAndOnlyTheLatestCopiesStay() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        func backups() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }.sorted()
+        }
+        // Launch after launch with the same damaged file: one copy.
+        for _ in 0..<3 {
+            try Data("not json".utf8).write(to: file)
+            let store = Store()
+            store.stateFile = file
+            store.load()
+        }
+        #expect(try backups().count == 1)
+        // Distinct damaged files: the latest five stay.
+        for n in 0..<7 {
+            try Data("not json \(n)".utf8).write(to: file)
+            let store = Store()
+            store.stateFile = file
+            store.load()
+        }
+        let kept = try backups()
+        #expect(kept.count == Store.maxBackups)
+        #expect(try kept.map { String(decoding: try Data(contentsOf: folder.appendingPathComponent($0)), as: UTF8.self) }.sorted()
+                == (2..<7).map { "not json \($0)" })
+    }
+
+    @Test func aFileThatCouldNotBeKeptAsideIsNotWrittenOverUntilItIs() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let original = Data(#"{"settings": {"pollInterval": 45, "notifications": true}, "categories": [{"name": 5}]}"#.utf8)
+        try original.write(to: file)
+        struct Full: Error {}
+        let store = Store()
+        store.stateFile = file
+        store.keepAsideStandIn = { _, _ in throw Full() }
+        store.load()
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        // The copy failed, launch and save alike: the original stays as it was, and the change waits in memory.
+        #expect(try Data(contentsOf: file) == original)
+        #expect(store.marks.keys.sorted() == ["pr:a/one#1"])
+        // The copy can be made: it is, then the change is written.
+        store.keepAsideStandIn = nil
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
+    }
+
+    @Test func aFileThatIsThereButCannotBeReadIsNotWrittenOverUntilItCanBeAndIsKeptAside() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let original = Data(#"{"settings": {"pollInterval": 45, "notifications": true}}"#.utf8)
+        try original.write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        // Unreadable isn't absent: the only copy stays as it was.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        #expect(try Data(contentsOf: file) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["state.json"])
+        // Readable again: it is kept aside, then the change is written.
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.marks.keys.sorted() == ["pr:a/one#1"])
+    }
+
+    @Test func aSaveThatCannotBeMadeIsSaidUntilOneIs() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        try Data(#"{"settings": {"pollInterval": 45, "notifications": true}}"#.utf8).write(to: file)
+        let actions = folder.appendingPathComponent("actions.json")
+        try Data(#"{"baselines": {}, "runs": {}}"#.utf8).write(to: actions)
+        for url in [file, actions] { try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path) }
+        defer { for url in [file, actions] { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) } }
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        // Unreadable: running on defaults, said from the start, the ledger's file too.
+        #expect(store.stateSaveProblem?.contains("Running on defaults until the file can be read") == true)
+        #expect(store.actionsSaveProblem?.contains("actions.json") == true)
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        #expect(store.stateSaveProblem?.contains("Running on defaults until the file can be read") == true)
+        // Readable again: once a save works, nothing is said.
+        for url in [file, actions] { try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        store.flushSave()
+        store.saveActions()
+        store.flushActions()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.saveProblem == nil)
+        // A write that fails (a full disk, a folder it can't write in) is said too, until one works.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        store.marks = [:]
+        store.flushSave()
+        store.saveActions()
+        store.flushActions()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.stateSaveProblem?.hasPrefix("Saving state.json failed") == true)
+        #expect(store.stateSaveProblem?.contains("Running on defaults") == false)
+        #expect(store.actionsSaveProblem?.hasPrefix("Saving actions.json failed") == true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        store.flushSave()
+        store.saveActions()
+        store.flushActions()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.saveProblem == nil)
+    }
+
     @Test func oneElementThatNoLongerDecodesIsLostAloneNotItsWholeList() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -186,6 +327,101 @@ import Testing
         #expect(store.router.summaries == [summary])
         // What was lost is kept aside, in the file as it was.
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).contains { $0.hasPrefix("state.json.bak-") })
+    }
+
+    @Test func aLossInTheRouterAloneKeepsTheFileAside() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let decision = RouterDecision(at: Date(timeIntervalSince1970: 1_800_000_000), trigger: .you("hi"), outcome: .done)
+        let original = Data("""
+        {"settings": {"pollInterval": 60, "notifications": true},
+         "router": {"enabled": true, "decisions": [\(String(decoding: try enc.encode(decision), as: UTF8.self)), {"at": 5}],
+                    "waits": {"s1": 12, "s2": "late"}}}
+        """.utf8)
+        try original.write(to: file)
+        let state = try { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return try d.decode(PersistedState.self, from: original) }()
+        #expect(state.dropped == ["router: 1 of decisions", "router: 1 of waits"])
+        #expect(state.router?.dropped == [])
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        #expect(store.router.enabled && store.router.decisions == [decision] && store.router.waits == ["s1": 12])
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+    }
+
+    @Test func aChangeWhoseEntryIsLostOrThatAnOlderFileKeptInItsChatGetsAnEntryOfItsOwn() throws {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try enc.encode(value), as: UTF8.self) }
+        var waiting = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
+                                    patch: .order(before: [], after: []))
+        waiting.pending = "made by the Router"
+        let applied = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_100), title: "Changed the order back",
+                                    patch: .order(before: [], after: []))
+        let linked = RouterDecision(at: Date(timeIntervalSince1970: 1_800_000_200), trigger: .you("hi"), outcome: .done)
+        // Its entry can't be read: the change waiting for your Apply is still reached, through an entry of Lookout's.
+        let state = try dec.decode(RouterState.self, from: Data("""
+        {"changes": [\(try json(waiting)), \(try json(applied))], "decisions": [{"at": 5}, \(try json(linked))]}
+        """.utf8))
+        #expect(state.dropped == ["1 of decisions"])
+        #expect(state.decisions.map(\.links.changes) == [[waiting.id], []])
+        #expect(state.decisions.first?.trigger == .system && state.decisions.first?.at == waiting.date)
+        // An older file's chat: each change it kept gets an entry too.
+        let old = try dec.decode(RouterState.self, from: Data("""
+        {"chat": [{"text": "hi"}, {"change": \(try json(applied))}]}
+        """.utf8))
+        #expect(old.changes.map(\.id) == [applied.id])
+        #expect(old.decisions.map(\.links.changes) == [[applied.id]])
+    }
+
+    @Test func anOlderFilesChatChangeThatCannotBeReadIsSaidLostSoTheFileIsKeptAside() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let good = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
+                                 patch: .order(before: [], after: []))
+        let original = Data("""
+        {"settings": {"pollInterval": 60, "notifications": true},
+         "router": {"chat": [{"text": "hi"}, {"change": \(String(decoding: try enc.encode(good), as: UTF8.self))},
+                             {"change": {"title": 5}}]}}
+        """.utf8)
+        try original.write(to: file)
+        let store = Store()
+        store.stateFile = file
+        store.load()
+        #expect(store.router.changes.map(\.id) == [good.id])
+        store.marks = ["pr:a/one#1": EntryMarks(seen: ["k"])]
+        store.flushSave()
+        // The chat isn't written again: the file as it was is kept aside first.
+        let backups = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("state.json.bak-") }
+        #expect(try backups.map { try Data(contentsOf: folder.appendingPathComponent($0)) } == [original])
+    }
+
+    @Test func aRunUnderWayWhenTheAppQuitSaysItWasInterrupted() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let first = Store()
+        first.stateFile = file
+        let working = first.logDecision(RouterDecision(trigger: .you("fix the bug")))
+        let finished = first.logDecision(RouterDecision(trigger: .you("hi"), done: [.sent(to: "a", text: "hi", original: nil)], outcome: .done))
+        first.flushSave()
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        let entry = second.router.decisions.first { $0.id == working }
+        #expect(entry?.outcome == .done && entry?.done == [.failed("interrupted")] && entry?.summary == "failed")
+        #expect(second.router.decisions.first { $0.id == finished }?.done == [.sent(to: "a", text: "hi", original: nil)])
     }
 
     @Test func aFileFromBeforeTheCategoriesLoadsWhatItCanAndLosesTheRest() throws {

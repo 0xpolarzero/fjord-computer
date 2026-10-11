@@ -307,12 +307,17 @@ enum PluginFixture {
         #expect(SessionSettings(model: "sonnet[1m]", effort: "bogus") == SessionSettings(model: "sonnet[1m]", effort: nil))
         #expect(SessionSettings(model: "claude-opus-4-5", effort: "xhigh")?.effort == "xhigh")
         #expect(SessionSettings(model: "claude-x; rm", effort: nil) == nil)
-        #expect(SessionSettings.parse("@lookout fix the bug with opus, high effort") == SessionSettings(model: "opus", effort: "high"))
+        #expect(SessionSettings.parse("@lookout fix the bug, with opus, high effort") == SessionSettings(model: "opus", effort: "high"))
         #expect(SessionSettings.parse("start a new session using Sonnet") == SessionSettings(model: "sonnet", effort: nil))
-        #expect(SessionSettings.parse("do it with xhigh effort") == SessionSettings(model: nil, effort: "xhigh"))
-        #expect(SessionSettings.parse("effort max please") == SessionSettings(model: nil, effort: "max"))
+        #expect(SessionSettings.parse("do it, with xhigh effort") == SessionSettings(model: nil, effort: "xhigh"))
+        #expect(SessionSettings.parse("start a session, effort max: fix it") == SessionSettings(model: nil, effort: "max"))
         #expect(SessionSettings.parse("write about opus the band") == nil)
         #expect(SessionSettings.parse("fix the thing") == nil)
+        // A negation in the task doesn't reach a settings clause set apart from it.
+        let both = SessionSettings(model: "opus", effort: "high")
+        #expect(SessionSettings.parse("start a session in lookout to fix login without changing the UI (with opus, high effort)") == both)
+        #expect(SessionSettings.parse("fix login without changing the UI - with opus, high effort") == both)
+        #expect(SessionSettings.parse("fix login without changing the UI \u{2014} with opus, high effort") == both)
     }
 
     @Test func theAckSaysWhatWasApplied() {
@@ -810,6 +815,31 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         let sneaky = RelaySigner.sign(body: "hi", target: "../x", key: key)
         await #expect(throws: (any Error).self) { try await inbox.deliver(sneaky, to: "../x") }
         #expect(!FileManager.default.fileExists(atPath: inbox.root.path))
+    }
+
+    @MainActor
+    @Test func theMessageIsWrittenAsideAndPutWhereThePluginLooksOnlyAsTheGateLetsItGo() async throws {
+        let dir = TempDir()
+        var inbox = RelayInbox(root: dir.path("relay"))
+        inbox.timeout = 0.1
+        let folder = inbox.folder(for: "cli-a")
+        let signed = RelaySigner.sign(body: "hi", target: "cli-a", key: key)
+        var seen: [String] = []
+        await #expect(throws: RelayInbox.Failure.refused("Stopped")) {
+            try await inbox.deliver(signed, to: "cli-a") {
+                seen = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+                return "Stopped"
+            }
+        }
+        // Written already when the gate was asked, but not as a message; refused, nothing is left.
+        #expect(seen.count == 1 && seen[0].hasSuffix(".tmp"))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+        // Let through: it is put in place, as the plugin reads it.
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
+        let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
+        try await inbox.deliver(signed, to: "cli-a") { nil }
+        #expect(await fake.value == signed)
     }
 
     @Test func leftoversAreSweptOnTheNextDelivery() async throws {

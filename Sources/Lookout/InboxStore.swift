@@ -21,6 +21,8 @@ enum InboxStore {
         var done: [InboxEntry] = []
         /// Each entry's search text, lowercased (see `Store.inboxRows`): made on the first search after a change.
         var searchKeys: [String: String]?
+        /// Waits for `expires`, then makes the change seen (`inboxTimePassed`) and announces what came in.
+        var timer: Task<Void, Never>?
 
         init() {}
 
@@ -72,9 +74,25 @@ extension Store {
             let context = inboxContext
             let all = Array(things.values)
             let result = InboxEngine.evaluate(things: all, categories: categories, marks: marks, context: context)
-            inboxMemo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals,
-                                        expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
-                                        entries: result, marks: marks)
+            var memo = InboxStore.Memo(revision: inboxRevision, jev: context.jevSignals,
+                                       expires: InboxEngine.nextChange(things: all, categories: categories, after: context.now),
+                                       entries: result, marks: marks)
+            // One timer, for the next threshold: what shows the inbox and the notifications see it crossed, with no refresh.
+            if inboxMemo.timer != nil, inboxMemo.expires == memo.expires {
+                memo.timer = inboxMemo.timer
+            } else {
+                inboxMemo.timer?.cancel()
+                if let expires = memo.expires {
+                    memo.timer = Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow) + 0.05))
+                        guard !Task.isCancelled, let self else { return }
+                        inboxMemo.timer = nil
+                        inboxTimePassed()
+                        announceInbox()
+                    }
+                }
+            }
+            inboxMemo = memo
         }
         return inboxMemo
     }
@@ -141,7 +159,77 @@ extension Store {
         marks[entry.id] = m
     }
 
+    /// How many of a category's rules are off (a chip that can never match, a group gone), as the engine keeps them.
+    func rulesOff(_ id: UUID) -> Int {
+        guard let category = categories.first(where: { $0.id == id }) else { return 0 }
+        return category.rules.filter { !InboxEngine.problems($0, in: category, groups: groups).isEmpty }.count
+    }
+
+    /// Opens the category's editor: the categories page takes the request when it shows (`go` takes the window there).
+    func editCategory(_ id: UUID, go: (AppDestination) -> Void) {
+        categoryEditorRequest = id
+        go(.categories)
+    }
+
     func moveCategory(from source: IndexSet, to destination: Int) { categories.move(fromOffsets: source, toOffset: destination) }
+
+    /// Your assignment rated (and marked, and acted on) before GitHub said when it was made, as `assigned`, is the same
+    /// assignment once its time is known (`assigned:<t>`): its rating, its facts' marks (seen, Done, notified) and its
+    /// actions' records are carried over to that stamp, once, rather than it coming in again as new. Called as things change,
+    /// with `seenBefore` the things as they were: only an assignment already there when the thing was last seen is the same
+    /// one (its time as seen then, or, seen without a time, made no later than the thing's last update then). One made since
+    /// (taken off and assigned again while the app was closed) is new: what was said of the old one is dropped, not carried.
+    func carryAssignmentStamps(seenBefore: [String: Thing]) {
+        let legacy = ":assigned"
+        func isLegacy(_ key: String) -> Bool { key.hasPrefix("importance:") && key.hasSuffix(legacy) }
+        let candidates = things.values.filter { thing in
+            thing.assignedAt != nil && (thing.signals?.importance?.stamp == "assigned"
+                || marks[thing.id].map { m in (m.seen.union(m.acked).union(m.notified)).contains(where: isLegacy) } ?? false)
+        }
+        guard !candidates.isEmpty else { return }
+        let context = inboxContext
+        let me = InboxEngine.viewer(context.me)
+        // By thing: the stamp's suffix it is carried to, or nil where it is dropped.
+        var carried: [String: String?] = [:]
+        var updated = things, newMarks = marks
+        for thing in candidates {
+            guard let stamp = InboxEngine.importanceStamp(thing, context: context), stamp.hasPrefix("assigned:"),
+                  let at = Int(stamp.dropFirst("assigned:".count)) else { continue }
+            let before = seenBefore[thing.id]
+            let wasMine = before?.assignees.contains { InboxEngine.viewer($0) == me } ?? false
+            let seenAt = before?.assignedAt?.first { InboxEngine.viewer($0.key) == me }?.value
+            let same = wasMine
+                && (seenAt.map { Int($0.timeIntervalSince1970) == at } ?? (at <= Int(before!.updatedAt.timeIntervalSince1970)))
+            let suffix: String? = same ? String(stamp.dropFirst("assigned".count)) : nil
+            func carry(_ key: String) -> String? { isLegacy(key) ? suffix.map { key + $0 } : key }
+            carried[thing.id] = .some(suffix)
+            if thing.signals?.importance?.stamp == "assigned" {
+                if same { updated[thing.id]?.signals?.importance?.stamp = stamp } else { updated[thing.id]?.signals?.importance = nil }
+            }
+            if var m = newMarks[thing.id] {
+                m.seen = Set(m.seen.compactMap(carry))
+                m.acked = Set(m.acked.compactMap(carry))
+                m.notified = Set(m.notified.compactMap(carry))
+                m.doneFacts = m.doneFacts?.compactMap { f in carry(f.key).map { var f = f; f.key = $0; return f } }
+                if m.doneFacts?.isEmpty == true { m.doneFacts = nil }
+                newMarks[thing.id] = m
+            }
+        }
+        guard !carried.isEmpty else { return }
+        var ledger = actionLedger
+        for (key, run) in ledger.runs where isLegacy(run.trigger) {
+            guard let suffix = carried[run.thing] else { continue }
+            ledger.runs[key] = nil
+            guard let suffix else { continue }
+            var moved = run
+            moved.trigger += suffix
+            if ledger.run(moved.category, moved.thing, moved.action, moved.trigger) == nil { ledger.set(moved) }
+        }
+        // Things last: setting them calls this again, which then finds nothing left to carry.
+        if newMarks != marks { marks = newMarks }
+        if ledger != actionLedger { actionLedger = ledger }
+        if updated != things { things = updated }
+    }
 
     /// Things the fetched cache has that `rule` matches: the editor's live preview.
     func preview(_ rule: Rule) -> [Thing] {

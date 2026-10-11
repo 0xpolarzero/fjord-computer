@@ -57,6 +57,9 @@ enum SessionScope {
 extension Store {
     /// Sessions the Router starts without a model or effort named get Jev's pick (Settings → Claude); on unless turned off.
     var jevPicksSessionModels: Bool { settings.jevPicksSessionModels ?? true }
+
+    /// Settings' "Let Jev read what you type": the draft goes to TypeSafe while you type (on unless turned off).
+    var jevReadsDrafts: Bool { settings.jevReadsDrafts ?? true }
 }
 
 // MARK: - The target while you type
@@ -106,7 +109,7 @@ final class RouterLiveTarget {
     func update(text: String, context: RouterContext, store: Store) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let fixed = pinned != nil || RouterDispatcher.plan(text: text, context: context, store: store) != .classify
-        guard store.routerOn, !Store.isDemo, !fixed, text.count >= Self.minLength else {
+        guard store.routerOn, store.jevReadsDrafts, !Store.isDemo, !fixed, text.count >= Self.minLength else {
             cancel()
             clear()
             if text.isEmpty { dismissed = nil }
@@ -158,7 +161,7 @@ final class RouterLiveTarget {
         guard target.hasPrefix("session:") else { return nil }
         let session = String(target.dropFirst("session:".count))
         if store.routerWorkingRows.contains(where: { $0.id == session }) { return RouterModel.workingID(session) }
-        return store.openRouterCards.first { $0.sessionID == session }?.id
+        return store.routerShownOpenCards.first { $0.sessionID == session }?.id
     }
 
     /// Esc: the prediction goes, and stays away for this draft.
@@ -209,7 +212,13 @@ extension RouterModel {
     /// What the draft goes with: the reply, the @projects, the target you pinned and the one you waved off.
     func context(_ store: Store) -> RouterContext {
         let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
-        var context = RouterContext(replyTo: reply, projects: projects, target: live.pinned, notTo: live.dismissed)
+        var context = RouterContext(replyTo: reply, projects: projects, target: live.pinned, notTo: live.dismissed,
+                                    pills: sentDraft(store).pills)
+        // Jev's pick shown over the composer for the draft as it is now: sending it goes with it, as it was shown (the
+        // dispatcher's copy of it may have expired, and asking again could go elsewhere).
+        let shown = live.valid(text: plainDraft(store), context: context, store: store)
+        context.shown = shown?.target
+        context.jev = shown?.found
         // Jev's pick you clicked, while the draft still goes there (as the pinned target or the reply to its card).
         if let chosen = live.chosen, chosen.target == live.pinned || reply.map({ "answer:\($0)" }) == chosen.target {
             context.predicted = chosen.target
@@ -221,9 +230,40 @@ extension RouterModel {
         return context
     }
 
-    /// The draft's words as they will be sent (pills written as @name).
-    func plainDraft(_ store: Store) -> String {
-        MentionText.plain(draft, tokens: tokens, name: store.folderName).trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The draft's words as they will be sent (pills written as @name): as written, the first line's indentation kept (code
+    /// pasted), only blank lines before it and whitespace after the end left out.
+    func plainDraft(_ store: Store) -> String { sentDraft(store).text }
+
+    /// The draft as it will be sent, and where its pills are in it (the character offsets of each "@name").
+    func sentDraft(_ store: Store) -> (text: String, pills: [Range<Int>]) {
+        var out: [Character] = []
+        var pills: [Range<Int>] = []
+        var next = tokens.makeIterator()
+        for c in draft {
+            if c == MentionText.mark, let folder = next.next() {
+                let name = Array("@" + store.folderName(folder))
+                pills.append(out.count..<(out.count + name.count))
+                out += name
+            } else {
+                out.append(c)
+            }
+        }
+        let (text, lead) = Self.sendableCut(String(out))
+        let count = text.count
+        return (text, pills.map { ($0.lowerBound - lead)..<($0.upperBound - lead) }.filter { $0.lowerBound >= 0 && $0.upperBound <= count })
+    }
+
+    /// `text` without the blank lines it starts with or the whitespace it ends with; the rest (the first line's indentation)
+    /// as written. Empty when it is only whitespace.
+    nonisolated static func sendable(_ text: String) -> String { sendableCut(text).text }
+
+    /// `sendable`, and how many characters were cut from the start.
+    nonisolated static func sendableCut(_ text: String) -> (text: String, lead: Int) {
+        guard let first = text.firstIndex(where: { !$0.isWhitespace }) else { return ("", 0) }
+        let lineStart = text[..<first].lastIndex(where: \.isNewline).map(text.index(after:)) ?? text.startIndex
+        var out = String(text[lineStart...])
+        while let last = out.last, last.isWhitespace { out.removeLast() }
+        return (out, text.distance(from: text.startIndex, to: lineStart))
     }
 
     /// The draft changed: Jev's pick follows it.

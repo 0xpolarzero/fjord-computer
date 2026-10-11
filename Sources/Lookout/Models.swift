@@ -3,6 +3,8 @@ import SwiftUI
 
 enum CIState: String, Codable {
     case success, failure, pending, none
+    /// Stopped before it finished (GitHub's `cancelled`): never passing.
+    case cancelled
 
     var color: Color {
         switch self {
@@ -10,7 +12,7 @@ enum CIState: String, Codable {
         case .success: CDS.Git.added
         case .failure: CDS.Text.danger
         case .pending: CDS.clay
-        case .none: Theme.tertiary
+        case .none, .cancelled: Theme.tertiary
         }
     }
 
@@ -19,6 +21,7 @@ enum CIState: String, Codable {
         case .success: "checkmark.seal.fill"
         case .failure: "xmark.seal.fill"
         case .pending: "clock.fill"
+        case .cancelled: "stop.circle.fill"
         case .none: "seal.fill"
         }
     }
@@ -28,6 +31,7 @@ enum CIState: String, Codable {
         case .success: "Passing"
         case .failure: "Failing"
         case .pending: "Running"
+        case .cancelled: "Cancelled"
         case .none: "No checks"
         }
     }
@@ -37,6 +41,7 @@ enum CIState: String, Codable {
         case .success: "passing"
         case .failure: "failing"
         case .pending: "running"
+        case .cancelled: "cancelled"
         case .none: "no checks"
         }
     }
@@ -52,6 +57,9 @@ struct CIStatus: Codable, Hashable {
     var updatedAt: Date?
     /// Each workflow on its own (external checks and statuses together are one more).
     var workflows: [Workflow] = []
+    /// The commit's Actions runs were not all read (past the pages read): a workflow not among `workflows` may still be
+    /// on it, so what was known of the commit's workflows before stays.
+    var runsCapped: Bool? = nil
 
     struct Workflow: Codable, Hashable {
         /// The workflow's id on GitHub; `Store.externalWorkflowID` for external checks.
@@ -61,6 +69,9 @@ struct CIStatus: Codable, Hashable {
         var failing: [String]
         var url: URL?
         var updatedAt: Date?
+        /// Which execution it shows (`Thing.ciRun`), and whether any of it still runs though it already fails.
+        var run: String? = nil
+        var running: Bool? = nil
     }
 }
 
@@ -82,6 +93,8 @@ struct AppSettings: Codable {
     /// Jev reads new comments and rates review requests in the inbox (default on, with a TypeSafe key); off, nothing of the
     /// inbox goes to TypeSafe and what Jev said counts for nothing.
     var jevReadsInbox: Bool?
+    /// Jev reads the Router's draft while you type, to show where it would go (default on); off, it is routed when sent.
+    var jevReadsDrafts: Bool?
 }
 
 struct PersistedState: Codable {
@@ -103,12 +116,17 @@ struct PersistedState: Codable {
     var myTeams: Set<String>? = nil
     /// The GitHub login last signed in.
     var login: String? = nil
+    /// What the things were fetched for (`Store.fetchedFor`); nil (a file from before it) is the categories saved.
+    var fetchedFor: Store.FetchedScope? = nil
+    /// Rules were edited and not yet taken in by the actions when the app quit.
+    var baselinePending: Bool? = nil
 
     init(settings: AppSettings, agents: AgentsState? = nil, router: RouterState? = nil, categories: [InboxCategory]? = nil,
          groups: [InboxGroup]? = nil, categorySections: [CategorySection]? = nil, things: [String: Thing]? = nil,
          marks: [String: EntryMarks]? = nil,
          categoryBaselines: [UUID: Set<UUID>]? = nil, ownedRepos: Set<String>? = nil, contributedRepos: Set<String>? = nil,
-         reposResolvedAt: Date? = nil, myTeams: Set<String>? = nil, login: String? = nil) {
+         reposResolvedAt: Date? = nil, myTeams: Set<String>? = nil, login: String? = nil,
+         fetchedFor: Store.FetchedScope? = nil, baselinePending: Bool? = nil) {
         self.settings = settings
         self.agents = agents
         self.router = router
@@ -123,6 +141,8 @@ struct PersistedState: Codable {
         self.reposResolvedAt = reposResolvedAt
         self.myTeams = myTeams
         self.login = login
+        self.fetchedFor = fetchedFor
+        self.baselinePending = baselinePending
     }
 
     /// The parts the file had that this build could not read (a damaged file, or one from a build whose parts this one
@@ -131,7 +151,7 @@ struct PersistedState: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case settings, agents, router, categories, groups, categorySections, things, marks, categoryBaselines, ownedRepos,
-             contributedRepos, reposResolvedAt, myTeams, login
+             contributedRepos, reposResolvedAt, myTeams, login, fetchedFor, baselinePending
     }
 
     /// Tolerant: a file from before the categories (repos, items, ci) loses that data and loads the rest; a part that no
@@ -162,6 +182,11 @@ struct PersistedState: Codable {
         settings = part(.settings) ?? AppSettings()
         agents = part(.agents)
         router = part(.router)
+        // What the Router's state lost on its own (a card, a decision, a map) counts as lost too.
+        if let lost = router?.dropped, !lost.isEmpty {
+            dropped += lost.map { "router: \($0)" }
+            router?.dropped = []
+        }
         categories = each(.categories)
         groups = each(.groups)
         categorySections = each(.categorySections)
@@ -173,6 +198,8 @@ struct PersistedState: Codable {
         reposResolvedAt = part(.reposResolvedAt)
         myTeams = part(.myTeams)
         login = part(.login)
+        fetchedFor = part(.fetchedFor)
+        baselinePending = part(.baselinePending)
         self.dropped = dropped
     }
 }

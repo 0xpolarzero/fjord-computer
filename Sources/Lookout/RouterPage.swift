@@ -60,12 +60,14 @@ struct RouterPage: Equatable {
              summaries: summaries)
     }
 
-    /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`).
+    /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`). `tasks`: what
+    /// sessions whose turn is over still run (`Store.routerTasks`, the map the keys and the counts go by too, a muted
+    /// project's sessions with the rest); without it, the Working rows'.
     static func make(cards: [RouterCard], working: [AgentRow], asks: [RouterAskBack], history: [Entry],
-                     summaries: [RouterSummary] = []) -> RouterPage {
+                     summaries: [RouterSummary] = [], tasks: [String: [ClaudeTask]]? = nil) -> RouterPage {
         let open = cards.filter(\.isOpen)
         var page = RouterPage()
-        let tasks = Dictionary(working.map { ($0.id, $0.tasks) }, uniquingKeysWith: +)
+        let tasks = tasks ?? Dictionary(working.map { ($0.id, $0.tasks) }, uniquingKeysWith: +)
         page.needs = open.filter { $0.kind != .waiting && shows($0, tasks: tasks) }.sorted(by: ranked)
         // A session that is working again shows as working.
         let busy = Set(working.map(\.id))
@@ -128,7 +130,7 @@ extension Store {
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory,
-              summaries: router.summaries)
+              summaries: router.summaries, tasks: routerTasks)
     }
 
     /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
@@ -140,10 +142,17 @@ extension Store {
         return router.cards.filter { RouterPage.shows($0, tasks: tasks) }
     }
 
+    /// The open cards the page shows, newest first: what Jev offers and a send goes to, and where a superseded card's pick
+    /// moves. An addressed card is still replied to from the history.
+    var routerShownOpenCards: [RouterCard] {
+        let tasks = routerTasks
+        return openRouterCards.filter { RouterPage.shows($0, tasks: tasks) }
+    }
+
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],
-              summaries: router.summaries)
+              summaries: router.summaries, tasks: routerTasks)
     }
 }
 
@@ -337,13 +346,15 @@ private struct RouterHistory: View {
                     pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
                 })
                 // A card picked (clicked, or with the keys): as little scrolling as shows it whole; the Router picked: the bottom.
-                .onChange(of: model.revealRequest) { _, request in
-                    guard let request else { return }
+                // Asked for before the page was drawn too (a banner's card far up the history): it goes there once laid out.
+                .onChange(of: model.revealRequest, initial: true) { _, request in
+                    guard let request = model.takeReveal(request, by: "history") else { return }
                     scroll(to: request.id, anchor: request.id == RouterModel.endID ? .bottom : nil, in: all, drawn: entries)
                 }
-                // A message asked for (an action's chip), the page opening on it or not.
+                // A message asked for (an action's chip), the page opening on it or not: gone to once, not again each time the
+                // page is drawn.
                 .onChange(of: model.messageRequest, initial: true) { _, request in
-                    guard let request else { return }
+                    guard let request = model.takeReveal(request, by: "message") else { return }
                     scroll(to: request.id, anchor: .center, in: all, drawn: entries)
                 }
                 // Scrolled up, the lines drawn stay; back at the bottom, only the newest are.
@@ -780,7 +791,7 @@ private struct CardDetails: View {
                 if let origin = card.origin { OriginTag(origin: origin) }
             }
             CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
-            if card.addressedBy != .superseded && card.addressedBy != .gone {
+            if store.routerCanReopen(card) {
                 ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
                     model.reopen(card.id, store: store)
                 }
@@ -850,7 +861,7 @@ private struct HoverOpen: View {
         .accessibilityLabel("Open \(title) in Claude")
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)
-        .animation(.easeOut(duration: 0.12), value: shown)
+        .motion(.easeOut(duration: 0.12), value: shown)
         .accessibilityHidden(!shown)
     }
 }
@@ -953,8 +964,7 @@ private struct RouterZones: View {
             .accessibilityAddTraits(.isHeader)
             .accessibilityLabel("Working, \(page.working.count)" + (page.waiting.isEmpty ? "" : ", \(page.waiting.count) waiting"))
             if !page.working.isEmpty { overview }
-            ZoneScroll(maxHeight: caps.working,
-                       reveal: model.revealRequest,
+            ZoneScroll(maxHeight: caps.working, model: model, zone: "working",
                        ids: Set(page.working.map { RouterModel.workingID($0.id) } + page.waiting.map { RouterModel.workingID($0.sessionID) })) {
                 VStack(spacing: 0) {
                     ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
@@ -1026,7 +1036,7 @@ private struct RouterZones: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityLabel("Needs you, \(page.needs.count + page.asks.count)")
-                ZoneScroll(maxHeight: needsCap, reveal: model.revealRequest,
+                ZoneScroll(maxHeight: needsCap, model: model, zone: "needs",
                            ids: Set(page.needs.map(\.id) + page.asks.map { $0.id.uuidString })) {
                     VStack(spacing: 6) {
                         ForEach(page.asks) { ask in
@@ -1125,12 +1135,16 @@ private extension View {
 /// it is laid out (the scroll view's ideal height is its content's), so the first layout has it right.
 private struct ZoneScroll<Content: View>: View {
     let maxHeight: CGFloat
-    let reveal: ScrollRequest?
+    let model: RouterModel
+    /// Which zone it is: what it went to of what was asked (`RouterModel.takeReveal`).
+    let zone: String
     let ids: Set<String>
     @ViewBuilder let content: () -> Content
     /// The content's height, for the fade alone: kept out of the view's state, which holds only whether it overflows.
     @State private var natural = Natural()
     @State private var overflows = false
+    /// A scroll asked for, made once the zone is laid out.
+    @State private var pending: ScrollRequest?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private final class Natural { var height: CGFloat = 0 }
@@ -1141,6 +1155,7 @@ private struct ZoneScroll<Content: View>: View {
                 content().frame(maxWidth: .infinity).onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                     natural.height = $0
                     fade()
+                    perform(proxy)
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -1154,16 +1169,25 @@ private struct ZoneScroll<Content: View>: View {
                     .frame(height: 18)
             })
             .onChange(of: maxHeight) { fade() }
-            .onChange(of: reveal) { _, request in
+            // Asked for before the zone was drawn too (a banner's card below what fits): it goes there once laid out.
+            .onChange(of: model.revealRequest, initial: true) { _, request in
                 guard let request, ids.contains(request.id) else { return }
-                withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: .center) }
+                pending = model.takeReveal(request, by: zone)
             }
+            .onChange(of: pending) { perform(proxy) }
         }
     }
 
     private func fade() {
         let over = natural.height > maxHeight + 1
         if over != overflows { overflows = over }
+    }
+
+    /// The scroll asked for, once the zone has been laid out (its content measured).
+    private func perform(_ proxy: ScrollViewProxy) {
+        guard natural.height > 0, let request = pending else { return }
+        pending = nil
+        withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: .center) }
     }
 }
 
@@ -1648,7 +1672,9 @@ struct CardView: View {
 // MARK: - Ask-back card
 
 /// "Where should this go?": a message the Router couldn't place with confidence. The top targets are buttons, "Something else…"
-/// lists every session and project, and typing a target's name in the composer answers it too. Nothing is sent until you pick.
+/// lists every session and project. Only a click answers it: whatever is typed in the composer meanwhile is a message of its
+/// own, even one that reads like a target's name, so a session titled after what you'd say ("Don't deploy") is never picked
+/// for saying it. Nothing is sent until you pick.
 private struct AskBackCard: View {
     let store: Store
     let ask: RouterAskBack
@@ -1666,7 +1692,8 @@ private struct AskBackCard: View {
             Text("“\(RouterDecision.clip(ask.message, 160))”")
                 .cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             FlowLayout(spacing: 6) {
-                ForEach(ask.options) { option in
+                // What can still be sent to: a card hidden since it was offered (its session's tasks running) has no button.
+                ForEach(ask.options.filter { store.routerDispatcher.eligible($0.target, store: store) }) { option in
                     ClaudeButton(option.title + (option.detail.isEmpty ? "" : " · \(option.detail)"), variant: .secondary, size: .sm) {
                         store.routerDispatcher.pick(ask.id, target: option.target)
                     }

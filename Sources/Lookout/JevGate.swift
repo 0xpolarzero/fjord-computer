@@ -20,7 +20,7 @@ enum JevUse {
     case icons
     /// The inbox's new comments and requests.
     case inbox
-    /// The clone and size of a session an inbox action starts.
+    /// The clone and size of a session an inbox action starts (it reads the item, so the inbox's switch too).
     case actions
     /// A category's or a section's icon.
     case categoryIcons
@@ -44,6 +44,19 @@ enum JevUse {
     private(set) var paused: JevClient.Failure?
     /// Failures in a row (rate limits and overloads included).
     private(set) var failures = 0
+    /// Counts the pauses failures put in: a call that worked doesn't lift one put in after it was let through.
+    private(set) var pauses = 0
+    /// The cards judged at once, whatever message they were judged for (`Store.judgeCards`).
+    let cardSlots = JevSlots(CardJudge.concurrency)
+
+    /// Told when a call made in its task is let through the gate (`Store.throughJevGate`): a call refused at the gate was
+    /// never sent, and is not a failure of what it asked about.
+    final class Admission: @unchecked Sendable {
+        private(set) var sent = false
+        func letThrough() { sent = true }
+    }
+
+    @TaskLocal static var admission: Admission?
 
     /// Throws why no call may go now with `key`.
     func admit(key: String) throws {
@@ -54,7 +67,10 @@ enum JevUse {
     /// Whether a call with `key` may go now.
     func isOpen(for key: String) -> Bool { (try? admit(key: key)) != nil }
 
-    func succeeded() {
+    /// A call worked: everything starts over, unless (`since`: the `pauses` it was let through at) a failure paused calls
+    /// meanwhile, as an older call worked before TypeSafe said to wait.
+    func succeeded(since: Int? = nil) {
+        if let since, since != pauses { return }
         failures = 0
         until = .distantPast
         paused = nil
@@ -91,6 +107,24 @@ enum JevUse {
     private func pause(_ seconds: TimeInterval, _ failure: JevClient.Failure) {
         until = max(until, now().addingTimeInterval(seconds))
         paused = failure
+        pauses &+= 1
+    }
+}
+
+/// At most `count` at once: the others wait their turn, first come first served.
+@MainActor final class JevSlots {
+    private var free: Int
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(_ count: Int) { free = count }
+
+    func acquire() async {
+        if free > 0 { free -= 1; return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func release() {
+        if waiting.isEmpty { free += 1 } else { waiting.removeFirst().resume() }
     }
 }
 
@@ -99,11 +133,12 @@ extension Store {
     func jevAllows(_ use: JevUse) -> Bool {
         switch use {
         case .routing: routerOn
-        case .drafts: routerOn
+        case .drafts: routerOn && jevReadsDrafts
         case .triage, .cards: router.enabled
         case .icons: agents.enabled && agents.iconsEnabled
         case .inbox: jevReadsInbox
-        case .actions: router.enabled && agents.enabled
+        // It reads the item (its title and what GitHub wrote): only when Jev may read the inbox.
+        case .actions: router.enabled && agents.enabled && jevReadsInbox
         case .categoryIcons: true
         }
     }
@@ -115,8 +150,9 @@ extension Store {
         return client
     }
 
-    /// One call for `use`, made with the key of `generation`: not made, or its answer dropped (`cancelled`), when the key
-    /// changed or the switch went off; not made while the gate is closed; its failure tells the gate.
+    /// One call for `use`, made with the key of `generation`: not made, or its answer or failure dropped (`cancelled`), when
+    /// the key changed or the switch went off (a failure also when the task was cancelled); not made while the gate is closed;
+    /// its failure tells the gate.
     func throughJevGate<T>(_ use: JevUse, generation: Int, _ call: () async throws -> T) async throws -> T {
         let key = typesafeKey ?? ""
         func allowed() throws {
@@ -124,14 +160,18 @@ extension Store {
         }
         try allowed()
         try jevGate.admit(key: key)
+        JevGate.admission?.letThrough()
+        let pauses = jevGate.pauses
         let out: T
         do {
             out = try await call()
         } catch {
-            if generation == jevGate.generation { jevGate.failed(error, key: key) }
+            // Asked with a key since replaced, or stopped: nothing failed (an old key's rejection says nothing of the new one).
+            guard generation == jevGate.generation, !Task.isCancelled else { throw JevClient.Failure.cancelled }
+            jevGate.failed(error, key: key)
             throw error
         }
-        if generation == jevGate.generation { jevGate.succeeded() }
+        if generation == jevGate.generation { jevGate.succeeded(since: pauses) }
         try allowed()
         return out
     }

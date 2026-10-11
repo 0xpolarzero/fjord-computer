@@ -401,6 +401,9 @@ struct ThingComment: Codable, Hashable, Identifiable {
     var snippet: String
     /// Logins @-mentioned in the body, lowercased.
     var mentions: [String] = []
+    /// The comment as Jev reads it (`InboxSync.readLimit` long) when it is longer than its snippet; nil when the snippet is
+    /// all of it, or in an older file.
+    var text: String? = nil
     /// A review's summary rather than a plain comment.
     var isReview = false
 }
@@ -414,6 +417,9 @@ struct ThingReview: Codable, Hashable, Identifiable {
     var author: Person
     var state: ReviewState
     var at: Date
+    /// The commit it was made on (GitHub's `commit.oid`): it and those before it were reviewed, whenever Lookout first saw
+    /// them. Nil when GitHub didn't say, or in an older file.
+    var commitID: String? = nil
 }
 
 struct ThingThread: Codable, Hashable, Identifiable {
@@ -426,12 +432,51 @@ struct ThingThread: Codable, Hashable, Identifiable {
     var lastReplyAt: Date
     var path: String?
     var snippet: String
+    /// The latest reply as Jev reads it when it is longer than its snippet; nil when the snippet is all of it.
+    var text: String? = nil
+    /// Each author's latest comment in the thread among its last ones fetched (by login, lowercased): your answer in the
+    /// middle of a thread is your latest word there though others replied after it. Nil in an older file.
+    var latestBy: [String: Date]?
+    /// The comments among those fetched (its first and last ones) that @-mention someone: a mention in the middle of a
+    /// thread is one, though a later reply's text is the thread's. Nil in an older file.
+    var mentions: [ThreadMention]?
+    /// The replies among its last ones fetched before its latest, oldest first: a question there still asks you though
+    /// someone else replied after it. Nil in an older file.
+    var earlier: [ThingComment]?
+
+    /// Whether a reply among those fetched (its latest, or an earlier one) has this id.
+    func hasReply(_ id: String) -> Bool { lastReplyID == id || earlier?.contains { $0.id == id } == true }
+}
+
+/// A review-thread comment's @-mentions, with what makes it an event: its id, who wrote it and when.
+struct ThreadMention: Codable, Hashable, Identifiable {
+    var id: String
+    var author: Person
+    var at: Date
+    /// Lowercased, as `ThingComment.mentions`.
+    var logins: [String]
+}
+
+/// A PR's review threads past the first page, as last read: how many threads it had and when it was last updated then, when
+/// they were read, and the logins their latest replies mention.
+struct ThreadsTail: Codable, Hashable {
+    var total: Int
+    var updatedAt: Date
+    var readAt: Date
+    var mentions: [String] = []
 }
 
 struct ThingCommit: Codable, Hashable, Identifiable {
     var id: String
     var author: String
+    /// When it was committed, as GitHub says: pushed later, it reaches the PR only then.
     var at: Date
+    /// When it was first seen on a PR read before without it (`Store.stampingCommitArrivals`); nil for what a PR had when
+    /// it was first read, or in an older file.
+    var seenAt: Date? = nil
+
+    /// When it came to the PR, as far as Lookout knows: what counts it as new since Done or your review.
+    var arrived: Date { max(at, seenAt ?? at) }
 }
 
 /// A review someone was asked for, and when: a new request after a review is a new fact.
@@ -472,22 +517,54 @@ struct Thing: Codable, Hashable, Identifiable {
     var behindBase = false
     /// The latest commit's id.
     var headSha: String?
+    /// PRs: what its review threads past the first page were read for, kept to be read again only once that changes.
+    var threadsTail: ThreadsTail?
+    /// PRs: how its reviews were read (`InboxSync.reviewsShape`); nil from a build that kept only each reviewer's latest.
+    var reviewsShape: Int?
+    /// Which execution of its CI it shows (`ci:`…): a PR's checks on its head commit by their ids (a rerun's are new ones),
+    /// a workflow's run and attempt. Nil when unknown (an older file).
+    var ciRun: String?
+    /// A check is still running, though the outcome may already say failing: the CI as a whole isn't done.
+    var ciRunning = false
+    /// Workflows: the run (or an external check) was cancelled; `checks` then says failing, never passing.
+    var ciCancelled = false
+    /// When its CI (state, run, whether it still runs) was last seen to change; nil until it is seen changing. A PR's
+    /// `updatedAt` doesn't move when its checks finish.
+    var ciChangedAt: Date?
+    /// When its CI last finished, as GitHub says (its checks' completion, its statuses' posting, a workflow's run): what a
+    /// thing first seen is stamped with (`ciChangedAt`), as CI that finished before it was found may still be news.
+    var ciFinishedAt: Date?
     /// When each current review request was made (the latest `ReviewRequestedEvent` per reviewer).
     var reviewRequests: [ThingReviewRequest] = []
     var greptileScore: Int?
     // Workflows
     var workflowName: String?
     var branch: String?
+    /// The name its branch has on GitHub now, when it isn't `branch`: a rule that names `master` keeps its things as
+    /// `@master` (`branch`), while master renamed main is read, named and re-run as main.
+    var ciBranch: String?
+    /// The repo's default branch, when known: what a rule that names no branch watches.
+    var defaultBranch: String?
     var failingJobs: [String] = []
     /// PRs: the size of the change, when GitHub said.
     var additions: Int?
     var deletions: Int?
     var changedFiles: Int?
+    /// GitHub's node id of a PR or issue: what it is looked at again by when no search returned it (`Store.recheck`).
+    var nodeID: String?
     /// What Jev made of it (InboxJev.swift), kept across refreshes; nil before it was asked anything.
     var signals: ThingSignals?
+    /// Those (lowercased logins) GitHub's `mentions:` search for them returned it for: mentioned there, though the comment
+    /// that did may be past those fetched (ten newer ones came since). Kept across refreshes, at most
+    /// `InboxSync.maxSearchMentions`; on a thing just fetched, `false` says such a search read whole would have found it and
+    /// didn't (`InboxSync.markMentioned`).
+    var mentionedBySearch: [String: Bool]?
 }
 
 extension Thing {
+    /// A workflow's branch by the name it has on GitHub now (`ciBranch`), else as its rule names it.
+    var currentBranch: String? { ciBranch ?? branch }
+
     /// Tolerant of a file from an older build: a field added since it was written (`behindBase`, `reviewRequests`…) takes
     /// its default, where the synthesized decoding lost the thing (and, with it, every thing).
     init(from decoder: Decoder) throws {
@@ -502,6 +579,7 @@ extension Thing {
         status = try c.decodeIfPresent(ThingStatus.self, forKey: .status) ?? .open
         labels = try c.decodeIfPresent([String].self, forKey: .labels) ?? []
         assignees = try c.decodeIfPresent([String].self, forKey: .assignees) ?? []
+        assignedAt = try c.decodeIfPresent([String: Date].self, forKey: .assignedAt)
         requestedReviewers = try c.decodeIfPresent([String].self, forKey: .requestedReviewers) ?? []
         mentioned = try c.decodeIfPresent([String].self, forKey: .mentioned) ?? []
         createdAt = try c.decode(Date.self, forKey: .createdAt)
@@ -514,15 +592,26 @@ extension Thing {
         hasConflicts = try c.decodeIfPresent(Bool.self, forKey: .hasConflicts) ?? false
         behindBase = try c.decodeIfPresent(Bool.self, forKey: .behindBase) ?? false
         headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
+        threadsTail = try c.decodeIfPresent(ThreadsTail.self, forKey: .threadsTail)
+        reviewsShape = try c.decodeIfPresent(Int.self, forKey: .reviewsShape)
+        ciRun = try c.decodeIfPresent(String.self, forKey: .ciRun)
+        ciRunning = try c.decodeIfPresent(Bool.self, forKey: .ciRunning) ?? false
+        ciCancelled = try c.decodeIfPresent(Bool.self, forKey: .ciCancelled) ?? false
+        ciChangedAt = try c.decodeIfPresent(Date.self, forKey: .ciChangedAt)
+        ciFinishedAt = try c.decodeIfPresent(Date.self, forKey: .ciFinishedAt)
         reviewRequests = try c.decodeIfPresent([ThingReviewRequest].self, forKey: .reviewRequests) ?? []
         greptileScore = try c.decodeIfPresent(Int.self, forKey: .greptileScore)
         workflowName = try c.decodeIfPresent(String.self, forKey: .workflowName)
         branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        ciBranch = try c.decodeIfPresent(String.self, forKey: .ciBranch)
+        defaultBranch = try c.decodeIfPresent(String.self, forKey: .defaultBranch)
         failingJobs = try c.decodeIfPresent([String].self, forKey: .failingJobs) ?? []
         additions = try c.decodeIfPresent(Int.self, forKey: .additions)
         deletions = try c.decodeIfPresent(Int.self, forKey: .deletions)
         changedFiles = try c.decodeIfPresent(Int.self, forKey: .changedFiles)
         signals = try c.decodeIfPresent(ThingSignals.self, forKey: .signals)
+        nodeID = try c.decodeIfPresent(String.self, forKey: .nodeID)
+        mentionedBySearch = try c.decodeIfPresent([String: Bool].self, forKey: .mentionedBySearch)
     }
 }
 
@@ -536,6 +625,13 @@ struct ThingSignals: Codable, Hashable {
     /// Your latest word there as ever seen: someone's later reply in a thread takes the place of yours in what GitHub
     /// returns, and must not make a question you answered ask again.
     var answeredAt: Date?
+    /// GitHub's `involves:` search for this viewer returned it: you're involved, though what you did there (a comment ten
+    /// newer ones pushed out of what is fetched) may no longer be among what came with it. Kept, as involvement is.
+    var involved: Bool?
+    /// The same for your review searches (`review-requested:`, `reviewed-by:`), by qualifier: a request made only of your
+    /// team, or a review of yours past the latest fetched. Each is kept, or taken back, by its own search only. On a thing
+    /// just fetched, `false` says such a search read whole would have found it and didn't.
+    var involvedBy: [String: Bool]?
 }
 
 /// What Jev said of one message; nil where it wasn't sure.

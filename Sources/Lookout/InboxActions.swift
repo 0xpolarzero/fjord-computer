@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Actions: what a category does by itself when a thing comes in. Pure planning here (which runs are due, which are old
 // news), the Store's runner and the real performer below. The user-facing contract is in docs/design/spec/inbox.md.
@@ -127,6 +128,8 @@ struct ActionRun: Codable, Hashable {
     var sessionID: String?
     /// The entry in the Router's history (its decision log id) the run left.
     var message: UUID?
+    /// For `enter`: when the thing was first seen out of the category since (nil while it is in).
+    var left: Date?
 }
 
 /// Everything actions remember: what was already there when each category (or action) began, and each run.
@@ -135,10 +138,41 @@ struct ActionLedger: Codable, Equatable {
         /// A fingerprint of the category's rules (see `InboxActions.fingerprint`).
         var rules: String
         var actions: Set<UUID>
+        /// The fingerprint is this build's (its sets sorted). Nil in a ledger saved before: one an earlier build wrote.
+        var sorted: Bool?
     }
 
     var baselines: [UUID: Baseline] = [:]
     var runs: [String: ActionRun] = [:]
+    /// PRs read again with every latest review (`InboxSync.reviewsShape`) since the last plan: the reviews they had all
+    /// along, back now, are taken as old, once. Kept by an earlier build, every review of the PR; this one keeps
+    /// `restoredReviewIDs` instead.
+    var restoredReviews: Set<String>?
+    /// The same, by PR: the ids of the reviews it had all along (made by the time it was last read), back now. One made
+    /// since, while Lookout was closed, isn't among them, and is new.
+    var restoredReviewIDs: [String: Set<String>]?
+    /// Each such PR as it was last read, with the reviews it had all along back: the categories it was in then, and its
+    /// facts there. Only those were there before; what it has besides (a commit pushed while Lookout was closed) is new.
+    var restoredBefore: [String: [UUID: Set<String>]]?
+    /// By category, then thing: a review request or assignment of yours that was there, not yet rated by Jev, when the
+    /// category (or an action of it) was taken in. Its rating arriving later doesn't make the thing new (`AwaitedRating`).
+    var awaitedRatings: [UUID: [String: AwaitedRating]]?
+
+    /// A request or assignment (`InboxEngine.importanceStamp`) there when actions were taken in, its rating still to come:
+    /// once rated, what the rating alone brings into the category is old for those actions, as it would have been had Jev
+    /// rated it before.
+    struct AwaitedRating: Codable, Equatable {
+        var stamp: String
+        /// The actions taken in then.
+        var actions: Set<UUID>
+        /// It was in the category then: only its importance facts for that request are old; else its entering and its
+        /// facts there are.
+        var wasIn: Bool
+        /// By action, what it had in the category when that action was taken in, or would have had there rated (its
+        /// importance aside): only those facts are old once it is rated. One made since (a comment) is new, and so is its
+        /// entering when that brings it in. Nil from a build that didn't note them: all its facts there are old.
+        var facts: [UUID: [String]]? = nil
+    }
 
     static func key(_ category: UUID, _ thing: String, _ action: UUID, _ trigger: String) -> String {
         "\(category.uuidString)\u{1F}\(thing)\u{1F}\(action.uuidString)\u{1F}\(trigger)"
@@ -156,11 +190,20 @@ struct ActionLedger: Codable, Equatable {
 enum InboxActions {
     /// Runs per sync; the rest wait for the next.
     static let perSync = 10
-    /// How long a thing must have been out of a category before coming back counts as entering again (a workflow that
-    /// is re-run and fails again would otherwise be re-run for ever).
+    /// How long a thing must have been out of a category, without a break, before coming back counts as entering again (a
+    /// workflow that is re-run and fails again would otherwise be re-run for ever).
     static let reentryCooldown: TimeInterval = 3600
-    /// Runs remembered.
+    /// Runs remembered, beyond those for what is still present (never forgotten while their trigger is there).
     static let maxRuns = 2000
+
+    /// A thing's review request or assignment of yours (`InboxEngine.importanceStamp`), and whether Jev has rated it.
+    struct Rating: Equatable {
+        var stamp: String
+        var rated: Bool
+        /// Not rated yet: by category (one with an importance rule), the facts it would have there once rated, its
+        /// importance aside.
+        var facts: [UUID: [String]] = [:]
+    }
 
     /// One action due for one thing.
     struct Job: Equatable {
@@ -182,6 +225,7 @@ enum InboxActions {
         switch parts[0] {
         case "comment", "mention", "last":
             return thing.comments.first { $0.id == id }?.author.login
+                ?? thing.threads.lazy.compactMap { $0.mentions?.first { $0.id == id }?.author.login }.first
         case "review", "approved", "changes":
             return thing.reviews.first { $0.id == id }?.author.login ?? thing.comments.first { $0.id == id }?.author.login
         case "commit":
@@ -190,6 +234,27 @@ enum InboxActions {
             return thing.threads.first { $0.id == id }?.lastReplyBy.login
         default:
             return nil
+        }
+    }
+
+    /// Whether the event a fact is about (a comment, review, commit, thread reply) is no longer on the thing, so the fact can
+    /// never be had again; false for facts about state, which may come back.
+    private static func eventGone(_ key: String, _ thing: Thing) -> Bool {
+        let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2 else { return false }
+        let id = parts[1]
+        switch parts[0] {
+        case "comment", "mention", "last", "person", "noise", "asks":
+            return !thing.comments.contains { $0.id == id } && !thing.threads.contains { $0.hasReply(id) }
+                && !(parts[0] == "mention" && thing.threads.contains { $0.mentions?.contains { $0.id == id } == true })
+        case "review", "approved", "changes":
+            return !thing.reviews.contains { $0.id == id } && !thing.comments.contains { $0.id == id }
+        case "commit":
+            return !thing.commits.contains { $0.id == id }
+        case "thread":
+            return !thing.threads.contains { $0.id == id && (parts.count < 3 || $0.lastReplyID == parts[2]) }
+        default:
+            return false
         }
     }
 
@@ -207,36 +272,226 @@ enum InboxActions {
 
     /// What the rules say, in a number that is the same at every launch: any edit of a rule (not only adding or removing
     /// one) makes what matches it old news. So does an edit of a group a rule names: adding Carol to it brings in what
-    /// Carol already had, and that isn't new either. Rules that name no group read as they always did.
+    /// Carol already had, and that isn't new either. Rules that name no group read as they always did. A set (kinds, roles,
+    /// states) is written in an order that changes at every launch: each list of plain values is sorted first.
     static func fingerprint(_ rules: [Rule], groups: [InboxGroup]) -> String {
+        let (json, appendix) = fingerprintParts(rules, groups: groups)
+        return hash(canonical(json) + appendix)
+    }
+
+    /// What a fingerprint saved by an earlier build says of the rules now.
+    enum LegacyMatch { case same, different, unknown }
+
+    /// Whether `stored` is the fingerprint of the same rules as written before they were sorted (in any order a launch
+    /// may have given the sets), as ledgers saved by earlier builds hold it. Only what was a `Set` then is tried in other
+    /// orders: a condition's states or statuses (`checks`, `status`, `workflow`); kinds and roles were already written in
+    /// their cases' order, and a list (labels, people, repos) in yours. Bounded: past `limit` orders it is `unknown`.
+    static func legacyFingerprint(_ stored: String, of rules: [Rule], groups: [InboxGroup], limit: Int = 5_000) -> LegacyMatch {
+        let (json, appendix) = fingerprintParts(rules, groups: groups)
+        let arrays = plainArrays(json).filter { array in
+            setKeys.contains { key in json[..<array.range.lowerBound].reversed().starts(with: key.reversed()) }
+        }
+        var budget = limit
+        var found = false
+        // Every order of every set, the text around them kept.
+        func walk(_ index: Int, _ built: [UInt8], _ from: Int) {
+            guard !found, budget > 0 else { return }
+            guard index < arrays.count else {
+                budget -= 1
+                if hash(built + json[from...] + appendix) == stored { found = true }
+                return
+            }
+            let array = arrays[index]
+            let prefix = built + json[from..<array.range.lowerBound]
+            for order in permutations(array.items) {
+                guard !found, budget > 0 else { return }
+                walk(index + 1, prefix + joined(order), array.range.upperBound)
+            }
+        }
+        walk(0, [], 0)
+        return found ? .same : budget > 0 ? .different : .unknown
+    }
+
+    /// How a condition holding a set is written (`{"checks":{"_0":[…]}}`): the text right before the set's `[`. Never inside a
+    /// string, where a quote is escaped.
+    private static let setKeys = ["checks", "status", "workflow"].map { Array("\"\($0)\":{\"_0\":".utf8) }
+
+    private static func fingerprintParts(_ rules: [Rule], groups: [InboxGroup]) -> (json: [UInt8], appendix: [UInt8]) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         encoder.dateEncodingStrategy = .iso8601
-        var data = (try? encoder.encode(rules)) ?? Data()
+        let data = (try? encoder.encode(rules)) ?? Data()
         let text = String(decoding: data, as: UTF8.self)
+        var appendix: [UInt8] = []
         for group in groups.sorted(by: { $0.id.uuidString < $1.id.uuidString }) where text.contains(group.id.uuidString) {
             let members = Set(group.members.map { $0.lowercased() }).sorted().joined(separator: "\u{1F}")
-            data.append(contentsOf: Array("\u{1E}\(group.id.uuidString)\u{1F}\(group.kind.rawValue)\u{1F}\(members)".utf8))
+            appendix += Array("\u{1E}\(group.id.uuidString)\u{1F}\(group.kind.rawValue)\u{1F}\(members)".utf8)
         }
+        return (Array(data), appendix)
+    }
+
+    private static func hash(_ bytes: [UInt8]) -> String {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in data {
+        for byte in bytes {
             hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
         }
         return String(hash, radix: 16)
     }
 
+    /// JSON text with each list of plain values sorted, as written otherwise.
+    static func canonical(_ json: [UInt8]) -> [UInt8] {
+        var out: [UInt8] = []
+        var from = 0
+        for array in plainArrays(json) {
+            out += json[from..<array.range.lowerBound]
+            out += joined(array.items.sorted { $0.lexicographicallyPrecedes($1) })
+            from = array.range.upperBound
+        }
+        return out + json[from...]
+    }
+
+    private static func joined(_ items: [ArraySlice<UInt8>]) -> [UInt8] {
+        var out: [UInt8] = [UInt8(ascii: "[")]
+        for (i, item) in items.enumerated() {
+            if i > 0 { out.append(UInt8(ascii: ",")) }
+            out += item
+        }
+        out.append(UInt8(ascii: "]"))
+        return out
+    }
+
+    /// Every order of a list; a long one (a set is a few values, a list of labels is kept in its order) only as it is.
+    private static func permutations(_ items: [ArraySlice<UInt8>]) -> [[ArraySlice<UInt8>]] {
+        guard items.count > 1, items.count <= 5 else { return [items] }
+        var out: [[ArraySlice<UInt8>]] = []
+        for i in items.indices {
+            var rest = items
+            let first = rest.remove(at: i)
+            for tail in permutations(rest) { out.append([first] + tail) }
+        }
+        return out
+    }
+
+    /// Each array of JSON text holding only plain values (strings, numbers, literals): its range, `[` to `]` included,
+    /// and its items as written. They never nest.
+    private static func plainArrays(_ json: [UInt8]) -> [(range: Range<Int>, items: [ArraySlice<UInt8>])] {
+        var out: [(range: Range<Int>, items: [ArraySlice<UInt8>])] = []
+        // Open containers: whether each is an array, where it starts, whether it holds only plain values, its commas.
+        var stack: [(array: Bool, start: Int, plain: Bool, commas: [Int])] = []
+        var inString = false, escaped = false
+        for (i, byte) in json.enumerated() {
+            if inString {
+                if escaped { escaped = false } else if byte == UInt8(ascii: "\\") { escaped = true } else if byte == UInt8(ascii: "\"") { inString = false }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                inString = true
+            case UInt8(ascii: "["), UInt8(ascii: "{"):
+                if !stack.isEmpty { stack[stack.count - 1].plain = false }
+                stack.append((byte == UInt8(ascii: "["), i, true, []))
+            case UInt8(ascii: ","):
+                if !stack.isEmpty { stack[stack.count - 1].commas.append(i) }
+            case UInt8(ascii: "]"), UInt8(ascii: "}"):
+                guard let open = stack.popLast() else { continue }
+                guard open.array, open.plain, i > open.start + 1 else { continue }
+                var items: [ArraySlice<UInt8>] = []
+                var start = open.start + 1
+                for comma in open.commas + [i] {
+                    items.append(json[start..<comma])
+                    start = comma + 1
+                }
+                out.append((open.start..<(i + 1), items))
+            default:
+                break
+            }
+        }
+        return out.sorted { $0.range.lowerBound < $1.range.lowerBound }
+    }
+
     /// Brings the ledger up to date with the categories (a category, rule set or action seen for the first time takes what
     /// is there as old; runs of what is gone are forgotten) and returns the runs that are due, in the order of the
     /// categories, newest things first.
+    /// `known`: the ids of every thing still fetched, in a category now or not.
     static func plan(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: inout ActionLedger,
-                     me: String, now: Date = Date()) -> [Job] {
+                     me: String, known things: Set<String> = [], ratings: [String: Rating] = [:], now: Date = Date()) -> [Job] {
         let byCategory = Dictionary(grouping: entries, by: \.categoryID)
         let known = Set(categories.map(\.id))
+        // Reviews a PR had all along, back since this build reads every latest one: old, as if they had been there.
+        // Only those it had by the time it was last read: one made since is new. A review's opinion counts with it.
+        if ledger.restoredReviews != nil || ledger.restoredReviewIDs != nil || ledger.restoredBefore != nil {
+            let whole = ledger.restoredReviews ?? []
+            let byID = ledger.restoredReviewIDs ?? [:]
+            let before = ledger.restoredBefore ?? [:]
+            func restored(_ key: String, of thing: String) -> Bool {
+                let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+                guard parts.count == 2, ["review", "approved", "changes"].contains(parts[0]) else { return false }
+                return whole.contains(thing) || byID[thing]?.contains(parts[1]) == true
+            }
+            for category in categories {
+                for entry in byCategory[category.id] ?? [] where whole.contains(entry.id) || byID[entry.id] != nil {
+                    // In the category as last read, those reviews back (a "New review" one it is in only by them): it was
+                    // there all along, its entering and the facts it had there then are old. Nothing else is.
+                    let had = before[entry.id]?[category.id]
+                    for action in category.actions.items where action.applies(to: entry.thing.kind) {
+                        var keys = had.map { had in ["enter"] + entry.facts.map(\.key).filter(had.contains) } ?? []
+                        if action.trigger == .eachFact { keys += entry.facts.map(\.key).filter { restored($0, of: entry.id) } }
+                        for key in keys where ledger.run(category.id, entry.id, action.id, key) == nil {
+                            ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: key,
+                                                 state: .baselined, at: now))
+                        }
+                    }
+                }
+            }
+            ledger.restoredReviews = nil
+            ledger.restoredReviewIDs = nil
+            ledger.restoredBefore = nil
+        }
+        // Ratings awaited since a baseline that have come: what they alone bring is old for the actions taken in then. One
+        // whose request or assignment is gone, or another now, is no longer awaited.
+        if var awaited = ledger.awaitedRatings {
+            for category in categories {
+                guard var records = awaited[category.id] else { continue }
+                for (thing, record) in records {
+                    guard let rating = ratings[thing], rating.stamp == record.stamp else { records[thing] = nil; continue }
+                    guard rating.rated else { continue }
+                    records[thing] = nil
+                    guard let entry = byCategory[category.id]?.first(where: { $0.id == thing }) else { continue }
+                    let rated = entry.facts.map(\.key).filter { $0.hasPrefix("importance:") && $0.hasSuffix(":" + record.stamp) }
+                    let others = entry.facts.map(\.key).filter { !rated.contains($0) }
+                    for action in category.actions.items where record.actions.contains(action.id) && action.applies(to: entry.thing.kind) {
+                        var keys = record.wasIn ? rated : ["enter"] + entry.facts.map(\.key)
+                        // What it had then is old, and its entering if nothing else brings it in; what came since is new.
+                        if let had = record.facts?[action.id].map(Set.init) {
+                            keys = rated + others.filter(had.contains)
+                            if !record.wasIn, others.allSatisfy(had.contains) { keys.insert("enter", at: 0) }
+                        }
+                        for key in keys where ledger.run(category.id, entry.id, action.id, key) == nil {
+                            ledger.set(ActionRun(category: category.id, thing: entry.id, action: action.id, trigger: key,
+                                                 state: .baselined, at: now))
+                        }
+                    }
+                }
+                awaited[category.id] = records.isEmpty ? nil : records
+            }
+            for id in awaited.keys where !known.contains(id) { awaited[id] = nil }
+            ledger.awaitedRatings = awaited.isEmpty ? nil : awaited
+        }
         // Baselines: what is there when a category's rules change, or an action is added, is old.
         for category in categories {
             let ruleIDs = fingerprint(category.rules, groups: groups)
             let actionIDs = Set(category.actions.items.map(\.id))
-            let before = ledger.baselines[category.id]
+            var before = ledger.baselines[category.id]
+            // Saved by a build that didn't sort the sets: the same rules, taken in once under their sorted number.
+            // Too many orders to tell (several conditions of states): taken as the same rules too, the safer side. Such a
+            // number is almost always the last one the earlier build saved for the rules as they still are; taking it as
+            // changed would make old, silently, everything that came in since, and no action would ever run for it. What
+            // was already run (or taken as old) keeps its record and isn't run again; only what has none is due.
+            // A number this build wrote that isn't the rules' is an edit, whatever it is (and it may be too many orders to tell).
+            if let stored = before?.rules, stored != ruleIDs, before?.sorted != true,
+               legacyFingerprint(stored, of: category.rules, groups: groups) != .different {
+                before?.rules = ruleIDs
+            }
             let all = before == nil || before!.rules != ruleIDs
             let fresh = all ? category.actions.items : category.actions.items.filter { !(before?.actions.contains($0.id) ?? false) }
             for action in fresh {
@@ -250,25 +505,73 @@ enum InboxActions {
                     }
                 }
             }
-            let baseline = ActionLedger.Baseline(rules: ruleIDs, actions: actionIDs)
-            if before != baseline { ledger.baselines[category.id] = baseline }
+            // A request or assignment there now that Jev hasn't rated yet: its rating, when it comes, is old news too.
+            let rates = category.rules.contains { $0.conditions.contains { if case .importance = $0 { true } else { false } } }
+            if !fresh.isEmpty {
+                var records = !rates || all ? [:] : ledger.awaitedRatings?[category.id] ?? [:]
+                let inside = Dictionary((byCategory[category.id] ?? []).map { ($0.id, $0.facts.map(\.key)) }, uniquingKeysWith: { a, _ in a })
+                for (thing, rating) in ratings where rates && !rating.rated {
+                    var record = records[thing].flatMap { $0.stamp == rating.stamp ? $0 : nil }
+                        ?? ActionLedger.AwaitedRating(stamp: rating.stamp, actions: [], wasIn: inside[thing] != nil, facts: [:])
+                    record.actions.formUnion(fresh.map(\.id))
+                    // What it has there now, or would have rated: its importance aside, what a rating then finds old.
+                    var had: [String] = []
+                    for key in (inside[thing] ?? []) + (rating.facts[category.id] ?? [])
+                    where !key.hasPrefix("importance:") && !had.contains(key) { had.append(key) }
+                    if record.facts != nil { for action in fresh { record.facts?[action.id] = had } }
+                    records[thing] = record
+                }
+                var awaited = ledger.awaitedRatings ?? [:]
+                awaited[category.id] = records.isEmpty ? nil : records
+                ledger.awaitedRatings = awaited.isEmpty ? nil : awaited
+            }
+            let baseline = ActionLedger.Baseline(rules: ruleIDs, actions: actionIDs, sorted: true)
+            if ledger.baselines[category.id] != baseline { ledger.baselines[category.id] = baseline }
         }
         for id in ledger.baselines.keys where !known.contains(id) { ledger.baselines[id] = nil }
 
         // Forget: runs of a category or action that is gone; entering records of a thing that has been out for a while.
         let actionIDs = Set(categories.flatMap { $0.actions.items.map(\.id) })
-        let inside = Set(entries.filter { !triggering($0, me: me).isEmpty }.map { "\($0.categoryID.uuidString)\u{1F}\($0.id)" })
+        // In the category is in it, whoever's facts hold it there: your own comment (the action's) leaving it in is no exit,
+        // which would let another person's reply after the cooldown run the action again within one visit. Whose facts
+        // they are counts only for what triggers a run.
+        let inside = Set(entries.map { "\($0.categoryID.uuidString)\u{1F}\($0.id)" })
         for (key, run) in ledger.runs {
             if !known.contains(run.category) || !actionIDs.contains(run.action) {
                 ledger.runs[key] = nil
-            } else if run.trigger == "enter", run.state != .running,
-                      !inside.contains("\(run.category.uuidString)\u{1F}\(run.thing)"),
-                      now.timeIntervalSince(run.at) > reentryCooldown {
-                ledger.runs[key] = nil
+            } else if run.trigger == "enter", run.state != .running {
+                // Out for the cooldown on end, counted from when it left (not from the run): back sooner is the same visit.
+                let isIn = inside.contains("\(run.category.uuidString)\u{1F}\(run.thing)")
+                if isIn, let left = run.left {
+                    // Seen back only now: out for the whole cooldown is a new visit, without a refresh in between to say so.
+                    if now.timeIntervalSince(left) > reentryCooldown { ledger.runs[key] = nil } else { ledger.runs[key]?.left = nil }
+                } else if !isIn, let left = run.left {
+                    if now.timeIntervalSince(left) > reentryCooldown { ledger.runs[key] = nil }
+                } else if !isIn {
+                    ledger.runs[key]?.left = now
+                }
             }
         }
+        // Over the cap, only what nothing present can ask about again goes, oldest first: a run for a fact a thing still has
+        // is what keeps it from running again, so it stays however many there are, and so do the runs of a thing still
+        // fetched but out of the category for now (it may come back with the same facts). A fact not shown now (Jev's
+        // reading off hides importance) may be shown again: in the category, only a run whose event (a comment, review,
+        // commit, thread reply) is gone from the thing goes. Entering is forgotten only by the cooldown above.
         if ledger.runs.count > maxRuns {
-            let drop = ledger.runs.filter { $0.value.state != .running }.sorted { $0.value.at < $1.value.at }
+            var present: Set<String> = []
+            var inCategory: [String: Thing] = [:]
+            for entry in entries {
+                let prefix = "\(entry.categoryID.uuidString)\u{1F}\(entry.id)\u{1F}"
+                for fact in entry.facts { present.insert(prefix + fact.key) }
+                inCategory["\(entry.categoryID.uuidString)\u{1F}\(entry.id)"] = entry.thing
+            }
+            let drop = ledger.runs.filter { _, run in
+                guard run.state != .running, run.trigger != "enter" else { return false }
+                let key = "\(run.category.uuidString)\u{1F}\(run.thing)"
+                if let thing = inCategory[key] { return !present.contains(key + "\u{1F}" + run.trigger) && eventGone(run.trigger, thing) }
+                return !things.contains(run.thing)
+            }
+                .sorted { $0.value.at < $1.value.at }
                 .prefix(ledger.runs.count - maxRuns)
             for (key, _) in drop { ledger.runs[key] = nil }
         }
@@ -288,8 +591,10 @@ enum InboxActions {
             for entry in mine {
                 let facts = triggering(entry, me: me)
                 guard !facts.isEmpty else { continue }
+                // An action is run once per thing and fact however often its id is listed: its runs are kept by that id.
+                var listed = Set<UUID>()
                 for action in category.actions.items where action.applies(to: entry.thing.kind) {
-                    guard baseline.actions.contains(action.id) else { continue }
+                    guard baseline.actions.contains(action.id), listed.insert(action.id).inserted else { continue }
                     switch action.trigger {
                     case .enter:
                         if ledger.run(category.id, entry.id, action.id, "enter") == nil {
@@ -305,6 +610,34 @@ enum InboxActions {
             }
         }
         return jobs
+    }
+
+    /// A job planned before others ran, as it stands now: nil when it is no longer due (its action deleted or edited, its
+    /// category's rules or groups changed, the thing out of the category or Done, its run recorded meanwhile), else for the
+    /// facts it still has.
+    static func stillDue(_ job: Job, entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup],
+                         ledger: ActionLedger, me: String) -> Job? {
+        guard let category = categories.first(where: { $0.id == job.category.id }),
+              category.actions.items.contains(job.action),
+              let baseline = ledger.baselines[category.id], baseline.actions.contains(job.action.id),
+              baseline.rules == fingerprint(category.rules, groups: groups),
+              let entry = entries.first(where: { $0.id == job.entry.id && $0.categoryID == category.id && !$0.isDone })
+        else { return nil }
+        let facts = triggering(entry, me: me)
+        guard !facts.isEmpty else { return nil }
+        func unrecorded(_ key: String) -> Bool { ledger.run(category.id, entry.id, job.action.id, key) == nil }
+        if job.keys == ["enter"], !unrecorded("enter") { return nil }
+        var now = job
+        now.category = category
+        now.entry = entry
+        if job.keys != ["enter"] {
+            now.facts = facts.filter { job.keys.contains($0.key) && unrecorded($0.key) }
+            now.keys = now.facts.map(\.key)
+            if now.keys.isEmpty { return nil }
+        } else {
+            now.facts = facts
+        }
+        return now
     }
 
     // MARK: Words
@@ -410,6 +743,10 @@ enum InboxActions {
         }
     }
 
+    /// A category's name as untrusted metadata: cleaned, on one line, bounded, its fence tags broken up. Only ever placed
+    /// inside a fenced block.
+    static func categoryLabel(_ name: String) -> String { neutralized(UntrustedText.clean(name, limit: 80)) }
+
     /// The new session's title: its reference and what it is about, in one short line.
     static func sessionTitle(_ thing: Thing) -> String {
         SessionStart.cleanTitle(reference(thing) + " " + inline(thing.title))
@@ -417,7 +754,7 @@ enum InboxActions {
 
     static func reference(_ thing: Thing) -> String {
         switch thing.kind {
-        case .workflow: "\(thing.repo) · \(thing.workflowName ?? "workflow") on \(thing.branch ?? "its branch")"
+        case .workflow: "\(thing.repo) · \(thing.workflowName ?? "workflow") on \(thing.currentBranch ?? "its branch")"
         default: "\(thing.repo)#\(thing.number ?? 0)"
         }
     }
@@ -428,10 +765,11 @@ enum InboxActions {
     /// the block, each bounded on its own.
     static func routerMessage(_ text: String, category: String, thing: Thing, facts: [Fact]) -> String {
         let kind = thing.kind == .pr ? "Pull request" : thing.kind == .issue ? "Issue" : "Workflow"
-        let lines = ["Context, from the “\(category)” category of the Lookout inbox:",
+        let lines = ["Context, from the category (named in the block below) of the Lookout inbox:",
                      "- URL: \(trustedURL(thing) ?? "in the GitHub block below")",
                      "- \(kind): \(trustedReference(thing) ?? "in the GitHub block below")"]
-        var github = ["- Title: \(inline(thing.title))"]
+        // A category's name is yours to type but can be copied from a title GitHub's users chose: data, not your words.
+        var github = ["- Category: \(categoryLabel(category))", "- Title: \(inline(thing.title))"]
         if trustedReference(thing) == nil || thing.kind == .workflow { github.append("- Reference: " + inline(reference(thing))) }
         if trustedURL(thing) == nil { github.append("- URL: " + inline(thing.url.absoluteString)) }
         if let author = thing.author { github.append("- Author: " + inline("@" + author.login)) }
@@ -443,7 +781,7 @@ enum InboxActions {
             github.append("- Last comment, by \(inline("@" + last.author.login)): “\(UntrustedText.clean(last.snippet, limit: 400))”")
         }
         let body = substitutePrompt(text, thing: thing).trimmingCharacters(in: .whitespacesAndNewlines)
-        return "⚡ \(category): " + (body.isEmpty ? "" : body + "\n\n") + lines.joined(separator: "\n")
+        return "⚡ An action of the category (named in the block below): " + (body.isEmpty ? "" : body + "\n\n") + lines.joined(separator: "\n")
             + "\n\n" + UntrustedFence.github.warned(github.joined(separator: "\n"))
     }
 
@@ -717,6 +1055,9 @@ extension Store {
     /// Takes in what changed (baselines) and runs what is due, at most `InboxActions.perSync` per call.
     func runActions(now: Date = Date()) async {
         guard let performer = resolvedPerformer, let me = me?.login, !me.isEmpty else { return }
+        // On the defaults (the state couldn't be read): taken in against them, the ledger would forget every run of your
+        // categories, and take as new what they hold. Nothing runs, and nothing is taken in, until your categories are back.
+        guard !onDefaults else { return }
         // An edit is waiting to be taken in: what it now matches is old news, and must not fire first.
         guard !baselinePending else { return }
         guard !actionsBusy else { actionsAgain = true; return }
@@ -725,20 +1066,64 @@ extension Store {
         repeat {
             actionsAgain = false
             var ledger = actionLedger
-            let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me, now: now)
-            let batch = Array(jobs.prefix(InboxActions.perSync))
-            for job in batch {
-                for key in job.keys {
-                    ledger.set(ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
-                                         state: .running, at: now))
-                }
-            }
+            let jobs = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
+                                         known: Set(things.keys), ratings: actionRatings(), now: now)
             if ledger != actionLedger { actionLedger = ledger }
-            if !batch.isEmpty { await actionsWritten() }
-            for job in batch {
-                let result = await InboxActions.perform(job, with: performer, now: now)
-                var next = actionLedger
+            for queued in jobs.prefix(InboxActions.perSync) {
+                // What ran before it may have taken long: it runs only if it is still due now, for what is still there.
+                guard !baselinePending,
+                      let job = InboxActions.stillDue(queued, entries: entries, categories: categories, groups: groups,
+                                                      ledger: actionLedger, me: me) else { continue }
+                // Each job is recorded as running just before it reaches outside, and nothing reaches outside before that
+                // record is on disk: a quit during one leaves only that one interrupted, not those still waiting. A failed
+                // write is tried again now, and if that fails too the run isn't made, and its record goes back to what it
+                // was (due again at a later refresh).
+                let before = actionLedger
+                // The rules it was due under: an edit taken in meanwhile (a new baseline) makes it old, as what else they
+                // match then.
+                let rules = before.baselines[job.category.id]?.rules
+                var running = before
                 for key in job.keys {
+                    running.set(ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
+                                          state: .running, at: now))
+                }
+                actionLedger = running
+                // The ledger as it is now, with `keys` of this job's records back to what they were before it; or, the rules
+                // edited and taken in meanwhile, taken as old (with no record, it would be due again under the new ones).
+                func undone(_ keys: [String]) -> ActionLedger {
+                    var back = actionLedger
+                    let superseded = back.baselines[job.category.id].map { $0.rules != rules } ?? false
+                    for key in keys {
+                        let id = ActionLedger.key(job.category.id, job.entry.id, job.action.id, key)
+                        back.runs[id] = superseded
+                            ? ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
+                                        state: .baselined, at: now)
+                            : before.runs[id]
+                    }
+                    return back
+                }
+                if await !actionsWritten() {
+                    saveActions()
+                    if await !actionsWritten() {
+                        Self.actionsLog.error("An action wasn't run: its record couldn't be saved")
+                        actionLedger = undone(job.keys)
+                        return
+                    }
+                }
+                // The write took a while: deleted, Done, no longer matching or its rules edited meanwhile, it isn't run (its
+                // record goes back, and that is written in turn).
+                guard !baselinePending, actionLedger.baselines[job.category.id]?.rules == rules,
+                      let checked = InboxActions.stillDue(job, entries: entries, categories: categories, groups: groups,
+                                                          ledger: undone(job.keys), me: me)
+                else {
+                    actionLedger = undone(job.keys)
+                    continue
+                }
+                let dropped = job.keys.filter { !checked.keys.contains($0) }
+                if !dropped.isEmpty { actionLedger = undone(dropped) }
+                let result = await InboxActions.perform(checked, with: performer, now: now)
+                var next = actionLedger
+                for key in checked.keys {
                     var run = result
                     run.trigger = key
                     next.set(run)
@@ -750,24 +1135,112 @@ extension Store {
 
     /// The categories were edited: what they match now is taken as old once the edits pause (so typing doesn't thrash), and
     /// no action runs in between.
+    /// What the categories newly ask GitHub for isn't taken in before it has been fetched: a category made for a repo not
+    /// yet read would take in nothing, and the refresh after would bring its open PRs as new arrivals and act on them. It
+    /// waits for refreshes that have answered each of its searches and workflow targets (`baselineIfFetched`).
     func categoriesEdited(delay: Duration = .seconds(1)) {
         baselinePending = true
+        baselineAwaitsFetch = false
         baselineTask?.cancel()
         baselineTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, let self else { return }
-            baselineActions()
-            baselinePending = false
-            scheduleActions()
+            if unfetchedScope().isEmpty {
+                baselineActions()
+                baselinePending = false
+                scheduleActions()
+            } else {
+                baselineAwaitsFetch = true
+            }
+        }
+    }
+
+    /// After a refresh: an edit that waited for what it asks for to be fetched is taken in once it has been.
+    func baselineIfFetched() {
+        guard baselinePending, baselineAwaitsFetch, unfetchedScope().isEmpty else { return }
+        baselineActions()
+        baselineAwaitsFetch = false
+        baselinePending = false
+    }
+
+    /// The searches and workflow targets of the categories with actions that the things weren't fetched for. Nothing when
+    /// it isn't known what they were fetched for (never loaded nor refreshed), or who you are.
+    func unfetchedScope() -> Set<String> {
+        guard let fetched = fetchedScopeKeys(), let me = me?.login, !me.isEmpty else { return [] }
+        return InboxSync.scopeKeys(categories: categories.filter { !$0.actions.isEmpty }, groups: groups, me: me,
+                                   owned: ownedRepos, contributed: contributedRepos, myTeams: myTeams,
+                                   ownerRepos: inboxSyncState.ownerRepos).subtracting(fetched)
+    }
+
+    /// What an edit's actions wait to have read before anything runs (`baselineIfFetched`), as the inbox's status says it
+    /// ("Actions paused until … can be read"): the repos and owners its searches name, else the searches, and the repos
+    /// whose workflows it asks for. Nil when nothing waits.
+    func actionsPausedFor() -> String? {
+        guard baselinePending, baselineAwaitsFetch else { return nil }
+        var seen = Set<String>()
+        let names = unfetchedScope().sorted().map(Self.scopeName).filter { seen.insert($0.lowercased()).inserted }
+        guard !names.isEmpty else { return nil }
+        let shown = names.prefix(3).joined(separator: ", ")
+        return names.count > 3 ? shown + " and \(names.count - 3) more" : shown
+    }
+
+    /// A scope key (`InboxSync.scopeKeys`) as said to you.
+    nonisolated static func scopeName(_ key: String) -> String {
+        if key.hasPrefix("workflow:") { return "\(key.dropFirst(9).prefix { $0 != "@" })'s workflows" }
+        let query = key.hasPrefix("search:") ? String(key.dropFirst(7)) : key
+        let tokens = query.split(separator: " ").map(String.init)
+        let places = tokens.compactMap { token -> String? in
+            let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, ["repo", "user", "org"].contains(parts[0].lowercased()) else { return nil }
+            return parts[1]
+        }
+        if !places.isEmpty { return places.joined(separator: " or ") }
+        let said = tokens.filter { !$0.hasPrefix("archived:") && !$0.hasPrefix("sort:") }.joined(separator: " ")
+        return "“\(said)”"
+    }
+
+    /// The scope the things were fetched for, as keys (`InboxSync.scopeKeys`).
+    func fetchedScopeKeys() -> Set<String>? {
+        switch fetchedFor {
+        case nil: return nil
+        case .keys(let keys): return keys
+        case .categories(let categories, let groups):
+            guard let me = me?.login, !me.isEmpty else { return [] }
+            return InboxSync.scopeKeys(categories: categories, groups: groups, me: me, owned: ownedRepos,
+                                       contributed: contributedRepos, myTeams: myTeams, ownerRepos: inboxSyncState.ownerRepos)
         }
     }
 
     /// Takes what is in the categories now as old, for the actions they have.
     func baselineActions(now: Date = Date()) {
-        guard let me = me?.login, !me.isEmpty else { return }
+        guard let me = me?.login, !me.isEmpty, !onDefaults else { return }
         var ledger = actionLedger
-        _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me, now: now)
+        _ = InboxActions.plan(entries: entries, categories: categories, groups: groups, ledger: &ledger, me: me,
+                              known: Set(things.keys), ratings: actionRatings(), now: now)
         if ledger != actionLedger { actionLedger = ledger }
+    }
+
+    /// Each thing's review request or assignment of yours, and whether Jev has rated it (`InboxActions.plan`).
+    func actionRatings() -> [String: InboxActions.Rating] {
+        let context = inboxContext
+        var out: [String: InboxActions.Rating] = [:]
+        // Categories that rate: what a thing not yet rated would have in each once rated (at the most, any importance rule
+        // takes it) is what it has there now, for the actions taken in before its rating.
+        let rates = categories.filter { $0.rules.contains { $0.conditions.contains { if case .importance = $0 { true } else { false } } } }
+        for (id, thing) in things {
+            guard let stamp = InboxEngine.importanceStamp(thing, context: context) else { continue }
+            let rated = InboxEngine.signals(thing, context.me)?.importance?.stamp == stamp
+            var one = InboxActions.Rating(stamp: stamp, rated: rated)
+            if !rated, context.jevSignals, !rates.isEmpty {
+                let urgent = InboxEngine.rated(thing, .urgent, stamp: stamp, me: context.me)
+                for category in rates {
+                    let entry = InboxEngine.evaluate(things: [urgent], categories: [category], marks: marks, context: context).first
+                    one.facts[category.id] = entry?.facts.map(\.key).filter { !$0.hasPrefix("importance:") } ?? []
+                }
+            }
+            out[id] = one
+        }
+        return out
     }
 
     func actionChips(for entry: InboxEntry) -> [InboxActions.Chip] {
@@ -802,11 +1275,34 @@ extension Store {
 
     var actionsFile: URL? { stateFileURL?.deletingLastPathComponent().appendingPathComponent("actions.json") }
 
-    func loadActions() {
-        guard persists, let url = actionsFile, let data = try? Data(contentsOf: url) else { return }
+    /// `keepingAside`: the state wasn't read, so the categories are the defaults: the file is copied aside before it is
+    /// first written over, as one read only in part is.
+    func loadActions(keepingAside: Bool = false) {
+        guard persists, let url = actionsFile else { return }
+        let data: Data
+        do {
+            guard let read = try Store.readExisting(url) else { return }
+            data = read
+        } catch {
+            // There but unreadable: not written over until it can be read and kept aside (see `saveActions`).
+            Self.actionsLog.error("actions.json can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
+            actionsDisk.unreadable = true
+            actionsSaveProblem = "actions.json can't be read: \(error.localizedDescription)"
+            return
+        }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        guard var ledger = try? dec.decode(ActionLedger.self, from: data) else { return }
+        // Record by record: one this build can't read is lost alone. With anything lost, the file is kept aside before it
+        // is first written over (see `saveActions`), and what is there now is taken as old, as for a new action: a thing
+        // whose record was lost is not acted on again for what it already had.
+        let read = try? dec.decode(LossyLedger.self, from: data)
+        var ledger = read?.ledger ?? ActionLedger()
+        let lost = read?.lost ?? ["everything"]
+        if !lost.isEmpty {
+            Self.actionsLog.error("actions.json was read only in part (\(lost.joined(separator: ", "), privacy: .public) lost)")
+            ledger.baselines = [:]
+        }
+        if keepingAside || !lost.isEmpty { actionsDisk.keepAside(data) }
         // Running when the app quit: not retried (it may have happened), said as failed.
         for (key, run) in ledger.runs where run.state == .running {
             var r = run
@@ -817,31 +1313,135 @@ extension Store {
         actionLedger = ledger
     }
 
-    /// Where actions.json is written: off the main thread, one write at a time, in the order asked.
-    private static let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
 
+    nonisolated private static let actionsLog = Logger(subsystem: InboxLog.subsystem, category: "actions")
+
+    /// Each write is the whole ledger as of a revision: one that is written has every change before it on disk. One that
+    /// fails is said in the log and tried again (2, 4, 8… seconds, a minute at most) unless a later one is written first.
     func saveActions() {
         guard persists, let url = actionsFile else { return }
         let ledger = ActionsBox(ledger: actionLedger)
-        Self.actionsWriter.async {
+        let disk = actionsDisk
+        let revision = disk.ask()
+        actionsWriter.async {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
-            guard let data = try? enc.encode(ledger.ledger) else { return }
-            try? data.write(to: url, options: .atomic)
+            do {
+                // A file read only in part is copied aside first: until that works, it isn't written over.
+                if disk.unreadable {
+                    if let original = try Store.readExisting(url) { disk.keepAside(original) }
+                    disk.unreadable = false
+                }
+                if let original = disk.unkept {
+                    let backup = try Store.keepAside(original, of: url)
+                    disk.keptAside()
+                    Self.actionsLog.error("actions.json, read only in part, is kept as \(backup, privacy: .public)")
+                }
+                try enc.encode(ledger.ledger).write(to: url, options: .atomic)
+                disk.wrote(revision)
+                DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.actionsSaveProblem = nil } }
+            } catch {
+                let failures = disk.failed()
+                let problem = "Saving actions.json failed: \(error.localizedDescription)"
+                DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.actionsSaveProblem = problem } }
+                Self.actionsLog.error("saving actions.json failed (\(failures, privacy: .public) in a row): \(error.localizedDescription, privacy: .public)")
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(min(60, 1 << min(failures, 6))))
+                    guard let self, disk.isBehind, disk.asked == revision else { return }
+                    saveActions()
+                }
+            }
         }
     }
 
-    /// Returns once every write of actions.json asked so far is on disk: a run is recorded as running before what it does
-    /// reaches outside (a relaunch then says it was interrupted rather than doing it again).
-    func actionsWritten() async {
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in Self.actionsWriter.async { done.resume() } }
+    /// Whether every change of the ledger made so far is on disk, once the writes asked are done: a run is recorded as
+    /// running before what it does reaches outside (a relaunch then says it was interrupted rather than doing it again).
+    @discardableResult
+    func actionsWritten() async -> Bool {
+        guard persists, actionsFile != nil else { return true }
+        let wanted = actionsDisk.asked
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in actionsWriter.async { done.resume() } }
+        return actionsDisk.written >= wanted
     }
 
-    /// The same, waiting here (quitting).
-    func flushActions() { Self.actionsWriter.sync {} }
+    /// The same, waiting here (quitting): one that failed is tried once more.
+    func flushActions() {
+        actionsWriter.sync {}
+        guard actionsDisk.isBehind else { return }
+        saveActions()
+        actionsWriter.sync {}
+    }
 }
 
 private struct ActionsBox: @unchecked Sendable { let ledger: ActionLedger }
+
+/// actions.json read record by record, saying what it couldn't read.
+private struct LossyLedger: Decodable {
+    var ledger = ActionLedger()
+    var lost: [String] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case baselines, runs, restoredReviews, restoredReviewIDs, restoredBefore, awaitedRatings
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        do { ledger.baselines = try c.decodeIfPresent([UUID: ActionLedger.Baseline].self, forKey: .baselines) ?? [:] } catch {
+            lost.append("baselines")
+        }
+        do {
+            // Required: a file without them (or with null) has lost every record, not had none.
+            let all = try c.decode([String: Lossy<ActionRun>].self, forKey: .runs)
+            ledger.runs = all.compactMapValues(\.value)
+            if ledger.runs.count < all.count { lost.append("\(all.count - ledger.runs.count) of runs") }
+        } catch {
+            lost.append("runs")
+        }
+        // What is still to come (reviews back, ratings awaited) is kept across a restart: without it, what was there is new.
+        do { ledger.restoredReviews = try c.decodeIfPresent(Set<String>.self, forKey: .restoredReviews) } catch {
+            lost.append("restoredReviews")
+        }
+        do { ledger.restoredReviewIDs = try c.decodeIfPresent([String: Set<String>].self, forKey: .restoredReviewIDs) } catch {
+            lost.append("restoredReviewIDs")
+        }
+        do { ledger.restoredBefore = try c.decodeIfPresent([String: [UUID: Set<String>]].self, forKey: .restoredBefore) } catch {
+            lost.append("restoredBefore")
+        }
+        do {
+            ledger.awaitedRatings = try c.decodeIfPresent([UUID: [String: ActionLedger.AwaitedRating]].self, forKey: .awaitedRatings)
+        } catch {
+            lost.append("awaitedRatings")
+        }
+    }
+}
+
+/// The revisions of the ledger asked to be written, and the latest written (the writes go in order, so it has every one
+/// before it); read and changed from the writer and the main actor alike.
+final class ActionsDisk: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _asked = 0, _written = 0, failures = 0
+    private var _unkept: Data?
+
+    /// What the file held when it was read only in part, until it is copied aside.
+    var unkept: Data? { lock.withLock { _unkept } }
+    func keepAside(_ data: Data) { lock.withLock { _unkept = data } }
+    func keptAside() { lock.withLock { _unkept = nil } }
+    private var _unreadable = false
+    /// Whether the file was there but couldn't be read: until it can be (and is kept aside), it isn't written over.
+    var unreadable: Bool {
+        get { lock.withLock { _unreadable } }
+        set { lock.withLock { _unreadable = newValue } }
+    }
+
+    var asked: Int { lock.withLock { _asked } }
+    var written: Int { lock.withLock { _written } }
+    var isBehind: Bool { lock.withLock { _written < _asked } }
+
+    func ask() -> Int { lock.withLock { _asked += 1; return _asked } }
+    func wrote(_ revision: Int) { lock.withLock { _written = max(_written, revision); failures = 0 } }
+    /// Counts a failed write; returns how many in a row.
+    func failed() -> Int { lock.withLock { failures += 1; return failures } }
+}
 
 // MARK: - The real performer
 
@@ -868,28 +1468,43 @@ final class StoreActionPerformer: ActionPerformer {
     }
 
     func failedRuns(for thing: Thing) async throws -> [FailedRun] {
-        var query = ["per_page": "50"]
-        var workflow: Int?
+        let path: String
+        var query = ["per_page": "100"]
+        var pages = Store.ciPages
         switch thing.kind {
         case .pr:
+            // All the head commit's runs, page by page (bounded): a failing 51st workflow is one to re-run too.
             guard let sha = thing.headSha else { throw ActionFailure("its head commit isn't known yet") }
+            path = "/repos/\(thing.repo)/actions/runs"
             query["head_sha"] = sha
         case .workflow:
-            // `workflow:owner/repo:<id>@<branch>`
+            // `workflow:owner/repo:<id>@<branch>`: its own runs, newest first, whatever other workflows ran since.
             let id = thing.id.split(separator: ":").last.map { String($0.split(separator: "@").first ?? "") } ?? ""
             guard let number = Int(id) else { throw ActionFailure("checks that aren't GitHub Actions can't be re-run") }
-            workflow = number
-            query["branch"] = thing.branch ?? ""
+            path = "/repos/\(thing.repo)/actions/workflows/\(number)/runs"
+            // Its runs are listed under the name its branch has now (master renamed main lists none as master).
+            query["branch"] = thing.currentBranch ?? ""
             query["event"] = "push"
+            // On the commit its CI was read at (`ci:<sha>:…`), when known.
+            if let run = thing.ciRun, run.hasPrefix("ci:"), case let parts = run.split(separator: ":"), parts.count > 2 {
+                query["head_sha"] = String(parts[1])
+            }
+            query["per_page"] = "1"
+            pages = 1
         case .issue:
             return []
         }
-        let runs: GHWorkflowRuns = try await store.gh.get("/repos/\(thing.repo)/actions/runs", query)
+        var runs: [GHWorkflowRuns.Run] = []
+        for page in 1...pages {
+            query["page"] = "\(page)"
+            let answer: GHWorkflowRuns = try await store.gh.get(path, query)
+            runs += answer.workflowRuns
+            if answer.workflowRuns.count < Int(query["per_page"]!)! || runs.count >= answer.totalCount ?? .max { break }
+        }
         var seen = Set<Int>()
         var out: [FailedRun] = []
         // Newest first: the first of each workflow is its latest run.
-        for run in runs.workflowRuns where seen.insert(run.workflowId).inserted {
-            if let workflow, run.workflowId != workflow { continue }
+        for run in runs where seen.insert(run.workflowId).inserted {
             guard let id = run.id, run.status == "completed", ["failure", "timed_out"].contains(run.conclusion ?? "") else { continue }
             out.append(FailedRun(id: id, name: run.name, url: run.htmlUrl))
         }

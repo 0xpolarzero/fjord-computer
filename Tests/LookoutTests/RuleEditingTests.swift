@@ -179,6 +179,20 @@ private final class RepoCalls: @unchecked Sendable {
         #expect(RuleEditing.problems(rule, groups: [], isCI: false).isEmpty)
     }
 
+    @Test func aGroupGoneFromAConditionTurnsTheRuleOff() {
+        let trusted = InboxGroup(name: "Trusted", kind: .people, members: ["ann"])
+        let gone = Pick<PersonRef>(except: [.group(trusted.id)])
+        for condition: Condition in [.newComment(by: gone, since: .done), .approved(by: gone),
+                                     .unresolvedThreads(startedBy: nil, lastReplyBy: gone),
+                                     .unresolvedThreads(startedBy: gone, lastReplyBy: nil)] {
+            let rule = Rule(scope: Scope(kinds: [.pr]), conditions: [condition])
+            #expect(RuleEditing.problems(rule, groups: [trusted], isCI: false).isEmpty)
+            let found = RuleEditing.problems(rule, groups: [], isCI: false)
+            #expect(found.map(\.condition) == [0])
+            #expect(found.map(\.reason) == ["This group no longer exists"])
+        }
+    }
+
     @Test func savedRulesAndGroupsAreRenamedOnceAtSync() async {
         let calls = RepoCalls()
         let s = store(calls)
@@ -242,5 +256,21 @@ private final class RepoCalls: @unchecked Sendable {
         #expect(DaysField.synced("", to: 7, focused: true) == nil)
         // An undo while the field has the keyboard still shows what it is now.
         #expect(DaysField.synced("14", to: 7, focused: true) == "7")
+    }
+
+    @MainActor @Test func theCountUnderARuleIsTakenAgainWhenWhatItCountsInChanges() {
+        let store = InboxFixture.store([InboxFixture.pr(1)])
+        let rule = store.categories[0].rules[0]
+        let before = RuleEditor.previewKey(rule, store: store)
+        // A refresh brings a thing: the same rule, counted again.
+        store.things["pr:a/one#2"] = InboxFixture.pr(2)
+        #expect(RuleEditor.previewKey(rule, store: store) != before)
+        let refreshed = RuleEditor.previewKey(rule, store: store)
+        // So do a group edited and time crossing a threshold.
+        store.groups.append(InboxGroup(name: "g", kind: .people, members: ["x"]))
+        #expect(RuleEditor.previewKey(rule, store: store) != refreshed)
+        let grouped = RuleEditor.previewKey(rule, store: store)
+        store.inboxTimePassed()
+        #expect(RuleEditor.previewKey(rule, store: store) != grouped)
     }
 }

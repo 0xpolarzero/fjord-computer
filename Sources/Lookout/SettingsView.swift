@@ -236,6 +236,8 @@ struct SettingsView: View {
                 SettingsDivider()
                 sessionModels
                 SettingsDivider()
+                draftsJev
+                SettingsDivider()
                 inboxJev
                 SettingsDivider()
                 sessionIcons
@@ -315,10 +317,19 @@ struct SettingsView: View {
         }
     }
 
+    /// Whether the Router's draft goes to TypeSafe while you type, for Jev's pick over the composer (RouterLiveTarget).
+    private var draftsJev: some View {
+        SettingsRow("Let Jev read what you type",
+                    info: ("Let Jev read what you type", "With a TypeSafe API key, once you pause typing in the Router, your draft goes to TypeSafe (api.typesafe.ai) so Jev can show where it would go before you send it. What goes: the draft's words and its @projects, the Router's last decisions, how you routed messages before, and what it could go to: your Claude sessions' titles, projects and what each is doing, the open cards' titles and what they ask, and your projects' names. The same goes when you send a message, to route it. Off, nothing goes while you type: a message is routed when you send it.")) {
+            SettingsSwitch("Let Jev read what you type",
+                           isOn: Binding(get: { store.jevReadsDrafts }, set: { store.settings.jevReadsDrafts = $0 }))
+        }
+    }
+
     /// Whether Jev reads the inbox's new comments and rates its review requests (InboxJev.swift), which sends them to TypeSafe.
     private var inboxJev: some View {
         SettingsRow("Let Jev read new comments",
-                    info: ("Let Jev read new comments", "With a TypeSafe API key, each refresh sends the inbox's new comments, reviews and thread replies (not yours, from the last two weeks), and the review requests and assignments waiting on you, to TypeSafe (api.typesafe.ai). What goes: the comment's text and its author, the one just before it, the PR or issue's title, number and repo, its author, labels, size and checks, and your part in it; and, when a session's turn ends waiting, the titles, numbers and checks of the PRs and workflows of its repo, for what it waits on. Jev says whether a comment asks you something or is noise, and how important a request is, for the rules that ask (a comment asks me, noise or a person, rated at least). Off, nothing of the inbox is sent and those rules see nothing Jev said: noise is bots only.")) {
+                    info: ("Let Jev read new comments", "With a TypeSafe API key, each refresh sends the inbox's new comments, reviews and thread replies (not yours, from the last two weeks), and the review requests and assignments waiting on you, to TypeSafe (api.typesafe.ai). What goes: the comment's text and its author, the one just before it, the PR or issue's title, number and repo, its author, labels, size and checks, and your part in it; and, when a session's turn ends waiting, the titles, numbers and checks of the PRs and workflows of its repo, for what it waits on; and, when an action starts a session for an item, the item's title and number and the action's task (with what GitHub wrote), for which clone it works in and how big a task it is. Jev says whether a comment asks you something or is noise, and how important a request is, for the rules that ask (a comment asks me, noise or a person, rated at least). Off, nothing of the inbox is sent and those rules see nothing Jev said: noise is bots only, and an action's session starts in the clone last used, on your defaults.")) {
             SettingsSwitch("Let Jev read new comments",
                            isOn: Binding(get: { store.jevReadsInbox }, set: { store.settings.jevReadsInbox = $0 }))
         }

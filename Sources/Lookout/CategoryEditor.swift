@@ -99,13 +99,19 @@ struct CategoryEditor: View {
     }
 
     /// Whether Create can make it: it needs a name.
-    private var canCreate: Bool { !draft.wrappedValue.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canCreate: Bool { !unnamed && !hasOffRule }
+    private var unnamed: Bool { draft.wrappedValue.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// A rule the engine would keep off: the editor flags it, and Create waits for it to be fixed.
+    private var hasOffRule: Bool {
+        let c = draft.wrappedValue
+        return c.rules.contains { !InboxEngine.problems($0, in: c, groups: store.groups).isEmpty }
+    }
 
     private var createButton: some View {
         Button("Create", action: create)
             .buttonStyle(PrimaryButtonStyle())
             .disabled(!canCreate)
-            .tip(canCreate ? "Create category" : "Name it first")
+            .tip(unnamed ? "Name it first" : hasOffRule ? "Fix the rules in red first" : "Create category")
     }
 
     @ViewBuilder private var undoRedo: some View {
@@ -191,7 +197,7 @@ struct CategoryEditor: View {
                     RuleEditor(rule: $rule, store: store, isCI: c.isCI,
                                notice: rule.id == c.rules.first?.id ? firstRuleNotice : nil,
                                onRemove: c.isCI ? nil : { draft.wrappedValue.rules.removeAll { $0.id == rule.id } })
-                    let off = InboxEngine.problems(rule)
+                    let off = InboxEngine.problems(rule, in: c, groups: store.groups)
                     if !off.isEmpty {
                         Text("Off until fixed").cdsText(foot12, .regular, CDS.Text.danger).padding(.leading, 4)
                             .tip("Off until fixed", off.map(\.reason).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: ". "))

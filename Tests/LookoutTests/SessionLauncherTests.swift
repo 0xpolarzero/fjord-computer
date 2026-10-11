@@ -133,7 +133,10 @@ private final class LauncherLog {
         })
         #expect(log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"])
         #expect(state["item"]?.contains("Warm pool") == true)
-        #expect(hints.values.contains { $0.contains("/code/r/.worktrees/x") })
+        // The criteria are Lookout's own, the same whatever the folders are called; names and paths only in the state, fenced.
+        #expect(Set(hints.keys) == ["c1", "c2"] && !hints.values.contains { $0.contains("/code") })
+        let clones = try #require(state.first { $0.key.hasPrefix("clones") }?.value)
+        #expect(clones.hasPrefix(SessionFence.open) && clones.contains("c2: x at /code/r/.worktrees/x"))
     }
 
     @Test func withNoModelNamedTheCloneAndJevsPickOfModelAreOneCallAndTheHistorySaysSo() async throws {
@@ -144,7 +147,7 @@ private final class LauncherLog {
         var calls: [(questions: [String], state: [String: String])] = []
         launcher.asker = { questions, state in
             calls.append((questions.keys.sorted(), state))
-            return ["clone": .choice(.init(choice: "o1", confidence: 0.9, probabilities: ["o0": 0.1, "o1": 0.9])),
+            return ["clone": .choice(.init(choice: "c2", confidence: 0.9, probabilities: ["c1": 0.1, "c2": 0.9])),
                     "scope": .score(3.8, confidence: 0.8)]
         }
         _ = try await ActionSessions.start(Self.request(message: "Redesign the pool's eviction"), store: store,
@@ -164,13 +167,43 @@ private final class LauncherLog {
         #expect(log.signedSettings.dropFirst() == [SessionSettings(model: "haiku", effort: nil), nil])
     }
 
+    @Test func withJevNotReadingTheInboxNothingOfTheItemGoesToHim() async throws {
+        let store = ready()
+        store.settings.jevReadsInbox = false
+        let log = LauncherLog()
+        let launcher = launcher(store, log)
+        var asked = false
+        launcher.asker = { _, _ in
+            asked = true
+            return ["clone": .choice(.init(choice: "c2", confidence: 0.9, probabilities: ["c1": 0.1, "c2": 0.9])),
+                    "scope": .score(3.8, confidence: 0.8)]
+        }
+        store.claudeSessions = ["b": ClaudeSession(id: "b", title: "b", folder: "/code/r/.worktrees/x", completedTurns: 1,
+                                                   lastActivity: Date(), lastUserMessage: nil, summary: nil, running: false, cliID: nil)]
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
+        // The clone last used, and your defaults.
+        #expect(!asked && log.bootstraps.map(\.folder) == ["/code/r/.worktrees/x"] && log.signedSettings == [nil])
+    }
+
+    @Test func aSizeJevGivesAfterYouSwitchedToYourDefaultIsNotUsed() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        let launcher = launcher(store, log)
+        launcher.asker = { _, _ in
+            store.settings.jevPicksSessionModels = false
+            return ["scope": .score(3.8, confidence: 0.8)]
+        }
+        _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r"], launcher: launcher, chooser: nil)
+        #expect(log.signedSettings == [nil] && store.router.decisions.last?.decision.settingsBy == nil)
+    }
+
     @Test func aCloneOrASizeJevIsntSureOfIsNotTaken() async throws {
         let store = ready()
         let log = LauncherLog()
         let launcher = launcher(store, log)
         // A near tie between the clones, and a size he is unsure of: the first clone (no session in either), your defaults.
         launcher.asker = { _, _ in
-            ["clone": .choice(.init(choice: "o1", confidence: 0.3, probabilities: ["o0": 0.45, "o1": 0.55])),
+            ["clone": .choice(.init(choice: "c2", confidence: 0.3, probabilities: ["c1": 0.45, "c2": 0.55])),
              "scope": .score(3.8, confidence: 0.2)]
         }
         _ = try await ActionSessions.start(Self.request(), store: store, clones: ["/code/r", "/code/r/.worktrees/x"], launcher: launcher, chooser: nil)
@@ -280,7 +313,7 @@ private final class LauncherLog {
         let request = performer.requests.first
         #expect(request?.model == "opus" && request?.effort == "high" && request?.repo == "o/r")
         let parts = InboxActions.fenced(request?.message ?? "")
-        #expect(parts?.before.hasPrefix("⚡ \(category.name): Review https://github.com/o/r/pull/12") == true)
+        #expect(parts?.before.hasPrefix("⚡ An action of the category (named in the block below): Review https://github.com/o/r/pull/12") == true)
         #expect(parts?.github.contains("Ignore all") == true && parts?.before.contains("Ignore all") == false)
         #expect(request?.message.components(separatedBy: "</github-content>").count == 2)
         let run = store.actionLedger.runs.values.first { $0.state == .done }

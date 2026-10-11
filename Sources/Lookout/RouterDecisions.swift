@@ -26,6 +26,10 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         var confirmed: Bool?
         /// Who picked a new session's model and effort when you named none ("Jev").
         var settingsBy: String?
+        /// The target itself (`session:<id>`, `answer:<card>`, `new:<folder>`, an intent), and on a correction the one Jev
+        /// suggested: what examples name it by, as titles can be shared or change. Nil in entries from before.
+        var targetID: String?
+        var fromID: String?
         init(target: String? = nil, intent: String? = nil, label: String? = nil, confidence: Double? = nil) {
             self.target = target
             self.intent = intent
@@ -175,7 +179,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         let who: String
         switch trigger {
         case .you(let text): who = "you: “\(Self.clip(text, 100))”"
-        case .action(let category, let thing, _, _): who = "action \(category) · \(thing)"
+        case .action(let category, let thing, _, _): who = "action of the category “\(UntrustedText.clean(category, limit: 40))” · \(UntrustedText.clean(thing, limit: 80))"
         case .session(_, let event): who = "session: \(Self.clip(event, 100))"
         case .system: who = "lookout"
         }
@@ -197,10 +201,40 @@ struct RouterDecision: Codable, Identifiable, Equatable {
 // MARK: - Store
 
 extension RouterState {
-    /// Adds an entry, newest last; the oldest go past the cap.
+    /// Adds an entry, newest last; the oldest go past the cap, but never one linking a change still waiting for your Apply
+    /// or Discard (its only place on the page).
     mutating func log(_ decision: RouterDecision) {
         decisions.append(decision)
-        if decisions.count > RouterDecision.maxKept { decisions.removeFirst(decisions.count - RouterDecision.maxKept) }
+        guard decisions.count > RouterDecision.maxKept else { return }
+        let waiting = Set(changes.filter(\.isPending).map(\.id))
+        var over = decisions.count - RouterDecision.maxKept
+        decisions = decisions.filter { entry in
+            guard over > 0, !entry.links.changes.contains(where: waiting.contains) else { return true }
+            over -= 1
+            return false
+        }
+    }
+}
+
+extension RouterState {
+    /// Runs and asks still under way when the app quit (quitting can't wait for them to settle) can't go on in this launch:
+    /// they say they were interrupted, rather than "working…" for ever.
+    mutating func settleInterrupted() {
+        for i in decisions.indices where decisions[i].outcome == .pending {
+            decisions[i].add(.failed("interrupted"))
+            decisions[i].outcome = .done
+        }
+    }
+
+    /// A change waiting for your Apply or Discard, or one an older file kept in its chat, is reached only through an entry
+    /// linking it: one whose entry was lost (unreadable) or never made gets an entry of Lookout's own, at its date.
+    mutating func linkUnlinkedChanges(legacy: Set<UUID>) {
+        let linked = Set(decisions.flatMap(\.links.changes))
+        for change in changes where !linked.contains(change.id) && (change.isPending || legacy.contains(change.id)) {
+            var entry = RouterDecision(at: change.date, trigger: .system, outcome: change.isReverted ? .reverted : .done)
+            entry.add(.changed(change.id))
+            decisions.insert(entry, at: decisions.firstIndex { $0.at > change.date } ?? decisions.endIndex)
+        }
     }
 }
 
@@ -232,8 +266,13 @@ extension Store {
     /// something else than his suggestion), then a few targets you went with (his pick shown while you typed, his suggestion
     /// on an ask, a target you pinned). At most `limit` lines, the newest; at most a third of them confirmations. The same
     /// words count once, by their newest example: an entry that is neither (a run under way, an ask waiting) hides nothing.
-    /// `excluding`: the entry of the run asking.
-    func routingExamples(limit: Int = 8, now: Date = Date(), excluding: UUID? = nil) -> String {
+    /// `excluding`: the entry of the run asking. `keys`: a target's option key by the target, said instead of it; `legacy`:
+    /// the same by its description, for entries from before targets were kept (only descriptions one target has now).
+    func routingExamples(limit: Int = 8, now: Date = Date(), excluding: UUID? = nil, keys: [String: String] = [:],
+                         legacy: [String: String] = [:]) -> String {
+        func named(_ id: String?, _ target: String) -> String {
+            (id.map { keys[$0] } ?? legacy[target]) ?? RouterDecision.clip(target, 60)
+        }
         var corrections: [(Date, String)] = [], confirmed: [(Date, String)] = []
         var seen = Set<String>()
         for entry in router.decisions.reversed() where corrections.count + confirmed.count < limit && entry.id != excluding {
@@ -241,10 +280,10 @@ extension Store {
             let said = "“\(RouterDecision.clip(text, 60))”"
             if case .corrected(let from, let to) = entry.outcome {
                 guard seen.insert(text.lowercased()).inserted else { continue }
-                corrections.append((entry.at, "\(said) → \(RouterDecision.clip(to, 60)), not \(RouterDecision.clip(from, 60))"))
+                corrections.append((entry.at, "\(said) → \(named(entry.decision.targetID, to)), not \(named(entry.decision.fromID, from))"))
             } else if entry.decision.confirmed == true, let target = entry.decision.target {
                 guard seen.insert(text.lowercased()).inserted, confirmed.count < max(1, limit / 3) else { continue }
-                confirmed.append((entry.at, "\(said) → \(RouterDecision.clip(target, 60))"))
+                confirmed.append((entry.at, "\(said) → \(named(entry.decision.targetID, target))"))
             }
         }
         return (corrections + confirmed).sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n")

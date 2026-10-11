@@ -345,6 +345,18 @@ import Testing
         #expect(state.changes.count == RouterFeed.maxChanges && state.changes.first?.title == "10")
     }
 
+    @Test func aChangeWaitingForYourApplyOutlivesTheCap() {
+        var state = RouterState()
+        var waiting = LookoutChange(date: at(0), title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        waiting.pending = "asks first"
+        state.changes = [waiting] + (1...510).map {
+            LookoutChange(date: at(Double($0)), title: "\($0)", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        }
+        RouterFeed.prune(&state)
+        #expect(state.changes.count == RouterFeed.maxChanges)
+        #expect(state.changes.first == waiting && state.changes[1].title == "12")
+    }
+
     @Test func anOlderFileWithAChatAndAConversationStillLoads() throws {
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
@@ -472,6 +484,22 @@ import Testing
         RouterFeed.reopen(&state, "local_a#t2", now: at(3))
         #expect(state.cards.map(\.isOpen) == [true, false])
         #expect(state.cards[1].addressedBy == .superseded)
+    }
+
+    @Test func aHandledTurnOutlastsArchivingAndIsForgottenOnlyWithItsSession() {
+        var state = seen([session(turns: 2)])
+        state.handledTurns = ["local_a": 2]
+        // Archived: kept, so that unarchived it makes no card of that turn again.
+        RouterFeed.update(&state, sessions: [session(turns: 2, archived: true)], activity: [:], muted: [], viewing: nil, now: at(1))
+        #expect(state.handledTurns == ["local_a": 2])
+        // Gone for good: forgotten.
+        RouterFeed.update(&state, sessions: [], activity: [:], muted: [], viewing: nil, now: at(2))
+        #expect(state.handledTurns.isEmpty)
+        // At most `maxHandled`, those active last kept.
+        let many = (0...RouterFeed.maxHandled).map { session("local_\($0)", turns: 2, message: Double($0), archived: true) }
+        state.handledTurns = Dictionary(uniqueKeysWithValues: many.map { ($0.id, 2) })
+        RouterFeed.update(&state, sessions: many, activity: [:], muted: [], viewing: nil, now: at(3))
+        #expect(state.handledTurns.count == RouterFeed.maxHandled && state.handledTurns["local_0"] == nil && state.handledTurns["local_1"] == 2)
     }
 
     @Test func aReplyInTheSameSecondAsTheCardIsToldApartAfterARelaunch() throws {

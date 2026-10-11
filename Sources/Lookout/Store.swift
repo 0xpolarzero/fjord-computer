@@ -20,12 +20,70 @@ final class Store {
     var categorySections: [CategorySection] = [.github] {
         didSet { persistedRevision &+= 1 }
     }
+    /// A category whose editor the categories page opens when it shows (a rule-off mark's click, from the bar or the window).
+    var categoryEditorRequest: UUID?
     /// Who is changing the categories and groups now, for the log (see `InboxLog`); nil is the editor.
     @ObservationIgnored var inboxSource: InboxChangeSource?
     /// Where those log lines go; the tests read them.
     @ObservationIgnored var inboxLog: (String) -> Void = InboxLog.write
     var things: [String: Thing] = [:] {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1; resolveWaits() }
+        didSet {
+            inboxRevision &+= 1; persistedRevision &+= 1
+            // Only when CI was seen to change was set below: nothing else changed.
+            guard !stampingCI else { return }
+            if !loading {
+                let now = Date()
+                let ci = Self.stampingCIChanges(things, before: oldValue, now: now)
+                if let stamped = Self.stampingCommitArrivals(ci ?? things, before: oldValue, now: now) ?? ci {
+                    stampingCI = true
+                    things = stamped
+                    stampingCI = false
+                }
+            }
+            resolveWaits(); if !loading { carryAssignmentStamps(seenBefore: oldValue) }
+        }
+    }
+    @ObservationIgnored private var stampingCI = false
+
+    /// The things with when their CI was last seen to change (`Thing.ciChangedAt`): kept from before while it is the same
+    /// (a refresh makes the thing anew), `now` once its state, its run or whether it still runs changed; nil when none moved.
+    /// One first seen with CI is stamped when that CI finished, as GitHub says (`ciFinishedAt`), else now: CI that finished
+    /// before it was found, after a turn that waits on it ended, is still CI that changed since.
+    nonisolated static func stampingCIChanges(_ things: [String: Thing], before: [String: Thing], now: Date) -> [String: Thing]? {
+        var stamped = things
+        var moved = false
+        for (id, thing) in things where thing.kind == .pr || thing.kind == .workflow {
+            guard let old = before[id] else {
+                if thing.ciChangedAt == nil, thing.checks != nil { stamped[id]?.ciChangedAt = thing.ciFinishedAt ?? now; moved = true }
+                continue
+            }
+            let same = thing.checks == old.checks && thing.ciRunning == old.ciRunning && thing.ciCancelled == old.ciCancelled
+                && (old.ciRun == nil || thing.ciRun == old.ciRun)
+            let at = same ? thing.ciChangedAt ?? old.ciChangedAt
+                : thing.ciChangedAt == nil || thing.ciChangedAt == old.ciChangedAt ? now : thing.ciChangedAt
+            if at != thing.ciChangedAt { stamped[id]?.ciChangedAt = at; moved = true }
+        }
+        return moved ? stamped : nil
+    }
+
+    /// The things with when each commit came to its PR (`ThingCommit.seenAt`): kept from before for one it had, `now` for
+    /// one first seen on a PR read before (pushed since, though committed earlier); nil when none moved. What a PR has when
+    /// it is first read (or read again after it was gone) isn't stamped: it was all there before.
+    nonisolated static func stampingCommitArrivals(_ things: [String: Thing], before: [String: Thing], now: Date) -> [String: Thing]? {
+        var stamped = things
+        var moved = false
+        for (id, thing) in things where thing.kind == .pr && !thing.commits.isEmpty {
+            guard let old = before[id], !old.commits.isEmpty else { continue }
+            let seen = Dictionary(old.commits.map { ($0.id, $0.seenAt) }, uniquingKeysWith: { a, _ in a })
+            var commits = thing.commits
+            for i in commits.indices {
+                // One it had keeps what it had (nil when it was there when the PR was first read).
+                let at: Date? = if let had = seen[commits[i].id] { had } else { commits[i].seenAt ?? now }
+                if at != commits[i].seenAt { commits[i].seenAt = at; moved = true }
+            }
+            stamped[id]?.commits = commits
+        }
+        return moved ? stamped : nil
     }
     var marks: [String: EntryMarks] = [:] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1 }
@@ -58,14 +116,44 @@ final class Store {
     /// The categories page's undo history while it is open (⌘Z there is the editor's, not Done's).
     @ObservationIgnored var categoryHistory: CategoryHistory?
     /// Rules were edited and the actions have not yet taken in what they match: nothing runs until they have.
-    @ObservationIgnored var baselinePending = false
+    /// Saved with the state: a quit before it is taken in leaves it waiting at the next launch.
+    @ObservationIgnored var baselinePending = false {
+        didSet { if baselinePending != oldValue { persistedRevision &+= 1 } }
+    }
     @ObservationIgnored var baselineTask: Task<Void, Never>?
+    /// The edit's pause is over, but what it asks GitHub for hasn't been fetched yet: it is taken in after the refresh
+    /// that has (`baselineIfFetched`).
+    @ObservationIgnored var baselineAwaitsFetch = false
+    /// What the things were fetched for: the categories they were saved with, then the searches and workflow targets the
+    /// refreshes since have answered. Nil when never loaded nor refreshed (the things are taken as they are).
+    /// Saved with the state: after a restart, what the things were fetched for is still what was, not what the categories
+    /// ask for now.
+    @ObservationIgnored var fetchedFor: FetchedScope? {
+        didSet { if fetchedFor != oldValue { persistedRevision &+= 1 } }
+    }
+    enum FetchedScope: Equatable, Codable {
+        case categories([InboxCategory], [InboxGroup])
+        case keys(Set<String>)
+    }
     @ObservationIgnored var actionsAgain = false
+    /// Which of the ledger's changes are on disk (InboxActions.swift): no action runs before its record is.
+    @ObservationIgnored let actionsDisk = ActionsDisk()
     /// What the last inbox refresh failed at, if it did (InboxSync.swift); the things it had stay.
     var inboxError: String?
     /// Why Jev couldn't read the inbox's new comments and requests (InboxJev.swift): what rests on his reading (asks me,
     /// noise, importance) stays as it was until he can.
     var inboxReadError: String?
+    /// Why what is changed isn't being saved, if it isn't (the state's file or the actions'): said where the sync status is,
+    /// until a save works.
+    var saveProblem: String? {
+        let problems = [stateSaveProblem, actionsSaveProblem].compactMap { $0 }
+        return problems.isEmpty ? nil : problems.joined(separator: "\n")
+    }
+    var stateSaveProblem: String?
+    var actionsSaveProblem: String?
+    /// The saved state couldn't be read at launch: what runs is the defaults, until a save works.
+    /// No action runs meanwhile: the ledger would be taken in against these categories, not yours (InboxActions.swift).
+    @ObservationIgnored private(set) var onDefaults = false
     /// Repos (lowercased) GitHub said don't exist, or can't be seen: their chips are red and block Save.
     var missingRepos: Set<String> = []
     /// What GitHub said of each repo named, this session (lowercased name to its canonical name).
@@ -81,13 +169,14 @@ final class Store {
     @ObservationIgnored var teamsResolvedAt: Date?
     /// What the inbox's refreshes keep between them (InboxSync.swift).
     @ObservationIgnored var inboxSyncState = InboxSyncState()
-    /// Default branches found for workflow things, by repo.
+    /// Default branches found for workflow things, by repo, and when each was looked up (again daily: `defaultBranchRecheck`).
     @ObservationIgnored var defaultBranches: [String: String] = [:]
-    /// A commit's headline by repo, asked once per commit (see `ciHeadline`).
-    @ObservationIgnored var headlines: [String: (commit: String, title: String)] = [:]
+    @ObservationIgnored var defaultBranchesCheckedAt: [String: Date] = [:]
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()
+    /// Time alone changed what matches (InboxStore.swift): what reads the inbox reads it again.
+    func inboxTimePassed() { inboxRevision &+= 1 }
     /// Done, taken back with ⌘Z or the inbox's undo line.
     let undoStack = UndoStack()
     var settings = AppSettings() {
@@ -169,7 +258,12 @@ final class Store {
     /// Filled in right after launch (see `start`): the Keychain read stays off the main thread.
     var hasTypesafeKey = false
     var iconError: String?
-    var claudeLink: ClaudeLink = .off
+    var claudeLink: ClaudeLink = .off {
+        didSet { if claudeLink == .ok { claudeSessionsRead = true } }
+    }
+    /// Claude's sessions have been read since Lookout started reading them: a read failing after that leaves the last ones
+    /// known (`claudeSessions`), not nothing known.
+    var claudeSessionsRead = false
 
     var me: GHUser? {
         didSet {
@@ -207,7 +301,7 @@ final class Store {
     /// Where the token comes from; replaced in tests (the real one can spawn `gh`).
     @ObservationIgnored var resolveToken: @Sendable () -> (String, TokenSource)? = { TokenProvider.resolve() }
     /// Counts the changes made in Settings; the token held was found under `foundAt`, and is looked for again once they differ.
-    @ObservationIgnored private var credentialsChanged = 0
+    @ObservationIgnored private(set) var credentialsChanged = 0
     @ObservationIgnored private var foundAt = 0
     /// A token was just saved or taken away: the sign-in that fails next is its result and is said aloud (a poll's isn't).
     @ObservationIgnored private(set) var awaitingSignIn = false
@@ -261,6 +355,9 @@ final class Store {
     /// The sessions whose background work the last read looked at (see `ClaudeSnapshot.taskInventory`); nil until a read
     /// has said (a test feeding sessions by hand: every one).
     @ObservationIgnored var claudeTaskInventory: Set<String>?
+    /// Every session the last read listed, archived ones too, with when each was active last: what the Router's memory of
+    /// handled turns is kept for (`RouterFeed.update`). Nil until a read has said.
+    @ObservationIgnored var claudeSessionsListed: [String: Date]?
     @ObservationIgnored let formBridge = FormBridge()
     /// Claude Code's binary, which the Router's runs use.
     @ObservationIgnored lazy var routerStatus = RouterStatus()
@@ -433,11 +530,16 @@ final class Store {
     }
 
     /// How soon to read again because a session's background work isn't known yet (see `RouterFeed.update`): only while the
-    /// Router waits on a finished turn of a session that isn't running and the last read couldn't say. Nil otherwise (no tick
-    /// for it at rest).
+    /// Router waits on a finished turn of a session that isn't running, or a waiting card on another session (`resolveWaits`),
+    /// and the last read couldn't say. Nil otherwise (no tick for it at rest).
     var inventoryRecheck: TimeInterval? {
         guard router.enabled, let inventory = claudeTaskInventory else { return nil }
-        let waiting = router.pendingTurns.keys.contains { id in
+        let watched = router.cards.compactMap { card -> String? in
+            guard card.isOpen, card.kind == .waiting, card.triage?.ready == nil,
+                  case .session(let id, _) = card.triage?.watch?.target else { return nil }
+            return id
+        }
+        let waiting = (Array(router.pendingTurns.keys) + watched).contains { id in
             claudeSessions[id].map { !$0.running && !inventory.contains(id) } ?? false
         }
         return waiting ? Self.inventoryRecheckDelay : nil
@@ -594,23 +696,49 @@ final class Store {
     func load() {
         loading = true
         defer { loading = false }
-        guard let file, let data = try? Data(contentsOf: file) else { return }
+        guard let file else { return }
+        // Nothing read: nothing was fetched for any category.
+        fetchedFor = .categories([], [])
+        let data: Data
+        do {
+            guard let read = try Self.readExisting(file) else { loadActions(); return }
+            data = read
+        } catch {
+            // There but unreadable (its mode, say): not fresh state. Nothing is written over it until it can be read and
+            // kept aside (see `writeSnapshot`). The actions' file is read (and kept from being written over) all the same.
+            unreadable = file
+            onDefaults = true
+            stateSaveProblem = "state.json can't be read: \(error.localizedDescription)" + Self.onDefaultsNote
+            Self.stateLog.error("the saved state can't be read (it isn't written over until it can be): \(error.localizedDescription, privacy: .public)")
+            loadActions(keepingAside: true)
+            return
+        }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         guard let state = try? dec.decode(PersistedState.self, from: data) else {
             keepAside(file, data, dropped: ["everything"])
+            loadActions(keepingAside: true)
             return
         }
         if !state.dropped.isEmpty { keepAside(file, data, dropped: state.dropped) }
         settings = state.settings
         agents = state.agents ?? AgentsState()
-        router = state.router ?? RouterState()
+        var router = state.router ?? RouterState()
+        router.settleInterrupted()
+        self.router = router
         changingInbox(.load) {
             if let c = state.categories { categories = c }
             groups = state.groups ?? []
             categorySections = state.categorySections ?? [.github]
         }
         things = state.things ?? [:]
+        // (A file from before it was saved: the categories it was saved with.)
+        if state.things != nil { fetchedFor = state.fetchedFor ?? .categories(categories, groups) }
+        // An edit not taken in when the app quit still waits for what it asks for to be fetched.
+        if state.baselinePending == true {
+            baselinePending = true
+            baselineAwaitsFetch = true
+        }
         marks = state.marks ?? [:]
         categoryBaselines = state.categoryBaselines ?? [:]
         ownedRepos = state.ownedRepos ?? []
@@ -620,26 +748,86 @@ final class Store {
         login = state.login ?? ""
         savedRevision = persistedRevision
         loadActions()
+        // Once the login, marks and actions' records are in: carried during the load, a cached rating or Done was lost.
+        loading = false
+        carryAssignmentStamps(seenBefore: things)
     }
 
     /// A file read only in part is copied aside (`state.json.bak-<date>`) before anything is written over it: what this
     /// build couldn't read (a newer build's, or a damaged part) can still be brought back by hand.
+    /// Until that copy is made, nothing is written over the file: each write tries the copy again first, and the changes
+    /// wait in memory (see `writeSnapshot`).
     private func keepAside(_ file: URL, _ data: Data, dropped: [String]) {
         guard persists else { return }
-        let format = DateFormatter()
-        format.locale = Locale(identifier: "en_US_POSIX")
-        format.dateFormat = "yyyy-MM-dd-HHmmss"
-        let stamp = format.string(from: Date())
-        let backup = file.deletingLastPathComponent().appendingPathComponent("\(file.lastPathComponent).bak-\(stamp)")
         do {
-            try data.write(to: backup, options: .withoutOverwriting)
-            Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup.lastPathComponent, privacy: .public)")
+            let backup = try (keepAsideStandIn ?? { try Self.keepAside($0, of: $1) })(data, file)
+            unkept = nil
+            Self.stateLog.error("the saved state was read only in part (\(dropped.joined(separator: ", "), privacy: .public) lost): kept as \(backup, privacy: .public)")
         } catch {
-            Self.stateLog.error("the saved state was read only in part, and keeping it aside failed: \(error.localizedDescription, privacy: .public)")
+            unkept = (file, data, dropped)
+            stateSaveProblem = "state.json, read only in part, can't be kept aside: \(error.localizedDescription)"
+            Self.stateLog.error("the saved state was read only in part, and keeping it aside failed (it isn't written over until it is): \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private static let writer = DispatchQueue(label: "lookout.save")
+    /// A file read only in part not yet kept aside: what it held, and what was lost of it.
+    @ObservationIgnored private var unkept: (file: URL, data: Data, dropped: [String])?
+    /// A file that was there but couldn't be read at launch: nothing is written over it until it can be read and kept aside.
+    @ObservationIgnored private var unreadable: URL?
+
+    /// What `file` holds; nil only when it isn't there (fresh state). Any other failure to read it throws.
+    nonisolated static func readExisting(_ file: URL) throws -> Data? {
+        do {
+            return try Data(contentsOf: file)
+        } catch {
+            let ns = error as NSError
+            let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+            if (ns.domain == NSCocoaErrorDomain && ns.code == CocoaError.fileReadNoSuchFile.rawValue)
+                || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+                || (underlying?.domain == NSPOSIXErrorDomain && underlying?.code == Int(ENOENT)) {
+                return nil
+            }
+            throw error
+        }
+    }
+    /// Stands in for `Store.keepAside(_:of:)` (tests).
+    @ObservationIgnored var keepAsideStandIn: ((Data, URL) throws -> String)?
+
+    /// Distinct copies kept aside of a file, at most: the oldest go first.
+    nonisolated static let maxBackups = 5
+
+    /// Copies `data` (what `file` held) beside it as `<name>.bak-<date>`, unless a copy with the same bytes is already
+    /// there (the same damaged file, launch after launch, is kept once); past `maxBackups` copies the oldest go. Returns
+    /// the copy's name.
+    nonisolated static func keepAside(_ data: Data, of file: URL, now: Date = Date()) throws -> String {
+        let fm = FileManager.default
+        let folder = file.deletingLastPathComponent()
+        let prefix = file.lastPathComponent + ".bak-"
+        // Oldest first.
+        func made(_ name: String) -> Date {
+            ((try? fm.attributesOfItem(atPath: folder.appendingPathComponent(name).path))?[.creationDate] as? Date) ?? .distantPast
+        }
+        let kept = ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasPrefix(prefix) }
+            .map { ($0, made($0)) }.sorted { ($0.1, $0.0) < ($1.1, $1.0) }.map(\.0)
+        if let same = kept.first(where: { (try? Data(contentsOf: folder.appendingPathComponent($0))) == data }) { return same }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy-MM-dd-HHmmss"
+        var name = prefix + format.string(from: now)
+        var n = 1
+        while kept.contains(name) || fm.fileExists(atPath: folder.appendingPathComponent(name).path) {
+            n += 1
+            name = prefix + format.string(from: now) + "-\(n)"
+        }
+        try data.write(to: folder.appendingPathComponent(name), options: .withoutOverwriting)
+        for old in kept.dropLast(max(0, maxBackups - 1)) { try? fm.removeItem(at: folder.appendingPathComponent(old)) }
+        return name
+    }
+
+    /// Each Store writes on queues of its own (production has one Store): another cannot hold this one's writes up.
+    private let writer = DispatchQueue(label: "lookout.save")
+    /// Where actions.json is written: off the main thread, one write at a time, in the order asked.
+    let actionsWriter = DispatchQueue(label: "lookout.actions.save", qos: .utility)
 
     /// Coalesced: the write happens shortly after the last call, off the main thread.
     func save() { scheduleSave(after: .milliseconds(500)) }
@@ -669,16 +857,33 @@ final class Store {
 
     private func writeSnapshot(wait: Bool) {
         guard persistedRevision != savedRevision, persists, !loading else {
-            if wait { Self.writer.sync {} }
+            if wait { writer.sync {} }
             return
         }
         guard let url = file else { return }
         let revision = persistedRevision
+        if let unreadable {
+            do {
+                if let data = try Self.readExisting(unreadable) { keepAside(unreadable, data, dropped: ["everything"]) }
+                self.unreadable = nil
+            } catch {
+                wrote(revision, failure: "the saved state can't be read, so it isn't written over: \(error.localizedDescription)", retry: !wait)
+                return
+            }
+        }
+        if let unkept {
+            keepAside(unkept.file, unkept.data, dropped: unkept.dropped)
+            guard self.unkept == nil else {
+                wrote(revision, failure: "the file read only in part isn't kept aside yet, so it isn't written over", retry: !wait)
+                return
+            }
+        }
         let box = SnapshotBox(state: PersistedState(settings: settings, agents: agents, router: router, categories: categories,
                                                        groups: groups, categorySections: categorySections, things: things, marks: marks,
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
                                                        contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
-                                                       myTeams: myTeams, login: login.isEmpty ? nil : login))
+                                                       myTeams: myTeams, login: login.isEmpty ? nil : login,
+                                                       fetchedFor: fetchedFor, baselinePending: baselinePending ? true : nil))
         let write: @Sendable () -> String? = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
@@ -691,9 +896,9 @@ final class Store {
             }
         }
         if wait {
-            wrote(revision, failure: Self.writer.sync(execute: write), retry: false)
+            wrote(revision, failure: writer.sync(execute: write), retry: false)
         } else {
-            Self.writer.async {
+            writer.async {
                 let failure = write()
                 Task { @MainActor [weak self] in self?.wrote(revision, failure: failure, retry: true) }
             }
@@ -706,9 +911,12 @@ final class Store {
         guard let failure else {
             saveFailures = 0
             savedRevision = revision
+            stateSaveProblem = nil
+            onDefaults = false
             return
         }
         saveFailures += 1
+        stateSaveProblem = "Saving state.json failed: \(failure)" + (onDefaults ? Self.onDefaultsNote : "")
         Self.stateLog.error("saving the state failed (\(self.saveFailures, privacy: .public) in a row): \(failure, privacy: .public)")
         // (A change made since has a write of its own coming, which retries in turn.)
         if retry, persistedRevision == revision {
@@ -717,6 +925,8 @@ final class Store {
     }
 
     private struct SnapshotBox: @unchecked Sendable { let state: PersistedState }
+
+    private static let onDefaultsNote = "\nRunning on defaults until the file can be read"
 
     // MARK: Derived
 
@@ -964,37 +1174,115 @@ final class Store {
         await syncInbox(manual: asked)
     }
 
-    /// Asks GitHub for the CI of a repo's default branch (found once, then remembered), and the commit's headline.
-    func fetchCI(_ name: String) async throws -> CIStatus {
+    /// How long a repo's default branch is taken as known before it is looked up again (an unchanged answer is a 304).
+    nonisolated static let defaultBranchRecheck: TimeInterval = 86400
+
+    /// Asks GitHub for the CI of a repo's default branch, and the commit's headline. The default branch is looked up, then
+    /// again daily (another may have been made the default: `main` to `release`), and at once when its head is gone; a
+    /// lookup again that fails leaves the one known.
+    func fetchCI(_ name: String, now: Date = Date()) async throws -> CIStatus {
         var branch = defaultBranches[name]
-        if branch == nil {
-            let info: GHRepo = try await gh.get("/repos/\(name)")
-            defaultBranches[name] = info.defaultBranch
-            branch = info.defaultBranch
+        if branch == nil || defaultBranchesCheckedAt[name].map({ now.timeIntervalSince($0) >= Self.defaultBranchRecheck }) ?? true {
+            do { branch = try await lookUpDefaultBranch(name, now: now) } catch { if branch == nil { throw error } }
         }
-        return try await fetchBranchCI(name, branch: branch!)
+        var status = try await fetchBranchCI(name, branch: branch!, now: now)
+        // Gone: the lookup it made says which is the default now, and that one is read.
+        if status.sha == nil, let found = defaultBranches[name], found != branch {
+            branch = found
+            status = try await fetchBranchCI(name, branch: found, now: now)
+        }
+        // Renamed since it was found: the name it has now is the default branch.
+        if status.sha != nil, status.branch != branch { defaultBranches[name] = status.branch }
+        return status
     }
 
-    /// Asks GitHub for the CI of one branch of a repo, and the commit's headline.
-    func fetchBranchCI(_ name: String, branch: String) async throws -> CIStatus {
+    /// A repo's default branch, as GitHub has it now, remembered with when it was looked up.
+    @discardableResult
+    func lookUpDefaultBranch(_ name: String, now: Date = Date()) async throws -> String {
+        let info: GHRepo = try await gh.get("/repos/\(name)")
+        defaultBranches[name] = info.defaultBranch
+        defaultBranchesCheckedAt[name] = now
+        return info.defaultBranch
+    }
+
+    /// Asks GitHub for the CI of one branch of a repo, and the commit's headline. A branch renamed since (`master` now
+    /// `main`) is read as the branch it is now: its head comes under the new name, and so must its Actions runs, filtered by
+    /// it. `CIStatus.branch` is that name; a rule's branch keeps its things as it names them (`@master`), so what it, its
+    /// marks and waits know them by stays.
+    /// A branch that no longer exists (its head not found, its repo found) has no CI: no workflows, no commit (`sha` nil), so
+    /// what was read of it before goes; the repo's default branch is learned again meanwhile.
+    func fetchBranchCI(_ name: String, branch: String, now: Date = Date()) async throws -> CIStatus {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove("/")
         let ref = branch.addingPercentEncoding(withAllowedCharacters: allowed) ?? branch
-        // Only push-triggered Actions runs count: issue/comment-triggered workflows also run against the
-        // default branch HEAD and would otherwise make CI look red.
-        let actions: GHWorkflowRuns = try await gh.get("/repos/\(name)/actions/runs",
-                                                       ["branch": branch, "event": "push", "per_page": "30"])
-        let sha = actions.workflowRuns.first?.headSha
-        let target = sha ?? ref
-        async let checksReq: GHCheckRuns = gh.get("/repos/\(name)/commits/\(target)/check-runs", ["per_page": "100"])
-        async let statusReq: GHCombinedStatus = gh.get("/repos/\(name)/commits/\(target)/status")
-        let (checks, combined) = try await (checksReq, statusReq)
-        let reading = Self.readCI(runs: actions.workflowRuns, sha: sha, checks: checks.checkRuns, combined: combined)
-        let commit = sha ?? combined.sha
-        // The headline comes from the Actions run; a repo with only external CI asks the commit for it (once per commit).
-        let title = await ciHeadline(name, commit: commit, runTitle: actions.workflowRuns.first?.displayTitle)
-        return CIStatus(branch: branch, sha: commit, url: URL(string: "https://github.com/\(name)/commit/\(commit)"),
-                        checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows)
+        // The branch's head is the commit read: the latest Actions run may be on an older one (a docs commit its path filters
+        // skip, while external CI runs on it). All three sources are asked about that commit.
+        let head: GHBranch
+        do {
+            head = try await gh.get("/repos/\(name)/branches/\(ref)")
+        } catch let error as GitHubError where error.status == 404 {
+            // The repo not found either: that is the error, and what was read of it stays.
+            try await lookUpDefaultBranch(name, now: now)
+            return CIStatus(branch: branch, sha: nil, url: nil, checkedAt: Date())
+        }
+        let sha = head.commit.sha
+        let current = head.name.flatMap { $0.isEmpty ? nil : $0 } ?? branch
+        let (runs, runsRead) = try await branchRuns(name, branch: current, sha: sha, lineage: branch)
+        async let checksReq = branchCheckRuns(name, target: sha, branch: branch)
+        async let statusReq = branchStatuses(name, target: sha, branch: branch)
+        let ((checks, checksRead), (combined, statusesRead)) = try await (checksReq, statusReq)
+        // Runs not all read are like checks not all read: what isn't read may still run.
+        let reading = Self.readCI(runs: runs, sha: sha, checks: checks, combined: combined,
+                                  complete: checksRead && statusesRead && runsRead)
+        let title = runs.first { $0.headSha == sha }?.displayTitle ?? head.headline
+        return CIStatus(branch: current, sha: sha, url: URL(string: "https://github.com/\(name)/commit/\(sha)"),
+                        checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows,
+                        runsCapped: runsRead ? nil : true)
+    }
+
+    /// A commit's push-triggered Actions runs on a branch, page by page (GitHub gives 30 unless asked, 100 at most), and
+    /// whether all of them were read. Only push-triggered runs count: issue/comment-triggered workflows also run against the
+    /// default branch HEAD and would otherwise make CI look red.
+    func branchRuns(_ name: String, branch: String, sha: String, lineage: String) async throws -> ([GHWorkflowRuns.Run], Bool) {
+        var runs: [GHWorkflowRuns.Run] = []
+        for page in 1...Self.ciPages {
+            let answer: GHWorkflowRuns = try await gh.get("/repos/\(name)/actions/runs",
+                                                          ["branch": branch, "event": "push", "head_sha": sha, "per_page": "100",
+                                                           "page": "\(page)"], lineage: lineage)
+            runs += answer.workflowRuns
+            if answer.workflowRuns.count < 100 || runs.count >= answer.totalCount ?? .max { return (runs, true) }
+        }
+        return (runs, false)
+    }
+
+    /// The pages of check runs or statuses read at most for one commit (100 each): past them, what isn't read may still run.
+    nonisolated static let ciPages = 3
+
+    /// A commit's check runs, page by page (GitHub gives 30 unless asked, 100 at most), and whether all of them were read.
+    func branchCheckRuns(_ name: String, target: String, branch: String) async throws -> ([GHCheckRuns.Run], Bool) {
+        var runs: [GHCheckRuns.Run] = []
+        for page in 1...Self.ciPages {
+            let answer: GHCheckRuns = try await gh.get("/repos/\(name)/commits/\(target)/check-runs",
+                                                       ["per_page": "100", "page": "\(page)"], lineage: branch)
+            runs += answer.checkRuns
+            if runs.count >= answer.totalCount || answer.checkRuns.isEmpty { return (runs, runs.count >= answer.totalCount) }
+        }
+        return (runs, false)
+    }
+
+    /// A commit's combined status with all its statuses, page by page, and whether all of them were read.
+    func branchStatuses(_ name: String, target: String, branch: String) async throws -> (GHCombinedStatus, Bool) {
+        var first: GHCombinedStatus?
+        var statuses: [GHCombinedStatus.Status] = []
+        for page in 1...Self.ciPages {
+            let answer: GHCombinedStatus = try await gh.get("/repos/\(name)/commits/\(target)/status",
+                                                            ["per_page": "100", "page": "\(page)"], lineage: branch)
+            if first == nil { first = answer }
+            statuses += answer.statuses
+            if statuses.count >= answer.totalCount || answer.statuses.isEmpty { break }
+        }
+        let combined = GHCombinedStatus(state: first!.state, totalCount: first!.totalCount, sha: first!.sha, statuses: statuses)
+        return (combined, statuses.count >= combined.totalCount)
     }
 
     /// What CI's three sources say about one commit.
@@ -1010,9 +1298,9 @@ final class Store {
 
     /// Folds Actions runs (the latest of each workflow, on `sha`) and their jobs, external check runs and legacy statuses
     /// into each workflow's state and failed names, and when any of them last changed. Any of the three can be all a repo
-    /// has.
+    /// has. Checks or statuses not all read (`complete` false) may still run: they are running, never passing.
     nonisolated static func readCI(runs: [GHWorkflowRuns.Run], sha: String?, checks: [GHCheckRuns.Run],
-                                   combined: GHCombinedStatus) -> CIReading {
+                                   combined: GHCombinedStatus, complete: Bool = true) -> CIReading {
         var latest: [Int: GHWorkflowRuns.Run] = [:]
         for run in runs where run.headSha == sha && latest[run.workflowId] == nil { latest[run.workflowId] = run }
         let external = checks.filter { $0.app?.slug != "github-actions" }
@@ -1028,31 +1316,31 @@ final class Store {
                 let failed = jobs.filter { run.checkSuiteId != nil && $0.checkSuite?.id == run.checkSuiteId }.map(\.name)
                 failing = failed.isEmpty ? [run.name] : failed
             }
-            let state: CIState = !failing.isEmpty ? .failure : run.status != "completed" ? .pending : .success
+            let state: CIState = !failing.isEmpty ? .failure : run.status != "completed" ? .pending
+                : run.conclusion == "cancelled" ? .cancelled : .success
             workflows.append(CIStatus.Workflow(id: "\(run.workflowId)", name: run.name, state: state, failing: failing,
-                                               url: run.htmlUrl, updatedAt: run.updatedAt))
+                                               url: run.htmlUrl, updatedAt: run.updatedAt,
+                                               run: run.id.map { "ci:\(run.headSha):\($0)#\(run.runAttempt ?? 1)" }))
         }
-        if !external.isEmpty || combined.totalCount > 0 {
+        if !external.isEmpty || combined.totalCount > 0 || !complete {
             let failing = external.filter { bad.contains($0.conclusion ?? "") }.map(\.name)
                 + combined.statuses.filter { $0.state == "failure" || $0.state == "error" }.map(\.context)
-            let pending = external.contains { $0.status != "completed" } || combined.statuses.contains { $0.state == "pending" }
+            // GitHub's own state of all the statuses counts too (it is "pending" with none, so only when there are some).
+            let pending = !complete || external.contains { $0.status != "completed" }
+                || combined.statuses.contains { $0.state == "pending" } || (combined.totalCount > 0 && combined.state == "pending")
+            // A check stopped before it finished didn't pass.
+            let cancelled = external.contains { $0.status == "completed" && $0.conclusion == "cancelled" }
             let changed = external.compactMap { $0.completedAt ?? $0.startedAt }
                 + combined.statuses.compactMap { $0.updatedAt ?? $0.createdAt }
+            // Another check finishing moves `changed`, not which execution it is: its checks by id, statuses by when posted.
+            let ids = external.map { $0.id.map { "c\($0)" } ?? "n\($0.name)" }
+                + combined.statuses.map { "s\($0.context)@\(($0.createdAt ?? .distantPast).timeIntervalSince1970)" }
             workflows.append(CIStatus.Workflow(id: externalWorkflowID, name: "Checks",
-                                               state: !failing.isEmpty ? .failure : pending ? .pending : .success,
-                                               failing: failing, url: nil, updatedAt: changed.max()))
+                                               state: !failing.isEmpty ? .failure : pending ? .pending : cancelled ? .cancelled : .success,
+                                               failing: failing, url: nil, updatedAt: changed.max(),
+                                               run: InboxSync.ciRun(sha: sha ?? combined.sha, ids: ids), running: pending))
         }
         return CIReading(changedAt: workflows.compactMap(\.updatedAt).max(), workflows: workflows)
-    }
-
-    /// The commit's headline: the Actions run's title when there is one; else what the commit says, asked once per
-    /// commit (a repo with only external CI has no run to read it from).
-    func ciHeadline(_ name: String, commit: String, runTitle: String?) async -> String? {
-        if let runTitle { return runTitle }
-        if let known = headlines[name], known.commit == commit { return known.title }
-        let found: GHCommit? = try? await gh.get("/repos/\(name)/commits/\(commit)")
-        if let title = found?.headline { headlines[name] = (commit, title) }
-        return found?.headline
     }
 
     // MARK: Notifications

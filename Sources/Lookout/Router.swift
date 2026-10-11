@@ -87,12 +87,13 @@ struct RouterState: Codable, Equatable {
 
     init() {}
 
-    /// A line of the chat an older file kept: only the change it may hold is read.
+    /// A line of the chat an older file kept: only the change it may hold is read (one there that can't be read fails the
+    /// line, and is counted as lost).
     private struct LegacyLine: Decodable {
         var change: LookoutChange?
         enum CodingKeys: String, CodingKey { case change }
         init(from decoder: Decoder) throws {
-            change = try? decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(LookoutChange.self, forKey: .change)
+            change = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(LookoutChange.self, forKey: .change)
         }
     }
 
@@ -125,29 +126,58 @@ struct RouterState: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? false
-        enabledAt = try? c.decodeIfPresent(Date.self, forKey: .enabledAt)
-        // Card by card: one this version can't read is left out, not every card.
-        cards = ((try? c.decodeIfPresent([Lossy<RouterCard>].self, forKey: .cards)) ?? []).compactMap(\.value)
-        // The same for the changes, decisions and summaries.
-        changes = ((try? c.decodeIfPresent([Lossy<LookoutChange>].self, forKey: .changes)) ?? []).compactMap(\.value)
+        // Each part, and each element of a list or map, on its own: one this version can't read is left out, not the rest,
+        // and is named in `dropped` (the file is then kept aside before it is written over: see `PersistedState`).
+        var lost: [String] = []
+        func value<T: Decodable>(_ key: CodingKeys) -> T? {
+            do { return try c.decodeIfPresent(T.self, forKey: key) } catch {
+                lost.append(key.stringValue)
+                return nil
+            }
+        }
+        func list<T: Decodable>(_ key: CodingKeys) -> [T] {
+            guard let all: [Lossy<T>] = value(key) else { return [] }
+            let read = all.compactMap(\.value)
+            if read.count < all.count { lost.append("\(all.count - read.count) of \(key.stringValue)") }
+            return read
+        }
+        func map<T: Decodable>(_ key: CodingKeys) -> [String: T] {
+            guard let all: [String: Lossy<T>] = value(key) else { return [:] }
+            let read = all.compactMapValues(\.value)
+            if read.count < all.count { lost.append("\(all.count - read.count) of \(key.stringValue)") }
+            return read
+        }
+        enabled = value(.enabled) ?? false
+        enabledAt = value(.enabledAt)
+        cards = list(.cards)
+        changes = list(.changes)
         // Older files kept the changes among the chat's lines; the rest of the chat is no longer kept.
-        if changes.isEmpty { changes = ((try? c.decodeIfPresent([LegacyLine].self, forKey: .chat)) ?? []).compactMap(\.change) }
-        decisions = ((try? c.decodeIfPresent([Lossy<RouterDecision>].self, forKey: .decisions)) ?? []).compactMap(\.value)
-        summaries = ((try? c.decodeIfPresent([Lossy<RouterSummary>].self, forKey: .summaries)) ?? []).compactMap(\.value)
-        seen = (try? c.decodeIfPresent([String: String].self, forKey: .seen)) ?? [:]
-        waits = (try? c.decodeIfPresent([String: Int64].self, forKey: .waits)) ?? [:]
-        waitTools = (try? c.decodeIfPresent([String: String].self, forKey: .waitTools)) ?? [:]
-        formSeen = (try? c.decodeIfPresent([String: Int64].self, forKey: .formSeen)) ?? [:]
-        pendingTurns = (try? c.decodeIfPresent([String: PendingTurn].self, forKey: .pendingTurns)) ?? [:]
-        origins = (try? c.decodeIfPresent([String: SessionOrigin].self, forKey: .origins)) ?? [:]
-        heldWaits = (try? c.decodeIfPresent([String: HeldWait].self, forKey: .heldWaits)) ?? [:]
-        lookoutStarted = (try? c.decodeIfPresent([String: Date].self, forKey: .lookoutStarted)) ?? [:]
-        zonesShare = try? c.decodeIfPresent(Double.self, forKey: .zonesShare)
-        autoContinue = (try? c.decodeIfPresent(Bool.self, forKey: .autoContinue)) ?? false
-        autoContinueSessions = (try? c.decodeIfPresent([String: Bool].self, forKey: .autoContinueSessions)) ?? [:]
-        handledTurns = (try? c.decodeIfPresent([String: Int].self, forKey: .handledTurns)) ?? [:]
+        var legacy: Set<UUID> = []
+        if changes.isEmpty {
+            changes = (list(.chat) as [LegacyLine]).compactMap(\.change)
+            legacy = Set(changes.map(\.id))
+        }
+        decisions = list(.decisions)
+        summaries = list(.summaries)
+        seen = map(.seen)
+        waits = map(.waits)
+        waitTools = map(.waitTools)
+        formSeen = map(.formSeen)
+        pendingTurns = map(.pendingTurns)
+        origins = map(.origins)
+        heldWaits = map(.heldWaits)
+        lookoutStarted = map(.lookoutStarted)
+        zonesShare = value(.zonesShare)
+        autoContinue = value(.autoContinue) ?? false
+        autoContinueSessions = map(.autoContinueSessions)
+        handledTurns = map(.handledTurns)
+        linkUnlinkedChanges(legacy: legacy)
+        dropped = lost
     }
+
+    /// What the file had that this version couldn't read ("2 of cards", "waits"): never saved, and handed on to
+    /// `PersistedState.dropped` (empty once loaded).
+    var dropped: [String] = []
 }
 
 /// An element of a saved array read on its own: nil when it can't be, so one bad element doesn't take the rest with it.
@@ -348,6 +378,8 @@ enum RouterFeed {
     static let placeholder = "Finished its turn"
     static let maxCards = 300
     static let maxChanges = 500
+    /// Sessions whose handled turn is kept (`RouterState.handledTurns`), archived ones included.
+    static let maxHandled = 500
     /// How long the app's sidebar dot may lag behind a turn you left unread (it is written to disk up to ~30 s late).
     static let unreadGraceMs: Int64 = 40_000
 
@@ -425,7 +457,8 @@ enum RouterFeed {
     /// since: with some still running it is work under way, and the card waits until that is done.
     static func update(_ state: inout RouterState, sessions: [ClaudeSession], activity: [String: ClaudeActivity],
                        muted: Set<String>, viewing: String?, unread: Set<String>? = nil, forms: [String: Set<String>]? = nil,
-                       tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, now: Date) {
+                       tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, listed: [String: Date]? = nil,
+                       now: Date) {
         let live = Dictionary(sessions.filter { !$0.isArchived }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
 
         for i in state.cards.indices where state.cards[i].isOpen && live[state.cards[i].sessionID] == nil {
@@ -567,7 +600,15 @@ enum RouterFeed {
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
         state.autoContinueSessions = state.autoContinueSessions.filter { live[$0.key] != nil }
-        state.handledTurns = state.handledTurns.filter { live[$0.key] != nil }
+        // A handled turn outlasts its session's archiving (unarchived, it is no new card): forgotten once the session is gone
+        // for good, and past the `maxHandled` sessions active last. `listed`: every session the read listed, archived ones too
+        // (the store's sessions leave the archived out); nil: `sessions`.
+        let known = listed ?? Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
+        state.handledTurns = state.handledTurns.filter { known[$0.key] != nil }
+        if state.handledTurns.count > maxHandled {
+            let kept = Set(state.handledTurns.keys.sorted { (known[$0] ?? .distantPast, $0) > (known[$1] ?? .distantPast, $1) }.prefix(maxHandled))
+            state.handledTurns = state.handledTurns.filter { kept.contains($0.key) }
+        }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
         state.lookoutStarted = state.lookoutStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
         // What started a session goes with it, past the same hour (a session is noted as Lookout's before its origin is):
@@ -702,7 +743,15 @@ enum RouterFeed {
             }
             state.cards = state.cards.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
         }
-        if state.changes.count > maxChanges { state.changes.removeFirst(state.changes.count - maxChanges) }
+        // Past `maxChanges`, the oldest go, but never one still waiting for your Apply or Discard.
+        if state.changes.count > maxChanges {
+            var over = state.changes.count - maxChanges
+            state.changes = state.changes.filter { change in
+                guard over > 0, !change.isPending else { return true }
+                over -= 1
+                return false
+            }
+        }
     }
 }
 
@@ -778,12 +827,16 @@ extension Store {
         }
         RouterFeed.update(&state, sessions: Array(claudeSessions.values), activity: claudeActivity,
                           muted: Set(agents.mutedFolders), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
-                          inventory: claudeTaskInventory, now: now)
+                          inventory: claudeTaskInventory, listed: claudeSessionsListed, now: now)
         applyTurnSummaries(&state)
         if state != router {
-            let known = Set(router.cards.map(\.id))
+            let known = Dictionary(router.cards.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             router = state
-            let fresh = state.cards.filter { $0.isOpen && !known.contains($0.id) }
+            // New cards, and open ones that need you only now (a turn's summary came late, blocked): announced once.
+            let fresh = state.cards.filter { card in
+                guard card.isOpen, let was = known[card.id] else { return card.isOpen }
+                return card.kind.needsYou && was.isOpen && !was.kind.needsYou && !routerAttention.delivered.contains(card.id)
+            }
             if !fresh.isEmpty { announceRouterCards(fresh) }
         }
         // What the turns ended on (Jev), and the waits that are over.

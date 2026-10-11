@@ -233,6 +233,12 @@ enum RuleEditing {
             found.append(.init(condition: nil, slot: "in", reason: "Workflows need at least one repo"))
         }
         for (i, c) in rule.conditions.enumerated() {
+            // A group gone from a condition's pick would widen it ("by anyone except Trusted" taking Trusted's), so it is off.
+            var picks = [c.people]
+            if case .unresolvedThreads(let started, let last) = c { picks = [started, last] }
+            if picks.contains(where: { gone($0, person) }) {
+                found.append(.init(condition: i, slot: nil, reason: "This group no longer exists"))
+            }
             switch c {
             case .status(let s) where s.isEmpty: found.append(.init(condition: i, slot: nil, reason: "Pick at least one status"))
             case .checks(let s) where s.isEmpty, .workflow(let s) where s.isEmpty:
@@ -469,6 +475,10 @@ struct EditorData {
         for team in store.myTeams { counts[team, default: 0] += 1 }
         return counts.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
     }
+
+    /// Not offered where people are known by login only (who a thing is for, commit authors, the mentioned): they can't be
+    /// told to be maintainers or bots (`InboxEngine.problems` flags them there).
+    static let loginOnlyHidden: Set<PersonRef> = [.maintainers, .bots]
 
     func peopleOptions(_ query: String, _ pick: Pick<PersonRef>, teams allowsTeams: Bool = false) -> [SlotOption<PersonRef>] {
         var q = query.trimmingCharacters(in: .whitespaces).lowercased()

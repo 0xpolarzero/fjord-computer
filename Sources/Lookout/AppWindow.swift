@@ -30,6 +30,8 @@ enum AppPolicy {
 final class AppWindowController: NSObject, NSWindowDelegate {
     /// The window the Go menu acts on: the last one made.
     static weak var active: AppWindowController?
+    /// The controllers whose window has been brought in: whether another is still open when one's close is tidied.
+    private static let broughtIn = NSHashTable<AppWindowController>.weakObjects()
     static let autosave = "LookoutApp"
     static let minSize = NSSize(width: 1000, height: 600)
 
@@ -214,6 +216,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             self.content = content
             window.contentViewController = content
         }
+        Self.broughtIn.add(self)
         AppPolicy.update(windowOpen: true)
         AppPolicy.activate()
         window.makeKeyAndOrderFront(nil)
@@ -584,7 +587,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 self.window?.contentViewController = nil
                 // Short of memory: not kept either (it was still in the window as the pressure came).
                 if self.memoryShort { self.releaseKept() }
-                AppPolicy.update(windowOpen: false)
+                // Only the last window's close puts the app back to the bar only: one closing late (its work is deferred)
+                // must not take the policy from another that has opened since. Asked of the windows themselves, so a close
+                // whose tidying never came (or a controller gone) leaves nothing behind that reads as open.
+                Self.broughtIn.remove(self)
+                AppPolicy.update(windowOpen: Self.broughtIn.allObjects.contains { $0.isOpen })
             }
         }
     }

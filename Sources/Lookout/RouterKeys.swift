@@ -5,8 +5,9 @@ import Foundation
 /// The Router's keys in the app window. In the composer: Return sends, ⇧Return starts a new line, ↑↓ pick a card while it is empty;
 /// with @ suggestions showing, ↑↓ walk them and Return or Tab picks one; Backspace at the very start takes the last chip off.
 /// Elsewhere: ↑↓ pick a card, Space marks it addressed (or open again), Return replies to it, and typing goes to the
-/// composer. The cards are walked in the order the page shows them (`RouterModel.cards`). Esc dismisses the suggestions, then
-/// Jev's pick of a target, then the pinned target, then the reply chip, then closes the window.
+/// composer. The cards are walked in the order the page shows them (`RouterModel.cards`). Esc is first the Back of a plan in
+/// revise mode (its feedback field showing), then dismisses the suggestions, then Jev's pick of a target, then the pinned
+/// target, then the reply chip, then is the Revise… of the plan shown in full, then closes the window.
 @MainActor
 final class RouterKeys {
     let store: Store
@@ -29,10 +30,13 @@ final class RouterKeys {
         // The @ suggestions are the caret's: where it is now decides what the keys do.
         if model.composerFocused, let editor = responder as? NSTextView { model.followCaret(editor) }
         if code == kVK_Escape, flags.isEmpty {
-            if model.mention != nil { model.dismissMention() }
+            let plan = model.expandedPlan(store)
+            if let revising = model.revisingPlan, revising == plan?.id { model.revisingPlan = nil }
+            else if model.mention != nil { model.dismissMention() }
             else if model.live.prediction != nil { model.dismissPrediction() }
             else if model.live.pinned != nil { model.live.reset() }
             else if model.replyTo != nil { model.replyTo = nil }
+            else if let plan { model.revisingPlan = plan.id }
             else { close() }
             return true
         }
@@ -146,9 +150,12 @@ enum RouterBanners {
     }
 
     /// Back after being away: one banner for what came meanwhile, opening on the most urgent of it.
+    /// With the Router off, its cards are left out: only what came in the inbox is said.
     static func postBack(_ strip: AwayStrip, store: Store, windowIsKey: Bool) {
-        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(store.routerShownCards) else { return }
-        let first = strip.listed(store.routerShownCards).first
+        let cards = store.router.enabled ? store.routerShownCards : []
+        store.routerAttention.reported(strip.listed(cards))
+        guard !windowIsKey, store.settings.notifications, !store.isSnoozed, let line = strip.line(cards) else { return }
+        let first = strip.listed(cards).first
         store.notifier.post(id: first.map { prefix + $0.id } ?? Notifier.summaryPrefix + UUID().uuidString,
                             title: "While you were away", subtitle: "", body: line, quiet: false)
     }

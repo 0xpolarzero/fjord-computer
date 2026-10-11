@@ -21,7 +21,8 @@ import Testing
         for file in ["RouterWaiting.swift", "RouterDispatcher.swift", "RouterMCP.swift"] {
             let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
             #expect(!text.contains("FileManager.default.createDirectory(at: home"), "\(file) makes the Router's folder on the main thread")
-            #expect(text.contains("PrivateFile.makeFolder(home)"), "\(file)")
+            // Preparing (RouterMCP) runs nothing in it: only the send paths make it.
+            #expect(file == "RouterMCP.swift" || text.contains("PrivateFile.makeFolder(home)"), "\(file)")
         }
     }
 }

@@ -247,6 +247,33 @@ import Testing
         #expect(InboxEngine.facts(rule, t, marks: nil, context: context())?.map(\.key) == ["workflow:failing"])
     }
 
+    @Test func aRuleTheEditorFlagsInItsCategoryIsOffThereButCIKeepsEveryWatchedRepo() {
+        // A workflow rule whose last repo was removed: flagged in a category of yours, so it takes nothing.
+        let rule = Rule(scope: Scope(kinds: [.workflow], in: Pick()), conditions: [.workflow([.failing])])
+        let mine = InboxCategory(name: "Mine", symbol: "a", color: .blue, rules: [rule])
+        #expect(InboxEngine.evaluate(things: [workflow(.failing)], categories: [mine], marks: [:], context: context()).isEmpty)
+        // CI's own rule says every watched repo that way.
+        var ci = mine
+        ci.isCI = true
+        #expect(InboxEngine.evaluate(things: [workflow(.failing)], categories: [ci], marks: [:], context: context()).count == 1)
+        // A repo group that no longer exists in its except is flagged too: it doesn't widen the rule.
+        let gone = Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("a/one")], except: [.group(UUID())])))
+        let category = InboxCategory(name: "Gone", symbol: "b", color: .red, rules: [gone])
+        #expect(InboxEngine.evaluate(things: [pr()], categories: [category], marks: [:], context: context()).isEmpty)
+    }
+
+    @Test func maintainersAndBotsAreFlaggedWherePeopleAreKnownByLoginOnly() {
+        func problems(_ scope: Scope, _ match: MatchMode, _ conditions: [Condition]) -> [InboxEngine.Problem] {
+            InboxEngine.problems(Rule(scope: scope, match: match, conditions: conditions))
+        }
+        let pr = Scope(kinds: [.pr])
+        #expect(problems(pr, .any, [.newCommits(by: Pick(include: [.bots]))]).map(\.condition) == [0])
+        #expect(problems(pr, .any, [.mentions(Pick(include: [.me], except: [.maintainers]))]).map(\.condition) == [0])
+        #expect(problems(Scope(kinds: [.pr], to: Pick(include: [.bots])), .any, []).map(\.slot) == ["to"])
+        // Comment and review authors are known in full.
+        #expect(problems(pr, .any, [.newComment(by: Pick(include: [.bots])), .newReview(by: Pick(include: [.maintainers]))]).isEmpty)
+    }
+
     @Test func workflowsScopeByBranchAndName() {
         let rule = { (on: [String]?, named: [String]?) in
             Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/one")]), on: on, named: named),

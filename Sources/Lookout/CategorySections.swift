@@ -349,9 +349,23 @@ struct SectionHeaderRow: View {
         let name = section.name.trimmingCharacters(in: .whitespaces)
         guard iconAuto, name.count >= 2 else { return }
         try? await Task.sleep(for: .milliseconds(800))
-        guard !Task.isCancelled, iconAuto, let symbol = await SectionIcon.pick(name: name, choose: store.jevChooser(.categoryIcons)),
-              !Task.isCancelled, iconAuto else { return }
-        update { $0.symbol = symbol }
+        guard !Task.isCancelled else { return }
+        await store.autoPickSectionIcon(section.id, name: name, choose: store.jevChooser(.categoryIcons))
+    }
+}
+
+extension Store {
+    /// Gives a section the icon its name suggests, only if (read live, before asking and before applying) it still has
+    /// that name and its icon wasn't chosen by hand: a rename and a choice made meanwhile are not this pick's to overwrite.
+    func autoPickSectionIcon(_ id: UUID, name: String, choose: Claude.Chooser?) async {
+        func current() -> CategorySection? {
+            categorySections.first { $0.id == id && $0.name.trimmingCharacters(in: .whitespaces) == name && $0.iconChosen != true }
+        }
+        guard current() != nil, !Task.isCancelled,
+              let symbol = await SectionIcon.pick(name: name, choose: choose),
+              !Task.isCancelled, current() != nil,
+              let i = categorySections.firstIndex(where: { $0.id == id }) else { return }
+        categorySections[i].symbol = symbol
     }
 }
 

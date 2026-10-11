@@ -110,6 +110,28 @@ import Testing
         #expect(posted().count == 1)
     }
 
+    @Test func aFinishedTurnWhoseLateSummarySaysBlockedIsBanneredOnce() {
+        let (s, _, posted) = store()
+        s.claudeLink = .ok
+        s.agents.enabled = true
+        s.claudeIsFrontmost = { false }
+        s.onNewRouterCards = { [weak s] in if let s { RouterBanners.post($0, store: s, windowIsKey: false) } }
+        var session = ClaudeSession(id: "a", title: "Deploy", folder: "/code/a", completedTurns: 2, lastActivity: Date(), cliID: "cli-a")
+        s.claudeSessions = ["a": session]
+        s.router.cards = [RouterCard(id: "a#t2", sessionID: "a", kind: .done, title: "Deploy", folder: "/code/a",
+                                     text: RouterFeed.placeholder, createdAt: Date())]
+        s.feedRouter()
+        #expect(s.router.cards[0].kind == .done && posted().isEmpty)
+        // Its summary comes after, blocked: the card that was there needs you now, and says so (no key, no triage to wait for).
+        session.summary = .init(blocked: true, detail: "Can't reach the server")
+        s.claudeSessions = ["a": session]
+        s.feedRouter()
+        #expect(s.router.cards[0].kind == .stuck && posted() == [RouterBanners.prefix + "a#t2"])
+        // Once.
+        s.feedRouter()
+        #expect(posted().count == 1)
+    }
+
     @Test func whatTheSummaryToldOfAsYouCameBackGetsNoBannerOfItsOwn() {
         let (s, idle, posted) = store()
         var waiting = card("wait", .waiting)
@@ -135,6 +157,87 @@ import Testing
         idle.seconds = 1
         RouterBanners.postReady(s.router.cards[0], store: s, windowIsKey: false)
         #expect(posted().count == 2)
+    }
+
+    @Test func aRenewedCompletionAfterTheSummaryToldOfAnEarlierOneBanners() {
+        let (s, idle, posted) = store()
+        var waiting = card("wait", .waiting)
+        waiting.triage = RouterTriage(state: .waiting, waitingOn: .ci,
+                                      watch: .init(target: .ci(thing: "pr:o/r#1"), label: "CI on o/r#1", ref: "o/r#1"))
+        s.router.cards = [waiting]
+        // CI failed while away: the summary on coming back tells of it.
+        idle.seconds = 400
+        s.routerAttention.refresh()
+        s.router.cards[0].triage?.ready = .init(result: "failed", at: Date())
+        RouterBanners.postReady(s.router.cards[0], store: s, windowIsKey: false)
+        idle.seconds = 1
+        s.routerAttention.refresh()
+        #expect(posted().count == 1)
+        // Rerun: pending, then passing. That is a new completion.
+        s.router.cards[0].triage?.ready = nil
+        s.router.cards[0].triage?.ready = .init(result: "passing", at: Date().addingTimeInterval(60))
+        RouterBanners.postReady(s.router.cards[0], store: s, windowIsKey: false)
+        #expect(posted().count == 2)
+    }
+
+    @Test func aCardTheSummaryToldOfAsFinishedStillBannersOnceItNeedsYou() {
+        let (s, idle, posted) = store()
+        let done = card("done", .done)
+        s.router.cards = [done]
+        idle.seconds = 400
+        RouterBanners.post([done], store: s, windowIsKey: false)
+        // Back before Jev answered: the summary says it finished.
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(posted() == [RouterBanners.prefix + "done"] && s.routerAttention.strip?.line(s.router.cards) == "1 finished")
+        // His triage: it asks for your OK. That is news, and it comes.
+        s.router.cards[0].kind = .approval
+        RouterBanners.post([s.router.cards[0]], store: s, windowIsKey: false)
+        #expect(posted().count == 2)
+    }
+
+    @Test func aCardLeftOutOfTheSummaryWhileTheRouterWasOffStillBanners() {
+        let (s, idle, posted) = store()
+        let ask = card("ask", .asks, urgency: 1)
+        s.router.cards = [ask]
+        idle.seconds = 400
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        #expect(!s.routerAttention.admitInbox(.low))
+        // Back with the Router off: only the inbox is said.
+        s.router.enabled = false
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(posted().count == 1)
+        // On again, it comes as it is: a stop of the session's.
+        s.router.enabled = true
+        s.router.cards[0].kind = .question
+        RouterBanners.post([s.router.cards[0]], store: s, windowIsKey: false)
+        #expect(posted().count == 2)
+    }
+
+    @Test func withTheRouterOffComingBackSaysOnlyWhatCameInTheInbox() {
+        let (s, idle, _) = store()
+        var bodies: [String] = []
+        s.notifier.onPost = { bodies.append($0.content.body) }
+        let ask = card("ask", .asks, urgency: 1, minutes: -1)
+        s.router.cards = [ask]
+        idle.seconds = 400
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        #expect(!s.routerAttention.admitInbox(.low))
+        // Off while you're away: its card is not said when you're back, the inbox still is.
+        s.router.enabled = false
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(bodies == ["1 in your inbox"])
+        // Nothing but its cards: nothing at all.
+        idle.seconds = 400
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        s.router.enabled = true
+        RouterBanners.post([ask], store: s, windowIsKey: false)
+        s.router.enabled = false
+        idle.seconds = 0
+        s.routerAttention.refresh()
+        #expect(bodies == ["1 in your inbox"])
     }
 
     @Test func aLockedScreenIsAwayAndNothingCameMeansNoSummary() {

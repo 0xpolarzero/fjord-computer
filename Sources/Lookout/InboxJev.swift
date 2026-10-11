@@ -155,7 +155,17 @@ enum InboxJev {
         let ids = Set(InboxEngine.messages(thing).map(\.id))
         signals.messages = signals.messages.filter { ids.contains($0.key) }
         signals.answeredAt = [signals.answeredAt, InboxEngine.latestWord(thing, by: me)].compactMap { $0 }.max()
-        thing.signals = signals.messages.isEmpty && signals.importance == nil && signals.answeredAt == nil ? nil : signals
+        // Found by your `involves:` search this time (marked on the fetched thing), or any time before; until a search of
+        // yours read whole would have found it and didn't (marked `false`): you're no longer involved.
+        if thing.signals?.viewer == viewer, let involved = thing.signals?.involved { signals.involved = involved ? true : nil }
+        // The same for each of your review searches, by itself.
+        if thing.signals?.viewer == viewer, let marks = thing.signals?.involvedBy {
+            var kept = signals.involvedBy ?? [:]
+            for (search, found) in marks { kept[search] = found ? true : nil }
+            signals.involvedBy = kept.isEmpty ? nil : kept
+        }
+        thing.signals = signals.messages.isEmpty && signals.importance == nil && signals.answeredAt == nil && signals.involved == nil
+            && signals.involvedBy == nil ? nil : signals
     }
 
     /// A fact that never shows a banner: noise, or a message Jev read as noise (unless it asks you something).
@@ -219,9 +229,11 @@ enum InboxJev {
         let before = all.last { $0.at < m.at && $0.path == m.path }
         var out: [String: Any] = [
             "on": name(thing), "your part": role(thing, context), "from": who(m.author),
-            "kind": m.path.map { $0.isEmpty ? "reply in a review thread" : "reply in a review thread on \($0)" } ?? (m.isReview ? "review" : "comment"),
+            "kind": m.path != nil ? "reply in a review thread" : (m.isReview ? "review" : "comment"),
             "text": github(m.text, 2000), "mentions you": m.text.lowercased().contains("@" + context.me.lowercased()) ? "yes" : "no",
         ]
+        // A file's name is the PR's (anyone's) words: in a field of its own, cleaned, bounded and fenced; `kind` stays fixed.
+        if let path = m.path, !path.isEmpty { out["file of the review thread"] = UntrustedFence.github.fence(UntrustedText.clean(path, limit: 200)) }
         if let before { out["just before, \(who(before.author))"] = github(before.text, 200) }
         return out
     }

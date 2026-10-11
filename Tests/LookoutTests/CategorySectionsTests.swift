@@ -114,6 +114,42 @@ import Testing
         #expect(quiet().createSection(name: "Builds").symbol == "hammer")
     }
 
+    /// A chooser that takes the first option, after `during` ran (what happens while Jev is being asked).
+    private func choosing(during: @escaping @MainActor () -> Void) -> Claude.Chooser {
+        { options, _, _, _ in
+            await MainActor.run { during() }
+            return JevClient.Choice(choice: options[0], confidence: 1, probabilities: [options[0]: 1])
+        }
+    }
+
+    @Test func anAutomaticIconNeverOverwritesOneChosenOrANameChangedWhileAsking() async {
+        let store = quiet()
+        let section = store.createSection(name: "Builds")
+        let id = section.id
+        let start = store.categorySections.first { $0.id == id }?.symbol
+        // Chosen by hand while Jev is being asked: his pick is dropped.
+        await store.autoPickSectionIcon(id, name: "Builds", choose: choosing {
+            if let i = store.categorySections.firstIndex(where: { $0.id == id }) {
+                store.categorySections[i].symbol = "star"
+                store.categorySections[i].iconChosen = true
+            }
+        })
+        #expect(store.categorySections.first { $0.id == id }?.symbol == "star")
+        // Renamed while asked: the pick was for the old name.
+        if let i = store.categorySections.firstIndex(where: { $0.id == id }) {
+            store.categorySections[i].iconChosen = nil
+            store.categorySections[i].symbol = "tray"
+        }
+        await store.autoPickSectionIcon(id, name: "Builds", choose: choosing {
+            if let i = store.categorySections.firstIndex(where: { $0.id == id }) { store.categorySections[i].name = "Other" }
+        })
+        #expect(store.categorySections.first { $0.id == id }?.symbol == "tray")
+        // Left alone, the pick is applied.
+        await store.autoPickSectionIcon(id, name: "Other", choose: choosing {})
+        #expect(store.categorySections.first { $0.id == id }?.symbol != "tray")
+        _ = start
+    }
+
     @Test func aFileFromBeforeSectionsLoadsWithGitHubsAlone() throws {
         let old = try JSONEncoder().encode(PersistedState(settings: AppSettings(), categories: [category("Mine")]))
         let state = try JSONDecoder().decode(PersistedState.self, from: old)

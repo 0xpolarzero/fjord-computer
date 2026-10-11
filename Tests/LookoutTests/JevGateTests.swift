@@ -112,6 +112,30 @@ import Testing
         #expect(calls == 1)
     }
 
+    @Test func anOlderCallThatWorkedDoesntLiftANewerPause() async throws {
+        let s = store()
+        let latch = Latch()
+        var inside = false
+        // B is let through and still asks when A is told to wait a minute.
+        let b = Task { try await s.throughJevGate(.inbox, generation: s.jevGate.generation) { inside = true; await latch.wait(); return 1 } }
+        while !inside { await Task.yield() }
+        await #expect(throws: JevClient.Failure.rateLimited(retryAfter: 60)) {
+            try await s.throughJevGate(.inbox, generation: s.jevGate.generation) { () async throws -> Int in throw JevClient.Failure.rateLimited(retryAfter: 60) }
+        }
+        latch.open = true
+        #expect(try await b.value == 1)
+        // C still waits.
+        var asked = false
+        await #expect(throws: JevClient.Failure.rateLimited(retryAfter: 60)) {
+            try await s.throughJevGate(.inbox, generation: s.jevGate.generation) { asked = true; return 1 }
+        }
+        #expect(!asked && s.jevGate.failures == 1)
+        // A call let through after it does start over.
+        let pauses = s.jevGate.pauses
+        s.jevGate.succeeded(since: pauses)
+        #expect(s.jevGate.isOpen(for: "sk-old") && s.jevGate.failures == 0)
+    }
+
     @Test func anAnswerAfterTheKeyOrTheSwitchChangedIsDropped() async {
         let s = store()
         var flip: () -> Void = {}
@@ -124,6 +148,27 @@ import Testing
         s.router.enabled = false
         await #expect(throws: JevClient.Failure.cancelled) { try await off?([:], [:]) }
         #expect(!asked && s.jevAsker(.triage, base: { _, _ in [:] }) == nil)
+    }
+
+    @Test func aRejectionOfAKeySinceReplacedIsDroppedAndPausesNoIcons() async {
+        let s = store()
+        s.agents.iconsEnabled = true
+        let old = s.jevChooser(.icons, base: { _, _, _, _ in
+            _ = s.setTypesafeKey("sk-new")
+            throw JevClient.Failure.unauthorized
+        })
+        await #expect(throws: JevClient.Failure.cancelled) { try await old?(["a"], [:], [:], "") }
+        #expect(s.jevGate.isOpen(for: "sk-new") && s.jevGate.isOpen(for: "sk-old"))
+        // A cancelled call's failure is dropped too.
+        let task = Task { try await s.throughJevGate(.icons, generation: s.jevGate.generation) { () async throws -> Int in
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw JevClient.Failure.unauthorized
+        } }
+        await #expect(throws: JevClient.Failure.cancelled) { try await task.value }
+        #expect(s.jevGate.isOpen(for: "sk-new"))
+        // The icons take it as nothing failed: no pause.
+        s.iconPickFailed(JevClient.Failure.cancelled)
+        #expect(s.iconsPausedUntil < .distantFuture && s.iconError == nil)
     }
 
     /// Lets a read go on once opened (from any thread).

@@ -79,6 +79,21 @@ import Testing
         #expect(state.decisions.first?.trigger == .you("m5"))
     }
 
+    @Test func theEntryOfAChangeWaitingForYourApplyOutlivesTheCap() {
+        var state = RouterState()
+        var change = LookoutChange(title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        change.pending = "asks first"
+        state.changes = [change]
+        state.log(RouterDecision(trigger: .you("change it"), done: [.changed(change.id)], links: .init(changes: [change.id])))
+        for i in 0..<(RouterDecision.maxKept + 5) { state.log(RouterDecision(trigger: .you("m\(i)"))) }
+        #expect(state.decisions.count == RouterDecision.maxKept)
+        #expect(state.decisions.first?.trigger == .you("change it") && state.decisions[1].trigger == .you("m6"))
+        // Applied (or discarded), it goes with the rest.
+        state.changes[0].pending = nil
+        state.log(RouterDecision(trigger: .you("more")))
+        #expect(state.decisions.first?.trigger == .you("m6"))
+    }
+
     // MARK: Context
 
     @Test func recentDecisionsAreOneLineEachAndCorrectionsAreSaid() {

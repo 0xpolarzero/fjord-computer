@@ -426,6 +426,7 @@ extension Store {
         }
         // Only on change: the views observing these redraw on every assignment.
         if claudeSessions != byID { claudeSessions = byID }
+        claudeSessionsListed = Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
     }
 
     // MARK: Actions
@@ -575,6 +576,9 @@ extension Store {
         // What is under way with the old key stops (the icon's pick starts again with the new one once it has).
         iconTask?.cancel()
         routerTriager.cancelAll()
+        // The triage's retry was timed to the old key's pause: a pause with the new one times its own (`triageTurns`).
+        routerTriager.retry?.cancel()
+        routerTriager.retry = nil
         iconError = nil
         iconsPausedUntil = .distantPast
         pickIcons()
@@ -607,6 +611,7 @@ extension Store {
             if persists { watchClaude() }
             claudeSessions = [:]
             claudeLink = .off
+            claudeSessionsRead = false
         }
     }
 }

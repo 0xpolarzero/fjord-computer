@@ -20,6 +20,8 @@ struct RouterComposer: View {
     /// The @ word's first character in the card (x from its leading edge, y of its line's top from its top), once known.
     @State private var mentionAt: CGPoint?
     @State private var windowHeight: CGFloat = 0
+    /// The card's width: the suggestions stay inside it.
+    @State private var cardWidth: CGFloat = 0
     @State private var hovering = false
     @State private var overButton = false
     @Environment(\.colorSchemeContrast) private var contrast
@@ -40,11 +42,12 @@ struct RouterComposer: View {
                 .overlay(alignment: .topLeading) {
                     if !suggestions.isEmpty {
                         let at = mentionAt ?? CGPoint(x: 0, y: C.pad + (C.row - 20) / 2)
-                        MentionList(suggestions: suggestions, index: model.mentionIndex,
+                        let place = MentionList.place(caretX: at.x, available: cardWidth)
+                        MentionList(suggestions: suggestions, index: model.mentionIndex, width: place.width,
                                     hover: { model.mentionIndex = $0 }) { model.pickMention($0) }
                             .fixedSize()
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
-                            .offset(x: max(0, at.x), y: at.y - C.mentionOffset - listHeight)
+                            .offset(x: place.x, y: at.y - C.mentionOffset - listHeight)
                             .transition(.opacity)
                     }
                 }
@@ -65,6 +68,8 @@ struct RouterComposer: View {
         }
         .onAppear {
             if on { requestFocus() }
+            // What was pinned before the page was left may be gone since (the watch below only sees changes from now on).
+            model.live.revalidate(store: store)
             model.predictTarget(store: store)
         }
         .onChange(of: model.focusRequest) { requestFocus() }
@@ -140,12 +145,13 @@ struct RouterComposer: View {
         }
         .background(shape.fill(CDS.Surface.s3))
         .background(AnchorView(anchor: anchor) { windowHeight = $0 })
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
         .overlay(shape.strokeBorder(ring, lineWidth: 1))
         .bakedShadow(focused ? C.dropFocus : C.drop, .rounded(C.radius), radius: 10, y: 4)
         .contentShape(shape)
         .onHover { hovering = $0 }
         .onTapGesture { if on { focusTick &+= 1 } }
-        .animation(.easeOut(duration: 0.2), value: hot)
+        .motion(.easeOut(duration: 0.2), value: hot)
     }
 
     private func field(on: Bool) -> some View {
@@ -180,7 +186,7 @@ struct RouterComposer: View {
             let empty = !on || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             GhostIcon(symbol: "arrow.turn.down.left", label: "Send") { model.send(store: store) }
                 .disabled(empty)
-                .tip("Send", "Return · ⇧Return for a new line")
+                .tip("Send", model.sendRefused ?? "Return · ⇧Return for a new line")
         }
     }
 
@@ -321,8 +327,18 @@ private struct ChipClose: View {
 struct MentionList: View {
     let suggestions: [(folder: String, name: String)]
     let index: Int
+    var width: CGFloat = CDS.Composer.mentionWidth
     var hover: ((Int) -> Void)? = nil
     let pick: (String) -> Void
+
+    /// Where the list goes under a caret at `caretX` in a card `available` wide (0 while that isn't known yet): no wider than
+    /// the card, and moved left as far as it takes to end inside it.
+    static func place(caretX: CGFloat, available: CGFloat, preferred: CGFloat = CDS.Composer.mentionWidth)
+        -> (x: CGFloat, width: CGFloat) {
+        guard available > 0 else { return (max(0, caretX), preferred) }
+        let width = min(preferred, available)
+        return (min(max(0, caretX), available - width), width)
+    }
 
     var body: some View {
         let d = CDS.Density.compact
@@ -354,7 +370,7 @@ struct MentionList: View {
             }
         }
         .padding(d.pad.xs)
-        .frame(width: CDS.Composer.mentionWidth)
+        .frame(width: width)
         .background(shape.fill(CDS.Surface.s3))
         .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
         .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
@@ -371,7 +387,8 @@ struct MentionList: View {
 }
 
 /// The composer field's place on screen, kept by an empty AppKit view behind it: a text view is the composer's when it is in
-/// the same window and inside the field (SwiftUI doesn't hand out the field's own text view). It also tells its window's
+/// the same window and what it shows is inside the field (SwiftUI doesn't hand out the field's own text view): the part of
+/// its text in view, not the whole of a long draft scrolled in it, which reaches far out of the field. It also tells its window's
 /// height, for the field's `min(24rem, 40svh)`.
 final class FieldAnchor {
     weak var view: NSView?
@@ -379,7 +396,9 @@ final class FieldAnchor {
     func owns(_ editor: NSTextView) -> Bool {
         guard let view, let window = view.window, editor.window === window else { return false }
         let field = view.convert(view.bounds, to: nil)
-        let text = editor.convert(editor.bounds, to: nil)
+        let shown = editor.visibleRect
+        guard !shown.isEmpty else { return false }
+        let text = editor.convert(shown, to: nil)
         return field.contains(CGPoint(x: text.midX, y: text.midY))
     }
 }
@@ -441,7 +460,7 @@ private struct LiveTargetWatch: View {
 extension RouterModel {
     /// What a pick or a pin can go to, and where the page shows it: the open cards, the working sessions, the sessions kept.
     static func targets(_ store: Store) -> [String] {
-        store.openRouterCards.map(\.id) + store.routerWorkingRows.map { workingID($0.id) }
+        store.routerShownOpenCards.map(\.id) + store.routerWorkingRows.map { workingID($0.id) }
             + store.claudeSessions.values.filter { !$0.isArchived }.map(\.id).sorted()
     }
 

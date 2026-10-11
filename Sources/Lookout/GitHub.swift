@@ -43,8 +43,12 @@ struct GHWorkflowRuns: Decodable {
         var htmlUrl: URL? = nil
         /// The run's own id (what re-running it takes).
         var id: Int? = nil
+        /// Which attempt of the run it is: re-running it keeps its id and counts one more.
+        var runAttempt: Int? = nil
     }
     let workflowRuns: [Run]
+    /// How many runs the query has in all, past this page.
+    var totalCount: Int? = nil
 }
 
 struct GHCheckRuns: Decodable {
@@ -60,6 +64,8 @@ struct GHCheckRuns: Decodable {
         let headSha: String
         let startedAt: Date?
         let completedAt: Date?
+        /// Its own id: a rerun makes a new check run, one finishing keeps its own.
+        var id: Int? = nil
     }
     let totalCount: Int
     let checkRuns: [Run]
@@ -87,6 +93,18 @@ struct GHCommit: Decodable {
     var headline: String? {
         commit.message.split(whereSeparator: \.isNewline).first.map { $0.trimmingCharacters(in: .whitespaces) }
     }
+}
+
+/// A branch and the commit at its head (`/repos/o/r/branches/{b}`). A branch renamed since is answered with the branch it
+/// is now (GitHub redirects the old name): `name` says which.
+struct GHBranch: Decodable {
+    struct Head: Decodable {
+        let sha: String
+        let commit: GHCommit.Detail
+    }
+    var name: String? = nil
+    let commit: Head
+    var headline: String? { GHCommit(commit: commit.commit).headline }
 }
 
 struct GitHubError: LocalizedError {
@@ -148,7 +166,8 @@ final class GitHubClient: @unchecked Sendable {
         var used: Int
         /// The decoded body and the type it was decoded as.
         var decoded: (value: Any, type: ObjectIdentifier)?
-        /// What a commit's answers share across commits (`/repos/o/r/commits/{sha}/status`): a newer commit supersedes them.
+        /// What a commit's answers share across commits (`/repos/o/r/commits/{sha}/status`, and the branch they are asked
+        /// for): a newer commit of that branch supersedes them.
         var family: String?
     }
     private var etags: [String: Remembered] = [:]
@@ -167,7 +186,8 @@ final class GitHubClient: @unchecked Sendable {
 
     /// Room for every repository's answers at once: a poll visits each in turn, and a cache smaller than that cycle evicts each
     /// answer just before it is asked for again, so every poll becomes full 200s against the rate limit. Per repository: its
-    /// default branch, actions runs, check runs and status, and a few spare.
+    /// default branch, its branch's head, actions runs, check runs and status, and a few spare. Each branch watched counts
+    /// as one: its answers are its own (see `lineage` in `get`).
     func reserveETags(forRepositories count: Int) {
         lock.withLock { etagLimit = max(Self.etagFloor, 8 * count + 40) }
     }
@@ -175,8 +195,11 @@ final class GitHubClient: @unchecked Sendable {
     /// How many answers are remembered (the tests count them).
     var remembered: Int { lock.withLock { etags.count } }
 
-    func get<T: Decodable>(_ path: String, _ query: [String: String] = [:], as type: T.Type = T.self) async throws -> T {
-        let answer = try await exchange(path, query)
+    /// `lineage` names what a commit's answers are asked for (a branch): a newer commit's take the place of the older one's
+    /// of the same lineage only, so two branches at different commits keep theirs side by side.
+    func get<T: Decodable>(_ path: String, _ query: [String: String] = [:], as type: T.Type = T.self,
+                           lineage: String? = nil) async throws -> T {
+        let answer = try await exchange(path, query, lineage: lineage)
         if answer.notModified, let value = answer.decoded?.value as? T, answer.decoded?.type == ObjectIdentifier(T.self) { return value }
         let value: T
         do {
@@ -206,7 +229,7 @@ final class GitHubClient: @unchecked Sendable {
         var decoded: (value: Any, type: ObjectIdentifier)?
     }
 
-    private func exchange(_ path: String, _ query: [String: String]) async throws -> Answer {
+    private func exchange(_ path: String, _ query: [String: String], lineage: String? = nil) async throws -> Answer {
         // Out of calls: GitHub asks that nothing is sent until the reset. Search has a budget of its own, which this one's end leaves.
         if !path.hasPrefix("/search/"), let reset = lock.withLock({ coreRemaining == 0 ? coreResetsAt : nil }), reset > Date() {
             throw GitHubError(message: "API rate limit exceeded, waiting for the reset")
@@ -242,7 +265,7 @@ final class GitHubClient: @unchecked Sendable {
         lock.withLock {
             guard generation == sent else { return }
             etagClock += 1
-            let family = Self.family(of: key)
+            let family = Self.family(of: key).map { "\(lineage ?? "")|\($0)" }
             // A newer commit's answers replace the older commit's: those are never asked for again.
             if let family { etags = etags.filter { $0.key == key || $0.value.family != family } }
             etags[key] = Remembered(etag: etag, data: data, used: etagClock, decoded: nil, family: family)
@@ -251,15 +274,24 @@ final class GitHubClient: @unchecked Sendable {
         return Answer(data: data, key: key, etag: etag)
     }
 
-    /// `…/commits/<40 hex digits>/…` with the sha taken out, for the answers that are about one commit; nil for the others.
+    /// `…/commits/<40 hex digits>/…` or `…?head_sha=<40 hex digits>` with the sha taken out, for the answers that are about
+    /// one commit; nil for the others.
     private static func family(of key: String) -> String? {
-        let parts = key.split(separator: "/", omittingEmptySubsequences: false)
-        guard let at = parts.firstIndex(of: "commits"), parts.indices.contains(at + 1) else { return nil }
-        let sha = parts[at + 1]
-        guard sha.count == 40, sha.allSatisfy(\.isHexDigit) else { return nil }
-        var rest = parts
-        rest[at + 1] = "{sha}"
-        return rest.joined(separator: "/")
+        func isSha(some: Substring) -> Bool { some.count == 40 && some.allSatisfy(\.isHexDigit) }
+        guard var comps = URLComponents(string: key) else { return nil }
+        var found = false
+        var parts = comps.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: false)
+        if let at = parts.firstIndex(of: "commits"), parts.indices.contains(at + 1), isSha(some: parts[at + 1]) {
+            parts[at + 1] = "~sha"
+            comps.percentEncodedPath = parts.joined(separator: "/")
+            found = true
+        }
+        if let items = comps.queryItems, let at = items.firstIndex(where: { $0.name == "head_sha" }),
+           isSha(some: Substring(items[at].value ?? "")) {
+            comps.queryItems![at].value = "~sha"
+            found = true
+        }
+        return found ? comps.string : nil
     }
 
     /// A write: POST with a JSON body (or none). The answer's body, empty when GitHub gave none.

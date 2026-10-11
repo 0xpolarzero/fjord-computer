@@ -157,6 +157,7 @@ struct AppSidebar: View {
 
     private func categoryRow(_ category: InboxCategory) -> some View {
         let badge = store.badge(category)
+        let off = store.rulesOff(category.id)
         return AppSidebarRow(title: category.title, on: navigator.selection == .category(category.id),
                              badge: badge > 0 ? RailBadge(count: badge, fill: category.color.swatch, ink: category.color.ink) : nil,
                              tip: badge == 0 ? category.title : "\(category.title) · \(category.isCI ? "\(badge) failing" : "\(badge) new")",
@@ -165,10 +166,13 @@ struct AppSidebar: View {
                 .font(.system(size: M.symbol, weight: .medium))
                 .foregroundStyle(category.color.swatch.opacity(badge > 0 || on ? 1 : 0.6))
         } trailing: {
-            if badge > 0 {
-                CountText(badge, color: category.color.swatch)
-            } else if !category.isCI {
-                CountText(store.count(category.id), color: CDS.Text.muted)
+            HStack(spacing: 6) {
+                if off > 0 { RulesOffMark(count: off) { store.editCategory(category.id) { navigator.go($0) } } }
+                if badge > 0 {
+                    CountText(badge, color: category.color.swatch)
+                } else if !category.isCI {
+                    CountText(store.count(category.id), color: CDS.Text.muted)
+                }
             }
         }
         .padding(.bottom, rowGap)

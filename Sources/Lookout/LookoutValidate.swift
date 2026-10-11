@@ -36,7 +36,11 @@ enum LookoutValidate {
             }
             out += extra(rule, label: label, store: store)
         }
+        var actionIDs = Set<UUID>()
         for (i, action) in c.actions.items.enumerated() {
+            if !actionIDs.insert(action.id).inserted {
+                out.append("actions[\(i)] (\(action.title)): another action has the id \(action.id.uuidString); each action is there once")
+            }
             if !kinds.isEmpty, !kinds.contains(where: { action.applies(to: $0) }) {
                 out.append("actions[\(i)] (\(action.title)): None of this category's rules is something this applies to.")
             }

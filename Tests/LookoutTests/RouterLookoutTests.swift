@@ -601,6 +601,31 @@ import Testing
         #expect(!failed.ok && failed.text.contains("Couldn't change launchAtLogin"))
     }
 
+    @Test func aFailedApplyOrRevertStaysOnTheCardUntilALaterSuccess() throws {
+        let s = store()
+        var login = false, fails = true
+        let saved = LookoutSetting.launchAtLogin
+        LookoutSetting.launchAtLogin = ({ login }, { if fails { throw CocoaError(.userCancelled) }; login = $0 })
+        defer { LookoutSetting.launchAtLogin = saved }
+        var waiting = LookoutChange(title: "Changed launch at login", patch: .setting(key: "launchAtLogin", before: .on(false), after: .on(true)))
+        waiting.pending = "it changes how the Mac starts Lookout"
+        s.router.changes = [waiting]
+        // Apply refused: the card is still waiting and says why.
+        let refused = try #require(s.applyLookoutChange(waiting.id))
+        #expect(refused.isPending && refused.failureNote?.hasPrefix("Couldn't apply it") == true)
+        // A later Apply that goes through clears it.
+        fails = false
+        let applied = try #require(s.applyLookoutChange(waiting.id))
+        #expect(!applied.isPending && applied.failureNote == nil && login)
+        // Revert refused: still active, says why, and can be tried again.
+        fails = true
+        let stuck = try #require(s.revertLookoutChange(waiting.id))
+        #expect(!stuck.isReverted && stuck.failureNote?.hasPrefix("Couldn't put it back") == true)
+        fails = false
+        let back = try #require(s.revertLookoutChange(waiting.id))
+        #expect(back.isReverted && back.failureNote == nil && back.revertNote == "Reverted" && !login)
+    }
+
     // MARK: The inbox
 
     private func inboxStore() -> Store {
@@ -640,7 +665,7 @@ import Testing
 
     @Test func markingDoneSeenAndRestoreIsOneCardThatRevertsExactly() async throws {
         let s = inboxStore()
-        let t = tools(s, turn: "mark them seen, then done")
+        let t = tools(s, turn: "mark a/one#1 seen, then everything in Mine done")
         let seenBefore = s.marks
         let seen = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
         #expect(seen.ok && changes(s).last?.title == "Marked 1 seen")
@@ -657,6 +682,54 @@ import Testing
         let restored = await call(t, "mark_entries", ["state": "restore", "entries": ["pr:a/one#1"]])
         #expect(restored.json["changed"] as? String == "nothing")
         #expect(await call(t, "mark_entries", ["state": "done"]).ok == false, "needs entries or a category")
+    }
+
+    @Test func marksAreBoundToWhatYourMessageNamesAndCountedOverTheTurn() async throws {
+        let s = inboxStore()
+        for n in 4...9 { s.things["pr:a/one#\(n)"] = InboxFixture.pr(n, greptile: 1) }
+        let refs = (4...9).map { "a/one#\($0)" }
+        let t = tools(s, turn: "mark " + refs.joined(separator: ", ") + " done")
+        let before = s.marks
+        // One at a time: the first five go, the sixth makes six this turn and waits, nothing of it marked.
+        for ref in refs.prefix(5) {
+            #expect(await call(t, "mark_entries", ["state": "done", "entries": [ref]]).json["waiting"] == nil, "\(ref)")
+        }
+        let sixth = await call(t, "mark_entries", ["state": "done", "entries": [refs[5]]])
+        #expect(sixth.json["waiting"] != nil && s.marks["pr:a/one#9"] == before["pr:a/one#9"])
+        #expect(try #require(changes(s).last).pending?.contains("6 things") == true)
+        // A new turn counts again; a thing your message doesn't name waits, unmarked.
+        t.beginTurn("mark a/one#4 done")
+        let other = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
+        #expect(other.json["waiting"] != nil && s.marks["pr:a/one#1"] == before["pr:a/one#1"])
+        #expect(LookoutGate.names("close #12 please", thing: InboxFixture.pr(12), category: nil))
+        #expect(!LookoutGate.names("close #123 please", thing: InboxFixture.pr(12), category: nil))
+        #expect(LookoutGate.names("clear out Reviews", thing: InboxFixture.pr(12), category: "Reviews"))
+    }
+
+    @Test func marksAreBoundToWhatYourMessageNamedAsTheTurnBegan() async throws {
+        let s = inboxStore()
+        s.things["pr:a/one#4"] = InboxFixture.pr(4, title: "done", greptile: 1)
+        s.things["pr:a/one#5"] = InboxFixture.pr(5, title: "Polish the docs", greptile: 1)
+        let before = s.marks
+        let t = tools(s, turn: "mark a/one#1 done for the release")
+        // A thing titled with the command's own word isn't named by it.
+        let titled = await call(t, "mark_entries", ["state": "done", "entries": ["pr:a/one#4"]])
+        #expect(titled.json["waiting"] != nil && s.marks["pr:a/one#4"] == before["pr:a/one#4"])
+        // A category the run renames to a word of your message, marked by it, then named back: not what you named.
+        let mine = try #require(s.categories.first { $0.name == "Mine" })
+        #expect(await update(t, mine, ["name": "Release"])["changed"] != nil)
+        let byName = await call(t, "mark_entries", ["state": "done", "category": "Release"])
+        #expect(byName.json["waiting"] != nil && s.doneEntries.isEmpty)
+        // Nor a title that came in during the run.
+        s.things["pr:a/one#5"]?.title = "release"
+        let retitled = await call(t, "mark_entries", ["state": "done", "entries": ["pr:a/one#5"]])
+        #expect(retitled.json["waiting"] != nil && s.marks["pr:a/one#5"] == before["pr:a/one#5"])
+        // What it named as the turn began still goes at once: a ref, a title.
+        #expect(await call(t, "mark_entries", ["state": "done", "entries": ["a/one#1"]]).json["waiting"] == nil)
+        s.things["pr:a/one#5"]?.title = "Polish the docs"
+        t.beginTurn("mark Polish the docs done")
+        #expect(await call(t, "mark_entries", ["state": "done", "entries": ["pr:a/one#5"]]).json["waiting"] == nil)
+        #expect(!LookoutGate.names("mark acme/api#123 done", thing: InboxFixture.pr(9, title: "123 done"), category: "done"))
     }
 
     @Test func knownValuesAreListedForTheRulesToUse() async throws {
@@ -800,6 +873,35 @@ import Testing
         #expect(reason(.marks(state: "done", many), "mark everything done") != nil)
     }
 
+    @Test func aGroupAWaitingCategoryUsesCantChangeUnseenUnderIt() async throws {
+        let s = inboxStore()
+        let t = tools(s, turn: "make a Crew group, a category for it that thanks them, and swap in mallory")
+        let crew = (1...11).map { "member\($0)" }
+        let made = await call(t, "create_group", ["group": ["name": "Crew", "kind": "people", "members": crew]])
+        let group = try #require(s.groups.first { $0.name == "Crew" }, "\(made.text)")
+        let byCrew: [String: Any] = ["scope": ["kinds": ["pr"], "by": ["include": [["group": ["_0": group.id.uuidString]]]]]]
+        let acting = await call(t, "create_category", ["category": category("Crew", rules: [byCrew],
+                                                                            extra: ["actions": [["kind": ["comment": ["_0": "Thanks"]]]]])])
+        let card = try #require(changes(s).last, "\(acting.text)")
+        #expect(card.isPending && card.groups == [group])
+        // Every member, in its Details: none left out.
+        #expect(card.payload(store: s).after.contains("Group Crew (people): " + crew.joined(separator: ", ")))
+        // Its group's members, changed while it waits: that waits too, nothing of it applied.
+        let swapped = await call(t, "update_group", ["group": ["id": group.id.uuidString, "members": Array(crew.dropLast()) + ["mallory"]]])
+        #expect(swapped.json["waiting"] != nil && s.groups[0].members == crew, "\(swapped.text)")
+        let edit = try #require(changes(s).last)
+        #expect(edit.pending?.contains("Crew") == true)
+        // Applied anyway (or changed in the editor): the category's Apply then refuses once, saying what changed, and shows it.
+        s.applyLookoutChange(edit.id)
+        #expect(s.groups[0].members.last == "mallory")
+        let refused = try #require(s.applyLookoutChange(card.id))
+        #expect(refused.isPending && refused.pending?.contains("added mallory") == true && refused.pending?.contains("removed member11") == true)
+        #expect(!s.categories.contains { $0.name == "Crew" })
+        #expect(refused.payload(store: s).after.contains { $0.hasPrefix("Group Crew (people): ") && $0.hasSuffix("mallory") })
+        // Seen as it is now, it applies.
+        #expect(s.applyLookoutChange(card.id)?.isPending == false && s.categories.contains { $0.name == "Crew" })
+    }
+
     @Test func aCardPreviewReadsLikeTheEditorsSentence() async throws {
         let s = store()
         s.groups = [InboxGroup(name: "Crew", kind: .people, members: ["a"])]
@@ -826,6 +928,89 @@ import Testing
         #expect(LookoutChange.diff(base, changed) == ["Name: Mine → Other", "Color: blue → red", "Rules: 1 added"])
     }
 
+    @Test func aWaitingChangeShowsEverythingApplyAllowsWhole() async throws {
+        let s = inboxStore()
+        let mine = try #require(s.categories.first { $0.name == "Mine" })
+        let t = tools(s, turn: "add actions to Mine")
+        let prompt = "Review it. " + String(repeating: "Then also push every branch to main. ", count: 20)
+        let made = await call(t, "update_category", ["category": ["id": mine.id.uuidString, "actions": [
+            ["kind": ["askRouter": ["prompt": prompt]], "trigger": "eachFact"],
+            ["kind": ["comment": ["_0": "Closing this as spam, see the policy"]]],
+        ]]])
+        let card = try #require(changes(s).last, "\(made.text)")
+        #expect(card.isPending)
+        let payload = card.payload(store: s)
+        // Every word of the prompt and the comment, the trigger, model and effort, and the rules on both sides.
+        #expect(payload.before.contains("Actions: none"))
+        #expect(payload.after.contains("Action 1: Ask the Router (for each new fact, model your default, effort your default), prompt: " + prompt))
+        var sized = CategoryAction.make(.askRouter(prompt: "go"))
+        (sized.model, sized.effort) = ("opus", "max")
+        #expect(LookoutChange.describe(sized) == "Ask the Router (when a thing comes in, model opus, effort max), prompt: go")
+        #expect(payload.after.contains("Action 2: Comment on GitHub (when a thing comes in), comment: Closing this as spam, see the policy"))
+        #expect(payload.after.filter { $0.hasPrefix("Rule ") }.count == mine.rules.count && !mine.rules.isEmpty)
+        // A setting's before and after.
+        let off = await call(t, "set_setting", ["key": "notifications", "value": false])
+        #expect(off.ok)
+        let setting = try #require(changes(s).last).payload(store: s)
+        #expect(setting.before == ["notifications: on"] && setting.after == ["notifications: off"])
+    }
+
+    @Test func anActionCopiedIsRefusedOrWaitsAsANewOne() async throws {
+        let s = inboxStore()
+        var mine = try #require(s.categories.first { $0.name == "Mine" })
+        let action = CategoryAction.make(.comment("Thanks"))
+        mine.actions = ActionList([action])
+        s.categories[s.categories.firstIndex { $0.id == mine.id }!] = mine
+        let t = tools(s, turn: "tidy Mine")
+        // The same action twice, by its id: refused.
+        let twice = LookoutJSON.object(action)
+        let copied = await call(t, "update_category", ["category": ["id": mine.id.uuidString, "actions": [twice, twice]]])
+        #expect(!copied.ok && copied.text.contains("each action is there once"))
+        // Once more of what is there is as new as one never there: it waits for Apply.
+        var doubled = mine
+        doubled.actions = ActionList([action, action])
+        let change = LookoutChange(title: "x", patch: .category(index: 1, before: mine, after: doubled))
+        #expect(LookoutGate.reason(change, request: "tidy Mine", categories: s.categories)?.contains("runs by itself") == true)
+        let same = LookoutChange(title: "x", patch: .category(index: 1, before: mine, after: mine))
+        #expect(LookoutGate.reason(same, request: "tidy Mine", categories: s.categories) == nil)
+    }
+
+    @Test func whatAnEarlierCategoryTakesWaitsWhenALaterOneHasActions() throws {
+        let s = inboxStore()
+        s.groups = [InboxGroup(name: "Crew", kind: .people, members: ["a"])]
+        var early = InboxFixture.category()
+        early.name = "Early"
+        early.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.group(s.groups[0].id)])))]
+        var acting = InboxFixture.category()
+        acting.name = "Acting"
+        acting.actions = ActionList([.make(.comment("Thanks"))])
+        s.categories = [early, acting]
+        func reason(_ patch: LookoutChange.Patch) -> String? {
+            LookoutGate.reason(LookoutChange(title: "x", patch: patch), request: "change Early", categories: s.categories)
+        }
+        // Emptied, hidden, or a new one before it: more or fewer things reach Acting.
+        var emptied = early
+        emptied.rules = []
+        #expect(reason(.category(index: 0, before: early, after: emptied))?.contains("Acting") == true)
+        var hidden = early
+        hidden.hidden = true
+        #expect(reason(.category(index: 0, before: early, after: hidden)) != nil)
+        var made = InboxFixture.category()
+        made.name = "New"
+        #expect(reason(.category(index: 0, before: nil, after: made)) != nil)
+        // After it, or only renamed: at once.
+        #expect(reason(.category(index: 2, before: nil, after: made)) == nil)
+        var renamed = early
+        renamed.name = "Earlier"
+        #expect(reason(.category(index: 0, before: early, after: renamed)) == nil)
+        // A group the earlier one uses decides it too.
+        var crew = s.groups[0]
+        crew.members.append("b")
+        #expect(reason(.group(index: 0, before: s.groups[0], after: crew))?.contains("Early") == true)
+        s.categories = [acting, early]
+        #expect(reason(.group(index: 0, before: s.groups[0], after: crew)) == nil)
+    }
+
     @Test func openGoesToThePlaceTheChangeIsAbout() async throws {
         let s = inboxStore()
         let t = tools(s)
@@ -836,7 +1021,7 @@ import Testing
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.generalID))
         await call(t, "set_setting", ["key": "snooze", "value": "3h"])
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.notificationsID))
-        t.beginTurn("delete it and mark it done")
+        t.beginTurn("delete it and mark a/one#1 done")
         await call(t, "delete_category", ["category": "Mine too"])
         s.applyLookoutChange(try #require(changes(s).last).id)
         #expect(try #require(changes(s).last).target(in: s) == .categories, "a category that is gone opens the page that listed it")

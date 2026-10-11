@@ -16,10 +16,10 @@ Deterministic, as today (RouterFeed): cards, banners, the live Working line. The
 - Working cards are live, with a 1–2 sentence explanation of what is happening, and a 1–2 sentence summary of what the turn did when it ends. Source: the session's activity stream and the Claude app's own summary when present; Haiku fills gaps, only on change (turn start, at most every ~30 s while tools run, turn end). The end-of-turn line is the card's text in the history and context for later runs.
 
 ### B. You type
-1. Deterministic: a reply armed on a card, or a typed `@project`, fixes the target. The text gets the minimal Haiku edit (strip addressing, keep only this target's part, drop `@router` asides; otherwise verbatim) and is sent.
+1. Deterministic: a reply armed on a card, or a typed `@project`, fixes the target. The text gets a deterministic edit of the user's own bytes, never a model's rewrite: the `@project` pills it starts with (by where the composer put them, never by matching words against a project's or a session's name) and `@router` asides are taken out, in two explicit forms only, never in code (fenced, indented or inline): a bracketed aside opened right before the marker and closed, balanced, on the same line (`(@router no rush)`, `[@router later]`), its bracket and marker outside code but code inside it its own (`(@router don't wait on `` `CI` ``)`), brackets in that code not counted, never one opened inside a double-quoted span on its line (`"(@router no rush)"`, `“…”`: the quote's text; single quotes are apostrophes as often and never count), or a whole line that starts with `@router`. Anything else, "tell <session> to …" and a `@router` anywhere else in the text (`ask @router`, `print(f'ask @router')`) included, is sent verbatim: no quote or code is guessed at, so nothing is cut short and nothing is refused for it. Nothing is added or reworded, so what is signed as the user's words is always theirs.
 2. Otherwise Jev classifies with context (open cards, working sessions, the last 10 decisions): reply to card/session, start a session in a project, change Lookout, question about current state, unclear.
    - Confident (top score high and clearly ahead): act; the history shows what was done.
-   - Unsure: an ask-back card under the message with the top targets as buttons plus "Something else…"; nothing is sent until the user picks. The pick is logged as a decision.
+   - Unsure: an ask-back card under the message with the top targets as buttons plus "Something else…"; nothing is sent until the user picks. Only a click picks (a button, "Something else…", or Dismiss): text typed while it waits is a message of its own, routed as itself, even when it reads like a target's name, so a session titled "Don't deploy" is never picked for saying "don't deploy". The pick is logged as a decision.
 3. A Claude run (Haiku) only for: changing Lookout, compound requests, questions about state. Fresh `claude -p` with a context built for this run (live-state snapshot, last 10 decisions, the message), only the tools that intent needs, a typed result (`--json-schema`). Starting a session may carry a model and effort (`--model`, `--effort`).
 
 ### C. From an inbox action ("Ask the Router")
@@ -46,7 +46,7 @@ The long-lived process, `--resume`, the transcript (`chat`), peer turns and the 
 1. Decision log, and the history built on it.
 2. Typed runs: dispatcher → rules → Jev → Haiku; the ask-back card.
 3. Inbox actions start sessions directly, tagged with their origin; model and effort overrides.
-4. Model and effort for sessions the Router starts.
+4. Model and effort for sessions the Router starts. Asked for before the task ("with opus: …") or in a closing clause set apart from it by a comma, semicolon, dash or parentheses (", with opus", " — using haiku, high effort", "(with opus)"); an unseparated "with <model>" at the end is the task's own words.
 5. Jev decides what a message addresses.
 6. Live Working explanations and end-of-turn summaries.
 7. Remove the long-lived process, resume and transcript.

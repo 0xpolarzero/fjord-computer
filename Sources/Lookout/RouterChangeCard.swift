@@ -16,6 +16,8 @@ struct ChangeCard: View {
     @Environment(\.cdsColumnWidth) private var width
 
     private var reverted: Bool { change.isReverted }
+    /// The whole before and after of a change waiting for Apply, shown.
+    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,9 +36,13 @@ struct ChangeCard: View {
             RoundedRectangle(cornerRadius: CDS.Transcript.cardRadius, style: .continuous).strokeBorder(CDS.border, lineWidth: 1)
         }
         .padding(.trailing, CDS.Transcript.textStop(width))
+        .onChange(of: change.failureNote) { _, note in
+            if let note { AccessibilityNotification.Announcement("\(change.title). \(note)").post() }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(reverted ? "\(change.title). \(change.revertNote ?? "Reverted")"
-                            : change.pending.map { "\(change.title). Not applied yet: \($0)" } ?? change.title)
+                            : (change.pending.map { "\(change.title). Not applied yet: \($0)" } ?? change.title)
+                + (change.failureNote.map { ". \($0)" } ?? ""))
     }
 
     // MARK: Header
@@ -53,9 +59,11 @@ struct ChangeCard: View {
                 Text(change.revertNote ?? "Reverted").cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
                     .lineLimit(2).multilineTextAlignment(.trailing)
             } else if change.isPending {
+                failure
                 ClaudeButton("Discard", variant: .ghost, size: .sm) { store.discardLookoutChange(change.id) }
                 ClaudeButton("Apply", variant: .primary, size: .sm) { store.applyLookoutChange(change.id) }
             } else {
+                failure
                 ClaudeButton("Open", variant: .ghost, size: .sm) { openChange(change) }
                 ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertLookoutChange(change.id) }
             }
@@ -64,13 +72,31 @@ struct ChangeCard: View {
         .frame(minHeight: 36)
     }
 
-    /// Why a change waits for you, under its line: nothing of it is applied until Apply.
+    /// Why the last Apply or Revert failed, in the line's own note place; the buttons stay for another try.
+    @ViewBuilder private var failure: some View {
+        if let note = change.failureNote {
+            Text(note).cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.danger)
+                .lineLimit(2).multilineTextAlignment(.trailing)
+                .help(note)
+        }
+    }
+
+    /// Why a change waits for you, under its line: nothing of it is applied until Apply. Everything Apply allows (every
+    /// prompt, comment, trigger, setting and rule, before and after) opens under it, whole.
     @ViewBuilder private var waiting: some View {
         if let why = change.pending, change.isPending {
-            Text("Not applied yet: \(why).")
-                .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
-                .padding(.horizontal, CDS.Density.compact.pad.xs).padding(.bottom, CDS.Density.compact.pad.sm)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: CDS.Density.compact.gap.sm) {
+                HStack(alignment: .firstTextBaseline, spacing: CDS.Density.compact.gap.sm) {
+                    Text("Not applied yet: \(why).")
+                        .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
+                    Spacer(minLength: 0)
+                    ClaudeButton(expanded ? "Hide details" : "Details", variant: .ghost, size: .sm) { expanded.toggle() }
+                        .help("Everything Apply allows: the whole before and after of this change")
+                }
+                if expanded { PayloadView(payload: change.payload(store: store)) }
+            }
+            .padding(.horizontal, CDS.Density.compact.pad.xs).padding(.bottom, CDS.Density.compact.pad.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -112,6 +138,31 @@ struct ChangeCard: View {
 }
 
 // MARK: - Pieces
+
+/// A change's whole before and after, line by line, nothing cut.
+private struct PayloadView: View {
+    let payload: ChangePayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CDS.Density.compact.gap.sm) {
+            side("Before", payload.before)
+            side("After", payload.after)
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func side(_ name: String, _ lines: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(name).cdsText(CDS.Density.compact.footnote, .medium, CDS.Text.secondary)
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(line).cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
 
 /// A rule's lines as read-only chips, in the editor's own look.
 struct RuleChips: View {
@@ -188,8 +239,8 @@ private struct GroupPreview: View {
             VStack(alignment: .leading, spacing: 6) {
                 SentenceLayout(spacing: 4, lineSpacing: 4) {
                     Word(group.kind == .people ? "People" : "Repos")
-                    ForEach(group.members.prefix(10), id: \.self) { Text($0).modifier(ChipLook()) }
-                    if group.members.count > 10 { Word("and \(group.members.count - 10) more") }
+                    // Every member: what a rule by this group takes is all of them.
+                    ForEach(group.members, id: \.self) { Text($0).modifier(ChipLook()) }
                     if group.members.isEmpty { Word("no members yet") }
                 }
             }

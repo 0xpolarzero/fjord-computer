@@ -90,6 +90,38 @@ import Testing
         return thing
     }
 
+    @Test func aSaveThatCannotBeMadeIsSaidEvenOfflineOrSignedOut() {
+        let store = InboxFixture.store([])
+        let hub = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: HubState())
+        store.actionsSaveProblem = "Saving actions.json failed: full"
+        store.unreachable = true
+        var s = hub.sync(now: Date())
+        #expect(s.text == "Not saved" && s.detail?.contains("full") == true && s.detail?.contains("couldn't reach GitHub") == true)
+        store.authError = "GitHub rejected the token"
+        s = hub.sync(now: Date())
+        #expect(s.text == "Not saved" && s.detail?.contains("can't sign in to GitHub") == true)
+        // Saved again: GitHub's state is back.
+        store.actionsSaveProblem = nil
+        #expect(hub.sync(now: Date()).text == "Sign-in problem")
+    }
+
+    @Test func actionsWaitingForWhatCantBeReadAreSaidInTheInboxStatus() {
+        var made = InboxCategory(name: "New", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], in: Pick(include: [.repo("o/new")])))
+        ])
+        made.actions = ActionList([CategoryAction.make(.comment("Thanks"))])
+        let store = InboxFixture.store([], category: made)
+        let hub = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: HubState())
+        store.fetchedFor = .keys([])
+        store.inboxError = "Something went wrong"
+        #expect(hub.sync(now: Date()).detail?.contains("Actions paused") == false)
+        // An edit waits for its repo's search, which keeps failing: it is said.
+        store.baselinePending = true
+        store.baselineAwaitsFetch = true
+        let s = hub.sync(now: Date())
+        #expect(s.text == "Inbox didn't sync" && s.detail?.contains("Actions paused until o/new can be read") == true)
+    }
+
     @Test func theCIBadgeCountsFailingWorkflowsNotRepos() {
         var ci = InboxStore.ci
         ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/one"), .repo("b/two")])),

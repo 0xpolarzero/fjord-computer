@@ -889,8 +889,9 @@ struct RelayInbox: Sendable {
     /// Writes `text` for `session` and waits for the plugin's answer. Throws `unanswered` when there's none within `timeout`
     /// (the message is withdrawn first), `refused` when the plugin says no. Returns the plugin's answer: "ok", with what it
     /// applied after it when the message carried settings ("ok model=opus effort=high").
-    /// `gate` says, on the main actor and right before the message is written (nothing awaited between the two), why it
-    /// may no longer go: a reason refuses it, unwritten.
+    /// `gate` says, on the main actor and right before the message is put in place (nothing awaited between the two), why it
+    /// may no longer go: a reason refuses it, unwritten. The file is written aside off the main thread first (the folder, the
+    /// write, its mode); only the gate and the rename that puts it where the plugin looks are on the main actor.
     @discardableResult
     func deliver(_ text: String, to session: String, interval: TimeInterval = 0.03,
                  gate: (@MainActor () -> String?)? = nil) async throws -> String {
@@ -901,10 +902,15 @@ struct RelayInbox: Sendable {
         let message = dir.appendingPathComponent("\(header.nonce).msg"), ack = dir.appendingPathComponent("\(header.nonce).ack")
         let fm = FileManager.default
         if let gate {
-            try await OffMain.run { Swift.Result { try Self.sweep(dir) } }.get()
-            try await MainActor.run {
-                if let refusal = gate() { throw Failure.refused(refusal) }
-                try PrivateFile.write(Data(text.utf8), to: message)
+            let aside = try await OffMain.run { Swift.Result { try Self.sweep(dir); return try PrivateFile.prepare(Data(text.utf8), for: message) } }.get()
+            do {
+                try await MainActor.run {
+                    if let refusal = gate() { throw Failure.refused(refusal) }
+                    try PrivateFile.commit(aside, to: message)
+                }
+            } catch {
+                unlink(aside.path)
+                throw error
             }
         } else {
             try await OffMain.run { Swift.Result { try Self.sweep(dir); try PrivateFile.write(Data(text.utf8), to: message) } }.get()

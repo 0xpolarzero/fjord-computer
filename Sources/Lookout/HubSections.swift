@@ -139,8 +139,11 @@ extension LookoutHub {
         } else {
             "All caught up"
         }
-        return HStack(spacing: 0) {
+        return HStack(spacing: 6) {
             Text(text).font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
+            if case .category(let id) = tab, store.rulesOff(id) > 0 {
+                RulesOffMark(count: store.rulesOff(id)) { store.editCategory(id, go: openApp) }
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Space.md)
@@ -314,7 +317,7 @@ extension LookoutHub {
         .tip(s.title, s.detail)
     }
 
-    private struct SyncState {
+    struct SyncState {
         var color: Color
         var text: String
         var title: String
@@ -323,8 +326,13 @@ extension LookoutHub {
         var spinning = false
     }
 
-    private func sync(now: Date) -> SyncState {
+    func sync(now: Date) -> SyncState {
         let refresh = "Click to check now · \(store.shortcut(.refresh).display)"
+        // First: edits being lost at quit are what you can't see otherwise (GitHub's state is said under it).
+        if let problem = store.saveProblem {
+            let also = store.authError != nil ? "\nAlso: can't sign in to GitHub · Click for Settings" : store.unreachable ? "\nAlso: couldn't reach GitHub" : ""
+            return SyncState(color: Theme.amber, text: "Not saved", title: "Changes aren't being saved", detail: problem + also)
+        }
         if let error = store.authError {
             return SyncState(color: Theme.red, text: "Sign-in problem", title: "Can't sign in to GitHub",
                              detail: error + "\nClick for Settings")
@@ -334,8 +342,10 @@ extension LookoutHub {
                              detail: "Check your connection · Lookout tries again on its own\n" + refresh)
         }
         if let error = store.inboxError {
+            // An edit's actions waiting for what can't be read: nothing runs until it is, which isn't seen otherwise.
+            let paused = store.actionsPausedFor().map { "\nActions paused until \($0) can be read" } ?? ""
             return SyncState(color: Theme.amber, text: "Inbox didn't sync", title: "GitHub didn't answer the inbox's search",
-                             detail: error + "\n" + refresh)
+                             detail: error + paused + "\n" + refresh)
         }
         if let error = store.inboxReadError {
             return SyncState(color: Theme.amber, text: "Jev can't read", title: "Jev couldn't read the inbox's new comments",
@@ -375,9 +385,14 @@ struct CategoryTab: View {
     let store: Store
     let action: () -> Void
     @State private var target = false
+    @Environment(\.openApp) private var openApp
 
     var body: some View {
-        Button(action: action) { CategoryTabLabel(category: category, selected: selected, badge: badge) }
+        Button(action: action) {
+            CategoryTabLabel(category: category, selected: selected, badge: badge, rulesOff: store.rulesOff(category.id)) {
+                store.editCategory(category.id, go: openApp)
+            }
+        }
             .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
                                               hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostHover,
                                               pressed: CDS.Fill.ghostHover, isActive: selected))
@@ -455,6 +470,8 @@ private struct CategoryTabLabel: View {
     let category: InboxCategory
     let selected: Bool
     let badge: Int
+    var rulesOff = 0
+    var fix: () -> Void = {}
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
@@ -466,6 +483,7 @@ private struct CategoryTabLabel: View {
             if !category.actions.isEmpty {
                 Image(systemName: "bolt.fill").font(.system(size: 8)).foregroundStyle(CDS.Text.muted).accessibilityHidden(true)
             }
+            if rulesOff > 0 { RulesOffMark(count: rulesOff, size: 8, open: fix) }
         }
         .font(CDS.sans(13, .medium))
         .foregroundStyle(selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted)

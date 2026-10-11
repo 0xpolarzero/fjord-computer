@@ -40,18 +40,19 @@ extension Store {
     var routerIsPretend: Bool { Store.isDemo || !persists }
 
     /// Your message to the Router, with the card it replies to and the projects you tagged; in a demo, a canned reply
-    /// instead of a real process.
-    func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+    /// instead of a real process. Whether it went: an ask-back's target named that is gone since sends nothing.
+    @discardableResult
+    func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) -> Bool {
+        let text = RouterModel.sendable(text)
+        guard !text.isEmpty else { return false }
         if routerIsPretend {
             var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
                                        links: .init(cards: context.replyTo.map { [$0] } ?? []))
             entry.reply = "In a demo the Router only says what it would do."
             logDecision(entry)
-        } else {
-            routerDispatcher.submit(text, context: context)
+            return true
         }
+        return routerDispatcher.submit(text, context: context) != nil
     }
 
     /// Writes a form's answer for its card's session (the hook passes it on) through the shared `FormWriter`, off the main
@@ -151,6 +152,23 @@ extension RouterCard.Addressed {
         case .superseded: "Followed by a newer card"
         case .gone: "Session archived"
         }
+    }
+}
+
+extension RouterCard {
+    /// Whether it can be opened again (Reopen, Space): an addressed card, unless a newer card of its session replaced it or
+    /// its session was archived or deleted.
+    var canReopen: Bool { !isOpen && addressedBy != .superseded && addressedBy != .gone }
+}
+
+extension Store {
+    /// `RouterCard.canReopen`, and once the app's sessions have been read, only while its session is still there and not
+    /// archived: a card handled before its session went (only open cards are marked gone) isn't opened again on nothing. A
+    /// read failing since goes by the sessions last read.
+    func routerCanReopen(_ card: RouterCard) -> Bool {
+        guard card.canReopen else { return false }
+        guard claudeSessionsRead else { return true }
+        return claudeSessions[card.sessionID].map { !$0.isArchived } ?? false
     }
 }
 
@@ -262,12 +280,17 @@ final class RouterModel {
     /// The card the keys act on.
     var selection: String?
     var draft = "" {
-        didSet { if draft != oldValue { mentionChanged() } }
+        didSet { if draft != oldValue { sendRefused = nil; mentionChanged() } }
     }
-    /// Asks the Router's conversation to scroll to a message (an inbox action's), selecting no card.
+    /// Why the draft wasn't sent (it stays in the composer), until it changes.
+    var sendRefused: String?
+    static let goneTarget = "Not sent: what you named was handled or is gone since. Pick where it goes on the ask, or say more."
+    /// Asks the Router's conversation to scroll to a message (an inbox action's), selecting no card and replying to none:
+    /// what you write next goes to the Router.
     var messageRequest: ScrollRequest?
     func show(message: UUID) {
         selection = nil
+        replyTo = nil
         messageRequest = ScrollRequest(id: message.uuidString, seq: (messageRequest?.seq ?? 0) + 1)
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
@@ -302,6 +325,17 @@ final class RouterModel {
     /// Per plan (by its form's key): the note typed to go with "Keep planning", and what was decided from here.
     var planNotes: [String: String] = [:]
     var planDecided: [String: PendingForm.PlanDecision] = [:]
+    /// The plan (its form's key) in revise mode, its feedback field showing: Esc is its Back before anything else.
+    var revisingPlan: String?
+
+    /// The plan of the card shown in full in Needs you, while it can still be decided: Esc opens its revise mode (Revise…)
+    /// once nothing else is there to dismiss, and is Back while it is in it.
+    func expandedPlan(_ store: Store) -> PendingForm? {
+        guard let id = store.routerZones.openNeed(preferred: expandedNeed),
+              let card = store.router.cards.first(where: { $0.id == id }),
+              let form = store.pendingForm(for: card), form.isPlan, !locked(form) else { return nil }
+        return form
+    }
 
     /// The form's controls are shut while its answer is written and once it is.
     func locked(_ form: PendingForm) -> Bool { sending.contains(form.id) || sent.contains(form.id) }
@@ -361,14 +395,37 @@ final class RouterModel {
         if let i = listed.firstIndex(of: id) {
             next = listed[(i + 1)...].first(where: visible.contains) ?? listed[..<i].reversed().first(where: visible.contains)
         }
+        advance(from: id, to: next, store: store)
+    }
+
+    /// The pick moved on by itself (its card handled or gone from the list): a reply on that card follows it while nothing is
+    /// written, while no reply (one you took off) stays none. Only a card you pick (a click, a banner, the keys) arms a reply.
+    /// The page shows the new pick as it shows one you make (the card of Needs you opened in full), and goes there if `shows`.
+    private func advance(from id: String, to next: String?, store: Store, reveal shows: Bool = false) {
         selection = next
+        replyTo = followingReply(from: id, to: next)
+        if let next { showPick(next, store: store, reveal: shows) }
+    }
+
+    /// The reply once the pick moved on by itself from `id` to `next`: words written to that card stay its own (its session
+    /// still takes them, handled or not), rather than going to the next card's.
+    private func followingReply(from id: String, to next: String?) -> String? {
+        replyTo == id && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? next : replyTo
     }
 
     /// Picks a card, or none (the Router itself), and takes the page there: an addressed card opens in the history, the
     /// Router row goes back down to the live zones. A card clicked is where you see it: the page is not taken anywhere.
+    /// The composer replies to what is picked, at once: a banner's card picked while the page isn't drawn is answered too,
+    /// not the card the reply was on when the page was left.
     func select(_ id: String?, store: Store, reveal shows: Bool = true) {
         selection = id
+        replyTo = id
         guard let id else { reveal(Self.endID, highlight: false); return }
+        showPick(id, store: store, reveal: shows)
+    }
+
+    /// The picked card opened (in full in Needs you, out in the history) and, if `shows`, gone to.
+    private func showPick(_ id: String, store: Store, reveal shows: Bool) {
         if let card = store.router.cards.first(where: { $0.id == id }) {
             // A session waiting is a row of Working.
             if card.isOpen, card.kind == .waiting { if shows { reveal(Self.workingID(card.sessionID)) }; return }
@@ -396,6 +453,17 @@ final class RouterModel {
     }
     @ObservationIgnored private var highlightTask: Task<Void, Never>?
 
+    /// The reveal each of the page's scrolls (the history, each zone) last went to: drawn again (the page left and come back
+    /// to), it doesn't go there again, while one asked for before it was drawn is gone to once it is.
+    @ObservationIgnored private var revealsTaken: [String: Int] = [:]
+
+    /// The request, if the scroll named hasn't gone to it yet (it now has).
+    func takeReveal(_ request: ScrollRequest?, by scroll: String) -> ScrollRequest? {
+        guard let request, revealsTaken[scroll] != request.seq else { return nil }
+        revealsTaken[scroll] = request.seq
+        return request
+    }
+
     func reveal(_ id: String, highlight: Bool = true) {
         revealRequest = ScrollRequest(id: id, seq: (revealRequest?.seq ?? 0) + 1)
         guard highlight else { return }
@@ -417,13 +485,12 @@ final class RouterModel {
         store.setCardAddressed(id, true)
         store.logCardAction("Marked handled", card: id)
         Announce.say("Addressed")
-        if selection == id { selection = next }
+        if selection == id { advance(from: id, to: next, store: store, reveal: true) }
     }
 
     /// Reopen on a history line: the card is back in Needs you and the page goes to it.
     func reopen(_ id: String, store: Store) {
-        guard let card = store.router.cards.first(where: { $0.id == id }), !card.isOpen,
-              card.addressedBy != .superseded, card.addressedBy != .gone else { return }
+        guard let card = store.router.cards.first(where: { $0.id == id }), store.routerCanReopen(card) else { return }
         store.setCardAddressed(id, false)
         expanded.remove(id)
         Announce.say("Open again")
@@ -445,21 +512,25 @@ final class RouterModel {
     }
 
     /// Space: addressed, or open again. An addressed card goes up to the history, so the next open card is picked (or the one
-    /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card.
+    /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card; nor
+    /// is one whose session is gone (`RouterCard.canReopen`, as Reopen).
     func toggleAddressed(store: Store) {
         reconcile(store: store)
         let shown = cards(store)
         guard let id = selection, let card = shown.first(where: { $0.id == id }) else { return }
-        if card.addressedBy == .superseded {
-            if let newer = store.openRouterCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
+        if !card.isOpen, !store.routerCanReopen(card) {
+            if card.addressedBy == .superseded,
+               let newer = store.routerShownOpenCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
             return
         }
+        // Open again: as Reopen, which shows the card in Needs you and goes to it.
+        guard card.isOpen else { reopen(id, store: store); return }
         let open = shown.filter(\.isOpen).map(\.id)
         let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
-        store.setCardAddressed(id, card.isOpen)
-        if card.isOpen { store.logCardAction("Marked handled", card: id) }
-        Announce.say(card.isOpen ? "Addressed" : "Open again")
-        if card.isOpen { select(next, store: store) }
+        store.setCardAddressed(id, true)
+        store.logCardAction("Marked handled", card: id)
+        Announce.say("Addressed")
+        advance(from: id, to: next, store: store, reveal: true)
     }
 
     /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the
@@ -467,7 +538,11 @@ final class RouterModel {
     func send(store: Store) {
         let text = plainDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
-        store.sendToRouter(text, context: context(store))
+        guard store.sendToRouter(text, context: context(store)) else {
+            sendRefused = Self.goneTarget
+            Announce.say(Self.goneTarget)
+            return
+        }
         caret = nil
         tokens = []
         draft = ""
