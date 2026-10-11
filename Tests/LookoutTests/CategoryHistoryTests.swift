@@ -118,6 +118,21 @@ import Testing
         #expect(store.categories == before)
     }
 
+    @Test func aGroupEditOnThePageIsTakenAsOldOnceTheEditsPauseAsARuleEditIs() async throws {
+        let store = InboxFixture.store([InboxFixture.pr(1)])
+        store.gh.session = StubbedGitHub.session { _ in .init(200, "{}") }
+        var edited = false
+        // Once the page is drawn, a group is edited there: the actions wait for it to be taken in.
+        _ = try await AccessibilityTree.render(CategoriesView(store: store).tipSpace(), ready: { tree in
+            if !edited, AccessibilityTree.hasControls(tree) {
+                edited = true
+                store.groups.append(InboxGroup(name: "Trusted", kind: .people, members: ["carol"]))
+            }
+            return edited && store.baselinePending
+        })
+        #expect(store.baselinePending)
+    }
+
     @Test func aRuleWithAnImpossibleChipIsOffUntilFixed() {
         let store = InboxFixture.store([InboxFixture.pr(1)])
         var rule = store.categories[0].rules[0]

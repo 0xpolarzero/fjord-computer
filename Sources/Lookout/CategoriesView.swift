@@ -80,7 +80,11 @@ struct CategoriesView: View {
             history.observe(store, field: CategoryHistory.typingField())
             store.categoriesEdited()
         }
-        .onChange(of: store.groups) { history.observe(store, field: CategoryHistory.typingField()) }
+        // A group's edit changes what the rules naming it match, as a rule's edit does: taken as old once the edits pause.
+        .onChange(of: store.groups) {
+            history.observe(store, field: CategoryHistory.typingField())
+            store.categoriesEdited()
+        }
         .onChange(of: store.categorySections) { history.observe(store, field: CategoryHistory.typingField()) }
         .onAppear(perform: syncHistory)
         .onDisappear {
