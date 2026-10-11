@@ -537,9 +537,9 @@ enum InboxEngine {
 
     /// Every message of a thing, oldest first.
     static func messages(_ thing: Thing) -> [Message] {
-        let comments = thing.comments.map { Message(id: $0.id, author: $0.author, at: $0.at, text: $0.snippet, isReview: $0.isReview) }
+        let comments = thing.comments.map { Message(id: $0.id, author: $0.author, at: $0.at, text: $0.text ?? $0.snippet, isReview: $0.isReview) }
         let replies = thing.threads.map {
-            Message(id: $0.lastReplyID, author: $0.lastReplyBy, at: $0.lastReplyAt, text: $0.snippet, path: $0.path ?? "")
+            Message(id: $0.lastReplyID, author: $0.lastReplyBy, at: $0.lastReplyAt, text: $0.text ?? $0.snippet, path: $0.path ?? "")
         }
         return (comments + replies).sorted { $0.at < $1.at }
     }

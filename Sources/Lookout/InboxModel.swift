@@ -401,6 +401,9 @@ struct ThingComment: Codable, Hashable, Identifiable {
     var snippet: String
     /// Logins @-mentioned in the body, lowercased.
     var mentions: [String] = []
+    /// The comment as Jev reads it (`InboxSync.readLimit` long) when it is longer than its snippet; nil when the snippet is
+    /// all of it, or in an older file.
+    var text: String? = nil
     /// A review's summary rather than a plain comment.
     var isReview = false
 }
@@ -426,6 +429,8 @@ struct ThingThread: Codable, Hashable, Identifiable {
     var lastReplyAt: Date
     var path: String?
     var snippet: String
+    /// The latest reply as Jev reads it when it is longer than its snippet; nil when the snippet is all of it.
+    var text: String? = nil
     /// Each author's latest comment in the thread among its last ones fetched (by login, lowercased): your answer in the
     /// middle of a thread is your latest word there though others replied after it. Nil in an older file.
     var latestBy: [String: Date]?

@@ -438,7 +438,8 @@ enum InboxSync {
             id: id, isResolved: t["isResolved"] as? Bool ?? false,
             startedBy: person(first["author"], association: first["authorAssociation"]),
             lastReplyBy: person(last["author"], association: last["authorAssociation"]), lastReplyID: lastID,
-            lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String), latestBy: latestBy,
+            lastReplyAt: at, path: t["path"] as? String, snippet: snippet(last["body"] as? String),
+            text: readText(last["body"] as? String), latestBy: latestBy,
             mentions: mentioned),
                 // Every reply read mentions them, not only its latest: "@me what do you think?" stays to me once answered.
                 uniqued(mentioned.flatMap(\.logins)))
@@ -506,15 +507,26 @@ enum InboxSync {
         }.filter { seen.insert($0).inserted }
     }
 
+    /// How much of a comment Jev reads: a question at its end is still read.
+    static let readLimit = 2000
+
+    /// A comment as Jev reads it, when its snippet doesn't hold all of it.
+    static func readText(_ body: String?) -> String? {
+        let text = snippet(body, limit: readLimit)
+        return text.count > snippetLimit ? text : nil
+    }
+
+    static let snippetLimit = 280
+
     /// A comment's text as a line: no HTML comments, code, markup.
-    static func snippet(_ body: String?) -> String {
+    static func snippet(_ body: String?, limit: Int = snippetLimit) -> String {
         guard var text = body else { return "" }
         text = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "```[\\s\\S]*?```", with: " [code] ", options: .regularExpression)
         text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "[#*_>`]", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return String(text.trimmingCharacters(in: .whitespaces).prefix(280))
+        return String(text.trimmingCharacters(in: .whitespaces).prefix(limit))
     }
 
     /// `<!-- greptile_confidence_score:4 -->` in a PR body.
@@ -602,7 +614,7 @@ enum InboxSync {
             let found = mentions(text)
             mentioned += found
             comments.append(ThingComment(id: id, author: person(c["author"], association: c["authorAssociation"]), at: at,
-                                         snippet: snippet(text), mentions: found))
+                                         snippet: snippet(text), mentions: found, text: readText(text)))
         }
 
         if isPR {
@@ -652,7 +664,8 @@ enum InboxSync {
                 if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let found = mentions(text)
                     mentioned += found
-                    comments.append(ThingComment(id: id, author: who, at: at, snippet: snippet(text), mentions: found, isReview: true))
+                    comments.append(ThingComment(id: id, author: who, at: at, snippet: snippet(text), mentions: found,
+                                                 text: readText(text), isReview: true))
                 }
                 if reviewIDs.insert(id).inserted { reviews.append(ThingReview(id: id, author: who, state: s, at: at)) }
             }
