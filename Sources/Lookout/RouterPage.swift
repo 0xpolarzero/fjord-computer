@@ -728,7 +728,7 @@ private struct DecisionDetails: View {
                 HStack(spacing: 6) {
                     ForEach(sessions, id: \.self) { id in
                         ClaudeButton("Open \(store.claudeSessions[id]?.title ?? "session")", variant: .ghost, size: .sm,
-                                     icon: "arrow.up.right.square") { store.openAgent(id) }
+                                     icon: ClaudeMark.openSymbol) { store.openAgent(id) }
                     }
                 }
             }
@@ -888,7 +888,7 @@ private struct CardSessionMenu: View {
     }
 }
 
-/// Open in Claude, shown while its card is hovered; its room is kept so nothing moves.
+/// Open in Claude on a history line, shown while it is hovered; its room is kept so nothing moves.
 private struct HoverOpen: View {
     let title: String
     let shown: Bool
@@ -896,7 +896,7 @@ private struct HoverOpen: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "arrow.up.right.square").font(.system(size: 12, weight: .medium))
+            OpenInClaudeGlyph(size: 13)
                 .foregroundStyle(CDS.Text.secondary)
                 .frame(width: 22, height: 22)
                 .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(CDS.Fill.ghostHover))
@@ -1675,7 +1675,10 @@ struct CardView: View {
             .accessibilityAction(named: "Open in Claude") { openInClaude() }
     }
 
-    private var hoverOpen: some View { HoverOpen(title: card.title, shown: hovered) { openInClaude() } }
+    /// Always there on a card, beside Mark handled and alike: what you do with a card isn't hidden until you hover it.
+    private var openButton: some View {
+        ClaudeButton(icon: ClaudeMark.openSymbol, label: "Open in Claude", variant: .ghost, size: .sm) { openInClaude() }
+    }
 
     private func openInClaude() { model.open(card.id, store: store) }
 
@@ -1697,7 +1700,6 @@ struct CardView: View {
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
                     content(form: form)
-                    if !(wide && form != nil) && !(quiet && wide) { markHandled(icon: false) }
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12).padding(.top, 2)
                 .transition(.opacity)
@@ -1725,8 +1727,6 @@ struct CardView: View {
         let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
         // A form has its own buttons: Mark handled sits in the header beside it.
-        // Worth a look's Got it is always there, in the header when there's room.
-        let handle = (expanded && wide && form != nil) || (quiet && wide)
         return VStack(alignment: .leading, spacing: 1) {
             if wide {
                 HStack(spacing: 8) {
@@ -1738,14 +1738,14 @@ struct CardView: View {
                     Spacer(minLength: 4)
                     projectLabel(project)
                     age
-                    if handle { markHandled(icon: true) }
-                    hoverOpen
+                    markHandled
+                    openButton
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; hoverOpen }
-                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); age; hoverOpen }
-                    HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; hoverOpen }
+                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; markHandled; openButton }
+                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); age; markHandled; openButton }
+                    HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; markHandled; openButton }
                 }
                 // Under the title, past the glyph's room when it has one.
                 if !expanded { HStack(spacing: 8) { CardLead(store: store, sessionID: card.sessionID, room: true); ask } }
@@ -1756,17 +1756,10 @@ struct CardView: View {
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder private func markHandled(icon: Bool) -> some View {
-        if quiet, icon {
-            ClaudeButton(icon: "checkmark", label: "Got it", variant: .ghost, size: .sm) { model.address(card.id, store: store) }
-        } else if quiet {
-            ClaudeButton("Got it", variant: .secondary, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
-        } else if icon {
-            ClaudeButton(icon: "checkmark", label: "Mark handled", variant: .ghost, size: .sm) { model.address(card.id, store: store) }
-        } else if card.kind.isTurn {
-            ClaudeButton("Mark handled", primary: true, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
-        } else {
-            ClaudeButton("Mark handled", variant: .ghost, size: .sm, icon: "checkmark") { model.address(card.id, store: store) }
+    /// Mark handled (Got it, on Worth a look): in the header, always.
+    private var markHandled: some View {
+        ClaudeButton(icon: "checkmark.circle", label: quiet ? "Got it" : "Mark handled", variant: .ghost, size: .sm) {
+            model.address(card.id, store: store)
         }
     }
 

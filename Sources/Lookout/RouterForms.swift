@@ -449,12 +449,12 @@ struct ClaudeButton: View {
 
     @ViewBuilder private var content: some View {
         if iconOnly, let icon {
-            Image(systemName: icon).font(.system(size: 13, weight: .regular)).foregroundStyle(ink)
+            ButtonIcon(name: icon, size: 13).foregroundStyle(ink)
         } else {
             let weight: CDS.Weight = variant == .primary || variant == .danger ? .medium : .regular
             HStack(spacing: 4) {
                 if let icon {
-                    Image(systemName: icon).font(.system(size: 13)).padding(.leading, -4)
+                    ButtonIcon(name: icon, size: 13).padding(.leading, -4)
                 }
                 Text(title).cdsText(CDS.Density.comfortable.body, weight, ink).lineLimit(1)
                 if !shortcut.isEmpty {
