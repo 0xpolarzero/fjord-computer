@@ -198,6 +198,18 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         let few = InboxSync.searchPlan(categories: [InboxCategory(name: "x", symbol: "star", color: .blue, rules: Array(rules.prefix(3)))],
                                        groups: [], me: "me", contributed: [], cursor: 5)
         #expect(few.searches.count == 3 && few.next == 0)
+        // Sixteen first queries and more after them: the window still reaches the later ones.
+        let two = (0..<16).map { Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u\($0)"), .user("v\($0)")]))) }
+        let crowded = [InboxCategory(name: "x", symbol: "star", color: .blue, rules: two)]
+        var cursor = 0, asked = Set<String>()
+        let all = InboxSync.searchPlan(categories: crowded, groups: [], me: "me", contributed: []).all
+        for _ in 0..<4 {
+            let plan = InboxSync.searchPlan(categories: crowded, groups: [], me: "me", contributed: [], cursor: cursor)
+            #expect(plan.searches.count == InboxSync.maxSearches)
+            asked.formUnion(plan.searches)
+            cursor = plan.next
+        }
+        #expect(all.count > InboxSync.maxSearches && asked == all)
         #expect(InboxSync.pageSizes(searches: 1, budget: 150) == InboxSync.pageSize)
         #expect(InboxSync.pageSizes(searches: 16, budget: 150) == 9 && InboxSync.pageSizes(searches: 4, budget: 3) == 1)
     }

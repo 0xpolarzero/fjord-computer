@@ -35,8 +35,8 @@ enum InboxSync {
     }
 
     /// The searches a refresh makes, out of all the rules ask for: each rule's first query, then the others a window at a
-    /// time from `cursor` (or the first queries themselves a window at a time, when they alone pass the cap), so that past
-    /// the cap every query gets its turn over the refreshes. `next` is where the next refresh's window starts.
+    /// time from `cursor` (or every query, first ones first, a window at a time, when the first ones alone fill the cap), so
+    /// that past the cap every query gets its turn over the refreshes. `next` is where the next refresh's window starts.
     static func searchPlan(categories: [InboxCategory], groups: [InboxGroup], me: String, contributed: Set<String>,
                            myTeams: Set<String> = [], now: Date = Date(), cursor: Int = 0)
         -> (searches: [String], all: Set<String>, next: Int) {
@@ -64,8 +64,9 @@ enum InboxSync {
             let start = cursor % list.count
             return ((0..<count).map { list[(start + $0) % list.count] }, (start + count) % list.count)
         }
+        // The first queries alone fill the cap: the window goes over every query, so the others still get their turn.
         if firsts.count >= maxSearches {
-            let (taken, next) = window(firsts, maxSearches)
+            let (taken, next) = window(firsts + rest, maxSearches)
             return (taken, seen, next)
         }
         let (more, next) = window(rest, maxSearches - firsts.count)
