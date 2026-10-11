@@ -1400,6 +1400,18 @@ extension Store {
         }
         // The rest of their review threads, a page at a time up to the cap: an unresolved one past the first page is there.
         // One that can't be read is a thing given in part.
+        if let failure = await readThreadTails(moreThreads, into: &found, partial: &partial, now: now) { error = error ?? failure }
+        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy, failed: failed,
+                       complete: complete.subtracting(failed))
+    }
+
+    /// Reads on the review threads of PRs that have more than came with them (`moreThreads`), a page at a time up to the
+    /// cap, into `found`; each read to its end gets its `threadsTail`. One that can't be read is put in `partial` (a thing
+    /// given in part); what failed is said.
+    func readThreadTails(_ moreThreads: [String: (node: String, cursor: String, total: Int)], into found: inout [String: Thing],
+                         partial: inout Set<String>, now: Date) async -> String? {
+        var moreThreads = moreThreads
+        var error: String?
         var read: [String: Int] = moreThreads.mapValues { _ in InboxSync.threadsFirst }
         var tailMentions: [String: [String]] = [:]
         while !moreThreads.isEmpty {
@@ -1438,8 +1450,7 @@ extension Store {
             }
             moreThreads = next
         }
-        return Fetched(things: Array(found.values), partial: partial, error: error, foundBy: foundBy, failed: failed,
-                       complete: complete.subtracting(failed))
+        return error
     }
 
     /// Looks again at some of the things kept though no search returned them (`recheckBatch`, in turns): first how each
@@ -1486,6 +1497,10 @@ extension Store {
             let whole = await read(InboxSync.nodesRequest(changed))
             guard let wholeErrored = whole.errored else { return ([:], whole.error) }
             error = error ?? whole.error
+            var fresh: [String: Thing] = [:]
+            var olds: [String: Thing] = [:]
+            var moreThreads: [String: (node: String, cursor: String, total: Int)] = [:]
+            let now = Date()
             for (i, value) in whole.nodes.enumerated() where !wholeErrored.contains(i) {
                 guard let node = value as? [String: Any], var thing = InboxSync.thing(node),
                       let old = byNode[thing.nodeID ?? ""], old.id == thing.id else { continue }
@@ -1495,10 +1510,22 @@ extension Store {
                     error = error ?? "GitHub gave part of an answer"
                     continue
                 }
-                // Review threads past those read with it: as read before, as a refresh that can't read them on keeps them.
-                if InboxSync.moreThreads(node) != nil, old.threadsTail != nil { InboxSync.takeTail(of: old, into: &thing) }
-                out[thing.id] = InboxSync.keepingRequestTimes(thing, from: old)
+                // Review threads past those read with it: as a search's are, those read before stand while the PR is as
+                // it was then and they are recent (or points are low); otherwise they are read on.
+                if let more = InboxSync.moreThreads(node) {
+                    if InboxSync.keepsTail(old, total: more.total, updatedAt: thing.updatedAt, now: now, remaining: gh.graphqlRemaining) {
+                        InboxSync.takeTail(of: old, into: &thing)
+                    } else {
+                        moreThreads[thing.id] = more
+                    }
+                }
+                fresh[thing.id] = thing
+                olds[thing.id] = old
             }
+            var partial = Set<String>()
+            if let failure = await readThreadTails(moreThreads, into: &fresh, partial: &partial, now: now) { error = error ?? failure }
+            // One whose threads couldn't be read on stays as it was.
+            for (id, thing) in fresh where !partial.contains(id) { out[id] = InboxSync.keepingRequestTimes(thing, from: olds[id]) }
         }
         if error == nil { inboxSyncState.recheckCursor = (start + batch.count) % sorted.count }
         return (out, error)

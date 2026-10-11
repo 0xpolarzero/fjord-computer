@@ -1143,6 +1143,61 @@ extension InboxSyncMapping {
         #expect(s.inboxError == nil)
     }
 
+    @Test func aKeptPRLookedAtAgainReadsOnItsReviewThreadsAsASearchDoes() async {
+        final class Box: @unchecked Sendable {
+            var shown: [Int] = [1, 2]; var updated = "2026-10-09T10:00:00Z"; var tail = "t21"; var pages = 0
+        }
+        let box = Box()
+        let s = Store()
+        s.persists = false
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.categories = [InboxCategory(name: "Repo", symbol: "star", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.user("u")])))
+        ])]
+        s.gh.session = StubbedGitHub.session { request in
+            let text = InboxSyncRefresh.body(request)
+            func thread(_ id: String) -> [String: Any] {
+                let comment: [String: Any] = ["id": id + "c", "createdAt": "2026-10-08T10:00:00Z", "body": "why?", "authorAssociation": "NONE",
+                                              "author": ["login": "bob", "__typename": "User"]]
+                return ["id": id, "isResolved": false, "path": "a.swift", "first": ["nodes": [comment]], "last": ["nodes": [comment]]]
+            }
+            func pr(_ n: Int) -> [String: Any] {
+                guard n == 2 else { return node(["id": "PR_1", "number": 1, "url": "https://github.com/o/r/pull/1"]) }
+                // Twenty threads on its first page, and more past it.
+                let threads: [String: Any] = ["totalCount": 21, "pageInfo": ["hasNextPage": true, "endCursor": "c1"],
+                                              "nodes": (1...20).map { thread("t\($0)") }]
+                return node(["id": "PR_2", "number": 2, "url": "https://github.com/o/r/pull/2", "updatedAt": box.updated,
+                             "reviewThreads": threads])
+            }
+            var data: [String: Any] = ["rateLimit": ["cost": 1, "remaining": 4000]]
+            if text.contains("node(id:") {
+                box.pages += 1
+                data["p0"] = ["reviewThreads": ["pageInfo": ["hasNextPage": false], "nodes": [thread(box.tail)]]]
+            } else if text.contains("nodes(ids:") {
+                let state: [String: Any] = ["__typename": "PullRequest", "id": "PR_2", "state": "OPEN", "merged": false,
+                                            "isDraft": false, "updatedAt": box.updated]
+                data["nodes"] = [text.contains("...P") ? pr(2) : state]
+            } else {
+                let first = !text.contains("after:")
+                let info: [String: Any] = box.shown.count == 1 ? ["hasNextPage": true, "endCursor": "c"] : ["hasNextPage": false]
+                data["s0"] = ["pageInfo": info, "nodes": first ? box.shown.map(pr) : []]
+            }
+            return StubbedGitHub.Reply(200, String(decoding: try JSONSerialization.data(withJSONObject: ["data": data]), as: UTF8.self))
+        }
+        await s.syncInbox()
+        #expect(s.things["pr:o/r#2"]?.threads.contains { $0.id == "t21" } == true && box.pages == 1)
+        // #2 falls past the caps, then changes: the thread past its first page is another now.
+        box.shown = [1]
+        box.updated = "2026-10-10T10:00:00Z"
+        box.tail = "t22"
+        await s.syncInbox()
+        // What is past its first page is read again, as it is now, not taken as read before.
+        #expect(box.pages == 2)
+        #expect(s.things["pr:o/r#2"]?.threads.contains { $0.id == "t22" } == true)
+        #expect(s.things["pr:o/r#2"]?.threads.contains { $0.id == "t21" } == false)
+        #expect(s.things["pr:o/r#2"]?.threadsTail?.updatedAt == s.things["pr:o/r#2"]?.updatedAt)
+    }
+
     @Test func aSearchGitHubDidntAnswerHasntRunAndWhatItFoundStaysUntilItDoes() async {
         final class Box: @unchecked Sendable { var asked: [String] = []; var hidden: Set<Int> = []; var failing: Set<Int> = [] }
         let box = Box()
