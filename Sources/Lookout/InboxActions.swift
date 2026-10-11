@@ -946,18 +946,26 @@ extension Store {
                 // write is tried again now, and if that fails too the run isn't made, and its record goes back to what it
                 // was (due again at a later refresh).
                 let before = actionLedger
+                // The rules it was due under: an edit taken in meanwhile (a new baseline) makes it old, as what else they
+                // match then.
+                let rules = before.baselines[job.category.id]?.rules
                 var running = before
                 for key in job.keys {
                     running.set(ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
                                           state: .running, at: now))
                 }
                 actionLedger = running
-                // The ledger as it is now, with `keys` of this job's records back to what they were before it.
+                // The ledger as it is now, with `keys` of this job's records back to what they were before it; or, the rules
+                // edited and taken in meanwhile, taken as old (with no record, it would be due again under the new ones).
                 func undone(_ keys: [String]) -> ActionLedger {
                     var back = actionLedger
+                    let superseded = back.baselines[job.category.id].map { $0.rules != rules } ?? false
                     for key in keys {
                         let id = ActionLedger.key(job.category.id, job.entry.id, job.action.id, key)
-                        back.runs[id] = before.runs[id]
+                        back.runs[id] = superseded
+                            ? ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id, trigger: key,
+                                        state: .baselined, at: now)
+                            : before.runs[id]
                     }
                     return back
                 }
@@ -969,9 +977,9 @@ extension Store {
                         return
                     }
                 }
-                // The write took a while: deleted, Done or no longer matching meanwhile, it isn't run (its record goes back,
-                // and that is written in turn).
-                guard !baselinePending,
+                // The write took a while: deleted, Done, no longer matching or its rules edited meanwhile, it isn't run (its
+                // record goes back, and that is written in turn).
+                guard !baselinePending, actionLedger.baselines[job.category.id]?.rules == rules,
                       let checked = InboxActions.stillDue(job, entries: entries, categories: categories, groups: groups,
                                                           ledger: undone(job.keys), me: me)
                 else {

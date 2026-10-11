@@ -326,6 +326,37 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(!saved.runs.values.contains { $0.thing == "pr:a/one#2" })
     }
 
+    @Test func anActionWhoseRulesAreEditedAndTakenInWhileItsRunningRecordIsWrittenIsNotRunNorDueAgain() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lookout-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (store, performer) = store([InboxFixture.pr(1)], actions: [session])
+        store.stateFile = folder.appendingPathComponent("state.json")
+        store.persists = true
+        await store.runActions()
+        add(store, InboxFixture.pr(2))
+        // The disk is slow: the running record's write waits.
+        let gate = DispatchSemaphore(value: 0)
+        Store.actionsWriter.async { gate.wait() }
+        let run = Task { await store.runActions() }
+        var spins = 0
+        while !store.actionLedger.runs.values.contains(where: { $0.state == .running }), spins < 10_000 {
+            await Task.yield()
+            spins += 1
+        }
+        #expect(store.actionLedger.runs.values.contains { $0.state == .running })
+        // Meanwhile the rule is widened (PR 2 still matches), and the edit is taken in: what it matches now is old.
+        store.categories[0].rules[0].conditions = [.greptileBelow(9)]
+        store.baselineActions()
+        gate.signal()
+        await run.value
+        #expect(performer.asked.isEmpty)
+        #expect(store.actionLedger.runs.values.contains { $0.thing == "pr:a/one#2" && $0.state == .baselined })
+        // Nor at the next refresh.
+        await store.runActions()
+        #expect(performer.asked.isEmpty)
+    }
+
     @Test func whatIsAlreadyThereWhenTheActionIsMadeIsNeverRun() async {
         let (store, performer) = store([InboxFixture.pr(1), InboxFixture.pr(2)], actions: [session])
         await store.runActions()
