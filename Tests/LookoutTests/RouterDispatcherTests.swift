@@ -638,6 +638,24 @@ import Testing
         #expect(RouterDispatcher.title(for: "") == "New session")
     }
 
+    @Test func settingsAreOnlyAskedForInTheRequestNeverInCodeOrQuotes() async {
+        let fenced = "start a session to fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```"
+        #expect(SessionStart.task(from: fenced) == "fix the parser:\n```\nlabel = \"high effort\"\nmodel = use opus\n```")
+        #expect(SessionStart.task(from: "fix the label: label = \"high effort\"") == "fix the label: label = \"high effort\"")
+        #expect(SessionStart.task(from: "    let mode = \"with opus\" // high effort") == "let mode = \"with opus\" // high effort")
+        #expect(SessionStart.task(from: "Rename the flag. It is set with opus, low effort today")
+                == "Rename the flag. It is set with opus, low effort today")
+        // In the request's own sentence, as before.
+        #expect(SessionStart.task(from: "fix the tests with opus, low effort. Then lint") == "fix the tests. Then lint")
+        let (_, d, f) = setup()
+        let a = d.submit(fenced, context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, a)
+        #expect(f.startSettings.count == 1 && f.startSettings.last! == nil, "nothing asked for")
+        let b = d.submit("start a session with opus: fix it", context: RouterContext(projects: ["/code/lookout"]))
+        await finish(d, f, b)
+        #expect(f.startSettings.last! == SessionSettings(model: "opus", effort: nil))
+    }
+
     @Test func aStartPassesTheTitleOfTheTaskNotTheRequest() async {
         let (_, d, f) = setup()
         let a = d.submit("@lookout start a session with haiku, low effort: reply with exactly pong and nothing else",

@@ -523,13 +523,35 @@ enum SessionStart {
             tidy()
             _ = strip(#"^(?:to|and|then|that)\s+"#, from: &t)
         }
-        // Settings words anywhere else ("fix the tests with opus, low effort"): the plugin applies them, the session never reads them.
-        if SessionSettings.parse(t) != nil || started {
-            _ = strip(#"[,;]?[ \t]*\b"# + settingClause, from: &t, all: true, joining: true)
-            if started || SessionSettings.parse(text) != nil { tidy() }
+        // Settings words elsewhere in the request's sentence ("fix the tests with opus, low effort"): the plugin applies them,
+        // the session never reads them. Never in the code, quotes or lines after it, which are the task's own words.
+        if SessionSettings.parse(envelope(t)) != nil || started {
+            let end = t.index(t.startIndex, offsetBy: envelope(t).count)
+            var head = String(t[..<end])
+            _ = strip(#"[,;]?[ \t]*\b"# + settingClause, from: &head, all: true, joining: true)
+            t = head + t[end...]
+            if started || SessionSettings.parse(envelope(text)) != nil { tidy() }
         }
         let task = t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;")))
         return String(task.map { c in c.unicodeScalars.first.flatMap { pilled[$0] } ?? String(c) }.joined())
+    }
+
+    /// Where a message's model and effort may be asked for: its first line up to the end of its first sentence, stopping at a
+    /// quote or code; nothing when it starts as code, a quote or an indented line. What follows is the task's, as written.
+    static func envelope(_ text: String) -> String {
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count, chars[i].isNewline { i += 1 }
+        guard i < chars.count, chars[i] != " ", chars[i] != "\t", chars[i] != ">" else { return "" }
+        var end = i
+        while end < chars.count {
+            let c = chars[end]
+            if c.isNewline || "\"`“‘".contains(c) { break }
+            if c == "'", end == 0 || !chars[end - 1].isLetter { break }
+            if ".!?".contains(c), end + 1 == chars.count || chars[end + 1].isWhitespace { end += 1; break }
+            end += 1
+        }
+        return String(chars[..<end])
     }
 
     /// `text` with each pill (an "@name" at its place) made one private character, and what each stands for. A text that

@@ -452,7 +452,7 @@ struct RouterAskBack: Identifiable, Equatable {
         let project = store.folderName(folder)
         // "…with opus, high effort": set in the session by its plugin before the first message; else Jev's pick by the size
         // of the task, when you let him.
-        var settings = SessionSettings.parse(job.text)
+        var settings = SessionSettings.parse(SessionStart.envelope(job.text))
         if settings == nil, store.jevPicksSessionModels, !task.isEmpty,
            let scope = await scope(of: task, project: project, job: job),
            // Switched to "Your default" while Jev was asked: his size isn't used.
