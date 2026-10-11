@@ -445,6 +445,24 @@ import Testing
         #expect(await s.waitOptions(for: s.claudeSessions["a"]!).map(\.key) == ["s0"])
     }
 
+    @Test func aForksWorkflowsOfTheSameNameAndBranchAreToldApartByTheirRepo() async {
+        // A fork's clone tracks its own repo and the one it was forked from: both run "Test" on main.
+        func workflow(_ repo: String) -> Thing {
+            var thing = ci(.pending)
+            thing.id = "run:\(repo)#Test"
+            thing.repo = repo
+            thing.kind = .workflow
+            thing.workflowName = "Test"
+            thing.branch = "main"
+            return thing
+        }
+        let (s, _) = store(watch: ciWatch, things: [workflow("my/app"), workflow("acme/app")])
+        s.routerTriager.repos["/code/app"] = ["my/app", "acme/app"]
+        let abouts = await s.waitOptions(for: s.claudeSessions["a"]!).filter { $0.key.hasPrefix("c") }.map(\.about)
+        #expect(abouts.count == 2 && Set(abouts).count == 2)
+        #expect(abouts.contains { $0.contains("Test on main in my/app") } && abouts.contains { $0.contains("Test on main in acme/app") })
+    }
+
     @Test func theInboxsChecksGoToJevOnlyWhileHeMayReadTheInbox() async {
         var thing = ci(.pending)
         thing.title = "Secret migration of the billing tables"

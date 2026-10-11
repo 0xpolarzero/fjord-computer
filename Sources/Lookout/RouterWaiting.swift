@@ -57,9 +57,12 @@ enum RouterWaits {
         safeRef(thing.kind == .workflow ? thing.repo : "\(thing.repo)\(thing.number.map { "#\($0)" } ?? "")")
     }
 
-    /// "CI on owner/repo#12" for a PR, "CI: Tests on main" for a workflow.
+    /// "CI on owner/repo#12" for a PR, "CI: Tests on main in owner/repo" for a workflow (a fork's clone tracks two repos whose
+    /// workflows can share a name and a branch).
     static func ciLabel(_ thing: Thing) -> String {
-        if thing.kind == .workflow { return "CI: \(thing.workflowName ?? thing.title) on \(thing.branch ?? "the default branch")" }
+        if thing.kind == .workflow {
+            return "CI: \(thing.workflowName ?? thing.title) on \(thing.branch ?? "the default branch") in \(thing.repo)"
+        }
         return "CI on \(thing.repo)\(thing.number.map { "#\($0)" } ?? "")"
     }
 }
