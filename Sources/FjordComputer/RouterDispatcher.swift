@@ -1061,10 +1061,7 @@ struct RouterAskBack: Identifiable, Equatable {
         if target.hasPrefix("answer:") { return store.routerShownOpenCards.contains { $0.id == String(target.dropFirst(7)) } }
         if target.hasPrefix("session:") { return store.claudeSessions[String(target.dropFirst(8))].map { !$0.isArchived } ?? false }
         // A project Fjord Computer knows: a session's folder, or a repo in your code folders (a clone with no session yet).
-        if target.hasPrefix("new:") {
-            let folder = String(target.dropFirst(4))
-            return store.knownFolders.contains(folder) || store.projectFolders.contains(folder)
-        }
+        if target.hasPrefix("new:") { return store.isProjectFolder(String(target.dropFirst(4))) }
         return true
     }
 

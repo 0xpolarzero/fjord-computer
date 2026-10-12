@@ -7,9 +7,11 @@ private final class Tree {
     let root: String
     private let fm = FileManager.default
 
+    /// Where it really is (`/private/var/…`, not `/var/…`), as the scan keys what it finds.
     init() {
-        root = fm.temporaryDirectory.appendingPathComponent("fjord-code-\(UUID().uuidString)", isDirectory: true).path
-        try? fm.createDirectory(atPath: root, withIntermediateDirectories: true)
+        let made = fm.temporaryDirectory.appendingPathComponent("fjord-code-\(UUID().uuidString)", isDirectory: true).path
+        try? fm.createDirectory(atPath: made, withIntermediateDirectories: true)
+        root = CodeFolders.resolved(made)
     }
 
     deinit { try? fm.removeItem(atPath: root) }
@@ -124,6 +126,61 @@ private final class Tree {
         """
         #expect(CodeFolders.remotes(config: config) == ["me/repo", "owner/repo"])
     }
+
+    @Test func aLinkedRootIsLookedThroughWhereItReallyIs() throws {
+        let tree = Tree()
+        tree.repo("data/code/app", remotes: [("origin", "https://github.com/o/app")])
+        // `~/code` linked to `/Volumes/Data/code`: a session in the app ran in the latter, and the scan keys it there too.
+        try FileManager.default.createSymbolicLink(atPath: tree.path("code"), withDestinationPath: tree.path("data/code"))
+        let found = CodeFolders.scan(roots: [tree.path("code"), tree.path("data/code")], home: "/nowhere")
+        #expect(found.repos == [tree.path("data/code/app"): ["o/app"]])
+        // The temporary folder itself is a link away (`/var` is `/private/var`).
+        let made = FileManager.default.temporaryDirectory.path
+        #expect(CodeFolders.resolved(made) == CodeFolders.resolved(CodeFolders.resolved(made)))
+        #expect(CodeFolders.resolved("/no/such/folder/") == "/no/such/folder")
+    }
+
+    @Test func aBareRepoIsARepoAndIsntLookedInto() {
+        let tree = Tree()
+        // `git clone --mirror`: no `.git`, its own HEAD, config, objects (256 folders) and refs.
+        tree.file("mirrors/app.git/HEAD", "ref: refs/heads/main\n")
+        tree.file("mirrors/app.git/config", "[core]\n\tbare = true\n[remote \"origin\"]\n\turl = https://github.com/o/app\n")
+        for i in 0..<3 { tree.folder("mirrors/app.git/objects/0\(i)") }
+        tree.folder("mirrors/app.git/refs/heads")
+        tree.repo("mirrors/app.git/objects/00/inside", remotes: [("origin", "https://github.com/o/inside")])
+        let found = CodeFolders.scan(roots: [tree.root], home: "/nowhere")
+        #expect(found.repos == [tree.path("mirrors/app.git"): ["o/app"]])
+        #expect(found.bare == [tree.path("mirrors/app.git")])
+        // An objects folder not in a recognised repo isn't walked either.
+        tree.repo("loose/objects/repo", remotes: [("origin", "https://github.com/o/loose")])
+        #expect(CodeFolders.scan(roots: [tree.path("loose")], home: "/nowhere").repos.isEmpty)
+    }
+
+    @Test func onlyARemoteWhoseHostIsGitHubNamesARepo() {
+        let accepted = [
+            "git@github.com:Owner/Repo.git", "github.com:owner/repo", "https://github.com/owner/repo",
+            "https://GitHub.com/owner/repo.git", "https://user:token@github.com/owner/repo", "https://github.com:443/owner/repo",
+            "ssh://git@github.com/owner/repo.git", "ssh://git@ssh.github.com:443/owner/repo.git", "git://github.com/owner/repo",
+            "https://www.github.com/owner/repo/tree/main", "https://github.com/owner/repo?tab=readme#top",
+        ]
+        for url in accepted { #expect(LocalClones.repo(fromRemote: url) == "owner/repo", "\(url)") }
+        let rejected = [
+            "https://git.example.com/github.com/victim/repo", "https://evil.io/x?github.com/victim/repo",
+            "https://evil.io/x#github.com:victim/repo", "https://github.com.evil.io/victim/repo", "https://evilgithub.com/victim/repo",
+            "git@evil.io:github.com/victim/repo", "/srv/github.com:victim/repo", "file://github.com/victim/repo",
+            "https://github.com@evil.io/victim/repo", "https://github.com/victim", "https://github.com/../repo",
+            "https://gitlab.com/owner/repo", "https://github.com:evil/victim/repo",
+        ]
+        for url in rejected { #expect(LocalClones.repo(fromRemote: url) == nil, "\(url)") }
+    }
+}
+
+/// Counts calls made from any thread.
+private final class Count: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var value: Int { lock.withLock { n } }
+    func add() { lock.withLock { n += 1 } }
 }
 
 @MainActor
@@ -137,12 +194,13 @@ private final class Tree {
 
     @Test func clonesAreFoundAmongSessionsAndScannedReposAlike() async {
         let tree = Tree()
-        // A session's folder no scan reached: read when asked.
+        // A session's folder no scan reached: read off the main thread when it shows up.
         tree.repo("session-only", remotes: [("origin", "https://github.com/o/app")])
         let session = tree.path("session-only")
         let s = store { _ in .init(repos: ["/code/app": ["o/app", "up/app"], "/code/other": ["o/other"], "/code/local": []]) }
         s.claudeSessions = ["a": ClaudeSession(id: "a", title: "a", folder: session, lastActivity: Date()),
                             "b": ClaudeSession(id: "b", title: "b", folder: "/code/app", lastActivity: Date())]
+        await s.codeFolders.settled()
         #expect(s.localClones(of: "o/app") == [session])
         s.addCodeFolders(["/code", "/code/"])
         #expect(s.codeFolderRoots == ["/code"])
@@ -200,13 +258,56 @@ private final class Tree {
         #expect(tree.all.contains { $0.role == "AXButton" && $0.label == "Rescan" })
     }
 
-    @Test func requestsDuringAScanFoldIntoOneMore() async {
-        final class Count: @unchecked Sendable {
-            private let lock = NSLock()
-            private var n = 0
-            var value: Int { lock.withLock { n } }
-            func add() { lock.withLock { n += 1 } }
+    @Test func aSessionsFolderIsReadOnceOffTheMainThreadAndClonesAreFromMemory() async {
+        let reads = Count()
+        let s = store { _ in .init(repos: ["/code/app": ["o/app"]]) }
+        s.codeFolders.readRemotes = { folder in
+            reads.add()
+            return folder == "/work/app" ? ["o/app"] : []
         }
+        func session(_ id: String, _ folder: String?) -> ClaudeSession {
+            ClaudeSession(id: id, title: id, folder: folder, lastActivity: Date())
+        }
+        s.claudeSessions = ["a": session("a", "/work/app"), "b": session("b", "/work/notes"), "c": session("c", nil)]
+        await s.codeFolders.settled()
+        #expect(reads.value == 2)
+        #expect(s.localClones(of: "o/app") == ["/work/app"])
+        // Asking again, or a session changing in the same folders, reads nothing.
+        _ = s.localClones(of: "o/app")
+        s.claudeSessions["d"] = session("d", "/work/app")
+        await s.codeFolders.settled()
+        #expect(reads.value == 2)
+        // A new folder is read alone; a scan reads every session's folder again, and takes in what it finds.
+        s.claudeSessions["e"] = session("e", "/work/other")
+        await s.codeFolders.settled()
+        #expect(reads.value == 3)
+        s.addCodeFolders(["/code"])
+        await s.codeFolders.settled()
+        #expect(reads.value == 6)
+        #expect(s.localClones(of: "o/app") == ["/code/app", "/work/app"])
+        // Kept, not worked out per read; Scratch is a project only for `new:` (it is a session's), never listed.
+        #expect(s.projectFolders == ["/code/app", "/work/app", "/work/notes", "/work/other"])
+        #expect(s.isProjectFolder("/code/app") && s.isProjectFolder("/work/notes") && s.isProjectFolder(""))
+        #expect(!s.isProjectFolder("/elsewhere"))
+        #expect(s.routerDispatcher.eligible("new:/code/app", store: s) && !s.routerDispatcher.eligible("new:/elsewhere", store: s))
+        // The bare repos found aren't clones to work in.
+        s.codeFolders.scan = { _ in .init(repos: ["/code/app": ["o/app"], "/code/app.git": ["o/app"]], bare: ["/code/app.git"]) }
+        s.codeFolders.refresh()
+        await s.codeFolders.settled()
+        #expect(s.codeRepos.count == 2 && s.localClones(of: "o/app") == ["/code/app", "/work/app"])
+        #expect(!s.projectFolders.contains("/code/app.git"))
+    }
+
+    @Test func atBuildsOnlyTheProjectRowsTheWordCanFind() async {
+        let s = store { _ in .init(repos: Dictionary(uniqueKeysWithValues: (0..<299).map { ("/code/a\($0)", []) } + [("/code/lookout", [])])) }
+        s.addCodeFolders(["/code"])
+        await s.codeFolders.settled()
+        // A bare @ lists them all (a few are shown); a typed word only those it finds.
+        #expect(RouterMentions.candidates(s).filter { $0.section == .projects }.count == 300)
+        #expect(RouterMentions.candidates(s, query: "look").filter { $0.section == .projects }.compactMap(\.folder) == ["/code/lookout"])
+    }
+
+    @Test func requestsDuringAScanFoldIntoOneMore() async {
         let count = Count()
         let s = store { roots in
             count.add()

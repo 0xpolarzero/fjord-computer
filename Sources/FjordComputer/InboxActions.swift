@@ -936,16 +936,45 @@ extension InboxActions {
 // MARK: - Local clones
 
 enum LocalClones {
-    /// `owner/repo` (lowercased) from a remote URL on GitHub.
+    /// The hosts a remote on GitHub has (`ssh.github.com` is its SSH over port 443).
+    static let githubHosts: Set<String> = ["github.com", "www.github.com", "ssh.github.com"]
+    static let remoteSchemes: Set<String> = ["https", "http", "ssh", "git", "git+ssh", "ssh+git"]
+
+    /// `owner/repo` (lowercased) from a remote URL on GitHub: `scheme://[user@]github.com[:port]/owner/repo[.git]` or
+    /// `[user@]github.com:owner/repo[.git]`. GitHub must be the URL's host, not a word in its path or query
+    /// (`https://example.com/github.com/owner/repo` is not GitHub's); a query or fragment is dropped.
     static func repo(fromRemote url: String) -> String? {
-        guard let host = url.range(of: "github.com", options: .caseInsensitive) else { return nil }
-        var rest = url[host.upperBound...]
-        guard let first = rest.first, first == ":" || first == "/" else { return nil }
-        rest = rest.dropFirst()
+        let url = url.trimmingCharacters(in: .whitespaces)
+        var rest: Substring
+        var host: Substring
+        if let scheme = url.range(of: "://") {
+            guard remoteSchemes.contains(url[..<scheme.lowerBound].lowercased()) else { return nil }
+            let afterScheme = url[scheme.upperBound...]
+            let authorityEnd = afterScheme.firstIndex { $0 == "/" || $0 == "?" || $0 == "#" } ?? afterScheme.endIndex
+            host = afterScheme[..<authorityEnd]
+            rest = afterScheme[authorityEnd...]
+            if let at = host.lastIndex(of: "@") { host = host[host.index(after: at)...] }
+            if let colon = host.lastIndex(of: ":") {
+                guard host[host.index(after: colon)...].allSatisfy(\.isNumber) else { return nil }
+                host = host[..<colon]
+            }
+        } else {
+            // scp-like: what comes before the first ":" is the host (with its user), and has no "/" (else it is a path).
+            guard let colon = url.firstIndex(of: ":") else { return nil }
+            host = url[..<colon]
+            guard !host.contains("/") else { return nil }
+            if let at = host.lastIndex(of: "@") { host = host[host.index(after: at)...] }
+            rest = url[url.index(after: colon)...]
+        }
+        guard githubHosts.contains(host.lowercased()) else { return nil }
+        if let end = rest.firstIndex(where: { $0 == "?" || $0 == "#" }) { rest = rest[..<end] }
         var parts = rest.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard parts.count >= 2 else { return nil }
         parts = Array(parts.prefix(2))
         if parts[1].lowercased().hasSuffix(".git") { parts[1] = String(parts[1].dropLast(4)) }
+        // GitHub's own names: letters, digits, `-`, `_` and `.`, and never `.` or `..` alone.
+        let allowed = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber || "-_.".contains(c)) }
+        guard parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && $0.allSatisfy(allowed) }) else { return nil }
         return parts.joined(separator: "/").lowercased()
     }
 

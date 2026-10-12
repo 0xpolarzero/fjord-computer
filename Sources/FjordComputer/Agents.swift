@@ -280,9 +280,11 @@ extension Store {
 
     var allAgentRows: [AgentRow] { cache.all }
 
-    /// Every folder a name can be asked for: the ones sessions are in, the ones muted and the repos in your code folders.
-    var namedFolders: Set<String> {
-        Set(claudeSessions.values.map(\.folderKey)).union(agents.mutedFolders).union(codeFolders.repos.keys).subtracting([""])
+    /// Every folder a name can be asked for: the ones sessions are in, the ones muted and the clones in your code folders.
+    var namedFolders: Set<String> { namedFolders(sessions: Set(claudeSessions.values.map(\.folderKey))) }
+
+    private func namedFolders(sessions: Set<String>) -> Set<String> {
+        sessions.union(agents.mutedFolders).union(codeFolders.clones.keys).subtracting([""])
     }
 
     /// A project's name wherever it is named: its own, with as much of the path above it as it takes to tell it from another
@@ -294,7 +296,10 @@ extension Store {
     /// Called when the sessions or the muted folders change : the
     /// names are worked out again only when the set of folders is another, and the dictionary is only written when a name did.
     func refreshFolderNames() {
-        let folders = namedFolders
+        let sessions = Set(claudeSessions.values.map(\.folderKey))
+        // The projects (and their clones) follow the sessions' folders too.
+        codeFolders.sessionFoldersChanged(sessions)
+        let folders = namedFolders(sessions: sessions)
         guard folders != namedFoldersSeen else { return }
         namedFoldersSeen = folders
         let names = FolderNames.names(for: folders)

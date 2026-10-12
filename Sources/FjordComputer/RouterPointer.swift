@@ -422,6 +422,8 @@ extension RouterMentions {
         var out: [MentionSuggestion] = []
         for folder in store.projectFolders where !folder.isEmpty && !except.contains(.project(folder)) {
             let name = store.folderName(folder)
+            // One a typed word can't find isn't made a row (there may be hundreds, from your code folders).
+            if !query.isEmpty, score(name, query: query) == nil { continue }
             out.append(MentionSuggestion(section: .projects, pick: .pointer(.project(folder)), name: name,
                                          detail: MentionList.shortPath(folder),
                                          look: MentionLook(label: name, symbol: "folder", tint: CDS.Text.secondary), keys: [name]))
