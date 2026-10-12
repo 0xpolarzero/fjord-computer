@@ -4,15 +4,15 @@ import SwiftUI
 import Testing
 @testable import Lookout
 
-/// The Router page's sizes as they are laid out: the zones as tall as what they hold up to their room, and the composer as
-/// tall as its lines.
+/// The Router page's sizes as they are laid out: Now and History each one scroll, nothing scrolling inside them, and the
+/// composer as tall as its lines.
 @MainActor
 @Suite(.hostsWindows) struct RouterLayoutTests {
-    /// The Router's page in an offscreen window, 1100 × `height`.
-    private func mount(_ store: Store, _ model: RouterModel, height: CGFloat = 900) -> (NSHostingView<some View>, NSWindow) {
+    /// The Router's page in an offscreen window, `width` × `height`.
+    private func mount(_ store: Store, _ model: RouterModel, width: CGFloat = 1100, height: CGFloat = 900) -> (NSHostingView<some View>, NSWindow) {
         let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
-            .frame(width: 1100, height: height))
-        let window = AwayWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: height), styleMask: .borderless,
+            .frame(width: width, height: height))
+        let window = AwayWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: .borderless,
                                 backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = hosting
@@ -33,40 +33,36 @@ import Testing
         return store
     }
 
-    /// Each zone's scroll as tall as what it holds when that fits, and the history the rest of the page above them; past
-    /// their room, Needs you scrolls inside and the history keeps its floor.
-    @Test func theZonesAreAsTallAsTheirCardsUpToTheirRoom() async {
-        for copies in [1, 6] {
-            // A tall page for one of each card, so that they all fit.
-            let (hosting, window) = mount(demo(copies: copies), RouterModel(), height: copies == 1 ? 2000 : 900)
+    /// A wide page: Now and History side by side, each one scroll down the page with nothing scrolling inside it, whatever
+    /// Now holds; a narrow one: one of them at a time, the switch going between them.
+    @Test func nowAndHistoryAreEachOneScrollSideBySideOrOneAtATime() async {
+        for width in [1100, 900] as [CGFloat] {
+            let model = RouterModel()
+            let store = demo(copies: 6)
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
+            let (hosting, window) = mount(store, model, width: width)
             defer { window.contentView = nil; window.orderOut(nil) }
-            /// The history (the topmost scroll), and the zones' scrolls under it with their content's height (not the composer's
-            /// field, which scrolls too, nor an open form's, inside a card).
-            func frames() -> (history: NSRect, zones: [(frame: NSRect, content: CGFloat)])? {
+            /// The page's scrolls, down the page: not the composer's field, nor one inside a card (an open form's).
+            func pages() -> [NSRect] {
                 hosting.layoutSubtreeIfNeeded()
-                let all = scrolls(hosting).filter { $0.frame.height > 0 && !($0.documentView is MentionTextView) }
-                    .map { ($0.convert($0.bounds, to: nil), $0.documentView?.frame.height ?? 0) }
-                guard let top = all.max(by: { $0.0.maxY < $1.0.maxY }) else { return nil }
-                let zones = all.filter { zone in zone.0 != top.0 && !all.contains { $0.0 != zone.0 && $0.0.contains(zone.0) } }
-                return zones.count >= 2 ? (top.0, zones.map { (frame: $0.0, content: $0.1) }) : nil
+                return scrolls(hosting).filter { !($0.documentView is MentionTextView) }
+                    .map { $0.convert($0.bounds, to: nil) }.filter { $0.height > 600 }
             }
-            await waitUntil { frames() != nil }
-            await waitUntilSteady(turns: 8) { frames().map { [Int($0.history.height)] + $0.zones.map { Int($0.frame.height) } } ?? [] }
-            guard let f = frames() else { Issue.record("no zones"); continue }
-            let needs = f.zones.min { $0.frame.minY < $1.frame.minY }!
-            if copies == 1 {
-                for zone in f.zones {
-                    #expect(abs(zone.frame.height - zone.content) <= 1,
-                            "as tall as what it holds: \(zone.frame) for \(zone.content) among \(f.zones) under \(f.history)")
-                }
+            await waitUntil { !pages().isEmpty }
+            await waitUntilSteady(turns: 8) { pages().map { [Int($0.minX), Int($0.width), Int($0.height)] } }
+            let shown = pages().sorted { $0.minX < $1.minX }
+            // Now and History, nothing else scrolling down the page.
+            #expect(shown.count == 2, "Now and History: \(shown)")
+            guard shown.count == 2 else { continue }
+            if width == 1100 {
+                #expect(shown[0].maxX <= shown[1].minX + 1, "side by side: \(shown)")
             } else {
-                #expect(needs.content > needs.frame.height + 100, "Needs you scrolls inside: \(needs.frame.height) of \(needs.content)")
-                #expect(f.history.height >= 140, "the history keeps its floor: \(f.history.height)")
+                // One over the other, each the page's width: the history kept under Now, hidden, where it was.
+                #expect(shown.allSatisfy { $0.width > width - 80 }, "each the page's width: \(shown)")
+                model.show(.history)
+                await waitUntilSteady(turns: 8) { pages().map { [Int($0.minX), Int($0.width), Int($0.height)] } }
+                #expect(pages().count == 1, "History alone: \(pages())")
             }
-            // Nothing between the history and the zones but the line and the zones' headers: the history takes the rest.
-            let zonesTop = f.zones.map(\.frame.maxY).max()!
-            #expect(f.history.minY > zonesTop, "the history over the zones")
-            #expect(f.history.minY - zonesTop < 120, "the history down to the zones: \(f.history.minY - zonesTop)")
         }
     }
 

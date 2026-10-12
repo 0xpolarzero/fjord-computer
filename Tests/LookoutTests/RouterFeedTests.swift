@@ -53,6 +53,22 @@ import Testing
         #expect(state.cards.count == 1)
     }
 
+    @Test func aNewerTurnYouWatchedEndPutsTheOlderTurnsCardPast() {
+        // A turn asks you something and gets its card; you answer in the app and watch the next turn end: no card for that
+        // one, and the question is past all the same.
+        var state = seen([session(turns: 1)])
+        update(&state, [session(turns: 2, message: 0)], now: 1)
+        #expect(state.cards.map(\.id) == ["local_a#t2"] && state.cards[0].isOpen)
+        update(&state, [session(turns: 2, message: 2, running: true)], viewing: "local_a", now: 2)
+        update(&state, [session(turns: 3, message: 2)], viewing: "local_a", now: 3)
+        #expect(state.cards.count == 1 && state.cards[0].addressedBy == .superseded)
+        // A question card the session still stops on isn't a turn's: left to its own rules.
+        var waiting = seen([session(turns: 1)])
+        update(&waiting, [session(turns: 1, running: true)], activity: ["local_a": question(1)], now: 1)
+        update(&waiting, [session(turns: 2)], now: 2)
+        #expect(waiting.cards.contains { !$0.kind.isTurn })
+    }
+
     @Test func aTurnIsCardedOnceItsSummaryIsWritten() {
         // The count goes up first, the session still counting as running until the app writes the summary: no card yet.
         var state = seen([session(turns: 1)])

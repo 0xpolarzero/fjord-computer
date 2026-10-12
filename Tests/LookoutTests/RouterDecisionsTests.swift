@@ -122,9 +122,11 @@ import Testing
         let question = RouterCard(id: "s#w1", sessionID: "s", kind: .question, title: "T", folder: nil, text: "x", createdAt: now)
         var row = AgentRow(session: ClaudeSession(id: "s", title: "T", lastActivity: now), entry: AgentEntry(id: "s"), label: "T")
         row.tasks = [ClaudeTask(id: "a1", kind: .agent, title: "Explore", since: now)]
-        #expect(RouterPage.make(cards: [done, question], working: [row]).needs.map(\.id) == ["s#w1"])
+        let busy = RouterPage.make(cards: [done, question], working: [row])
+        #expect(busy.needs.map(\.id) == ["s#w1"] && busy.notes.isEmpty)
         row.tasks = []
-        #expect(Set(RouterPage.make(cards: [done, question], working: [row]).needs.map(\.id)) == ["s#t1", "s#w1"])
+        let idle = RouterPage.make(cards: [done, question], working: [row])
+        #expect(idle.needs.map(\.id) == ["s#w1"] && idle.notes.map(\.id) == ["s#t1"])
     }
 
     // MARK: History

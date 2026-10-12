@@ -264,7 +264,7 @@ extension LookoutHub {
         ControlsGear { openApp(.settings) }
     }
 
-    /// The controls: how syncing is going, then the window, the categories and settings, each with its key.
+    /// The controls: when the inbox was last updated (and a refresh), then the window and settings, each with its key.
     var peekControls: some View {
         VStack(alignment: .leading, spacing: 0) {
             // As a Claude menu's group label: `px-2 py-1`, footnote, muted.
@@ -274,7 +274,6 @@ extension LookoutHub {
             MenuRow(symbol: "macwindow", title: "Open window", key: store.shortcut(.togglePanel).display) {
                 openApp(firstDestination)
             }
-            MenuRow(symbol: "tray.2", title: "Inbox categories", key: nil) { openApp(.categories) }
             MenuRow(symbol: "gearshape", title: "Settings", key: "⌘,") { openApp(.settings) }
         }
     }
@@ -303,7 +302,7 @@ struct ControlsGear: View {
             .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous),
                                               rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
             .accessibilityLabel("Controls")
-            .accessibilityHint("Opens Settings; hover for the inbox categories and the window")
+            .accessibilityHint("Opens Settings; hover for the window and the last update")
     }
 }
 

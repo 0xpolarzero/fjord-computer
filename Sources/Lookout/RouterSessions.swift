@@ -27,7 +27,7 @@ struct ClaudeDot: View {
         init(_ card: RouterCard) {
             guard card.isOpen else { self = .quiet; return }
             switch card.kind {
-            case .question, .plan, .asks, .approval: self = .needsYou
+            case .question, .plan, .asks, .approval, .finish: self = .needsYou
             case .stuck: self = .stuck
             case .done: self = .done
             case .waiting: self = .waiting
@@ -94,7 +94,7 @@ struct SessionGlyph: View {
             if dot, kind != .quiet {
                 ClaudeDot(kind: kind)
                     .scaleEffect(0.8)
-                    .background(Circle().fill(Color.black).frame(width: 9, height: 9))
+                    .background(Circle().fill(Theme.bg).frame(width: 9, height: 9))
                     .offset(x: 5, y: -5)
             }
         }

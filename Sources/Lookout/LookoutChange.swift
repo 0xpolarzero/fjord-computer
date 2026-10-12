@@ -177,7 +177,7 @@ extension LookoutChange {
             var out = ["Name: \(c.title)", "Icon: \(c.symbol)", "Color: \(c.color.rawValue)",
                        "Notifications: \(c.notifies ? "on" : "off")", c.hidden ? "Hidden from the bar" : "Shown in the bar"]
             if let section = c.section {
-                out.append("Section: " + (store.categories.first { $0.id == section }?.title ?? section.uuidString))
+                out.append("Folder: " + (store.categories.first { $0.id == section }?.title ?? section.uuidString))
             }
             out += c.rules.isEmpty ? ["Rules: none"] : c.rules.enumerated().map { "Rule \($0.offset + 1): " + words.summary($0.element) }
             out += c.actions.isEmpty ? ["Actions: none"] : c.actions.items.enumerated().map { "Action \($0.offset + 1): " + Self.describe($0.element) }

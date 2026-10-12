@@ -74,19 +74,20 @@ import UserNotifications
         reopenTransfer(store)
         // Two addressed cards in the history, the one addressed now below the older one.
         store.setCardAddressed(store.openRouterCards.first { $0.kind == .stuck }!.id, true)
-        // Down the page: the history's addressed cards as it draws them (oldest first, above), then what needs you, then the
-        // finished turns. Not the newest first, which puts a finished turn second and walks the history upwards.
+        // The history's addressed cards as it draws them (oldest first), then Now top to bottom: what needs you, then the
+        // finished turns worth a look. Not the newest first, which walks the history upwards.
         let (needs, done, earlier) = model.sections(store)
         let listed = (earlier + needs + done).map(\.id)
         #expect(!needs.isEmpty && !done.isEmpty && earlier.count > 1)
         #expect(earlier.map(\.id) == store.routerHistory.compactMap { if case .card(let c) = $0 { c.id } else { nil } })
         #expect(earlier.map(\.addressedAt!) == earlier.map(\.addressedAt!).sorted())
         #expect(model.cards(store).map(\.id) == listed)
-        // None picked, ↓ starts at the top of Needs you and goes down the screen.
+        // None picked, ↓ starts at the top of Now (Needs you) and goes down it.
         var walked: [String] = []
         for _ in needs + done {
             #expect(keys.key(key(kVK_DownArrow), responder: nil))
             walked += model.selection.map { [$0] } ?? []
+            #expect(model.pane == .now)
         }
         #expect(walked == (needs + done).map(\.id))
         // At the bottom it stays there; ↑ walks back up the same way, into the history up to its oldest card.
@@ -98,6 +99,10 @@ import UserNotifications
         }
         #expect(walked == listed.dropLast().reversed())
         #expect(keys.key(key(kVK_UpArrow), responder: nil) && model.selection == listed.first)
+        // Up past the top of Now, the keys went on into the history, which shows; back down, Now shows again.
+        #expect(model.pane == .history)
+        for _ in earlier { model.move(down: true, store: store) }
+        #expect(model.selection == needs.first?.id && model.pane == .now)
     }
 
     /// The demo's finished turn whose session is idle, open again: its only open one is from a session still running things.
@@ -113,7 +118,7 @@ import UserNotifications
         let keys = RouterKeys(store: store, model: model) {}
         let hidden = store.openRouterCards.first { $0.sessionID == "local_demo-ci" && $0.kind == .done }!
         #expect(!(store.claudeTasks["local_demo-ci"] ?? []).isEmpty)
-        #expect(!store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(!store.routerPage.notes.contains { $0.id == hidden.id })
         #expect(!model.cards(store).contains { $0.id == hidden.id })
         // The arrows never land on it, a pick on it moves off, and Return and Space can't reach it.
         for _ in 0...model.cards(store).count {
@@ -126,13 +131,13 @@ import UserNotifications
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil) && model.replyTo != hidden.id)
         // Away, it isn't said to have finished, nor counted.
         #expect(AwayStrip(since: Date(), cards: [hidden.id]).line(store.routerShownCards) == nil)
-        #expect(store.routerCounts.done == 0)
+        #expect(store.routerCounts.notes == 0)
         // Once what it ran ends, it is everywhere.
         store.claudeTasks["local_demo-ci"] = nil
-        #expect(store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(store.routerPage.notes.contains { $0.id == hidden.id })
         #expect(model.cards(store).contains { $0.id == hidden.id })
         #expect(AwayStrip(since: Date(), cards: [hidden.id]).line(store.routerShownCards) == "1 finished")
-        #expect(store.routerCounts.done == 1)
+        #expect(store.routerCounts.notes == 1)
     }
 
     @Test func mutingAProjectWhoseFinishedSessionStillRunsThingsKeepsItsCardHiddenOnThePageAsForTheKeys() {
@@ -142,12 +147,12 @@ import UserNotifications
         store.setFolderMuted(store.claudeSessions["local_demo-ci"]!.folderKey, true)
         // Its Working row goes with the mute; what it runs doesn't, and the page goes by that as the keys and counts do.
         #expect(!store.routerWorkingRows.contains { $0.id == "local_demo-ci" })
-        #expect(!store.routerPage.needs.contains { $0.id == hidden.id })
-        #expect(!store.routerZones.needs.contains { $0.id == hidden.id })
+        #expect(!store.routerPage.notes.contains { $0.id == hidden.id })
+        #expect(!store.routerZones.notes.contains { $0.id == hidden.id })
         #expect(!model.cards(store).contains { $0.id == hidden.id })
-        #expect(store.routerCounts.done == 0)
+        #expect(store.routerCounts.notes == 0)
         store.claudeTasks["local_demo-ci"] = nil
-        #expect(store.routerPage.needs.contains { $0.id == hidden.id })
+        #expect(store.routerPage.notes.contains { $0.id == hidden.id })
         #expect(model.cards(store).contains { $0.id == hidden.id })
     }
 

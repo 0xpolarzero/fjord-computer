@@ -467,6 +467,15 @@ extension WindowSeams {
 
 @MainActor
 @Suite struct BarState {
+    /// The window shortcut closes only a window you are looking at (or one on its way in); one behind another app or
+    /// minimized comes in front instead, and one on its way out comes back.
+    @Test func theShortcutClosesOnlyAWindowInFront() {
+        #expect(AppWindowController.shortcutCloses(phase: .idle, front: true))
+        #expect(!AppWindowController.shortcutCloses(phase: .idle, front: false))
+        #expect(AppWindowController.shortcutCloses(phase: .opening, front: false))
+        #expect(!AppWindowController.shortcutCloses(phase: .closing, front: true))
+    }
+
     /// The rows' avatars are warmed at the URL a row asks for: the latest actor's, at a row's size; and the account's at
     /// Settings' size.
     @Test func theAvatarsWarmedAreTheOnesTheRowsShow() {

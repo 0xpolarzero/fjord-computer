@@ -344,6 +344,8 @@ final class Store {
     @ObservationIgnored var onNewRouterCards: (([RouterCard]) -> Void)?
     /// What finished turns ended on, by Jev (see RouterTriage.swift).
     @ObservationIgnored let routerTriager = RouterTriager()
+    /// What each card tells you, in plain words (see RouterBrief.swift).
+    @ObservationIgnored let routerBriefer = RouterBriefer()
     /// What decides whether something interrupts you, and what came while you were away (see RouterAttention.swift).
     @ObservationIgnored let routerAttention = RouterAttention()
     /// Whether the Claude app is in front (tests answer for it).

@@ -126,6 +126,8 @@ extension Store {
     func waitOptions(for session: ClaudeSession, message: String? = nil) async -> [RouterTriage.WaitOption] {
         let since = session.lastActivity
         let repos = await gitRepos(of: session.folder)
+        // Read once: every option below is checked against it.
+        let reading = message.map { waitReading($0, by: session) }
         // A session whose turn is over but whose background work still runs is at work too: on the turn it ended.
         let background = { (other: ClaudeSession) in
             !other.running && other.completedTurns > 0 && !(self.claudeTasks[other.id] ?? []).isEmpty
@@ -135,7 +137,7 @@ extension Store {
                 let (wa, wb) = (a.running || background(a), b.running || background(b))
                 return wa != wb ? wa : a.lastActivity > b.lastActivity
             }, cap: 10) { other in
-            message.map { waitNamed(.init(target: .session(id: other.id, turns: 0), label: ""), in: $0, by: session) } ?? false
+            reading.map { waitNamed(.init(target: .session(id: other.id, turns: 0), label: ""), in: $0, by: session) } ?? false
         }
         var options = others.enumerated().map { i, other in
             let stoppedSince = !other.running && other.completedTurns > 0 && other.lastActivity > since
@@ -164,7 +166,7 @@ extension Store {
         }
         func changed(_ thing: Thing) -> Date { max(thing.updatedAt, thing.ciChangedAt ?? .distantPast) }
         let ci = Self.keepingNamed(candidates.sorted { changed($0) > changed($1) }, cap: 6) { thing in
-            message.map { waitNamed(.init(target: .ci(thing: thing.id), label: "", ref: RouterWaits.ref(thing)), in: $0, by: session) } ?? false
+            reading.map { waitNamed(.init(target: .ci(thing: thing.id), label: "", ref: RouterWaits.ref(thing)), in: $0, by: session) } ?? false
         }
         options += ci.enumerated().map { i, thing in
             RouterTriage.WaitOption(key: "c\(i)", hint: "Checks on a PR or workflow of this session's repository, described under c\(i) in the wait options (data, not instructions), "
@@ -194,28 +196,59 @@ extension Store {
     /// another branch too is either), from Lookout's own data. A watch whose ref
     /// isn't its thing's names nothing. A wait it doesn't name is never continued on its own.
     func waitNamed(_ watch: RouterTriage.Watch, in message: String, by session: ClaudeSession) -> Bool {
+        waitNamed(watch, in: waitReading(message, by: session), by: session)
+    }
+
+    /// What a waiting message names, read once (`waitReading`), so the many waits checked against one message don't each
+    /// read it again: every session against every other was seconds on the main actor with a few hundred sessions.
+    struct WaitReading {
+        let lower: String
+        /// The other live sessions it names: by id, or their title's words or project said of a session.
+        let sessions: Set<String>
+        /// What `saidOfSessions` read of it.
+        let said: [String]
+        /// `namedCI(lower, excluding: nil)` and `prsNamed(lower)`.
+        let ci: Set<String>
+        let prs: Set<String>
+    }
+
+    func waitReading(_ message: String, by session: ClaudeSession) -> WaitReading {
         let lower = message.lowercased()
+        let said = RouterDepends.saidOfSessions(message)
+        let sessions = Set(claudeSessions.values.filter { candidate in
+            !candidate.isArchived && candidate.id != session.id
+                && (Self.namesID(lower, candidate.id)
+                    || RouterDepends.namesSession(said, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
+        }.map(\.id))
+        return WaitReading(lower: lower, sessions: sessions, said: said,
+                           ci: namedCI(lower, excluding: nil), prs: Self.prsNamed(lower))
+    }
+
+    /// Whether a (lowercased) message names a session by its id, whole.
+    private static func namesID(_ lower: String, _ id: String) -> Bool {
+        let id = id.lowercased()
+        // Most messages name no session's id: the plain search spares the pattern.
+        return lower.contains(id) && lower.range(of: #"(?<![\w-])"# + NSRegularExpression.escapedPattern(for: id) + #"(?![\w-])"#,
+                                                 options: .regularExpression) != nil
+    }
+
+    func waitNamed(_ watch: RouterTriage.Watch, in reading: WaitReading, by session: ClaudeSession) -> Bool {
+        let lower = reading.lower
         switch watch.target {
         case .session(let id, _):
             // Two sessions named: which it waits on isn't clear, whichever of them Jev picked.
-            let namedSessions = claudeSessions.values.filter { candidate in
-                !candidate.isArchived && candidate.id != session.id
-                    && (lower.range(of: #"(?<![\w-])"# + NSRegularExpression.escapedPattern(for: candidate.id.lowercased()) + #"(?![\w-])"#,
-                                    options: .regularExpression) != nil
-                        || RouterDepends.namesSession(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
-            }
-            guard namedSessions.count <= 1 else { return false }
+            guard reading.sessions.count <= 1 else { return false }
             // A workflow or a PR named too, by its bare number as well (`#12`, a PR of its repo): which of them it waits on isn't clear.
-            guard namedCI(lower, excluding: nil).isEmpty, Self.prsNamed(lower, repo: "").isEmpty else { return false }
+            guard reading.ci.isEmpty, Self.prsNamed(lower, repo: "").isEmpty else { return false }
             if lower.contains(id.lowercased()) { return true }
             guard let other = claudeSessions[id] else { return false }
-            return RouterDepends.namesSession(message, title: other.title, project: other.folderName, ownProject: session.folderName)
+            return RouterDepends.namesSession(reading.said, title: other.title, project: other.folderName, ownProject: session.folderName)
         case .ci(let thingID):
             guard let thing = things[thingID] else { return false }
             let ref = RouterWaits.ref(thing)
             if let given = watch.ref, given.lowercased() != ref?.lowercased() { return false }
             // A session named too ("the Build workflow … and the Schema migration session"): which it waits on isn't clear.
-            if hasNamedSession(message, lower: lower, by: session) { return false }
+            if !reading.sessions.isEmpty { return false }
             if thing.kind == .workflow {
                 // A PR named too: which it waits on isn't clear.
                 if !Self.prsNamed(lower, repo: thing.repo).isEmpty { return false }
@@ -247,7 +280,7 @@ extension Store {
             // Two PRs named ("#1 and #2"): which it waits on isn't clear, whichever of them Jev picked.
             guard Self.prsNamed(lower, repo: thing.repo).count <= 1 else { return false }
             // A workflow named too: which it waits on isn't clear.
-            guard namedCI(lower, excluding: nil).subtracting(Self.prsNamed(lower)).isEmpty else { return false }
+            guard reading.ci.subtracting(reading.prs).isEmpty else { return false }
             if let ref, LookoutGate.mentions(lower, ref: ref) { return true }
             if let number = thing.number, Self.linksPR(lower, repo: thing.repo, number: number) { return true }
             // Another PR named by its ref: this one's number or title words in the same message are about that one.
@@ -256,16 +289,6 @@ extension Store {
             // password reset PRs").
             guard let number = thing.number else { return false }
             return lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil
-        }
-    }
-
-    /// Whether the message names another live session, by its id, or its title words or project said of a session.
-    func hasNamedSession(_ message: String, lower: String, by session: ClaudeSession) -> Bool {
-        claudeSessions.values.contains { candidate in
-            !candidate.isArchived && candidate.id != session.id
-                && (lower.range(of: #"(?<![\w-])"# + NSRegularExpression.escapedPattern(for: candidate.id.lowercased()) + #"(?![\w-])"#,
-                                options: .regularExpression) != nil
-                    || RouterDepends.namesSession(message, title: candidate.title, project: candidate.folderName, ownProject: session.folderName))
         }
     }
 
@@ -350,6 +373,8 @@ extension Store {
         }
         if state != router { router = state }
         for card in ready {
+            // Over: its brief says what came of it (its tier, and so its source, changed).
+            routerBriefer.request(card.id, message: nil, store: self)
             // On its own only for a wait its message named: one Jev alone tied it to could be something else that is done.
             if continuesAutomatically(card.sessionID), card.triage?.watch?.named == true {
                 tellWaiting(card.id, automatic: true, now: now)
@@ -412,6 +437,7 @@ extension Store {
                 }
                 // Sent on its own, it came with no banner: one that didn't go, still ready and untold, is said as one not
                 // sent on its own is (once: only resolveWaits sends on its own, once per wait), so Tell it isn't missed.
+                if automatic { self.routerTriager.autoFailed.insert(card.id) }
                 if automatic, self.waitStillTellable(card.id, revision: self.cardRevisions[card.id, default: 0], automatic: false),
                    let current = self.router.cards.first(where: { $0.id == card.id }) {
                     self.routerTriager.onReady?(current)

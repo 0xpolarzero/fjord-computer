@@ -291,7 +291,7 @@ struct SectionHeaderRow: View {
                     .focused($focused)
                     .onSubmit { editingName = false }
                     .onChange(of: focused) { _, now in if !now { editingName = false } }
-                    .accessibilityLabel("Section name")
+                    .accessibilityLabel("Folder name")
             } else {
                 Text(section.title).cdsText(CDS.Density.comfortable.body, .semibold)
                     .foregroundStyle(section.name.isEmpty ? CDS.Text.muted : CDS.Text.primary)
@@ -304,7 +304,7 @@ struct SectionHeaderRow: View {
             Spacer(minLength: 8)
             IconButton(symbol: "plus", help: "New category in \(section.title)", label: "New category in \(section.title)",
                        size: 24, tint: CDS.Text.secondary, action: add)
-            IconButton(symbol: "trash", help: count > 0 ? "Delete: its categories go to the first section left" : "Delete",
+            IconButton(symbol: "trash", help: count > 0 ? "Delete: its categories go to the first folder left" : "Delete",
                        label: "Delete \(section.title)", size: 24, tint: CDS.Text.muted) {
                 store.deleteSection(section.id)
             }
@@ -377,7 +377,7 @@ struct CategorySectionPicker: View {
     var body: some View {
         if !store.categorySections.isEmpty {
             let current = store.sectionID(of: category)
-            SettingsRow("Section", info: ("Section", "The well of the bar it sits in. Which category a thing goes to doesn't change.")) {
+            SettingsRow("Folder", info: ("Folder", "The well of the bar it sits in. Which category a thing goes to doesn't change.")) {
                 Menu {
                     ForEach(store.categorySections) { section in
                         Button { category.section = section.id } label: {
@@ -389,7 +389,7 @@ struct CategorySectionPicker: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .accessibilityLabel("Section")
+                .accessibilityLabel("Folder")
             }
         }
     }

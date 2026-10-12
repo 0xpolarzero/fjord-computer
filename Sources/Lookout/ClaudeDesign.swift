@@ -13,6 +13,12 @@ enum CDS {
                         opacity: a))
     }
 
+    /// A colour the same in both looks, for a fill that carries its own ink (a count badge): the light look's mapping is
+    /// made for text and would turn a bright fill dark.
+    static func solid(_ v: UInt32) -> Color {
+        Color(.sRGB, red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
+    }
+
     /// The neutral alpha steps: white in dark mode.
     static func alpha(_ a: Double) -> Color { Brand.ink.opacity(a) }
 
@@ -184,6 +190,10 @@ enum CDS {
         static let symbol: CGFloat = 13
         /// The 0.5pt white-10% right edge.
         static let edge: CGFloat = 0.5
+        /// A section's categories, one step in from its row: their icons clear the tree guide under the section's own.
+        static let treeIndent: CGFloat = 14
+        /// The tree guide's stroke.
+        static let treeGuide: CGFloat = 1
     }
 
     /// The Code session pane's title bar (spec §3).

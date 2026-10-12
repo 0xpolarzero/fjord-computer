@@ -36,8 +36,20 @@ The decision log: one entry per run (trigger, decision, what was done, outcome: 
 - Otherwise Jev decides, after any message that touches a session with open cards, per card: resolved → history ("addressed by your message"); partly (e.g. 1 of 3 questions) → stays, showing what is left; not → stays. Unsure → stays.
 - Reopen from the history puts a card back in Needs you.
 
+## Tiers: whose move is next (agreed 2026-10-11, RouterTiers.swift)
+1. Needs you: the move is yours. Question, plan, OK, asks, stuck; Finish up (done, but a last step is left to you: merge, relaunch and try it, run something, test by hand); a wait that is over while nothing continues it on its own. A wait on you is an ask.
+2. Waiting: the move is something else's (CI, a deploy, another session, someone else's review, a rate limit).
+3. Worth a look: done, nothing to do, but it tells you something (a caveat, a risk, a decision it took alone, a claim it didn't check, a finding). Unsure, a finished turn is this, never quieter.
+4. Done: done, nothing to do, nothing to tell. It goes straight to the history (`settled`), unread until you click it, "Got it" or "Mark all read".
+5. Working: the live rows.
+
+Jev decides 3 and 4 and Finish up with two yes/no questions in the triage's one call: `userStep` (a concrete action left to the user now) and `notable`. A sure step (p ≥ 0.6) is Finish up, trivial or not; the history takes a turn only when Jev is sure it is done (p ≥ 0.7), a step and a note each at most 0.2 likely, and it claims nothing it didn't check; otherwise Worth a look. A trivial turn settles only when done (not partway, not unverified).
+
+## Briefs (RouterBrief.swift)
+Every card is told in your words' style: one Haiku call once its triage lands (a question or plan when it comes, a wait when it is over), saying what is needed from you (Needs you), what it waits on (Waiting), what is notable (Worth a look), or what was done (Done). Its input is the turn's final message, the card, Jev's triage and the form; nothing of it goes to Jev. Trivial finished turns keep Claude's own summary. Your style instructions (Settings, "How the Router writes to you") follow the fixed rules in the system prompt, for the briefs and the working sessions' summaries alike.
+
 ## Page
-Bottom-anchored: Needs you (prominent, one card open), Working (live lines), above them the history (the decision log and addressed cards, one line each, expandable). The composer has inline @project pills.
+Bottom-anchored, the more it matters the nearer the composer: the history (the decision log and addressed cards, one line each, expandable; finished turns unread highlighted), Working (live lines) and Waiting under it, Worth a look (quiet, the first three), Needs you (prominent, one card open). The composer has inline @project pills. The badge counts Needs you (amber) and Worth a look (blue); the history's unread lines count for nothing.
 
 ## Removed
 The long-lived process, `--resume`, the transcript (`chat`), peer turns and the ability of a session to message the Router, the single serial queue (runs are independent), the role prompt's header grammar. What stays of the old file: `changes` (the records behind change cards); old `chat` and `claudeSessionID` keys are read (changes migrated) and dropped on the next save.

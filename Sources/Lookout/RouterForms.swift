@@ -364,7 +364,7 @@ struct CodePlanCard: View {
 // MARK: - Fields
 
 /// CDS TextArea (§5.7): white-5% fill, a 1px white-10% ring (20% on hover), radius 8, 8 × 12, text 14/20, muted placeholder.
-private struct CDSTextArea: View {
+struct CDSTextArea: View {
     let placeholder: String
     let lines: ClosedRange<Int>
     @Binding var text: String
@@ -449,12 +449,12 @@ struct ClaudeButton: View {
 
     @ViewBuilder private var content: some View {
         if iconOnly, let icon {
-            Image(systemName: icon).font(.system(size: 13, weight: .regular)).foregroundStyle(ink)
+            ButtonIcon(name: icon, size: 13).foregroundStyle(ink)
         } else {
             let weight: CDS.Weight = variant == .primary || variant == .danger ? .medium : .regular
             HStack(spacing: 4) {
                 if let icon {
-                    Image(systemName: icon).font(.system(size: 13)).padding(.leading, -4)
+                    ButtonIcon(name: icon, size: 13).padding(.leading, -4)
                 }
                 Text(title).cdsText(CDS.Density.comfortable.body, weight, ink).lineLimit(1)
                 if !shortcut.isEmpty {

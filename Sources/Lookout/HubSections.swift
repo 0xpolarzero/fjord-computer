@@ -204,7 +204,7 @@ extension LookoutHub {
     /// The Router's cell in the bar; a click opens its window.
     var routerCell: some View {
         let counts = store.routerCounts
-        return RouterCell(needsYou: counts.needsYou, done: counts.done) { openApp(.router) }
+        return RouterCell(needsYou: counts.needsYou, notes: counts.notes) { openApp(.router) }
     }
 
     /// "Router", then what's open (amber for what needs you, blue for finished turns). The whole line opens its window.
@@ -228,7 +228,7 @@ extension LookoutHub {
         let counts = store.routerCounts
         var status: [(String, Color)] = []
         if counts.needsYou > 0 { status.append(("\(counts.needsYou) need you", Theme.amber)) }
-        if counts.done > 0 { status.append(("\(counts.done) done", Theme.accent)) }
+        if counts.notes > 0 { status.append(("\(counts.notes) worth a look", Theme.accent)) }
         return status.isEmpty ? [("nothing open", Theme.tertiary)] : status
     }
 
@@ -276,7 +276,7 @@ extension LookoutHub {
         .frame(minHeight: Theme.Metrics.line)
     }
 
-    /// Sync state, as a dot and a few words: problems first, then checking, snoozed, and up to date.
+    /// Sync state, as a dot and a few words (problems first, then snoozed, then when it was last updated), and a refresh.
     var syncStatus: some View {
         HStack(spacing: 8) {
             Ticking(coarse: true) { now in
@@ -284,6 +284,20 @@ extension LookoutHub {
             }
             // The rate limit is part of syncing: it pauses at 0, inbox included.
             RateNotice(store: store, fill: false).lineLimit(1).layoutPriority(-1)
+            Spacer(minLength: 0)
+            refreshButton
+        }
+    }
+
+    /// Checks GitHub now; a spinner in its place while a check runs.
+    @ViewBuilder private var refreshButton: some View {
+        if store.isSyncing {
+            ProgressView().controlSize(.mini).scaleEffect(0.6)
+                .frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control)
+                .accessibilityLabel("Checking GitHub")
+        } else {
+            IconButton(symbol: "arrow.clockwise", help: "Check now", detail: store.shortcut(.refresh).display,
+                       size: CDS.Density.compact.control) { store.refreshNow() }
         }
     }
 
@@ -294,9 +308,7 @@ extension LookoutHub {
         } label: {
             HStack(spacing: 6) {
                 Group {
-                    if s.spinning {
-                        ProgressView().controlSize(.mini).scaleEffect(0.6)
-                    } else if let symbol = s.symbol {
+                    if let symbol = s.symbol {
                         Image(systemName: symbol).font(Theme.Typography.glyph(9, .bold)).foregroundStyle(s.color)
                     } else {
                         Circle().fill(s.color).frame(width: CDS.Dot.size, height: CDS.Dot.size)
@@ -313,7 +325,6 @@ extension LookoutHub {
         .buttonStyle(.plain)
         .accessibilityLabel(s.text)
         .accessibilityHint(s.title)
-        .disabled(store.isSyncing)
         .tip(s.title, s.detail)
     }
 
@@ -323,7 +334,6 @@ extension LookoutHub {
         var title: String
         var detail: String?
         var symbol: String? = nil
-        var spinning = false
     }
 
     func sync(now: Date) -> SyncState {
@@ -351,18 +361,15 @@ extension LookoutHub {
             return SyncState(color: Theme.amber, text: "Jev can't read", title: "Jev couldn't read the inbox's new comments",
                              detail: error + "\nLabels and importance wait for him; everything else is as your rules say\n" + refresh)
         }
-        if store.isSyncing {
-            return SyncState(color: Theme.tertiary, text: "Checking…", title: "Checking GitHub",
-                             detail: "Pull requests, issues and workflows", spinning: true)
-        }
         guard let last = store.lastSync else {
-            return SyncState(color: Theme.tertiary, text: store.me == nil ? "Connecting…" : "Not checked yet",
-                             title: "Connecting to GitHub", detail: nil)
+            // The first check: nothing to date yet (the refresh button spins while it runs).
+            return SyncState(color: Theme.tertiary, text: store.me == nil ? "Connecting to GitHub…" : "Never updated",
+                             title: "Connecting to GitHub", detail: "Pull requests, issues and workflows")
         }
         let interval = store.settings.pollInterval
         let checked = "Last checked at \(last.formatted(date: .omitted, time: .shortened))"
         if now.timeIntervalSince(last) > interval * 3 {
-            return SyncState(color: Theme.amber, text: "Synced \(agoPhrase(last, now: now))", title: "Not syncing",
+            return SyncState(color: Theme.amber, text: "Updated \(agoPhrase(last, now: now))", title: "Not syncing",
                              detail: "\(checked) · check your connection or token\n" + refresh)
         }
         if store.isSnoozed, let until = store.settings.snoozeUntil {
@@ -371,8 +378,9 @@ extension LookoutHub {
                              symbol: "moon.fill")
         }
         let next = max(0, Int(last.addingTimeInterval(interval).timeIntervalSince(now)))
-        return SyncState(color: Theme.green, text: "Up to date", title: checked,
-                         detail: "Next check in about \(next < 60 ? "\(next)s" : "\(next / 60)m")\n\(refresh)")
+        let upcoming = store.isSyncing ? "Checking now" : "Next check in about \(next < 60 ? "\(next)s" : "\(next / 60)m")"
+        return SyncState(color: Theme.green, text: "Updated \(agoPhrase(last, now: now))", title: checked,
+                         detail: "\(upcoming)\n\(refresh)")
     }
 }
 

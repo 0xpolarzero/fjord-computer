@@ -151,7 +151,7 @@ struct CategoriesView: View {
                 SettingsSection("Categories",
                                 info: ("Categories", store.categorySections.isEmpty
                                        ? "A thing goes to the first category, from the top, with a rule matching it. Drag to reorder."
-                                       : "A thing goes to the first category, from the top, with a rule matching it. Drag a category to reorder it or into another section; drag a section to move it with its categories.")) {
+                                       : "A thing goes to the first category, from the top, with a rule matching it. Drag a category to reorder it or into another folder; drag a folder to move it with its categories.")) {
                     SettingsNest {
                         if store.categorySections.isEmpty {
                             ForEach(Array(store.categories.enumerated()), id: \.element.id) { i, category in
@@ -167,7 +167,7 @@ struct CategoriesView: View {
                             }
                         }
                         SettingsDivider()
-                        NewRow(title: "New section", symbol: "plus") { focusSection = store.createSection(name: "").id }
+                        NewRow(title: "New folder", symbol: "plus") { focusSection = store.createSection(name: "").id }
                         SettingsDivider()
                         DoneRow(count: store.doneEntries.count)
                     }
@@ -333,7 +333,7 @@ private struct CategoryRow: View {
             Button("Edit", action: open)
             Button(category.hidden ? "Show in the bar" : "Hide from the bar") { update { $0.hidden.toggle() } }
             if store.categorySections.count > 1 {
-                Menu("Move to section") {
+                Menu("Move to folder") {
                     ForEach(store.categorySections) { section in
                         Button(section.title) { store.moveCategory(category.id, toSection: section.id) }
                             .disabled(store.sectionID(of: category) == section.id)
@@ -356,7 +356,7 @@ private struct CategoryRow: View {
     }
 }
 
-/// The last row of the tree: a dashed tile with a plus, and what it makes ("New section"; "New category" with no sections).
+/// The last row of the tree: a dashed tile with a plus, and what it makes ("New folder"; "New category" with no sections).
 private struct NewRow: View {
     let title: String
     let symbol: String

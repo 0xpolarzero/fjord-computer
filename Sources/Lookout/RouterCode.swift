@@ -11,16 +11,19 @@ struct RouterCodeView: View {
     var checksClaudeCode = true
     /// Inside the app window the detail area sets the size (and the window's top is the window's job); alone it has its own.
     var embedded = false
+    /// Room the window's buttons take at the header's start (when the sidebar is a rail).
+    var leadingInset: CGFloat = 0
 
     static let column: CGFloat = 768
 
     var body: some View {
-        RouterMain(store: store, model: model)
+        RouterMain(store: store, model: model, leadingInset: leadingInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(CDS.Surface.s1)
+            // In the app window, the header shows the window's top bar.
+            .background { CDS.Surface.s1.padding(.top, embedded ? CDS.TitleBar.header : 0) }
         .frame(minWidth: embedded ? 0 : 760, minHeight: embedded ? 0 : 520)
         .foregroundStyle(Theme.text)
-        .environment(\.colorScheme, .dark)
+        .modifier(Brand.Scheme())
         // Inside the app window, the window's tip space draws the tips: a second one would only measure the page again.
         .tipSpace(!embedded)
         .task { if checksClaudeCode { await model.checkClaudeCode(store) } }
@@ -32,6 +35,7 @@ struct RouterCodeView: View {
 struct RouterMain: View {
     let store: Store
     @Bindable var model: RouterModel
+    var leadingInset: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,7 +57,8 @@ struct RouterMain: View {
                 .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
                 .foregroundStyle(CDS.Text.secondary)
                 .frame(width: 16, height: 16)
-                .padding(.leading, CDS.TitleBar.glyphLeading)
+                // Its place, or 12 past the window's buttons when they are in the header.
+                .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 12))
                 .accessibilityHidden(true)
             Text("Router")
                 .font(CDS.sans(CDS.Density.compact.body.0, .medium))

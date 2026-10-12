@@ -34,6 +34,12 @@ struct RouterTriage: Codable, Hashable {
         case none, uncommitted, committed, pushed, pr, unknown
     }
 
+    /// Once a turn is done (or partway, asking nothing): is there a move left that is yours, something worth your reading,
+    /// or nothing at all? It decides between Finish up, Worth a look and the history (RouterTiers.swift).
+    enum Next: String, Codable, CaseIterable {
+        case you, note, nothing
+    }
+
     /// What a waiting turn waits on.
     enum WaitingOn: String, Codable, CaseIterable {
         case ci, tests, deploy, session, review, rateLimit, other
@@ -91,6 +97,8 @@ struct RouterTriage: Codable, Hashable {
     var circles = false
     /// A trivial turn (a short reply, a small step): not worth telling you about when you're back (see RouterAttention.swift).
     var trivial = false
+    /// What is left for you once it is done, when Jev is sure (see `Next`); nil when he isn't, or wasn't asked.
+    var next: Next?
     /// The final message it was made from (a hash): it is asked again only when that changes.
     var source = ""
 
@@ -107,7 +115,7 @@ struct RouterTriage: Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case state, questions, urgency, unverified, work, waitingOn, watch, ready, told, source, circles, trivial
+        case state, questions, urgency, unverified, work, waitingOn, watch, ready, told, source, circles, trivial, next
     }
 
     /// Each field on its own: one this version doesn't know is dropped, not the triage.
@@ -125,6 +133,7 @@ struct RouterTriage: Codable, Hashable {
         source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
         circles = (try? c.decodeIfPresent(Bool.self, forKey: .circles)) ?? false
         trivial = (try? c.decodeIfPresent(Bool.self, forKey: .trivial)) ?? false
+        next = try? c.decodeIfPresent(Next.self, forKey: .next)
     }
 
     // MARK: The card it makes
@@ -137,16 +146,17 @@ struct RouterTriage: Codable, Hashable {
         case .approval: .approval
         case .blocked: .stuck
         case .waiting: blocked || triage?.circles == true ? .stuck : .waiting
-        case .done, .progress, nil: blocked || triage?.circles == true ? .stuck : .done
+        case .done, .progress, nil:
+            blocked || triage?.circles == true ? .stuck : triage?.next == .you ? .finish : .done
         }
     }
 
     static let urgencyLevels = ["fyi", "whenever", "today", "soon", "blocking now"]
 
     /// A session waiting: cool, apart from Needs you's warm and the working sessions' clay.
-    static let waitingTint = Color(red: 0.42, green: 0.78, blue: 0.86)
+    static let waitingTint = Brand.map(Color(red: 0.42, green: 0.78, blue: 0.86))
     /// An OK asked for: the hottest of Needs you.
-    static let approvalTint = Color(red: 0.98, green: 0.52, blue: 0.24)
+    static let approvalTint = Brand.map(Color(red: 0.98, green: 0.52, blue: 0.24))
 
     /// Where the changes stand, in a couple of words for the card; nil when there's nothing to say.
     var workLabel: String? {
@@ -269,11 +279,11 @@ struct RouterTriage: Codable, Hashable {
     static func questions(candidates: [String], options: [WaitOption]) -> [String: JevClient.Question] {
         var q: [String: JevClient.Question] = [
             "state": .choice(State.allCases.map(\.rawValue), hints: [
-                "done": "It finished what it was asked and reports it; nothing is asked of the user",
-                "asks": "It asks the user one or more questions in prose, or wants them to choose or decide something",
+                "done": "It completed the work it was asked for and reports it; some follow-through by the user may remain",
+                "asks": "It needs the user's answer, decision, review, test or action now before it can go on: questions in prose, or something to choose or decide",
                 "approval": "It asks permission before doing something consequential: pushing, publishing, deleting, driving the screen, spending money",
                 "blocked": "It hit an error, lacks access or a permission, or can't proceed without help",
-                "waiting": "It waits on something outside it: CI or checks, tests running, a deploy, another session, a review, a rate limit; it will continue when that is done",
+                "waiting": "Its work is blocked by a running process, an event or someone other than the user: CI or checks, tests running, a deploy, another session, someone else's review, a rate limit; nothing is needed from the user now",
                 "progress": "It reports partial progress and isn't finished, without asking anything",
             ], instructions: "What did this coding session's turn end on, judging by its final message? Pick done unless the message clearly shows otherwise."),
             "urgency": .score(levels: urgencyLevels,
@@ -289,7 +299,7 @@ struct RouterTriage: Codable, Hashable {
             ], instructions: "Where do this turn's code changes stand, according to the message? Pick unknown unless it says."),
             "waitingOn": .choice(WaitingOn.allCases.map(\.rawValue), hints: [
                 "ci": "CI or checks on a branch or pull request", "tests": "A test run", "deploy": "A deploy or release",
-                "session": "Another Claude session or agent", "review": "A review by someone", "rateLimit": "A rate limit or quota",
+                "session": "Another Claude session or agent", "review": "A review by someone other than the user", "rateLimit": "A rate limit or quota",
                 "other": "Something else, or it isn't waiting",
             ], instructions: "If the session is waiting on something outside it before continuing, what is it?"),
         ]
@@ -424,6 +434,8 @@ extension Claude {
     var bannerWait: Duration = .seconds(20)
     /// Waiting cards whose session is being told its wait is over (never saved: a send cut short by quitting is not one).
     var telling: Set<String> = []
+    /// Waiting cards whose send on its own failed: yours to continue now (RouterTiers.swift). In memory, as `telling` is.
+    var autoFailed: Set<String> = []
     /// The GitHub repos each folder's git remotes name (`Store.gitRepos`); tests fill it in.
     var repos: [String: Set<String>] = [:]
     /// When each folder's entry in `repos` was read: past `remotesTTL` it is read again (a remote added since, as a fork's
@@ -509,7 +521,8 @@ extension Store {
         return jevAsker(.triage, base: routerTriager.asker)
     }
 
-    private func finalMessage(_ session: ClaudeSession) async -> String? {
+    /// A session's latest final message (the triage's, and a brief's that wasn't given one).
+    func finalMessage(_ session: ClaudeSession) async -> String? {
         if let reader = routerTriager.reader { return await reader(session) }
         let reader = activityReader
         let cli = session.cliID
@@ -529,6 +542,10 @@ extension Store {
     /// little at most: he may find it going in circles, said once per streak, or rate how urgent it is.
     func announceRouterCards(_ fresh: [RouterCard]) {
         var now: [RouterCard] = []
+        // Questions and plans aren't triaged: their brief is made now, from the form if it is held already.
+        for card in fresh where card.kind == .question || card.kind == .plan {
+            routerBriefer.request(card.id, message: nil, store: self)
+        }
         for card in fresh {
             guard triageAsker != nil, card.kind == .stuck, card.triage == nil, let (_, session) = currentTurnCard(card.id),
                   !session.running, routerTriager.heldBanners.insert(card.id).inserted else { now.append(card); continue }
@@ -694,6 +711,7 @@ extension Store {
                     self.routerTriager.unwatched[id] = message
                 }
                 self.applyTriage(triage, to: id)
+                self.routerBriefer.request(id, message: message, store: self)
             }
         }
     }
@@ -731,11 +749,12 @@ extension Store {
             }
             // Read long ago: read again (an `upstream` added since), and bound by what was read meanwhile.
             if reposExpired(session.folder) { readUnwatched(card.id, session: session) }
+            let reading = waitReading(message, by: session)
             let named = things.values.filter { thing in
                 (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
                     && (thing.checks == .pending || thing.ciRunning
                         || (thing.checks != nil && max(thing.updatedAt, thing.ciChangedAt ?? .distantPast) > session.lastActivity))
-                    && bindsTo(thing, message: message, by: session)
+                    && bindsTo(thing, message: message, reading: reading, by: session)
             }
             guard named.count == 1, let thing = named.first else { continue }
             state.cards[i].triage?.watch = .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing),
@@ -748,8 +767,8 @@ extension Store {
 
     /// Whether a waiting message names this CI well enough to watch it without Jev: as `waitNamed` reads it, and, for a PR,
     /// by its ref, its link or its number (its title's words alone are not enough).
-    private func bindsTo(_ thing: Thing, message: String, by session: ClaudeSession) -> Bool {
-        guard waitNamed(.init(target: .ci(thing: thing.id), label: "", ref: RouterWaits.ref(thing)), in: message, by: session) else {
+    private func bindsTo(_ thing: Thing, message: String, reading: WaitReading, by session: ClaudeSession) -> Bool {
+        guard waitNamed(.init(target: .ci(thing: thing.id), label: "", ref: RouterWaits.ref(thing)), in: reading, by: session) else {
             return false
         }
         guard thing.kind == .pr else { return true }
@@ -816,6 +835,12 @@ extension Store {
         let blocked = session.summary?.blocked ?? (before.kind == .stuck)
         state.cards[i].triage = triage
         state.cards[i].kind = RouterTriage.kind(blocked: blocked, triage: triage)
+        // Nothing in it for you: to the history, unread (RouterTiers.swift).
+        if state.cards[i].settles {
+            state.cards[i].addressedAt = Date()
+            state.cards[i].addressedBy = .settled
+            state.cards[i].unread = true
+        }
         let held = routerTriager.heldBanners.remove(id) != nil
         guard state != router || held else { return }
         router = state
@@ -840,5 +865,6 @@ extension Store {
         guard let card = RouterFeed.addTurn(&state, current, triage: triage, text: text, at: current.lastActivity) else { return }
         router = state
         onNewRouterCards?([card])
+        routerBriefer.request(card.id, message: message, store: self)
     }
 }
