@@ -306,7 +306,7 @@ extension WindowSeams {
             }
         }
 
-        // MARK: Switching tabs from the bar with the panel open
+        // MARK: Switching tabs from the bar with the panel open, and slipping off it and back
 
         @Test func theInboxPanelStaysOpenOverTheRowsOfATabPickedFromTheBarWhileOpen() async {
             await Self.concurrently(Self.edges) { edge in
@@ -326,6 +326,22 @@ extension WindowSeams {
                 }
                 await rig.graceElapsed()
                 #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
+                // Off the panel's far side from its last row, briefly, and back onto the same row.
+                guard let row = rig.panelItems().last else { Issue.record("\(edge): nothing in the panel"); return }
+                await rig.walk(to: row.centre, "the last row")
+                let back = rig.pointer
+                let off: NSPoint = switch edge {
+                case .right: NSPoint(x: row.frame.minX - 30, y: back.y)
+                case .left: NSPoint(x: row.frame.maxX + 30, y: back.y)
+                case .top: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.minY).min()! - 30)
+                case .bottom: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.maxY).max()! + 30)
+                }
+                await rig.move(to: off)
+                try? await Task.sleep(for: .milliseconds(40))
+                await rig.move(to: back)
+                await rig.graceElapsed()
+                #expect(rig.hub.section == .inbox, "\(edge): a moment off the panel closed it though the pointer came back")
+                #expect(!rig.window.ignoresMouseEvents, "\(edge): back on the panel, the window lets the pointer through")
                 await rig.leave()
                 #expect(rig.hub.section == nil)
                 #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
@@ -371,35 +387,6 @@ extension WindowSeams {
                     #expect(rig.hub.section == nil, "\(edge) \(cell): still open after the pointer left")
                 }
                 #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
-            }
-        }
-
-        // MARK: Slipping off and back
-
-        @Test func slippingOffThePanelForAMomentAndBackOntoItKeepsItOpen() async {
-            await Self.concurrently(Self.edges) { edge in
-                let rig = await Rig(edge: edge, scenario: .agents)
-                defer { rig.close() }
-                guard let category = rig.store.shownCategories.first else { return }
-                #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
-                guard let row = rig.panelItems().last else { Issue.record("\(edge): nothing in the panel"); return }
-                await rig.cross(to: row.centre, "the last row")
-                // Off the panel's far side, briefly, and back onto the same row.
-                let back = rig.pointer
-                let off: NSPoint = switch edge {
-                case .right: NSPoint(x: row.frame.minX - 30, y: back.y)
-                case .left: NSPoint(x: row.frame.maxX + 30, y: back.y)
-                case .top: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.minY).min()! - 30)
-                case .bottom: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.maxY).max()! + 30)
-                }
-                await rig.move(to: off)
-                try? await Task.sleep(for: .milliseconds(40))
-                await rig.move(to: back)
-                await rig.graceElapsed()
-                #expect(rig.hub.section == .inbox, "\(edge): a moment off the panel closed it though the pointer came back")
-                #expect(!rig.window.ignoresMouseEvents, "\(edge): back on the panel, the window lets the pointer through")
-                await rig.leave()
-                #expect(rig.hub.section == nil)
             }
         }
 
