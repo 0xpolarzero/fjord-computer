@@ -1687,9 +1687,9 @@ private extension View {
 // MARK: - Working card
 
 /// A session working on its own: calm and small, one line. Its icon and title, what it is doing now (shimmering), what it
-/// left running, and for how long. A click expands it in place: every summary of it, newest first, and its subagents and
-/// commands with what each is on (Open in Claude is there and in its menu). Its sparkles button (on hover) summarizes it, and
-/// folded, its newest summary sits under it.
+/// left running, and for how long; hovering it shows Open in Claude in the time's place (it is in its menu too). A click
+/// expands it in place: every summary of it, newest first, and its subagents and commands with what each is on. Its sparkles
+/// button (on hover) summarizes it, and folded, its newest summary sits under it.
 private struct WorkingCard: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -1719,13 +1719,22 @@ private struct WorkingCard: View {
                             .help(RouterLive.tooltip(title: row.session.title, activity: row.activity, tasks: row.tasks))
                         Spacer(minLength: 4)
                         if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
-                        if let start {
-                            TimelineView(.periodic(from: .now, by: 1)) { context in
-                                Text(AgentRow.duration(context.date.timeIntervalSince(start)))
-                                    .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                        // Open in Claude takes the time's place on hover, as on the history's lines; its room is kept without one.
+                        Group {
+                            if let start {
+                                TimelineView(.periodic(from: .now, by: 1)) { context in
+                                    Text(AgentRow.duration(context.date.timeIntervalSince(start)))
+                                        .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                                }
+                            } else {
+                                Color.clear.frame(width: 22, height: 16)
                             }
-                            .layoutPriority(1)
                         }
+                        .opacity(hovered ? 0 : 1)
+                        .overlay(alignment: .trailing) {
+                            HoverOpen(title: row.session.title, shown: hovered) { store.openAgent(row.id) }
+                        }
+                        .layoutPriority(1)
                     }
                     .contentShape(Rectangle())
                 }
@@ -1754,7 +1763,7 @@ private struct WorkingCard: View {
         .contextMenu { SessionMenu(row: row, store: store) }
     }
 
-    /// Expanded: its summaries, newest first, then its subagents and commands, then Open in Claude.
+    /// Expanded: its summaries, newest first, then its subagents and commands.
     @ViewBuilder private var details: some View {
         let summaries = store.router.summaries.filter { $0.sessionID == row.id }.reversed()
         VStack(alignment: .leading, spacing: 8) {
@@ -1787,9 +1796,6 @@ private struct WorkingCard: View {
                     }
                 }
             }
-            Button("Open in Claude") { store.openAgent(row.id) }
-                .buttonStyle(.link).font(CDS.sans(12))
-                .padding(.leading, 26)
         }
         .transition(.opacity)
     }
