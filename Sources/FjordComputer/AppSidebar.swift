@@ -346,9 +346,10 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
             HStack(spacing: M.rowGap) {
                 leading(on)
                     .frame(width: M.leadingSlot, height: M.leadingSlot)
-                    // The bar's corner count, on the rail only; it comes in after the labels have gone.
-                    .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear,
-                                 offset: CGSize(width: 2, height: -2), opacity: collapsed ? 1 : 0)
+                    // The bar's corner count, small and within the row (the rows' gap leaves no room above it), on the rail
+                    // only; it comes in after the labels have gone.
+                    .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear, small: true,
+                                 opacity: collapsed ? 1 : 0)
                     .animation(collapsed ? .easeIn(duration: 0.18).delay(0.12) : .easeOut(duration: 0.08), value: collapsed)
                     // The indent eases out with the sidebar's width, so a nested icon reaches its tile as the rail closes.
                     .padding(.leading, M.railShift + (collapsed ? 0 : indent))

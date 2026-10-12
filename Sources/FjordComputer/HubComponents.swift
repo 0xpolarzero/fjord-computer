@@ -772,27 +772,29 @@ extension CategoryColor {
 
 /// Claude's corner count (the pending-invite badge), shared by the Router's cell and the categories': 16 tall, round, caption
 /// at 460, a 2pt ring around it; nothing at zero. Put on a cell with `cornerBadge(_:fill:ink:)`, which cuts the ring out of
-/// the cell so whatever is under the cell shows through it.
+/// the cell so whatever is under the cell shows through it. `small` is the sidebar rail's: 12 tall, tucked into its tile's
+/// corner so it stays within its row, clear of the tile above.
 struct CornerBadge: View {
     let count: Int
     let fill: Color
     let ink: Color
+    var small = false
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     /// Where the badge sits from its cell's top-trailing corner, and the ring's width around it.
-    static let offset = CGSize(width: 6, height: -5)
-    static let ringWidth: CGFloat = 2
+    static func offset(small: Bool) -> CGSize { small ? CGSize(width: 3, height: 0) : CGSize(width: 6, height: -5) }
+    static func ringWidth(small: Bool) -> CGFloat { small ? 1.5 : 2 }
 
     var body: some View {
         if count > 0 {
             Text(count > 99 ? "99+" : "\(count)")
-                .font(Theme.Typography.badge)
+                .font(small ? Theme.Typography.ui(8.5, .semibold).monospacedDigit() : Theme.Typography.badge)
                 .foregroundStyle(ink)
                 .contentTransition(reduce ? .opacity : .numericText(value: Double(count)))
-                .padding(.horizontal, 4)
-                .frame(minWidth: 16, minHeight: 16)
+                .padding(.horizontal, small ? 3 : 4)
+                .frame(minWidth: small ? 12 : 16, minHeight: small ? 12 : 16)
                 .background(Capsule().fill(fill))
-                .offset(Self.offset)
+                .offset(Self.offset(small: small))
                 .transition(.scaleFade(0.6, reduce: reduce))
         }
     }
@@ -802,8 +804,9 @@ extension View {
     /// A `CornerBadge` on this cell's top-trailing corner, its ring a real cut-out: the cell is clipped around a capsule
     /// `ringWidth` larger than the badge, so what is under the cell (the bar, or glass) shows through the ring. `offset` moves
     /// badge and hole together; `opacity` fades both (the hole closes as the badge fades).
-    func cornerBadge(_ count: Int, fill: Color, ink: Color, offset: CGSize = .zero, opacity: Double = 1) -> some View {
-        modifier(CornerBadgeCutout(count: count, fill: fill, ink: ink, offset: offset, opacity: opacity))
+    func cornerBadge(_ count: Int, fill: Color, ink: Color, small: Bool = false, offset: CGSize = .zero,
+                     opacity: Double = 1) -> some View {
+        modifier(CornerBadgeCutout(count: count, fill: fill, ink: ink, small: small, offset: offset, opacity: opacity))
     }
 }
 
@@ -811,6 +814,7 @@ private struct CornerBadgeCutout: ViewModifier {
     let count: Int
     let fill: Color
     let ink: Color
+    let small: Bool
     let offset: CGSize
     let opacity: Double
     /// The badge's size as laid out (its width follows the count); the last one is kept while it has none.
@@ -821,9 +825,9 @@ private struct CornerBadgeCutout: ViewModifier {
         // no texture. A mask (or a `destinationOut` ring, which needs a compositing group) renders the cell into a layer of
         // its own and composites it through the mask: an offscreen pass on every frame the cell redraws, a hover fade say.
         content
-            .clipShape(BadgeHole(size: size, offset: offset, shown: count > 0 ? opacity : 0), style: FillStyle(eoFill: true))
+            .clipShape(BadgeHole(size: size, small: small, offset: offset, shown: count > 0 ? opacity : 0), style: FillStyle(eoFill: true))
             .overlay(alignment: .topTrailing) {
-                CornerBadge(count: count, fill: fill, ink: ink)
+                CornerBadge(count: count, fill: fill, ink: ink, small: small)
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { if $0.width > 0, $0.height > 0 { size = $0 } }
                     .offset(offset)
                     .opacity(opacity)
@@ -835,6 +839,7 @@ private struct CornerBadgeCutout: ViewModifier {
 /// it comes (and shrinking as it goes) when the count's change is animated.
 private struct BadgeHole: Shape {
     var size: CGSize
+    let small: Bool
     var offset: CGSize
     var shown: CGFloat
 
@@ -847,11 +852,11 @@ private struct BadgeHole: Shape {
         // Far enough out that nothing the cell draws past its bounds (a glyph's overhang) is clipped.
         var path = Path(rect.insetBy(dx: -rect.width, dy: -rect.height))
         guard shown > 0 else { return path }
-        let badge = CGRect(x: rect.maxX - size.width + CornerBadge.offset.width + offset.width,
-                           y: rect.minY + CornerBadge.offset.height + offset.height,
+        let corner = CornerBadge.offset(small: small)
+        let badge = CGRect(x: rect.maxX - size.width + corner.width + offset.width, y: rect.minY + corner.height + offset.height,
                            width: size.width, height: size.height)
         // From 60 %, as the badge itself comes (`.scaleFade(0.6)`), so the hole and the badge grow together.
-        let ring = CornerBadge.ringWidth, scale = 0.6 + 0.4 * shown
+        let ring = CornerBadge.ringWidth(small: small), scale = 0.6 + 0.4 * shown
         let w = (badge.width + 2 * ring) * scale, h = (badge.height + 2 * ring) * scale
         path.addPath(Capsule().path(in: CGRect(x: badge.midX - w / 2, y: badge.midY - h / 2, width: w, height: h)))
         return path
