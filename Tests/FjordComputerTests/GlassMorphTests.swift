@@ -76,6 +76,67 @@ import Testing
         #expect(alpha(8.5, 8.5) == 1)
     }
 
+    /// In the hole the ground goes clear and what is drawn over it stays: a solid glyph pixel as it was, an anti-aliased
+    /// one as the glyph's colour at partial alpha. Outside the hole, and in its rounded corner, nothing changes.
+    @Test(arguments: [1, 2]) func theHoleKeepsTheSidebarsLabelsOverAClearGround(scale: Int) throws {
+        let rep = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 200 * scale, pixelsHigh: 120 * scale,
+                                                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = NSSize(width: 200, height: 120)
+        #expect(rep.bitmapFormat.isDisjoint(with: [.alphaFirst, .alphaNonpremultiplied, .floatingPointSamples]))
+        let data = try #require(rep.bitmapData)
+        // Pixels in points from the bottom, as the hole is; rows in memory from the top.
+        func at(_ x: CGFloat, _ y: CGFloat) -> Int {
+            (rep.pixelsHigh - 1 - Int(y * CGFloat(scale))) * rep.bytesPerRow + Int(x * CGFloat(scale)) * 4
+        }
+        func set(_ x: CGFloat, _ y: CGFloat, _ pixel: [UInt8]) { for i in 0..<4 { data[at(x, y) + i] = pixel[i] } }
+        func pixel(_ x: CGFloat, _ y: CGFloat) -> [Int] { (0..<4).map { Int(data[at(x, y) + $0]) } }
+        let ground: [UInt8] = [240, 236, 232, 255]
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide { for i in 0..<4 { data[y * rep.bytesPerRow + x * 4 + i] = ground[i] } }
+        }
+        // A solid black glyph pixel, and (0, 90, 200) at half coverage over the ground.
+        set(30, 60, [0, 0, 0, 255])
+        set(40, 60, [120, 163, 216, 255])
+        // Outside the hole: a glyph pixel in the page, which stays as it is.
+        set(150, 30, [0, 0, 0, 255])
+        let hole = AppTransition.Hole(rect: NSRect(x: 8, y: 8, width: 60, height: 104), radius: 8)
+        AppTransition.punch(rep, hole)
+
+        #expect(pixel(38, 30) == [0, 0, 0, 0] && pixel(10, 60) == [0, 0, 0, 0] && pixel(38, 110) == [0, 0, 0, 0])
+        #expect(pixel(30, 60) == [0, 0, 0, 255])
+        let mid = pixel(40, 60)
+        #expect(abs(mid[3] - 128) <= 1)
+        // Unpremultiplied, it is the glyph's colour.
+        let colour = (0..<3).map { Double(mid[$0]) * 255 / Double(mid[3]) }
+        for (got, want) in zip(colour, [0.0, 90, 200]) { #expect(abs(got - want) <= 3) }
+        #expect(pixel(4, 60) == [240, 236, 232, 255] && pixel(150, 60) == [240, 236, 232, 255])
+        #expect(pixel(38, 4) == [240, 236, 232, 255] && pixel(38, 116) == [240, 236, 232, 255])
+        #expect(pixel(150, 30) == [0, 0, 0, 255])
+        // The rounded corner, outside the shape.
+        #expect(pixel(8.5, 8.5) == [240, 236, 232, 255] && pixel(67.5, 111.5) == [240, 236, 232, 255])
+    }
+
+    /// A bitmap other than 8-bit RGBA has the hole cleared whole, as before.
+    @Test func anotherFormatHasTheHoleClearedWhole() throws {
+        let rep = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 200, pixelsHigh: 120,
+                                                bitsPerSample: 16, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = NSSize(width: 200, height: 120)
+        let context = try #require(NSGraphicsContext(bitmapImageRep: rep))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 10_000, height: 10_000).fill()
+        NSColor.black.setFill()
+        NSRect(x: 30, y: 58, width: 4, height: 4).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        AppTransition.punch(rep, AppTransition.Hole(rect: NSRect(x: 8, y: 8, width: 60, height: 104), radius: 8))
+        func alpha(_ x: Int, _ y: Int) -> CGFloat { rep.colorAt(x: x, y: y)?.alphaComponent ?? -1 }
+        #expect(alpha(31, 60) == 0 && alpha(38, 60) == 0)
+        #expect(alpha(4, 60) == 1 && alpha(150, 60) == 1)
+    }
+
     @Test func aWindowWithoutASidebarOrNotOnGlassHasNoHole() {
         let sidebar = NSRect(x: 8, y: 8, width: 240, height: 584)
         #expect(AppTransition.GlassWindow(sidebar: sidebar).hole(glass: true, radius: 16)
@@ -108,7 +169,9 @@ import Testing
         let size = NSSize(width: 1180, height: 760)
         #expect(GlassMorph.sidebarFrame(windowSize: size, collapsed: false)
                 == NSRect(x: 8, y: 8, width: AppRootView.sidebarWidth, height: 744))
-        #expect(GlassMorph.sidebarFrame(windowSize: size, collapsed: true).width == AppSidebar.railWidth)
+        // The rail starts under the header's line: 760 less its 48 and the bottom inset.
+        #expect(GlassMorph.sidebarFrame(windowSize: size, collapsed: true)
+                == NSRect(x: 8, y: 8, width: AppSidebar.railWidth, height: 704))
         #expect(GlassMorph.sidebarRadius(windowRadius: 16) == 8)
         #expect(GlassMorph.sidebarRadius(windowRadius: 26) == 18)
         // Full screen (no radius) and small radii keep the floor.

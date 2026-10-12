@@ -18,8 +18,9 @@ import SwiftUI
 // Each step is a signpost interval (subsystem com.amontlabs.fjord, category "morph"), to see in Instruments where an
 // opening's time goes: the request to the first flush, bringing the window in, each capture and picture installed, the
 // handoff, and the overlay going; on glass, inside each capture, the capture flag's two passes ("Capture flag on", "Capture
-// flag off": the stand-ins drawn, then the glass restored). G1, G2 and their hosts are made once, at idle with the overlay
-// (`prepareOverlay`), and taken up by each glass morph, so a morph makes no view before its first frame.
+// flag off": the stand-ins drawn, then the glass restored) and the sidebar's ground taken out ("Unblend sidebar"). G1, G2
+// and their hosts are made once, at idle with the overlay (`prepareOverlay`), and taken up by each glass morph, so a morph
+// makes no view before its first frame.
 //
 // On glass (macOS 26, `Chrome.Mode.glass`) the morph starts as the bar's glass (docs/design/fjord/glass-plan.md §5.6, M1).
 // The overlay holds, bottom to top: the shadow; G1, a glass shape (`NSGlassEffectView`) growing from the bar's cell to the
@@ -27,12 +28,13 @@ import SwiftUI
 // dropped frame, §11 S5); the window-shaped `s1` container, fading in over the second half; G2, a glass shape at the inset
 // sidebar's frame riding the container's opacity, so it samples `s1` as the real sidebar does; and the window's picture,
 // whole, in a clip of the window's shape. The window's captures draw the small glass pieces (the nav capsule, the
-// composer) as their opaque fills (`GlassCapture`), and the sidebar's rounded rect is cleared out of the picture after it
-// is taken (`punch`), so the picture shows G2 through where the sidebar is. Every layer runs the same curve
-// as the glass (the springs as one cubic, `GlassMorph.curve`), so the glass and the picture move in lockstep. No picture of
-// the bar is taken: G1 is its glass. Closing mirrors it, G1 fading into the bar's glass as the bar fades in beneath.
-// Reduce Motion: the cross-fade at the window's frame, G2 and the picture fading with the container. Opaque mode and macOS
-// 14 and 15: the morph above, unchanged.
+// composer) as their opaque fills (`GlassCapture`), and the window's ground is taken out of the sidebar's rounded rect
+// after the picture is taken (`punch`, colour-to-alpha), so the picture shows G2 through where the sidebar is with the
+// sidebar's rows, icons and counts still on it. Every layer runs the same curve as the glass (the springs as one cubic,
+// `GlassMorph.curve`), so the glass and the picture move in lockstep. No picture of the bar is taken: G1 is its glass.
+// Closing mirrors it, G1 fading into the bar's glass as the bar fades in beneath. Reduce Motion: the cross-fade at the
+// window's frame, G2 and the picture fading with the container. Opaque mode and macOS 14 and 15: the morph above,
+// unchanged.
 
 /// The morph's signposts.
 enum MorphSignposts {
@@ -122,8 +124,8 @@ enum AppTransition {
     /// How many pictures of a window were taken (the tests count them).
     private(set) static var captures = 0
 
-    /// A place left clear in a window's picture: the inset sidebar's rounded rect (window coordinates), which the glass
-    /// morph's G2 shows through.
+    /// A place in a window's picture whose ground is taken out: the inset sidebar's rounded rect (window coordinates),
+    /// which the glass morph's G2 shows through, under the sidebar's labels.
     struct Hole: Equatable {
         var rect: NSRect
         var radius: CGFloat
@@ -131,7 +133,7 @@ enum AppTransition {
 
     /// The window's pixels as they are now: its whole frame (title bar and buttons included) at the screen's scale. With
     /// the window's capture flag (`capture`) and glass on, its small glass pieces are drawn as their stand-ins for the
-    /// picture and restored, in this turn (`GlassCapture.around`); `hole` is then cleared out of the picture.
+    /// picture and restored, in this turn (`GlassCapture.around`); the ground is then taken out of `hole` (`punch`).
     static func snapshot(of window: NSWindow, capture: GlassCapture? = nil, hole: Hole? = nil) -> CGImage? {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
         captures += 1
@@ -140,7 +142,7 @@ enum AppTransition {
         let glass = GlassCapture.chromeIsGlass
         let cleared = glass ? hole : nil
         let draw = { () -> CGImage? in
-            // With alpha whatever the window's opacity, where there is a hole: it must come out clear, not black.
+            // With alpha whatever the window's opacity, where there is a hole: its ground must come out clear, not black.
             let made = cleared != nil ? alphaRep(for: view) : view.bitmapImageRepForCachingDisplay(in: view.bounds)
             guard let rep = made else { return nil }
             view.cacheDisplay(in: view.bounds, to: rep)
@@ -172,11 +174,23 @@ enum AppTransition {
         return tagged
     }
 
-    /// Clears `hole` (in points, the rep's `size`) out of `rep`: transparent there, untouched elsewhere. Drawn in the
-    /// bitmap's own pixels whatever scale its context starts with; the shape is the sidebar's (continuous corners).
+    /// Takes the window's ground out of `hole` (in points, the rep's `size`) in `rep`, keeping what is drawn over it: the
+    /// sidebar's rows, icons and counts stay, with their exact edges, and the ground between them goes transparent, so G2
+    /// shows through it with the labels already on it. Untouched outside the shape (the sidebar's, continuous corners).
+    /// The ground is read from the picture itself, just right of the hole, in the bitmap's own colour space. A bitmap
+    /// other than 8-bit RGBA, or no opaque ground to read, has the hole cleared whole instead.
     static func punch(_ rep: NSBitmapImageRep, _ hole: Hole) {
-        guard rep.hasAlpha, rep.size.width > 0, rep.size.height > 0,
-              let context = NSGraphicsContext(bitmapImageRep: rep) else { return }
+        guard rep.hasAlpha, rep.size.width > 0, rep.size.height > 0 else { return }
+        let signpost = MorphSignposts.signposter.beginInterval("Unblend sidebar")
+        defer { MorphSignposts.signposter.endInterval("Unblend sidebar", signpost) }
+        if unblend(rep, hole) { return }
+        clear(rep, hole)
+    }
+
+    /// Clears `hole` out of `rep` whole: transparent there, untouched elsewhere. Drawn in the bitmap's own pixels whatever
+    /// scale its context starts with.
+    private static func clear(_ rep: NSBitmapImageRep, _ hole: Hole) {
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else { return }
         let cg = context.cgContext
         cg.saveGState()
         cg.concatenate(cg.ctm.inverted())
@@ -186,6 +200,112 @@ enum AppTransition {
         cg.fillPath()
         cg.restoreGState()
         context.flushGraphics()
+    }
+
+    /// Colour-to-alpha over the ground in `hole`, in one pass over the hole's pixels; false when `rep` isn't 8-bit RGBA,
+    /// premultiplied and chunky, or has no opaque ground beside the hole (nothing is changed then).
+    ///
+    /// Each pixel is taken as something over the ground `b` (a pixel not opaque is first put over `b`), and is given the
+    /// least alpha that explains it: per channel |c − b| / (1 − b) where c is above b, |c − b| / b where below, the largest
+    /// of the three, 0…1. Its colour is then b + (c − b) / alpha, stored premultiplied as c − b·(1 − alpha): the ground
+    /// comes out clear, a solid glyph as it was, an anti-aliased edge as the glyph's colour at partial alpha. Where the
+    /// shape's own edge covers a pixel in part, the result is mixed with the pixel as it was by that coverage.
+    private static func unblend(_ rep: NSBitmapImageRep, _ hole: Hole) -> Bool {
+        let format = rep.bitmapFormat
+        guard rep.bitsPerSample == 8, rep.samplesPerPixel == 4, rep.bitsPerPixel == 32, !rep.isPlanar,
+              rep.colorSpace.colorSpaceModel == .rgb,
+              format.isDisjoint(with: [.alphaNonpremultiplied, .floatingPointSamples,
+                                       .sixteenBitLittleEndian, .thirtyTwoBitLittleEndian,
+                                       .sixteenBitBigEndian, .thirtyTwoBitBigEndian]),
+              let data = rep.bitmapData else { return false }
+        let width = rep.pixelsWide, height = rep.pixelsHigh, rowBytes = rep.bytesPerRow
+        let sx = CGFloat(width) / rep.size.width, sy = CGFloat(height) / rep.size.height
+        // Byte offsets of r, g, b and alpha in a pixel.
+        let (ri, gi, bi, ai) = format.contains(.alphaFirst) ? (1, 2, 3, 0) : (0, 1, 2, 3)
+        // Pixel rows count from the top, points from the bottom.
+        func offset(_ x: Int, _ yUp: Int) -> Int { (height - 1 - yUp) * rowBytes + x * 4 }
+
+        // The ground: the commonest opaque pixel of five down a column 2pt right of the hole.
+        let sampleX = Int(((hole.rect.maxX + 2) * sx).rounded(.down))
+        guard sampleX >= 0, sampleX < width else { return false }
+        var samples: [UInt32] = []
+        for step in 1...5 {
+            let y = Int(((hole.rect.minY + hole.rect.height * CGFloat(step) / 6) * sy).rounded(.down))
+            guard y >= 0, y < height else { continue }
+            let at = offset(sampleX, y)
+            guard data[at + ai] == 255 else { continue }
+            samples.append(UInt32(data[at + ri]) << 16 | UInt32(data[at + gi]) << 8 | UInt32(data[at + bi]))
+        }
+        guard let ground = samples.max(by: { a, b in
+            samples.lazy.filter { $0 == a }.count < samples.lazy.filter { $0 == b }.count
+        }) else { return false }
+        let gr = UInt8(ground >> 16 & 0xFF), gg = UInt8(ground >> 8 & 0xFF), gb = UInt8(ground & 0xFF)
+
+        // The hole's pixels, and the shape's coverage of each (anti-aliased at its edge), drawn once.
+        let x0 = max(0, Int((hole.rect.minX * sx).rounded(.down)))
+        let x1 = min(width, Int((hole.rect.maxX * sx).rounded(.up)))
+        let y0 = max(0, Int((hole.rect.minY * sy).rounded(.down)))
+        let y1 = min(height, Int((hole.rect.maxY * sy).rounded(.up)))
+        guard x1 > x0, y1 > y0 else { return true }
+        let maskWidth = x1 - x0, maskHeight = y1 - y0
+        guard let mask = CGContext(data: nil, width: maskWidth, height: maskHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let coverage = mask.data?.assumingMemoryBound(to: UInt8.self) else { return false }
+        let maskRowBytes = mask.bytesPerRow
+        mask.setFillColor(gray: 0, alpha: 1)
+        mask.fill(CGRect(x: 0, y: 0, width: maskWidth, height: maskHeight))
+        mask.translateBy(x: CGFloat(-x0), y: CGFloat(-y0))
+        mask.scaleBy(x: sx, y: sy)
+        mask.setFillColor(gray: 1, alpha: 1)
+        mask.addPath(RoundedRectangle(cornerRadius: hole.radius, style: .continuous).path(in: hole.rect).cgPath)
+        mask.fillPath()
+
+        let b = (Float(gr) / 255, Float(gg) / 255, Float(gb) / 255)
+        // Per channel, 1 / the room above the ground and 1 / the room below it (0 where there is none: no c lies there).
+        func reach(_ ground: Float) -> (up: Float, down: Float) {
+            (ground < 1 ? 1 / (1 - ground) : 0, ground > 0 ? 1 / ground : 0)
+        }
+        let rr = reach(b.0), rg = reach(b.1), rb = reach(b.2)
+        func spread(_ c: Float, _ ground: Float, _ reach: (up: Float, down: Float)) -> Float {
+            c > ground ? (c - ground) * reach.up : (ground - c) * reach.down
+        }
+        for yUp in y0..<y1 {
+            let row = data + (height - 1 - yUp) * rowBytes
+            let maskRow = coverage + (y1 - 1 - yUp) * maskRowBytes
+            for x in x0..<x1 {
+                let m = maskRow[x - x0]
+                if m == 0 { continue }
+                let p = row + x * 4
+                let a8 = p[ai]
+                let out: (Float, Float, Float, Float)
+                if a8 == 255, p[ri] == gr, p[gi] == gg, p[bi] == gb {
+                    out = (0, 0, 0, 0)
+                } else {
+                    // Put over the ground (premultiplied), then unblend.
+                    let a = Float(a8) / 255, rest = 1 - a
+                    let c = (Float(p[ri]) / 255 + b.0 * rest, Float(p[gi]) / 255 + b.1 * rest,
+                             Float(p[bi]) / 255 + b.2 * rest)
+                    let alpha = min(1, max(spread(c.0, b.0, rr), spread(c.1, b.1, rg), spread(c.2, b.2, rb)))
+                    let keep = 1 - alpha
+                    out = (min(alpha, max(0, c.0 - b.0 * keep)), min(alpha, max(0, c.1 - b.1 * keep)),
+                           min(alpha, max(0, c.2 - b.2 * keep)), alpha)
+                }
+                if m == 255 {
+                    p[ri] = UInt8(out.0 * 255 + 0.5)
+                    p[gi] = UInt8(out.1 * 255 + 0.5)
+                    p[bi] = UInt8(out.2 * 255 + 0.5)
+                    p[ai] = UInt8(out.3 * 255 + 0.5)
+                } else {
+                    // The shape's edge: as the clear fill did, by its coverage.
+                    let cover = Float(m) / 255, stay = (1 - cover) / 255
+                    p[ri] = UInt8(min(255, (Float(p[ri]) * stay + out.0 * cover) * 255 + 0.5))
+                    p[gi] = UInt8(min(255, (Float(p[gi]) * stay + out.1 * cover) * 255 + 0.5))
+                    p[bi] = UInt8(min(255, (Float(p[bi]) * stay + out.2 * cover) * 255 + 0.5))
+                    p[ai] = UInt8(min(255, (Float(a8) * stay + out.3 * cover) * 255 + 0.5))
+                }
+            }
+        }
+        return true
     }
 
     /// What the glass morph needs of the window beyond its frame: its capture flag, and its inset sidebar's frame in the
