@@ -318,7 +318,9 @@ struct MentionField: NSViewRepresentable {
             }
         }
 
-        /// The view's text made the model's, its pills drawn anew; the caret kept where it was.
+        /// The view's text made the model's, its pills drawn anew; the caret kept where it was. A mark with no pointer (or no
+        /// pill) is left out, and a pointer with no mark: the model then takes the text as shown, so the view and the draft
+        /// keep the same offsets (the @ word, a pick's range, a caret asked for).
         private func show(_ model: RouterModel, in view: MentionTextView) {
             told = (model.draft, model.pointers)
             let shown = MentionText.serialize(view.attributedString())
@@ -330,10 +332,14 @@ struct MentionField: NSViewRepresentable {
             var run = ""
             func flush() { if !run.isEmpty { text.append(NSAttributedString(string: run, attributes: view.base)); run = "" } }
             for ch in model.draft {
-                if ch == MentionText.mark, let pointer = pointers.next(), let pill = view.makePill(pointer) {
+                guard ch == MentionText.mark else {
+                    run.append(ch)
+                    continue
+                }
+                if let pointer = pointers.next(), let pill = view.makePill(pointer) {
                     flush()
                     text.append(NSAttributedString(attachment: pill))
-                } else { run.append(ch) }
+                }
             }
             flush()
             let keep = view.selectedRange()
@@ -341,6 +347,12 @@ struct MentionField: NSViewRepresentable {
             view.setSelectedRange(NSRange(location: min(keep.location, text.length), length: 0))
             view.typingAttributes = view.base
             fits.removeAll()
+            let now = MentionText.serialize(text)
+            if now != (model.draft, model.pointers) {
+                told = now
+                if model.pointers != now.pointers { model.pointers = now.pointers }
+                if model.draft != now.draft { model.draft = now.draft }
+            }
         }
 
         struct Fit: Hashable {

@@ -316,14 +316,16 @@ final class RouterModel {
     }
 
     /// "Edit and resend": the message in the composer, which takes the keyboard; no reply or pin goes with it (picking one
-    /// later ends the edit: the draft then goes there as a message of its own).
+    /// later ends the edit: the draft then goes there as a message of its own). Its pills come back as the "@name" they were
+    /// sent as; an attachment character in it (pasted before the composer left them out) goes, as a paste's does.
     func edit(session: String, message: String, sentAt: Date? = nil) {
         replyTo = nil
         live.reset()
         pointers = []
         editing = Editing(session: session, original: message, sentAt: sentAt)
-        draft = message
-        caretRequest = (message as NSString).length
+        let words = message.replacingOccurrences(of: MentionText.markString, with: "")
+        draft = words
+        caretRequest = (words as NSString).length
         focusRequest &+= 1
     }
     /// In a narrow window, the side of the page shown: it follows what you pick (an open card is in Now, an addressed one and

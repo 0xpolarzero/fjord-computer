@@ -347,6 +347,35 @@ import Testing
         #expect(model.caretRequest == nil && v.selectedRange() == NSRange(location: (v.string as NSString).length, length: 0))
     }
 
+    /// A draft whose marks and pointers don't pair up (a message sent with a literal attachment character, edited and resent):
+    /// the view shows a pill for each pair only, and the model takes the text as shown, so their offsets stay the same.
+    @Test func aDraftWithAMarkButNoPointerKeepsTheViewAndTheModelInStep() {
+        let v = view()
+        let model = RouterModel()
+        let field = MentionField.Coordinator()
+        field.view = v
+        field.model = model
+        v.delegate = field
+        let m = MentionText.markString
+        model.pointers = [.project("/code/lcu")]
+        model.draft = "a \(m) b \(m) c"
+        field.follow(model)
+        #expect(v.string == "a \(m) b  c" && model.draft == v.string && model.pointers == [.project("/code/lcu")])
+        // A pointer with no mark goes too.
+        model.pointers = [.project("/code/lcu"), .project("/code/lookout")]
+        model.draft = "x \(m)"
+        field.follow(model)
+        #expect(v.string == "x \(m)" && model.draft == v.string && model.pointers == [.project("/code/lcu")])
+        // Typed after it: the @ word is found where the view has it.
+        v.setSelectedRange(NSRange(location: (v.string as NSString).length, length: 0))
+        v.insertText(" @lo", replacementRange: v.selectedRange())
+        #expect(model.draft == v.string && RouterModel.mention(in: model.draft, caret: v.selectedRange().location)?.query == "lo")
+        // "Edit and resend" of such a message: the character goes from the draft, the original stays what was sent.
+        model.edit(session: "local_a", message: "fix \(m) it")
+        #expect(model.draft == "fix  it" && model.pointers.isEmpty && model.caretRequest == 7)
+        #expect(model.editing?.original == "fix \(m) it")
+    }
+
     @Test func prefillAddsPillsAndTheSendCarriesThem() {
         let (store, pr, _) = triage()
         let m = MentionText.markString
