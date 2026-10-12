@@ -294,7 +294,8 @@ extension RouterTools {
     /// the ranking's own four (evals/router/v2, `--card top1,other,recent`).
     static func askCard(ranked: [String], recent: [String]) -> [String] {
         let ranked = ranked.filter { $0 != "unclear" }
-        let other = ranked.prefix(4).first { !$0.hasPrefix("session:") }
+        // A new session or one of Lookout's intents: a card's answer (`answer:`) is its session's, as `session:` is.
+        let other = ranked.prefix(4).dropFirst().first { !$0.hasPrefix("session:") && !$0.hasPrefix("answer:") }
         var seen = Set<String>()
         return (Array(ranked.prefix(1)) + [other].compactMap { $0 } + recent + ranked).filter { seen.insert($0).inserted }
     }

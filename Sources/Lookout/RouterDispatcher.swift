@@ -366,9 +366,13 @@ struct RouterAskBack: Identifiable, Equatable {
             guard range.lowerBound >= 0, range.upperBound <= chars.count else { return nil }
             return String(chars[range])
         }
+        // What a send to it does: a new session starts one, an intent is the Router's own run.
+        let does = action != "send" ? action
+            : target?.hasPrefix("new:") == true ? "start"
+            : target.flatMap { RouterRun.Intent(rawValue: $0) } != nil ? "intent" : "send"
         traceLog.append(RouterTrace(kind: .decided, id: job.id, message: RouterTools.redacted(text),
                                     pills: pills.isEmpty ? nil : pills, pinned: job.context.target, shown: job.context.shown,
-                                    notTo: job.context.notTo, replyTo: job.context.replyTo, path: path, action: action,
+                                    notTo: job.context.notTo, replyTo: job.context.replyTo, path: path, action: does,
                                     target: target, inputs: inputs))
     }
 

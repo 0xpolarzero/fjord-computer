@@ -87,6 +87,9 @@ struct RouterFusionParityTests {
         #expect(Array(card.prefix(4)) == ["session:d", "question", "session:b", "session:c"])
         #expect(Array(RouterTools.askCard(ranked: ["session:a", "session:b"], recent: ["session:c"]).prefix(3))
                 == ["session:a", "session:c", "session:b"])
+        // A card's answer first: the other kind is still the intent behind it, not the answer again (found live).
+        #expect(Array(RouterTools.askCard(ranked: ["answer:d#t1", "compound", "session:a"], recent: ["session:b"]).prefix(3))
+                == ["answer:d#t1", "compound", "session:b"])
     }
 
     /// The routing trace records what `decide` read: its ranking, its sureness, and whether that was sure.
