@@ -847,11 +847,11 @@ struct AppNavButtons: View {
 
     var body: some View {
         HStack(spacing: CDS.TitleBar.buttonGap) {
-            AppIconButton(symbol: "sidebar.left", help: sidebarShown ? "Hide sidebar" : "Show sidebar", enabled: true) {
+            AppIconButton(symbol: "sidebar.left", help: sidebarShown ? "Hide sidebar" : "Show sidebar", key: "⌘B", enabled: true) {
                 sidebarShown.toggle()
             }
-            AppIconButton(symbol: "chevron.left", help: "Back · ⌘[", enabled: navigator.canGoBack) { navigator.back() }
-            AppIconButton(symbol: "chevron.right", help: "Forward · ⌘]", enabled: navigator.canGoForward) { navigator.forward() }
+            AppIconButton(symbol: "chevron.left", help: "Back", key: "⌘[", enabled: navigator.canGoBack) { navigator.back() }
+            AppIconButton(symbol: "chevron.right", help: "Forward", key: "⌘]", enabled: navigator.canGoForward) { navigator.forward() }
         }
     }
 }
@@ -859,6 +859,8 @@ struct AppNavButtons: View {
 struct AppIconButton: View {
     let symbol: String
     let help: String
+    /// Its shortcut, shown in its tooltip.
+    var key: String? = nil
     let enabled: Bool
     let action: () -> Void
     @State private var hovered = false
@@ -882,7 +884,8 @@ struct AppIconButton: View {
         .disabled(!enabled)
         .onHover { hovered = $0 }
         .accessibilityLabel(help)
-        .help(help)
+        // The app's tooltip (as every other button's), with its shortcut.
+        .tip(help, key)
     }
 
     private var ink: AnyShapeStyle {

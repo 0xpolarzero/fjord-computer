@@ -35,17 +35,17 @@ final class SidebarState {
     func toggle() { set(collapsed: !collapsed) }
 }
 
-/// View ▸ Collapse Sidebar, ⌃⌘S.
+/// View ▸ Collapse Sidebar, ⌘B.
 @MainActor
 final class SidebarMenu: NSObject, NSMenuItemValidation {
     static let shared = SidebarMenu()
-    private let item = NSMenuItem(title: "Collapse Sidebar", action: #selector(toggle), keyEquivalent: "s")
+    private let item = NSMenuItem(title: "Collapse Sidebar", action: #selector(toggle), keyEquivalent: "b")
 
     func makeItem() -> NSMenuItem {
         let top = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
         let menu = NSMenu(title: "View")
         item.target = self
-        item.keyEquivalentModifierMask = [.control, .command]
+        item.keyEquivalentModifierMask = [.command]
         menu.addItem(item)
         top.submenu = menu
         return top

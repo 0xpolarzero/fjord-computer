@@ -22,10 +22,6 @@ enum WindowChrome {
     /// the header's line as a rail, which leaves that line to the three buttons and the nav buttons after them.
     static func panelTop(collapsed: Bool) -> CGFloat { collapsed ? CDS.TitleBar.header : inset }
 
-    /// Room over the sidebar's rows inside the panel: down to the header's line either way (the rail's panel starts there),
-    /// so its rows are at the same height folded or not.
-    static func rowsTop(collapsed: Bool) -> CGFloat { CDS.TitleBar.header - panelTop(collapsed: collapsed) }
-
     /// Where the page starts, from the window's leading edge: the panel and its inset.
     static func pageLeading(collapsed: Bool) -> CGFloat { inset + panelWidth(collapsed: collapsed) }
 
@@ -129,27 +125,37 @@ struct InsetWindowLayout: View {
             .padding(.leading, start)
     }
 
-    /// The sidebar: an inset panel of glass (or the sidebar's fill) whose width and top follow the fold's spring; the
-    /// sidebar in it is laid out at its full width always and clipped, so nothing inside it reflows.
+    /// The sidebar: an inset panel of glass (or the sidebar's fill) whose width and top follow the fold's spring, and the
+    /// sidebar over it, laid out once at its full width and at a fixed place (its rows from the header's line) and only
+    /// masked to the panel's shape, so nothing in it moves or lays out again as it folds: the panel's edges move round it.
     private func panel(collapsed: Bool, glass: Bool) -> some View {
         let shape = WindowChrome.panelShape
-        return GlassEffectContainer {
-            AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
-                // Out, its rows start under the header's line, where the window's three buttons and the nav buttons sit on
-                // its glass; as a rail the panel itself starts under that line.
-                .padding(.top, WindowChrome.rowsTop(collapsed: collapsed))
-                .frame(width: WindowChrome.panelWidth(collapsed: collapsed), alignment: .leading)
-                .frame(maxHeight: .infinity)
-                .clipShape(shape)
-                // The rows past a rail's edge are clipped out of sight, and out of reach: clicks there are the page's.
-                .contentShape(shape)
-                .environment(\.onGlass, glass)
+        let width = WindowChrome.panelWidth(collapsed: collapsed)
+        let top = WindowChrome.panelTop(collapsed: collapsed)
+        return ZStack(alignment: .topLeading) {
+            GlassEffectContainer {
                 // Its glass stays on for the morph's capture (left out of the picture, its place cleared there for the
                 // morph's G2).
-                .modifier(PanelMaterial(shape: shape, glass: glass, fill: CDS.Surface.sidebar, standsIn: false))
+                Color.clear
+                    .frame(width: width)
+                    .frame(maxHeight: .infinity)
+                    .modifier(PanelMaterial(shape: shape, glass: glass, fill: CDS.Surface.sidebar, standsIn: false))
+            }
+            .padding(.top, top)
+            AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
+                .frame(width: AppRootView.sidebarWidth, alignment: .leading)
+                .frame(maxHeight: .infinity)
+                .environment(\.onGlass, glass)
+                .frame(width: width, alignment: .leading)
+                // Clipped to the panel's width: the rows past a rail's edge are out of reach (clicks there are the page's).
+                .clipped()
+                // The panel's shape, from where it is now (above the rows when it is out): what is past a rail's edge is
+                // out of sight.
+                .mask(alignment: .topLeading) {
+                    shape.frame(width: width).frame(maxHeight: .infinity).padding(.top, top - CDS.TitleBar.header)
+                }
+                .padding(.top, CDS.TitleBar.header)
         }
-        // Its top moves with its width, on the fold's spring.
-        .padding(.top, WindowChrome.panelTop(collapsed: collapsed))
         .padding([.leading, .bottom], WindowChrome.inset)
     }
 }

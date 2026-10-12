@@ -13,14 +13,10 @@ import Testing
     }
 
     /// Out, the panel runs from the inset with the window's three buttons on it; as a rail it starts under the header's
-    /// line, which holds the three buttons and the nav capsule after them, clear of each other. The rows sit at the header's
-    /// line when it is out and an inset into the rail.
+    /// line, which holds the three buttons and the nav buttons after them, clear of each other.
     @Test func theRailStartsUnderTheHeadersLine() {
         #expect(WindowChrome.panelTop(collapsed: false) == WindowChrome.inset)
         #expect(WindowChrome.panelTop(collapsed: true) == CDS.TitleBar.header)
-        #expect(WindowChrome.panelTop(collapsed: false) + WindowChrome.rowsTop(collapsed: false) == CDS.TitleBar.header)
-        // The rows start at the header's line either way, so they don't move as it folds.
-        #expect(WindowChrome.panelTop(collapsed: true) + WindowChrome.rowsTop(collapsed: true) == CDS.TitleBar.header)
         #expect(WindowChrome.panelWidth(collapsed: true) == AppSidebar.railWidth)
         // The nav buttons, centred on the line, end above the rail's top.
         #expect((CDS.TitleBar.header + CDS.TitleBar.button + 2 * AppNavButtons.capsulePad) / 2 <= WindowChrome.panelTop(collapsed: true))
