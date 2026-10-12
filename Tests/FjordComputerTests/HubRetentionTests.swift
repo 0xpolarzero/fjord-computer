@@ -265,42 +265,28 @@ extension WindowSeams {
             }
         }
 
-        // MARK: The inbox, each tab from its own cell
+        // MARK: The inbox, each tab from its own cell, afresh and as the last panel fades
 
         @Test func theInboxPanelStaysOpenOverEveryRowOfEveryTabOpenedFromItsCell() async {
             await Self.concurrently(Self.edges) { edge in
                 let rig = await Rig(edge: edge, scenario: .agents)
                 defer { rig.close() }
-                for category in rig.store.shownCategories {
+                let categories = rig.store.shownCategories
+                // The first opens afresh, and again at the end as the last one fades. Between, every other one opens afresh
+                // and the rest as the last one is still fading out, the other way round on the edge across: each tab opens
+                // both ways on a side and on a top or bottom bar.
+                let across = edge == .left || edge == .bottom ? 1 : 0
+                for (k, category) in (categories + categories.prefix(1)).enumerated() {
                     let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
                     #expect(opened, "\(edge) \(category.name): no panel")
                     await rig.hoverEachItem(category.name)
                     await rig.graceElapsed()
                     #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
-                    await rig.leave(settling: true)
+                    // Off it, and back once it has faded out, or straight back while it still is.
+                    await rig.leave(settling: k + 1 < categories.count && (k + 1 + across) % 2 == 0)
                     #expect(rig.hub.section == nil, "\(edge) \(category.name): still open after the pointer left")
                     #expect(rig.window.ignoresMouseEvents && !rig.controller.watchesGlobally,
                             "\(edge) \(category.name): the bar still takes the mouse or watches it system-wide at rest")
-                }
-                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
-            }
-        }
-
-        // MARK: Back on the bar as the last panel fades
-
-        @Test func aPanelReopenedWhileTheLastOneFadesStaysOpenOverItsRows() async {
-            await Self.concurrently(Self.edges) { edge in
-                let rig = await Rig(edge: edge, scenario: .agents)
-                defer { rig.close() }
-                for category in rig.store.shownCategories + rig.store.shownCategories.prefix(1) {
-                    let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
-                    #expect(opened, "\(edge) \(category.name): no panel")
-                    await rig.hoverEachItem(category.name)
-                    await rig.graceElapsed()
-                    #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
-                    // Off it, and straight back: the closing panel is still fading out as the next opens.
-                    await rig.leave()
-                    #expect(rig.hub.section == nil)
                 }
                 #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
