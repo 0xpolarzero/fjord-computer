@@ -479,11 +479,21 @@ identity).
   - **S6(8), the fold: two containers, and the fold needs §5.2 step 2.** 20 folds: one container 64 hitches (91 in
     all), two containers 12 (14 in all), the longest 16.7 ms both ways. Two containers; and since neither reaches 0,
     the page lays out once at its final inset and rides an offset (§5.2, 2).
-  - **Not settled here: S1, S2 and S6(1–7).** They are judgements of glass against the desktop (active or subdued in a
-    non-key panel, live backdrop, sidebar glass or plate, label vibrancy, edge effects, the Reduce Transparency
-    switch); screenshots taken from this shell show only the app's windows, without what is behind them. They need the
-    owner's eyes or a screenshot with Screen Recording permission. One seen in passing: a window that loses key draws
-    its glass flatter and lighter (the inactive look), as expected.
+  - **S1 / S1b, glass in the never-key panel: pass, both paths.** Over one striped backdrop shared by both, the panel's
+    glass refracts and rims exactly as the key window's does, app active or not; the AppKit path's square screen side
+    holds (the clip works). S1b: bar and panel in one container read as one live glass shape, the rows legible on it.
+  - **S2, the backdrop: pass for moving content.** The backdrop jumped 18pt every 0.5 s: in 24 captures the panel's
+    glass always showed the current position, never the last. Not checked: a full-screen app's Space, Stage Manager,
+    video.
+  - **S6, the window: pass → W1.** (1) Glass draws key and not key (not key: the capsule and sidebar flatter, the
+    system's inactive look). (2) The inset sidebar reads as a lighter, edge-lit panel, faint in light mode and clearly
+    a panel in dark, as Finder's: keep glass. (3) Inbox rows soften under the top bar (`.soft`); the Router's and
+    Now's pages not checked. (4) Label styles adapt to light and dark; the fixed `CDS.Text` values are dark-only (near
+    invisible in light): chrome text uses `.primary`/`.secondary`/`.tertiary`. (5) `ConcentricRectangle` follows the
+    window's corners without an explicit `containerShape` too (kept explicit anyway, for radius 0). (6) Radius 0: the
+    sidebar's corners stay at 6. (7) Not tried: toggling Reduce Transparency changes a system setting (the owner's).
+    Screen captures: `screencapture` from this shell once Screen Recording was granted to Claude Code's own
+    `claude.app` (not Claude.app: the shell is a disclaimed process).
 - **Baselines** (2026-10-12, `docs/design/fjord/baselines/`):
   - `motion.json`, `scripts/motion-trace.sh` on `--demo busy`, open/fold/fold/close/peek/drag × 5: 14 hitches during
     the app's motions (Drag 4, Fold 4, Peek 3, Bar away 2, Open to first flush 2, Overlay going 1). p50 / p95: Peek 38.7
