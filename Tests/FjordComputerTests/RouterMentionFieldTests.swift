@@ -213,6 +213,80 @@ import Testing
         #expect(model.caretRequest == 26)
     }
 
+    @Test func snippetsAreOfferedAfterTheRestAndFoundByTheirOwnSearch() {
+        let (store, _, _) = triage()
+        store.snippets = [Snippet(name: "Review for bugs", text: "\n  Review this for bugs only.\nSay what you would change."),
+                          Snippet(name: "Fix CI", text: "Find out why CI fails and fix it."),
+                          Snippet(name: "Answer the review", text: "Go through the open threads."),
+                          Snippet(name: "Rebase", text: "Rebase on main."),
+                          Snippet(name: "Blank", text: "  \n")]
+        let model = RouterModel()
+        func snippets() -> [MentionSuggestion] { model.suggestions(store).filter { $0.section == .snippets } }
+        // A bare @: a few, in order, after every other section's few; one with no text isn't offered.
+        model.draft = "please @"
+        #expect(model.suggestions(store).map(\.section) == [.projects, .sessions, .notifications, .categories, .snippets, .snippets, .snippets])
+        #expect(snippets().map(\.name) == ["Review for bugs", "Fix CI", "Answer the review"])
+        let row = snippets()[0]
+        #expect(row.detail == "Review this for bugs only." && row.look.symbol == Snippet.symbol && row.insertsText)
+        // Typing: `Store.snippets(matching:)` decides, by name first, then by text.
+        model.draft = "please @revi"
+        #expect(snippets().map(\.name) == ["Review for bugs", "Answer the review"])
+        model.draft = "please @MAIN"
+        #expect(snippets().map(\.name) == ["Rebase"])
+        model.draft = "please @blank"
+        #expect(snippets().isEmpty)
+        // Picked: its text in the @ word's place, plain, the caret after it.
+        model.draft = "please @main"
+        model.pickMention(snippets()[0])
+        #expect(model.draft == "please Rebase on main." && model.pointers.isEmpty && model.caretRequest == 22)
+        #expect(model.suggestions(store).isEmpty)
+    }
+
+    /// The composer's text view in a window (whose undo it uses, as in the app), told to the model as `MentionField` tells it.
+    @Test(.hostsWindows) func aSnippetPickedInTheComposerIsOneStepOfItsUndo() throws {
+        let v = view()
+        let model = RouterModel()
+        let field = MentionField.Coordinator()
+        field.view = v
+        field.model = model
+        v.delegate = field
+        v.textStorage?.delegate = field
+        v.allowsUndo = true
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 300, height: 40), styleMask: .borderless, backing: .buffered,
+                              defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = v
+        defer { window.contentView = nil }
+        let undo = try #require(v.undoManager)
+        undo.groupsByEvent = false
+        defer { undo.removeAllActions() }
+        model.editor = v
+        show(v, "ask \(MentionText.markString) ", ["/code/lcu"])
+        model.pointers = [.project("/code/lcu")]
+        model.draft = v.string
+        undo.beginUndoGrouping()
+        v.insertText("@reb", replacementRange: v.selectedRange())
+        undo.endUndoGrouping()
+        #expect(model.draft == "ask \(MentionText.markString) @reb")
+        let snippet = MentionSuggestion(section: .snippets, pick: .text("rebase on main"), name: "Rebase", detail: "",
+                                        look: MentionLook(label: "Rebase", symbol: Snippet.symbol, tint: nil), keys: [])
+        undo.beginUndoGrouping()
+        model.pickMention(snippet)
+        undo.endUndoGrouping()
+        // In the view, as typed: the pill stays a pill, the model follows.
+        #expect(v.string == "ask \(MentionText.markString) rebase on main" && model.draft == v.string)
+        #expect(MentionText.serialize(v.attributedString()).pointers == [.project("/code/lcu")] && model.caretRequest == 20)
+        #expect(v.selectedRange() == NSRange(location: 20, length: 0))
+        // ⌘Z: the @ word back (the model with it, so no update puts the text back), then what was typed before it; ⇧⌘Z again.
+        undo.undo()
+        #expect(v.string == "ask \(MentionText.markString) @reb" && model.draft == v.string)
+        undo.undo()
+        #expect(v.string == "ask \(MentionText.markString) " && model.draft == v.string && model.pointers == [.project("/code/lcu")])
+        undo.redo()
+        undo.redo()
+        #expect(model.draft == "ask \(MentionText.markString) rebase on main")
+    }
+
     @Test func prefillAddsPillsAndTheSendCarriesThem() {
         let (store, pr, _) = triage()
         let m = MentionText.markString

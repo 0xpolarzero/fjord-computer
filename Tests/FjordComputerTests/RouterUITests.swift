@@ -518,6 +518,38 @@ import UserNotifications
         #expect(model.suggestions(store).isEmpty)
     }
 
+    /// A notification's "Open in Router" made while the Router's page isn't there: the window goes to the Router, and the
+    /// composer, made as the page appears, holds the thing's pill and the keyboard, its caret after the pill.
+    @Test(.hostsWindows) func openInRouterBeforeThePageShowsLandsInTheComposer() async throws {
+        let store = demo()
+        let entry = try #require(store.entries.first { !$0.isDone })
+        let model = RouterModel()
+        let navigator = AppNavigator(start: .settings, defaults: nil)
+        model.open(thing: entry.id, in: navigator)
+        #expect(navigator.selection == .router && model.pointers == [.notification(entry.id)])
+        #expect(model.draft == MentionText.markString + " " && model.caretRequest == 2 && model.focusRequest == 1)
+        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
+            .frame(width: 1100, height: 720))
+        let window = AwayWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .titled, backing: .buffered,
+                                defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        func fields(_ view: NSView) -> [MentionTextView] { (view as? MentionTextView).map { [$0] } ?? [] + view.subviews.flatMap(fields) }
+        await waitUntil { !fields(hosting).isEmpty }
+        let composer = try #require(fields(hosting).first)
+        // The composer asks for the keyboard as it appears (given it here if other tests' windows took it): the caret goes
+        // after the pill as it takes it.
+        await waitUntil {
+            if window.firstResponder !== composer { window.makeFirstResponder(composer) }
+            return window.firstResponder === composer && model.caretRequest == nil
+        }
+        #expect(composer.string == MentionText.markString + " " && composer.selectedRange() == NSRange(location: 2, length: 0))
+        #expect(MentionText.serialize(composer.attributedString()).pointers == [.notification(entry.id)])
+    }
+
     @Test(.hostsWindows) func aLongDraftScrolledInTheComposerIsStillTheComposers() {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400), styleMask: .borderless,
                               backing: .buffered, defer: false)

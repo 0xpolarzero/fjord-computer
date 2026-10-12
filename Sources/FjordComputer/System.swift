@@ -402,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hub.pickRouterCard = { [weak window] id in window?.pick(card: id) }
         hub.pickRouterMessage = { [weak window] id in window?.pick(message: id) }
+        hub.prefillRouter = { [weak window] thing in window?.prefillRouter(thing: thing) }
         hub.windowPlace = { [weak window] in window?.navigator.selection }
         // Banners for new cards that need you; a demo posts none.
         if !demo {

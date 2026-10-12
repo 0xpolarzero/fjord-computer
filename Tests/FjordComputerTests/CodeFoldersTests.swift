@@ -156,6 +156,22 @@ private final class Tree {
         #expect(s.codeRepos.count == 3)
     }
 
+    @Test func atOffersTheReposFoundInCodeFoldersAsProjects() async {
+        let s = store { _ in .init(repos: ["/code/app": ["o/app"], "/code/tool": []]) }
+        s.claudeSessions = ["a": ClaudeSession(id: "a", title: "a", folder: "/x/lookout", lastActivity: Date())]
+        s.addCodeFolders(["/code"])
+        await s.codeFolders.settled()
+        let projects = RouterMentions.candidates(s).compactMap(\.folder)
+        #expect(projects == s.projectFolders && Set(projects) == ["/code/app", "/code/tool", "/x/lookout"])
+        // Typed, picked: a project's pill like any other.
+        let model = RouterModel()
+        model.draft = "in @too"
+        let found = model.suggestions(s)
+        #expect(found.first?.folder == "/code/tool")
+        model.pickMention(found[0])
+        #expect(model.projects == ["/code/tool"])
+    }
+
     @Test func scannedFoldersAreNamedAndTellSameNamedProjectsApart() async {
         let s = store { _ in .init(repos: ["/y/app": ["o/app"], "/y/tool": []]) }
         s.claudeSessions = ["a": ClaudeSession(id: "a", title: "a", folder: "/x/app", lastActivity: Date())]

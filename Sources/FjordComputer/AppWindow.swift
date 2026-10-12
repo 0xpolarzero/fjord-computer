@@ -66,9 +66,14 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private lazy var keys = RouterKeys(store: store, model: routerModel) { [weak self] in self?.close() }
     /// The inbox's search, and the keys of the inbox destinations (see `AppWindowKeys`).
     let search = InboxSearch()
-    private(set) lazy var inboxKeys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search) { [weak self] in
-        self?.close()
-    }
+    private(set) lazy var inboxKeys: AppWindowKeys = {
+        let keys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search) { [weak self] in self?.close() }
+        keys.openInRouter = { [weak self] thing in
+            guard let self else { return }
+            routerModel.open(thing: thing, in: navigator)
+        }
+        return keys
+    }()
     private var monitor: Any?
     /// The window's corner radius, for the root's shapes.
     let corner = WindowCorner()
@@ -524,6 +529,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         contentChanged()
     }
 
+    /// A thing's "Open in Router" from the bar: its pill in the Router's composer (the window opens on the Router next).
+    func prefillRouter(thing: String) {
+        routerModel.prefill([.notification(thing)])
+        contentChanged()
+    }
+
     /// The Go menu's destinations with their titles, in the sidebar's order (none during the onboarding).
     var goItems: [GoMenuModel.Item] {
         guard store.settings.toolsPicked == true else { return [] }
@@ -705,6 +716,15 @@ private extension InboxTab {
     }
 }
 
+extension RouterModel {
+    /// "Open in Router" on an inbox thing: its pill in the composer (after what the draft holds), and `navigator` on the
+    /// Router. The composer takes the keyboard, its caret after the pill, also when the page is made only now.
+    func open(thing: String, in navigator: AppNavigator) {
+        prefill([.notification(thing)])
+        navigator.go(.router)
+    }
+}
+
 /// The window's corner radius as the window reports it (`AppTransition.cornerRadius(of:)`): read when it becomes key and
 /// on entering and leaving full screen, where it is 0.
 @MainActor @Observable
@@ -774,6 +794,8 @@ struct AppRootView: View {
             navigator.go(.router)
         }
         .environment(\.pickRouterCard) { card in routerModel.select(card, store: store) }
+        // A row's "Open in Router", while the Router is on.
+        .environment(\.openInRouter, store.offers(.openInRouter) ? { routerModel.open(thing: $0, in: navigator) } : nil)
         // Chips in the window's own lists: a place, or the Router on the message an action left in its conversation.
         .environment(\.openApp) { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), tools: store.tools)) }
         .environment(\.openRouterMessage) { message in

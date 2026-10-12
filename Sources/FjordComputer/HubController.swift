@@ -94,6 +94,8 @@ struct HubRoot: View {
     var openRouter: (String?) -> Void = { _ in }
     var openRouterMessage: (UUID) -> Void = { _ in }
     var pickRouterCard: (String) -> Void = { _ in }
+    /// A row's "Open in Router" (given while the Router is on).
+    var openInRouter: ((String) -> Void)? = nil
     /// How the bar and its panels draw: the app's, or a fixed one in tests.
     var chrome: Chrome = .shared
 
@@ -106,6 +108,7 @@ struct HubRoot: View {
             .environment(\.openRouter, openRouter)
             .environment(\.openRouterMessage, openRouterMessage)
             .environment(\.pickRouterCard, pickRouterCard)
+            .environment(\.openInRouter, store.offers(.openInRouter) ? openInRouter : nil)
             // Tooltips are drawn over the whole window, outside the hub's clipped shape, so they're never cut off.
             .tipSpace()
     }
@@ -190,6 +193,8 @@ final class HubController {
     }
     /// Scrolls the Router's conversation to a message, before the window opens on it.
     var pickRouterMessage: (UUID) -> Void = { _ in }
+    /// Tags a thing (its id) in the Router's composer, before the window opens on it: a row's "Open in Router".
+    var prefillRouter: (String) -> Void = { _ in }
     /// The avatars about to be shown. Replaceable so tests can observe when and in what order they are warmed.
     var prefetchAvatars: ([URL]) -> Void = { ImageCache.shared.prefetch($0) }
     /// The place the app window shows (or opens on).
@@ -264,7 +269,8 @@ final class HubController {
                                 openUpdates: { [weak self] in self?.openedUpdates() },
                                 openRouter: { [weak self] in self?.opened(.router, card: $0) },
                                 openRouterMessage: { [weak self] in self?.pickRouterMessage($0); self?.opened(.router) },
-                                pickRouterCard: pickRouterCard)
+                                pickRouterCard: pickRouterCard,
+                                openInRouter: { [weak self] in self?.prefillRouter($0); self?.opened(.router) })
         window.setFrame(dockFrame(), display: true)
         syncTrigger()
     }

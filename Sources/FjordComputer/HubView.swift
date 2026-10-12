@@ -22,6 +22,10 @@ extension EnvironmentValues {
     @Entry var openRouterMessage: (UUID) -> Void = { _ in }
     /// Picks a card in the Router (window open or not): a click on it in the bar's panel, before the window opens on the Router.
     @Entry var pickRouterCard: (String) -> Void = { _ in }
+    /// "Open in Router" on an inbox thing (its id): the app window on the Router, its composer holding the thing's pill and
+    /// the keyboard, for you to say what to do with it. Nil where the Router can't take it (off, or nothing to open it):
+    /// the rows offer no such action.
+    @Entry var openInRouter: ((String) -> Void)? = nil
     /// Whether SwiftUI has the pointer over the bar or its panel, for a host that has no `HubController` (the playground). The
     /// app ignores it: the controller alone decides, from where the hub is drawn.
     @Entry var hubPointer: (Bool) -> Void = { _ in }
@@ -230,6 +234,10 @@ struct FjordHub: View {
             Button("Settings…") { openApp(.settings) }
             if store.triageOn {
                 Button("Inbox Categories…") { openApp(.categories) }
+            }
+            // The snippets serve both tools, as in the window's sidebar.
+            if store.triageOn || store.routerOn {
+                Button("Snippets…") { openApp(.snippets) }
             }
             if store.updater.isRelease {
                 // Settings' update row says what the check finds (up to date, or why it failed); the bar has no room to.

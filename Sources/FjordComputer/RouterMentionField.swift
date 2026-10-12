@@ -133,6 +133,7 @@ struct MentionField: NSViewRepresentable {
         container.widthTracksTextView = true
         container.lineFragmentPadding = 0
         storage.addLayoutManager(layout)
+        storage.delegate = context.coordinator
         layout.addTextContainer(container)
         let view = MentionTextView(frame: .zero, textContainer: container)
         view.isRichText = false
@@ -149,7 +150,7 @@ struct MentionField: NSViewRepresentable {
         view.insertionPointColor = NSColor(CDS.Text.primary)
         view.selectedTextAttributes = [.backgroundColor: NSColor(CDS.Text.accent).withAlphaComponent(0.35)]
         view.setAccessibilityLabel("Message the Router")
-        view.setAccessibilityHelp("Return sends, Shift Return starts a new line, @ tags a project, a session, a notification or a category")
+        view.setAccessibilityHelp("Return sends, Shift Return starts a new line, @ tags a project, a session, a notification or a category, or inserts a snippet")
         view.delegate = context.coordinator
         context.coordinator.view = view
 
@@ -168,6 +169,7 @@ struct MentionField: NSViewRepresentable {
         let c = context.coordinator
         c.model = model
         c.store = store
+        model.editor = view
         let (font, base) = Self.attributes()
         view.base = base
         view.font = font
@@ -241,7 +243,7 @@ struct MentionField: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         weak var view: MentionTextView?
         var model: RouterModel?
         var store: Store?
@@ -253,6 +255,20 @@ struct MentionField: NSViewRepresentable {
         struct Fit: Hashable {
             var width: CGFloat
             var text: String
+        }
+
+        /// The text changed by the view's undo or redo (⌘Z), which tells its delegate nothing: the model follows it here, or
+        /// the next update would put the text back.
+        nonisolated func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+                                     range editedRange: NSRange, changeInLength delta: Int) {
+            guard editedMask.contains(.editedCharacters) else { return }
+            MainActor.assumeIsolated {
+                guard !syncing, let model, view?.undoManager?.isUndoing == true || view?.undoManager?.isRedoing == true
+                else { return }
+                let (draft, pointers) = MentionText.serialize(textStorage)
+                if model.pointers != pointers { model.pointers = pointers }
+                if model.draft != draft { model.draft = draft }
+            }
         }
 
         func textDidChange(_ notification: Notification) {

@@ -348,8 +348,7 @@ struct MentionSuggestion: Identifiable, Equatable {
     /// The list's sections, in order.
     enum Section: Int, CaseIterable, Comparable {
         case projects, sessions, notifications, categories
-        /// Text to insert (a snippet's): picked, it takes the @ word's place as text, not as a pill. Nothing lists any yet;
-        /// whatever does adds its rows to `RouterMentions.candidates`.
+        /// Text to insert (a snippet's): picked, it takes the @ word's place as text, not as a pill.
         case snippets
 
         var title: String {
@@ -373,11 +372,12 @@ struct MentionSuggestion: Identifiable, Equatable {
 
     var section: Section
     var pick: Pick
-    /// What the row says first, after an "@" (`lookout`, `lookout#12`), and after it, muted.
+    /// What the row says first, after an "@" (`lookout`, `lookout#12`; a snippet's name without one), and after it, muted.
     var name: String
     var detail: String
     var look: MentionLook
-    /// What the typed word is matched against, the name first.
+    /// What the typed word is matched against, the name first. None: it was matched already, and its order is the match's
+    /// (a snippet's row, found by `Store.snippets(matching:)`).
     var keys: [String]
 
     var id: String {
@@ -392,19 +392,25 @@ struct MentionSuggestion: Identifiable, Equatable {
 
     /// The project's folder, for a project's row.
     var folder: String? { if case .pointer(.project(let folder)) = pick { folder } else { nil } }
+
+    /// Whether picking it inserts text (a snippet's) rather than a pill: its row says its name without an "@".
+    var insertsText: Bool { if case .text = pick { true } else { false } }
 }
 
 extension RouterMentions {
-    /// How many rows each section shows, and the whole list: a bare @ shows a few of each, typing more of the best.
+    /// How many rows each section shows, and the whole list: a bare @ shows a few of each (every section's), typing more of
+    /// the best.
     static let perSection = (bare: 3, typed: 4)
-    static let maxRows = 12
+    static let maxRows = 15
 
-    /// Everything @ can point to, by section: the projects; the sessions, working first then the latest; the open
-    /// notifications, unread first then the latest; the categories in the bar's order. `except`: what the draft tags already.
+    /// Everything @ can point to, by section: the projects (those of your sessions and the repos found in your code
+    /// folders); the sessions, working first then the latest; the open notifications, unread first then the latest; the
+    /// categories in the bar's order; then the snippets `query` finds, best first (all of them, in order, for a bare @).
+    /// `except`: what the draft tags already.
     @MainActor
-    static func candidates(_ store: Store, except: Set<RouterPointer> = []) -> [MentionSuggestion] {
+    static func candidates(_ store: Store, except: Set<RouterPointer> = [], query: String = "") -> [MentionSuggestion] {
         var out: [MentionSuggestion] = []
-        for folder in store.knownFolders where !folder.isEmpty && !except.contains(.project(folder)) {
+        for folder in store.projectFolders where !folder.isEmpty && !except.contains(.project(folder)) {
             let name = store.folderName(folder)
             out.append(MentionSuggestion(section: .projects, pick: .pointer(.project(folder)), name: name,
                                          detail: MentionList.shortPath(folder),
@@ -435,6 +441,12 @@ extension RouterMentions {
             out.append(MentionSuggestion(section: .categories, pick: .pointer(.category(c.id)), name: c.title,
                                          detail: "\(count) open", look: store.pointerLook(.category(c.id)), keys: [c.title]))
         }
+        // Found by the snippets' own search (their name or their text), so no keys: the word isn't matched again.
+        for s in store.snippets(matching: query) where !s.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            out.append(MentionSuggestion(section: .snippets, pick: .text(s.text), name: s.title, detail: s.preview ?? "",
+                                         look: MentionLook(label: s.title, symbol: Snippet.symbol, tint: CDS.Text.secondary),
+                                         keys: []))
+        }
         return out
     }
 
@@ -442,7 +454,7 @@ extension RouterMentions {
     static func suggest(_ candidates: [MentionSuggestion], query: String) -> [MentionSuggestion] {
         let per = query.isEmpty ? perSection.bare : perSection.typed
         let scored = candidates.compactMap { c -> (MentionSuggestion, Int)? in
-            let best = c.keys.compactMap { score($0, query: query) }.min()
+            let best = c.keys.isEmpty ? 0 : c.keys.compactMap { score($0, query: query) }.min()
             return best.map { (c, $0) }
         }
         // Stable within a score: the candidates' own order (working sessions, unread notifications first).

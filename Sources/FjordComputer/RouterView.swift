@@ -737,12 +737,16 @@ final class RouterModel {
         }
     }
 
-    /// What the @ word matches, by section (projects, sessions, notifications, categories), best first in each (a few of
-    /// each for a bare @); what the draft tags already left out.
+    /// What the @ word matches, by section (projects, sessions, notifications, categories, snippets), best first in each (a
+    /// few of each for a bare @); what the draft tags already left out.
     func suggestions(_ store: Store) -> [MentionSuggestion] {
         guard let query = mention else { return [] }
-        return RouterMentions.suggest(RouterMentions.candidates(store, except: Set(pointers)), query: query)
+        return RouterMentions.suggest(RouterMentions.candidates(store, except: Set(pointers), query: query), query: query)
     }
+
+    /// The composer's text view (`MentionField`): text a pick inserts goes in through it while it shows the draft, so ⌘Z
+    /// takes it back as it does what you type.
+    @ObservationIgnored weak var editor: MentionTextView?
 
     /// Return or Tab on a suggestion: a pill in the @ word's place, or the text it inserts (a snippet's).
     func pickMention(_ suggestion: MentionSuggestion) {
@@ -752,7 +756,8 @@ final class RouterModel {
         }
     }
 
-    /// The @ word replaced by `text`, as typed (no pill); the caret after it.
+    /// The @ word replaced by `text`, as typed (no pill); the caret after it. With the composer's text view showing the
+    /// draft, the edit is the view's own, one step of its undo (the @ word comes back).
     func insertMention(_ text: String) {
         guard mention != nil, let found = Self.mention(in: draft, caret: caret) else { return }
         let start = draft.utf16.distance(from: draft.utf16.startIndex, to: found.range.lowerBound.samePosition(in: draft.utf16)!)
@@ -760,8 +765,13 @@ final class RouterModel {
         var next = draft
         next.replaceSubrange(found.range, with: words)
         let end = start + (words as NSString).length
+        if let editor, !editor.hasMarkedText(), MentionText.serialize(editor.attributedString()) == (draft, pointers) {
+            editor.breakUndoCoalescing()
+            editor.insertPlain(words, replacing: NSRange(found.range, in: draft))
+            editor.breakUndoCoalescing()
+        }
         caret = end
-        draft = next
+        if draft != next { draft = next }
         caretRequest = end
         mention = nil
     }

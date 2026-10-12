@@ -104,17 +104,23 @@ struct RouterComposer: View {
             mentionAt = mentionPoint(editor)
         }
         .onChange(of: model.caretRequest) { _, request in
-            guard let request else { return }
-            model.caretRequest = nil
+            guard request != nil else { return }
             // After the field has the new text.
-            DispatchQueue.main.async {
-                guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-                let at = min(request, (editor.string as NSString).length)
-                editor.setSelectedRange(NSRange(location: at, length: 0))
-                model.followCaret(editor)
-                mentionAt = mentionPoint(editor)
-            }
+            DispatchQueue.main.async { placeCaret() }
         }
+    }
+
+    /// Puts the caret where the model asked (`caretRequest`) once the composer's text view has the keyboard: at once when
+    /// it has it, else as it takes it (a notification's "Open in Router" prefilled before the Router's page showed).
+    private func placeCaret() {
+        guard let request = model.caretRequest,
+              let editor = model.editor ?? (NSApp.keyWindow?.firstResponder as? NSTextView),
+              editor.window?.firstResponder === editor else { return }
+        model.caretRequest = nil
+        let at = min(request, (editor.string as NSString).length)
+        editor.setSelectedRange(NSRange(location: at, length: 0))
+        model.followCaret(editor)
+        mentionAt = mentionPoint(editor)
     }
 
     // MARK: Strip
@@ -188,7 +194,12 @@ struct RouterComposer: View {
         return MentionField(store: store, model: model, maxHeight: CGFloat(lines) * 20, editable: on, focusTick: focusTick) { now in
             focused = now
             model.composerFocused = now
-            if now { DispatchQueue.main.async { typePendingKeys() } }
+            if now {
+                DispatchQueue.main.async {
+                    placeCaret()
+                    typePendingKeys()
+                }
+            }
         }
         .frame(minHeight: 20)
         .background(alignment: .topLeading) {
@@ -403,7 +414,7 @@ struct MentionList: View {
                             .foregroundStyle(row.look.tint ?? CDS.Text.secondary)
                             .frame(width: d.icon, height: d.icon)
                         HStack(alignment: .firstTextBaseline, spacing: d.gap.xs) {
-                            Text("@" + row.name).font(CDS.sans(d.body.0)).foregroundStyle(CDS.Text.primary)
+                            Text(row.insertsText ? row.name : "@" + row.name).font(CDS.sans(d.body.0)).foregroundStyle(CDS.Text.primary)
                                 .lineLimit(1).layoutPriority(1)
                             Text(row.detail).font(CDS.sans(d.caption.0)).foregroundStyle(CDS.Text.muted)
                                 .lineLimit(1).truncationMode(row.folder == nil ? .tail : .head)

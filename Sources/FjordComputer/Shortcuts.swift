@@ -128,6 +128,8 @@ struct ModifierTap {
 
 enum ShortcutAction: String, CaseIterable, Identifiable {
     case togglePanel, router, openItem, toggleRead, discard, markAllRead, refresh
+    /// The picked row's thing tagged in a message to the Router (needs the Router on too: `Store.offers`).
+    case openInRouter
 
     var id: String { rawValue }
 
@@ -140,6 +142,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .markAllRead: "Mark all seen"
         case .refresh: "Refresh now"
         case .router: "Open the Router"
+        case .openInRouter: "Open in Router"
         }
     }
 
@@ -151,7 +154,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         switch self {
         case .togglePanel: nil
         case .router: .router
-        case .openItem, .toggleRead, .discard, .markAllRead, .refresh: .triage
+        case .openItem, .toggleRead, .discard, .markAllRead, .refresh, .openInRouter: .triage
         }
     }
 
@@ -164,11 +167,18 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .markAllRead: Shortcut(keyCode: UInt16(kVK_Space), modifiers: [.option])
         case .refresh: Shortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.command])
         case .router: Shortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .option])
+        case .openInRouter: Shortcut(keyCode: UInt16(kVK_Return), modifiers: [.command])
         }
     }
 }
 
 extension Store {
+    /// Whether `action` shows in Settings and works: its tool is on, and for Open in Router the Router too.
+    func offers(_ action: ShortcutAction) -> Bool {
+        guard action.tool.map(isOn) ?? true else { return false }
+        return action != .openInRouter || routerOn
+    }
+
     /// The action that already holds `shortcut`, which `action` can't take as well.
     func shortcutConflict(_ shortcut: Shortcut, for action: ShortcutAction) -> ShortcutAction? {
         guard !shortcut.isUnassigned else { return nil }

@@ -180,6 +180,7 @@ struct EntryRow: View {
     let store: Store
     let hub: HubState
     @State private var hover = false
+    @Environment(\.openInRouter) private var openInRouter
 
     private var thing: Thing { entry.thing }
     /// Compared here, in this row's own body: hovering another row doesn't rebuild the whole hub.
@@ -322,7 +323,7 @@ struct EntryRow: View {
 
     /// Room the controls take over the title line: 24pt buttons 2 apart, 3 from the end, and 4 before them.
     private var actionsWidth: CGFloat {
-        let n = CGFloat(unread || entry.isDone ? 3 : 2)
+        let n = CGFloat((unread || entry.isDone ? 3 : 2) + (openInRouter == nil ? 0 : 1))
         return n * IconButton.Size.row + (n - 1) * CDS.RowControl.gap + CDS.RowControl.inset + 4
     }
 
@@ -345,6 +346,12 @@ struct EntryRow: View {
                 IconButton(symbol: "archivebox", help: "Archive", detail: "Moves it to the archive until something new happens · \(store.shortcut(.discard).display)",
                            size: size) { store.finish(entry) }
             }
+            if let openInRouter {
+                IconButton(symbol: EntryMenu.routerSymbol, help: "Open in Router",
+                           detail: "Tag it in a message to the Router · \(store.shortcut(.openInRouter).display)", size: size) {
+                    openInRouter(entry.id)
+                }
+            }
             IconButton(symbol: "arrow.up.right", help: "Open on GitHub", detail: store.shortcut(.openItem).display, size: size) {
                 store.open(entry)
             }
@@ -352,13 +359,18 @@ struct EntryRow: View {
     }
 }
 
-/// An entry's context menu: open, copy link, seen, archive.
+/// An entry's context menu: open (on GitHub, in the Router), copy link, seen, archive.
 struct EntryMenu: View {
     let entry: InboxEntry
     let store: Store
+    @Environment(\.openInRouter) private var openInRouter
+
+    /// "Open in Router"'s symbol: the Router's own.
+    static let routerSymbol = Tool.router.symbol
 
     var body: some View {
         Button("Open on GitHub") { store.open(entry) }
+        if let openInRouter { Button("Open in Router") { openInRouter(entry.id) } }
         Button("Copy link") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(entry.thing.url.absoluteString, forType: .string)

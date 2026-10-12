@@ -71,6 +71,9 @@ final class AppWindowKeys {
     let search: InboxSearch
     /// Closes the window (Esc with nothing left to step out of).
     let close: () -> Void
+    /// "Open in Router" on a thing (its id): the window on the Router, the thing tagged in its composer. Done only while
+    /// the Router is on.
+    var openInRouter: (String) -> Void = { _ in }
 
     init(store: Store, navigator: AppNavigator, hub: HubState, search: InboxSearch, close: @escaping () -> Void) {
         self.store = store
@@ -199,6 +202,9 @@ final class AppWindowKeys {
             store.open(entry)
         } else if shortcut == store.shortcut(.toggleRead) {
             if entry.isUnread { store.markSeen(entry) } else if !entry.isDone { store.markUnread(entry) }
+        } else if shortcut == store.shortcut(.openInRouter) {
+            guard store.offers(.openInRouter) else { return false }
+            openInRouter(entry.id)
         } else if shortcut == store.shortcut(.discard) {
             let i = targets.firstIndex(of: selection) ?? 0
             // The pick moves on to the next row (the previous one at the end) as this one leaves the list.

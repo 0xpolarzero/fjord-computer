@@ -120,6 +120,25 @@ import Testing
         #expect(r.store.unreadCount(r.category) == 0)
     }
 
+    @Test func commandReturnOpensThePickInTheRouterWhileItIsOn() {
+        let r = rig()
+        var opened: [String] = []
+        r.keys.openInRouter = { opened.append($0) }
+        let rows = ids(r)
+        r.hub.selection = rows[1]
+        let commandReturn = key(kVK_Return, "\r", .command)
+        // The Router off: nothing, and nothing in Settings either.
+        #expect(!r.keys.key(commandReturn) && opened.isEmpty)
+        #expect(!r.store.offers(.openInRouter) && r.store.offers(.discard))
+        r.store.router.enabled = true
+        r.store.agents.enabled = true
+        #expect(r.store.offers(.openInRouter))
+        #expect(r.keys.key(commandReturn) && opened == [String(rows[1].dropFirst(2))])
+        // Nothing picked: nothing to open.
+        r.hub.selection = nil
+        #expect(!r.keys.key(commandReturn) && opened.count == 1)
+    }
+
     @Test func refreshIsHandledOnItsBinding() {
         let r = rig()
         r.store.isSyncing = true
