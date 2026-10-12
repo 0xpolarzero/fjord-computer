@@ -39,7 +39,7 @@ struct RouterMain: View {
 
     var body: some View {
         if #available(macOS 26, *) {
-            // The page runs under its top bar (glass-plan §5.3): the history softened by the scroll edge effect, Now's
+            // The page runs under its top bar (glass-plan §5.3): in a wide window the history, Now's
             // column with a hard edge under its own bar (see `NowColumn`). The composer floats over the page's bottom
             // (§5.4): its height is the page's bottom inset, so the last line still lands above it and earlier ones scroll
             // under it.
