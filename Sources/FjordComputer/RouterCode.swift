@@ -50,7 +50,7 @@ struct RouterMain: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             .safeAreaBar(edge: .top, spacing: 0) { topBar }
-            .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectHidden(true, for: .top)
         } else {
             VStack(spacing: 0) {
                 topBar
@@ -90,6 +90,8 @@ struct RouterMain: View {
         .padding(.trailing, CDS.TitleBar.endInset)
         .frame(height: CDS.TitleBar.bar)
         .frame(height: CDS.TitleBar.header)
+        // The page's ground behind its title line, so nothing scrolled under it shows through the title.
+        .background(CDS.Surface.s1)
     }
 }
 

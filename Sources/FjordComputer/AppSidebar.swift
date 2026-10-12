@@ -3,7 +3,7 @@ import SwiftUI
 // The app window's sidebar: the bar's items with their names and counts, in Claude's Code-tab sidebar look
 // (docs/design/spec/global-sidebar-titlebar.md §2): flat #111, 26pt rows, a 24pt leading slot, 13pt labels.
 //
-// Inbox: each category shown (its symbol in its colour, what is unread or failing), then Done. The Router after it, with
+// Inbox: each category shown (its symbol in its colour, what is unread or failing), then the archive. The Router after it, with
 // what needs you and what is done. Settings and the inbox's categories at the bottom.
 
 /// Whether the sidebar is an icon rail, remembered across launches (a shot or a test passes `defaults: nil`; a demo
@@ -108,8 +108,8 @@ struct AppSidebar: View {
                                 .overlay(alignment: .topLeading) { treeGuide }
                             }
                         }
-                        AppSidebarRow(title: "Done", on: navigator.selection == .done,
-                                      tip: "Done · \(store.doneEntries.count)", action: { navigator.go(.done) }) { on in
+                        AppSidebarRow(title: "Archive", on: navigator.selection == .done,
+                                      tip: "Archive · \(store.doneEntries.count)", action: { navigator.go(.done) }) { on in
                             Image(systemName: "archivebox")
                                 .font(.system(size: M.symbol, weight: .medium))
                                 .chromeInk(on ? .primary : .tertiary, glass: onGlass)
@@ -408,49 +408,6 @@ private struct SidebarTextModifier: ViewModifier {
 
 private extension View {
     func sidebarText(_ collapsed: Bool) -> some View { modifier(SidebarTextModifier(collapsed: collapsed)) }
-}
-
-/// The wordmark at the top of the expanded sidebar on macOS 26 (glass-plan §9 Phase 5): "fjord" in Geist Medium, as the
-/// brief's wordmark, the j's dot a disc in fonte (as the onboarding's mark, the only other fonte). The disc sits as the
-/// mark's drawing places it
-/// (docs/design/fjord/mark.html): 0.6 into the dotless j's advance, 0.75 of the size over the baseline, a radius of 0.075 of
-/// it. It goes and comes with the labels, so the rail never shows it.
-struct SidebarWordmark: View {
-    let collapsed: Bool
-    @Environment(\.onGlass) private var onGlass
-    static let size: CGFloat = 16
-    /// With U+0237, the dotless j: the disc is its dot.
-    static let text = "f\u{0237}ord"
-    /// The mark's drawing's letter spacing.
-    static let tracking: CGFloat = -0.012 * size
-    static let discRadius: CGFloat = 0.075 * size
-    /// The disc's centre over the baseline.
-    static let discHeight: CGFloat = 0.75 * size
-    /// The disc's centre from the text's start: past the f and 0.6 into the j, both with their tracking.
-    static let discX: CGFloat = {
-        let font = CDS.nsSans(size, .medium)
-        func advance(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width + tracking }
-        return advance("f") + 0.6 * advance("\u{0237}")
-    }()
-
-    var body: some View {
-        Text(Self.text)
-            .font(CDS.sans(Self.size, .medium))
-            .tracking(Self.tracking)
-            .chromeInk(.primary, glass: onGlass)
-            .lineLimit(1)
-            .fixedSize()
-            .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
-                Circle()
-                    .fill(FjordLogo.fonte)
-                    .frame(width: 2 * Self.discRadius, height: 2 * Self.discRadius)
-                    .alignmentGuide(.leading) { $0[HorizontalAlignment.center] - Self.discX }
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Self.discHeight }
-            }
-            .sidebarText(collapsed)
-            // A logo, not navigation: the window's title already names the app.
-            .accessibilityHidden(true)
-    }
 }
 
 /// The sidebar's Inbox label (§2.6, 12/16 muted, its text inset 10), with an edit button at its right on hover that opens the

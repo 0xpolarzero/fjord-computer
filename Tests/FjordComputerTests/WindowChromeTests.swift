@@ -21,18 +21,18 @@ import Testing
         #expect(WindowChrome.panelTop(collapsed: false) + WindowChrome.rowsTop(collapsed: false) == CDS.TitleBar.header)
         #expect(WindowChrome.rowsTop(collapsed: true) == WindowChrome.inset)
         #expect(WindowChrome.panelWidth(collapsed: true) == AppSidebar.railWidth)
-        // The capsule on the rail's header line: after the three buttons, from the page's start.
-        #expect(WindowChrome.pageLeading(collapsed: true) + WindowChrome.navGap >= TrafficLights.end + 10)
-        // Centred on the line, it ends above the rail's top.
+        // The nav buttons, centred on the line, end above the rail's top.
         #expect((CDS.TitleBar.header + CDS.TitleBar.button + 2 * AppNavButtons.capsulePad) / 2 <= WindowChrome.panelTop(collapsed: true))
     }
 
-    /// The capsule sits at the same place in the page either way: clear of the window's three buttons over a rail, beside
-    /// the sidebar (never on it) when it is out.
-    @Test func theNavCapsuleClearsTheWindowsButtonsAndTheSidebar() {
-        #expect(WindowChrome.pageLeading(collapsed: true) + WindowChrome.navGap >= AppNavButtons.leading)
-        #expect(WindowChrome.navGap >= WindowChrome.inset)
-        #expect(WindowChrome.headerInset > WindowChrome.navGap)
+    /// The nav buttons sit after the window's three, inside the expanded sidebar; folded, the page's title makes room for
+    /// them over its line, and out it starts at the page's start.
+    @Test func theNavButtonsSitAfterTheWindowsButtonsInsideTheSidebar() {
+        #expect(AppNavButtons.leading >= TrafficLights.end + 10)
+        #expect(AppNavButtons.leading + AppNavButtons.capsuleWidth <= WindowChrome.pageLeading(collapsed: false) - WindowChrome.inset)
+        #expect(WindowChrome.pageLeading(collapsed: true) + WindowChrome.headerInset(collapsed: true)
+                == AppNavButtons.leading + AppNavButtons.capsuleWidth)
+        #expect(WindowChrome.headerInset(collapsed: false) == 0)
     }
 
     /// Opaque, the sidebar's ghost tokens as before; on glass ink steps of their own, nothing at rest either way.
@@ -48,16 +48,6 @@ import Testing
         }
     }
 
-    /// The wordmark starts after the window's three buttons and fits the expanded sidebar; its disc sits over the j.
-    @Test func theWordmarkFitsTheSidebarsTitleLine() {
-        // As shipped: in Geist (the app loads it at launch).
-        Brand.loadFonts()
-        let width = (SidebarWordmark.text as NSString).size(withAttributes: [.font: CDS.nsSans(SidebarWordmark.size, .medium)]).width
-        #expect(WindowChrome.wordmarkLeading > TrafficLights.end)
-        #expect(WindowChrome.wordmarkLeading + width <= WindowChrome.inset + AppRootView.sidebarWidth - WindowChrome.inset)
-        #expect(SidebarWordmark.discX > 0 && SidebarWordmark.discX < width / 3)
-        #expect(SidebarWordmark.discHeight + SidebarWordmark.discRadius < CDS.TitleBar.header - 2 * WindowChrome.inset)
-    }
 
     @Test func aShapeInsetInTheWindowKeepsTheFloorInFullScreen() {
         #expect(Theme.Radius.concentric(0, inset: WindowChrome.inset, minimum: WindowChrome.minimumRadius) == 6)

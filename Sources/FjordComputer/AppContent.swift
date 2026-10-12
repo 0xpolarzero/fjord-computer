@@ -2,8 +2,8 @@ import SwiftUI
 
 // What the app window shows for a destination, and the inbox list at full width.
 
-/// A tab of the inbox at the window's width: the same rows as the hub's (`EntryRow`: open, mark seen, Done, restore, the
-/// context menu), newest first, with the undo line after a Done and "Mark all as seen" in the toolbar.
+/// A tab of the inbox at the window's width: the same rows as the hub's (`EntryRow`: open, mark seen, archive, restore, the
+/// context menu), newest first, with the undo line after an archive and "Mark all as seen" in the toolbar.
 struct InboxListView: View {
     let store: Store
     let tab: InboxTab
@@ -85,7 +85,7 @@ struct InboxListView: View {
     private var title: String {
         if searching { return "Search" }
         switch tab {
-        case .done: return "Done"
+        case .done: return "Archive"
         case .category: return store.category(tab)?.title ?? "Inbox"
         }
     }
@@ -93,7 +93,7 @@ struct InboxListView: View {
     private func subtitle(_ all: [InboxEntry], unread: Int) -> String {
         if searching { return all.isEmpty ? "" : "\(all.count) found" }
         if all.isEmpty { return "" }
-        if tab == .done { return "\(all.count) moved to Done" }
+        if tab == .done { return "\(all.count) archived" }
         if store.category(tab)?.isCI == true { return "\(all.count) failing" }
         return unread > 0 ? "\(unread) unread of \(all.count)" : "\(all.count) seen"
     }
@@ -117,7 +117,7 @@ struct InboxListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// After a Done, for a few seconds: what happened and a way to take it back (⌘Z does it for 30 s).
+    /// After an archive, for a few seconds: what happened and a way to take it back (⌘Z does it for 30 s).
     private var undoLine: some View {
         Group {
             if let entry = store.undoStack.line {
@@ -165,7 +165,7 @@ struct AppPage<Trailing: View, Content: View>: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .safeAreaBar(edge: .top, spacing: 0) { header }
-                .scrollEdgeEffectStyle(.soft, for: .top)
+                .scrollEdgeEffectHidden(true, for: .top)
         } else {
             VStack(spacing: 0) {
                 header
@@ -191,6 +191,8 @@ struct AppPage<Trailing: View, Content: View>: View {
         .padding(.leading, max(CDS.TitleBar.endInset, leadingInset + 14))
         .padding(.trailing, CDS.TitleBar.endInset)
         .frame(height: CDS.TitleBar.header)
+        // The page's own ground behind its title line, so nothing scrolled under it shows through the title.
+        .background(CDS.Surface.s1)
     }
 }
 

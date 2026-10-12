@@ -2,8 +2,9 @@ import SwiftUI
 
 // The app window's chrome on macOS 26 (docs/design/fjord/glass-plan.md §5.2–§5.3): the sidebar an inset panel, glass (or
 // its opaque fill), folding to a rail of the same shape; the page beside it, laid out once at the fold's end and drawn on
-// the fold's spring by an offset, so a fold never lays the page out again frame by frame (§11, S6(8)); the sidebar toggle,
-// back and forward as plain buttons at the page's start, riding the same offset. macOS 14 and 15 keep the flat sidebar.
+// the fold's spring; the sidebar toggle, back and forward as plain buttons on the title line right after the window's
+// three buttons, in the same place whether the sidebar is out (on its glass) or a rail (over the page's line), so a fold
+// moves everything round them and never them. macOS 14 and 15 keep the flat sidebar.
 
 /// Where the window's chrome sits on macOS 26.
 @MainActor
@@ -27,16 +28,11 @@ enum WindowChrome {
     /// Where the page starts, from the window's leading edge: the panel and its inset.
     static func pageLeading(collapsed: Bool) -> CGFloat { inset + panelWidth(collapsed: collapsed) }
 
-    /// From the page's start to the nav buttons': as far as keeps it clear of the window's three buttons on the header's
-    /// line when the sidebar is a rail, the same when it is out, so the buttons and the title after them never move inside
-    /// the page.
-    static var navGap: CGFloat { max(inset, AppNavButtons.leading - pageLeading(collapsed: true)) }
-
-    /// The sidebar's wordmark's start, from the window's edge: a gap after the window's three buttons.
-    static var wordmarkLeading: CGFloat { TrafficLights.end + 12 }
-
-    /// Room the nav buttons take at the page header's start: the page's title goes after it.
-    static var headerInset: CGFloat { navGap + AppNavButtons.capsuleWidth }
+    /// Room the page's header leaves at its start for the nav buttons: up to their end and a gap when the sidebar is a rail
+    /// (they sit over the page's line then), none when it is out (they sit on the sidebar).
+    static func headerInset(collapsed: Bool) -> CGFloat {
+        collapsed ? AppNavButtons.leading + AppNavButtons.capsuleWidth - pageLeading(collapsed: true) : 0
+    }
 
     /// The sidebar's shape: concentric with the window's corners (its radius less the inset) under the root's
     /// `containerShape`, never under `minimumRadius`; the same radius on all four corners.
@@ -106,31 +102,30 @@ struct InsetWindowLayout: View {
         let collapsed = sidebar.collapsed
         let glass = chrome.mode == .glass
         ZStack(alignment: .topLeading) {
-            page(start: WindowChrome.pageLeading(collapsed: collapsed), glass: glass)
+            page(start: WindowChrome.pageLeading(collapsed: collapsed), collapsed: collapsed)
             panel(collapsed: collapsed, glass: glass)
-        }
-        // What the page uncovers while it rides the fold (its far side as the sidebar comes out) is the window's own s1.
-        .clipped()
-    }
-
-    /// The page and the nav buttons over its header, from `start`: a fold animates it on the fold's own spring, in step with
-    /// the sidebar's edge. (Laying the page out once at its end and moving it with an offset measured worse, 13 to 14
-    /// hitches in 12 folds against 10 to 11, and jumped what is anchored to the page's far side; §11.)
-    private func page(start: CGFloat, glass: Bool) -> some View {
-        ZStack(alignment: .topLeading) {
-            AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                       checksClaudeCode: checksClaudeCode, leadingInset: WindowChrome.headerInset)
-            // On the title line as plain buttons, no capsule of their own: the window's buttons, these and the page's title
-            // read as one line.
+            // The sidebar toggle, back and forward: plain buttons on the title line right after the window's three, at the
+            // same place out and folded, on the sidebar's glass when it is out and over the page's line as a rail.
             AppNavButtons(navigator: navigator,
                           sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
                 .padding(AppNavButtons.capsulePad)
-                .environment(\.onGlass, glass)
-                .padding(.leading, WindowChrome.navGap)
+                .environment(\.onGlass, glass && !collapsed)
+                .padding(.leading, AppNavButtons.leading - AppNavButtons.capsulePad)
                 .frame(height: CDS.TitleBar.header)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.leading, start)
+        // What the page uncovers while it follows the fold (its far side as the sidebar comes out) is the window's own s1.
+        .clipped()
+    }
+
+    /// The page from `start`: a fold animates it on the fold's own spring, in step with the sidebar's edge, its header's
+    /// title making room for the nav buttons when they sit over its line. (Laying the page out once at its end and moving
+    /// it with an offset measured worse, 13 to 14 hitches in 12 folds against 10 to 11, and jumped what is anchored to the
+    /// page's far side; §11.)
+    private func page(start: CGFloat, collapsed: Bool) -> some View {
+        AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                   checksClaudeCode: checksClaudeCode, leadingInset: WindowChrome.headerInset(collapsed: collapsed))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.leading, start)
     }
 
     /// The sidebar: an inset panel of glass (or the sidebar's fill) whose width and top follow the fold's spring; the
@@ -139,16 +134,9 @@ struct InsetWindowLayout: View {
         let shape = WindowChrome.panelShape
         return GlassEffectContainer {
             AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
-                // Out, its rows start under the header's line, where the window's three buttons sit on its glass; as a rail
-                // the panel itself starts under that line.
+                // Out, its rows start under the header's line, where the window's three buttons and the nav buttons sit on
+                // its glass; as a rail the panel itself starts under that line.
                 .padding(.top, WindowChrome.rowsTop(collapsed: collapsed))
-                // The wordmark on the header's line, after the window's three buttons, centred on them.
-                .overlay(alignment: .topLeading) {
-                    SidebarWordmark(collapsed: collapsed)
-                        .frame(height: CDS.TitleBar.header - 2 * WindowChrome.inset)
-                        .padding(.leading, WindowChrome.wordmarkLeading - WindowChrome.inset)
-                        .allowsHitTesting(false)
-                }
                 .frame(width: WindowChrome.panelWidth(collapsed: collapsed), alignment: .leading)
                 .frame(maxHeight: .infinity)
                 .clipShape(shape)
