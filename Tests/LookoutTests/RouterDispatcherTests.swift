@@ -835,7 +835,7 @@ import Testing
         // Started, not failed; the run is over (you may send meanwhile) and the line says what its first message waits for.
         #expect(decision(s, a)?.done == [.started(session: "local_late", project: "lookout", model: nil, effort: nil)])
         #expect(!d.isBusy && decision(s, a)?.outcome == .pending && s.router.lookoutStarted["local_late"] != nil)
-        #expect(d.held[a!]?.contains("waits for the Claude app") == true && d.held[a!]?.contains("21 sessions") == true)
+        #expect(d.held[a!]?.contains("waits for the Claude app") == true && d.held[a!]?.contains("at most 21 sessions") == true)
         // The app runs it: the first message goes, and the line says so.
         f.finishHeld?.resume()
         await waitUntil { decision(s, a)?.outcome == .done }

@@ -891,13 +891,14 @@ enum SessionStart {
     struct NotRunning: LocalizedError, Equatable {
         /// `local_<uuid>`.
         var sessionID: String
-        /// How many sessions the app runs, when it is at its limit (the likely reason); nil otherwise.
+        /// The app's limit of sessions run at once, when it is at it (the likely reason); nil otherwise. Lookout's count of
+        /// registered processes isn't the app's own (it counts more), so only the limit is said.
         var full: Int? = nil
         var errorDescription: String? {
             "The new session is in the Claude app, but the app hasn't run it yet" + Self.reason(full)
         }
         static func reason(_ full: Int?) -> String {
-            full.map { " (it runs \($0) sessions, its limit): close one you're done with, then open the new one" }
+            full.map { " (it runs at most \($0) sessions at once and is at that limit): close one you're done with, then open the new one" }
                 ?? ": open it there"
         }
     }
@@ -930,12 +931,12 @@ enum SessionStart {
             running = peers.count
             there = has
             if there, running >= limit, Date().timeIntervalSince(start) >= grace {
-                throw NotRunning(sessionID: host, full: running)
+                throw NotRunning(sessionID: host, full: limit)
             }
             if Date() >= deadline { break }
             try await Task.sleep(nanoseconds: 250_000_000)
         } while true
-        if there { throw NotRunning(sessionID: host, full: running >= limit ? running : nil) }
+        if there { throw NotRunning(sessionID: host, full: running >= limit ? limit : nil) }
         throw RouterTools.Failure("The Claude app didn't open the new session in \(Int(RouterTools.bounded(timeout))) s")
     }
 }
