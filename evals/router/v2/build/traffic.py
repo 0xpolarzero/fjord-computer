@@ -84,15 +84,16 @@ def read(path):
 
 
 def join(lines, since=None):
-    """Decided routings by id (the later of a duplicate), each with its last follow-up, and the counts of what didn't
-    join: duplicates, orphan follow-ups, unknown kinds."""
+    """Decided routings by id (the first of a duplicate: a re-ask after "Cancel and send elsewhere" decides again under
+    the same id, and the original send's inputs are the example worth keeping), each with its last follow-up (a
+    correction after a cancel is where it finally went), and the counts of what didn't join."""
     decided, follow = {}, {}
     stats = collections.Counter()
     for line in lines:
         kind, i = line["kind"], line["id"]
         if kind == "decided":
             stats["duplicate_ids"] += i in decided
-            decided[i] = line
+            decided.setdefault(i, line)
         elif kind in FOLLOW:
             follow[i] = line
         else:
@@ -127,7 +128,8 @@ def gold(d, f):
     if out == "corrected":
         return {"intended": f.get("target"), "ask": "required"}
     if out == "cancelled":
-        return {"intended": None, "ask": None if asked else "required"}
+        # A cancel alone says nothing sure (too late, or a change of mind); sent elsewhere it ends in a correction.
+        return {"intended": None, "ask": None}
     return {"intended": None, "ask": None}
 
 

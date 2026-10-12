@@ -72,7 +72,7 @@ class GoldTests(unittest.TestCase):
     def test_outcomes_and_gold(self):
         want = {"kept": ("kept", "session:A", "forbidden"), "ask-picked": ("picked", "session:A", "allowed"),
                 "ask-fixed": ("corrected", "session:B", "required"), "ask-open": ("unanswered", None, None),
-                "sent-fixed": ("corrected", "session:B", "required"), "sent-undone": ("cancelled", None, "required"),
+                "sent-fixed": ("corrected", "session:B", "required"), "sent-undone": ("cancelled", None, None),
                 "rule": ("kept", "answer:c1", "forbidden")}
         for i, (out, intended, ask) in want.items():
             self.assertEqual((self.r[i]["outcome"], self.r[i]["gold"]["intended"], self.r[i]["gold"]["ask"]),
@@ -93,7 +93,7 @@ class RobustnessTests(unittest.TestCase):
                  {"kind": "teleported", "id": "x"}, follow("picked", "ghost", "session:A"), {"no": "kind"}]
         r, stats, bad = records(lines, tail='{"kind": "decided", "id": "half')
         self.assertEqual(list(r), ["x"])
-        self.assertEqual(r["x"]["target"], "session:B")  # the later line wins
+        self.assertEqual(r["x"]["target"], "session:A")  # the first line wins: a re-ask decides again under its id
         self.assertEqual(bad, 2)
         self.assertEqual(stats["duplicate_ids"], 1)
         self.assertEqual(stats["orphan_followups"], 1)
