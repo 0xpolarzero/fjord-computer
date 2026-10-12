@@ -50,6 +50,8 @@ struct RouterPage: Equatable {
     var working: [AgentRow] = []
     /// Each working session's newest summary, by session: shown under its row until the next one.
     var summaries: [String: RouterSummary] = [:]
+    /// Each working session's questions your last message left (`RouterFeed.unanswered`), by session: under its row.
+    var unanswered: [String: [String]] = [:]
     /// Oldest first: the Router's runs, the summaries and the addressed cards by time.
     var history: [Entry] = []
 
@@ -90,6 +92,9 @@ struct RouterPage: Equatable {
         page.asks = asks
         page.history = history
         page.summaries = latest(summaries, working: working)
+        for row in working {
+            if let left = RouterFeed.unanswered(cards, row.id, turns: row.session.completedTurns)?.skipped { page.unanswered[row.id] = left }
+        }
         return page
     }
 
@@ -1524,7 +1529,7 @@ private struct RouterNow: View {
         VStack(spacing: 0) {
             ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
                 if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
-                WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id])
+                WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id], unanswered: page.unanswered[row.id] ?? [])
                     .id(RouterModel.workingID(row.id))
                     .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
                     .transition(.asymmetric(insertion: .opacity, removal: .opacity))
@@ -1686,6 +1691,30 @@ private struct SparklesButton: View {
     }
 }
 
+/// What your last message to a working session left unanswered (`RouterCard.skipped`), under its row, until you answer it
+/// or its turn ends.
+struct UnansweredLine: View {
+    let questions: [String]
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "questionmark.bubble").font(.system(size: 9, weight: .medium)).foregroundStyle(CDS.Fill.warning)
+                .frame(width: 18)
+            Text(Self.text(questions)).cdsText((12, 16), .regular, CDS.Text.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.trailing, 30)
+        .accessibilityElement(children: .combine)
+    }
+
+    static func text(_ questions: [String]) -> String {
+        (questions.count == 1 ? "1 question you didn't answer: " : "\(questions.count) questions you didn't answer: ")
+            + questions.joined(separator: " · ")
+    }
+}
+
 /// A session's newest summary, under its row: its whole text, wrapped, and how long ago it was made (its time on hover).
 private struct WorkingSummary: View {
     let summary: RouterSummary
@@ -1730,6 +1759,7 @@ private struct WorkingCard: View {
     @Bindable var model: RouterModel
     let row: AgentRow
     let summary: RouterSummary?
+    let unanswered: [String]
     @State private var hovered = false
     @State private var expanded = false
     @Environment(\.cdsColumnWidth) private var columnWidth
@@ -1781,6 +1811,7 @@ private struct WorkingCard: View {
                 .accessibilityAction(named: "Summarize") { summarize() }
                 SparklesButton(busy: busy, done: busy, label: "Summarize this session") { summarize() }
             }
+            if !unanswered.isEmpty { UnansweredLine(questions: unanswered) }
             if expanded { details } else if let summary { WorkingSummary(summary: summary) }
             if let error = summarizer.errors[row.id] {
                 Text(error).cdsText((12, 16), .regular, CDS.Fill.warning).lineLimit(2).padding(.leading, 26)
@@ -2100,6 +2131,11 @@ struct CardView: View {
 
     private func openInClaude() { model.open(card.id, store: store) }
 
+    /// What the session went on without: questions your last message left that its final message doesn't ask again.
+    static func wentAhead(_ questions: [String]) -> String {
+        (questions.count == 1 ? "Went ahead without your answer: " : "Went ahead without your answers: ") + questions.joined(separator: " · ")
+    }
+
     // MARK: Open
 
     private var open: some View {
@@ -2108,6 +2144,12 @@ struct CardView: View {
             header { summary(project: project) }
             if let left = card.left, let total = card.total {
                 Text("\(left.count) of \(total) left").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    .padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
+                    .padding(.leading, wide ? 28 : 0)
+            }
+            let without = card.wentAheadWithout
+            if !without.isEmpty {
+                Text(Self.wentAhead(without)).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(expanded ? nil : 2)
                     .padding(.horizontal, 14).padding(.bottom, expanded ? 4 : 7).padding(.top, -3)
                     .padding(.leading, wide ? 28 : 0)
             }

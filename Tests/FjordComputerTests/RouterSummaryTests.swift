@@ -165,6 +165,23 @@ import Testing
                  entry: AgentEntry(id: id), label: "TE")
     }
 
+    @Test func aWorkingRowSaysWhatYourLastMessageLeftUnansweredUntilItsTurnEnds() {
+        var a = row("a")
+        a.session.completedTurns = 2
+        var card = RouterCard(id: "a#t2", sessionID: "a", kind: .asks, title: "T a", folder: nil, text: "", createdAt: now,
+                              addressedAt: now, addressedBy: .reply)
+        card.skipped = ["Tag it?"]
+        #expect(RouterPage.make(cards: [card], working: [a, row("b")]).unanswered == ["a": ["Tag it?"]])
+        #expect(UnansweredLine.text(["Tag it?"]) == "1 question you didn't answer: Tag it?")
+        // Its next turn over, the card of that turn says it instead.
+        a.session.completedTurns = 3
+        #expect(RouterPage.make(cards: [card], working: [a]).unanswered.isEmpty)
+        // Cleared by being superseded, not by your message: nothing was left by you.
+        a.session.completedTurns = 2
+        card.addressedBy = .superseded
+        #expect(RouterPage.make(cards: [card], working: [a]).unanswered.isEmpty)
+    }
+
     @Test func eachWorkingRowShowsItsNewestSummaryAndOnlyWhileItWorks() {
         let early = RouterSummary(at: now.addingTimeInterval(-100), text: "early", sessionID: "a")
         let late = RouterSummary(at: now, text: "late", sessionID: "a")
