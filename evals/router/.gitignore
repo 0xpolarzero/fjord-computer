@@ -3,3 +3,8 @@ __pycache__/
 runs/
 # Experiment outputs hold per-case boards (message text): never commit.
 explore/*/out/
+# Round-1 written cases and their generators: their boards were copied from real sessions (titles, summaries,
+# answers). Kept on this machine only; benchmark v2 supersedes them.
+cases/
+heldout/
+gen/

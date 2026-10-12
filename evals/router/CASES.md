@@ -11,9 +11,9 @@ what a good router does with it.
   "board": {
     "projects": ["lookout", "lcu", "silo"],
     "sessions": [
-      {"id": "s1", "title": "Inbox and CI improvements", "project": "lookout", "running": false,
+      {"id": "s1", "title": "Settings page polish", "project": "lookout", "running": false,
        "activity": "", "summary": "Proposed moving the CI poller off the main thread", "idle_min": 4},
-      {"id": "s2", "title": "Docked to window transition performance", "project": "lookout", "running": true,
+      {"id": "s2", "title": "Faster window resize", "project": "lookout", "running": true,
        "activity": "Running the test suite", "summary": "", "idle_min": 0}
     ],
     "cards": [
@@ -55,7 +55,7 @@ A wrong send is the worst outcome (your words land in the wrong session). A need
 ## Writing good cases
 
 - Boards look like real ones: 3–25 sessions, often several in the same project with related topics; most cards are
-  `done`; a few wait on you. Titles are what Claude Code names sessions ("Quick bug fix", "Inbox and CI improvements").
+  `done`; a few wait on you. Titles are what Claude Code names sessions ("Quick bug fix", "Settings page polish").
 - Messages are what you would really type: short, lowercase, typos, "it", "that", "yes", replies to a question by
   its content, references by topic rather than title, pasted errors, sometimes French.
 - Gold is what a careful human assistant who sees the same board would do. When in doubt, `ask_ok: true`.

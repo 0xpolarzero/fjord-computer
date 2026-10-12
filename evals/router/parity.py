@@ -1,9 +1,12 @@
 """What the measured policy decided, with its inputs, for Lookout's tests to check RouteFusion and RouterLexical against.
 
-python3 parity.py  →  Tests/LookoutTests/Fixtures/router-fusion-parity.json (written cases only: synth and heldout;
+python3 parity.py  →  Tests/LookoutTests/Fixtures/router-fusion-parity.json (written cases, synth and heldout, their boards
+scrubbed of real text by `scrub`;
 real boards stay on this machine). Policy: explore.final3 (round 3), format combo-o."""
+import copy
 import json
 import pathlib
+import re
 
 import bench
 import formats
@@ -14,6 +17,36 @@ from explore import lexical as L
 from explore import recency as R
 
 OUT = pathlib.Path(__file__).parent.parent.parent / "Tests" / "LookoutTests" / "Fixtures" / "router-fusion-parity.json"
+
+
+WORD = re.compile(r"[^\W_]+")
+
+
+def scrub(case):
+    """The case with its board's text replaced: the round-1 boards were copied from real sessions (titles, summaries,
+    answers), and the fixture is committed. Every word not in the (written) message becomes a numbered placeholder,
+    the same word the same placeholder within the case, so what overlaps the message, and what overlaps between
+    sessions, still does for BM25; no real word is left, and numbering (not hashing) leaves nothing to look up."""
+    keep = {w.lower() for w in WORD.findall(case["message"])}
+    names = {}
+
+    def text(value):
+        if not isinstance(value, str):
+            return value
+        return WORD.sub(lambda m: m.group(0) if m.group(0).lower() in keep
+                        else names.setdefault(m.group(0).lower(), f"w{len(names) + 1}"), value)
+
+    case = copy.deepcopy(case)
+    board = case["board"]
+    for s in board["sessions"]:
+        for key in ("title", "activity", "summary"):
+            s[key] = text(s.get(key))
+    for card in board.get("cards", []):
+        card["text"] = text(card.get("text"))
+    for h in board.get("history", []):
+        h["you"] = text(h.get("you"))
+    case.pop("why", None)
+    return case
 
 
 def target(dest, board_ids):
@@ -36,7 +69,7 @@ def main():
         for row in run.load(f"combo-o@{s}"):
             if row["order"] != 0:
                 continue
-            c = cases[row["id"]]
+            c = scrub(cases[row["id"]])
             b = c["board"]
             ids = {x["id"] for x in b["sessions"]}
             r = run.reading(row)
