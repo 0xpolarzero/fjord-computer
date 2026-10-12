@@ -369,9 +369,10 @@ extension Claude {
     /// refused key, say): asked again with a new key only.
     private(set) var failedUnder: [String: Int] = [:]
     private(set) var unrescuedUnder: [String: Int] = [:]
-    /// Stuck turns whose banner waits for Jev's triage (`Store.announceRouterCards`).
+    /// Stuck turns whose banner waits for Jev's triage (`Store.announceRouterCards`), and turns that need you whose banner
+    /// waits for what they ask to be read (`Store.holdForAsks`).
     var heldBanners: Set<String> = []
-    /// How long a stuck turn's banner waits for the triage at most.
+    /// How long a banner waits for the triage, or for the asks, at most.
     var bannerWait: Duration = .seconds(20)
     /// Waiting cards whose session is being told its wait is over (never saved: a send cut short by quitting is not one).
     var telling: Set<String> = []
@@ -491,18 +492,30 @@ extension Store {
         for card in fresh {
             guard triageAsker != nil, card.kind == .stuck, card.triage == nil, let (_, session) = currentTurnCard(card.id),
                   !session.running, routerTriager.heldBanners.insert(card.id).inserted else { now.append(card); continue }
-            let wait = routerTriager.bannerWait
-            Task { [weak self] in
-                try? await Task.sleep(for: wait)
-                self?.releaseBanner(card.id)
-            }
+            releaseLater(card.id)
         }
         if !now.isEmpty { onNewRouterCards?(now) }
     }
 
-    /// A stuck turn's banner held for its triage, which didn't come in time (or came to nothing): announced as the card is
-    /// now, if it still needs you and isn't its circles streak again.
-    private func releaseBanner(_ id: String) {
+    private func releaseLater(_ id: String) {
+        let wait = routerTriager.bannerWait
+        Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            self?.releaseBanner(id)
+        }
+    }
+
+    /// A turn that needs you, about to be announced: when its brief will read what it asks, the banner waits for that (a
+    /// little at most), so it says the questions as the card lists them. Whether it held it.
+    private func holdForAsks(_ card: RouterCard) -> Bool {
+        guard routerBriefer.readsAsks(card, store: self) else { return false }
+        if routerTriager.heldBanners.insert(card.id).inserted { releaseLater(card.id) }
+        return true
+    }
+
+    /// A banner held for its triage, or for its asks, which didn't come in time (or came to nothing, or came): announced
+    /// as the card is now, if it still needs you and isn't its circles streak again.
+    func releaseBanner(_ id: String) {
         guard routerTriager.heldBanners.remove(id) != nil, router.enabled, let card = router.cards.first(where: { $0.id == id }), card.isOpen,
               card.kind.needsYou else { return }
         announceTurn(card, in: router.cards)
@@ -787,7 +800,7 @@ extension Store {
         guard state != router || held else { return }
         router = state
         let card = state.cards[i]
-        if card.kind.needsYou, held || !before.kind.needsYou || !routerAttention.delivered.contains(id) {
+        if card.kind.needsYou, held || !before.kind.needsYou || !routerAttention.delivered.contains(id), !holdForAsks(card) {
             announceTurn(card, in: state.cards)
         }
         resolveWaits()
@@ -806,7 +819,7 @@ extension Store {
         let text = detail.isEmpty ? RouterLive.firstSentences(message, count: 2, limit: 280) ?? RouterFeed.placeholder : detail
         guard let card = RouterFeed.addTurn(&state, current, triage: triage, text: text, at: current.lastActivity) else { return }
         router = state
-        onNewRouterCards?([card])
+        if !holdForAsks(card) { onNewRouterCards?([card]) }
         routerBriefer.request(card.id, message: message, store: self)
     }
 }

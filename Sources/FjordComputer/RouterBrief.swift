@@ -330,6 +330,13 @@ extension Store {
         pump(store: store)
     }
 
+    /// Whether a request for this card would read what it asks (`RouterBriefContext.extracts`, as far as the card tells):
+    /// its banner then waits for that.
+    func readsAsks(_ card: RouterCard, store: Store) -> Bool {
+        card.asks == nil && card.kind.isTurn && card.kind.needsYou && card.isOpen
+            && (runner != nil || (!UnderTest.isRunning && !store.routerIsPretend))
+    }
+
     /// The Router was turned off: nothing more is asked, and what is under way lands nowhere.
     func cancelAll() {
         queue = []
@@ -353,6 +360,8 @@ extension Store {
                 guard let self else { return }
                 running.remove(id)
                 if !queue.contains(id) { busy.remove(id) }
+                // A banner held for what it asks goes now, with them or without.
+                store?.releaseBanner(id)
                 if let store { pump(store: store) }
             }
         }

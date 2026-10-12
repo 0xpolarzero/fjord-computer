@@ -284,4 +284,29 @@ import Testing
         await briefer.idle()
         #expect(store.router.cards.first?.brief == nil && store.router.cards.first?.asks == nil)
     }
+
+    @MainActor @Test func aTurnsBannerWaitsForWhatItAsks() async throws {
+        let store = store(turn(.asks, triage: RouterTriage(state: .asks)))
+        store.claudeSessions["a"] = ClaudeSession(id: "a", title: "T a", folder: "/code/lookout", completedTurns: 2,
+                                                  lastActivity: Date(), running: false, cliID: "cli-a")
+        store.router.cards[0].kind = .done
+        store.router.cards[0].triage = nil
+        final class Gate: @unchecked Sendable { var release: CheckedContinuation<Void, Never>? }
+        let gate = Gate()
+        store.routerBriefer.runner = { _, _, _ in
+            await withCheckedContinuation { gate.release = $0 }
+            return #"{"brief":"It needs it to go on.","asks":[{"question":"Push to main?","options":[]}]}"#
+        }
+        var announced: [RouterCard] = []
+        store.onNewRouterCards = { announced += $0 }
+        store.applyTriage(RouterTriage(state: .asks), to: "a#t2")
+        store.routerBriefer.request("a#t2", message: "Done. Push to main?", store: store)
+        while gate.release == nil { await Task.yield() }
+        // Held while its asks are read…
+        #expect(announced.isEmpty && store.router.cards[0].kind == .asks)
+        gate.release?.resume()
+        await store.routerBriefer.idle()
+        // …then announced with them.
+        #expect(announced.map(\.id) == ["a#t2"] && announced.first?.asks == [RouterAsk(question: "Push to main?")])
+    }
 }
