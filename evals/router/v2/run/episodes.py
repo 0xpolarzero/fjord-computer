@@ -146,7 +146,7 @@ class RouterSystem:
     """
     def __init__(self, format_name="combo-o", policy_name="explore.final3:best", baseline=None,
                  cache_path=None, cache_only=False, option_seed=None, quiet=True,
-                 legacy_cache=True, max_calls=40, card="policy"):
+                 legacy_cache=True, max_calls=40, card="top1,other,recent"):
         if baseline not in {None, "always-ask", "recency-only", "lexical-only"}:
             raise ValueError("unknown baseline")
         self.format_name, self.policy_name, self.baseline = format_name, policy_name, baseline
@@ -488,7 +488,7 @@ def main(argv=None):
     parser.add_argument("--format", default="combo-o")
     parser.add_argument("--policy", default="explore.final3:best")
     parser.add_argument("--baseline", choices=["always-ask", "recency-only", "lexical-only"])
-    parser.add_argument("--card", default="policy",
+    parser.add_argument("--card", default="top1,other,recent",
                         help="how an ask card's four buttons are chosen: " + ", ".join(CARDS) + ", or slots like top1,last,recent")
     parser.add_argument("--cache", type=Path, default=HERE / "cache")
     parser.add_argument("--cache-only", action="store_true")
