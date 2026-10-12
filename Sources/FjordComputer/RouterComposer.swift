@@ -46,6 +46,9 @@ struct RouterComposer: View {
         let on = model.canSend(store)
         let suggestions = model.suggestions(store)
         VStack(alignment: .leading, spacing: 0) {
+            // Your messages on their way, rising from here until they fly to where they went.
+            FlightStack(store: store, flights: model.flights)
+                .padding(.bottom, model.flights.pills.isEmpty ? 0 : C.dockGap)
             // Who your words go to, as the Code tab's strip over its composer: the card's session, the projects you tagged.
             if model.replyTo != nil || model.live.pinned != nil || model.live.prediction != nil || model.editing != nil {
                 strip.padding(.bottom, C.dockGap)
@@ -175,6 +178,7 @@ struct RouterComposer: View {
                 .padding(C.pad)
         }
         .modifier(ComposerMaterial(shape: shape, glass: glass, fill: CDS.Surface.s3))
+        .flightFrame("composer")
         .background(AnchorView(anchor: anchor) { windowHeight = $0 })
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
         .overlay(shape.strokeBorder(ring, lineWidth: 1))
@@ -362,7 +366,7 @@ private struct PredictionChip: View {
 }
 
 /// The chip's ×: ghost, muted, primary and white 7.5% on hover.
-private struct ChipClose: View {
+struct ChipClose: View {
     let label: String
     let action: () -> Void
     @State private var hovering = false

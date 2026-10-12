@@ -38,6 +38,17 @@ struct RouterMain: View {
     var leadingInset: CGFloat = 0
 
     var body: some View {
+        let flights = model.flights
+        page
+            // Your messages in flight, from over the composer to where each went (`RouterFlights`).
+            .overlay { FlightLayer(store: store, flights: flights) }
+            .coordinateSpace(.named(FlightSpace.name))
+            .onPreferenceChange(FlightFramesKey.self) { flights.frames = $0 }
+            .environment(flights)
+            .onAppear { flights.landedInHistory = { [weak model] in model?.show(.history) } }
+    }
+
+    @ViewBuilder private var page: some View {
         if #available(macOS 26, *) {
             // The page runs under its top bar (glass-plan §5.3): in a wide window the history, Now's
             // column with a hard edge under its own bar (see `NowColumn`). The composer floats over the page's bottom

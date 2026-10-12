@@ -143,9 +143,12 @@ struct RouterPage: Equatable {
 }
 
 extension Store {
+    /// The asks Needs you shows: those of messages sent from the composer unfold over it instead (`RouterFlights`).
+    var routerAsksInNeeds: [RouterAskBack] { routerDispatcher.askBacks.filter { !$0.context.flies } }
+
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
-        .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory,
+        .make(cards: router.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: routerHistory,
               summaries: router.summaries, tasks: routerTasks)
     }
 
@@ -175,7 +178,7 @@ extension Store {
 
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
-        .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],
+        .make(cards: router.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: [],
               summaries: router.summaries, tasks: routerTasks)
     }
 }
@@ -215,6 +218,7 @@ struct RouterPageView: View {
             // crossing into a wide window keeps where you were in it (its scroll, the lines drawn).
             ZStack(alignment: .topLeading) {
                 HistoryColumn(store: store, model: model, bar: !wide)
+                    .flightTarget(historyHidden ? nil : "history", flashes: false)
                     .column(historyWidth)
                     .frame(width: historyWidth, height: height)
                     .offset(x: wide ? nowWidth + CDS.hairline : 0)
@@ -317,19 +321,16 @@ private struct NowColumn: View {
             // The chips and the Router's status line are the column's bar: Now runs under it and the page's top bar, with a
             // hard edge, as its sections' headers pin under it (glass-plan §5.3).
             RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
-                      travellingWorking: travellingWorking, statusInBar: true)
-                .safeAreaBar(edge: .top, spacing: 0) {
-                    VStack(spacing: 0) {
-                        chips(page)
-                        RouterBusyLine(store: store)
-                    }
-                }
+                      travellingWorking: travellingWorking)
+                .flightFrame("now")
+                .safeAreaBar(edge: .top, spacing: 0) { chips(page) }
                 .scrollEdgeEffectStyle(.hard, for: .top)
         } else {
             VStack(spacing: 0) {
                 chips(page)
                 RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
                           travellingWorking: travellingWorking)
+                    .flightFrame("now")
             }
         }
     }
@@ -343,6 +344,8 @@ private struct NowColumn: View {
         .measured()
         .padding(.top, 6)
         .padding(.bottom, 2)
+        // Under it is what shows of Now: where a message can land.
+        .flightFrame("nowTop")
     }
 }
 
@@ -374,7 +377,7 @@ private struct PaneSwitch: View {
     var body: some View {
         HStack(spacing: 0) {
             // What needs you, as the badge counts it, and the messages waiting for you to say where they go.
-            segment(.now, "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count, tint: CDS.Fill.warning)
+            segment(.now, "Now", count: store.routerCounts.needsYou + store.routerAsksInNeeds.count, tint: CDS.Fill.warning)
             segment(.history, "History", count: store.routerUnread.count, tint: CDS.Fill.accent)
         }
         .padding(1)
@@ -409,6 +412,7 @@ private struct PaneSwitch: View {
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
+        .flightTarget("pane:\(pane == .now ? "now" : "history")", radius: thumb / 2)
         .onHover { hovered = $0 ? pane : (hovered == pane ? nil : hovered) }
         .help(pane == .now ? "What's live: what needs you, what waits and what works" : "The Router's conversation and what was handled")
         .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
@@ -530,6 +534,7 @@ private struct ZoneChips: View {
                 ZoneChip(zone: zone, count: page.count(zone), named: named, open: !model.shownFolds.contains(zone)) {
                     model.chip(zone)
                 }
+                .flightTarget("chip:\(zone.rawValue)", radius: ZoneChip.height / 2)
             }
         }
         .fixedSize()
@@ -598,22 +603,6 @@ extension RouterPage {
         if waiting.contains(where: { RouterModel.workingID($0.sessionID) == id }) { return .waiting }
         if working.contains(where: { RouterModel.workingID($0.id) == id }) { return .working }
         return nil
-    }
-}
-
-/// While the Router itself works: one slim line over Now.
-private struct RouterBusyLine: View {
-    let store: Store
-    @Environment(\.routerGutter) private var gutter
-
-    var body: some View {
-        if store.routerDispatcher.isBusy {
-            WorkingStatus(label: "The Router is working")
-                .padding(.horizontal, gutter + CDS.Transcript.textInset)
-                .padding(.vertical, 2)
-                .measured()
-                .transition(.opacity)
-        }
     }
 }
 
@@ -1429,8 +1418,6 @@ private struct RouterNow: View {
     /// Sessions whose card moves between the zones (matched geometry), from the needs side and from the working side.
     let travelling: Set<String>
     let travellingWorking: Set<String>
-    /// The Router's status line is in the column's bar (macOS 26), not over the scroll.
-    var statusInBar = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
@@ -1469,7 +1456,6 @@ private struct RouterNow: View {
         let folded = model.shownFolds
         let zones = self.zones
         VStack(spacing: 0) {
-            if !statusInBar { RouterBusyLine(store: store) }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -1633,6 +1619,7 @@ private struct RouterNow: View {
             ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
                 if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
                 WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id], unanswered: page.unanswered[row.id] ?? [])
+                    .flightTarget("session:\(row.id)")
                     .id(RouterModel.workingID(row.id))
                     .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
                     .transition(.asymmetric(insertion: .opacity, removal: .opacity))
@@ -1648,6 +1635,7 @@ private struct RouterNow: View {
             ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
                 if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
                 WaitingCard(store: store, card: card)
+                    .flightTarget("session:\(card.sessionID)")
                     .id(RouterModel.workingID(card.sessionID))
                     .transition(.asymmetric(insertion: .opacity, removal: .opacity))
             }
@@ -1670,6 +1658,7 @@ private struct RouterNow: View {
             ForEach(shown) { card in
                 CardView(store: store, model: model, card: card, expanded: card.id == open, form: nil,
                          project: store.routerProject(card), quiet: true)
+                    .flightTarget("card:\(card.id)", radius: 12)
                     .id(card.id)
                     .transition(.asymmetric(insertion: .opacity, removal: .scaleFade(0.97, reduce: reduceMotion)))
             }
@@ -1695,6 +1684,7 @@ private struct RouterNow: View {
                 CardView(store: store, model: model, card: card, expanded: card.id == open,
                          form: store.pendingForm(for: card), project: store.routerProject(card),
                          formCap: card.id == open ? formCap : CardView.closedFormCap)
+                    .flightTarget("card:\(card.id)", radius: 12)
                     .id(card.id)
                     .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
                     .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
@@ -2364,7 +2354,7 @@ struct CardView: View {
 /// lists every session and project. Only a click answers it: whatever is typed in the composer meanwhile is a message of its
 /// own, even one that reads like a target's name, so a session titled after what you'd say ("Don't deploy") is never picked
 /// for saying it. Nothing is sent until you pick.
-private struct AskBackCard: View {
+struct AskBackCard: View {
     let store: Store
     let ask: RouterAskBack
 

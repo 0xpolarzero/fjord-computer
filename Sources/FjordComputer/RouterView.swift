@@ -284,6 +284,8 @@ struct RouterCardLine: View {
 final class RouterModel {
     /// The Working sessions' summaries being made.
     @ObservationIgnored let summarizer = RouterSummarizer()
+    /// Your messages on their way: pills over the composer, flying to where each went.
+    @ObservationIgnored let flights = RouterFlights()
     /// The card the keys act on.
     var selection: String?
     var draft = "" {
@@ -651,8 +653,10 @@ final class RouterModel {
             show(.history)
             return
         }
-        let toRouter = replyTo == nil
-        guard store.sendToRouter(text, context: context(store)) else {
+        // A pill over the composer from here until it lands where it went (`RouterFlights`): the page stays where it is.
+        var context = context(store)
+        context.flies = true
+        guard store.sendToRouter(text, context: context) else {
             sendRefused = Self.goneTarget
             Announce.say(Self.goneTarget)
             return
@@ -662,8 +666,6 @@ final class RouterModel {
         draft = ""
         replyTo = nil
         live.reset()
-        // The Router answers in its conversation, in the history.
-        if toRouter { show(.history) }
     }
 
     /// A card clicked: its session opens in Claude, and the card is picked (it stays open).
