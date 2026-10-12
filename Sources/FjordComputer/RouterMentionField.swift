@@ -121,6 +121,14 @@ struct MentionField: NSViewRepresentable {
     /// Bumped to ask for the keyboard.
     let focusTick: Int
     let onFocus: (Bool) -> Void
+    /// What VoiceOver calls the field, and its hint (nil: the composer's).
+    var label = "Message the Router"
+    var hint: String? = nil
+    /// A key's command (`moveUp:`, `insertNewline:`, `cancelOperation:`…) before the text view does it: true when it was
+    /// handled. For a field outside the Router's page, whose keys `RouterKeys` doesn't see (a "Then" prompt).
+    var onCommand: ((Selector) -> Bool)? = nil
+    /// The selection moved (the caret, for the @ suggestions), with the text view.
+    var onSelection: ((NSTextView) -> Void)? = nil
 
     private static var role: (CGFloat, CGFloat) { CDS.Density.compact.prose }
 
@@ -149,8 +157,8 @@ struct MentionField: NSViewRepresentable {
         view.importsGraphics = false
         view.insertionPointColor = NSColor(CDS.Text.primary)
         view.selectedTextAttributes = [.backgroundColor: NSColor(CDS.Text.accent).withAlphaComponent(0.35)]
-        view.setAccessibilityLabel("Message the Router")
-        view.setAccessibilityHelp("Return sends, Shift Return starts a new line, @ tags a project, a session, a notification or a category, or inserts a snippet")
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityHelp(hint ?? "Return sends, Shift Return starts a new line, @ tags a project, a session, a notification or a category, or inserts a snippet")
         view.delegate = context.coordinator
         context.coordinator.view = view
 
@@ -169,6 +177,8 @@ struct MentionField: NSViewRepresentable {
         let c = context.coordinator
         c.model = model
         c.store = store
+        c.onCommand = onCommand
+        c.onSelection = onSelection
         model.editor = view
         let (font, base) = Self.attributes()
         view.base = base
@@ -249,6 +259,8 @@ struct MentionField: NSViewRepresentable {
         var store: Store?
         var focusTick = 0
         var syncing = false
+        var onCommand: ((Selector) -> Bool)?
+        var onSelection: ((NSTextView) -> Void)?
         /// The text's height at a width, for the text it had then (a pill is one character of it; pills made anew clear it).
         var fits: [Fit: CGFloat] = [:]
 
@@ -283,6 +295,12 @@ struct MentionField: NSViewRepresentable {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             if let view, !view.hasMarkedText() { view.typingAttributes = view.base }
+            if let view { onSelection?(view) }
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
+            return onCommand?(commandSelector) ?? false
         }
     }
 }

@@ -241,14 +241,19 @@ enum Demo {
         var undelivered = entry(0.2, .you("tell Game recommendations to rebase"), "reply",
                                 [.failed("SendMessage to Game recommendations: not delivered (the session isn't open in Claude)")])
         undelivered.links.sessions = ["local_demo-games"]
+        // A category's "Then" sent its prompt with the thing tagged; the Router started a session in its clone.
+        let pill = "@ziglang/zig#1"
+        let prompt = "Address what \(pill) is waiting on."
+        var sentByThen = entry(0.3, .you(prompt), "message", [.started(session: nil, project: "zig", model: nil, effort: nil)])
+        sentByThen.fromAction = SessionOrigin(category: "Contributions", thing: "ziglang/zig#1", actionID: "demo", runID: "demo")
+        sentByThen.mentions = [RouterMention(range: 13..<(13 + pill.count), pointer: .notification("pr:ziglang/zig#1"), name: "ziglang/zig#1")]
         state.decisions = [
             asked,
             entry(3.3, .you("transfer: remove the old remote"), "reply",
                   [.sent(to: "Repository ownership transfer setup", text: "Remove the old remote.", original: "transfer: remove the old remote")]),
             entry(0.5, .you("start a session to bump the version"), "start", [.failed("Cancelled")]),
             undelivered,
-            entry(0.3, .action(category: "Contributions", thing: "ziglang/zig#1", actionID: "demo", runID: nil), "action",
-                  [.started(session: nil, project: "zig", model: nil, effort: nil)]),
+            sentByThen,
             entry(9, .you("add a category for my contributions that need a look, and snooze banners for an hour"), "change",
                   changes.prefix(2).map { .changed($0.id) }),
             entry(3, .you("archive the bot chatter, and mute reviews for you"), "change",

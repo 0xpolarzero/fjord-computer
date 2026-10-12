@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private let body13: (CGFloat, CGFloat) = (13, 19)
@@ -20,9 +21,9 @@ struct ActionsEditor: View {
                 .tip("Then", "Runs once for each thing that comes in, never for what is already here when you add it")
                 .padding(.bottom, 12)
             VStack(alignment: .leading, spacing: 6) {
-                // One that starts a session shows only while Triage and the Router are both on (it is kept meanwhile).
+                // One that sends to the Router shows only while Triage and the Router are both on (it is kept meanwhile).
                 ForEach($actions.items) { $action in
-                    if store.toolsLinked || !action.kind.startsSession {
+                    if store.toolsLinked || !action.kind.sendsToRouter {
                         ActionRow(action: $action, store: store, rules: rules, categoryName: categoryName, kinds: kinds) {
                             actions.items.removeAll { $0.id == action.id }
                         }
@@ -36,7 +37,7 @@ struct ActionsEditor: View {
     private var addMenu: some View {
         Menu {
             if store.toolsLinked {
-                Button("Ask the Router") { actions.items.append(.make(.askRouter(prompt: ""))) }
+                Button("Send to the Router") { actions.items.append(.make(.askRouter(prompt: ActionPrompt()))) }
             }
             Button("Comment on GitHub") { actions.items.append(.make(.comment(""))) }
             Button("Re-run failed checks") { actions.items.append(.make(.rerun)) }
@@ -81,9 +82,8 @@ private struct ActionRow: View {
             }
             switch action.kind {
             case .askRouter(let prompt):
-                ActionTextBox(text: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }),
-                              placeholder: "What to do, like “Review {url} and fix what Greptile flagged”", label: "Prompt")
-                    .tip("Prompt", "The Router starts a new session in a local clone of the repo (Jev picks when there are several; no clone, no session). Its title, link, repo, why it is here and the last comment are added for you, in a block marked as written by others. {repo} {number} {url} are filled in; {title} and {author} point to that block, so nothing others wrote reads as your words.")
+                ActionPromptField(prompt: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }), store: store)
+                    .tip("Prompt", "Sent to the Router as yours, from this category, with the thing tagged: @this notification says where it goes in your words (else it is added at the end). The Router sends it to a session working in a local clone of the repo, or starts one there; if it isn't sure where, it asks you and waits. Its title, link, why it is here and the last comment go with it in a block marked as written by others, so nothing others wrote reads as your words. @ also inserts a snippet, or tags a project, a session or a category.")
                 HStack(spacing: 8) {
                     MenuChip(title: "Model: " + (action.model?.capitalized ?? "Default"), label: "Model") {
                         Toggle("Default", isOn: Binding(get: { action.model == nil }, set: { _ in action.model = nil }))
@@ -91,14 +91,14 @@ private struct ActionRow: View {
                             Toggle(model.capitalized, isOn: Binding(get: { action.model == model }, set: { _ in action.model = model }))
                         }
                     }
-                    .tip("Model", "The model of the session it starts. Default is the one in your Claude Code settings.")
+                    .tip("Model", "The model of a session the Router starts for it; a session already there keeps its own. Default is the one in your Claude Code settings.")
                     MenuChip(title: "Effort: " + (action.effort ?? "Default"), label: "Effort") {
                         Toggle("Default", isOn: Binding(get: { action.effort == nil }, set: { _ in action.effort = nil }))
                         ForEach(ActionSettings.efforts, id: \.self) { effort in
                             Toggle(effort, isOn: Binding(get: { action.effort == effort }, set: { _ in action.effort = effort }))
                         }
                     }
-                    .tip("Effort", "How hard the session it starts thinks. Default is the one in your Claude Code settings.")
+                    .tip("Effort", "How hard a session the Router starts for it thinks; a session already there keeps its own. Default is the one in your Claude Code settings.")
                 }
                 RouterWarning(strong: InboxActions.rulesMatchOthers(rules))
             case .comment(let text):
@@ -152,11 +152,11 @@ private struct ActionRow: View {
         }
         let performer = store.actionPerformer ?? (store.persists && !Store.isDemo ? StoreActionPerformer(store: store) : nil)
         preview = await InboxActions.preview(action, category: categoryName.isEmpty ? "New category" : categoryName,
-                                             thing: match.thing, facts: match.facts, performer: performer)
+                                             thing: match.thing, facts: match.facts, performer: performer, name: store.pointerName)
     }
 }
 
-/// Under "Ask the Router": what reaches the session is written by others; stronger when the rules can match their items.
+/// Under "Send to the Router": what reaches the session is written by others; stronger when the rules can match their items.
 private struct RouterWarning: View {
     let strong: Bool
 
@@ -168,7 +168,7 @@ private struct RouterWarning: View {
         .foregroundStyle(CDS.Text.warning)
         .padding(.horizontal, strong ? 8 : 0).padding(.vertical, strong ? 4 : 0)
         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(CDS.Text.warning.opacity(strong ? 0.16 : 0)))
-        .tip("Prompt injection", "Anyone who can write a title or comment on matching items can try to steer that session. It runs with your Claude Code permission settings, unattended. Keep the prompt narrow and the rules tight (by me, Maintainers)."
+        .tip("Prompt injection", "Anyone who can write a title or comment on matching items can try to steer the session it reaches. That session runs with your Claude Code permission settings, unattended. The Router never acts on it itself (it never changes Fjord Computer for an action), but keep the prompt narrow and the rules tight (by me, Maintainers)."
              + (strong ? " These rules match items others write." : ""))
         .accessibilityElement(children: .combine)
     }
@@ -200,4 +200,115 @@ private struct ActionTextBox: View {
             }
             .accessibilityLabel(label)
     }
+}
+
+/// A "Send to the Router" prompt, written as the Router's composer is (`MentionField`): typing @ suggests "this notification"
+/// first (the thing the action runs for), then projects, sessions and categories as pills, and snippets as text; ↑↓ walk
+/// them, Return or Tab picks, Esc dismisses.
+struct ActionPromptField: View {
+    @Binding var prompt: ActionPrompt
+    let store: Store
+    /// The field's own draft, pills and @ word: the composer's model, never the Router's.
+    @State private var model = RouterModel()
+    @State private var editor = EditorBox()
+    @State private var focused = false
+    @State private var focusTick = 0
+
+    /// The text view, once it has told where its caret is (a pick puts the caret after it).
+    final class EditorBox {
+        weak var view: NSTextView?
+    }
+
+    var body: some View {
+        let rows = Self.suggestions(model, store: store)
+        VStack(alignment: .leading, spacing: 6) {
+            MentionField(store: store, model: model, maxHeight: 200, editable: true, focusTick: focusTick,
+                         onFocus: { focused = $0 }, label: "Prompt",
+                         hint: "@ tags this notification, a project, a session or a category, or inserts a snippet",
+                         onCommand: command, onSelection: { view in
+                             editor.view = view
+                             model.followCaret(view)
+                         })
+                .frame(minHeight: 60, alignment: .topLeading)
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(alignment: .topLeading) {
+                    if model.draft.isEmpty {
+                        Text("What to do, like “Review @\(ActionPrompt.thisItemName) and fix what Greptile flagged”")
+                            .font(CDS.sans(13)).foregroundStyle(CDS.Text.muted)
+                            .padding(.horizontal, 10).padding(.vertical, 8).allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius, style: .continuous).fill(CDS.Fill.field))
+                .overlay(RoundedRectangle(cornerRadius: CDS.Settings.fieldRadius, style: .continuous)
+                    .strokeBorder(focused ? CDS.Fill.accent : CDS.Settings.fieldRing, lineWidth: 1))
+                .contentShape(Rectangle())
+                .onTapGesture { focusTick &+= 1 }
+            if !rows.isEmpty {
+                MentionList(suggestions: rows, index: model.mentionIndex, width: 340, hover: { model.mentionIndex = $0 }) {
+                    model.pickMention($0)
+                }
+                .fixedSize()
+            }
+        }
+        .onAppear { Self.load(prompt, into: model) }
+        .onChange(of: prompt) { _, now in Self.load(now, into: model) }
+        .onChange(of: model.draft) { write() }
+        .onChange(of: model.pointers) { write() }
+        .onChange(of: model.caretRequest) { _, request in
+            guard let request else { return }
+            model.caretRequest = nil
+            // After the field has the new text.
+            DispatchQueue.main.async {
+                guard let view = editor.view else { return }
+                view.setSelectedRange(NSRange(location: min(request, (view.string as NSString).length), length: 0))
+                model.followCaret(view)
+            }
+        }
+    }
+
+    private func write() {
+        let now = Self.prompt(of: model)
+        if now != prompt { prompt = now }
+    }
+
+    /// The keys while @ suggestions show: ↑↓ walk them, Return or Tab picks, Esc dismisses. Otherwise the text view's own.
+    private func command(_ selector: Selector) -> Bool {
+        let rows = Self.suggestions(model, store: store)
+        guard !rows.isEmpty else { return false }
+        switch selector {
+        case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.moveDown(_:)):
+            model.moveMention(down: selector == #selector(NSResponder.moveDown(_:)), count: rows.count)
+        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+            model.pickMention(rows[min(model.mentionIndex, rows.count - 1)])
+        case #selector(NSResponder.cancelOperation(_:)):
+            model.dismissMention()
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// What the @ word matches: "this notification" first (while the prompt doesn't have it), then what the composer offers
+    /// but a notification (the thing it runs for is "this notification").
+    static func suggestions(_ model: RouterModel, store: Store) -> [MentionSuggestion] {
+        guard let query = model.mention else { return [] }
+        let others = model.suggestions(store).filter { $0.section != .notifications }
+        guard !model.pointers.contains(.thisItem), RouterMentions.score(ActionPrompt.thisItemName, query: query) != nil else {
+            return others
+        }
+        let this = MentionSuggestion(section: .notifications, pick: .pointer(.thisItem), name: ActionPrompt.thisItemName,
+                                     detail: "the thing it runs for", look: store.pointerLook(.thisItem),
+                                     keys: [ActionPrompt.thisItemName])
+        return [this] + others
+    }
+
+    /// The prompt in the field, unless the field has it already (what it writes back, an undo).
+    static func load(_ prompt: ActionPrompt, into model: RouterModel) {
+        guard prompt != Self.prompt(of: model) else { return }
+        model.pointers = prompt.pointers
+        model.draft = prompt.text
+    }
+
+    /// The prompt the field holds.
+    static func prompt(of model: RouterModel) -> ActionPrompt { ActionPrompt(text: model.draft, pointers: model.pointers) }
 }

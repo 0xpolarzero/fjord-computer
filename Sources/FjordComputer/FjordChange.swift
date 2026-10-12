@@ -223,7 +223,7 @@ extension FjordChange {
             settings = ", model \(action.model ?? "your default"), effort \(action.effort ?? "your default")"
         }
         switch action.kind {
-        case .askRouter(let prompt): return "\(action.title) (\(when)\(settings)), prompt: \(prompt)"
+        case .askRouter(let prompt): return "\(action.title) (\(when)\(settings)), prompt: \(prompt.words())"
         case .comment(let body): return "\(action.title) (\(when)), comment: \(body)"
         case .rerun: return "\(action.title) (\(when))"
         }

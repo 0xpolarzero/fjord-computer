@@ -994,12 +994,14 @@ private struct HistoryDecisionLine: View, Equatable {
         toggleHistoryLine(reduceMotion: reduceMotion) { model.toggleExpanded(key) }
     }
 
-    /// What set it off; your message with its pills drawn where they were.
+    /// What set it off; your message with its pills drawn where they were, after its category when a "Then" sent it.
     private var trigger: Text {
         guard case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty else {
             return Text(RouterDecision.clip(decision.triggerText, 90))
         }
-        return MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+        let message = MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+        guard let from = decision.fromAction else { return message }
+        return Text("\(Text(verbatim: "\(from.category) · ").fontWeight(.medium))\(message)")
     }
 }
 
@@ -1013,6 +1015,10 @@ private struct DecisionDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let from = decision.fromAction {
+                Text("⚡ Sent by \(from.category)'s Then for \(from.thing)").cdsText((12, 16), .regular, CDS.Text.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty {
                 MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
                     .cdsText(CDS.Transcript.text, .regular, CDS.Text.secondary)
@@ -2186,15 +2192,20 @@ private struct AskBackCard: View {
                 Spacer(minLength: 4)
                 Text(shortAgo(ask.at)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
             }
-            Text("“\(RouterDecision.clip(ask.message, 160))”")
+            Text((ask.context.action.map { "\($0.origin.category) · " } ?? "") + "“\(RouterDecision.clip(ask.message, 160))”")
                 .cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            if let note = ask.note {
+                Text(note).cdsText((12, 16), .medium, CDS.Text.warning).fixedSize(horizontal: false, vertical: true)
+            }
             FlowLayout(spacing: 6) {
                 // What can still be sent to: a card hidden since it was offered (its session's tasks running) has no button.
                 let options = ask.options.filter { store.routerDispatcher.eligible($0.target, store: store) }
                 let newest = ask.id == store.routerDispatcher.askBacks.last?.id
                 ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
                     ClaudeButton(option.title + (option.detail.isEmpty ? "" : " · \(option.detail)"), variant: .secondary, size: .sm) {
-                        store.routerDispatcher.pick(ask.id, target: option.target)
+                        if option.target == RouterAskBack.chooseFolder { chooseFolder() } else {
+                            store.routerDispatcher.pick(ask.id, target: option.target)
+                        }
                     }
                     // RouterKeys: ⌘1–⌘4 on the newest ask.
                     .help(newest && index < RouterKeys.pickKeys.count ? "⌘\(index + 1)" : "")
@@ -2230,5 +2241,17 @@ private struct AskBackCard: View {
         .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(warm.opacity(0.8), lineWidth: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Where should this go? \(ask.message)")
+    }
+
+    /// "Choose folder…": a folder picked in the open panel gets a new session with the message.
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Start a session here"
+        panel.message = ask.note.map { "\($0). Choose the folder a new session should work in." } ?? "Choose the folder a new session should work in."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        store.routerDispatcher.pick(ask.id, folder: url.path)
     }
 }

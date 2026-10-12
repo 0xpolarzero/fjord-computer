@@ -7,7 +7,7 @@ import Foundation
 typealias JevAsker = @MainActor ([String: JevClient.Question], [String: String]) async throws -> [String: JevClient.Answer]
 
 extension JevClient {
-    /// An older one-choice stand-in (`RouterTools.chooser`, `ActionSessions.Chooser`) as an asker: it answers the choices,
+    /// An older one-choice stand-in (`RouterTools.chooser`) as an asker: it answers the choices,
     /// one call each, and leaves every other question unanswered.
     static func asker(choosing choose: @escaping ([String], [String: String], [String: String], String) async throws -> Choice) -> JevAsker {
         { questions, state in

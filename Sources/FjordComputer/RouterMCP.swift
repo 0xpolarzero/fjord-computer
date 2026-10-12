@@ -501,6 +501,9 @@ final class RouterMCPServer: @unchecked Sendable {
     var deliveryCheck: (@MainActor () -> String?)?
     /// The text goes exactly as given, with nothing taken out (a continuation Fjord Computer wrote itself).
     var verbatim = false
+    /// A folder you chose for a new session ("Choose folder…" on an ask): `start_session` may start there too, besides the
+    /// projects Fjord Computer knows.
+    var chosenFolder: String?
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
     var starter: ((String, String) async throws -> SessionStart.Started)?
     /// Waiting for a held start's process (`finishStart`), by its session id: its peer; tests answer for it.
@@ -751,7 +754,7 @@ final class RouterMCPServer: @unchecked Sendable {
                               hint: "Session “\(Self.hinted(s.title, 120))” in project \(Self.hinted(project, 80))\(about.isEmpty ? "" : ": \(Self.hinted(about, 300))")",
                               title: s.title, project: project, sessionID: s.id, folder: s.folderKey))
         }
-        for folder in store.knownFolders.filter({ !$0.isEmpty && (projects?.contains($0) ?? true) }).prefix(60) {
+        for folder in Self.newSessionFolders(store, projects: projects) {
             let name = store.folderName(folder)
             out.append(Target(target: "new:\(folder)", hint: "Start a new session in project \(Self.hinted(name, 80))", title: "", project: name,
                               folder: folder))
@@ -1148,7 +1151,13 @@ final class RouterMCPServer: @unchecked Sendable {
 
     func startSession(_ store: Store, project: String, title: String, ticket: Ticket, settings: SessionSettings? = nil) async throws -> String {
         let said = try yourMessage()
-        let folder = try Self.folder(project, folders: store.knownFolders.filter { !$0.isEmpty }, name: store.folderName)
+        // Your sessions' folders first; else also the repos in your code folders (a clone of a notification's repo), and one
+        // you chose.
+        let known = store.knownFolders.filter { !$0.isEmpty }
+        var seen = Set<String>()
+        let all = (known + store.projectFolders + [chosenFolder].compactMap { $0 }).filter { !$0.isEmpty && seen.insert($0).inserted }
+        let folder = try (try? Self.folder(project, folders: known, name: store.folderName))
+            ?? Self.folder(project, folders: all, name: store.folderName)
         let name = store.folderName(folder)
         let title = SessionStart.cleanTitle(title)
         // The first message is the task alone, without the request to start the session or its settings.

@@ -16,17 +16,20 @@ enum RouterPointer: Hashable, Codable {
     case notification(String)
     /// A category of the Triage inbox.
     case category(UUID)
+    /// In a category's "Then" prompt only: the thing the action runs for, "this notification". It is never sent as it is:
+    /// the action makes it the thing's notification pill (`ActionPrompt.parts`).
+    case thisItem
 
     /// Whether it says where the message goes (a project, a session): such a pill is taken out of your words where they
     /// start with it, as an address (`RouterContext.pills`). A notification or a category is what you talk about, and stays.
     var addresses: Bool {
         switch self {
         case .project, .session: true
-        case .notification, .category: false
+        case .notification, .category, .thisItem: false
         }
     }
 
-    private enum CodingKeys: String, CodingKey { case project, session, notification, category }
+    private enum CodingKeys: String, CodingKey { case project, session, notification, category, thisItem }
 
     /// `{"project": "/code/lookout"}` and so on; a bare string, a project's folder (as the pills were kept before there
     /// were other kinds), is a project.
@@ -40,6 +43,7 @@ enum RouterPointer: Hashable, Codable {
         else if let v = try c.decodeIfPresent(String.self, forKey: .session) { self = .session(v) }
         else if let v = try c.decodeIfPresent(String.self, forKey: .notification) { self = .notification(v) }
         else if let v = try c.decodeIfPresent(UUID.self, forKey: .category) { self = .category(v) }
+        else if c.contains(.thisItem) { self = .thisItem }
         else { throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath, debugDescription: "Not a pointer")) }
     }
 
@@ -50,6 +54,7 @@ enum RouterPointer: Hashable, Codable {
         case .session(let id): try c.encode(id, forKey: .session)
         case .notification(let id): try c.encode(id, forKey: .notification)
         case .category(let id): try c.encode(id, forKey: .category)
+        case .thisItem: try c.encode(true, forKey: .thisItem)
         }
     }
 }
@@ -92,6 +97,8 @@ extension Store {
             return things[id].map(RouterPointers.reference) ?? "notification"
         case .category(let id):
             return categories.first { $0.id == id }.map { RouterPointers.inert($0.title, 40) } ?? "category"
+        case .thisItem:
+            return ActionPrompt.thisItemName
         }
     }
 
@@ -116,6 +123,8 @@ extension Store {
                 return MentionLook(label: name ?? "category", symbol: "tray", tint: CDS.Text.muted)
             }
             return MentionLook(label: RouterDecision.clip(c.title, 32), symbol: c.symbol, tint: c.color.swatch)
+        case .thisItem:
+            return MentionLook(label: ActionPrompt.thisItemName, symbol: "bell", tint: CDS.Text.accent)
         }
     }
 
@@ -284,7 +293,7 @@ enum RouterPointers {
                 let open = store.entries(in: c.id)
                 blocks.append(category(name: m.name, rules: RuleWords(store: store).summary(c), open: open.count,
                                        unread: open.filter(\.isUnread).count))
-            case .project, .session:
+            case .project, .session, .thisItem:
                 continue
             }
         }
@@ -293,7 +302,7 @@ enum RouterPointers {
             .joined(separator: "\n\n")
     }
 
-    /// A notification's block, as an inbox action's (`InboxActions.routerMessage`): outside the fence only what has GitHub's
+    /// A notification's block (an inbox action's message has it too, its thing tagged): outside the fence only what has GitHub's
     /// strict form (its reference, its link) and what Fjord Computer says itself (its kind, its state); its title, author,
     /// category, the facts that put it there and its last comment inside, each bounded.
     static func notification(name: String, thing: Thing, category: String?, facts: [Fact], done: Bool) -> String {
@@ -386,6 +395,7 @@ struct MentionSuggestion: Identifiable, Equatable {
         case .pointer(.session(let v)): "session:" + v
         case .pointer(.notification(let v)): "notification:" + v
         case .pointer(.category(let v)): "category:" + v.uuidString
+        case .pointer(.thisItem): "this"
         case .text(let v): "text:\(section.rawValue):" + name + ":" + String(v.hashValue)
         }
     }

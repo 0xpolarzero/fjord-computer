@@ -191,7 +191,7 @@ enum Shapes {
     /// without a second list to keep).
     static var actionVariants: [JSONShape.Variant] {
         let samples: [(ActionKind, String)] = [
-            (.askRouter(prompt: "prompt"), "Hands the thing to the Router with the prompt; it starts a session or passes it to one. `{repo} {number} {url}` are filled in; `{title}` and `{author}` point to the block of GitHub content that follows the prompt (what others wrote never goes in the prompt itself)."),
+            (.askRouter(prompt: "prompt"), "Sends the prompt to the Router with the thing attached; the Router sends it to a session working in that repo or starts one in a local clone; if unsure it waits for the user. The prompt is the user's words: `{url}` (or `{repo}#{number}`, `{title}`) stands for the thing where it is said, else the thing is attached at the end; its title, author and comments go in a fenced block of GitHub content, never in the prompt itself."),
             (.comment("text"), "Comments on the PR or issue on GitHub. `{title} {url} {number} {repo} {author}` are filled in. Only when the user asked."),
             (.rerun, "Re-runs the failed jobs of the failing workflow runs (PRs and workflows)."),
         ]

@@ -61,9 +61,9 @@ enum CategoriesDemo {
             ledger.set(ActionRun(category: c.id, thing: e.id, action: action, trigger: "enter", state: state,
                                  at: now.addingTimeInterval(-ago), detail: detail, url: url, sessionID: session))
         }
-        record("Contributions", 0, sessionAction, .done, "asked the Router", ago: 130, session: "local_demo")
-        record("Contributions", 1, sessionAction, .failed, "the Router is off", ago: 900)
-        record("Contributions", 2, sessionAction, .done, "asked the Router", ago: 3 * 3600)
+        record("Contributions", 0, sessionAction, .done, "session started", ago: 130, session: "local_demo")
+        record("Contributions", 1, sessionAction, .failed, "Triage or the Router is off", ago: 900)
+        record("Contributions", 2, sessionAction, .done, "sent to Fix the flaky sandbox test", ago: 3 * 3600, session: "local_demo-ci")
         record("Reviews for you", 0, commentAction, .done, "commented", ago: 600,
                url: URL(string: "https://github.com/ziglang/zig/pull/1#issuecomment-1"))
         record("CI", 0, rerunAction, .done, "re-ran 2 jobs", ago: 300)
@@ -75,8 +75,11 @@ enum CategoriesDemo {
         store.actionLedger = ledger
     }
 
+    /// The demo's "Send to the Router" prompt: the thing where it is said.
+    static let waitingOn = ActionPrompt([.text("Address what "), .pointer(.thisItem), .text(" is waiting on.")])
+
     static let demoActions: [String: [CategoryAction]] = [
-        "Contributions": [CategoryAction(id: sessionAction, kind: .askRouter(prompt: "Address what {url} is waiting on."))],
+        "Contributions": [CategoryAction(id: sessionAction, kind: .askRouter(prompt: CategoriesDemo.waitingOn))],
         "Reviews for you": [CategoryAction(id: commentAction, kind: .comment("Thanks {author}, I'll take a look today."))],
         "CI": [CategoryAction(id: rerunAction, kind: .rerun)],
     ]
@@ -107,7 +110,7 @@ enum CategoriesDemo {
             ], notifies: false, hidden: true),
         ] + [InboxStore.ci]
         store.categories[0].actions = ActionList([
-            CategoryAction(id: sessionAction, kind: .askRouter(prompt: "Address what {url} is waiting on.")),
+            CategoryAction(id: sessionAction, kind: .askRouter(prompt: CategoriesDemo.waitingOn)),
             CategoryAction(id: commentAction, kind: .comment("Thanks {author}, taking another look."), trigger: .eachFact),
         ])
         // Fetched things: the preview has history for both repos.

@@ -64,15 +64,15 @@ import Testing
         // Triage alone: a PR that comes in gets no session (a re-run isn't due: its checks pass).
         s.things["pr:a/one#2"] = InboxFixture.pr(2)
         await s.runActions()
-        #expect(performer.requests.isEmpty)
-        // The Router on: what was already there is old news; what comes after starts one.
+        #expect(performer.messages.isEmpty)
+        // The Router on: what was already there is old news; what comes after goes to the Router.
         s.setTool(.router, on: true)
         #expect(s.toolsLinked)
         await s.runActions()
-        #expect(performer.requests.isEmpty)
+        #expect(performer.messages.isEmpty)
         s.things["pr:a/one#3"] = InboxFixture.pr(3)
         await s.runActions()
-        #expect(performer.requests.map(\.thingID) == ["pr:a/one#3"])
+        #expect(performer.messages.map(\.parts.last) == [.pointer(.notification("pr:a/one#3"))])
     }
 
     @Test func jevReadsNothingOfTheInboxWithTriageOff() {

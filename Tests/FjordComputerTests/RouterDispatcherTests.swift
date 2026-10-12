@@ -13,6 +13,8 @@ import Testing
         var ranked: [RouterDispatcher.Scored] = []
         var rankError: Error?
         var ranks = 0
+        /// The projects each routing call was narrowed to.
+        var rankProjects: [[String]] = []
         /// Holds the next routing call until the test lets it go.
         var holdRank = false
         var rankHeld: CheckedContinuation<Void, Never>?
@@ -43,8 +45,9 @@ import Testing
         func install(_ d: RouterDispatcher) {
             d.onFinish = { [unowned self] in finished.append($0) }
             d.effects = RouterDispatcher.Effects(
-                rank: { [unowned self] _, _, _ in
+                rank: { [unowned self] _, _, projects in
                     ranks += 1
+                    rankProjects.append(projects)
                     if holdRank { await withCheckedContinuation { rankHeld = $0 } }
                     if let rankError { throw rankError }
                     return RouterDispatcher.Ranking(scored: ranked)
@@ -1439,6 +1442,131 @@ import Testing
         #expect(block.upperBound < message.lowerBound && input.contains("@\(ci.title): a category of the Triage inbox"))
         // A notification or category doesn't say where it goes.
         #expect(context.pills.isEmpty && RouterDispatcher.plan(text: text, context: context, store: s) == .classify)
+    }
+
+    // MARK: A notification's repo, and the actions' messages
+
+    /// Clones of o/lookout: the session's folder and one with no session yet; PR 7 there, PR 9 of a repo with no clone.
+    private func cloned(_ s: Store) async {
+        s.codeFolders.scan = { _ in .init(repos: ["/code/lookout": ["o/lookout"], "/code/lookout-2": ["o/lookout"], "/code/docs": ["o/docs"]]) }
+        s.addCodeFolders(["/code"])
+        await s.codeFolders.settled()
+        s.things["pr:o/lookout#7"] = InboxFixture.pr(7, repo: "o/lookout", title: "Login fails")
+        s.things["pr:o/none#9"] = InboxFixture.pr(9, repo: "o/none", title: "Elsewhere")
+    }
+
+    /// The message a category's "Then" sends for a thing: your words, the thing tagged, from the category.
+    private func fromAction(_ s: Store, _ parts: [RouterMessagePart], model: String? = "opus") -> (text: String, context: RouterContext) {
+        var (text, context) = tagged(s, parts)
+        context.action = RouterActionSource(origin: SessionOrigin(category: "Contributions", thing: "o/lookout#7 Login fails",
+                                                                  actionID: "a", runID: "r"),
+                                            title: "o/lookout#7 Login fails", model: model, effort: nil)
+        return (text, context)
+    }
+
+    @Test func aNotificationTaggedNarrowsWhereItGoesToItsReposClones() async {
+        let (s, d, f) = setup()
+        await cloned(s)
+        let (text, context) = tagged(s, [.text("why does "), .pointer(.notification("pr:o/lookout#7")), .text(" fail?")])
+        let world = RouterDispatcher.repoWorld(context, store: s)
+        #expect(world?.clones == ["/code/lookout", "/code/lookout-2"] && world?.targets == ["session:local_a", "new:/code/lookout", "new:/code/lookout-2"])
+        // What Jev routes among: the clones' sessions and cards, a new session in each clone (one never had a session), and
+        // the Router's own runs; nothing of another repo.
+        let targets = RouterTools(store: s).destinations(s, projects: Set(world?.clones ?? [])).map(\.target)
+        #expect(targets.contains("answer:local_a#w1") && targets.contains("new:/code/lookout-2") && targets.contains("question"))
+        #expect(!targets.contains("session:local_b") && !targets.contains("new:/code/docs"))
+        // Jev's pick outside it isn't gone to: you pick among what is in it, the Router's own runs kept for yours.
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "new:/code/lookout-2", p: 0.06), .init(target: "question", p: 0.04)]
+        let a = d.submit(text, context: context)
+        await finish(d, f, a)
+        #expect(f.rankProjects.last == ["/code/lookout", "/code/lookout-2"])
+        #expect(f.prepared.isEmpty && f.started.isEmpty)
+        let options = d.askBacks.first { $0.id == a }?.options.map(\.target)
+        #expect(options == ["new:/code/lookout-2", "question"])
+        #expect(d.eligible("new:/code/lookout-2", store: s), "a scanned clone with no session can be started in")
+        // Sure of the Router's own run: a question about the PR is answered.
+        f.ranked = [.init(target: "question", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let b = d.submit(text, context: context)
+        await finish(d, f, b)
+        #expect(f.runs.map(\.intent) == [.question])
+        // A project tagged too: it says where, and the repo doesn't narrow.
+        var pinned = context
+        pinned.projects = ["/code/docs"]
+        #expect(RouterDispatcher.repoWorld(pinned, store: s) == nil)
+    }
+
+    @Test func anActionsMessageGoesOnlyToASessionAndWaitsForYouWhenJevIsntSure() async throws {
+        let (s, d, f) = setup()
+        await cloned(s)
+        let (text, context) = fromAction(s, [.text("Address what "), .pointer(.notification("pr:o/lookout#7")), .text(" is waiting on.")])
+        // A run of the action, following the message.
+        let category = UUID(), action = UUID()
+        // Jev is sure it changes Fjord Computer: never for an incoming PR. Nothing is sent and nothing runs: it asks.
+        f.ranked = [.init(target: "change_fjord", p: 0.97), .init(target: "new:/code/lookout-2", p: 0.03)]
+        let id = try #require(d.submit(text, context: context))
+        s.actionLedger.set(ActionRun(category: category, thing: "pr:o/lookout#7", action: action, trigger: "enter", state: .running,
+                                     at: Date(), message: id))
+        await finish(d, f, id)
+        #expect(f.runs.isEmpty && f.sent.isEmpty && f.started.isEmpty)
+        let ask = d.askBacks.first { $0.id == id }
+        #expect(ask?.options.map(\.target) == ["new:/code/lookout-2"])
+        #expect(decision(s, id)?.fromAction?.category == "Contributions" && decision(s, id)?.triggerText.hasPrefix("Contributions · ") == true)
+        var run = s.actionLedger.run(category, "pr:o/lookout#7", action, "enter")
+        #expect(run?.state == .running && run?.detail == InboxActions.waitingWords)
+        // Not one of its options: the Router's own runs are refused.
+        #expect(!d.pick(id, target: "change_fjord") && !d.pick(id, target: "question"))
+        // Your pick: a new session in the clone, on the action's model, called after its thing, tagged with its origin.
+        #expect(d.pick(id, target: "new:/code/lookout-2"))
+        await waitUntil { f.finished.filter { $0 == id }.count == 2 }
+        #expect(f.started.map(\.folder) == ["/code/lookout-2"] && f.started.first?.title == "o/lookout#7 Login fails")
+        #expect(f.startSettings.first??.model == "opus")
+        #expect(s.router.origins["local_new"]?.category == "Contributions")
+        run = s.actionLedger.run(category, "pr:o/lookout#7", action, "enter")
+        #expect(run?.state == .done && run?.detail == "session started" && run?.sessionID == "local_new")
+    }
+
+    @Test func anActionsMessageIsSentWhereJevIsSureAndNeverOnTheWordsAlone() async {
+        let (s, d, f) = setup()
+        await cloned(s)
+        let (text, context) = fromAction(s, [.text("Address what "), .pointer(.notification("pr:o/lookout#7")), .text(" is waiting on.")])
+        f.ranked = [.init(target: "session:local_a", p: 0.97), .init(target: "unclear", p: 0.03)]
+        // Its session waits on a question: words not addressed to it would need your click; it isn't one here.
+        s.router.cards = []
+        let a = d.submit(text, context: context)
+        await finish(d, f, a)
+        #expect(f.prepared == ["local_a"] && decision(s, a)?.decision.targetID == "session:local_a")
+        #expect(s.router.origins["local_a"] == nil, "only a session started for it is tagged")
+        // Jev can't be asked: no guess, even where its words would say.
+        f.rankError = RouterTools.Failure("no TypeSafe key is set")
+        let b = d.submit(text, context: context)
+        await finish(d, f, b)
+        #expect(f.prepared == ["local_a"] && d.askBacks.contains { $0.id == b })
+        // Only while Triage and the Router are both on.
+        s.settings.triage = false
+        #expect(d.submit(text, context: context) == nil)
+    }
+
+    @Test func withNoCloneOfTheRepoItAsksForAFolder() async throws {
+        let (s, d, f) = setup()
+        await cloned(s)
+        let (text, context) = fromAction(s, [.text("Fix "), .pointer(.notification("pr:o/none#9"))])
+        let id = try #require(d.submit(text, context: context))
+        await finish(d, f, id)
+        let ask = d.askBacks.first { $0.id == id }
+        #expect(f.ranks == 0, "no guess, so no call")
+        #expect(ask?.note == "No clone of o/none" && ask?.options.map(\.target) == [RouterAskBack.chooseFolder])
+        #expect(d.eligible(RouterAskBack.chooseFolder, store: s) && !d.pick(id, target: RouterAskBack.chooseFolder))
+        // The folder you chose, known or not.
+        #expect(d.pick(id, folder: "/elsewhere/none"))
+        await waitUntil { f.finished.filter { $0 == id }.count == 2 }
+        #expect(f.started.map(\.folder) == ["/elsewhere/none"] && decision(s, id)?.decision.targetID == "new:/elsewhere/none")
+        // Yours: the Router's own runs stay among the options, with Choose folder…
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "question", p: 0.1)]
+        let (typed, tags) = tagged(s, [.text("fix "), .pointer(.notification("pr:o/none#9"))])
+        let b = d.submit(typed, context: tags)
+        await finish(d, f, b)
+        let mine = d.askBacks.first { $0.id == b }
+        #expect(mine?.note == "No clone of o/none" && mine?.options.map(\.target) == ["question", RouterAskBack.chooseFolder])
     }
 
     // MARK: Haiku runs

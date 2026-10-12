@@ -96,7 +96,7 @@ extension RouterTools {
             out.append(Destination(target: "answer:\(card.id)", name: unique(Self.hinted(card.title, 80)), criteria: criteria,
                                    sessionID: card.sessionID))
         }
-        for folder in store.knownFolders.filter({ !$0.isEmpty && (projects?.contains($0) ?? true) }).prefix(60) {
+        for folder in Self.newSessionFolders(store, projects: projects) {
             let name = Self.hinted(store.folderName(folder), 80)
             out.append(Destination(target: "new:\(folder)", name: unique("new session in \(name)"),
                                    criteria: ["kind": "new session", "project": name]))
@@ -105,6 +105,15 @@ extension RouterTools {
             out.append(Destination(target: intent.name, name: intent.name, criteria: intent.criteria))
         }
         return out
+    }
+
+    /// Where a new session is offered: every project Fjord Computer knows, or only `projects` (all of them, a clone with no
+    /// session yet too: a notification's repo, `RouterDispatcher.repoWorld`), known ones first.
+    static func newSessionFolders(_ store: Store, projects: Set<String>?) -> [String] {
+        guard let projects else { return Array(store.knownFolders.filter { !$0.isEmpty }.prefix(60)) }
+        let known = store.knownFolders.filter { !$0.isEmpty && projects.contains($0) }
+        let rest = CodeFolders.sorted(projects.subtracting(known)).filter { !$0.isEmpty }
+        return Array((known + rest).prefix(60))
     }
 
     /// The cards waiting on you among `destinations`, each with what it asks.

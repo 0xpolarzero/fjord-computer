@@ -942,10 +942,10 @@ import Testing
         let payload = card.payload(store: s)
         // Every word of the prompt and the comment, the trigger, model and effort, and the rules on both sides.
         #expect(payload.before.contains("Actions: none"))
-        #expect(payload.after.contains("Action 1: Ask the Router (for each new fact, model your default, effort your default), prompt: " + prompt))
+        #expect(payload.after.contains("Action 1: Send to the Router (for each new fact, model your default, effort your default), prompt: " + prompt))
         var sized = CategoryAction.make(.askRouter(prompt: "go"))
         (sized.model, sized.effort) = ("opus", "max")
-        #expect(FjordChange.describe(sized) == "Ask the Router (when a thing comes in, model opus, effort max), prompt: go")
+        #expect(FjordChange.describe(sized) == "Send to the Router (when a thing comes in, model opus, effort max), prompt: go")
         #expect(payload.after.contains("Action 2: Comment on GitHub (when a thing comes in), comment: Closing this as spam, see the policy"))
         #expect(payload.after.filter { $0.hasPrefix("Rule ") }.count == mine.rules.count && !mine.rules.isEmpty)
         // A setting's before and after.

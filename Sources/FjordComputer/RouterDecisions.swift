@@ -7,7 +7,9 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     enum Trigger: Codable, Equatable {
         /// Your message, or something you did on a card (what it was, in words).
         case you(String)
-        /// An inbox action ("Ask the Router"): its category and thing (names), the action, and its run (the message's id).
+        /// An inbox action that started a session itself, as it did before its message went through the Router: its category
+        /// and thing (names), the action, and its run. Only in entries from before; an action's message now is `.you`, with
+        /// `fromAction`.
         case action(category: String, thing: String, actionID: String, runID: String?)
         /// A session did something the Router acted on.
         case session(sessionID: String, event: String)
@@ -141,6 +143,9 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     var delivered: Delivered?
     /// The pills of your message (`.you`), drawn where their "@name" is; nil for anything else and in entries from before.
     var mentions: [RouterMention]?
+    /// A message a category's "Then" sent for a thing (your prompt, `.you`): the category, the thing, the action and its run.
+    /// Nil for anything else.
+    var fromAction: SessionOrigin?
     /// Its message was stopped where it was sent (a Cancel that wasn't too late).
     var isCancelled: Bool { delivered?.cancelled?.stopped == true }
 
@@ -170,7 +175,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     /// What set it off, in a line.
     var triggerText: String {
         switch trigger {
-        case .you(let text): text
+        case .you(let text): fromAction.map { "\($0.category) · " + text } ?? text
         case .action(let category, let thing, _, _): "From \(category) · \(thing)"
         case .session(_, let event): event
         case .system: "Fjord Computer"
@@ -219,6 +224,8 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         if outcome == .reverted { return "arrow.uturn.backward" }
         if isCancelled, outcome == .done || outcome == .pending { return "xmark.circle" }
         if case .action = trigger { return "bolt" }
+        // An action's message, before anything is done with it.
+        if fromAction != nil, done.isEmpty { return "bolt" }
         switch done.first {
         case .sent: return "paperplane"
         case .started: return "plus.square"
@@ -250,7 +257,9 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         let when = age == "now" ? "just now" : age.first?.isNumber == true && age.last?.isLetter == true ? "\(age) ago" : age
         let who: String
         switch trigger {
-        case .you(let text): who = "you: “\(Self.clip(text, 100))”"
+        case .you(let text):
+            who = fromAction.map { "action of the category “\(UntrustedText.clean($0.category, limit: 40))”, your prompt: “\(Self.clip(text, 100))”" }
+                ?? "you: “\(Self.clip(text, 100))”"
         case .action(let category, let thing, _, _): who = "action of the category “\(UntrustedText.clean(category, limit: 40))” · \(UntrustedText.clean(thing, limit: 80))"
         case .session(_, let event): who = "session: \(Self.clip(event, 100))"
         case .system: who = "Fjord Computer"

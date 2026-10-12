@@ -15,25 +15,27 @@ enum ActionTrigger: String, Codable, Hashable {
 }
 
 enum ActionKind: Codable, Hashable {
-    /// Starts a session in a local clone of the thing's repo with this prompt (the Router does it, with no model).
-    case askRouter(prompt: String)
+    /// "Send to the Router": the prompt goes through the Router as yours, from the category, with the thing tagged; the Router
+    /// sends it to a session working in the thing's repo or starts one in a local clone (`ActionPrompt`).
+    case askRouter(prompt: ActionPrompt)
     case comment(String)
     /// Re-run the failed jobs of the failing workflow runs.
     case rerun
 
-    /// It starts a Claude session (the Router does it): it runs and shows only while Triage and the Router are both on.
-    var startsSession: Bool { if case .askRouter = self { true } else { false } }
+    /// It sends to Claude sessions through the Router: it runs and shows only while Triage and the Router are both on.
+    var sendsToRouter: Bool { if case .askRouter = self { true } else { false } }
 
     // Written as the synthesized form was, so what is saved reads back. A `session(folder, prompt:)` saved before the Router
-    // was the only way in is read as `askRouter` with the same prompt (the Router picks the folder now).
+    // was the only way in is read as `askRouter` with the same prompt (the Router picks the folder now). A prompt saved before
+    // prompts had pills is read with its placeholders made pills (`ActionPrompt.migrated`).
     private enum Key: String, CodingKey { case askRouter, session, comment, rerun }
-    private enum Field: String, CodingKey { case prompt, _0 }
+    private enum Field: String, CodingKey { case _0 }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
         if c.contains(.askRouter) || c.contains(.session) {
-            let inner = try c.nestedContainer(keyedBy: Field.self, forKey: c.contains(.askRouter) ? .askRouter : .session)
-            self = .askRouter(prompt: (try? inner.decode(String.self, forKey: .prompt)) ?? "")
+            let inner = try c.nestedContainer(keyedBy: ActionPrompt.CodingKeys.self, forKey: c.contains(.askRouter) ? .askRouter : .session)
+            self = .askRouter(prompt: ActionPrompt(from: inner))
         } else if c.contains(.comment) {
             self = .comment(try c.nestedContainer(keyedBy: Field.self, forKey: .comment).decode(String.self, forKey: ._0))
         } else if c.contains(.rerun) {
@@ -47,8 +49,8 @@ enum ActionKind: Codable, Hashable {
         var c = encoder.container(keyedBy: Key.self)
         switch self {
         case .askRouter(let prompt):
-            var inner = c.nestedContainer(keyedBy: Field.self, forKey: .askRouter)
-            try inner.encode(prompt, forKey: .prompt)
+            var inner = c.nestedContainer(keyedBy: ActionPrompt.CodingKeys.self, forKey: .askRouter)
+            try prompt.encode(to: &inner)
         case .comment(let text):
             var inner = c.nestedContainer(keyedBy: Field.self, forKey: .comment)
             try inner.encode(text, forKey: ._0)
@@ -62,13 +64,14 @@ struct CategoryAction: Codable, Hashable, Identifiable {
     var id = UUID()
     var kind: ActionKind
     var trigger: ActionTrigger = .enter
-    /// For "Ask the Router": the model and effort of the session it starts (`ActionSettings`); nil is your Claude Code default.
+    /// For "Send to the Router": the model and effort of a session the Router starts for it (`ActionSettings`); nil is your
+    /// Claude Code default. A message sent to a session already there goes as it is.
     var model: String?
     var effort: String?
 
     var title: String {
         switch kind {
-        case .askRouter: "Ask the Router"
+        case .askRouter: "Send to the Router"
         case .comment: "Comment on GitHub"
         case .rerun: "Re-run failed checks"
         }
@@ -123,13 +126,15 @@ struct ActionRun: Codable, Hashable {
     var trigger: String
     var state: State
     var at: Date
-    /// done: "commented", "re-ran 2 jobs", "asked the Router"; failed: why.
+    /// done: "commented", "re-ran 2 jobs", "sent to <session>", "session started"; running: "waiting on you in the Router"
+    /// while the Router asks you where its message goes; failed: why.
     var detail = ""
     /// The comment's page.
     var url: URL?
-    /// The Claude app's id of the session the Router started for it.
+    /// The Claude app's id of the session the Router sent its message to, or started for it.
     var sessionID: String?
-    /// The entry in the Router's history (its decision log id) the run left.
+    /// The entry in the Router's history (its decision log id) the run left: what the Router made of its message follows
+    /// it (`Store.followActionRun`).
     var message: UUID?
     /// For `enter`: when the thing was first seen out of the category since (nil while it is in).
     var left: Date?
@@ -417,7 +422,7 @@ enum InboxActions {
     /// is there as old; runs of what is gone are forgotten) and returns the runs that are due, in the order of the
     /// categories, newest things first.
     /// `known`: the ids of every thing still fetched, in a category now or not.
-    /// `held`: actions held back (one that starts a session while Triage and the Router aren't both on): neither taken in
+    /// `held`: actions held back (one that sends to the Router while Triage and the Router aren't both on): neither taken in
     /// nor due, their runs kept; no longer held, they are taken in as just added, so only what comes after runs them.
     static func plan(entries: [InboxEntry], categories: [InboxCategory], groups: [InboxGroup], ledger: inout ActionLedger,
                      me: String, known things: Set<String> = [], ratings: [String: Rating] = [:], now: Date = Date(),
@@ -660,21 +665,6 @@ enum InboxActions {
         return values.reduce(text) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
     }
 
-    /// The placeholders of a prompt that goes to a session as your words: nothing GitHub wrote is put in them. `{title}` and
-    /// `{author}` point to the GitHub block below the prompt; `{repo}`, `{number}` and `{url}` are filled in only when they
-    /// have GitHub's own strict form (`owner/repo`, digits, a github.com link to it), else they point to the block too.
-    static func substitutePrompt(_ text: String, thing: Thing) -> String {
-        let repo = trustedRepo(thing.repo)
-        let values: [(String, String)] = [
-            ("{title}", "the title (in the GitHub block below)"),
-            ("{url}", trustedURL(thing) ?? "the link (in the GitHub block below)"),
-            ("{number}", thing.number.map(String.init) ?? ""),
-            ("{repo}", repo ?? "the repository (in the GitHub block below)"),
-            ("{author}", "the author (in the GitHub block below)"),
-        ]
-        return values.reduce(text) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
-    }
-
     /// `owner/repo` when it has GitHub's form (letters, digits, `-` for the owner; also `.` and `_` for the name), else nil.
     static func trustedRepo(_ repo: String) -> String? {
         repo.range(of: #"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"#, options: .regularExpression) != nil ? repo : nil
@@ -711,25 +701,6 @@ enum InboxActions {
     /// Content from GitHub made unable to close (or reopen) the fence it sits in.
     static func neutralized(_ text: String) -> String { UntrustedFence.github.neutralized(text) }
 
-    /// A message split around its fenced GitHub block: what comes before (without the warning line), the block, what follows.
-    static func fenced(_ text: String) -> (before: String, github: String, after: String)? {
-        guard let open = text.range(of: fenceOpen + "\n"), let close = text.range(of: "\n" + fenceClose, options: .backwards),
-              open.upperBound <= close.lowerBound else { return nil }
-        var before = String(text[..<open.lowerBound])
-        if before.hasSuffix(fenceWarning + "\n") { before.removeLast(fenceWarning.count + 1) }
-        return (before.trimmingCharacters(in: .whitespacesAndNewlines), String(text[open.upperBound..<close.lowerBound]),
-                String(text[close.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    /// A session's first message as Jev reads it to pick a clone: what you wrote, then the GitHub block, each bounded on its
-    /// own and the block framed again, so a long message can't cut the fence off.
-    static func forJev(_ message: String, limit: Int = 2000) -> String {
-        guard let parts = fenced(message) else { return UntrustedFence.github.warned(UntrustedText.clean(message, limit: limit, oneLine: false)) }
-        let yours = UntrustedText.clean(parts.before, limit: limit / 2, oneLine: false)
-        let github = UntrustedText.clean(parts.github, limit: limit / 2, oneLine: false)
-        return yours + "\n\n" + UntrustedFence.github.warned(github)
-    }
-
     /// Whether the rules can match things others write: any rule not strictly by you, or a comment, review, commit or thread
     /// condition not strictly by you. Conservative: unsure counts as yes.
     static func rulesMatchOthers(_ rules: [Rule]) -> Bool {
@@ -755,7 +726,8 @@ enum InboxActions {
     /// inside a fenced block.
     static func categoryLabel(_ name: String) -> String { neutralized(UntrustedText.clean(name, limit: 80)) }
 
-    /// The new session's title: its reference and what it is about, in one short line.
+    /// The title of a session the Router starts for an action's message: the thing's reference and what it is about, in one
+    /// short line.
     static func sessionTitle(_ thing: Thing) -> String {
         SessionStart.cleanTitle(reference(thing) + " " + inline(thing.title))
     }
@@ -765,32 +737,6 @@ enum InboxActions {
         case .workflow: "\(thing.repo) · \(thing.workflowName ?? "workflow") on \(thing.currentBranch ?? "its branch")"
         default: "\(thing.repo)#\(thing.number ?? 0)"
         }
-    }
-
-    /// What the session is told first: "⚡ <Category>: your prompt", then the event's context, the GitHub content fenced.
-    /// Your prompt and the lines outside the block hold nothing GitHub wrote (`substitutePrompt`, `trustedReference`): the
-    /// title, the author, a workflow's name and branch, a link of any other form, the facts and the last comment are all in
-    /// the block, each bounded on its own.
-    static func routerMessage(_ text: String, category: String, thing: Thing, facts: [Fact]) -> String {
-        let kind = thing.kind == .pr ? "Pull request" : thing.kind == .issue ? "Issue" : "Workflow"
-        let lines = ["Context, from the category (named in the block below) of the Triage inbox:",
-                     "- URL: \(trustedURL(thing) ?? "in the GitHub block below")",
-                     "- \(kind): \(trustedReference(thing) ?? "in the GitHub block below")"]
-        // A category's name is yours to type but can be copied from a title GitHub's users chose: data, not your words.
-        var github = ["- Category: \(categoryLabel(category))", "- Title: \(inline(thing.title))"]
-        if trustedReference(thing) == nil || thing.kind == .workflow { github.append("- Reference: " + inline(reference(thing))) }
-        if trustedURL(thing) == nil { github.append("- URL: " + inline(thing.url.absoluteString)) }
-        if let author = thing.author { github.append("- Author: " + inline("@" + author.login)) }
-        if !facts.isEmpty { github.append("- Why it is here: " + UntrustedText.clean(facts.map(\.label).joined(separator: " · "), limit: 400)) }
-        if thing.kind == .workflow, !thing.failingJobs.isEmpty {
-            github.append("- Failing jobs: " + UntrustedText.clean(thing.failingJobs.joined(separator: ", "), limit: 400))
-        }
-        if let last = thing.comments.max(by: { $0.at < $1.at }) {
-            github.append("- Last comment, by \(inline("@" + last.author.login)): “\(UntrustedText.clean(last.snippet, limit: 400))”")
-        }
-        let body = substitutePrompt(text, thing: thing).trimmingCharacters(in: .whitespacesAndNewlines)
-        return "⚡ An action of the category (named in the block below): " + (body.isEmpty ? "" : body + "\n\n") + lines.joined(separator: "\n")
-            + "\n\n" + UntrustedFence.github.warned(github.joined(separator: "\n"))
     }
 
     // MARK: Chips
@@ -840,6 +786,9 @@ enum InboxActions {
 
     private static func chip(_ run: ActionRun, action: CategoryAction, now: Date) -> Chip {
         switch run.state {
+        case .running where run.detail == waitingWords:
+            return Chip(id: action.id, label: waitingWords, tint: .attention, target: .router,
+                        help: "The Router isn't sure where it goes. Open the Router to pick", message: run.message)
         case .running, .baselined:
             return Chip(id: action.id, label: "running…", tint: .neutral, target: nil, help: action.title)
         case .failed:
@@ -848,12 +797,17 @@ enum InboxActions {
         case .done:
             switch action.kind {
             case .askRouter:
+                if let session = run.sessionID, run.detail.hasPrefix("sent to ") {
+                    let label = run.detail.count > 48 ? String(run.detail.prefix(47)) + "…" : run.detail
+                    return Chip(id: action.id, label: label, tint: .neutral, target: .session(session),
+                                help: "Sent \(ago(run.at, now: now)). Open the session in Claude")
+                }
                 if let session = run.sessionID {
                     return Chip(id: action.id, label: "session started \(ago(run.at, now: now))", tint: .neutral,
                                 target: .session(session), help: "Open the session in Claude")
                 }
-                return Chip(id: action.id, label: "asked the Router", tint: .neutral, target: .router,
-                            help: "Asked the Router \(ago(run.at, now: now)). Open the Router", message: run.message)
+                return Chip(id: action.id, label: "sent to the Router", tint: .neutral, target: .router,
+                            help: "Sent to the Router \(ago(run.at, now: now)). Open the Router", message: run.message)
             case .comment:
                 return Chip(id: action.id, label: "commented", tint: .neutral, target: run.url.map { .url($0) },
                             help: "Open the comment on GitHub")
@@ -877,9 +831,9 @@ struct FailedRun: Equatable {
 /// What actions do in the world. The Store has the real one; tests and the playground have their own (or none).
 @MainActor
 protocol ActionPerformer: AnyObject {
-    /// Starts a session for an "Ask the Router" action, with no model: in the repo's local clone (Jev picks among several),
-    /// tagged with where it came from, and logged in the Router's history. Throws why it couldn't.
-    func startSession(_ request: ActionSessionRequest) async throws -> ActionSessionStarted
+    /// Sends a "Send to the Router" action's message through the Router, as yours from its category: its entry in the
+    /// Router's history, where what the Router makes of it goes on (`Store.followActionRun`). Throws why it couldn't.
+    func sendToRouter(_ message: ActionMessage) async throws -> UUID
     /// Posts a comment; its page when GitHub says.
     func comment(repo: String, number: Int, body: String) async throws -> URL?
     /// The failed runs that re-running would take, for a PR's head commit or a workflow thing.
@@ -888,33 +842,6 @@ protocol ActionPerformer: AnyObject {
     func rerun(repo: String, run: FailedRun) async throws -> Int
     /// The local clones of a repo among the known project folders.
     func clones(of repo: String) -> [String]
-}
-
-/// What an "Ask the Router" action wants started.
-struct ActionSessionRequest: Equatable {
-    var category: String
-    var categoryID: UUID
-    /// The thing's id and its reference (`owner/repo#12`) with its title, as the session's origin says it.
-    var thingID: String
-    var reference: String
-    var repo: String
-    var action: UUID
-    /// The session's first message: the prompt, filled in, and the fenced GitHub content.
-    var message: String
-    /// The session's title: one short line.
-    var title: String
-    var model: String?
-    var effort: String?
-    /// The state a decision in the history is about: context for choosing among clones.
-    var summary: String
-    var run = UUID()
-}
-
-struct ActionSessionStarted: Equatable {
-    /// The Claude app's id of the new session.
-    var sessionID: String
-    /// The project (folder name) it runs in.
-    var project: String
 }
 
 struct ActionFailure: LocalizedError {
@@ -932,17 +859,16 @@ extension InboxActions {
                             state: .done, at: now)
         do {
             switch job.action.kind {
-            case .askRouter(let text):
-                let message = routerMessage(text, category: job.category.name, thing: thing, facts: job.facts)
-                let request = ActionSessionRequest(
-                    category: job.category.name, categoryID: job.category.id, thingID: thing.id, reference: reference(thing),
-                    repo: thing.repo, action: job.action.id, message: message, title: sessionTitle(thing),
-                    model: ActionSettings.clean(job.action.model, in: ActionSettings.models),
-                    effort: ActionSettings.clean(job.action.effort, in: ActionSettings.efforts),
-                    summary: "\(reference(thing)): \(inline(thing.title))")
-                let started = try await performer.startSession(request)
-                run.sessionID = started.sessionID
-                run.detail = "started a session in \(started.project)"
+            case .askRouter(let prompt):
+                // Your words and pills, the thing's pill among them: what GitHub wrote goes only in the thing's fenced block.
+                let origin = SessionOrigin(category: job.category.name, thing: sessionTitle(thing), actionID: job.action.id.uuidString,
+                                           runID: UUID().uuidString)
+                let source = RouterActionSource(origin: origin, title: sessionTitle(thing),
+                                                model: ActionSettings.clean(job.action.model, in: ActionSettings.models),
+                                                effort: ActionSettings.clean(job.action.effort, in: ActionSettings.efforts))
+                // Sent: where it goes is the Router's to say, and the run follows it there.
+                run.message = try await performer.sendToRouter(ActionMessage(parts: prompt.parts(thing: thing.id), source: source))
+                run.state = .running
             case .comment(let text):
                 guard let number = thing.number, thing.kind != .workflow else { throw ActionFailure("only PRs and issues take comments") }
                 let body = substitute(text, thing: thing).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -964,21 +890,33 @@ extension InboxActions {
         return run
     }
 
-    /// What "Try on latest match" shows: nothing is done.
+    /// What "Try on latest match" shows: nothing is done, and no model is asked. `name`: a pill's name (the store's).
     @MainActor
     static func preview(_ action: CategoryAction, category: String, thing: Thing, facts: [Fact],
-                        performer: ActionPerformer?) async -> [String] {
+                        performer: ActionPerformer?, name: (RouterPointer) -> String = ActionPrompt.plainName) async -> [String] {
         guard action.applies(to: thing.kind) else { return ["Doesn't apply to \(thing.kind.label.lowercased()): skipped."] }
         var lines = ["On \(reference(thing)): \(thing.title)"]
         switch action.kind {
-        case .askRouter(let text):
+        case .askRouter(let prompt):
+            let reference = RouterPointers.reference(thing)
+            let words = ActionPrompt(prompt.parts(thing: thing.id)).words { pointer in
+                if case .notification(let id) = pointer, id == thing.id { return reference }
+                return name(pointer)
+            }
+            lines.append("Sends to the Router, as yours from \(category): \(words)")
+            let addressed = prompt.pointers.contains { $0.addresses }
             let folders = performer?.clones(of: thing.repo) ?? []
-            lines.append(folders.isEmpty ? "No local clone of \(thing.repo) among the projects Claude knows: this would fail."
-                         : folders.count == 1 ? "Starts a session in \(folders[0]). First message:"
-                         : "Starts a session in one of \(folders.count) local clones (picked when it runs). First message:")
+            lines.append(addressed ? "It goes where its project or session pill says."
+                         : folders.isEmpty ? "No local clone of \(thing.repo): the Router would ask you where it goes."
+                         : "The Router sends it to a session working in \(folders.count == 1 ? "this clone" : "one of these clones"), "
+                            + "or starts one there; if unsure, it asks you:\n" + folders.map { "- " + $0 }.joined(separator: "\n"))
             let model = ActionSettings.clean(action.model, in: ActionSettings.models), effort = ActionSettings.clean(action.effort, in: ActionSettings.efforts)
-            if model != nil || effort != nil { lines.append("With " + [model.map { "model \($0)" }, effort.map { "effort \($0)" }].compactMap { $0 }.joined(separator: ", ") + ".") }
-            lines.append(routerMessage(text, category: category, thing: thing, facts: facts))
+            if model != nil || effort != nil {
+                lines.append("A session it starts runs with " + [model.map { "model \($0)" }, effort.map { "effort \($0)" }]
+                    .compactMap { $0 }.joined(separator: ", ") + ".")
+            }
+            lines.append("With what Fjord Computer knows of \(reference), marked as written by others:")
+            lines.append(RouterPointers.notification(name: reference, thing: thing, category: category, facts: facts, done: false))
         case .comment(let text):
             let body = substitute(text, thing: thing)
             lines.append("Comments on \(reference(thing)):")
@@ -1120,6 +1058,8 @@ extension Store {
                     next.set(run)
                 }
                 actionLedger = next
+                // A message the Router may have placed already: its runs say where it went.
+                if let message = result.message { followActionRun(message) }
             }
         } while actionsAgain
     }
@@ -1211,10 +1151,10 @@ extension Store {
         if ledger != actionLedger { actionLedger = ledger }
     }
 
-    /// The actions held back now (`InboxActions.plan`): those that start a session while Triage and the Router aren't both on.
+    /// The actions held back now (`InboxActions.plan`): those that send to the Router while Triage and the Router aren't both on.
     var heldActions: (CategoryAction) -> Bool {
         let linked = toolsLinked
-        return { !linked && $0.kind.startsSession }
+        return { !linked && $0.kind.sendsToRouter }
     }
 
     /// Each thing's review request or assignment of yours, and whether Jev has rated it (`InboxActions.plan`).
@@ -1240,20 +1180,20 @@ extension Store {
         return out
     }
 
-    /// A row's chips: none of an action that starts a session while Triage and the Router aren't both on.
+    /// A row's chips: none of an action that sends to the Router while Triage and the Router aren't both on.
     func actionChips(for entry: InboxEntry) -> [InboxActions.Chip] {
         guard let category = categories.first(where: { $0.id == entry.categoryID }), !category.actions.isEmpty else { return [] }
         var shown = category
         // The Router's switch is read only for a category that has such an action (rows redraw with what they read).
-        if shown.actions.items.contains(where: \.kind.startsSession), !toolsLinked {
-            shown.actions.items.removeAll { $0.kind.startsSession }
+        if shown.actions.items.contains(where: \.kind.sendsToRouter), !toolsLinked {
+            shown.actions.items.removeAll { $0.kind.sendsToRouter }
         }
         return InboxActions.chips(for: entry, category: shown, groups: groups, ledger: actionLedger, me: me?.login ?? "")
     }
 
-    /// Whether a job may still run: one that starts a session only while Triage and the Router are both on (switched off
+    /// Whether a job may still run: one that sends to the Router only while Triage and the Router are both on (switched off
     /// since it was planned, it isn't run; it is held back from the next plan on).
-    private func runnable(_ job: InboxActions.Job) -> Bool { !job.action.kind.startsSession || toolsLinked }
+    private func runnable(_ job: InboxActions.Job) -> Bool { !job.action.kind.sendsToRouter || toolsLinked }
 
     /// The most recently updated thing the rules match, with its facts: what "Try on latest match" tries on.
     func latestMatch(of rules: [Rule]) -> (thing: Thing, facts: [Fact])? {
@@ -1459,13 +1399,15 @@ final class StoreActionPerformer: ActionPerformer {
 
     func clones(of repo: String) -> [String] { store.localClones(of: repo) }
 
-    /// Stands in for the launcher and Jev (tests); the real ones otherwise.
-    var launcher: SessionLauncher?
-    var chooser: ActionSessions.Chooser?
-
-    func startSession(_ request: ActionSessionRequest) async throws -> ActionSessionStarted {
-        try await ActionSessions.start(request, store: store, clones: clones(of: request.repo),
-                                       launcher: launcher ?? SessionLauncher(store: store), chooser: chooser)
+    func sendToRouter(_ message: ActionMessage) async throws -> UUID {
+        // Only while Triage and the Router are both on, as the dispatcher checks again for each step.
+        guard store.toolsLinked else { throw ActionFailure("Triage or the Router is off") }
+        let (text, mentions) = store.composeForRouter(message.parts)
+        var context = RouterContext()
+        context.tag(mentions)
+        context.action = message.source
+        guard let id = store.routerDispatcher.submit(text, context: context) else { throw ActionFailure("the Router is off") }
+        return id
     }
 
     func comment(repo: String, number: Int, body: String) async throws -> URL? {
