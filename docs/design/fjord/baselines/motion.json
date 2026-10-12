@@ -1,0 +1,92 @@
+{
+  "template": "Hitches",
+  "scenario": "busy",
+  "steps": "open,fold,fold,close,peek,drag x5",
+  "date": "2026-10-12T15:10:43+0200",
+  "hitches": {
+    "all": 516,
+    "app": 516,
+    "moving": 14,
+    "within": {
+      "Open to first flush": 2,
+      "Bar away": 2,
+      "Bar capture": 0,
+      "Bring in": 0,
+      "Capture": 0,
+      "Install picture": 0,
+      "Handoff": 0,
+      "Overlay going": 1,
+      "Fold": 4,
+      "Peek": 3,
+      "Drag": 4
+    }
+  },
+  "intervals": {
+    "Bar away": {
+      "n": 5,
+      "p50_ms": 13.839,
+      "p95_ms": 42.878,
+      "max_ms": 42.878
+    },
+    "Bar capture": {
+      "n": 1,
+      "p50_ms": 2.869,
+      "p95_ms": 2.869,
+      "max_ms": 2.869
+    },
+    "Bring in": {
+      "n": 5,
+      "p50_ms": 7.715,
+      "p95_ms": 47.788,
+      "max_ms": 47.788
+    },
+    "Capture": {
+      "n": 1,
+      "p50_ms": 45.931,
+      "p95_ms": 45.931,
+      "max_ms": 45.931
+    },
+    "Drag": {
+      "n": 5,
+      "p50_ms": 255.496,
+      "p95_ms": 258.912,
+      "max_ms": 258.912
+    },
+    "Fold": {
+      "n": 10,
+      "p50_ms": 366.612,
+      "p95_ms": 378.995,
+      "max_ms": 378.995
+    },
+    "Handoff": {
+      "n": 1,
+      "p50_ms": 17.683,
+      "p95_ms": 17.683,
+      "max_ms": 17.683
+    },
+    "Install picture": {
+      "n": 1,
+      "p50_ms": 0.099,
+      "p95_ms": 0.099,
+      "max_ms": 0.099
+    },
+    "Open to first flush": {
+      "n": 5,
+      "p50_ms": 7.931,
+      "p95_ms": 36.256,
+      "max_ms": 36.256
+    },
+    "Overlay going": {
+      "n": 1,
+      "p50_ms": 103.578,
+      "p95_ms": 103.578,
+      "max_ms": 103.578
+    },
+    "Peek": {
+      "n": 5,
+      "p50_ms": 38.73,
+      "p95_ms": 46.866,
+      "max_ms": 46.866
+    }
+  }
+}

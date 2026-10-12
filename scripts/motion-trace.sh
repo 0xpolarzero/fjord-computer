@@ -1,12 +1,12 @@
 #!/bin/bash
 # The motions' frames and latencies, without a person or a pointer (docs/design/fjord/glass-plan.md §7, §8.2). Records the
-# release build with `xcrun xctrace` (Animation Hitches by default) while it plays a motion script on demo data
+# release build with `xcrun xctrace` (the Hitches and os_signpost instruments by default) while it plays a motion script on demo data
 # (`--demo <scenario> --motion-script <steps> --quit-after`: the app opens and closes its window as the shortcut does, folds
 # the sidebar, peeks the bar's inbox and drags the bar to the opposite edge, one step every 1.5 s, and quits). Then exports
 # the trace's table of contents, its hitches and its signpost intervals, and prints:
 #
-#   - the hitches: every one in the trace (the display's, whichever app missed the frame: the summary table names no
-#     process), and how many fall within each of the app's intervals;
+#   - the hitches during the app's motions (inside one of its intervals), and how many within each; the instrument also
+#     reports the app late some 12 times a second at rest, drawing nothing, so the rest are noise;
 #   - each signpost interval of the app (subsystem com.amontlabs.fjord: the morph's and the latency ones, "Peek", "Fold",
 #     "Drag", "Bar away", "Bar capture"): how many, p50, p95 and the longest, in ms. A "Bar away" ended "kept" (the bar was
 #     away already) is left out.
@@ -29,9 +29,10 @@
 set -u
 cd "$(dirname "$0")/.." || exit 2
 
-template="Animation Hitches"
+template="Hitches"
 scenario=busy
-steps="open,fold,fold,close,peek,drag x20"
+# Five rounds: enough for p95s, short enough that a trace stays small.
+steps="open,fold,fold,close,peek,drag x5"
 baseline=
 keep=
 slack=${SLACK_MS:-1}
@@ -42,7 +43,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --template)
             case "$2" in
-                hitches) template="Animation Hitches" ;;
+                hitches) template="Hitches" ;;
                 time) template="Time Profiler" ;;
                 swiftui) template="SwiftUI" ;;
                 metal) template="Metal System Trace" ;;
@@ -70,12 +71,28 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
 fi
 [ -x "$bin" ] || { echo "motion-trace: $bin not found"; exit 2; }
 
+# Instruments writes its raw data to the user's temp folder (instruments*.ktrace, xrgpu_aps_*: some 2 GB a second with
+# Animation Hitches, which records the whole system and its GPU) and leaves it there when a recording is stopped or hangs.
+# So: no start under MIN_FREE_GB free, and on any exit the files this run made there are deleted.
+scratch=$(getconf DARWIN_USER_TEMP_DIR)
+free_gb=$(df -g "$scratch" | awk 'NR==2 {print $4}')
+if [ "${free_gb:-0}" -lt "${MIN_FREE_GB:-80}" ]; then
+    echo "motion-trace: ${free_gb} GB free, under ${MIN_FREE_GB:-80}: Instruments' scratch could fill the disk"; exit 2
+fi
+mark=$(mktemp)
+cleanup() {
+    find "$scratch" -maxdepth 1 -type f \( -name 'instruments*.ktrace' -o -name 'xrgpu_aps_*' \) -newer "$mark" -delete
+    rm -f "$mark"
+    [ -n "$keep" ] || rm -rf "$dir"
+}
+trap cleanup EXIT
+trap 'pkill -INT -f "xctrace record.*$trace"; exit 130' INT TERM
+
 if [ -n "$keep" ]; then
     mkdir -p "$keep" || exit 2
     dir=$keep
 else
     dir=$(mktemp -d)
-    trap 'rm -rf "$dir"' EXIT
 fi
 trace=$dir/motion.trace
 rm -rf "$trace"
@@ -91,7 +108,10 @@ seconds=$(( (played * 15 + peeks * 7) / 10 ))
 limit=$(( seconds + 30 ))
 echo "motion-trace: $template, --demo $scenario, $played steps (about $(( seconds + 5 )) s)"
 
-xcrun xctrace record --template "$template" --instrument os_signpost --no-prompt --quiet \
+# The hitches alone are two instruments, not the Animation Hitches template: the template traces the whole system and
+# its GPU (hundreds of MB a second); these two take some 2 MB a second.
+if [ "$template" = Hitches ]; then what=(--instrument Hitches); else what=(--template "$template"); fi
+xcrun xctrace record "${what[@]}" --instrument os_signpost --no-prompt --quiet \
     --output "$trace" --time-limit "${limit}s" --target-stdout "$dir/app.out" \
     --launch -- "$bin" --demo "$scenario" --motion-script "$steps" --quit-after
 recorded=$?
@@ -104,16 +124,17 @@ notes=$(grep -c '^motion: .*(' "$dir/app.out" 2>/dev/null)
 
 xcrun xctrace export --input "$trace" --toc --output "$dir/toc.xml" || { echo "motion-trace: the table of contents can't be exported"; exit 2; }
 
-# The tables to read: the hitches (Animation Hitches' "hitches-summary") and the signpost intervals.
+# The tables to read: the hitches (Animation Hitches' "hitches") and the signpost intervals. A "|" between them, not a tab:
+# `read` would fold an empty first field into the separator.
 schemas=$(python3 -I - "$dir/toc.xml" <<'PY'
 import sys, xml.etree.ElementTree as ET
 names = [t.get("schema") for t in ET.parse(sys.argv[1]).getroot().iter("table") if t.get("schema")]
-hitches = "hitches-summary" if "hitches-summary" in names else ""
+hitches = "hitches" if "hitches" in names else ""
 signposts = "os-signpost-interval" if "os-signpost-interval" in names else ""
-print(hitches, signposts, sep="\t")
+print(hitches, signposts, sep="|")
 PY
 ) || { echo "motion-trace: the table of contents can't be read"; exit 2; }
-IFS=$'\t' read -r hitch_schema signpost_schema <<<"$schemas"
+IFS='|' read -r hitch_schema signpost_schema <<<"$schemas"
 [ -n "$hitch_schema" ] || echo "motion-trace: no hitches in this trace (the $template template has none)"
 [ -n "$signpost_schema" ] || echo "motion-trace: no signpost intervals in this trace"
 for schema in $hitch_schema $signpost_schema; do
@@ -127,7 +148,7 @@ import json, math, os, sys, time, xml.etree.ElementTree as ET
 
 folder, hitch_schema, signpost_schema, template, scenario, steps, baseline, slack = sys.argv[1:9]
 slack = float(slack)
-SUBSYSTEM = "com.amontlabs.fjord"
+SUBSYSTEM, APP = "com.amontlabs.fjord", "FjordComputer"
 
 def rows(schema):
     """The table's rows as {column: (raw text, fmt)}; a cell given as ref="n" is the one with id="n"."""
@@ -168,7 +189,9 @@ for r in rows(hitch_schema):
     start, duration = number(r, "start"), number(r, "duration")
     if start is None or not duration:
         continue
-    hitches.append((start, duration))
+    process = r.get("process", ("", ""))[1]
+    hitches.append((start, duration, APP in process))
+app_hitches = [h for h in hitches if h[2]]
 
 def percentile(xs, p):
     xs = sorted(xs)
@@ -177,9 +200,12 @@ def percentile(xs, p):
 summary = {"template": template, "scenario": scenario, "steps": steps, "date": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
            "hitches": None, "intervals": {}}
 if hitch_schema:
-    within = {name: sum(1 for h in hitches if any(s <= h[0] < s + d for s, d in spans))
+    within = {name: sum(1 for h in app_hitches if any(s <= h[0] < s + d for s, d in spans))
               for name, spans in intervals.items()}
-    summary["hitches"] = {"all": len(hitches), "within": within}
+    # At rest the instrument still reports the app late some 12 times a second while it draws nothing (no CPU, window
+    # closed): only a hitch during one of its motions counts.
+    moving = sum(1 for h in app_hitches if any(s <= h[0] < s + d for spans in intervals.values() for s, d in spans))
+    summary["hitches"] = {"all": len(hitches), "app": len(app_hitches), "moving": moving, "within": within}
 for name, spans in sorted(intervals.items()):
     ms = [d / 1e6 for _, d in spans]
     summary["intervals"][name] = {"n": len(ms), "p50_ms": round(percentile(ms, 50), 3),
@@ -187,7 +213,7 @@ for name, spans in sorted(intervals.items()):
 
 h = summary["hitches"]
 if h is not None:
-    print(f"hitches: {h['all']} on the display (whichever app missed the frame)")
+    print(f"hitches: {h['moving']} during the app's motions ({h['app']} attributed to it in all, most at rest: noise)")
     for name, n in sorted(h["within"].items()):
         if n:
             print(f"  within {name}: {n}")
@@ -219,9 +245,9 @@ if baseline:
         if (old.get("template"), old.get("scenario"), old.get("steps")) != (template, scenario, steps):
             print("  (recorded otherwise: the template, the scenario or the steps differ)")
         if h is not None and old.get("hitches"):
-            worse = h["all"] > old["hitches"]["all"]
+            worse = h["moving"] > old["hitches"]["moving"]
             failed |= worse
-            print(f"  hitches {h['all']} (was {old['hitches']['all']}){'  FAIL' if worse else ''}")
+            print(f"  hitches {h['moving']} (was {old['hitches']['moving']}){'  FAIL' if worse else ''}")
         for name, s in summary["intervals"].items():
             was = old_intervals.get(name)
             if not was:
