@@ -94,9 +94,13 @@ extension WindowSeams {
                 }
             }
 
-            /// Lets SwiftUI lay out and draw what it has pending.
+            /// Lets SwiftUI lay out and draw what it has pending, to the half point: a spring's tail creeps on for another
+            /// half second in hundredths of a point, which no walk here needs.
             func settle() async {
-                await waitUntilSteady(turns: 6) { drawn().map(\.frame) }
+                await waitUntilSteady(turns: 3) {
+                    drawn().map { NSRect(x: ($0.frame.minX * 2).rounded() / 2, y: ($0.frame.minY * 2).rounded() / 2,
+                                         width: ($0.frame.width * 2).rounded() / 2, height: ($0.frame.height * 2).rounded() / 2) }
+                }
             }
 
             /// Everything drawn in the hub's window, with where it is on screen. Elements in a scroll view are kept only
@@ -145,7 +149,7 @@ extension WindowSeams {
                 await move(to: cell.centre, expectOnHub: true, "on the \(label) cell")
                 hover(section, tab: tab)
                 // The dwell.
-                try? await Task.sleep(for: .milliseconds(160))
+                await waitUntil { hub.section == section }
                 await settle()
                 return hub.section == section
             }
@@ -174,8 +178,9 @@ extension WindowSeams {
                 await walk(to: p, what)
             }
 
-            /// Out of the panel on its far side, away from the bar, and on out of the window.
-            func leave(settling: Bool = true) async {
+            /// Out of the panel on its far side, away from the bar, and on out of the window, until it has closed; `settling`,
+            /// until it has faded out too, so the next opens afresh.
+            func leave(settling: Bool = false) async {
                 let far: NSPoint = switch edge {
                 case .right: NSPoint(x: window.frame.minX - 40, y: pointer.y)
                 case .left: NSPoint(x: window.frame.maxX + 40, y: pointer.y)
@@ -186,13 +191,14 @@ extension WindowSeams {
                 // Off the hub, the window lets clicks through to what's under it at once, even before the panel closes.
                 #expect(window.ignoresMouseEvents, "\(edge): off the hub, the window still takes the mouse")
                 await move(to: away)
-                // Past the leave grace; settling, past the closing panel's fade too.
-                try? await Task.sleep(for: .milliseconds(settling ? 400 : 140))
+                await waitUntil { hub.section == nil }
+                if settling { await waitUntil { !hub.pieces.allObjects.contains { $0.section != nil && $0.screenFrame != nil } } }
                 await move(to: away)
             }
 
             /// Every item of the open panel, top to bottom, each in turn: crossing from the bar to the first, then from one
-            /// to the next; the row under the pointer is picked (its actions show) as SwiftUI's hover would.
+            /// to the next; the row under the pointer is picked (its actions show) as SwiftUI's hover would. Picking a row
+            /// moves nothing the controller reads, so only the last is waited out before a last move on it.
             func hoverEachItem(_ what: String) async {
                 let items = panelItems()
                 #expect(!items.isEmpty, "\(edge) \(what): nothing drawn in the panel")
@@ -203,10 +209,13 @@ extension WindowSeams {
                     if first { await cross(to: now.centre, "\(what): \(now.label)") } else { await walk(to: now.centre, "\(what): \(now.label)") }
                     first = false
                     if let id = rowID(now.label) { hub.selection = "i:" + id }
-                    await settle()
-                    // A small move on it, after anything the hover changed.
+                    // A turn for SwiftUI to show the pick, then a small move on it.
+                    try? await Task.sleep(for: .milliseconds(1))
                     await move(to: NSPoint(x: pointer.x + 1, y: pointer.y + 1), expectOnHub: true, "\(what): on \(now.label)")
                 }
+                // Once what the hover changed has settled.
+                await settle()
+                await move(to: NSPoint(x: pointer.x - 1, y: pointer.y - 1), expectOnHub: true, "\(what): settled")
             }
 
             /// The inbox row a label names.
@@ -231,7 +240,7 @@ extension WindowSeams {
                 await rig.hoverEachItem(category.name)
                 await rig.graceElapsed()
                 #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
-                await rig.leave()
+                await rig.leave(settling: true)
                 #expect(rig.hub.section == nil, "\(edge) \(category.name): still open after the pointer left")
                 #expect(rig.window.ignoresMouseEvents && !rig.controller.watchesGlobally,
                         "\(edge) \(category.name): the bar still takes the mouse or watches it system-wide at rest")
@@ -251,7 +260,7 @@ extension WindowSeams {
                 await rig.graceElapsed()
                 #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
                 // Off it, and straight back: the closing panel is still fading out as the next opens.
-                await rig.leave(settling: false)
+                await rig.leave()
                 #expect(rig.hub.section == nil)
             }
             #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
@@ -290,8 +299,10 @@ extension WindowSeams {
             else { Issue.record("no categories"); return }
             #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
             await rig.hoverEachItem("\(category.name), top")
-            if let last = rig.store.entries(in: category.id).last { rig.hub.requestScroll("i:" + last.id) }
-            try? await Task.sleep(for: .milliseconds(400))
+            if let last = rig.store.entries(in: category.id).last {
+                rig.hub.requestScroll("i:" + last.id)
+                await waitUntil { rig.panelItems().contains { rig.rowID($0.label) == last.id } }
+            }
             await rig.settle()
             await rig.hoverEachItem("\(category.name), scrolled to the end")
             await rig.graceElapsed()
