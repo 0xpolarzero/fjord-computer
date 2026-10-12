@@ -11,7 +11,13 @@ enum AppWindowDev {
         Demo.populate(store, .router)
         let controller = AppWindowController(store: store, remembers: false)
         controller.onClose = { NSApp.terminate(nil) }
-        controller.show()
+        if CommandLine.arguments.contains(RouterFlightDemo.flag) {
+            RouterFlightDemo.install(store)
+            controller.show(.router)
+            RouterFlightDemo.play(store: store, model: controller.routerModel)
+        } else {
+            controller.show()
+        }
         return controller
     }
 }

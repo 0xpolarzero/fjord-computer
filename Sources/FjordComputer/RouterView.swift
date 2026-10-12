@@ -45,7 +45,7 @@ extension Store {
     func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) -> Bool {
         let text = RouterModel.sendable(text)
         guard !text.isEmpty else { return false }
-        if routerIsPretend {
+        if routerIsPretend && !RouterFlightDemo.on {
             var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
                                        links: .init(cards: context.replyTo.map { [$0] } ?? []))
             let mentions = RouterDispatcher.mentions(context.mentions, in: text)

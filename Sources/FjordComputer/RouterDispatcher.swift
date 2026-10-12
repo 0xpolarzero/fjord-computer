@@ -259,6 +259,12 @@ struct RouterAskBack: Identifiable, Equatable {
     /// A composer pill is done with (landed, failed or dismissed): its run is no longer one of `flying`.
     func forgetFlying(_ id: UUID) { flying.removeAll { $0 == id } }
 
+    /// The demo's ask and run under way gone (`RouterFlightDemo` plays its own).
+    func clearPreview() {
+        askBacks = []
+        progress = [:]
+    }
+
     /// A demo or a shot: an ask waiting for you and runs shown under way, with nothing behind them.
     func preview(ask: RouterAskBack, progress runs: [UUID: String] = [:]) {
         askBacks = [ask]

@@ -87,6 +87,7 @@ Releases are signed with one self-signed certificate, so macOS keeps the app's A
     #   demo scenario, Reduce Motion / Increase Contrast / Differentiate variants and a 1280x720 screen; shot names are
     #   <edge>-<state> (right-open, top-rest-signed-out...), and only those containing one of the names given are rendered
     .build/debug/FjordComputer --window                               # the window alone, on demo data
+    .build/debug/FjordComputer --window --flight-demo                 # the Router's page typing and sending four messages through the real dispatcher (Jev and the send stood in for), to see each fly to where it went
     .build/debug/FjordComputer --window-shots <dir>                   # render the window's pages as PNGs, offscreen
     FJORD_THEME=dark|light|claude .build/debug/FjordComputer          # pins the look: Fjord light or dark, or Claude's own (default: Fjord, following the Mac's appearance live)
     "build/Fjord Computer.app/Contents/MacOS/FjordComputer" --update 0.1.0   # pretend to be 0.1.0: check, download and verify the latest release
