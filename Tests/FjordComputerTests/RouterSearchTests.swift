@@ -230,4 +230,20 @@ import Testing
         model.search.query = ""
         #expect(model.history(store) == store.routerHistory)
     }
+
+    /// The folded Working section's line counts what the search leaves in it, as its chip does; off the search, every
+    /// working session.
+    @Test func theFoldedWorkingLineCountsOnlyWhatTheSearchLeaves() throws {
+        let store = demo()
+        let model = RouterModel()
+        let all = store.routerZones
+        try #require(all.working.count >= 2)
+        model.search.query = all.working[0].session.title
+        let page = model.zones(store)
+        try #require(page.working.contains { $0.id == all.working[0].id } && page.working.count < all.working.count)
+        let items = store.overviewItems(page.working)
+        #expect(items.count == page.working.count)
+        #expect(RouterOverviewLine.text(items)?.hasPrefix("\(page.working.count) working") == true)
+        #expect(store.overviewItems().count == all.working.count)
+    }
 }

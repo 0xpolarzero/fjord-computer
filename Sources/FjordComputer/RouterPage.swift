@@ -1563,8 +1563,9 @@ private struct RouterNow: View {
         case .notes: previewText(page.notes.map(\.title))
         case .waiting: previewText(page.waiting.map(\.title))
         case .working:
+            // The section's own rows (a search's matches while one is on), as the other sections' lines and the chips count.
             MinuteTicking { now in
-                let items = store.overviewItems(now: now)
+                let items = store.overviewItems(page.working, now: now)
                 if let line = RouterOverviewLine.text(items) {
                     Text(line).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
                         .help(RouterOverviewLine.tooltip(items))

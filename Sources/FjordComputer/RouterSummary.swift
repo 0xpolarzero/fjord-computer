@@ -259,8 +259,11 @@ extension Claude {
 
 extension Store {
     /// The working sessions as the line over them sees them.
-    func overviewItems(now: Date = Date()) -> [RouterOverviewLine.Item] {
-        routerWorkingRows.map { row in
+    func overviewItems(now: Date = Date()) -> [RouterOverviewLine.Item] { overviewItems(routerWorkingRows, now: now) }
+
+    /// `rows` as the line sees them: the Working section's, as a search leaves them.
+    func overviewItems(_ rows: [AgentRow], now: Date = Date()) -> [RouterOverviewLine.Item] {
+        rows.map { row in
             RouterOverviewLine.Item(name: row.projectName, title: row.session.title, label: workingLabel(row),
                                     quiet: max(0, now.timeIntervalSince(row.session.lastActivity)))
         }
