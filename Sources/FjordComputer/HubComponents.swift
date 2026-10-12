@@ -336,11 +336,11 @@ struct EntryRow: View {
                            size: size) { store.restore(entry) }
             } else {
                 if unread {
-                    IconButton(symbol: "checkmark", help: "Mark as seen", detail: store.shortcut(.toggleRead).display, size: size) {
+                    IconButton(symbol: "envelope.open", help: "Mark as read", detail: store.shortcut(.toggleRead).display, size: size) {
                         store.markSeen(entry)
                     }
                 } else {
-                    IconButton(symbol: "circlebadge", help: "Mark as unread", detail: store.shortcut(.toggleRead).display, size: size) {
+                    IconButton(symbol: "envelope.badge", help: "Mark as unread", detail: store.shortcut(.toggleRead).display, size: size) {
                         store.markUnread(entry)
                     }
                 }
@@ -360,7 +360,7 @@ struct EntryRow: View {
     }
 }
 
-/// An entry's context menu: open (on GitHub, in the Router), copy link, seen, archive.
+/// An entry's context menu: open (on GitHub, in the Router), copy link, read, archive.
 struct EntryMenu: View {
     let entry: InboxEntry
     let store: Store
@@ -380,7 +380,7 @@ struct EntryMenu: View {
         if entry.isDone {
             Button("Back to inbox") { store.restore(entry) }
         } else {
-            if entry.isUnread { Button("Mark as seen") { store.markSeen(entry) } }
+            if entry.isUnread { Button("Mark as read") { store.markSeen(entry) } }
             else { Button("Mark as unread") { store.markUnread(entry) } }
             Button("Archive") { store.finish(entry) }
         }

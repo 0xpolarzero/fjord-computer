@@ -137,9 +137,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         switch self {
         case .togglePanel: "Open Fjord Computer window"
         case .openItem: "Open on GitHub"
-        case .toggleRead: "Mark seen or unread"
+        case .toggleRead: "Mark as read or unread"
         case .discard: "Archive / back to inbox"
-        case .markAllRead: "Mark all seen"
+        case .markAllRead: "Mark all as read"
         case .refresh: "Refresh now"
         case .router: "Open the Router"
         case .openInRouter: "Open in Router"

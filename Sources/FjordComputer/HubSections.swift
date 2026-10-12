@@ -71,7 +71,7 @@ extension FjordHub {
             // The header's own buttons, apart from the tabs.
             IslandRule(axis: .vertical).frame(height: 14).padding(.horizontal, 3)
             if unread > 0 {
-                IconButton(symbol: "checkmark.circle", help: "Mark all as seen",
+                IconButton(symbol: "envelope.open", help: "Mark all as read",
                            detail: "Everything in \(store.category(tab)?.name ?? "Archive") · \(store.shortcut(.markAllRead).display)",
                            size: IconButton.Size.header) {
                     withAnimation(Motion.fade.resolved(reduce: reduce)) { store.markAllSeen(tab) }

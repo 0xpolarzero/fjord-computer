@@ -129,7 +129,7 @@ final class AppWindowKeys {
            [kVK_Return, kVK_ANSI_KeypadEnter, kVK_Space].contains(Int(event.keyCode)) { return false }
         if flags == .command, Self.isUndo(event, flags) { return store.undoLast() }
         if shortcut == store.shortcut(.refresh) { store.refreshNow(); return true }
-        // What the user bound comes before the typing that starts a search: a letter bound to Mark seen marks the picked row.
+        // What the user bound comes before the typing that starts a search: a letter bound to Mark as read marks the picked row.
         // Once a search has text, a bound letter is a letter like any other.
         if (!search.isSearching || !typesText(event)), isBound(shortcut), act(shortcut) { return true }
         if startsSearch(event, flags: flags) {
@@ -178,7 +178,7 @@ final class AppWindowKeys {
 
     // MARK: Actions
 
-    /// The bound action `shortcut` is, done: Mark all seen, or one on the picked row. False when it is none or there is
+    /// The bound action `shortcut` is, done: Mark all as read, or one on the picked row. False when it is none or there is
     /// nothing to act on.
     @discardableResult
     func act(_ shortcut: Shortcut) -> Bool {

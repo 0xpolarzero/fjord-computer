@@ -2,8 +2,8 @@ import SwiftUI
 
 // What the app window shows for a destination, and the inbox list at full width.
 
-/// A tab of the inbox at the window's width: the same rows as the hub's (`EntryRow`: open, mark seen, archive, restore, the
-/// context menu), newest first, with the undo line after an archive and "Mark all as seen" in the toolbar.
+/// A tab of the inbox at the window's width: the same rows as the hub's (`EntryRow`: open, mark read, archive, restore, the
+/// context menu), newest first, with the undo line after an archive and "Mark all as read" in the toolbar.
 struct InboxListView: View {
     let store: Store
     let tab: InboxTab
@@ -39,7 +39,7 @@ struct InboxListView: View {
             }
             InboxSearchField(search: search)
             if unread > 0 {
-                IconButton(symbol: "checkmark.circle", help: "Mark all as seen", detail: store.shortcut(.markAllRead).display,
+                IconButton(symbol: "envelope.open", help: "Mark all as read", detail: store.shortcut(.markAllRead).display,
                            size: IconButton.Size.header) {
                     withAnimation(Motion.fade.resolved(reduce: reduce)) { entries.filter(\.isUnread).forEach(store.markSeen) }
                 }
@@ -98,7 +98,7 @@ struct InboxListView: View {
         if all.isEmpty { return "" }
         if tab == .done { return "\(all.count) archived" }
         if store.category(tab)?.isCI == true { return "\(all.count) failing" }
-        return unread > 0 ? "\(unread) unread of \(all.count)" : "\(all.count) seen"
+        return unread > 0 ? "\(unread) unread of \(all.count)" : "\(all.count), all read"
     }
 
     private var empty: some View {

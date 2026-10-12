@@ -244,7 +244,7 @@ struct AppSidebar: View {
             }))
         Button("Hide") { store.setHidden(category.id, true) }
         Divider()
-        Button("Mark all seen") { store.markAllSeen(.category(category.id)) }
+        Button("Mark all as read") { store.markAllSeen(.category(category.id)) }
             .disabled(store.unreadCount(category.id) == 0)
         Divider()
         Button("Move up") { store.moveCategory(category.id, by: -1, among: shown) }

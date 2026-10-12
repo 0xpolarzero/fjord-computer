@@ -477,7 +477,7 @@ private struct UnreadFilter: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
-        .help(on ? "Show every line of the history" : "Show only the lines you haven't seen")
+        .help(on ? "Show every line of the history" : "Show only the lines you haven't read")
         .accessibilityLabel(count > 0 ? "Unread only, \(count)" : "Unread only")
         .accessibilityValue(on ? "On" : "Off")
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -493,7 +493,7 @@ private struct MarkAllRead: View {
     var body: some View {
         let hot = hovered && enabled
         Button(action: action) {
-            Text("Mark all read").cdsText((12, 16), .regular, hot ? CDS.Text.primary : CDS.Text.muted)
+            Text("Mark all as read").cdsText((12, 16), .regular, hot ? CDS.Text.primary : CDS.Text.muted)
                 .padding(.horizontal, 7)
                 .frame(height: ZoneChip.height)
                 .background(Capsule().fill(hot ? CDS.Fill.ghostHover : .clear))
@@ -502,7 +502,7 @@ private struct MarkAllRead: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
-        .help(enabled ? "Every finished turn in the history, seen" : "Nothing unread")
+        .help(enabled ? "Every finished turn in the history, read" : "Nothing unread")
     }
 }
 

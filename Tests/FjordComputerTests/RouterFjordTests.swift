@@ -668,7 +668,7 @@ import Testing
         let t = tools(s, turn: "mark a/one#1 seen, then everything in Mine done")
         let seenBefore = s.marks
         let seen = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
-        #expect(seen.ok && changes(s).last?.title == "Marked 1 seen")
+        #expect(seen.ok && changes(s).last?.title == "Marked 1 read")
         let done = await call(t, "mark_entries", ["state": "done", "category": "Mine"])
         #expect(done.ok && changes(s).last?.title == "Archived 2" && s.doneEntries.count == 2)
         #expect(await call(t, "mark_entries", ["state": "done", "category": "Mine"]).json["changed"] as? String == "nothing")
