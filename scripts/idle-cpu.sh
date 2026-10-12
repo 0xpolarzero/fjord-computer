@@ -12,9 +12,24 @@
 # that failure into a warning.
 #
 # A sample that is missing or malformed, a window that is not positive or a CPU time that goes backwards is a failure,
-# never a 0%. WindowServer's share over the same window is printed apart and is not part of the verdict: it draws the
-# ring. To say what the ring costs it, the bar is measured once more on `--demo busy`, which has no working session, and
-# the difference is printed.
+# never a 0%. In a single run WindowServer's share over the same window is printed apart and is not part of the verdict: it
+# draws the ring. To say what the ring costs it, the bar is measured once more on `--demo busy`, which has no working
+# session, and the difference is printed.
+#
+# Glass against opaque (AB=1, docs/design/fjord/glass-plan.md §7). Until the app reads FJORD_GLASS (the plan's `Chrome`), both
+# launches are the same app: a pass then says nothing about glass, only that the method's noise is low. The bar on
+# `--demo busy` (no ring turning), on the first
+# of EDGES, at rest and kept open (AB_STATES), launched with FJORD_GLASS=0 and FJORD_GLASS=1 in turn, RUNS times each, the
+# order swapped every run so a drift of the machine falls on both. Each launch is judged on the app's CPU as above; then the
+# medians and spreads (lowest to highest) of the app's and WindowServer's CPU are printed for each state, and WindowServer
+# is judged: the glass runs' median less the opaque runs' median must be at most WS_LIMIT points of a core, and at most the
+# opaque runs' spread (no more than the noise between opaque runs). WindowServer is every client's: keep the pointer off the
+# bar and the screen otherwise still (no video, no seconds in the menu bar's clock). It takes RUNS × states × 2 launches of
+# about WINDOW + 10 seconds: some 15 minutes with the defaults.
+#
+# `--baseline FILE` stores each measure's samples as JSON when FILE does not exist, and compares with it when it does: each
+# measure's median now beside the stored one, a WindowServer median more than WS_LIMIT above the stored one failing. Delete
+# the file to store a new baseline.
 #
 # What it does not measure: the network, notifications, the updater's loop, Claude's files changing under the watchers,
 # typing, hovering and scrolling. Those are for Instruments by hand.
@@ -24,8 +39,18 @@
 #   scripts/idle-cpu.sh                 build (release) and measure
 #   LIMIT=0.2 WINDOW=60 EDGES="right top bottom left" scripts/idle-cpu.sh
 #   SKIP_BUILD=1 scripts/idle-cpu.sh    use the release build as it is
+#   AB=1 [RUNS=5] [WS_LIMIT=0.3] [AB_STATES="rest open"] scripts/idle-cpu.sh    glass against opaque
+#   AB=1 scripts/idle-cpu.sh --baseline docs/design/fjord/baselines/idle-ab.json  store, then compare
 set -u
 cd "$(dirname "$0")/.."
+
+baseline=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --baseline) [ $# -ge 2 ] || { echo "idle-cpu: --baseline needs a file"; exit 2; }; baseline=$2; shift 2 ;;
+        *) echo "idle-cpu: unknown argument '$1' (only --baseline FILE)"; exit 2 ;;
+    esac
+done
 
 limit=${LIMIT:-0.1}     # percent of one core
 settle=${SETTLE:-5}     # seconds between launch and the wait for the CPU time to stop moving
@@ -33,12 +58,23 @@ quiet_for=${QUIET_FOR:-3}   # whole seconds the CPU time must not move before th
 quiet_max=${QUIET_MAX:-40}  # whole seconds that wait takes at most
 window=${WINDOW:-30}    # seconds between the two samples
 edges=${EDGES:-"right top"}
+ab=${AB:-0}
+runs=${RUNS:-5}
+ws_limit=${WS_LIMIT:-0.3}  # points of one core: glass's WindowServer median over opaque's, at most
+ab_states=${AB_STATES:-"rest open"}
 bin=.build/release/FjordComputer
 
 number() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
-for value in "$limit" "$settle" "$window"; do
-    number "$value" || { echo "idle-cpu: LIMIT, SETTLE and WINDOW are numbers ('$value' is not)"; exit 2; }
+for value in "$limit" "$settle" "$window" "$ws_limit"; do
+    number "$value" || { echo "idle-cpu: LIMIT, SETTLE, WINDOW and WS_LIMIT are numbers ('$value' is not)"; exit 2; }
 done
+[ "$ab" = 0 ] || [ "$ab" = 1 ] || { echo "idle-cpu: AB is 0 or 1 ('$ab' is not)"; exit 2; }
+[[ "$runs" =~ ^[1-9][0-9]*$ ]] || { echo "idle-cpu: RUNS is a whole number above 0 ('$runs' is not)"; exit 2; }
+for state in $ab_states; do
+    case "$state" in rest | open) ;; *) echo "idle-cpu: AB_STATES are rest or open ('$state' is not)"; exit 2 ;; esac
+done
+[ -z "$baseline" ] || [ ! -e "$baseline" ] || [ -f "$baseline" ] || { echo "idle-cpu: $baseline is not a file"; exit 2; }
+command -v python3 >/dev/null || { echo "idle-cpu: python3 is needed for the summary"; exit 2; }
 for value in "$quiet_for" "$quiet_max"; do
     [[ "$value" =~ ^[0-9]+$ ]] || { echo "idle-cpu: QUIET_FOR and QUIET_MAX are whole numbers ('$value' is not)"; exit 2; }
 done
@@ -84,6 +120,8 @@ motion_problem() {
 }
 
 out=$(mktemp)
+# One line per launch measured: state, edge, scenario, glass (- in a single run), app %, WindowServer % (n/a: not sampled).
+results=$(mktemp)
 pid=
 # stop_app: ends the app a measure launched, and waits for it, so none outlives its measure or reaches the next one's window.
 stop_app() {
@@ -94,13 +132,15 @@ stop_app() {
 }
 cleanup() {
     stop_app
-    rm -f "$out"
+    rm -f "$out" "$results"
 }
 trap cleanup EXIT
 
 failed=0
 scenario=agents
-last_ws=0
+# FJORD_GLASS for the launches (AB=1), else empty: not set.
+glass=
+last_ws=n/a
 
 # measure <label> <edge> [launch argument]: one launch, one verdict. However it ends, the app is stopped.
 measure() {
@@ -112,9 +152,12 @@ measure() {
 
 sample() {
     local label=$1 edge=$2; shift 2
+    last_ws=n/a
     : >"$out"
-    "$bin" --demo "$scenario" --lifecycle --edge "$edge" "$@" >"$out" 2>&1 &
+    # `env` execs the app, so the pid is the app's.
+    env ${glass:+FJORD_GLASS="$glass"} "$bin" --demo "$scenario" --lifecycle --edge "$edge" "$@" >"$out" 2>&1 &
     pid=$!
+    [ -z "$glass" ] || label="$label glass=$glass"
     sleep "$settle"
     if ! kill -0 "$pid" 2>/dev/null; then
         echo "idle-cpu: $label $edge: the app exited during the first $settle seconds"
@@ -182,21 +225,121 @@ sample() {
         printf "%-12s app %.3f%% (limit %s%%)  WindowServer %s%% (all clients)  %s\n", label, app, limit, ws, verdict
         exit app < limit ? 0 : 1
     }' || failed=1
+    # A measurement, passed or not, goes to the summary; one that is no measurement (the CPU time went backwards) does not.
+    awk -v a0="$app0" -v a1="$app1" 'BEGIN { exit !(a1 >= a0) }' || return
+    awk -v state="${label%% glass=*}" -v edge="$edge" -v scenario="$scenario" -v glass="${glass:--}" -v window="$window" \
+        -v a0="$app0" -v a1="$app1" -v ws="$last_ws" \
+        'BEGIN { printf "%s\t%s\t%s\t%s\t%.4f\t%s\n", state, edge, scenario, glass, (a1 - a0) / window * 100, ws }' >>"$results"
 }
 
-ring_ws=
-for edge in $edges; do
-    measure rest "$edge"
-    [ -z "$ring_ws" ] && ring_ws=$last_ws
-    measure open "$edge" --open
-done
+if [ "$ab" = 1 ]; then
+    # Glass against opaque: no ring turning (§7), opaque and glass in turn, the order swapped every run.
+    scenario=busy
+    edge=${edges%% *}
+    for ((run = 1; run <= runs; run++)); do
+        order="0 1"
+        [ $((run % 2)) = 0 ] && order="1 0"
+        for state in $ab_states; do
+            for glass in $order; do
+                if [ "$state" = open ]; then measure open "$edge" --open; else measure rest "$edge"; fi
+            done
+        done
+    done
+    glass=
+else
+    ring_ws=
+    for edge in $edges; do
+        measure rest "$edge"
+        [ -z "$ring_ws" ] && ring_ws=$last_ws
+        measure open "$edge" --open
+    done
 
-# What the ring costs: the same bar at rest with no working session, WindowServer's share beside the first one's.
-scenario=busy
-measure "no ring" "${edges%% *}"
-awk -v ring="$ring_ws" -v none="$last_ws" 'BEGIN {
-    if (ring == "n/a" || none == "n/a") { print "ring: WindowServer not sampled"; exit }
-    printf "ring: WindowServer %.2f%% with a working session, %.2f%% without (all clients; %+.2f%%)\n", ring, none, ring - none
-}'
+    # What the ring costs: the same bar at rest with no working session, WindowServer's share beside the first one's.
+    scenario=busy
+    measure "no ring" "${edges%% *}"
+    awk -v ring="$ring_ws" -v none="$last_ws" 'BEGIN {
+        if (ring == "n/a" || none == "n/a") { print "ring: WindowServer not sampled"; exit }
+        printf "ring: WindowServer %.2f%% with a working session, %.2f%% without (all clients; %+.2f%%)\n", ring, none, ring - none
+    }'
+fi
+
+# The medians, spreads and WindowServer's verdict (AB=1), and the baseline. Exits 1 on a failed verdict.
+python3 -I - "$results" "$ab" "$ws_limit" "$limit" "$window" "$baseline" <<'PY' || failed=1
+import json, os, statistics, sys, time
+
+results, ab, ws_limit, limit, window, baseline = sys.argv[1:7]
+ab, ws_limit = ab == "1", float(ws_limit)
+groups = {}
+for line in open(results):
+    state, edge, scenario, glass, app, ws = line.rstrip("\n").split("\t")
+    g = groups.setdefault((state, edge, scenario, glass), {"app": [], "ws": []})
+    g["app"].append(float(app))
+    if ws != "n/a":
+        g["ws"].append(float(ws))
+
+def stats(xs):
+    return (statistics.median(xs), min(xs), max(xs)) if xs else None
+
+def show(xs, digits):
+    s = stats(xs)
+    return "n/a" if s is None else f"{s[0]:.{digits}f}% ({s[1]:.{digits}f}–{s[2]:.{digits}f}, n={len(xs)})"
+
+failed = False
+if ab and not groups:
+    print("FAIL: no measurement to judge")
+    failed = True
+if ab:
+    for key in sorted({k[:3] for k in groups}):
+        state, edge, scenario = key
+        opaque, glass = groups.get(key + ("0",)), groups.get(key + ("1",))
+        for name, g in (("opaque", opaque), ("glass", glass)):
+            if g:
+                print(f"{state} {edge} {name:6}  app {show(g['app'], 3)}  WindowServer {show(g['ws'], 2)}")
+        if not opaque or not glass or len(opaque["ws"]) < 3 or len(glass["ws"]) < 3:
+            print(f"{state} {edge}: FAIL: fewer than 3 WindowServer samples of each, no verdict")
+            failed = True
+            continue
+        o, gl = stats(opaque["ws"]), stats(glass["ws"])
+        delta, spread = gl[0] - o[0], o[2] - o[1]
+        ok = delta <= ws_limit and delta <= spread
+        failed |= not ok
+        print(f"{state} {edge}: WindowServer glass − opaque {delta:+.2f} points of a core "
+              f"(limit {ws_limit}, opaque spread {spread:.2f})  {'ok' if ok else 'FAIL'}")
+
+if baseline:
+    now = [{"state": k[0], "edge": k[1], "scenario": k[2], "glass": None if k[3] == "-" else k[3],
+            "app": v["app"], "ws": v["ws"]} for k, v in sorted(groups.items())]
+    if not os.path.exists(baseline):
+        os.makedirs(os.path.dirname(baseline) or ".", exist_ok=True)
+        with open(baseline, "w") as f:
+            json.dump({"version": 1, "date": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "ab": ab, "limit": float(limit),
+                       "window": float(window), "measures": now}, f, indent=2)
+            f.write("\n")
+        print(f"baseline: stored in {baseline}")
+    else:
+        try:
+            old = json.load(open(baseline))
+            stored = {(m["state"], m["edge"], m["scenario"], m["glass"]): m for m in old["measures"]}
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(f"baseline: FAIL: {baseline} can't be read ({e})")
+            sys.exit(1)
+        print(f"baseline: against {baseline} ({old.get('date', 'undated')})")
+        for m in now:
+            key = (m["state"], m["edge"], m["scenario"], m["glass"])
+            name = " ".join(x for x in (m["state"], m["edge"], m["scenario"], m["glass"] and f"glass={m['glass']}") if x)
+            was = stored.get(key)
+            if not was:
+                print(f"  {name}: not in the baseline")
+                continue
+            line = f"  {name}: app {statistics.median(m['app']):.3f}% (was {statistics.median(was['app']):.3f}%)"
+            if m["ws"] and was["ws"]:
+                ws_now, ws_was = statistics.median(m["ws"]), statistics.median(was["ws"])
+                worse = ws_now - ws_was > ws_limit
+                failed |= worse
+                line += f"  WindowServer {ws_now:.2f}% (was {ws_was:.2f}%, {ws_now - ws_was:+.2f}){'  FAIL' if worse else ''}"
+            print(line)
+
+sys.exit(1 if failed else 0)
+PY
 
 exit $failed
