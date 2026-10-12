@@ -45,6 +45,16 @@ def _ranked_targets(trace: dict[str, Any]) -> list[str]:
 
 
 def event_score(trace: dict[str, Any], wrong_cost: float = 25) -> dict[str, Any]:
+    """One submit's loss/counts; with soft gold (`gold.views`, one per labeller where they disagreed), their mean."""
+    gold = trace.get("gold")
+    views = gold.get("views") if isinstance(gold, dict) else None
+    if not views:
+        return _event_score(trace, wrong_cost)
+    scores = [_event_score({**trace, "gold": view}, wrong_cost) for view in views]
+    return {key: sum(score[key] for score in scores) / len(scores) for key in scores[0]}
+
+
+def _event_score(trace: dict[str, Any], wrong_cost: float = 25) -> dict[str, Any]:
     """Return one submit's loss/counts. Board changes and picks are not submits.
 
     A required ask forbids every automatic action, even one whose destination

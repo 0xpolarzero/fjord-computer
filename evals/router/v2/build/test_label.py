@@ -556,7 +556,10 @@ class IncrementalIntegrationTests(unittest.TestCase):
                 self.raw_label(record, "gpt"), self.raw_label(record, "gemini")]
         write_jsonl(self.directory / "raw.jsonl", rows)
         gold = build_gold(records, directory=self.directory)[0]
-        self.assertEqual((gold["status"], gold["independent_labels"]), ("pending", 3))
+        # Unadjudicated, a split is soft gold: each labeller's view, scored as their mean (run/score.py).
+        self.assertEqual((gold["status"], gold["independent_labels"]), ("ready", 3))
+        self.assertTrue(gold["reason"].startswith("soft:"))
+        self.assertEqual([view["family"] for view in gold["gold"]["views"]], ["claude", "gemini", "gpt"])
         independent = annotations(record, latest_labels(rows)[0])
         adjudication = self.raw_label(record, "claude", role="adjudicator")
         adjudication["judgments_sha256"] = digest(independent)

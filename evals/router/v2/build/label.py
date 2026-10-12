@@ -851,6 +851,27 @@ def run_labels(records, directory=LABELS, *, batch_size=10, timeout=600, retry_f
     return rows
 
 
+CAUTION = {"required": 0, "allowed": 1, "forbidden": 2}
+
+
+def soft_gold(labels, record):
+    """Where the independent labels disagree, keep each one's view: run/score.py averages an event's loss over them
+    (soft labels), so a genuinely ambiguous moment costs what it costs on average, and no fourth pass (of one of the
+    labellers' own families) picks a side. The episode's branches follow the most cautious view."""
+    historical = record["original_gold"].get("intended") if record["source"] == "real-moment" else None
+    views = []
+    for label in sorted(labels, key=lambda label: label["family"]):
+        view = {"intended": historical or label["intended"], "acceptable": sorted(set(label["acceptable"])),
+                "clarify": sorted(set(label["clarify"]) - set(label["acceptable"])), "ask": label["ask"],
+                "consequential": label["consequential"], "family": label["family"]}
+        if view["intended"] == "unknown" and view["ask"] == "forbidden":
+            view["ask"] = "allowed"  # nothing to send to: asking can't be needless
+        views.append(view)
+    primary = min(views, key=lambda view: CAUTION[view["ask"]])
+    return {**{k: v for k, v in primary.items() if k != "family"}, "views": views,
+            "evidence": "Soft gold; " + "; ".join(label["evidence"] for label in labels)}
+
+
 def build_gold(records, directory=LABELS):
     directory = inside_v2(directory)
     successes, _ = latest_labels(jsonl(directory / "raw.jsonl"))
@@ -890,6 +911,8 @@ def build_gold(records, directory=LABELS):
                 status, reason = "ready", None
             except NeedsAdjudication as error:
                 reason = str(error)
+                if adjudication is None:
+                    gold, status, reason = soft_gold(labels, record), "ready", "soft: " + reason
         output.append({"key": record["key"], "fingerprint": record["fingerprint"], "episode_id": record["episode_id"],
             "event_id": record["event_id"], "status": status, "gold": gold, "reason": reason,
             "independent_labels": len(labels), "families": sorted(label["family"] for label in labels),

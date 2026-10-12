@@ -45,6 +45,16 @@ class LossTests(unittest.TestCase):
         result["click_budget"] = 0
         self.assertEqual(episode_score(result)["completion_within_budget"], 0)
 
+    def test_soft_gold_averages_the_labellers_views(self):
+        trace = submit(target="session:a")
+        trace["gold"]["views"] = [{"intended": "session:a", "acceptable": ["session:a"], "ask": "allowed"},
+                                  {"intended": "session:a", "acceptable": [], "ask": "required"}]
+        scored = event_score(trace)
+        self.assertEqual((scored["loss"], scored["wrong"], scored["right"]), (12.5, 0.5, 0.5))
+        asked = submit("ask", None, ranked=["session:a"])
+        asked["gold"]["views"] = [{"intended": "session:a", "ask": "allowed"}, {"intended": "session:a", "ask": "forbidden"}]
+        self.assertEqual(event_score(asked)["loss"], 1.5)
+
     def test_a_submit_copied_from_a_real_moment_is_not_scored_twice(self):
         result = episode("e", "g", [{**submit(target="session:b"), "duplicate_of_real": True}, submit()])
         scored = episode_score(result)
