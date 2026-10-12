@@ -226,14 +226,54 @@ import Testing
         #expect(state.cards.isEmpty)
     }
 
+    /// A run that started at `started` (minutes) and delivered its message to local_a at `sent`.
+    private func delivery(started: Double, sent: Double, turns: Int = 1, busy: Bool = false) -> RouterDecision {
+        var run = RouterDecision(at: at(started), trigger: .system)
+        run.add(.sent(to: "x", text: "hi", original: nil), session: "local_a")
+        run.delivered = .init(session: "local_a", cli: "cli-local_a", nonce: "n", at: at(sent), turns: turns, busy: busy, abortable: true)
+        return run
+    }
+
     @Test func aMessageFjordSentIsNotYouWritingInTheSession() {
         var state = seen([session(turns: 1)])
         state.fjordStarted["local_a"] = at(-10)
-        var run = RouterDecision(at: at(19.5), trigger: .system)
-        run.add(.sent(to: "x", text: "hi", original: nil), session: "local_a")
-        state.decisions = [run]
-        update(&state, [session(turns: 1, message: 20)], viewing: "local_a", now: 21)
+        // Routing took a while: the message went half a minute after the run began, and shows as it went.
+        state.decisions = [delivery(started: 19.5, sent: 20.1)]
+        update(&state, [session(turns: 1, message: 20.1)], viewing: "local_a", now: 21)
         #expect(state.fjordStarted["local_a"] != nil)
+    }
+
+    @Test func aReplyOfYoursMinutesAfterARunSentOneIsYours() {
+        // The run sent its message at 0; its turn ended, and you replied in the session two and a half minutes on.
+        var state = seen([session(turns: 1)])
+        state.decisions = [delivery(started: -0.2, sent: 0)]
+        update(&state, [session(turns: 1, message: 0)], now: 0.1)
+        #expect(state.replies.isEmpty)
+        update(&state, [session(turns: 2, message: 0)], now: 1)
+        #expect(state.cards.map(\.id) == ["local_a#t2"])
+        update(&state, [session(turns: 2, message: 2.5, running: true)], now: 2.6)
+        #expect(state.replies["local_a"] == RouterFeed.Stamp.ms(at(2.5)))
+        // A run linked to the session that delivered nothing (it answered a card, say) sends no message either.
+        var other = seen([session(turns: 1)])
+        var linked = RouterDecision(at: at(0.5), trigger: .system)
+        linked.links.sessions = ["local_a"]
+        other.decisions = [linked]
+        update(&other, [session(turns: 2, message: -10)], now: 1)
+        update(&other, [session(turns: 2, message: 1.5, running: true)], now: 1.6)
+        #expect(other.replies["local_a"] != nil)
+    }
+
+    @Test func aMessageSentWhileTheSessionWorkedShowsWhenItsTurnIsOver() {
+        // Sent at 0 while turn 2 ran: Claude Code takes it once that turn is over, minutes later.
+        var state = seen([session(turns: 1)])
+        update(&state, [session(turns: 2)], now: 1)
+        state.decisions = [delivery(started: -0.2, sent: 0, turns: 1, busy: true)]
+        update(&state, [session(turns: 2, message: 3, running: true)], now: 3.1)
+        #expect(state.replies.isEmpty)
+        // Its own turn over, a message is yours again.
+        update(&state, [session(turns: 3, message: 3)], now: 4)
+        update(&state, [session(turns: 3, message: 5, running: true)], now: 5.1)
+        #expect(state.replies["local_a"] == RouterFeed.Stamp.ms(at(5)))
     }
 
     @Test func whatStartedASessionIsForgottenWithIt() {

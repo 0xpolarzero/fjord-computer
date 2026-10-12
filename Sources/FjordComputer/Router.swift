@@ -541,7 +541,7 @@ enum RouterFeed {
             // that none of Fjord Computer's runs on it sent. Until then the app showing it (it brings it to the front
             // itself) means nothing.
             if let before, state.fjordStarted[id] != nil, stamp.message != before.message, let message = stamp.message,
-               !fjordSent(state, id, atMs: message) {
+               !fjordSent(state, id, turns: stamp.turns, atMs: message) {
                 state.fjordStarted[id] = nil
             }
             let watching = id == viewing && state.fjordStarted[id] == nil
@@ -551,7 +551,7 @@ enum RouterFeed {
                 // What addresses the cards there are, before any new one is made (a new one is newer than all of it).
                 if stamp.message != before.message, let message = stamp.message {
                     address(&state, id, .reply, now) { !$0.kind.isTurn && message > $0.replyAfter }
-                    queueReply(&state, id, message)
+                    queueReply(&state, id, turns: stamp.turns, message)
                 }
                 if let previous, ongoing != previous {
                     address(&state, id, .answered, now) { !$0.kind.isTurn }
@@ -673,25 +673,34 @@ enum RouterFeed {
     }
 
     /// Your message to judge the session's open turn cards against, when one is older than it. Not one a run of
-    /// Fjord Computer's sent: the Router judges those as it sends them.
-    static func queueReply(_ state: inout RouterState, _ session: String, _ message: Int64) {
-        guard !fjordSent(state, session, atMs: message),
+    /// Fjord Computer's sent: the Router judges those as it sends them. `turns`: the session's finished turns now.
+    static func queueReply(_ state: inout RouterState, _ session: String, turns: Int, _ message: Int64) {
+        guard !fjordSent(state, session, turns: turns, atMs: message),
               state.cards.contains(where: { $0.sessionID == session && $0.isOpen && $0.kind.isTurn && message > $0.replyAfter })
         else { return }
         state.replies[session] = max(state.replies[session] ?? 0, message)
     }
 
-    /// Whether a run of Fjord Computer's on the session sent the user message at `ms`: one that was started shortly
-    /// before it (delivering takes up to a minute or two) and is linked to the session.
-    private static func fjordSent(_ state: RouterState, _ session: String, atMs ms: Int64) -> Bool {
+    /// Whether Fjord Computer sent the session the user message at `ms` (`turns`: the session's finished turns now): its
+    /// first message as it was made, or one a run delivered, by the run's record of it (`RouterDecision.delivered`). The
+    /// session's plugin submits a delivery a moment before the run hears it went, so the message is that send's within
+    /// `deliveredSlack` of it, never minutes after: a reply of yours a little later is yours. One sent while the session
+    /// was busy waits for the turn under way to end, so until that turn has (and the delivery's own turn hasn't), a
+    /// message is the delivery's.
+    private static func fjordSent(_ state: RouterState, _ session: String, turns: Int, atMs ms: Int64) -> Bool {
         // The session's own first message goes out as soon as it is made, before any run links it.
         if let made = state.fjordStarted[session], Stamp.ms(made) - 5_000 <= ms, ms <= Stamp.ms(made) + 300_000 { return true }
         return state.decisions.contains { entry in
-            guard entry.links.sessions.contains(session) else { return false }
-            let started = Stamp.ms(entry.at)
-            return started - 5_000 <= ms && ms <= started + 300_000
+            guard let sent = entry.delivered, sent.session == session else { return false }
+            let at = Stamp.ms(sent.at)
+            guard at - deliveredSlack <= ms else { return false }
+            if ms <= at + deliveredSlack { return true }
+            return sent.busy && turns <= sent.turns + 1 && ms <= at + Int64(RouterDecision.Delivered.window * 1000)
         }
     }
+
+    /// How far from a delivery's recorded time (ms) its message may show in the session.
+    static let deliveredSlack: Int64 = 15_000
 
     /// The card of a finished turn, with the app's summary as it is now (or the placeholder until it's written).
     private static func addTurn(_ state: inout RouterState, _ session: ClaudeSession, turns: Int, message: Int64?, now: Date) {
@@ -737,7 +746,7 @@ enum RouterFeed {
                 if !card.kind.isTurn, let message = stamp.message, message > card.replyAfter || change.message {
                     by = .reply
                 } else if card.kind.isTurn, let message = stamp.message, message > card.replyAfter {
-                    queueReply(&state, session.id, message)
+                    queueReply(&state, session.id, turns: stamp.turns, message)
                 } else if !card.kind.isTurn, change.turns {
                     by = .answered
                 } else if !card.kind.isTurn, let ms = card.waitMs,
