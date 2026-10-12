@@ -583,6 +583,9 @@ private struct RouterHistory: View {
     private func perform(_ proxy: ScrollViewProxy) {
         guard laidOut.on, let scroll = pending else { return }
         pending = nil
+        // A request made while this update performs the scroll (the geometry it moves asking to stick) changes `pending`
+        // where its `onChange` doesn't see it: it is looked at once the update is over.
+        DispatchQueue.main.async { perform(proxy) }
         // Going to a line leaves the bottom (until the scroll, once done, finds it there after all); going to the bottom pins.
         pinned = scroll.id == RouterModel.endID
         if scroll.animated, let motion = Theme.Motion.hover.resolved(reduce: reduceMotion) {
