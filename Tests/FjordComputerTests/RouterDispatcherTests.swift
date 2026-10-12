@@ -1546,6 +1546,50 @@ import Testing
         #expect(d.submit(text, context: context) == nil)
     }
 
+    @Test func anActionsMessageIsntSentOnceTriageOrTheRouterIsOffWhateverItWaitedFor() async throws {
+        let (s, d, f) = setup()
+        await cloned(s)
+        var tools: [RouterTools] = []
+        d.configure = { tools.append($0) }
+        let (text, context) = fromAction(s, [.text("Address what "), .pointer(.notification("pr:o/lookout#7")), .text(" is waiting on.")])
+        // Sure of a new session, which the app runs only later.
+        f.ranked = [.init(target: "new:/code/lookout-2", p: 0.97), .init(target: "unclear", p: 0.03)]
+        f.heldStart = SessionStart.Held(waiting: .init(sessionID: "local_late"), title: "o/lookout#7 Login fails", project: "lookout-2",
+                                        ready: Prepared(text: text, original: text, rephrased: false), settings: nil)
+        let id = try #require(d.submit(text, context: context))
+        let category = UUID(), action = UUID()
+        s.actionLedger.set(ActionRun(category: category, thing: "pr:o/lookout#7", action: action, trigger: "enter", state: .running,
+                                     at: Date(), message: id))
+        await waitUntil { f.finishHeld != nil }
+        #expect(s.actionLedger.run(category, "pr:o/lookout#7", action, "enter")?.detail == "session started")
+        // Triage is switched off meanwhile: when the app runs the session, its first message doesn't go.
+        s.settings.triage = false
+        #expect(tools.last?.deliveryCheck?() == RouterDispatcher.unlinkedWords, "the send's own gate says so too")
+        f.finishHeld?.resume()
+        await waitUntil { decision(s, id)?.outcome == .done }
+        #expect(f.sent.isEmpty && decision(s, id)?.done.last == .failed(RouterDispatcher.unlinkedWords))
+        let run = s.actionLedger.run(category, "pr:o/lookout#7", action, "enter")
+        #expect(run?.state == .failed && run?.detail == RouterDispatcher.unlinkedWords && run?.sessionID == "local_late")
+        // A reply: switched off between its preparation and its send.
+        s.settings.triage = true
+        f.heldStart = nil
+        f.holdOn = ["local_a"]
+        s.router.cards = []
+        f.ranked = [.init(target: "session:local_a", p: 0.97), .init(target: "unclear", p: 0.03)]
+        let b = try #require(d.submit(text, context: context))
+        await waitUntil { f.prepared == ["local_a"] }
+        s.settings.triage = false
+        f.release("local_a")
+        await finish(d, f, b)
+        #expect(f.sent.isEmpty && decision(s, b)?.done.last == .failed(RouterDispatcher.unlinkedWords))
+        // A message of yours goes on.
+        #expect(tools.first?.deliveryCheck != nil)
+        f.holdOn = []
+        let mine = d.submit("tell the docs one to ship")
+        await finish(d, f, mine)
+        #expect(tools.last?.deliveryCheck == nil && f.sent.map(\.to) == ["peer-local_a"])
+    }
+
     @Test func withNoCloneOfTheRepoItAsksForAFolder() async throws {
         let (s, d, f) = setup()
         await cloned(s)
@@ -1558,6 +1602,7 @@ import Testing
         #expect(d.eligible(RouterAskBack.chooseFolder, store: s) && !d.pick(id, target: RouterAskBack.chooseFolder))
         // The folder you chose, known or not.
         #expect(d.pick(id, folder: "/elsewhere/none"))
+        #expect(!d.pick(id, folder: "/elsewhere/again"), "answered already")
         await waitUntil { f.finished.filter { $0 == id }.count == 2 }
         #expect(f.started.map(\.folder) == ["/elsewhere/none"] && decision(s, id)?.decision.targetID == "new:/elsewhere/none")
         // Yours: the Router's own runs stay among the options, with Choose folder…

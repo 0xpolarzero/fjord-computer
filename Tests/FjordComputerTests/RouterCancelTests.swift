@@ -278,6 +278,49 @@ import Testing
         #expect(lines.contains { $0.kind == .corrected && $0.from == "session:local_b" && $0.target == "session:local_a" })
     }
 
+    @Test func anActionsMessageSentElsewhereIsStillAnActionsMessage() async throws {
+        let w = World()
+        w.store.codeFolders.scan = { _ in .init(repos: ["/code/lookout": ["o/lookout"], "/code/lookout-2": ["o/lookout"]]) }
+        w.store.addCodeFolders(["/code"])
+        await w.store.codeFolders.settled()
+        w.store.things["pr:o/lookout#7"] = InboxFixture.pr(7, repo: "o/lookout", title: "Login fails")
+        let (text, mentions) = w.store.composeForRouter([.text("Address "), .pointer(.notification("pr:o/lookout#7"))])
+        var context = RouterContext()
+        context.tag(mentions)
+        context.action = RouterActionSource(origin: SessionOrigin(category: "Contributions", thing: "o/lookout#7 Login fails",
+                                                                  actionID: "a", runID: "r"),
+                                            title: "o/lookout#7 Login fails", model: "opus", effort: "high")
+        w.fakes.ranked = [.init(target: "session:local_a", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let id = try #require(w.dispatcher.submit(text, context: context))
+        await w.finish(id)
+        #expect(w.fakes.prepared == ["local_a"] && w.entry(id)?.actionSource == context.action)
+        // Asked again, Jev now sure it changes Fjord Computer: still never the Router's own runs, nor a folder not offered.
+        w.fakes.finished = []
+        w.fakes.ranked = [.init(target: "change_fjord", p: 0.9), .init(target: "question", p: 0.05), .init(target: "new:/code/lookout-2", p: 0.05)]
+        w.dispatcher.sendElsewhere(id)
+        await w.finish(id)
+        let ask = try #require(w.dispatcher.askBacks.first { $0.id == id })
+        #expect(ask.options.map(\.target) == ["new:/code/lookout-2"] && ask.context.action == context.action)
+        #expect(!w.dispatcher.pick(id, target: "question") && !w.dispatcher.pick(id, target: "change_fjord"))
+        #expect(!w.dispatcher.pick(id, folder: "/somewhere"))
+        // The new session is the action's: called after its thing, on its model and effort, tagged with its origin.
+        w.fakes.finished = []
+        #expect(w.dispatcher.pick(id, target: "new:/code/lookout-2"))
+        await w.finish(id)
+        #expect(w.fakes.started.map(\.title) == ["o/lookout#7 Login fails"])
+        #expect(w.fakes.startSettings.first??.model == "opus" && w.fakes.startSettings.first??.effort == "high")
+        #expect(w.store.router.origins["local_new"]?.category == "Contributions")
+        // An entry from before the settings were kept: its thing's line is the title, on your defaults.
+        var old = try #require(w.entry(id))
+        old.actionStart = nil
+        let back = try JSONDecoder().decode(RouterDecision.self, from: JSONEncoder().encode(old))
+        #expect(back.actionSource == RouterActionSource(origin: context.action!.origin, title: "o/lookout#7 Login fails"))
+        // Triage off: not sent elsewhere at all.
+        w.store.settings.triage = false
+        w.dispatcher.sendElsewhere(id)
+        #expect(w.dispatcher.progress[id] == nil)
+    }
+
     @Test func aWrongSendDismissedIsSentNowhereElse() async throws {
         let w = World()
         w.fakes.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "session:local_a", p: 0.04)]

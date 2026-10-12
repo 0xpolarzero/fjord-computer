@@ -146,6 +146,24 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     /// A message a category's "Then" sent for a thing (your prompt, `.you`): the category, the thing, the action and its run.
     /// Nil for anything else.
     var fromAction: SessionOrigin?
+    /// The same message's session settings: what a session the Router starts for it is called and runs on. Nil for anything
+    /// else, and in entries from before (the thing's line is the title then, on your defaults).
+    var actionStart: ActionStart?
+
+    struct ActionStart: Codable, Equatable {
+        var title: String
+        var model: String?
+        var effort: String?
+    }
+
+    /// Where an action's message came from and what a session started for it is (`RouterContext.action`), as it was sent:
+    /// what sending it elsewhere goes with again.
+    var actionSource: RouterActionSource? {
+        fromAction.map { origin in
+            RouterActionSource(origin: origin, title: actionStart?.title ?? origin.thing, model: actionStart?.model,
+                               effort: actionStart?.effort)
+        }
+    }
     /// Its message was stopped where it was sent (a Cancel that wasn't too late).
     var isCancelled: Bool { delivered?.cancelled?.stopped == true }
 

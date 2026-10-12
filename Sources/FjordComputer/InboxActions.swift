@@ -1429,7 +1429,8 @@ final class StoreActionPerformer: ActionPerformer {
     func clones(of repo: String) -> [String] { store.localClones(of: repo) }
 
     func sendToRouter(_ message: ActionMessage) async throws -> UUID {
-        // Only while Triage and the Router are both on, as the dispatcher checks again for each step.
+        // Only while Triage and the Router are both on: the dispatcher checks again before each step that reaches a session
+        // (after a start, a session the app runs later), and the send's own gate once more.
         guard store.toolsLinked else { throw ActionFailure("Triage or the Router is off") }
         let (text, mentions) = store.composeForRouter(message.parts)
         var context = RouterContext()

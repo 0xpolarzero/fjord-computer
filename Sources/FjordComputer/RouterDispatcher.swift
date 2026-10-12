@@ -274,8 +274,10 @@ struct RouterAskBack: Identifiable, Equatable {
                                    links: .init(cards: context.replyTo.map { [$0] } ?? []))
         entry.mentions = context.mentions.isEmpty ? nil : context.mentions
         entry.fromAction = context.action?.origin
+        entry.actionStart = context.action.map { .init(title: $0.title, model: $0.model, effort: $0.effort) }
         let id = store.logDecision(entry)
-        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: context.pills, mentions: context.mentions)),
+        launch(Job(id: id, text: text, context: context,
+                   tools: makeTools(id, text, pills: context.pills, mentions: context.mentions, action: context.action != nil)),
                stage: "starting") { [self] job in
             try await execute(job)
         }
@@ -301,7 +303,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// folder or not.
     @discardableResult
     func pick(_ id: UUID, folder: String) -> Bool {
-        guard let store, store.routerOn, !folder.isEmpty, let ask = askBacks.first(where: { $0.id == id }) else { return false }
+        guard let store, store.routerOn, !folder.isEmpty, let ask = askBacks.first(where: { $0.id == id }),
+              ask.options.contains(where: { $0.target == RouterAskBack.chooseFolder }) else { return false }
         if ask.context.action != nil, !store.toolsLinked { return false }
         answer(ask, target: "new:\(folder)", store: store, folder: folder)
         return true
@@ -327,7 +330,8 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         // A pick that is Jev's own suggestion confirms it: an example for the next ones.
         if !corrected { store.updateDecision(id) { $0.decision.confirmed = true } }
-        let tools = makeTools(id, ask.message, pills: ask.context.pills, mentions: ask.context.mentions)
+        let tools = makeTools(id, ask.message, pills: ask.context.pills, mentions: ask.context.mentions,
+                              action: ask.context.action != nil)
         tools.chosenFolder = folder
         launch(Job(id: id, text: ask.message, context: ask.context, tools: tools), stage: "starting") { [self] job in
             try await route(job, to: target)
@@ -361,14 +365,28 @@ struct RouterAskBack: Identifiable, Equatable {
 
     // MARK: Runs
 
-    private func makeTools(_ id: UUID, _ text: String, pills: [Range<Int>], mentions: [RouterMention] = []) -> RouterTools {
+    /// `action`: an action's message, whose every send is refused once Triage or the Router is off (`linked`).
+    private func makeTools(_ id: UUID, _ text: String, pills: [Range<Int>], mentions: [RouterMention] = [],
+                           action: Bool = false) -> RouterTools {
         let tools = RouterTools(store: store!)
         tools.claudePath = { [weak self] in self?.claudePath() }
         tools.decision = id
         tools.beginTurn(text, pills: pills)
         tools.tagged = RouterPointers.context(mentions, store: store!)
+        if action { tools.deliveryCheck = { [weak store = self.store] in store?.toolsLinked == true ? nil : Self.unlinkedWords } }
         configure?(tools)
         return tools
+    }
+
+    /// Why an action's message no longer goes: Triage or the Router switched off since it was sent to the Router.
+    static let unlinkedWords = "Triage or the Router is off; nothing was sent"
+
+    /// An action's message goes on only while Triage and the Router are both on, checked again before each step that
+    /// reaches a session (after every wait: a start, a session the app runs later); the send's own gate checks once more
+    /// (`deliveryCheck`). Anything else goes on.
+    private func linked(_ context: RouterContext) throws {
+        guard context.action != nil, store?.toolsLinked != true else { return }
+        throw RouterTools.Failure(Self.unlinkedWords)
     }
 
     /// The pills of `text` that are where they say: each an "@name" inside it, none overlapping another.
@@ -610,7 +628,9 @@ struct RouterAskBack: Identifiable, Equatable {
             return
         }
         stage(job, "preparing")
+        try linked(job.context)
         let delivery = try await effects.prepare(job.tools, session)
+        try linked(job.context)
         stage(job, "sending")
         // The cards open now, as they are: one that changes while this goes isn't addressed by it.
         let eligible = Dictionary(store.router.cards.filter(\.isOpen).map { ($0.id, store.cardRevisions[$0.id, default: 0]) },
@@ -674,12 +694,18 @@ struct RouterAskBack: Identifiable, Equatable {
               let entry = store.router.decisions.first(where: { $0.id == id }), case .you(let text) = entry.trigger,
               let sent = entry.delivered else { return }
         let wrong = entry.decision.targetID ?? "session:\(sent.session)"
+        var context = RouterContext(notTo: wrong)
+        // What it tagged goes with it again; where it goes is asked anew, not taken from its pills. An action's message is
+        // still one: only to a session, a new one called after its thing and on its model and effort, while Triage and the
+        // Router are both on.
+        context.mentions = entry.mentions ?? []
+        context.action = entry.actionSource
+        if context.action != nil, !store.toolsLinked { return }
         forgetLive()
         store.updateDecision(id) { $0.outcome = .pending }
-        var context = RouterContext(notTo: wrong)
-        // What it tagged goes with it again; where it goes is asked anew, not taken from its pills.
-        context.mentions = entry.mentions ?? []
-        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: [], mentions: context.mentions)),
+        let unattended = context.action != nil
+        launch(Job(id: id, text: text, context: context,
+                   tools: makeTools(id, text, pills: [], mentions: context.mentions, action: unattended)),
                stage: "cancelling") { [self] job in
             let how = await cancel(id, elsewhere: true)
             guard let how, how.stopped else {
@@ -688,11 +714,15 @@ struct RouterAskBack: Identifiable, Equatable {
                 return
             }
             stage(job, "classifying")
-            var found = await classify(job, projects: [])
+            let world = Self.repoWorld(job.context, store: store)
+            let noClone = world?.clones.isEmpty == true
+            var found = noClone && unattended ? Classification(ranked: [], sure: false, assisted: false)
+                : await classify(job, projects: noClone ? [] : world?.clones ?? [])
+            Self.keep(&found, world: world, unattended: unattended, store: store)
             let away = { (target: String) in target != wrong && Self.session(of: target, store: store) != sent.session }
             found.ranked = found.ranked.filter { away($0.target) }
             found.card = found.card?.filter(away)
-            askBack(job, found, suggestion: wrong, path: "elsewhere")
+            askBack(job, found, suggestion: wrong, path: "elsewhere", note: noClone ? world?.note : nil, chooseFolder: noClone)
         }
     }
 
@@ -709,6 +739,7 @@ struct RouterAskBack: Identifiable, Equatable {
         let settings = if let action = job.context.action { SessionSettings(model: action.model, effort: action.effort) }
             else { SessionSettings.parse(SessionStart.request(job.text, pills: job.context.pills)) }
         let delivery: Delivery
+        try linked(job.context)
         do {
             delivery = try await effects.start(job.tools, folder, job.context.action?.title ?? Self.title(for: task), settings)
         } catch let waiting as SessionStart.Held {
@@ -725,6 +756,11 @@ struct RouterAskBack: Identifiable, Equatable {
             return
         }
         if let session = delivery.session { store.noteFjordStarted(session) }
+        // Started, its first message not sent while Triage or the Router is off: the session stays, the line says why.
+        do { try linked(job.context) } catch {
+            note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
+            throw error
+        }
         stage(job, "sending")
         let ack = try await effects.send(job.tools, delivery)
         await delivered(job, delivery, session: delivery.session, turns: 0, busy: false)
@@ -808,13 +844,17 @@ struct RouterAskBack: Identifiable, Equatable {
             return
         }
         held[id] = Self.heldWords
-        let tools = makeTools(id, job.text, pills: job.context.pills, mentions: job.context.mentions)
+        let tools = makeTools(id, job.text, pills: job.context.pills, mentions: job.context.mentions,
+                              action: job.context.action != nil)
+        let context = job.context
         heldTools[id] = tools
         heldTasks[id] = Task { [weak self] in
             do {
                 guard let self else { return }
                 let delivery = try await effects.finish(tools, waiting)
                 try Task.checkCancellation()
+                // The session ran only now: an action's first message goes only if Triage and the Router are still on.
+                try linked(context)
                 held[id] = "sending"
                 let ack = try await effects.send(tools, delivery)
                 store.updateDecision(id) { entry in
@@ -898,12 +938,7 @@ struct RouterAskBack: Identifiable, Equatable {
             return askBack(job, Classification(ranked: [], sure: false, assisted: false), note: world?.note, chooseFolder: true)
         }
         let narrowed = noClone ? job.context.projects : world?.clones ?? job.context.projects
-        let inWorld = { (target: String) -> Bool in
-            if RouterRun.Intent(rawValue: target) != nil { return !unattended }
-            guard let world else { return true }
-            if target.hasPrefix("new:") { return world.clones.contains(String(target.dropFirst(4))) }
-            return Self.folder(of: target, store: store).map(world.clones.contains) ?? false
-        }
+        let inWorld = Self.inWorld(world, unattended: unattended, store: store)
         // The pick shown over the composer for these words is the decision: sent as shown, not asked again.
         var found: Classification
         if let shown = job.context.shown, let carried = job.context.jev, carried.assisted, carried.sure, carried.top?.target == shown {
@@ -920,16 +955,7 @@ struct RouterAskBack: Identifiable, Equatable {
             found.sure = false
             liveCache[Self.liveKey(job.text, narrowed)] = nil
         }
-        // An action's message is never sent on the words alone: without Jev, you pick.
-        if unattended, !found.assisted { found.sure = false }
-        // Only the repo's world (and, yours, the Router's own runs); an action's message only to a session. When Jev's pick
-        // isn't one, you pick.
-        if world != nil || unattended {
-            let kept = found.ranked.filter { inWorld($0.target) }
-            if kept.first?.target != found.top?.target { found.sure = false }
-            found.ranked = kept.isEmpty ? (world?.targets ?? []).map { Scored(target: $0, p: 0) } : kept
-            found.card = found.card?.filter(inWorld)
-        }
+        Self.keep(&found, world: world, unattended: unattended, store: store)
         // Where your own words send it ("start a session in lookout …", "tell CI to …"), resolved here and not by Jev, is
         // where it goes: his pick of another doesn't send it elsewhere ("tell CI to update the docs" isn't for Docs). Not
         // where you waved it off, nor when it is gone.
@@ -1336,6 +1362,29 @@ extension RouterDispatcher {
         let sessions = store.claudeSessions.values.filter { !$0.isArchived && clones.contains($0.folderKey) }
             .sorted { $0.lastActivity > $1.lastActivity }.map { "session:\($0.id)" }
         return RepoWorld(repos: repos, clones: clones, targets: sessions + clones.map { "new:\($0)" })
+    }
+
+    /// Whether a target is one the message may go to: in its repo's world (`repoWorld`; anywhere without one), and for an
+    /// action's message never the Router's own runs.
+    static func inWorld(_ world: RepoWorld?, unattended: Bool, store: Store) -> (String) -> Bool {
+        { target in
+            if RouterRun.Intent(rawValue: target) != nil { return !unattended }
+            guard let world else { return true }
+            if target.hasPrefix("new:") { return world.clones.contains(String(target.dropFirst(4))) }
+            return folder(of: target, store: store).map(world.clones.contains) ?? false
+        }
+    }
+
+    /// Jev's ranking kept to what the message may go to (`inWorld`): when his pick isn't among it, you pick. An action's
+    /// message is never sent on the words alone either (Jev not asked).
+    static func keep(_ found: inout Classification, world: RepoWorld?, unattended: Bool, store: Store) {
+        if unattended, !found.assisted { found.sure = false }
+        guard world != nil || unattended else { return }
+        let allowed = inWorld(world, unattended: unattended, store: store)
+        let kept = found.ranked.filter { allowed($0.target) }
+        if kept.first?.target != found.top?.target { found.sure = false }
+        found.ranked = kept.isEmpty ? (world?.targets ?? []).map { Scored(target: $0, p: 0) } : kept
+        found.card = found.card?.filter(allowed)
     }
 
     /// The folder a target works in: a session's, a card's session's (or the card's own); nil for anything else.
