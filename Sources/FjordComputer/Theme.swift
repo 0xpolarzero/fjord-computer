@@ -95,11 +95,19 @@ private struct IconButtonLabel: View {
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
-        // Claude's 16pt glyph (wght 533) as an SF Symbol; secondary ink, white on hover (`.df-chrome-btn`).
-        Image(systemName: symbol)
-            .font(.system(size: CDS.GhostIcon.glyph(size), weight: .medium))
-            .foregroundStyle(active || hover ? (tint == Theme.secondary ? Brand.ink : tint) : tint)
-            .frame(width: size, height: size)
+        // Claude's 16pt glyph (wght 533) as an SF Symbol; secondary ink, white on hover (`.df-chrome-btn`). The GitHub mark
+        // isn't one: drawn from its path, a point over, optically the weight of the symbols beside it.
+        let ink = active || hover ? (tint == Theme.secondary ? Brand.ink : tint) : tint
+        Group {
+            if symbol == CategorySection.githubMark {
+                GitHubMark().fill(ink).frame(width: CDS.GhostIcon.glyph(size) + 1, height: CDS.GhostIcon.glyph(size) + 1)
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: CDS.GhostIcon.glyph(size), weight: .medium))
+                    .foregroundStyle(ink)
+            }
+        }
+        .frame(width: size, height: size)
     }
 }
 

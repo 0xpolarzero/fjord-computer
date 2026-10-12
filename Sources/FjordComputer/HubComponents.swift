@@ -353,7 +353,7 @@ struct EntryRow: View {
                     openInRouter(entry.id)
                 }
             }
-            IconButton(symbol: "arrow.up.right", help: "Open on GitHub", detail: store.shortcut(.openItem).display, size: size) {
+            IconButton(symbol: CategorySection.githubMark, help: "Open on GitHub", detail: store.shortcut(.openItem).display, size: size) {
                 store.open(entry)
             }
         }
