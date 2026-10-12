@@ -392,7 +392,10 @@ enum RouteFusion {
     /// was right 78 times in 79.
     static let agrees = 0.5
     static let rulesSure = 0.6
-    static let sure = 0.9
+    /// 0.93 since the sureness was refitted on real moments: send when a wrong send's expected cost, (1 − p) × 25, is
+    /// under an ask's (about 2 on real moments, where the labellers found many asks needless): p ≳ 0.92. On dev real
+    /// moments 0.93 had the least loss (0.9: 1.86, 0.93: 1.71, 0.96: 1.76) and a third of the wrong sends of 0.9.
+    static let sure = 0.93
     /// The fused pick alone sends no message shorter than this, and never to one of Lookout's intents…
     static let fusedWords = 3
     /// …except a short reply ("go", "yes do it") to a session whose last message asks or proposes, at this sureness.

@@ -28,7 +28,7 @@ def case_features(r, case, fs, P):
 
 
 C1 = 0.6
-B1, B2 = 0.5, 0.9
+B1, B2 = 0.5, 0.93  # B2 as Lookout ships it (RouteFusion.sure), raised from 0.9 in round 4
 TERSE_BAR = 0.95
 MIN_WORDS = 3
 
