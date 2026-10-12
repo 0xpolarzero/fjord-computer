@@ -1655,12 +1655,13 @@ private struct SparklesButton: View {
     }
 }
 
-/// A session's newest summary, under its row: its whole text, wrapped, and its time.
+/// A session's newest summary, under its row: its whole text, wrapped, and how long ago it was made (its time on hover).
 private struct WorkingSummary: View {
     let summary: RouterSummary
 
     var body: some View {
-        let time = summary.at.formatted(date: .omitted, time: .shortened)
+        let at = summary.at
+        let time = at.formatted(date: Calendar.current.isDateInToday(at) ? .omitted : .abbreviated, time: .shortened)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 9, weight: .medium)).foregroundStyle(CDS.Text.muted)
                 .frame(width: 18)
@@ -1668,12 +1669,15 @@ private struct WorkingSummary: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(time).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+            MinuteTicking { now in
+                Text(shortAgo(at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+            }
+            .help(time)
         }
-        // The time under the row's duration, past the row's button.
+        // The age under the row's duration, past the row's button.
         .padding(.trailing, 30)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Summary at \(time)")
+        .accessibilityLabel("Summary \(agoPhrase(at)), at \(time)")
         .accessibilityValue(summary.text)
     }
 }
