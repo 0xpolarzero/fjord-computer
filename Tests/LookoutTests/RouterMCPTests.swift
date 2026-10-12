@@ -668,6 +668,86 @@ import Testing
         #expect(never.isError && never.text.contains("plugin didn't come up") && t.prepared["Never"] == nil)
     }
 
+    @Test func aStartTheAppDoesntRunYetIsHeldNotFailed() async throws {
+        let dir = TempDir()
+        let s = await store(dir)
+        let t = tools(s, turn: "start a session in lookout to bump the version")
+        t.starter = { _, _ in throw SessionStart.NotRunning(sessionID: "local_late") }
+        // The start is done (the app has the session); its first message is held, prepared but not signed.
+        var held: SessionStart.Held?
+        do {
+            _ = try await t.startSession(s, project: "lookout", title: "Bump it", ticket: t.ticket())
+        } catch let error as SessionStart.Held {
+            held = error
+        }
+        let waiting = try #require(held)
+        #expect(waiting.waiting.sessionID == "local_late" && waiting.project == "lookout" && waiting.title == "Bump it")
+        #expect(waiting.ready?.text == "bump the version" && t.prepared.isEmpty)
+        // Once the app runs it, in a turn of its own: its plugin, then the message signed for it and prepared for its peer.
+        let later = tools(s, turn: "start a session in lookout to bump the version")
+        later.processWaiter = { id in id == "local_late" ? "Bump it" : "?" }
+        later.pluginWait = 120
+        let support = dir.path("support"), claude = dir.path("claude")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { PluginFixture.live("late", support: support, claude: claude) }
+        let out = try await later.finishStart(s, waiting, ticket: later.ticket())
+        #expect(out.contains("local_late") && later.prepared["Bump it"]?.text.hasPrefix("⟦lookout v1 late ") == true)
+        #expect(later.prepared["Bump it"]?.newSessionIn == "lookout")
+        // The app never runs it: said, nothing prepared.
+        let never = tools(s, turn: "start a session in lookout to bump the version")
+        never.processWaiter = { _ in throw RouterTools.Failure("The Claude app didn't run the new session within 30 min; nothing was sent to it") }
+        await #expect(throws: RouterTools.Failure.self) { try await never.finishStart(s, waiting, ticket: never.ticket()) }
+        #expect(never.prepared.isEmpty)
+        // The Router switched off while it waits: said as that, not as the app never running it.
+        let off = tools(s, turn: "start a session in lookout to bump the version")
+        s.router.enabled = false
+        do {
+            _ = try await off.finishStart(s, waiting, ticket: off.ticket())
+            Issue.record("sent")
+        } catch {
+            #expect(error.localizedDescription.contains("The Router is off"), "\(error.localizedDescription)")
+        }
+        s.router.enabled = true
+    }
+
+    @Test func aForkIsCutFromTheOriginalsTranscriptAndItsFirstMessagePrepared() async throws {
+        let dir = TempDir()
+        let s = await store(dir)
+        let project = dir.path("projects/-code-lookout")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        // Claude Code's ids are UUIDs: only such an id is put in a path or the CLI's arguments.
+        let cli = "0b0e9b9e-3c1f-4c55-9a52-1d1a3b7c9e01"
+        s.claudeSessions["local_a"]?.cliID = cli
+        try RouterForkTests.transcript().write(to: project.appendingPathComponent("\(cli).jsonl"))
+        let t = tools(s, turn: "try SQLite instead")
+        t.transcriptsRoot = dir.path("projects")
+        var plans: [SessionFork.Plan] = []
+        t.forker = { plan in
+            plans.append(plan)
+            return SessionStart.Started(sessionID: "local_new", peer: plan.title)
+        }
+        let out = try await t.forkSession(s, .init(session: "local_a", point: .beforeLast, message: "try SQLite instead"), ticket: t.ticket())
+        // Run in the session's project, not the worktree its last message was sent from (gone, or another project).
+        #expect(plans == [SessionFork.Plan(cwd: "/code/lookout", cliID: cli, at: "a2", title: "Fork of Fix the login bug")])
+        #expect(out.contains("local_new") && t.prepared["Fork of Fix the login bug"]?.text.hasPrefix("⟦lookout v1 new ") == true)
+        // No first message: the fork waits for yours, nothing prepared.
+        let quiet = tools(s, turn: "Fork")
+        quiet.transcriptsRoot = dir.path("projects")
+        quiet.forker = { plan in plans.append(plan); return SessionStart.Started(sessionID: "local_new", peer: plan.title) }
+        _ = try await quiet.forkSession(s, .init(session: "local_a"), ticket: quiet.ticket())
+        #expect(plans.last?.at == nil && quiet.prepared.isEmpty)
+        // A session with an id that isn't a UUID, one whose conversation isn't found, one Lookout doesn't know: said, nothing made.
+        let none = tools(s, turn: "Fork")
+        none.transcriptsRoot = dir.path("projects")
+        none.forker = { _ in Issue.record("forked"); throw RouterTools.Failure("no") }
+        await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_b"), ticket: none.ticket()) }
+        s.claudeSessions["local_b"]?.cliID = "1b0e9b9e-3c1f-4c55-9a52-1d1a3b7c9e02"
+        await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_b"), ticket: none.ticket()) }
+        await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_z"), ticket: none.ticket()) }
+        await #expect(throws: SessionFork.Failure.self) {
+            try await none.forkSession(s, .init(session: "local_a", point: .before("never sent", after: nil)), ticket: none.ticket())
+        }
+    }
+
     @Test func aBodyInAnotherUnicodeFormIsNotThePreparedOne() async throws {
         let dir = TempDir()
         let s = await store(dir)

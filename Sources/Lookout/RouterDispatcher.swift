@@ -127,6 +127,8 @@ struct RouterAskBack: Identifiable, Equatable {
     enum Plan: Equatable {
         case reply(session: String, card: String?)
         case start(folder: String)
+        /// A session forked ("fork <session>…", `SessionFork.request`).
+        case fork(SessionFork.Request)
         /// A target you pinned.
         case route(String)
         case classify
@@ -154,7 +156,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var rank: @MainActor (RouterTools, _ message: String, _ projects: [String]) async throws -> Ranking
         /// The message for a session with its addressing taken out (`Addressing`), and its signature.
         var prepare: @MainActor (RouterTools, _ session: String) async throws -> Delivery
-        /// A new session in a project (folder) with the prepared first message.
+        /// A new session in a project (folder) with the prepared first message. Throws `SessionStart.Held` when the Claude
+        /// app has the session but doesn't run it yet.
         var start: @MainActor (RouterTools, _ folder: String, _ title: String, _ settings: SessionSettings?) async throws -> Delivery
         /// The signed send, through the gate: the plugin's ack when it went through the inbox.
         var send: @MainActor (RouterTools, Delivery) async throws -> String?
@@ -168,6 +171,14 @@ struct RouterAskBack: Identifiable, Equatable {
         var cancel: @MainActor (RouterDecision.Delivered) async throws -> RouterDecision.Cancelled = { _ in
             throw RouterTools.Failure("The Router isn't ready")
         }
+        /// A held start's first message, prepared once the app runs its session (bounded: `SessionStart.heldWait`).
+        var finish: @MainActor (RouterTools, SessionStart.Held) async throws -> Delivery = { _, _ in
+            throw RouterTools.Failure("The Router isn't ready")
+        }
+        /// A session forked, with the prepared first message (none: `text` is empty). Throws `SessionStart.Held` as `start` does.
+        var fork: @MainActor (RouterTools, SessionFork.Request) async throws -> Delivery = { _, _ in
+            throw RouterTools.Failure("The Router isn't ready")
+        }
     }
 
     /// Asks waiting for a pick, oldest first.
@@ -177,6 +188,13 @@ struct RouterAskBack: Identifiable, Equatable {
     var isBusy: Bool { !progress.isEmpty }
     /// Sends being taken back, by their entry in the log.
     private(set) var cancelling: Set<UUID> = []
+    /// Starts whose session the Claude app has but doesn't run yet, by their entry: what their first message waits for. Not
+    /// a run under way (you may send meanwhile); Stop ends them too.
+    private(set) var held: [UUID: String] = [:]
+    @ObservationIgnored private var heldTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var heldTools: [UUID: RouterTools] = [:]
+    /// Held starts you chose not to send (`dropHeld`): their line says so.
+    @ObservationIgnored private var dropped: Set<UUID> = []
 
     @ObservationIgnored private weak var store: Store?
     @ObservationIgnored var effects: Effects
@@ -283,7 +301,8 @@ struct RouterAskBack: Identifiable, Equatable {
         }
     }
 
-    /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you.
+    /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you. A held start's first
+    /// message isn't a run: its own line's "Don't send" drops it (`dropHeld`).
     func stopAll() {
         for task in tasks.values { task.cancel() }
         // Their turns end now, not once each run sees it was stopped: a send on its way is refused at its last gate.
@@ -323,7 +342,7 @@ struct RouterAskBack: Identifiable, Equatable {
         tasks[job.id] = nil
         runTools[job.id] = nil
         // Waiting for your pick is not over; anything else not settled is done.
-        if !askBacks.contains(where: { $0.id == job.id }) {
+        if !askBacks.contains(where: { $0.id == job.id }), held[job.id] == nil {
             store?.updateDecision(job.id) { if $0.outcome == .pending { $0.outcome = .done } }
         }
         onFinish?(job.id)
@@ -355,6 +374,9 @@ struct RouterAskBack: Identifiable, Equatable {
             trace(job, path: "start", action: "start", target: "new:\(folder)")
             chosen(job)
             try await start(job, folder: folder)
+        case .fork(let request):
+            trace(job, path: "fork", action: "fork", target: "session:\(request.session)")
+            try await fork(job, request)
         case .route(let target):
             trace(job, path: "pinned", action: "send", target: target)
             confirm(job, target)
@@ -408,6 +430,14 @@ struct RouterAskBack: Identifiable, Equatable {
         // Wholly for the Router ("@router what needs me?"): asked of it, whatever reply is armed or target pinned (a session
         // would get nothing of it). An aside in a message for a session goes with that message, taken out.
         if forRouter(text, pills: context.pills) { return .classify }
+        // "fork <session>…": of the session named, else of the one pinned ("fork this session"). Never while a card's reply
+        // is armed: words for it are its answer ("branch" to "Should I create a branch or commit to main?").
+        if context.replyTo == nil,
+           let fork = SessionFork.request(RouterTools.pastLeadingTags(text, pills: context.pills),
+                                          pinned: context.target.flatMap { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil },
+                                          store: store) {
+            return .fork(fork)
+        }
         if let id = context.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
             return .reply(session: card.sessionID, card: id)
         }
@@ -436,13 +466,38 @@ struct RouterAskBack: Identifiable, Equatable {
         return t.range(of: SessionStart.startPhrase, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    /// A short title for a new session from its task (`SessionStart.task`): the first few words, without the @project.
+    /// A short title for a new session from its task (`SessionStart.task`), without the @project: its first sentence when
+    /// that is short ("Router test, please ignore and do nothing"), else its first few words, never ending on a little word
+    /// ("to", "the") and marked as cut ("add a dark mode badge…").
     static func title(for text: String) -> String {
-        let words = text.split(whereSeparator: \.isWhitespace).filter { !$0.hasPrefix("@") }.prefix(6)
-        let title = SessionStart.cleanTitle(words.joined(separator: " "))
-            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".,:;-–—")))
-        return title.isEmpty ? "New session" : title
+        // The first line with words of its own (a line of @project tags alone is skipped).
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.split(whereSeparator: \.isWhitespace).filter { !$0.hasPrefix("@") } }
+        var words = lines.first { !$0.isEmpty } ?? []
+        if let end = words.firstIndex(where: { ".!?".contains($0.last ?? " ") && !abbreviations.contains($0.lowercased()) }) {
+            words = Array(words[...end])
+        }
+        let trim = CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".,:;-–—"))
+        var cut = false
+        if words.count > titleWords {
+            words = Array(words.prefix(titleCut))
+            while words.count > 1, let last = words.last, littleWords.contains(last.lowercased().trimmingCharacters(in: trim)) {
+                words.removeLast()
+            }
+            cut = true
+        }
+        let title = SessionStart.cleanTitle(words.joined(separator: " ")).trimmingCharacters(in: trim)
+        return title.isEmpty ? "New session" : cut ? title + "…" : title
     }
+
+    /// A first sentence up to this many words is the title whole; a longer one is cut to `titleCut`.
+    static let titleWords = 8
+    /// Words ending in a full stop that don't end a sentence.
+    private static let abbreviations: Set<String> = ["e.g.", "i.e.", "etc.", "vs.", "cf.", "approx.", "mr.", "mrs.", "ms.", "dr.", "no."]
+    static let titleCut = 6
+    private static let littleWords: Set<String> = [
+        "a", "an", "the", "to", "and", "or", "but", "of", "for", "in", "on", "at", "by", "with", "from", "into", "that", "this",
+        "it", "is", "are", "be", "so", "as", "if", "my", "our", "your", "its",
+    ]
 
     /// The answer a question card's form takes from a message that is exactly an option (or several, for a multiple choice):
     /// anything else is text for the session. Only a single question; a plan is never answered this way.
@@ -579,7 +634,12 @@ struct RouterAskBack: Identifiable, Equatable {
         let project = store.folderName(folder)
         // "…with opus, high effort": set in the session by its plugin before the first message; else your defaults.
         let settings = SessionSettings.parse(SessionStart.request(job.text, pills: job.context.pills))
-        let delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
+        let delivery: Delivery
+        do {
+            delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
+        } catch let waiting as SessionStart.Held {
+            return hold(job, waiting)
+        }
         if delivery.text.isEmpty {
             // Nothing to send: the settings travel with the first message, so they can't be applied.
             note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
@@ -598,6 +658,127 @@ struct RouterAskBack: Identifiable, Equatable {
         } else {
             note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
         }
+    }
+
+    // MARK: Forks
+
+    /// Forks `session` (`SessionFork`): from `point`, with `message` as the fork's first message (empty: none). A run of
+    /// its own, in the history as `trigger` says. Returns its entry in the log.
+    @discardableResult
+    func fork(_ request: SessionFork.Request, trigger: String) -> UUID? {
+        guard let store, store.routerOn else { return nil }
+        let id = store.logDecision(RouterDecision(trigger: .you(trigger), decision: .init(intent: "fork")))
+        // The turn is the fork's first message: the words the send gate lets through, as yours.
+        let words = request.message.isEmpty ? trigger : request.message
+        launch(Job(id: id, text: words, context: RouterContext(), tools: makeTools(id, words, pills: [])), stage: "starting") { [self] job in
+            trace(job, path: "fork", action: "fork", target: "session:\(request.session)")
+            try await fork(job, request)
+        }
+        return id
+    }
+
+    /// What the history says a fork made: a session in the original's project, forked from it.
+    static func forkLabel(_ request: SessionFork.Request, store: Store) -> String {
+        let session = store.claudeSessions[request.session]
+        let project = session.map { store.folderName($0.folderKey) } ?? "a project"
+        let from = session.map { "“\(RouterDecision.clip($0.title, 40))”" } ?? "a session"
+        return switch request.point {
+        case .whole: "\(project) (fork of \(from))"
+        case .beforeLast: "\(project) (fork of \(from), before your last message)"
+        case .before: "\(project) (fork of \(from), before that message)"
+        }
+    }
+
+    private func fork(_ job: Job, _ request: SessionFork.Request) async throws {
+        guard let store else { return }
+        stage(job, "forking the session")
+        let label = Self.forkLabel(request, store: store)
+        store.updateDecision(job.id) {
+            $0.decision.intent = "fork"
+            $0.decision.label = "fork"
+            $0.decision.target = describe("session:\(request.session)", store: store)
+            $0.decision.targetID = "session:\(request.session)"
+        }
+        let delivery: Delivery
+        do {
+            delivery = try await effects.fork(job.tools, request)
+        } catch var waiting as SessionStart.Held {
+            waiting.project = label
+            return hold(job, waiting)
+        }
+        if let session = delivery.session { store.noteLookoutStarted(session) }
+        note(job, .started(session: delivery.session, project: label, model: nil, effort: nil), session: delivery.session)
+        guard !delivery.text.isEmpty else { return }
+        stage(job, "sending")
+        _ = try await effects.send(job.tools, delivery)
+        note(job, .sent(to: delivery.to, text: delivery.body, original: nil), session: delivery.session)
+    }
+
+    /// A start the Claude app has but doesn't run yet: done as a start (the session is there), its first message sent once
+    /// the app runs it, in a turn of its own and not as a run under way (the composer is free meanwhile, and Stop leaves
+    /// it be: its line's "Don't send" drops it). Waiting too long, the Router switched off or reset, says the message wasn't
+    /// sent; the session stays.
+    private func hold(_ job: Job, _ waiting: SessionStart.Held) {
+        hold(job.id, waiting, text: job.text, pills: job.context.pills)
+    }
+
+    /// The same for a start that isn't a typed run's (an inbox action's, `ActionSessions`): `text` is the message held,
+    /// sent as given. Its entry in the log is `id`.
+    func hold(_ id: UUID, _ waiting: SessionStart.Held, text: String, pills: [Range<Int>]? = nil) {
+        guard let store else { return }
+        let session = waiting.waiting.sessionID
+        store.noteLookoutStarted(session)
+        store.updateDecision(id) { $0.add(.started(session: session, project: waiting.project, model: nil, effort: nil), session: session) }
+        guard waiting.ready != nil else {
+            if waiting.settings != nil { store.updateDecision(id) { $0.add(.failed("model/effort: no first message to set them with")) } }
+            return
+        }
+        held[id] = Self.heldWords
+        let tools = makeTools(id, text, pills: pills ?? [])
+        // An inbox action's message is Lookout's own, taken as it is.
+        if pills == nil { tools.verbatim = true }
+        heldTools[id] = tools
+        heldTasks[id] = Task { [weak self] in
+            do {
+                guard let self else { return }
+                let delivery = try await effects.finish(tools, waiting)
+                try Task.checkCancellation()
+                held[id] = "sending"
+                let ack = try await effects.send(tools, delivery)
+                store.updateDecision(id) { entry in
+                    if let settings = waiting.settings {
+                        entry.done.removeAll { if case .started = $0 { true } else { false } }
+                        AppliedSettings.from(ack: ack, requested: settings, supported: delivery.settingsSigned)
+                            .record(session: session, project: waiting.project, in: &entry)
+                    }
+                    entry.add(.sent(to: delivery.to, text: delivery.body, original: nil), session: session)
+                }
+            } catch {
+                let dropped = self?.dropped.remove(id) != nil
+                let reason = dropped ? "its first message wasn't sent: you chose not to send it"
+                    : error is CancellationError ? "its first message wasn't sent"
+                    : error.localizedDescription.split(separator: "\n").first.map(String.init) ?? "failed"
+                store.updateDecision(id) { $0.add(.failed(RouterDecision.clip(reason, 120))) }
+            }
+            tools.endTurn()
+            self?.held[id] = nil
+            self?.heldTasks[id] = nil
+            self?.heldTools[id] = nil
+            store.updateDecision(id) { if $0.outcome == .pending { $0.outcome = .done } }
+            self?.onFinish?(id)
+        }
+    }
+
+    /// What a held start's line says while its first message waits.
+    static let heldWords = "the first message waits for the Claude app to run it" + SessionStart.NotRunning.reason
+
+    /// "Don't send" on a held start's line: its first message is dropped (the session stays), its turn ended at once so
+    /// nothing of it can still go.
+    func dropHeld(_ id: UUID) {
+        guard let task = heldTasks[id] else { return }
+        dropped.insert(id)
+        heldTools[id]?.endTurn()
+        task.cancel()
     }
 
     /// Haiku, fresh, for what needs judgment or tools; its reply is what the history shows.
@@ -884,6 +1065,18 @@ extension RouterDispatcher.Effects {
         func object(_ json: String) -> [String: Any] {
             (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
         }
+        /// A started session's first message as `startSession` prepared it.
+        func started(_ answer: [String: Any], _ tools: RouterTools, project: String, settings: SessionSettings?) throws -> RouterDispatcher.Delivery {
+            // No task left in the words: the session is started with no first message.
+            if let peer = answer["peer"] as? String, (answer["text"] as? String)?.isEmpty == true, tools.prepared[peer] == nil {
+                return .init(to: peer, text: "", body: "", original: "", rephrased: false, session: answer["session"] as? String,
+                             newSessionIn: project, settings: settings, settingsSigned: false)
+            }
+            guard let peer = answer["peer"] as? String, let ready = tools.prepared[peer] else { throw RouterTools.Failure("Not prepared") }
+            return .init(to: peer, text: ready.text, body: ready.body ?? ready.text, original: ready.original,
+                         rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn,
+                         settings: settings, settingsSigned: ready.text.hasPrefix("⟦lookout v2 "))
+        }
         return Self(
             rank: { [weak dispatcher] tools, message, projects in
                 guard let dispatcher, let store = dispatcher.storeForEffects else { throw RouterTools.Failure("Lookout isn't ready") }
@@ -934,15 +1127,7 @@ extension RouterDispatcher.Effects {
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.startSession(store, project: folder, title: title, ticket: tools.ticket(), settings: settings))
-                // No task left in the words: the session is started with no first message.
-                if let peer = answer["peer"] as? String, (answer["text"] as? String)?.isEmpty == true, tools.prepared[peer] == nil {
-                    return .init(to: peer, text: "", body: "", original: "", rephrased: false, session: answer["session"] as? String,
-                                 newSessionIn: store.folderName(folder), settings: settings, settingsSigned: false)
-                }
-                guard let peer = answer["peer"] as? String, let ready = tools.prepared[peer] else { throw RouterTools.Failure("Not prepared") }
-                return .init(to: peer, text: ready.text, body: ready.body ?? ready.text, original: ready.original,
-                             rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn,
-                             settings: settings, settingsSigned: ready.text.hasPrefix("⟦lookout v2 "))
+                return try started(answer, tools, project: store.folderName(folder), settings: settings)
             },
             send: { [weak dispatcher] tools, delivery in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
@@ -971,6 +1156,19 @@ extension RouterDispatcher.Effects {
             cancel: { [weak dispatcher] sent in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
                 return try await store(dispatcher).cancelDelivery(sent)
+            },
+            finish: { [weak dispatcher] tools, held in
+                guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
+                let store = try store(dispatcher)
+                let answer = object(try await tools.finishStart(store, held, ticket: tools.ticket()))
+                return try started(answer, tools, project: held.project, settings: held.settings)
+            },
+            fork: { [weak dispatcher] tools, request in
+                guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
+                let store = try store(dispatcher)
+                let answer = object(try await tools.forkSession(store, request, ticket: tools.ticket()))
+                let project = store.claudeSessions[request.session].map { store.folderName($0.folderKey) } ?? ""
+                return try started(answer, tools, project: project, settings: nil)
             })
     }
 }

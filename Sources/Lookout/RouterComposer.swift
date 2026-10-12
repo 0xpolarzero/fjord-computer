@@ -34,7 +34,7 @@ struct RouterComposer: View {
         let suggestions = model.suggestions(store)
         VStack(alignment: .leading, spacing: 0) {
             // Who your words go to, as the Code tab's strip over its composer: the card's session, the projects you tagged.
-            if model.replyTo != nil || model.live.pinned != nil || model.live.prediction != nil {
+            if model.replyTo != nil || model.live.pinned != nil || model.live.prediction != nil || model.editing != nil {
                 strip.padding(.bottom, C.dockGap)
             }
             card(on: on, working: working)
@@ -109,6 +109,13 @@ struct RouterComposer: View {
     /// The card the message replies to, removable.
     private var strip: some View {
         FlowLayout(spacing: C.stripGap) {
+            if let editing = model.editing {
+                let title = store.claudeSessions[editing.session]?.title ?? "the session"
+                ComposerChip(symbol: "pencil", text: "Editing your message to \(title)", tint: CDS.Text.accent,
+                             removeLabel: "Stop editing (the draft stays)") { model.editing = nil }
+                Text("Sends to a fork from before it; files the agent changed aren't rolled back")
+                    .cdsText((12, 16), .regular, CDS.Text.muted)
+            }
             if let id = model.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
                 ComposerChip(symbol: "arrow.right", text: card.title, tint: card.kind.color,
                              removeLabel: "Stop replying to \(card.title)") { model.replyTo = nil }
@@ -117,7 +124,8 @@ struct RouterComposer: View {
                 ComposerChip(symbol: "arrow.right", text: title, tint: CDS.Text.accent,
                              removeLabel: "Let the Router decide where this goes") { model.live.reset() }
             }
-            if let prediction = model.live.prediction {
+            // While editing, the draft goes to a fork: no pick of Jev's is offered for it.
+            if model.editing == nil, let prediction = model.live.prediction {
                 PredictionChip(prediction: prediction) { model.pinPrediction(store: store) }
             }
         }

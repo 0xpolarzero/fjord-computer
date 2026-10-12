@@ -848,9 +848,13 @@ private struct HistoryDecisionLine: View, Equatable {
 
     private var key: String { decision.id.uuidString }
     /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
-    /// the dispatcher.
+    /// the dispatcher (a held start too: what its first message waits for).
     private var status: String {
-        decision.outcome == .pending ? store.routerDispatcher.progress[decision.id].map { $0 + "…" } ?? decision.summary : decision.summary
+        guard decision.outcome == .pending else { return decision.summary }
+        if let progress = store.routerDispatcher.progress[decision.id] { return progress + "…" }
+        // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
+        if let held = store.routerDispatcher.held[decision.id] { return decision.summary + " · " + held }
+        return decision.summary
     }
 
     var body: some View {
@@ -864,6 +868,12 @@ private struct HistoryDecisionLine: View, Equatable {
                         .cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
                     Text("· \(status)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    // A held start's first message: yours to drop (Stop leaves it be).
+                    if decision.outcome == .pending, store.routerDispatcher.held[decision.id] != nil {
+                        Button("Don't send") { store.routerDispatcher.dropHeld(decision.id) }
+                            .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
+                            .help("Its first message isn't sent; the session stays in the Claude app")
+                    }
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
                     Text(shortAgo(decision.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
@@ -898,7 +908,7 @@ private struct HistoryDecisionLine: View, Equatable {
                 }
             }
 
-            if open { DecisionDetails(decision: decision, cancel: cancel, store: store) }
+            if open { DecisionDetails(decision: decision, cancel: cancel, store: store, model: model) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -914,6 +924,7 @@ private struct DecisionDetails: View {
     let decision: RouterDecision
     let cancel: HistoryDecisionLine.Cancel
     let store: Store
+    let model: RouterModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -950,6 +961,18 @@ private struct DecisionDetails: View {
                     ForEach(sessions, id: \.self) { id in
                         ClaudeButton("Open \(store.claudeSessions[id]?.title ?? "session")", variant: .ghost, size: .sm,
                                      icon: ClaudeMark.openSymbol) { store.openAgent(id) }
+                    }
+                    // The message it sent, taken back in a fork: the session as it was before it (this one stays as it is),
+                    // and that again with the message edited.
+                    if let sent = decision.sentMessage, store.routerOn, store.claudeSessions[sent.session].map({ !$0.isArchived }) == true {
+                        ClaudeButton("Edit and resend", variant: .ghost, size: .sm, icon: "pencil") {
+                            model.edit(session: sent.session, message: sent.text, sentAt: sent.at)
+                        }
+                        .help("Opens it in the composer; sending it starts a fork of the session from before this message. Files the agent changed aren't rolled back")
+                        ClaudeButton("Fork from before this", variant: .ghost, size: .sm, icon: "arrow.triangle.branch") {
+                            store.forkSession(sent.session, point: .before(sent.text, after: sent.at))
+                        }
+                        .help("A new session with this one's conversation up to before this message; files aren't rolled back")
                     }
                 }
             }

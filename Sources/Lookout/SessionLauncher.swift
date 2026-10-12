@@ -83,10 +83,22 @@ final class SessionLauncher {
             throw RouterTools.Failure("There is no message to start the session with")
         }
         let title = SessionStart.cleanTitle(title)
-        let started = try await effects.bootstrap(folder, title)
+        let requested = SessionSettings(model: model, effort: effort)
+        let started: SessionStart.Started
+        do {
+            started = try await effects.bootstrap(folder, title)
+        } catch let waiting as SessionStart.NotRunning {
+            // Made, but the app doesn't run it yet: started, its first message held (never waited for here, where the inbox's
+            // other actions would wait behind it).
+            store.noteLookoutStarted(waiting.sessionID)
+            let project = store.folderName(folder)
+            throw SessionStart.Held(waiting: waiting, title: title, project: project,
+                                    ready: Prepared(text: firstMessage, original: firstMessage, rephrased: false, newSessionIn: project,
+                                                    body: firstMessage),
+                                    settings: requested)
+        }
         store.noteLookoutStarted(started.sessionID)
         try await effects.pluginReady(started.cliID)
-        let requested = SessionSettings(model: model, effort: effort)
         // Only a plugin that says it takes settings is sent them; an older one gets the plain message.
         let supported = requested == nil ? false : await effects.supportsSettings(started.cliID)
         let signed = try await effects.sign(firstMessage, started.cliID, supported ? requested : nil)
@@ -120,7 +132,8 @@ extension SessionLauncher.Effects {
                 _ = try OneShot.result(output)
                 guard let url = SessionStart.importURL(uuid: uuid) else { throw RouterTools.Failure("Couldn't make the link") }
                 if let intercept = store.interceptOpen { intercept("New Claude session in \(store.folderName(folder))") } else { Link.open(url) }
-                let peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir)
+                // The app has it but doesn't run it yet: `SessionStart.NotRunning`, held by `start`.
+                let peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, imported: { SessionStart.imported(uuid) })
                 return SessionStart.Started(sessionID: "local_\(uuid)", peer: peer)
             },
             pluginReady: { [weak launcher] cli in
@@ -203,6 +216,13 @@ enum ActionSessions {
                 }
                 $0.outcome = .done
             }
+            return ActionSessionStarted(sessionID: session, project: project)
+        } catch let held as SessionStart.Held {
+            // Started; its first message goes once the app runs the session, outside this run (`RouterDispatcher.hold`).
+            let session = held.waiting.sessionID
+            store.noteOrigin(SessionOrigin(category: request.category, thing: request.title, actionID: request.action.uuidString,
+                                           runID: request.run.uuidString), for: session)
+            store.routerDispatcher.hold(id, held, text: request.message)
             return ActionSessionStarted(sessionID: session, project: project)
         } catch {
             throw fail((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)

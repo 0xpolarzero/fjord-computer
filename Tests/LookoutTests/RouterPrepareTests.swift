@@ -201,6 +201,28 @@ import Testing
         await #expect(throws: RouterTools.Failure.self) { try await SessionStart.waitForPeer(uuid: "other", dir: peers, timeout: 0.5) }
     }
 
+    @Test func aSessionTheAppHasButDoesntRunIsNotAFailedStart() async throws {
+        let dir = TempDir()
+        let peers = dir.path("sessions")
+        try FileManager.default.createDirectory(at: peers, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: ["pid": Int(getpid()), "hostSessionId": "local_busy", "name": "Busy"])
+        try data.write(to: peers.appendingPathComponent("\(getpid()).json"))
+        // The app has it but doesn't run it by the end of the wait: said as such, never as a failed start; nothing said of
+        // how full the app is (Lookout can't count its sessions as it does).
+        await #expect(throws: SessionStart.NotRunning(sessionID: "local_u-1")) {
+            try await SessionStart.waitForPeer(uuid: "u-1", dir: peers, timeout: 0.5, imported: { true })
+        }
+        #expect(SessionStart.NotRunning(sessionID: "local_u-1").localizedDescription
+                == "The new session is in the Claude app, but the app hasn't run it yet: open it there (the app runs only so many sessions at once; close one you're done with if it doesn't start)")
+        // Whether the app has it: its file under the app's sessions folder (account/org/local_<uuid>.json).
+        let root = dir.path("claude-code-sessions")
+        let org = root.appendingPathComponent("acct/org")
+        try FileManager.default.createDirectory(at: org, withIntermediateDirectories: true)
+        #expect(!SessionStart.imported("u-1", root: root))
+        try Data("{}".utf8).write(to: org.appendingPathComponent("local_u-1.json"))
+        #expect(SessionStart.imported("u-1", root: root) && !SessionStart.imported("u-2", root: root))
+    }
+
     // MARK: One run, bounded
 
     private func script(_ dir: TempDir, _ name: String, _ body: String) -> String {

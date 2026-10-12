@@ -298,8 +298,32 @@ final class RouterModel {
         show(.history)
         messageRequest = ScrollRequest(id: message.uuidString, seq: (messageRequest?.seq ?? 0) + 1)
     }
-    /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
-    var replyTo: String?
+    /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer). Armed, it
+    /// ends an edit (the draft then answers the card).
+    var replyTo: String? {
+        didSet { if replyTo != nil, editing != nil { editing = nil } }
+    }
+    /// A message of yours being edited ("Edit and resend"): sending the draft forks its session from before it, with the
+    /// draft as the fork's first message. The session stays as it was; files its agent changed aren't rolled back.
+    var editing: Editing?
+    struct Editing: Equatable {
+        var session: String
+        /// The message as it was sent, and when the run that sent it began: where the fork is cut.
+        var original: String
+        var sentAt: Date? = nil
+    }
+
+    /// "Edit and resend": the message in the composer, which takes the keyboard; no reply or pin goes with it (picking one
+    /// later ends the edit: the draft then goes there as a message of its own).
+    func edit(session: String, message: String, sentAt: Date? = nil) {
+        replyTo = nil
+        live.reset()
+        tokens = []
+        editing = Editing(session: session, original: message, sentAt: sentAt)
+        draft = message
+        caretRequest = (message as NSString).length
+        focusRequest &+= 1
+    }
     /// In a narrow window, the side of the page shown: it follows what you pick (an open card is in Now, an addressed one and
     /// the Router's conversation in History). A wide window shows both.
     var pane: RouterPane = .now
@@ -586,6 +610,17 @@ final class RouterModel {
     func send(store: Store) {
         let text = plainDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
+        if let editing {
+            // Resent to a fork from before the original: never to the session itself, never routed.
+            guard store.forkSession(editing.session, point: .before(editing.original, after: editing.sentAt), message: text,
+                                    edited: true) != nil else { return }
+            caret = nil
+            tokens = []
+            draft = ""
+            self.editing = nil
+            show(.history)
+            return
+        }
         let toRouter = replyTo == nil
         guard store.sendToRouter(text, context: context(store)) else {
             sendRefused = Self.goneTarget
@@ -635,6 +670,7 @@ final class RouterModel {
     func removeLastChip() -> Bool {
         if live.pinned != nil { live.reset(); return true }
         if replyTo != nil { replyTo = nil; return true }
+        if editing != nil { editing = nil; return true }
         return false
     }
 
