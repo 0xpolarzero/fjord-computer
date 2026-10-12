@@ -313,7 +313,24 @@ private struct NowColumn: View {
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
         let travellingWorking = Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID)))
-        if #available(macOS 26, *) {
+        if model.layout == .canvas {
+            // The canvas (RouterCanvas.swift) under the same bar: it places what Now's scroll holds over itself.
+            if #available(macOS 26, *) {
+                RouterCanvas(store: store, model: model, page: page)
+                    .safeAreaBar(edge: .top, spacing: 0) {
+                        VStack(spacing: 0) {
+                            chips(page)
+                            RouterBusyLine(store: store)
+                        }
+                        .background(CDS.Surface.s1)
+                    }
+            } else {
+                VStack(spacing: 0) {
+                    chips(page)
+                    RouterCanvas(store: store, model: model, page: page)
+                }
+            }
+        } else if #available(macOS 26, *) {
             // The chips and the Router's status line are the column's bar: Now runs under it and the page's top bar, with a
             // hard edge, as its sections' headers pin under it (glass-plan §5.3).
             RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
@@ -338,6 +355,15 @@ private struct NowColumn: View {
         HStack(spacing: 12) {
             if bar { PaneSwitch(store: store, model: model) }
             ZoneChips(model: model, page: page, compact: bar)
+            // The list says it in its Needs you header; the canvas has none.
+            if model.layout == .canvas, page.count(.needs) == 0, !model.searching {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle").font(.system(size: 10, weight: .medium))
+                    Text("Nothing needs you").cdsText((12, 16), .regular, CDS.Text.muted)
+                }
+                .foregroundStyle(CDS.Text.muted)
+                .accessibilityElement(children: .combine)
+            }
             Spacer(minLength: 0)
         }
         .measured()
@@ -369,35 +395,68 @@ private struct PaneSwitch: View {
     let store: Store
     let model: RouterModel
     @Environment(\.routerGutter) private var gutter
-    @State private var hovered: RouterPane?
+
+    var body: some View {
+        PillSwitch(segments: [
+            // What needs you, as the badge counts it, and the messages waiting for you to say where they go.
+            .init(value: RouterPane.now, title: "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count,
+                  tint: CDS.Fill.warning, help: "What's live: what needs you, what waits and what works"),
+            .init(value: .history, title: "History", count: store.routerUnread.count, tint: CDS.Fill.accent,
+                  help: "The Router's conversation and what was handled"),
+        ], picked: model.pane, label: "Show") { model.show($0) }
+        .padding(.leading, gutter)
+    }
+}
+
+/// A pill of segments, one picked: the pane switch's look, for any choice. A segment is named, or an icon with its name in a
+/// tip; a count beside a name in its tint.
+struct PillSwitch<Value: Hashable>: View {
+    struct Segment {
+        let value: Value
+        var title: String
+        var icon: String? = nil
+        var count = 0
+        var tint: Color = CDS.Text.muted
+        var help: String? = nil
+    }
+
+    let segments: [Segment]
+    let picked: Value
+    let label: String
+    let pick: (Value) -> Void
+    @State private var hovered: Value?
 
     var body: some View {
         HStack(spacing: 0) {
-            // What needs you, as the badge counts it, and the messages waiting for you to say where they go.
-            segment(.now, "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count, tint: CDS.Fill.warning)
-            segment(.history, "History", count: store.routerUnread.count, tint: CDS.Fill.accent)
+            ForEach(segments.indices, id: \.self) { segment(segments[$0]) }
         }
         .padding(1)
         .frame(height: ZoneChip.height)
         // The track on the page's ground, so no history line scrolled under the switch shows through its names.
         .background(Capsule(style: .continuous).fill(CDS.Segmented.track).background(Capsule(style: .continuous).fill(CDS.Surface.s1)))
         .fixedSize()
-        .padding(.leading, gutter)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Show")
+        .accessibilityLabel(label)
     }
 
-    private func segment(_ pane: RouterPane, _ title: String, count: Int, tint: Color) -> some View {
-        let picked = model.pane == pane
+    @ViewBuilder private func segment(_ segment: Segment) -> some View {
+        let value = segment.value
+        let picked = self.picked == value
         let thumb = ZoneChip.height - 2
-        return Button { model.show(pane) } label: {
+        let ink = picked || hovered == value ? CDS.Text.primary : CDS.Text.muted
+        let button = Button { pick(value) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(title).cdsText((12, 16), .regular, picked || hovered == pane ? CDS.Text.primary : CDS.Text.muted)
-                if count > 0 {
-                    Text(count > 99 ? "99+" : "\(count)").cdsText((12, 16), .medium, tint).monospacedDigit()
+                if let icon = segment.icon {
+                    Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundStyle(ink)
+                        .frame(width: 14).frame(maxHeight: .infinity)
+                } else {
+                    Text(segment.title).cdsText((12, 16), .regular, ink)
+                }
+                if segment.count > 0 {
+                    Text(segment.count > 99 ? "99+" : "\(segment.count)").cdsText((12, 16), .medium, segment.tint).monospacedDigit()
                 }
             }
-            .padding(.horizontal, CDS.Segmented.padX)
+            .padding(.horizontal, segment.icon == nil ? CDS.Segmented.padX : 6)
             .frame(maxHeight: .infinity)
             .background {
                 if picked {
@@ -409,10 +468,15 @@ private struct PaneSwitch: View {
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 ? pane : (hovered == pane ? nil : hovered) }
-        .help(pane == .now ? "What's live: what needs you, what waits and what works" : "The Router's conversation and what was handled")
-        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+        .onHover { hovered = $0 ? value : (hovered == value ? nil : hovered) }
+        .accessibilityLabel(segment.count > 0 ? "\(segment.title), \(segment.count)" : segment.title)
         .accessibilityAddTraits(picked ? .isSelected : [])
+        // An icon's name is its tip; a name's tip says more.
+        if segment.icon != nil {
+            button.tip(segment.title, segment.help)
+        } else {
+            button.help(segment.help ?? "")
+        }
     }
 }
 
@@ -536,7 +600,7 @@ private struct ZoneChips: View {
     }
 }
 
-private struct ZoneChip: View {
+struct ZoneChip: View {
     /// The chips' height, and the switch's beside them.
     static let height: CGFloat = 20
     let zone: RouterZone
@@ -602,7 +666,7 @@ extension RouterPage {
 }
 
 /// While the Router itself works: one slim line over Now.
-private struct RouterBusyLine: View {
+struct RouterBusyLine: View {
     let store: Store
     @Environment(\.routerGutter) private var gutter
 
@@ -1217,7 +1281,7 @@ private struct DecisionDetails: View {
 /// An addressed card in the history: a dim line (its session's glyph, title, how it was addressed, when) opening to its kind,
 /// project and text, and Reopen. Clicking it shows it in full with the composer ready to reply to it; hovering it shows
 /// Open in Claude in the time's place.
-private struct HistoryCardLine: View, Equatable {
+struct HistoryCardLine: View, Equatable {
     let card: RouterCard
     let now: Date
     let open: Bool
@@ -1289,6 +1353,7 @@ private struct HistoryCardLine: View, Equatable {
             }
             .buttonStyle(.plain)
             .focused($focused)
+            .canvasHeader()
             .help(exactTime(when))
             .accessibilityLabel("\(unread ? "Unread, " : "")\(card.kind.label): \(card.title)")
             .accessibilityValue("\(how), \(AgentRow.spokenAge(now.timeIntervalSince(when))) ago, at \(exactTime(when)), \(open ? "expanded" : "collapsed")")
@@ -1307,7 +1372,7 @@ private struct HistoryCardLine: View, Equatable {
 }
 
 /// An open history card's details: its kind, project and origin, its text, and Reopen.
-private struct CardDetails: View {
+struct CardDetails: View {
     let card: RouterCard
     let store: Store
     let model: RouterModel
@@ -1335,7 +1400,7 @@ private struct CardDetails: View {
 
 /// A history card's session glyph, dimmed; its kind's symbol once the session is gone. A view of its own: the sessions it
 /// reads change all the time, and only it redraws for them.
-private struct CardGlyph: View {
+struct CardGlyph: View {
     let store: Store
     let sessionID: String
     let symbol: String
@@ -1352,7 +1417,7 @@ private struct CardGlyph: View {
 
 /// An open card's session glyph, or with `room` only the room it takes; nothing once the session is gone. A view of its own
 /// for the same reason.
-private struct CardLead: View {
+struct CardLead: View {
     let store: Store
     let sessionID: String
     var room = false
@@ -1365,7 +1430,7 @@ private struct CardLead: View {
 }
 
 /// A card's session menu, in a view of its own for the same reason.
-private struct CardSessionMenu: View {
+struct CardSessionMenu: View {
     let store: Store
     let sessionID: String
 
@@ -1376,7 +1441,7 @@ private struct CardSessionMenu: View {
 
 /// Open in Claude on a line. On a history line it shows while the line is hovered, its room kept so nothing moves; `quiet`,
 /// on a working or waiting row, it is always there, muted until the pointer is on it, as the sparkles button.
-private struct HoverOpen: View {
+struct HoverOpen: View {
     let title: String
     var shown = true
     var quiet = false
@@ -1758,7 +1823,7 @@ private struct ZoneHeaderButton<Preview: View>: View {
 }
 
 /// A sparkles icon button that makes summaries, the loader in its place while they are made.
-private struct SparklesButton: View {
+struct SparklesButton: View {
     /// Its summaries are being made: the loader shows.
     let busy: Bool
     /// Nothing more to ask for (each of its summaries is under way): it can't be clicked.
@@ -1819,7 +1884,7 @@ struct UnansweredLine: View {
 }
 
 /// A session's newest summary, under its row: its whole text, wrapped, and how long ago it was made (its time on hover).
-private struct WorkingSummary: View {
+struct WorkingSummary: View {
     let summary: RouterSummary
 
     var body: some View {
@@ -1857,12 +1922,14 @@ private extension View {
 /// folder, what it left running, and for how long, then Open in Claude (in its menu too). A click expands it in place: every
 /// summary of it, newest first, and its subagents and commands with what each is on. Its sparkles button summarizes it,
 /// expanding it to show the summary come in; folded, its newest summary sits under it.
-private struct WorkingCard: View {
+struct WorkingCard: View {
     let store: Store
     @Bindable var model: RouterModel
     let row: AgentRow
     let summary: RouterSummary?
     let unanswered: [String]
+    /// On the canvas: a card of its own, in its own box, rather than a row of the Working list's.
+    var standalone = false
     @State private var hovered = false
     @State private var expanded = false
     @Environment(\.cdsColumnWidth) private var columnWidth
@@ -1914,6 +1981,7 @@ private struct WorkingCard: View {
                 .accessibilityAction(named: "Summarize") { summarize() }
                 SparklesButton(busy: busy, done: busy, label: "Summarize this session") { summarize() }
             }
+            .canvasHeader()
             if !unanswered.isEmpty { UnansweredLine(questions: unanswered) }
             if expanded { details } else if let summary { WorkingSummary(summary: summary) }
             if let error = summarizer.errors[row.id] {
@@ -1922,7 +1990,16 @@ private struct WorkingCard: View {
         }
         .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear)
+        .background {
+            if standalone {
+                // The Working list's box, around this card alone.
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.03))
+                    .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
+            } else {
+                marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .contextMenu { SessionMenu(row: row, store: store) }
@@ -1991,9 +2068,11 @@ private struct WorkingCard: View {
 /// A session whose turn ended waiting on something (CI, a deploy, another session): with the working ones, in a cool
 /// tint and an hourglass, saying what for. Once Fjord Computer sees that done it says the session is ready to continue,
 /// and Tell it sends the session so. Opening it, or the Claude button beside it, opens the session in Claude.
-private struct WaitingCard: View {
+struct WaitingCard: View {
     let store: Store
     let card: RouterCard
+    /// On the canvas: a card of its own, its tint in a rounded box with no bar, rather than a row of a list.
+    var standalone = false
     @State private var hovered = false
 
     private var triage: RouterTriage { card.triage ?? RouterTriage() }
@@ -2038,6 +2117,7 @@ private struct WaitingCard: View {
                         .help("Sends it: \(message)")
                 }
             }
+            .canvasHeader()
             // What it waits on and what comes after, in your words' style (RouterBrief.swift).
             if let brief = card.brief {
                 Text(RouterText.inline(brief)).cdsText((12, 16), .regular, CDS.Text.secondary)
@@ -2048,8 +2128,17 @@ private struct WaitingCard: View {
         }
         .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(ready ? 0.13 : hovered ? 0.09 : 0.06))
-        .overlay(alignment: .leading) { Rectangle().fill(tint.opacity(ready ? 0.9 : 0.5)).frame(width: 2) }
+        .background {
+            if standalone {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tint.opacity(ready ? 0.13 : hovered ? 0.09 : 0.06))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(ready ? 0.5 : 0.2), lineWidth: 1)
+                    }
+            } else {
+                tint.opacity(ready ? 0.13 : hovered ? 0.09 : 0.06)
+            }
+        }
+        .overlay(alignment: .leading) { if !standalone { Rectangle().fill(tint.opacity(ready ? 0.9 : 0.5)).frame(width: 2) } }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .contextMenu {
@@ -2140,6 +2229,8 @@ struct CardView: View {
     static let closedFormCap: CGFloat = 400
     /// Worth a look's: neutral instead of warm, no shadow.
     var quiet = false
+    /// Its project named in its header; on the canvas the frame it is in names it.
+    var showsProject = true
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -2268,16 +2359,28 @@ struct CardView: View {
                     TriageChips(triage: card.triage)
                     if !expanded { ask.padding(.leading, 4).layoutPriority(0) }
                     Spacer(minLength: 4)
-                    projectLabel(project)
+                    if showsProject { projectLabel(project) }
                     age
                     archiveButton
                     openButton
                 }
+                .canvasHeader()
             } else {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; archiveButton; openButton }
-                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); age; archiveButton; openButton }
-                    HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; archiveButton; openButton }
+                if showsProject {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; archiveButton; openButton }
+                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); age; archiveButton; openButton }
+                        HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; archiveButton; openButton }
+                    }
+                } else {
+                    // No project to drop: the age goes before the chips, which say more of the turn.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); age; archiveButton; openButton }
+                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); archiveButton; openButton }
+                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); archiveButton; openButton }
+                        HStack(spacing: 8) { lead; title; Spacer(minLength: 4); archiveButton; openButton }
+                    }
+                    .canvasHeader()
                 }
                 // Under the title, past the glyph's room when it has one.
                 if !expanded { HStack(spacing: 8) { CardLead(store: store, sessionID: card.sessionID, room: true); ask } }
@@ -2364,7 +2467,7 @@ struct CardView: View {
 /// lists every session and project. Only a click answers it: whatever is typed in the composer meanwhile is a message of its
 /// own, even one that reads like a target's name, so a session titled after what you'd say ("Don't deploy") is never picked
 /// for saying it. Nothing is sent until you pick.
-private struct AskBackCard: View {
+struct AskBackCard: View {
     let store: Store
     let ask: RouterAskBack
 

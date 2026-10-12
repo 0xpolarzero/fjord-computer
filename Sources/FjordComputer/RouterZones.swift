@@ -8,6 +8,14 @@ enum RouterPane: String {
     case now, history
 }
 
+/// How Now is drawn: the list of sections, or the canvas (each project a frame, its sessions grouped and joined to their
+/// group by lines). Kept across launches with the window's other preferences.
+enum RouterLayout: String {
+    case list, canvas
+
+    static let key = "routerLayout"
+}
+
 /// A section of Now, top to bottom by whose move is next.
 enum RouterZone: String, CaseIterable, Identifiable {
     case needs, notes, waiting, working

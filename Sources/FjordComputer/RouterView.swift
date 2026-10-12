@@ -357,9 +357,21 @@ final class RouterModel {
     /// Where the folds are kept: the app's preferences for the window's model, none for shots and tests.
     @ObservationIgnored private let defaults: UserDefaults?
 
+    /// Now as a list or a canvas, kept as the folds are.
+    var layout: RouterLayout {
+        didSet {
+            guard layout != oldValue else { return }
+            defaults?.set(layout.rawValue, forKey: RouterLayout.key)
+        }
+    }
+    /// What the canvas keeps while the window lives: its camera, filter and folds (RouterCanvas.swift).
+    let canvas: RouterCanvasState
+
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
         folded = RouterZone.folds(in: defaults)
+        layout = defaults?.string(forKey: RouterLayout.key).flatMap(RouterLayout.init(rawValue:)) ?? .list
+        canvas = RouterCanvasState(defaults: defaults)
     }
     /// A fold of yours, or while a search is on, of the search's (`shownFolds`).
     func setFolded(_ zone: RouterZone, _ on: Bool) {
@@ -546,7 +558,7 @@ final class RouterModel {
 
     /// What the page scrolls to for the bottom of the history, and the id of a working session's card.
     static let endID = "end"
-    static func workingID(_ session: String) -> String { "working#" + session }
+    nonisolated static func workingID(_ session: String) -> String { "working#" + session }
 
     /// A section of Now asked for: opened and scrolled to (its id), or folded (`RouterZone.foldPrefix` and its id).
     var zoneRequest: ScrollRequest?

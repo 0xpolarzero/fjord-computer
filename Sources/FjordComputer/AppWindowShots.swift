@@ -49,6 +49,8 @@ enum AppWindowShots {
         var size = CGSize(width: 1280, height: 800)
         /// Sets the Router's composer up (a draft with a pill in it).
         var compose: ((RouterModel, Store) -> Void)?
+        /// The window's look; nil follows the Mac.
+        var appearance: NSAppearance.Name?
     }
 
     static let catalog: [Shot] = [
@@ -136,6 +138,34 @@ enum AppWindowShots {
             Demo.routerJevAttention(store, away: true)
             for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
+        // Now as a canvas: each project a frame, its sessions grouped and joined to their groups by lines.
+        Shot(name: "router-canvas", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.layout = .canvas },
+             appearance: .aqua),
+        Shot(name: "router-canvas-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.layout = .canvas },
+             appearance: .darkAqua),
+        // Jev's triage on the canvas: an OK asked, a turn asking two questions (one answered), sessions waiting and one ready.
+        Shot(name: "router-canvas-triage", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.layout = .canvas
+        }, appearance: .aqua),
+        // A card at the canvas's 420: its kind, Jev's chips, the approval's tint and how many questions are left.
+        Shot(name: "router-canvas-card420", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-api" && $0.isOpen }),
+               let asks = store.router.cards[i].asks {
+                store.router.cards[i].left = Array(asks.dropFirst().map(\.question))
+                store.router.cards[i].total = asks.count
+            }
+            model.layout = .canvas
+            // The second column, where microsandbox's frame is, at full size.
+            model.canvas.camera.transform = CanvasTransform(origin: CGPoint(x: CanvasMetrics.pad - CanvasMetrics.frameWidth
+                - CanvasMetrics.colGap, y: CanvasMetrics.pad), scale: 1)
+            model.canvas.camera.moved = true
+        }, appearance: .darkAqua),
+        Shot(name: "router-canvas-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 760), compose: { model, store in
+            Demo.routerTriage(store)
+            model.layout = .canvas
+        }, appearance: .aqua),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
         Shot(name: "snippets") { _ in .snippets },
@@ -151,6 +181,8 @@ enum AppWindowShots {
         Shot(name: "router-collapsed-760", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 760, height: 1000)),
         Shot(name: "category-narrow", destination: { $0.shownCategories[0].id.asCategory }, size: CGSize(width: 1000, height: 640)),
     ]
+
+    private static let canvasSize = CGSize(width: 1440, height: 900)
 
     /// Every open card six times over, so the zones would take the page.
     private static func manyNeeds(_ store: Store) {
@@ -199,6 +231,7 @@ enum AppWindowShots {
                                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                 backing: .buffered, defer: false)
         AppWindowController.style(window)
+        if let look = shot.appearance { window.appearance = NSAppearance(named: look) }
         window.contentViewController = controller
         window.setContentSize(shot.size)
         ShotRun.show(window)
