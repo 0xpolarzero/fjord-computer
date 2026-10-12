@@ -201,7 +201,13 @@ struct RouterAskBack: Identifiable, Equatable {
     private(set) var askBacks: [RouterAskBack] = []
     /// How far each run under way is, by its entry in the log ("classifying", "sending"…).
     private(set) var progress: [UUID: String] = [:]
-    var isBusy: Bool { !progress.isEmpty }
+    /// A run of yours is under way: the composer shows Stop. An action's message being placed, or waiting its turn, is the
+    /// inbox's, in the background (`actionRuns`): you send meanwhile, and Stop leaves it be.
+    var isBusy: Bool { progress.keys.contains { !actionRuns.contains($0) } }
+    /// What an action's message waiting its turn says on its line.
+    static let waitingTurn = "waiting its turn"
+    /// The entries of actions' messages under way or waiting their turn (`submit`, `launch`), until they end.
+    @ObservationIgnored private var actionRuns: Set<UUID> = []
     /// Sends being taken back, by their entry in the log.
     private(set) var cancelling: Set<UUID> = []
     /// Starts whose session the Claude app has but doesn't run yet, by their entry: what their first message waits for. Not
@@ -280,8 +286,9 @@ struct RouterAskBack: Identifiable, Equatable {
                       tools: makeTools(id, text, pills: context.pills, mentions: context.mentions, action: context.action != nil))
         // Actions' messages one at a time, in order (`nextAction`); yours at once.
         if context.action != nil {
+            actionRuns.insert(id)
             actionQueue.append(job)
-            progress[id] = "waiting its turn"
+            progress[id] = Self.waitingTurn
             nextAction()
         } else {
             launch(job, stage: "starting") { [self] job in try await execute(job) }
@@ -310,6 +317,7 @@ struct RouterAskBack: Identifiable, Equatable {
     /// entry's last line.
     private func drop(_ job: Job, _ reason: String) {
         job.tools.endTurn()
+        actionRuns.remove(job.id)
         progress[job.id] = nil
         store?.updateDecision(job.id) {
             $0.add(.failed(reason))
@@ -406,15 +414,15 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you. A held start's first
     /// message isn't a run: its own line's "Don't send" drops it (`dropHeld`).
-    /// `reason`: what an action's entry says of it (its run fails with why).
-    func stopAll(reason: String = "Stopped; nothing was sent") {
-        for task in tasks.values { task.cancel() }
+    /// `reason`: what an action's entry says of it (its run fails with why). `actions`: the inbox's actions' messages too,
+    /// their runs and their asks (the Router switched off); Stop is for yours, and leaves those be (they weren't sent by
+    /// you, and go on in the background).
+    func stopAll(reason: String = "Stopped; nothing was sent", actions: Bool = false) {
+        let stopped = { [actionRuns] (id: UUID) in actions || !actionRuns.contains(id) }
+        for (id, task) in tasks where stopped(id) { task.cancel() }
         // Their turns end now, not once each run sees it was stopped: a send on its way is refused at its last gate.
-        for tools in runTools.values { tools.endTurn() }
-        for ask in askBacks { dismiss(ask.id, reason: reason) }
-        let queued = actionQueue
-        actionQueue = []
-        for job in queued { drop(job, reason) }
+        for (id, tools) in runTools where stopped(id) { tools.endTurn() }
+        for ask in askBacks where actions || ask.context.action == nil { dismiss(ask.id, reason: reason) }
     }
 
     // MARK: Runs
@@ -438,6 +446,18 @@ struct RouterAskBack: Identifiable, Equatable {
         guard let store, let action = job.context.action, store.claudeSessions[session] == nil else { return }
         store.claudeSessions[session] = ClaudeSession(id: session, title: action.title, folder: folder, lastActivity: Date(),
                                                       running: true)
+    }
+
+    /// An action's message its session couldn't take: asked where it goes instead, among its repo's world without that
+    /// session, why said on the card.
+    private func couldntReach(_ job: Job, session: String, _ error: Error) {
+        guard let store else { return }
+        let world = Self.repoWorld(job.context, store: store)
+        let others = (world?.targets ?? []).filter { Self.session(of: $0, store: store) != session }
+        let title = store.claudeSessions[session].map { "“\(RouterDecision.clip($0.title, 40))”" } ?? "Its session"
+        let why = error.localizedDescription.split(separator: "\n").first.map(String.init) ?? "it can't take a message now"
+        askBack(job, Classification(ranked: others.map { Scored(target: $0, p: 0) }, sure: false, assisted: false),
+                note: "\(title) couldn't take it: \(RouterDecision.clip(why, 120))", chooseFolder: others.isEmpty)
     }
 
     /// Why an action's message no longer goes: Triage or the Router switched off since it was sent to the Router.
@@ -464,6 +484,7 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     private func launch(_ job: Job, stage first: String, _ body: @escaping (Job) async throws -> Void) {
+        if job.context.action != nil { actionRuns.insert(job.id) }
         progress[job.id] = first
         runTools[job.id] = job.tools
         tasks[job.id] = Task { [weak self] in
@@ -480,6 +501,7 @@ struct RouterAskBack: Identifiable, Equatable {
 
     private func end(_ job: Job) {
         job.tools.endTurn()
+        actionRuns.remove(job.id)
         progress[job.id] = nil
         tasks[job.id] = nil
         runTools[job.id] = nil
@@ -696,7 +718,15 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         stage(job, "preparing")
         try linked(job.context)
-        let delivery = try await effects.prepare(job.tools, session)
+        let delivery: Delivery
+        do {
+            delivery = try await effects.prepare(job.tools, session)
+        } catch where job.context.action != nil && !(error is CancellationError) && !Task.isCancelled {
+            // An action's message the session can't take (it doesn't run in the Claude app now): nothing went, so it isn't
+            // lost: you pick where it goes instead, that session left out.
+            try linked(job.context)
+            return couldntReach(job, session: session, error)
+        }
         try linked(job.context)
         stage(job, "sending")
         // The cards open now, as they are: one that changes while this goes isn't addressed by it.
@@ -791,6 +821,7 @@ struct RouterAskBack: Identifiable, Equatable {
             found.card = found.card?.filter(away)
             // Nothing left for an action's message (the repo's one clone was where it went): a folder of your choosing.
             let none = unattended && found.ranked.isEmpty && (found.card ?? []).isEmpty
+            try linked(job.context)
             askBack(job, found, suggestion: wrong, path: "elsewhere", note: noClone ? world?.note : nil, chooseFolder: noClone || none)
         }
     }
@@ -812,7 +843,7 @@ struct RouterAskBack: Identifiable, Equatable {
         do {
             delivery = try await effects.start(job.tools, folder, job.context.action?.title ?? Self.title(for: task), settings)
         } catch let waiting as SessionStart.Held {
-            know(waiting.waiting.sessionID, for: job, in: folder)
+            // Not known as a session yet: the app doesn't run it, so it can't take the next action's message.
             return hold(job, waiting)
         }
         if let session = delivery.session { know(session, for: job, in: folder) }
@@ -1006,6 +1037,7 @@ struct RouterAskBack: Identifiable, Equatable {
         // No clone of the repo at all: no guess. An action's message waits for you to choose a folder, with no call to Jev.
         let noClone = world?.clones.isEmpty == true
         if noClone, unattended {
+            try linked(job.context)
             return askBack(job, Classification(ranked: [], sure: false, assisted: false), note: world?.note, chooseFolder: true)
         }
         let narrowed = noClone ? job.context.projects : world?.clones ?? job.context.projects
@@ -1018,6 +1050,8 @@ struct RouterAskBack: Identifiable, Equatable {
             found = await classify(job, projects: narrowed)
         }
         try Task.checkCancellation()
+        // Switched off while Jev was asked: an action's message goes nowhere, not even to a card for you.
+        try linked(job.context)
         // Only the pick you saw over the composer, for these words, is one you went with; a pick read while you typed (and
         // kept for the send) that you never saw is Jev's like any other.
         found.live = found.assisted && found.sure && found.top.map { $0.target == job.context.shown } == true

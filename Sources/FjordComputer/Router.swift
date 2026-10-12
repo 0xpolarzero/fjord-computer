@@ -948,7 +948,7 @@ extension Store {
         }
         router = state
         // Off: a triage under way comes to nothing, and no banner held for one comes; your messages' runs stop.
-        if !on { routerTriager.turnedOff(); routerBriefer.cancelAll(); routerDispatcher.stopAll(reason: RouterDispatcher.unlinkedWords) }
+        if !on { routerTriager.turnedOff(); routerBriefer.cancelAll(); routerDispatcher.stopAll(reason: RouterDispatcher.unlinkedWords, actions: true); routerDispatcher.unlinked() }
         applyRouterSwitch(install: true)
         if on {
             feedRouter(now: now)

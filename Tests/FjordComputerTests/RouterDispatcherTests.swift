@@ -1631,18 +1631,76 @@ import Testing
         #expect(RouterDispatcher.repoWorld(context, store: s)?.targets.contains("session:local_new") == true)
         await finish(d, f, b)
         #expect(f.ranks == 2 && f.started.count == 2)
-        // Waiting its turn when the Router stops: it never runs, and says why.
+        // In the background: the composer sends meanwhile, and your Stop leaves them be.
         f.holdRank = true
         f.rankHeld = nil
         let c = try #require(d.submit(text, context: context))
         let e = try #require(d.submit(text, context: context))
         await waitUntil { f.rankHeld != nil }
-        d.stopAll(reason: RouterDispatcher.unlinkedWords)
-        await finish(d, f, e)
-        #expect(decision(s, e)?.done == [.failed(RouterDispatcher.unlinkedWords)] && decision(s, e)?.outcome == .done)
+        #expect(d.progress[e] == RouterDispatcher.waitingTurn && d.progress[c] != nil && !d.isBusy)
+        d.stopAll()
+        #expect(d.progress[e] == RouterDispatcher.waitingTurn && d.progress[c] != nil)
         f.holdRank = false
         f.rankHeld?.resume()
         await finish(d, f, c)
+        await finish(d, f, e)
+        #expect(f.started.count == 4)
+        // Waiting its turn when Triage goes off, or the Router: it never runs, and says why.
+        f.holdRank = true
+        f.rankHeld = nil
+        let g = try #require(d.submit(text, context: context))
+        let h = try #require(d.submit(text, context: context))
+        await waitUntil { f.rankHeld != nil }
+        d.stopAll(reason: RouterDispatcher.unlinkedWords, actions: true)
+        d.unlinked()
+        await finish(d, f, h)
+        #expect(decision(s, h)?.done == [.failed(RouterDispatcher.unlinkedWords)] && decision(s, h)?.outcome == .done)
+        f.holdRank = false
+        f.rankHeld?.resume()
+        await finish(d, f, g)
+        #expect(f.started.count == 4)
+    }
+
+    @Test func triageSwitchedOffWhileJevPlacesAnActionsMessageLeavesNoCard() async throws {
+        let (s, d, f) = setup()
+        await cloned(s)
+        let (text, context) = fromAction(s, [.text("Address "), .pointer(.notification("pr:o/lookout#7"))])
+        f.ranked = [.init(target: "change_fjord", p: 0.97), .init(target: "unclear", p: 0.03)]
+        f.holdRank = true
+        let id = try #require(d.submit(text, context: context))
+        await waitUntil { f.rankHeld != nil }
+        s.settings.triage = false
+        f.holdRank = false
+        f.rankHeld?.resume()
+        await finish(d, f, id)
+        #expect(d.askBacks.isEmpty && decision(s, id)?.done.last == .failed(RouterDispatcher.unlinkedWords))
+    }
+
+    @Test func aHeldStartIsntOfferedToTheNextActionAndASessionThatCantTakeItAsksInstead() async throws {
+        let (s, d, f) = setup()
+        await cloned(s)
+        let (text, context) = fromAction(s, [.text("Address "), .pointer(.notification("pr:o/lookout#7"))])
+        f.ranked = [.init(target: "new:/code/lookout-2", p: 0.97), .init(target: "unclear", p: 0.03)]
+        f.heldStart = SessionStart.Held(waiting: .init(sessionID: "local_late"), title: "o/lookout#7 Login fails", project: "lookout-2",
+                                        ready: Prepared(text: text, original: text, rephrased: false), settings: nil)
+        let a = try #require(d.submit(text, context: context))
+        await finish(d, f, a)
+        #expect(s.claudeSessions["local_late"] == nil, "the app doesn't run it yet: nothing can be sent to it")
+        #expect(RouterDispatcher.repoWorld(context, store: s)?.targets.contains("session:local_late") == false)
+        // A session the message can't reach (it doesn't run in the Claude app): nothing went, you pick where instead.
+        f.heldStart = nil
+        s.router.cards = []
+        f.ranked = [.init(target: "session:local_a", p: 0.97), .init(target: "unclear", p: 0.03)]
+        d.effects.prepare = { _, _ in throw RouterTools.Failure("“Fix the login bug” isn't running in the Claude app: open it first") }
+        let b = try #require(d.submit(text, context: context))
+        await finish(d, f, b)
+        let ask = try #require(d.askBacks.first { $0.id == b })
+        #expect(ask.note?.contains("couldn't take it: “Fix the login bug” isn't running") == true)
+        #expect(!ask.options.contains { $0.target == "session:local_a" } && ask.options.contains { $0.target == "new:/code/lookout-2" })
+        #expect(f.sent.isEmpty && decision(s, b)?.outcome == .pending)
+        await waitUntil { f.finishHeld != nil }
+        f.finishHeld?.resume()
+        await waitUntil { decision(s, a)?.outcome == .done }
     }
 
     @Test func triageSwitchedOffWhileAnActionsAskWaitsDismissesItSayingWhy() async throws {
