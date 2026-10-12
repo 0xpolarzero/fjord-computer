@@ -147,8 +147,10 @@ struct InsetWindowLayout: View {
                 .frame(maxHeight: .infinity)
                 .environment(\.onGlass, glass)
                 .frame(width: width, alignment: .leading)
-                // Clipped to the panel's width: the rows past a rail's edge are out of reach (clicks there are the page's).
+                // Clipped to the panel's width, and its clicks with it: a clip alone leaves the sidebar's scroll view (an
+                // AppKit view, 240 wide) taking the clicks on the page's first 180 beside a rail.
                 .clipped()
+                .contentShape(Rectangle())
                 // The panel's shape, from where it is now (above the rows when it is out): what is past a rail's edge is
                 // out of sight.
                 .mask(alignment: .topLeading) {

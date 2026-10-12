@@ -96,4 +96,56 @@ import Testing
         let rail = try #require(list())
         #expect(Int(rail.minX) == Int(WindowChrome.pageLeading(collapsed: true)), "\(rail)")
     }
+
+    /// Beside a rail, a click on the page is the page's: the sidebar is laid out at its full width under the rail's clip,
+    /// and its scroll view (an AppKit view) took the clicks on the page's first 180 points, the Router's Now/History switch
+    /// among them, so a narrow Router could neither go to History nor come back to Now.
+    @Test func theRouterSwitchBesideARailTakesItsClicks() async {
+        guard #available(macOS 26, *) else { return }
+        let store = Store()
+        store.persists = false
+        Demo.populate(store, .router)
+        store.interceptOpen = { _ in }
+        store.settings.toolsPicked = true
+        let model = RouterModel()
+        let root = AppRootView(store: store, navigator: AppNavigator(start: .router, defaults: nil), routerModel: model,
+                               hub: HubState(), checksClaudeCode: false, sidebar: SidebarState(defaults: nil, collapsed: true))
+        // The window's narrowest: the page beside the rail is narrow, one side at a time.
+        let size = AppWindowController.minSize
+        let hosting = NSHostingView(rootView: root)
+        let window = AwayWindow(contentRect: NSRect(origin: .zero, size: size),
+                                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                backing: .buffered, defer: false)
+        AppWindowController.style(window)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        let page = size.width - WindowChrome.pageLeading(collapsed: true)
+        #expect(!RouterZone.sideBySide(width: page))
+        await waitUntilSteady(turns: 8) { hosting.layoutSubtreeIfNeeded(); return hosting.subviews.count }
+
+        /// Clicks along the switch's line from its start, `from` to `to` points in, until the side shown is `side`.
+        func click(towards side: RouterPane, from: CGFloat, to: CGFloat) async {
+            let start = WindowChrome.pageLeading(collapsed: true) + (page - min(page, CDS.Transcript.measure + 2 * CDS.Transcript.gutter)) / 2
+                + RouterPageView.gutter(page)
+            // The window's own coordinates: from its frame's top, the title bar the page runs under included.
+            let y = window.frame.height - CDS.TitleBar.header - 6 - 12
+            for x in stride(from: start + from, through: start + to, by: 6) where model.pane != side {
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    window.sendEvent(NSEvent.mouseEvent(
+                        with: type, location: NSPoint(x: x, y: y), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!)
+                }
+                await waitUntilSteady(turns: 2) { model.pane }
+            }
+        }
+        // Now's side: History, after Now.
+        await click(towards: .history, from: 8, to: 160)
+        #expect(model.pane == .history)
+        // History's side: back to Now, its first segment.
+        await click(towards: .now, from: 4, to: 40)
+        #expect(model.pane == .now)
+    }
 }
