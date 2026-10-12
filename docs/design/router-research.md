@@ -198,6 +198,14 @@ land), so only changes that don't depend on ask gold are decided here.
 - **Always checking the session you last messaged** (explore/v2_continuity): −0.196 per message (CI −0.415 to
   −0.021) but on 3 avoided wrong sends in 2 groups, and as a hedge (a middling yes lowers confidence in a wrong pick)
   more than a find. Not ported; re-tested with real gold.
+- **Typing predictions are reused only on the board they were read on** (cards shown, sessions working, latest
+  finished, last-told); else read again at send. Not measurable offline (every eval message is decided on its own
+  board), which is the point: a stale reuse could only add wrong sends the benchmark never sees.
+- **Dead ends this round:** a running session's last answer as its latest for BM25 (A8: it already counts at full
+  weight in `f_old`; running-target errors are confusion between running sessions); a shortlist of the options Jev
+  sees (A9: −21 to −36% tokens, but 2–3 more wrong sends below 12 options, as the sureness reads Jev's mass on full
+  lists; last-told, BM25 and waiting cards add no recall beyond recency); two wordings of the route in one call (A12:
+  no gain, +68% tokens, and the second question shifts the answer to the first).
 - **Raising the send bar looks large but waits for gold:** a sureness floor of 0.95 would turn 37 sends into asks and
   avoid 9 of the 14 wrong sends (−0.45 per message), but only if those asks count as "allowed".
 - **Runner fixes found on the way:** a session started from an ask is named after its submit; changes to a started
