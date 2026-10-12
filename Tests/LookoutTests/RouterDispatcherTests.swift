@@ -828,14 +828,14 @@ import Testing
     @Test func aStartTheAppDoesntRunYetIsStartedAndItsFirstMessageFollows() async {
         let (s, d, f) = setup()
         let ready = Prepared(text: "fix the typo", original: "fix the typo", rephrased: false)
-        f.heldStart = SessionStart.Held(waiting: .init(sessionID: "local_late", full: 21), title: "fix the typo", project: "lookout",
+        f.heldStart = SessionStart.Held(waiting: .init(sessionID: "local_late"), title: "fix the typo", project: "lookout",
                                         ready: ready, settings: nil)
         let a = d.submit("start a new session to fix the typo", context: RouterContext(projects: ["/code/lookout"]))
         await waitUntil { f.finishHeld != nil }
         // Started, not failed; the run is over (you may send meanwhile) and the line says what its first message waits for.
         #expect(decision(s, a)?.done == [.started(session: "local_late", project: "lookout", model: nil, effort: nil)])
         #expect(!d.isBusy && decision(s, a)?.outcome == .pending && s.router.lookoutStarted["local_late"] != nil)
-        #expect(d.held[a!]?.contains("waits for the Claude app") == true && d.held[a!]?.contains("at most 21 sessions") == true)
+        #expect(d.held[a!] == RouterDispatcher.heldWords && RouterDispatcher.heldWords.contains("waits for the Claude app to run it"))
         // The app runs it: the first message goes, and the line says so.
         f.finishHeld?.resume()
         await waitUntil { decision(s, a)?.outcome == .done }
@@ -850,15 +850,25 @@ import Testing
         await waitUntil { decision(s, b)?.outcome == .done }
         #expect(decision(s, b)?.doneLines.last == "failed: The Claude app didn't run the new session within 30 min; nothing was sent to it")
         #expect(f.sent.count == 1)
-        // Stop ends a held start too.
+        // Stop, for other runs, leaves a held start be: its message still goes.
         f.finishHeld = nil
         f.finishError = nil
         let c = d.submit("start a new session to fix the typo", context: RouterContext(projects: ["/code/lookout"]))
         await waitUntil { f.finishHeld != nil }
         d.stopAll()
+        #expect(d.held[c!] != nil)
         f.finishHeld?.resume()
         await waitUntil { decision(s, c)?.outcome == .done }
-        #expect(f.sent.count == 1 && decision(s, c)?.doneLines.last?.hasPrefix("failed: Stopped") == true)
+        #expect(f.sent.count == 2 && decision(s, c)?.doneLines.last == "sent to peer-late: hello")
+        // Its line's "Don't send" drops it: nothing sent, the session stays, the line says so.
+        f.finishHeld = nil
+        let e = d.submit("start a new session to fix the typo", context: RouterContext(projects: ["/code/lookout"]))
+        await waitUntil { f.finishHeld != nil }
+        d.dropHeld(e!)
+        f.finishHeld?.resume()
+        await waitUntil { decision(s, e)?.outcome == .done }
+        #expect(f.sent.count == 2 && d.held.isEmpty)
+        #expect(decision(s, e)?.doneLines == ["started a session in lookout", "failed: its first message wasn't sent: you chose not to send it"])
     }
 
     @Test func aForkAskedForInWordsOrFromThePageIsLoggedAndItsFirstMessageSent() async {
@@ -870,20 +880,32 @@ import Testing
         #expect(decision(s, a)?.doneLines == ["started a session in lookout (fork of “Fix the login bug”, before your last message)",
                                               "sent to peer-fork: try SQLite instead"])
         #expect(decision(s, a)?.decision.confirmed == nil && decision(s, a)?.decision.label == "fork")
-        // Pinned, with nothing to send: forked, nothing sent.
-        let b = d.submit("fork it", context: RouterContext(target: "session:local_b"))
+        // Pinned and said as "this session", with nothing to send: forked, nothing sent.
+        let b = d.submit("fork this session", context: RouterContext(target: "session:local_b"))
         await finish(d, f, b)
         #expect(f.forked.last == .init(session: "local_b") && f.sent.count == 1)
         #expect(decision(s, b)?.doneLines == ["started a session in docs (fork of “Update the docs”)"])
         // From the page: a run of its own in the history.
-        let c = d.fork(.init(session: "local_a", point: .before("body-local_a")), trigger: "Fork “Fix the login bug” from before …")
+        let c = d.fork(.init(session: "local_a", point: .before("body-local_a", after: nil)), trigger: "Fork “Fix the login bug” from before …")
         await finish(d, f, c)
-        #expect(f.forked.last?.point == .before("body-local_a") && decision(s, c)?.triggerText.hasPrefix("Fork “Fix") == true)
+        #expect(f.forked.last?.point == .before("body-local_a", after: nil) && decision(s, c)?.triggerText.hasPrefix("Fork “Fix") == true)
         // A task that happens to start with "fork" isn't one.
         f.ranked = [.init(target: "session:local_a", p: 0.95)]
         let e = d.submit("fork the tests into their own module", context: RouterContext(target: "session:local_a"))
         await finish(d, f, e)
         #expect(f.forked.count == 3 && f.prepared == ["local_a"])
+        // A bare word or a pronoun is never a fork, pinned or not: it goes to the session as written.
+        for words in ["fork", "fork it", "branch", "branch off", "please fork that", "branch: main"] {
+            let x = d.submit(words, context: RouterContext(target: "session:local_b"))
+            await finish(d, f, x)
+        }
+        #expect(f.forked.count == 3 && f.prepared.filter { $0 == "local_b" }.count == 6)
+        // Replying to a card: its answer, even when it names a session ("Should I create a branch or commit to main?").
+        let r = d.submit("branch", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, r)
+        let named = d.submit("fork Update the docs", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, named)
+        #expect(f.forked.count == 3 && f.prepared.suffix(2) == ["local_a", "local_a"])
     }
 
     @Test func aPillOnALineOfItsOwnLeavesTheRequestAndItsSettingsUnderIt() async {
@@ -1127,6 +1149,10 @@ import Testing
         #expect(RouterDispatcher.title(for: "Fix the login bug. Then look at the tests and the docs too")
                 == "Fix the login bug")
         #expect(RouterDispatcher.title(for: "look into why the build is slow on the CI runners today") == "look into why the build…")
+        // A line of tags alone isn't the title; "e.g." doesn't end the sentence; the session's own words "Fork of" once.
+        #expect(RouterDispatcher.title(for: "@lookout\nfix login") == "fix login")
+        #expect(RouterDispatcher.title(for: "@lookout") == "New session")
+        #expect(RouterDispatcher.title(for: "use a cache, e.g. redis. Then the rest") == "use a cache, e.g. redis")
     }
 
     // MARK: Jev

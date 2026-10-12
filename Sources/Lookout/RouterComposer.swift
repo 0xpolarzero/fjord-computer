@@ -124,7 +124,8 @@ struct RouterComposer: View {
                 ComposerChip(symbol: "arrow.right", text: title, tint: CDS.Text.accent,
                              removeLabel: "Let the Router decide where this goes") { model.live.reset() }
             }
-            if let prediction = model.live.prediction {
+            // While editing, the draft goes to a fork: no pick of Jev's is offered for it.
+            if model.editing == nil, let prediction = model.live.prediction {
                 PredictionChip(prediction: prediction) { model.pinPrediction(store: store) }
             }
         }

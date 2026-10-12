@@ -298,23 +298,28 @@ final class RouterModel {
         show(.history)
         messageRequest = ScrollRequest(id: message.uuidString, seq: (messageRequest?.seq ?? 0) + 1)
     }
-    /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
-    var replyTo: String?
+    /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer). Armed, it
+    /// ends an edit (the draft then answers the card).
+    var replyTo: String? {
+        didSet { if replyTo != nil, editing != nil { editing = nil } }
+    }
     /// A message of yours being edited ("Edit and resend"): sending the draft forks its session from before it, with the
     /// draft as the fork's first message. The session stays as it was; files its agent changed aren't rolled back.
     var editing: Editing?
     struct Editing: Equatable {
         var session: String
-        /// The message as it was sent: where the fork is cut.
+        /// The message as it was sent, and when the run that sent it began: where the fork is cut.
         var original: String
+        var sentAt: Date? = nil
     }
 
-    /// "Edit and resend": the message in the composer, which takes the keyboard; no reply or pin goes with it.
-    func edit(session: String, message: String) {
+    /// "Edit and resend": the message in the composer, which takes the keyboard; no reply or pin goes with it (picking one
+    /// later ends the edit: the draft then goes there as a message of its own).
+    func edit(session: String, message: String, sentAt: Date? = nil) {
         replyTo = nil
         live.reset()
         tokens = []
-        editing = Editing(session: session, original: message)
+        editing = Editing(session: session, original: message, sentAt: sentAt)
         draft = message
         caretRequest = (message as NSString).length
         focusRequest &+= 1
@@ -607,7 +612,8 @@ final class RouterModel {
         guard !text.isEmpty, canSend(store) else { return }
         if let editing {
             // Resent to a fork from before the original: never to the session itself, never routed.
-            guard store.forkSession(editing.session, point: .before(editing.original), message: text, edited: true) != nil else { return }
+            guard store.forkSession(editing.session, point: .before(editing.original, after: editing.sentAt), message: text,
+                                    edited: true) != nil else { return }
             caret = nil
             tokens = []
             draft = ""

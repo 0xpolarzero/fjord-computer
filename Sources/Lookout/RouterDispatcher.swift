@@ -184,6 +184,9 @@ struct RouterAskBack: Identifiable, Equatable {
     /// a run under way (you may send meanwhile); Stop ends them too.
     private(set) var held: [UUID: String] = [:]
     @ObservationIgnored private var heldTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var heldTools: [UUID: RouterTools] = [:]
+    /// Held starts you chose not to send (`dropHeld`): their line says so.
+    @ObservationIgnored private var dropped: Set<UUID> = []
 
     @ObservationIgnored private weak var store: Store?
     @ObservationIgnored var effects: Effects
@@ -290,10 +293,10 @@ struct RouterAskBack: Identifiable, Equatable {
         }
     }
 
-    /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you.
+    /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you. A held start's first
+    /// message isn't a run: its own line's "Don't send" drops it (`dropHeld`).
     func stopAll() {
         for task in tasks.values { task.cancel() }
-        for task in heldTasks.values { task.cancel() }
         // Their turns end now, not once each run sees it was stopped: a send on its way is refused at its last gate.
         for tools in runTools.values { tools.endTurn() }
         for ask in askBacks { dismiss(ask.id) }
@@ -418,10 +421,12 @@ struct RouterAskBack: Identifiable, Equatable {
         // Wholly for the Router ("@router what needs me?"): asked of it, whatever reply is armed or target pinned (a session
         // would get nothing of it). An aside in a message for a session goes with that message, taken out.
         if forRouter(text, pills: context.pills) { return .classify }
-        // "fork <session>…": of the session named, else of the one pinned or replied to.
-        let pinned = context.target.flatMap { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil }
-            ?? context.replyTo.flatMap { id in store.router.cards.first { $0.id == id }?.sessionID }
-        if let fork = SessionFork.request(RouterTools.pastLeadingTags(text, pills: context.pills), pinned: pinned, store: store) {
+        // "fork <session>…": of the session named, else of the one pinned ("fork this session"). Never while a card's reply
+        // is armed: words for it are its answer ("branch" to "Should I create a branch or commit to main?").
+        if context.replyTo == nil,
+           let fork = SessionFork.request(RouterTools.pastLeadingTags(text, pills: context.pills),
+                                          pinned: context.target.flatMap { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil },
+                                          store: store) {
             return .fork(fork)
         }
         if let id = context.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
@@ -456,9 +461,12 @@ struct RouterAskBack: Identifiable, Equatable {
     /// that is short ("Router test, please ignore and do nothing"), else its first few words, never ending on a little word
     /// ("to", "the") and marked as cut ("add a dark mode badge…").
     static func title(for text: String) -> String {
-        let line = text.split(whereSeparator: \.isNewline).first { !$0.allSatisfy(\.isWhitespace) } ?? ""
-        var words = line.split(whereSeparator: \.isWhitespace).filter { !$0.hasPrefix("@") }
-        if let end = words.firstIndex(where: { ".!?".contains($0.last ?? " ") }) { words = Array(words[...end]) }
+        // The first line with words of its own (a line of @project tags alone is skipped).
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.split(whereSeparator: \.isWhitespace).filter { !$0.hasPrefix("@") } }
+        var words = lines.first { !$0.isEmpty } ?? []
+        if let end = words.firstIndex(where: { ".!?".contains($0.last ?? " ") && !abbreviations.contains($0.lowercased()) }) {
+            words = Array(words[...end])
+        }
         let trim = CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".,:;-–—"))
         var cut = false
         if words.count > titleWords {
@@ -474,6 +482,8 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// A first sentence up to this many words is the title whole; a longer one is cut to `titleCut`.
     static let titleWords = 8
+    /// Words ending in a full stop that don't end a sentence.
+    private static let abbreviations: Set<String> = ["e.g.", "i.e.", "etc.", "vs.", "cf.", "approx.", "mr.", "mrs.", "ms.", "dr.", "no."]
     static let titleCut = 6
     private static let littleWords: Set<String> = [
         "a", "an", "the", "to", "and", "or", "but", "of", "for", "in", "on", "at", "by", "with", "from", "into", "that", "this",
@@ -626,27 +636,37 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     /// A start the Claude app has but doesn't run yet: done as a start (the session is there), its first message sent once
-    /// the app runs it, in a turn of its own and not as a run under way (the composer is free meanwhile). Waiting too long,
-    /// or Stop, says the message wasn't sent; the session stays.
+    /// the app runs it, in a turn of its own and not as a run under way (the composer is free meanwhile, and Stop leaves
+    /// it be: its line's "Don't send" drops it). Waiting too long, the Router switched off or reset, says the message wasn't
+    /// sent; the session stays.
     private func hold(_ job: Job, _ waiting: SessionStart.Held) {
+        hold(job.id, waiting, text: job.text, pills: job.context.pills)
+    }
+
+    /// The same for a start that isn't a typed run's (an inbox action's, `ActionSessions`): `text` is the message held,
+    /// sent as given. Its entry in the log is `id`.
+    func hold(_ id: UUID, _ waiting: SessionStart.Held, text: String, pills: [Range<Int>]? = nil) {
         guard let store else { return }
         let session = waiting.waiting.sessionID
         store.noteLookoutStarted(session)
-        note(job, .started(session: session, project: waiting.project, model: nil, effort: nil), session: session)
+        store.updateDecision(id) { $0.add(.started(session: session, project: waiting.project, model: nil, effort: nil), session: session) }
         guard waiting.ready != nil else {
-            if waiting.settings != nil { note(job, .failed("model/effort: no first message to set them with")) }
+            if waiting.settings != nil { store.updateDecision(id) { $0.add(.failed("model/effort: no first message to set them with")) } }
             return
         }
-        held[job.id] = "the first message waits for the Claude app to run it" + SessionStart.NotRunning.reason(waiting.waiting.full)
-        let tools = makeTools(job.id, job.text, pills: job.context.pills)
-        heldTasks[job.id] = Task { [weak self] in
+        held[id] = Self.heldWords
+        let tools = makeTools(id, text, pills: pills ?? [])
+        // An inbox action's message is Lookout's own, taken as it is.
+        if pills == nil { tools.verbatim = true }
+        heldTools[id] = tools
+        heldTasks[id] = Task { [weak self] in
             do {
                 guard let self else { return }
                 let delivery = try await effects.finish(tools, waiting)
                 try Task.checkCancellation()
-                held[job.id] = "sending"
+                held[id] = "sending"
                 let ack = try await effects.send(tools, delivery)
-                store.updateDecision(job.id) { entry in
+                store.updateDecision(id) { entry in
                     if let settings = waiting.settings {
                         entry.done.removeAll { if case .started = $0 { true } else { false } }
                         AppliedSettings.from(ack: ack, requested: settings, supported: delivery.settingsSigned)
@@ -654,18 +674,32 @@ struct RouterAskBack: Identifiable, Equatable {
                     }
                     entry.add(.sent(to: delivery.to, text: delivery.body, original: nil), session: session)
                 }
-            } catch is CancellationError {
-                self?.note(job, .failed("Stopped: the session stays, its first message wasn't sent"))
             } catch {
-                let reason = error.localizedDescription.split(separator: "\n").first.map(String.init) ?? "failed"
-                self?.note(job, .failed(RouterDecision.clip(reason, 120)))
+                let dropped = self?.dropped.remove(id) != nil
+                let reason = dropped ? "its first message wasn't sent: you chose not to send it"
+                    : error is CancellationError ? "its first message wasn't sent"
+                    : error.localizedDescription.split(separator: "\n").first.map(String.init) ?? "failed"
+                store.updateDecision(id) { $0.add(.failed(RouterDecision.clip(reason, 120))) }
             }
             tools.endTurn()
-            self?.held[job.id] = nil
-            self?.heldTasks[job.id] = nil
-            store.updateDecision(job.id) { if $0.outcome == .pending { $0.outcome = .done } }
-            self?.onFinish?(job.id)
+            self?.held[id] = nil
+            self?.heldTasks[id] = nil
+            self?.heldTools[id] = nil
+            store.updateDecision(id) { if $0.outcome == .pending { $0.outcome = .done } }
+            self?.onFinish?(id)
         }
+    }
+
+    /// What a held start's line says while its first message waits.
+    static let heldWords = "the first message waits for the Claude app to run it" + SessionStart.NotRunning.reason
+
+    /// "Don't send" on a held start's line: its first message is dropped (the session stays), its turn ended at once so
+    /// nothing of it can still go.
+    func dropHeld(_ id: UUID) {
+        guard let task = heldTasks[id] else { return }
+        dropped.insert(id)
+        heldTools[id]?.endTurn()
+        task.cancel()
     }
 
     /// Haiku, fresh, for what needs judgment or tools; its reply is what the history shows.

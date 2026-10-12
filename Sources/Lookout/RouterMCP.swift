@@ -1051,8 +1051,9 @@ final class RouterMCPServer: @unchecked Sendable {
 
     private func signed(_ store: Store, _ ready: Prepared, title: String, cli: String?, ticket: Ticket,
                         settings: SessionSettings? = nil) async throws -> Prepared {
-        // What the user says to the Router in an @router aside never goes on: if one is still there, nothing is sent.
-        try noAside(ready.text)
+        // What the user says to the Router in an @router aside never goes on: if one is still there, nothing is sent. Text
+        // Lookout wrote itself goes as it is.
+        if !verbatim { try noAside(ready.text) }
         guard store.routerPluginStatus == .installed else {
             throw Failure("Lookout's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
@@ -1183,9 +1184,10 @@ final class RouterMCPServer: @unchecked Sendable {
                 throw Failure("Lookout isn't ready")
             }
             do {
-                peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, timeout: SessionStart.heldWait, limit: .max,
-                                                          check: { [weak self] in try self?.live(ticket) })
-            } catch is SessionStart.NotRunning, is Failure {
+                // Only the time running out is said so; Stop, a reset or the Router off ends the wait as itself.
+                peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, timeout: SessionStart.heldWait,
+                                                          imported: { true }, check: { [weak self] in try self?.live(ticket) })
+            } catch is SessionStart.NotRunning {
                 throw Failure("The Claude app didn't run the new session within \(Int(SessionStart.heldWait / 60)) min; nothing was sent to it")
             }
         }
@@ -1263,6 +1265,8 @@ final class RouterMCPServer: @unchecked Sendable {
         guard let session = store.claudeSessions[request.session], !session.isArchived, let cli = session.cliID else {
             throw Failure("That session isn't one Lookout knows (archived, or not found)")
         }
+        // Its id goes into a path and the CLI's arguments: only a UUID, as Claude Code makes them.
+        guard UUID(uuidString: cli) != nil else { throw Failure("That session's Claude Code id isn't one Lookout can fork") }
         let name = store.folderName(session.folderKey)
         let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
         if !message.isEmpty {
@@ -1274,14 +1278,17 @@ final class RouterMCPServer: @unchecked Sendable {
         let ready = message.isEmpty ? nil : try edited(message, envelope: false)
         if let ready { try noAside(ready.text) }
         let root = transcriptsRoot
-        let messages = await OffMain.run { SessionFork.transcript(cli, root: root).map { url in
-            SessionFork.messages(in: (try? Data(contentsOf: url)) ?? Data())
-        } }
+        let messages = await OffMain.run { SessionFork.transcript(cli, root: root).flatMap { SessionFork.messages(at: $0) } }
         guard let messages else { throw Failure("That session's conversation wasn't found, so it can't be forked") }
         let cut = try SessionFork.cut(request.point, messages: messages)
         let title = SessionStart.cleanTitle(request.title ?? SessionFork.title(of: session.title))
-        let plan = SessionFork.Plan(cwd: cut.cwd ?? session.folder ?? "", cliID: cli, at: cut.at, title: title, fresh: cut.fresh)
-        guard !plan.cwd.isEmpty else { throw Failure("That session has no folder to fork it in") }
+        // In its project (`--resume` finds the conversation from any folder): a worktree or folder the agent moved into may
+        // be gone, or be another project.
+        let plan = SessionFork.Plan(cwd: session.folder ?? cut.cwd ?? "", cliID: cli, at: cut.at, title: title, fresh: cut.fresh)
+        var isFolder: ObjCBool = false
+        guard !plan.cwd.isEmpty, forker != nil || FileManager.default.fileExists(atPath: plan.cwd, isDirectory: &isFolder) && isFolder.boolValue else {
+            throw Failure("That session's folder isn't there any more, so it can't be forked")
+        }
         try live(ticket)
         let started: SessionStart.Started
         do {
@@ -1294,6 +1301,9 @@ final class RouterMCPServer: @unchecked Sendable {
             }
         } catch let waiting as SessionStart.NotRunning {
             throw SessionStart.Held(waiting: waiting, title: title, project: name, ready: ready, settings: nil)
+        } catch let failed as Failure where failed.localizedDescription.contains("No message found") {
+            // The entry cut at isn't in the conversation Claude Code loads (compacted since).
+            throw Failure("That message is no longer in the session's conversation as Claude Code loads it (compacted?); nothing was forked")
         }
         return try await deliverable(store, started, ready: ready, title: title, project: name, settings: nil, ticket: ticket)
     }

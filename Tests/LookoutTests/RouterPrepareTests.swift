@@ -207,18 +207,13 @@ import Testing
         try FileManager.default.createDirectory(at: peers, withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: ["pid": Int(getpid()), "hostSessionId": "local_busy", "name": "Busy"])
         try data.write(to: peers.appendingPathComponent("\(getpid()).json"))
-        // At the app's limit (one running, a limit of one): said at once, with the reason, not after the whole wait.
-        let started = Date()
-        await #expect(throws: SessionStart.NotRunning(sessionID: "local_u-1", full: 1)) {
-            try await SessionStart.waitForPeer(uuid: "u-1", dir: peers, timeout: 120, limit: 1, grace: 0, imported: { true })
+        // The app has it but doesn't run it by the end of the wait: said as such, never as a failed start; nothing said of
+        // how full the app is (Lookout can't count its sessions as it does).
+        await #expect(throws: SessionStart.NotRunning(sessionID: "local_u-1")) {
+            try await SessionStart.waitForPeer(uuid: "u-1", dir: peers, timeout: 0.5, imported: { true })
         }
-        #expect(Date().timeIntervalSince(started) < 60)
-        // Under it: waited for, then said without a reason it can't know.
-        await #expect(throws: SessionStart.NotRunning(sessionID: "local_u-1", full: nil)) {
-            try await SessionStart.waitForPeer(uuid: "u-1", dir: peers, timeout: 0.5, limit: 5, imported: { true })
-        }
-        #expect(SessionStart.NotRunning(sessionID: "local_u-1", full: 21).localizedDescription
-                == "The new session is in the Claude app, but the app hasn't run it yet (it runs at most 21 sessions at once and is at that limit): close one you're done with, then open the new one")
+        #expect(SessionStart.NotRunning(sessionID: "local_u-1").localizedDescription
+                == "The new session is in the Claude app, but the app hasn't run it yet: open it there (the app runs only so many sessions at once; close one you're done with if it doesn't start)")
         // Whether the app has it: its file under the app's sessions folder (account/org/local_<uuid>.json).
         let root = dir.path("claude-code-sessions")
         let org = root.appendingPathComponent("acct/org")
@@ -226,7 +221,6 @@ import Testing
         #expect(!SessionStart.imported("u-1", root: root))
         try Data("{}".utf8).write(to: org.appendingPathComponent("local_u-1.json"))
         #expect(SessionStart.imported("u-1", root: root) && !SessionStart.imported("u-2", root: root))
-        #expect(SessionStart.appLimit >= 6)
     }
 
     // MARK: One run, bounded

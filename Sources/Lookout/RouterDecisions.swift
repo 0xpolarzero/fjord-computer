@@ -219,7 +219,9 @@ extension RouterState {
     /// they say they were interrupted, rather than "working…" for ever.
     mutating func settleInterrupted() {
         for i in decisions.indices where decisions[i].outcome == .pending {
-            decisions[i].add(.failed("interrupted"))
+            // A start whose first message was held for the session to run: the session is there, the message never went.
+            let held = decisions[i].done.contains { if case .started = $0 { true } else { false } }
+            decisions[i].add(.failed(held ? "its first message wasn't sent: Lookout quit while it waited for the session to run" : "interrupted"))
             decisions[i].outcome = .done
         }
     }

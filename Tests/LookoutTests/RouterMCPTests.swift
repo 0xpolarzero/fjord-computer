@@ -672,7 +672,7 @@ import Testing
         let dir = TempDir()
         let s = await store(dir)
         let t = tools(s, turn: "start a session in lookout to bump the version")
-        t.starter = { _, _ in throw SessionStart.NotRunning(sessionID: "local_late", full: 21) }
+        t.starter = { _, _ in throw SessionStart.NotRunning(sessionID: "local_late") }
         // The start is done (the app has the session); its first message is held, prepared but not signed.
         var held: SessionStart.Held?
         do {
@@ -697,6 +697,16 @@ import Testing
         never.processWaiter = { _ in throw RouterTools.Failure("The Claude app didn't run the new session within 30 min; nothing was sent to it") }
         await #expect(throws: RouterTools.Failure.self) { try await never.finishStart(s, waiting, ticket: never.ticket()) }
         #expect(never.prepared.isEmpty)
+        // The Router switched off while it waits: said as that, not as the app never running it.
+        let off = tools(s, turn: "start a session in lookout to bump the version")
+        s.router.enabled = false
+        do {
+            _ = try await off.finishStart(s, waiting, ticket: off.ticket())
+            Issue.record("sent")
+        } catch {
+            #expect(error.localizedDescription.contains("The Router is off"), "\(error.localizedDescription)")
+        }
+        s.router.enabled = true
     }
 
     @Test func aForkIsCutFromTheOriginalsTranscriptAndItsFirstMessagePrepared() async throws {
@@ -704,7 +714,10 @@ import Testing
         let s = await store(dir)
         let project = dir.path("projects/-code-lookout")
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
-        try RouterForkTests.transcript().write(to: project.appendingPathComponent("cli-local_a.jsonl"))
+        // Claude Code's ids are UUIDs: only such an id is put in a path or the CLI's arguments.
+        let cli = "0b0e9b9e-3c1f-4c55-9a52-1d1a3b7c9e01"
+        s.claudeSessions["local_a"]?.cliID = cli
+        try RouterForkTests.transcript().write(to: project.appendingPathComponent("\(cli).jsonl"))
         let t = tools(s, turn: "try SQLite instead")
         t.transcriptsRoot = dir.path("projects")
         var plans: [SessionFork.Plan] = []
@@ -713,8 +726,8 @@ import Testing
             return SessionStart.Started(sessionID: "local_new", peer: plan.title)
         }
         let out = try await t.forkSession(s, .init(session: "local_a", point: .beforeLast, message: "try SQLite instead"), ticket: t.ticket())
-        #expect(plans == [SessionFork.Plan(cwd: "/code/app/.claude/worktrees/w", cliID: "cli-local_a", at: "a2",
-                                           title: "Fork of Fix the login bug")])
+        // Run in the session's project, not the worktree its last message was sent from (gone, or another project).
+        #expect(plans == [SessionFork.Plan(cwd: "/code/lookout", cliID: cli, at: "a2", title: "Fork of Fix the login bug")])
         #expect(out.contains("local_new") && t.prepared["Fork of Fix the login bug"]?.text.hasPrefix("⟦lookout v1 new ") == true)
         // No first message: the fork waits for yours, nothing prepared.
         let quiet = tools(s, turn: "Fork")
@@ -722,14 +735,16 @@ import Testing
         quiet.forker = { plan in plans.append(plan); return SessionStart.Started(sessionID: "local_new", peer: plan.title) }
         _ = try await quiet.forkSession(s, .init(session: "local_a"), ticket: quiet.ticket())
         #expect(plans.last?.at == nil && quiet.prepared.isEmpty)
-        // A session whose conversation isn't found, or one Lookout doesn't know: said, nothing made.
+        // A session with an id that isn't a UUID, one whose conversation isn't found, one Lookout doesn't know: said, nothing made.
         let none = tools(s, turn: "Fork")
         none.transcriptsRoot = dir.path("projects")
         none.forker = { _ in Issue.record("forked"); throw RouterTools.Failure("no") }
         await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_b"), ticket: none.ticket()) }
+        s.claudeSessions["local_b"]?.cliID = "1b0e9b9e-3c1f-4c55-9a52-1d1a3b7c9e02"
+        await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_b"), ticket: none.ticket()) }
         await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_z"), ticket: none.ticket()) }
         await #expect(throws: SessionFork.Failure.self) {
-            try await none.forkSession(s, .init(session: "local_a", point: .before("never sent")), ticket: none.ticket())
+            try await none.forkSession(s, .init(session: "local_a", point: .before("never sent", after: nil)), ticket: none.ticket())
         }
     }
 

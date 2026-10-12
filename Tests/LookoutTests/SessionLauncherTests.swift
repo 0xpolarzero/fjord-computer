@@ -253,6 +253,46 @@ private final class LauncherLog {
         #expect(entry.doneLines == ["started a session in r (opus, high)"])
     }
 
+    @Test func aStartTheAppDoesntRunYetIsLoggedStartedAndItsMessageHeldOutsideTheInboxRun() async throws {
+        let store = ready()
+        let log = LauncherLog()
+        log.failure = SessionStart.NotRunning(sessionID: "local_late")
+        // The launcher never waits for it: started, the message handed back held.
+        await #expect(throws: SessionStart.Held.self) {
+            try await self.launcher(store, log).start(folder: "/code/r", title: "t", firstMessage: "Do it", model: "opus")
+        }
+        #expect(store.router.lookoutStarted["local_late"] != nil && log.sent.isEmpty)
+        // The inbox action: tagged and logged as started at once; its message goes through the Router's held starts.
+        var finished: [SessionStart.Held] = [], sent: [String] = []
+        let no = RouterTools.Failure("not here")
+        var go: CheckedContinuation<Void, Never>?
+        store.routerDispatcher.effects = RouterDispatcher.Effects(
+            rank: { _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _, _ in throw no },
+            send: { _, delivery in sent.append(delivery.body); return "ok model=opus" },
+            answer: { _, _, _ in throw no }, run: { _, _, _ in throw no },
+            finish: { tools, held in
+                finished.append(held)
+                await withCheckedContinuation { go = $0 }
+                #expect(tools.verbatim, "Lookout's own words, taken as they are")
+                return RouterDispatcher.Delivery(to: "peer-late", text: "SIGNED", body: held.ready?.text ?? "", original: "", rephrased: false,
+                                                 session: held.waiting.sessionID, newSessionIn: held.project, settings: held.settings,
+                                                 settingsSigned: true)
+            })
+        let request = Self.request(model: "opus", message: "Look at the PR")
+        let started = try await ActionSessions.start(request, store: store, clones: ["/code/r"], launcher: launcher(store, log), chooser: nil)
+        #expect(started == ActionSessionStarted(sessionID: "local_late", project: "r"))
+        #expect(store.router.origins["local_late"]?.actionID == request.action.uuidString)
+        let id = try #require(store.router.decisions.last?.id)
+        #expect(store.router.decisions.last?.done == [.started(session: "local_late", project: "r", model: nil, effort: nil)])
+        #expect(store.routerDispatcher.held[id] != nil && store.router.decisions.last?.outcome == .pending)
+        await waitUntil { go != nil }
+        #expect(finished.first?.ready?.text == "Look at the PR" && finished.first?.settings == SessionSettings(model: "opus", effort: nil))
+        go?.resume()
+        await waitUntil { store.router.decisions.last?.outcome == .done }
+        #expect(sent == ["Look at the PR"])
+        #expect(store.router.decisions.last?.doneLines == ["started a session in r (opus)", "sent to peer-late: Look at the PR"])
+    }
+
     @Test func aFailedLaunchIsLoggedAsFailedAndLeavesNoTag() async {
         let store = ready()
         let log = LauncherLog()

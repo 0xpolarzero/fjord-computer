@@ -240,6 +240,8 @@ extension RouterModel {
             live.clear()
             return predictTarget(store: store)
         }
+        // A target picked ends an edit: the draft goes there instead.
+        editing = nil
         if p.target.hasPrefix("answer:") {
             replyTo = String(p.target.dropFirst("answer:".count))
         } else {

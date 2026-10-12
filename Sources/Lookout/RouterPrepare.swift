@@ -876,31 +876,21 @@ enum SessionStart {
 
     /// How long a new session has to run in the Claude app before it is reported: the import takes a second, its process
     /// a few more.
-    static let processWait: TimeInterval = 45
+    static let processWait: TimeInterval = 30
     /// How long its first message is held for once the app has the session but doesn't run it yet (`NotRunning`).
     static let heldWait: TimeInterval = 30 * 60
-    /// At its limit, how long the app has to run the session anyway (a process of another session may just be going).
-    static let fullGrace: TimeInterval = 5
-
-    /// How many Claude Code processes the Claude app runs at once (its CLI governor: one per 3 GB of memory, at least 6). A
-    /// session it imports past that isn't run (the app gives up on the start, and doesn't retry it) until a slot frees and
-    /// you open it, or you send it something there.
-    static var appLimit: Int { max(6, Int(ProcessInfo.processInfo.physicalMemory / (3 << 30))) }
 
     /// The Claude app has the session (it imported it) but doesn't run it: its process isn't there to take a message yet.
+    /// Usually the app is at its limit of sessions run at once (its CLI governor: one per 3 GB of memory, at least 6): an
+    /// imported session's start is then given up, not retried, until a slot frees and it is opened, or something is sent to
+    /// it in the app. Lookout can't count the app's sessions as the app does, so it never says the app is full.
     struct NotRunning: LocalizedError, Equatable {
         /// `local_<uuid>`.
         var sessionID: String
-        /// The app's limit of sessions run at once, when it is at it (the likely reason); nil otherwise. Lookout's count of
-        /// registered processes isn't the app's own (it counts more), so only the limit is said.
-        var full: Int? = nil
         var errorDescription: String? {
-            "The new session is in the Claude app, but the app hasn't run it yet" + Self.reason(full)
+            "The new session is in the Claude app, but the app hasn't run it yet" + Self.reason
         }
-        static func reason(_ full: Int?) -> String {
-            full.map { " (it runs at most \($0) sessions at once and is at that limit): close one you're done with, then open the new one" }
-                ?? ": open it there"
-        }
+        static let reason = ": open it there (the app runs only so many sessions at once; close one you're done with if it doesn't start)"
     }
 
     /// Whether the Claude app has `local_<uuid>` (imported): its file under the app's sessions folder (account/org/<id>.json).
@@ -915,28 +905,23 @@ enum SessionStart {
 
     /// Waits (polling the registry off the main thread) for the app's process of `local_<uuid>`; its peer name.
     /// `check` is asked between polls (Stop, a reset): it throws to end the wait. `imported` says whether the app has the
-    /// session: once it has, and runs `limit` sessions or more, the wait ends early (the app won't run it now). A session the
-    /// app has but doesn't run throws `NotRunning`; one it never got, `RouterTools.Failure`.
-    static func waitForPeer(uuid: String, dir: URL, timeout: TimeInterval = processWait, limit: Int = appLimit,
-                            grace: TimeInterval = fullGrace, imported: @escaping @Sendable () -> Bool = { false },
+    /// session: one it has but doesn't run by `timeout` throws `NotRunning`; one it never got, `RouterTools.Failure`.
+    static func waitForPeer(uuid: String, dir: URL, timeout: TimeInterval = processWait,
+                            imported: @escaping @Sendable () -> Bool = { false },
                             check: @MainActor () throws -> Void = {}) async throws -> String {
         let host = "local_\(uuid)"
-        let start = Date(), deadline = start.addingTimeInterval(timeout)
-        var running = 0, there = false
+        let deadline = Date().addingTimeInterval(timeout)
+        var there = false
         repeat {
             try Task.checkCancellation()
             try await check()
             let (peers, has) = await OffMain.run { (ClaudePeers.read(dir: dir), imported()) }
             if let peer = peers[host] { return peer.name }
-            running = peers.count
             there = has
-            if there, running >= limit, Date().timeIntervalSince(start) >= grace {
-                throw NotRunning(sessionID: host, full: limit)
-            }
             if Date() >= deadline { break }
             try await Task.sleep(nanoseconds: 250_000_000)
         } while true
-        if there { throw NotRunning(sessionID: host, full: running >= limit ? limit : nil) }
+        if there { throw NotRunning(sessionID: host) }
         throw RouterTools.Failure("The Claude app didn't open the new session in \(Int(RouterTools.bounded(timeout))) s")
     }
 }

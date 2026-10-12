@@ -845,6 +845,12 @@ private struct HistoryDecisionLine: View, Equatable {
                         .cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
                     Text("· \(status)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                    // A held start's first message: yours to drop (Stop leaves it be).
+                    if decision.outcome == .pending, store.routerDispatcher.held[decision.id] != nil {
+                        Button("Don't send") { store.routerDispatcher.dropHeld(decision.id) }
+                            .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
+                            .help("Its first message isn't sent; the session stays in the Claude app")
+                    }
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
                     Text(shortAgo(decision.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
@@ -904,11 +910,11 @@ private struct DecisionDetails: View {
                     // and that again with the message edited.
                     if let sent = decision.sentMessage, store.routerOn, store.claudeSessions[sent.session].map({ !$0.isArchived }) == true {
                         ClaudeButton("Edit and resend", variant: .ghost, size: .sm, icon: "pencil") {
-                            model.edit(session: sent.session, message: sent.text)
+                            model.edit(session: sent.session, message: sent.text, sentAt: sent.at)
                         }
                         .help("Opens it in the composer; sending it starts a fork of the session from before this message. Files the agent changed aren't rolled back")
                         ClaudeButton("Fork from before this", variant: .ghost, size: .sm, icon: "arrow.triangle.branch") {
-                            store.forkSession(sent.session, point: .before(sent.text))
+                            store.forkSession(sent.session, point: .before(sent.text, after: sent.at))
                         }
                         .help("A new session with this one's conversation up to before this message; files aren't rolled back")
                     }
