@@ -223,7 +223,15 @@ final class Store {
     }
     /// The Router page's history (see `RouterPage.history`), worked out when the router changes and only then: the page
     /// reads it on every redraw.
-    private(set) var routerHistory: [RouterPage.Entry] = []
+    private(set) var routerHistory: [RouterPage.Entry] = [] {
+        didSet { routerSearchRevision &+= 1 }
+    }
+    /// Bumped when what the history is searched by changes (its lines, the projects' names): what the Router's search
+    /// keeps its work by (RouterSearch.swift). Observed, so a search's memo hit still redraws on the next change.
+    private(set) var routerSearchRevision = 0
+    /// Each history line's search text, in the history's order, as of the revision it was made for: made on the first
+    /// search after a change and kept for the searches after it (`routerHistorySearchKeys`).
+    @ObservationIgnored var routerHistoryKeys: (revision: Int, keys: [String])?
     /// Bumped on every change to `router`: a cheap memo/animation key.
     private(set) var routerRevision = 0
     /// How many times each card has changed (see `countCardChanges`).
@@ -240,7 +248,10 @@ final class Store {
     var routerPluginError: String?
     /// Every project's name, with as much of its path as tells it from another of the same name (`customer-a/app`): worked
     /// out when the folders change, not by each view that names a project. Only a change in it redraws what reads it.
-    var folderNames: [String: String] = [:]
+    var folderNames: [String: String] = [:] {
+        // The history is searched by its cards' project names too.
+        didSet { routerSearchRevision &+= 1 }
+    }
     /// The folders `folderNames` was worked out for: the work is skipped while they are the same.
     @ObservationIgnored var namedFoldersSeen: Set<String>?
     /// The git repos in your code folders, kept fresh (CodeFolders.swift).

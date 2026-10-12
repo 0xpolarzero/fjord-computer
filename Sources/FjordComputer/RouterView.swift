@@ -372,6 +372,8 @@ final class RouterModel {
     /// The search over Now and History, in the page's header (RouterSearch.swift), and the folds made while it is on.
     let search = InboxSearch()
     var searchFolds: Set<RouterZone> = []
+    /// The history as the search last left it, for its words and the history's revision (`searchedHistory`).
+    @ObservationIgnored var searchedHistoryMemo: (query: String, revision: Int, entries: [RouterPage.Entry])?
     /// Jev's pick for the draft while you type, and the target you fixed from it (see RouterJev.swift).
     let live = RouterLiveTarget()
     /// What the pills in the draft point to, one for each `MentionText.mark` in it, in order.

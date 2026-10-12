@@ -184,4 +184,50 @@ import Testing
         #expect(keys.key(key(kVK_Escape), responder: nil))
         #expect(model.search.query.isEmpty && model.replyTo == reply && !closed)
     }
+
+    /// The searched history is worked out once per change of the words or the history, and follows every change that could
+    /// alter it: a line's text, the project names, a card leaving the history or coming back, lines arriving.
+    @Test func theSearchedHistoryIsKeptBetweenRedrawsAndFollowsEveryChange() throws {
+        let store = demo()
+        let model = RouterModel()
+        var state = store.router
+        let i = try #require(state.cards.firstIndex { !$0.isOpen && $0.folder != nil })
+        let card = state.cards[i]
+        model.search.query = "zzqxv"
+        #expect(model.history(store).isEmpty)
+        // Read again (a redraw): nothing is made again.
+        let revision = store.routerSearchRevision
+        #expect(store.routerHistoryKeys?.revision == revision && model.searchedHistoryMemo?.revision == revision)
+        _ = model.history(store)
+        #expect(store.routerSearchRevision == revision && model.searchedHistoryMemo?.query == "zzqxv")
+        // An addressed card's brief comes in with the word: found at once. Its asks too.
+        state.cards[i].brief = "Says zzqxv now"
+        store.router = state
+        #expect(model.history(store).map(\.id) == [card.id])
+        state.cards[i].brief = nil
+        state.cards[i].asks = [RouterAsk(question: "Which?", options: ["ZZQXV"])]
+        store.router = state
+        #expect(model.history(store).map(\.id) == [card.id])
+        // Reopened, it leaves the history and so the search; archived again, it is back.
+        store.setCardAddressed(card.id, false)
+        #expect(model.history(store).isEmpty)
+        store.setCardAddressed(card.id, true)
+        #expect(model.history(store).map(\.id) == [card.id])
+        // A card addressed, a run logged and a summary made since: each listed as it comes.
+        state = store.router
+        state.cards.append(RouterCard(id: "n#t1", sessionID: "n", kind: .done, title: "Zzqxv landed", folder: card.folder,
+                                      text: "Done", createdAt: Date(), addressedAt: Date(), addressedBy: .you))
+        state.decisions.append(RouterDecision(trigger: .you("Ship zzqxv")))
+        state.summaries.append(RouterSummary(at: Date(), text: "Working on zzqxv", sessionID: "n", title: "N"))
+        store.router = state
+        #expect(model.history(store).count == 4)
+        // A project's name changes: its cards are found by the new one.
+        model.search.query = "qqwwee"
+        #expect(model.history(store).isEmpty)
+        store.folderNames[card.folder!] = "qqwwee"
+        #expect(model.history(store).contains { $0.id == card.id })
+        // No words: the history as stored.
+        model.search.query = ""
+        #expect(model.history(store) == store.routerHistory)
+    }
 }

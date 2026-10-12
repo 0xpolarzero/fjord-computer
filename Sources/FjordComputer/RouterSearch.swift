@@ -61,7 +61,24 @@ enum RouterSearch {
     static func history(_ entries: [RouterPage.Entry], query: String, project: (RouterCard) -> String) -> [RouterPage.Entry] {
         let words = words(query)
         guard !words.isEmpty else { return entries }
-        return entries.filter { matches(key($0, project: project), words) }
+        return history(entries, keys: entries.map { key($0, project: project) }, words: words)
+    }
+
+    /// The lines whose search text (`keys`, one per line, in order) holds every word, in order.
+    static func history(_ entries: [RouterPage.Entry], keys: [String], words: [Substring]) -> [RouterPage.Entry] {
+        zip(entries, keys).compactMap { matches($1, words) ? $0 : nil }
+    }
+}
+
+extension Store {
+    /// Each history line's search text (`RouterSearch.key`), in the history's order. Made on the first search after the
+    /// history or the projects' names change (`routerSearchRevision`) and kept for the searches after it: a keystroke
+    /// then only matches the words, and lowercases nothing.
+    func routerHistorySearchKeys() -> [String] {
+        if let kept = routerHistoryKeys, kept.revision == routerSearchRevision { return kept.keys }
+        let keys = routerHistory.map { RouterSearch.key($0, project: { routerProject($0).name }) }
+        routerHistoryKeys = (routerSearchRevision, keys)
+        return keys
     }
 }
 
@@ -98,11 +115,22 @@ extension RouterModel {
                                           doing: { store.liveExplanation($0) })
     }
 
+    /// The history lines holding every word of the search, in order (all of them with none). The page reads it on every
+    /// redraw and the keys on every press: it is worked out again only as the words or the history change (the store's
+    /// `routerSearchRevision`: its lines, the projects' names), over the search texts the store keeps, so a redraw between
+    /// keystrokes costs nothing and a keystroke only the matching.
+    func searchedHistory(_ store: Store) -> [RouterPage.Entry] {
+        guard searching else { return store.routerHistory }
+        let query = search.query, revision = store.routerSearchRevision
+        if let memo = searchedHistoryMemo, memo.query == query, memo.revision == revision { return memo.entries }
+        let entries = RouterSearch.history(store.routerHistory, keys: store.routerHistorySearchKeys(), words: RouterSearch.words(query))
+        searchedHistoryMemo = (query, revision, entries)
+        return entries
+    }
+
     /// The history as the search and the Unread filter leave it.
     func history(_ store: Store) -> [RouterPage.Entry] {
-        let entries = searching
-            ? RouterSearch.history(store.routerHistory, query: search.query, project: { store.routerProject($0).name })
-            : store.routerHistory
+        let entries = searchedHistory(store)
         guard unreadOnly else { return entries }
         return entries.filter { entry in
             guard case .card(let card) = entry else { return false }
