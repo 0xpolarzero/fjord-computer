@@ -38,6 +38,9 @@ struct RouterContext: Equatable {
     /// one, never the Router's own runs: an incoming PR must never change settings), and when where isn't clear it waits for
     /// your pick, with no fallback.
     var action: RouterActionSource?
+    /// Sent from the Router page's composer: its run shows as a pill over the composer, flying to where it went
+    /// (`RouterFlights`), and an ask about it unfolds there rather than in Needs you.
+    var flies = false
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
          predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = []) {
@@ -199,6 +202,8 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Asks waiting for a pick, oldest first.
     private(set) var askBacks: [RouterAskBack] = []
+    /// The runs of messages sent from the composer (`RouterContext.flies`), oldest first: the composer's pills.
+    private(set) var flying: [UUID] = []
     /// How far each run under way is, by its entry in the log ("classifying", "sending"…).
     private(set) var progress: [UUID: String] = [:]
     /// A run of yours is under way: the composer shows Stop. An action's message being placed, or waiting its turn, is the
@@ -251,6 +256,9 @@ struct RouterAskBack: Identifiable, Equatable {
         var tools: RouterTools
     }
 
+    /// A composer pill is done with (landed, failed or dismissed): its run is no longer one of `flying`.
+    func forgetFlying(_ id: UUID) { flying.removeAll { $0 == id } }
+
     /// A demo or a shot: an ask waiting for you and runs shown under way, with nothing behind them.
     func preview(ask: RouterAskBack, progress runs: [UUID: String] = [:]) {
         askBacks = [ask]
@@ -282,6 +290,7 @@ struct RouterAskBack: Identifiable, Equatable {
         entry.fromAction = context.action?.origin
         entry.actionStart = context.action.map { .init(title: $0.title, model: $0.model, effort: $0.effort) }
         let id = store.logDecision(entry)
+        if context.flies, context.action == nil { flying.append(id) }
         let job = Job(id: id, text: text, context: context,
                       tools: makeTools(id, text, pills: context.pills, mentions: context.mentions, action: context.action != nil))
         // Actions' messages one at a time, in order (`nextAction`); yours at once.
