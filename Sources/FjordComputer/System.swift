@@ -338,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var playground: Playground?
     private var appWindow: AppWindowController?
     private var sigtermSource: DispatchSourceSignal?
+    private var motion: MotionScriptPlayer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
@@ -437,6 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         globalShortcuts = globals
         // The first launch opens on the onboarding, where the tools are picked.
         if CommandLine.arguments.contains("--open") || store.settings.toolsPicked != true { toggleWindow() }
+        playMotionScript(demo: demo)
         if CommandLine.arguments.contains(Lifecycle.flag) {
             Lifecycle.start(store)
         } else {
@@ -488,6 +490,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// was left, whether it was closed, minimized or behind another app.
     private func toggleWindow() {
         if appWindow?.shortcutCloses == true { appWindow?.close() } else { showWindow(nil) }
+    }
+
+    /// `--motion-script` (`MotionScript`), with `--demo` only: the motions played on a timer for `scripts/motion-trace.sh`.
+    /// A script that doesn't parse ends the app, so a recording never runs on nothing.
+    private func playMotionScript(demo: Bool) {
+        let script: MotionScript?
+        do {
+            script = try MotionScript.parse(arguments: CommandLine.arguments)
+        } catch {
+            FileHandle.standardError.write(Data("motion: not a script (steps among open, close, fold, peek, drag, then xN)\n".utf8))
+            exit(2)
+        }
+        guard let script else { return }
+        guard demo else {
+            FileHandle.standardError.write(Data("motion: \(MotionScript.flag) plays only with --demo\n".utf8))
+            return
+        }
+        let player = MotionScriptPlayer()
+        player.open = { [weak self] in if self?.appWindow?.shortcutCloses == false { self?.toggleWindow() } }
+        player.close = { [weak self] in if self?.appWindow?.shortcutCloses == true { self?.toggleWindow() } }
+        player.fold = { SidebarState.shared.toggle() }
+        player.peek = { [weak self] in
+            guard let hub = self?.hub, !hub.barAway else { return nil }
+            // The pointer's own check first: off the bar, it lifts the quiet a window's close leaves.
+            hub.mouseMoved()
+            guard !hub.hub.quiet else { return nil }
+            hub.hub.enter(.inbox)
+            return {
+                hub.hub.cancelDwell()
+                hub.hub.section = nil
+            }
+        }
+        player.drag = { [weak self] in self?.hub?.dragToOppositeEdge() ?? false }
+        player.play(script, quitAfter: CommandLine.arguments.contains(MotionScript.quitFlag))
+        motion = player
     }
 
     /// The Dock icon (there while the window is open): the window in front, whatever was in front of it.

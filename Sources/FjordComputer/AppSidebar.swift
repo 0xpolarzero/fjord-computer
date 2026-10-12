@@ -6,10 +6,11 @@ import SwiftUI
 // Inbox: each category shown (its symbol in its colour, what is unread or failing), then Done. The Router after it, with
 // what needs you and what is done. Settings and the inbox's categories at the bottom.
 
-/// Whether the sidebar is an icon rail, remembered across launches (a shot or a test passes `defaults: nil`).
+/// Whether the sidebar is an icon rail, remembered across launches (a shot or a test passes `defaults: nil`; a demo
+/// remembers nothing, so trying it never changes your own).
 @MainActor @Observable
 final class SidebarState {
-    static let shared = SidebarState(defaults: .standard)
+    static let shared = SidebarState(defaults: Store.isDemo ? nil : .standard)
     private static let key = "appSidebarCollapsed"
 
     @ObservationIgnored private let defaults: UserDefaults?
@@ -27,7 +28,10 @@ final class SidebarState {
 
     func set(collapsed value: Bool) {
         guard value != collapsed else { return }
-        withAnimation(Self.animation) { collapsed = value }
+        let fold = LatencySignposts.signposter.beginInterval("Fold")
+        withAnimation(Self.animation, completionCriteria: .logicallyComplete) { collapsed = value } completion: {
+            LatencySignposts.signposter.endInterval("Fold", fold)
+        }
         defaults?.set(value, forKey: Self.key)
     }
 

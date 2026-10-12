@@ -153,6 +153,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // Until the opening's first frame is flushed (see `startOpening`), or at once when there is no morph.
         let asked = MorphSignposts.signposter.beginInterval("Open to first flush")
         defer { MorphSignposts.signposter.endInterval("Open to first flush", asked) }
+        LatencySignposts.windowAsked()
         Self.active = self
         settle()
         var destination = destination

@@ -86,7 +86,10 @@ final class HubState {
         dwell = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
             guard let self, !Task.isCancelled, !barHidden, !quiet, !dragging else { return }
+            // "Peek": until the commit that carries the panel to the render server, its first frame.
+            let peek = LatencySignposts.signposter.beginInterval("Peek")
             section = next
+            LatencySignposts.endAfterCommit("Peek", peek)
         }
     }
 

@@ -388,6 +388,8 @@ final class HubController {
     /// The app window is open (or closed): the bar leaves the edge, and comes back where it was. The pointer may be over it
     /// when it does, which shows no peek until it has left. Opening is also bringing it to the front.
     func setWindowOpen(_ open: Bool) {
+        // An opening that found the bar away already has no "Bar away" to time (one that fades it out has ended it).
+        defer { if open { LatencySignposts.barStayed() } }
         guard open != windowOpen || (open && !windowFront) else { return }
         windowOpen = open
         windowFront = open
@@ -409,7 +411,9 @@ final class HubController {
         let frame = hubScreenFrame
         var image: NSImage?
         if window.isVisible, !barApplied, let rep = host.bitmapImageRepForCachingDisplay(in: layout.frame) {
+            let capture = LatencySignposts.signposter.beginInterval("Bar capture")
             host.cacheDisplay(in: layout.frame, to: rep)
+            LatencySignposts.signposter.endInterval("Bar capture", capture)
             image = NSImage(size: layout.frame.size)
             image?.addRepresentation(rep)
         }
@@ -479,6 +483,7 @@ final class HubController {
     }
 
     private func fadeOut() {
+        LatencySignposts.barLeaving()
         let mine = barGeneration
         guard AppTransition.enabled else { finishFadeOut(mine); return }
         NSAnimationContext.runAnimationGroup({ context in
@@ -580,12 +585,14 @@ final class HubController {
             guard let self else { return }
             let size = self.host.fittingSize
             let target = self.restFrame(size: size, in: vf)
+            let glide = LatencySignposts.signposter.beginInterval("Drag")
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.26
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 self.window.animator().setFrame(target, display: true)
             }, completionHandler: {
                 MainActor.assumeIsolated {
+                    LatencySignposts.signposter.endInterval("Drag", glide)
                     self.dragStart = nil
                     self.hub.dragging = false
                     self.dock()
@@ -593,6 +600,24 @@ final class HubController {
                 }
             })
         }
+    }
+
+    /// `--motion-script`'s drag: the bar picked up and dropped by the opposite edge through the pointer's own path, with
+    /// points made up instead of a hand's, so the glide is the one a drag ends in. False when the bar can't be carried now.
+    func dragToOppositeEdge() -> Bool {
+        guard !barAway, dragStart == nil, layout.frame != .zero else { return false }
+        let vf = screen.visibleFrame
+        let from = NSPoint(x: hubScreenFrame.midX, y: hubScreenFrame.midY)
+        let to = switch ui.edge {
+        case .right: NSPoint(x: vf.minX + 20, y: from.y)
+        case .left: NSPoint(x: vf.maxX - 20, y: from.y)
+        case .top: NSPoint(x: from.x, y: vf.minY + 20)
+        case .bottom: NSPoint(x: from.x, y: vf.maxY - 20)
+        }
+        dragChanged(to: from)
+        dragChanged(to: to)
+        dragEnded(at: to)
+        return true
     }
 
     /// Where the bar rests on its edge: the same place `EdgeLayout` puts it once docked.
