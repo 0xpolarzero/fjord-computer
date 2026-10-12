@@ -354,19 +354,22 @@ extension RouterTools {
 /// Jev reads the message well and the board's recency poorly (minutes and order are his weak spots), and his sureness
 /// was 97% right on written cases but 63% on real ones. A small model weighs his answers with what the board says, fitted
 /// on real moments and written cases (evals/router/explore/fuse2.py): P(destination) = softmax of `weights` · features;
-/// the fused pick's chance of being right is a logistic on the moment (`sureness`).
+/// the fused pick's chance of being right is a logistic on the moment (`sureness`). Six weights and the sureness were
+/// refitted on real moments alone (evals/router/explore/v2_fusion): written episodes switch sessions twice as often as
+/// you do, and fitting on them taught too many switches. Real top-1 63.1% → 67.4% (+4.3 points, 95% CI +1.6 to +7.3,
+/// grouped cross-validation), the sureness better calibrated (ECE 0.056 → 0.023).
 @MainActor
 enum RouteFusion {
     static let weights: [String: Double] = [
         "lp": 0.84,                                   // Jev's route probability (log, floored at 0.001)
-        "fin0": 0.55, "fin1": 1.16, "fin2": 0.29,     // 1st / 2nd / 3rd most recently finished session
-        "run": -1.26,                                 // still running
-        "reply": 0.64,                                // "is it the answer to this session's card?" yes
+        "fin0": 1.36, "fin1": 1.16, "fin2": 1.08,     // 1st / 2nd / 3rd most recently finished session
+        "run": 1.79,                                  // still running: you often follow up while it works
+        "reply": 1.54,                                // "is it the answer to this session's card?" yes
         "told0": 0.72,                                // the session your last message went to
         "fin0u": 1.03, "idle5u": 2.44,                // latest / finished ≤ 5 min ago, times Jev's `unclear` p
-        "nxt": 0.87,                                  // "is it your next message in this conversation?" yes
+        "nxt": 1.70,                                  // "is it your next message in this conversation?" yes
         "f_said": 1.11, "f_old": 1.36,                // the message's words in the session's last answer, older turns
-        "f_you": -0.84,                               // …in what you last told it: a message repeating it starts anew
+        "f_you": -0.64,                               // …in what you last told it: a message repeating it starts anew
         "f_title": -0.57,                             // …in its title (it already weighs in Jev's reading)
         "new": 0.66,
         "question": -0.57, "compound": 1.03, "change_lookout": 0.63,
@@ -375,8 +378,8 @@ enum RouteFusion {
         "ilong": -1.51,                               // an intent for a message over 80 characters
     ]
     static let sureness: [String: Double] = [
-        "bias": 0.88, "lPtop": 1.28, "lgap": -0.3, "ljev": -0.21, "agree": 0.44, "u": -1.44, "lenlog": -0.35,
-        "recent2": -0.4, "top_fin0": -0.02, "top_intent": 0.46, "top_new": 0.82, "top_reply": 0.31,
+        "bias": -0.47, "lPtop": 0.69, "lgap": 0.09, "ljev": -0.10, "agree": 0.06, "u": -0.47, "lenlog": 0.00,
+        "recent2": 0.10, "top_fin0": 0.07, "top_intent": -0.24, "top_new": 0.81, "top_reply": 0.32,
     ]
     /// The rules' send stands when the fused P gives it at least this and the fused pick is the same at `rulesSure`;
     /// else the fused pick is sent at `sure`. On real moments the rules made 24 of 25 wrong sends; the fused pick at 0.9

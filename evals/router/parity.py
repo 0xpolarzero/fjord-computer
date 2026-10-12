@@ -21,7 +21,14 @@ def target(dest, board_ids):
 
 
 def main():
-    w, v = final3.fitted()
+    # The weights Lookout carries (RouteFusion's tables), so the fixture checks Swift computes as Python does with them.
+    # final3.fitted's setup without its fit: the lexical fields as features, the tie-inclusive `agree`.
+    from v2.run.episodes import _shipped_weights
+    L.install()
+    Fu.case_features = final3.case_features
+    L.STATE["fields"] = True
+    w, v = _shipped_weights()
+    final3._FIT["combo-o"] = (w, v)
     pol = final3.make(w, v)
     out = []
     for s in ("synth", "heldout"):
