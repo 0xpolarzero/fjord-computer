@@ -148,9 +148,11 @@ extension FjordHub {
 
     /// On glass the glass itself does the coming and going (`glassEffectTransition`, on the `glass` spring): the panel is there
     /// at once and its content fades in behind, and going, its content fades on `fade` as its glass goes back into the bar
-    /// (`PeekReveal`). Reduce Motion: a plain fade both ways.
+    /// (`PeekReveal`). The removal also fades the whole panel on the transaction's spring: a transition that animates
+    /// nothing was taken out at once (seen on screen), so the opacity keeps it there while its glass goes back. Reduce
+    /// Motion: a plain fade both ways.
     var glassPeekTransition: AnyTransition {
-        reduce ? .opacity : AnyTransition(PeekLeave())
+        reduce ? .opacity : .asymmetric(insertion: .identity, removal: AnyTransition(PeekLeave()).combined(with: .opacity))
     }
 
     /// On glass, the panels measured out of sight (`toMeasure`).
