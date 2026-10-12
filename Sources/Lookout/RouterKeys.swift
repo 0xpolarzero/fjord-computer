@@ -14,6 +14,8 @@ final class RouterKeys {
     let model: RouterModel
     let close: () -> Void
 
+    static let pickKeys = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4]
+
     init(store: Store, model: RouterModel, close: @escaping () -> Void) {
         self.store = store
         self.model = model
@@ -29,6 +31,14 @@ final class RouterKeys {
         let code = Int(event.keyCode)
         // The @ suggestions are the caret's: where it is now decides what the keys do.
         if model.composerFocused, let editor = responder as? NSTextView { model.followCaret(editor) }
+        // ⌘1–⌘4 pick that button on the newest "Where should this go?", wherever the keyboard is. By key position, so on
+        // any layout (on AZERTY, the & é " ' keys).
+        if flags == .command, let index = Self.pickKeys.firstIndex(of: code), let ask = store.routerDispatcher.askBacks.last {
+            let options = ask.options.filter { store.routerDispatcher.eligible($0.target, store: store) }
+            guard index < options.count else { return false }
+            store.routerDispatcher.pick(ask.id, target: options[index].target)
+            return true
+        }
         if code == kVK_Escape, flags.isEmpty {
             let plan = model.expandedPlan(store)
             if let revising = model.revisingPlan, revising == plan?.id { model.revisingPlan = nil }

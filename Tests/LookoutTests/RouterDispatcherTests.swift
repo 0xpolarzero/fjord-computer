@@ -1,3 +1,5 @@
+import AppKit
+import Carbon
 import Foundation
 import Testing
 @testable import Lookout
@@ -643,6 +645,25 @@ import Testing
         let pick = lines.first { $0.id == asked && $0.kind == .corrected }
         #expect(pick?.target == "session:local_a" && pick?.from == "session:local_b" && pick?.index != nil)
         _ = s
+    }
+
+    @Test func commandAndANumberPicksThatButtonOnTheNewestAsk() async {
+        let (s, d, f) = setup()
+        s.routerDispatcher = d
+        f.ranked = [.init(target: "session:local_b", p: 0.5), .init(target: "session:local_a", p: 0.4)]
+        let asked = d.submit("and the docs too")!
+        await finish(d, f, asked)
+        let options = d.askBacks.last!.options.filter { d.eligible($0.target, store: s) }
+        try? #require(options.count >= 2)
+        let keys = RouterKeys(store: s, model: RouterModel()) {}
+        // By key position: the "2" key (é on AZERTY) with ⌘.
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0,
+                                     context: nil, characters: "é", charactersIgnoringModifiers: "é", isARepeat: false,
+                                     keyCode: UInt16(kVK_ANSI_2))!
+        f.finished = []
+        #expect(keys.key(event, responder: nil))
+        await finish(d, f, asked)
+        #expect(d.askBacks.isEmpty && decision(s, asked)?.decision.targetID == options[1].target)
     }
 
     @Test func nothingIsTracedUnderATestUnlessItGivesAFile() {
