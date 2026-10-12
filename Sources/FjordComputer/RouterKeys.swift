@@ -8,7 +8,7 @@ import Foundation
 /// leaves only by its Archive button). The cards are walked in the order the page shows them (`RouterModel.cards`). Esc is
 /// first the Back of a plan in revise mode (its feedback field showing), then dismisses the suggestions, then Jev's pick of a
 /// target, then the pinned target, then the search, then the reply chip, then is the Revise… of the plan shown in full, then
-/// closes the window. ⌘F puts the keyboard in the search field (RouterSearch.swift), where ↑↓ walk what it lists, Return
+/// (on the canvas) folds the card open on it and clears its filter, then closes the window. ⌘F puts the keyboard in the search field (RouterSearch.swift), where ↑↓ walk what it lists, Return
 /// replies to the pick and Esc ends the search first; typing elsewhere still goes to the composer.
 @MainActor
 final class RouterKeys {
@@ -62,6 +62,9 @@ final class RouterKeys {
             else if !model.search.query.isEmpty { model.endSearch() }
             else if model.replyTo != nil { model.replyTo = nil }
             else if let plan { model.revisingPlan = plan.id }
+            // On the canvas: the card open on it folds, then its filter goes, before the window closes.
+            else if model.layout == .canvas, model.foldCanvasNode(store) {}
+            else if model.layout == .canvas, !model.canvas.filter.isEmpty { model.canvas.filter = [] }
             else { close() }
             return true
         }

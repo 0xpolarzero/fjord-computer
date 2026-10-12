@@ -157,6 +157,16 @@ enum RouterCanvasModel {
         return out
     }
 
+    /// The node a reveal goes to: an item drawn (a card's id, a row's `working#…`), or for a section of Now (its zone's
+    /// raw value) the first item of that group, frame by frame. Nil for what the canvas doesn't draw: the history's end, a
+    /// section's fold, an item folded away or past "+n more".
+    static func target(forReveal id: String, in folders: [CanvasFolder], folded: (CanvasFolder) -> Bool = { _ in false }) -> String? {
+        let drawn = folders.filter { !folded($0) }
+        if drawn.contains(where: { $0.shown.contains { $0.items.contains { $0.id == id } } }) { return id }
+        guard let zone = RouterZone(rawValue: id), let group = CanvasGroup.allCases.first(where: { $0.zone == zone }) else { return nil }
+        return drawn.lazy.compactMap { $0.shown.first { $0.group == group }?.items.first?.id }.first
+    }
+
     /// The items drawn, folder by folder, group by group, as they read: what the keys and VoiceOver go by. A folded frame's
     /// items aren't drawn.
     static func order(_ folders: [CanvasFolder], folded: (CanvasFolder) -> Bool = { _ in false }) -> [String] {

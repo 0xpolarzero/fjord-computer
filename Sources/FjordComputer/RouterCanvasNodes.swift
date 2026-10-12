@@ -77,6 +77,9 @@ struct CanvasFolderFrame: View {
                             .environment(\.canvasNodeID, node.id)
                             .environment(\.cdsColumnWidth, CanvasMetrics.cardW)
                             .frame(width: CanvasMetrics.cardW, alignment: .leading)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
+                                model.canvas.nodeRects[node.id] = rect
+                            }
                             .canvasGroup(node.group)
                             .transition(.scaleFade(0.97, reduce: reduceMotion))
                         }
@@ -284,17 +287,32 @@ struct CanvasNode: View {
             CardView(store: store, model: model, card: card, expanded: model.expandedNeed == card.id,
                      form: store.pendingForm(for: card), project: store.routerProject(card), formCap: Self.formCap, showsProject: false)
         case .ready(let card), .waiting(let card):
-            WaitingCard(store: store, card: card, standalone: true)
+            WaitingCard(store: store, card: card, standalone: true, open: openRow(item.id))
         case .note(let card):
             CardView(store: store, model: model, card: card, expanded: model.expandedNeed == card.id, form: nil,
                      project: store.routerProject(card), quiet: true, showsProject: false)
         case .working(let row):
             WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id],
-                        unanswered: page.unanswered[row.id] ?? [], standalone: true)
+                        unanswered: page.unanswered[row.id] ?? [], standalone: true, open: openRow(item.id))
         case .done(let card):
             MinuteTicking { now in
                 HistoryCardLine(card: card, now: now, open: model.expanded.contains(card.id),
                                 marked: model.selection == card.id || model.highlighted == card.id, store: store, model: model)
+            }
+        }
+    }
+
+    /// A Working or Waiting row's opening, the canvas's one open node (`RouterModel.canvasOpen`).
+    private func openRow(_ id: String) -> Binding<Bool> {
+        let model = model
+        return Binding {
+            model.canvas.openRow == id
+        } set: { on in
+            if on {
+                model.canvasOpen(id)
+                model.canvas.openRow = id
+            } else if model.canvas.openRow == id {
+                model.canvas.openRow = nil
             }
         }
     }

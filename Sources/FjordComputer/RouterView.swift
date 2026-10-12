@@ -441,7 +441,7 @@ final class RouterModel {
     /// The plan of the card shown in full in Needs you, while it can still be decided: Esc opens its revise mode (Revise…)
     /// once nothing else is there to dismiss, and is Back while it is in it.
     func expandedPlan(_ store: Store) -> PendingForm? {
-        guard let id = zones(store).openNeed(preferred: expandedNeed),
+        guard let id = openNeed(store),
               let card = store.router.cards.first(where: { $0.id == id }),
               let form = store.pendingForm(for: card), form.isPlan, !locked(form) else { return nil }
         return form
@@ -472,6 +472,12 @@ final class RouterModel {
         let earlier = history(store).compactMap { entry -> RouterCard? in
             guard case .card(let card) = entry, let now = byID[card.id], !now.isOpen else { return nil }
             return now
+        }
+        // On the canvas, the open cards as it draws them, frame by frame (its Done lines are the history's cards).
+        if layout == .canvas {
+            let open = Dictionary((page.needs + page.ready + page.notes).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            let order = RouterCanvasModel.order(canvasFolders(store, page: page), folded: canvas.folded)
+            return (order.compactMap { open[$0] }, [], earlier)
         }
         return (page.needs + page.ready, page.notes, earlier)
     }
@@ -544,6 +550,7 @@ final class RouterModel {
 
     /// The picked card opened (in full in Needs you, out in the history) and, if `shows`, gone to.
     private func showPick(_ id: String, store: Store, reveal shows: Bool, expand: Bool = true) {
+        if layout == .canvas { return showOnCanvas(id, store: store, reveal: shows, expand: expand) }
         if let card = store.router.cards.first(where: { $0.id == id }) {
             // A session waiting is a row under Working; one whose wait is over and is yours to continue, a row of Needs you.
             show(card.isOpen ? .now : .history)
@@ -698,6 +705,11 @@ final class RouterModel {
     /// folds back; the reply stays armed.
     func tap(_ id: String, store: Store) {
         let card = store.router.cards.first { $0.id == id }
+        // On the canvas a card shown in full folds back the same way; the reply stays armed.
+        if layout == .canvas, let card, card.isOpen, expandedNeed == id {
+            expandedNeed = nil
+            return
+        }
         if let card, !card.isOpen, expanded.contains(id) {
             expanded.remove(id)
             return

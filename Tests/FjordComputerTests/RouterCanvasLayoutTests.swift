@@ -154,4 +154,20 @@ import Testing
         // Taller than the room: its top at the room's top.
         #expect(at.origin(toShow: CGRect(x: 20, y: 300, width: 100, height: 900), in: free) == CGPoint(x: 0, y: -284))
     }
+
+    @Test func aRevealGoesToTheItemDrawnOrToTheFirstOfItsGroupAndNowhereForWhatIsntDrawn() {
+        var page = RouterPage()
+        page.notes = [card("n", "b", "/code/b", kind: .done)]
+        page.working = [row("w", "/code/a"), row("v", "/code/b")]
+        let folders = make(page, done: [card("d", "z", "/code/z", kind: .done, addressed: true)])
+        #expect(RouterCanvasModel.target(forReveal: "n", in: folders) == "n")
+        #expect(RouterCanvasModel.target(forReveal: RouterModel.workingID("v"), in: folders) == RouterModel.workingID("v"))
+        // A section of Now: its group's first item, frame by frame (busiest first: b has a note).
+        #expect(RouterCanvasModel.target(forReveal: RouterZone.working.rawValue, in: folders) == RouterModel.workingID("v"))
+        // The history's end, a section's fold, a frame folded away.
+        #expect(RouterCanvasModel.target(forReveal: RouterModel.endID, in: folders) == nil)
+        #expect(RouterCanvasModel.target(forReveal: RouterZone.foldPrefix + "working", in: folders) == nil)
+        #expect(RouterCanvasModel.target(forReveal: "d", in: folders, folded: { $0.doneOnly }) == nil)
+        #expect(RouterCanvasModel.target(forReveal: "d", in: folders) == "d")
+    }
 }

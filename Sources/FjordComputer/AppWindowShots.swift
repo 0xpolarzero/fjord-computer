@@ -166,6 +166,54 @@ enum AppWindowShots {
             Demo.routerTriage(store)
             model.layout = .canvas
         }, appearance: .aqua),
+        // A card opened in place on the canvas: the question's form, the plan, a working session's summaries and tasks, a
+        // finished turn worth a look, a finished one's details; the canvas gone to it.
+        Shot(name: "router-canvas-open-needs", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            model.layout = .canvas
+            if let card = store.router.cards.first(where: { $0.kind == .question && $0.isOpen }) {
+                model.select(card.id, store: store)
+            }
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-open-plan", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            model.layout = .canvas
+            if let card = store.router.cards.first(where: { $0.kind == .plan && $0.isOpen }) { model.select(card.id, store: store) }
+        }, appearance: .darkAqua),
+        Shot(name: "router-canvas-open-working", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            model.layout = .canvas
+            model.canvas.openRow = RouterModel.workingID("local_demo-lookout")
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-open-notes", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.layout = .canvas
+            if let card = model.zones(store).notes.first { model.select(card.id, store: store) }
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-open-waiting", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.layout = .canvas
+            if let card = model.zones(store).ready.first { model.select(card.id, store: store) }
+        }, appearance: .darkAqua),
+        // The chips: only Needs you and Working shown, the other groups gone from their frames in place.
+        Shot(name: "router-canvas-filter", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.layout = .canvas
+            model.canvas.filter = [.needs, .working]
+        }, appearance: .aqua),
+        // The frames of finished sessions only, opened from their fold.
+        Shot(name: "router-canvas-done-open", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            model.layout = .canvas
+            for folder in model.canvasFolders(store, page: model.zones(store)) where folder.doneOnly {
+                model.canvas.folderFolds[folder.key] = false
+            }
+            // The second column, where they are.
+            model.canvas.camera.transform = CanvasTransform(origin: CGPoint(x: CanvasMetrics.pad - CanvasMetrics.frameWidth
+                - CanvasMetrics.colGap, y: CanvasMetrics.pad), scale: 1)
+            model.canvas.camera.moved = true
+        }, appearance: .darkAqua),
+        // A search on the canvas: only the frames with a match.
+        Shot(name: "router-canvas-search", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
+            model.layout = .canvas
+            model.search.query = "lcu"
+        }, appearance: .aqua),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
         Shot(name: "snippets") { _ in .snippets },

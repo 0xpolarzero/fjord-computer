@@ -33,6 +33,14 @@ final class RouterCanvasState {
     }
     /// Groups whose "+n more" was opened ("folder#group").
     var expandedMore: Set<String> = []
+    /// The Working or Waiting row open on the canvas (its node's id). A card of Needs you or Worth a look open is
+    /// `RouterModel.expandedNeed`, a Done line `openDone` (in `RouterModel.expanded`, as the history's lines): one at a time.
+    var openRow: String?
+    var openDone: String?
+    /// Each node's box in the content, as last laid out (its frame's columns, its open height): what a reveal goes to.
+    @ObservationIgnored var nodeRects: [String: CGRect] = [:]
+    /// The reveal under way, so a newer one replaces it.
+    @ObservationIgnored private var revealTask: Task<Void, Never>?
     /// When the first look was taken: it follows the content as it settles (the cards measured, the column sized) for a
     /// moment, unless you move it.
     @ObservationIgnored var firstFit: Date?
@@ -77,6 +85,29 @@ final class RouterCanvasState {
         camera.transform = all.scale >= 0.6 ? all : CanvasTransform(origin: free.origin, scale: 1)
     }
 
+    /// A chip: only its group shown (with the others lit), or, lit, not.
+    func toggleFilter(_ group: CanvasGroup) {
+        if filter.contains(group) { filter.remove(group) } else { filter.insert(group) }
+    }
+
+    /// The camera moved the least that shows the node, once it is laid out (opened, its frame grown): its top at the
+    /// room's top when it is taller than the room.
+    func bringIntoView(_ id: String, reduce: Bool) {
+        revealTask?.cancel()
+        revealTask = Task { [weak self] in
+            // A few layout passes: what opened for it is measured first.
+            for _ in 0..<20 {
+                try? await Task.sleep(for: .milliseconds(40))
+                guard let self, !Task.isCancelled else { return }
+                guard let rect = self.nodeRects[id], self.free.width > 0 else { continue }
+                self.camera.moved = true
+                guard let next = self.camera.transform.origin(toShow: rect.insetBy(dx: -8, dy: -8), in: self.free) else { return }
+                withAnimation(Motion.spatial.resolved(reduce: reduce)) { self.camera.transform.origin = next }
+                return
+            }
+        }
+    }
+
     func zoom(by factor: CGFloat, reduce: Bool) {
         let at = CGPoint(x: free.midX, y: free.midY)
         camera.moved = true
@@ -91,6 +122,68 @@ extension RouterModel {
         return RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
                                       name: store.folderName, color: store.projectColor, filter: canvas.filter,
                                       picked: picked, expanded: canvas.expandedMore, showsAll: searching)
+    }
+
+    /// The card of Needs you shown in full: on the canvas only the one you opened (nothing opens by itself there), in the
+    /// list the one asked for or the first (`RouterPage.openNeed`). What Esc's Revise… and the form keys act on.
+    func openNeed(_ store: Store) -> String? {
+        let page = zones(store)
+        guard layout == .canvas else { return page.openNeed(preferred: expandedNeed) }
+        guard let id = expandedNeed, page.needs.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    /// The node open on the canvas, if one is: a card in full, a row, a Done line.
+    func canvasOpenNode(_ store: Store) -> String? {
+        let page = zones(store)
+        if let id = expandedNeed, (page.needs + page.notes).contains(where: { $0.id == id }) { return id }
+        if let id = canvas.openRow { return id }
+        if let id = canvas.openDone, expanded.contains(id) { return id }
+        return nil
+    }
+
+    /// One node open on the canvas at a time: every other folds as `id` opens (none: all fold).
+    func canvasOpen(_ id: String?) {
+        if expandedNeed != nil, expandedNeed != id { expandedNeed = nil }
+        if canvas.openRow != nil, canvas.openRow != id { canvas.openRow = nil }
+        if let done = canvas.openDone, done != id {
+            expanded.remove(done)
+            canvas.openDone = nil
+        }
+    }
+
+    /// Esc on the canvas: the node open on it folds. Whether one was.
+    func foldCanvasNode(_ store: Store) -> Bool {
+        guard canvasOpenNode(store) != nil else { return false }
+        canvasOpen(nil)
+        return true
+    }
+
+    /// A pick on the canvas: Now shows (in a narrow window) unless the card is only the history's, its node opens, and the
+    /// canvas goes there if `shows`. A session waiting is its row's node (`workingID`), one ready to continue its card's.
+    func showOnCanvas(_ id: String, store: Store, reveal shows: Bool, expand: Bool) {
+        var node = id
+        if let card = store.router.cards.first(where: { $0.id == id }) {
+            if card.isOpen && card.kind == .waiting {
+                node = store.routerTier(card) == .needsYou ? id : Self.workingID(card.sessionID)
+                show(.now)
+                canvasOpen(node)
+                canvas.openRow = node
+            } else if card.isOpen {
+                show(.now)
+                canvasOpen(id)
+                expandedNeed = id
+            } else {
+                let drawn = RouterCanvasModel.order(canvasFolders(store, page: zones(store)), folded: canvas.folded).contains(id)
+                if !drawn { show(.history) }
+                if expand {
+                    canvasOpen(id)
+                    expanded.insert(id)
+                    if drawn { canvas.openDone = id }
+                }
+            }
+        }
+        if shows { reveal(node) }
     }
 
     /// Each session's newest addressed card among the history's lines the search leaves (not the Unread filter: it is
@@ -117,18 +210,41 @@ struct RouterCanvas: View {
         VStack(alignment: .leading, spacing: 0) {
             CanvasNotices(store: store, model: model, page: page)
             if #available(macOS 26, *) {
-                // Under the composer, which floats over it: the room for content ends where the composer starts.
-                viewport(canvas).ignoresSafeArea(.container, edges: .bottom)
+                // Under the composer, which floats over it: the room for content ends where the composer starts (the
+                // inset read before the canvas runs under it).
+                GeometryReader { outer in
+                    viewport(canvas, bottom: outer.safeAreaInsets.bottom).ignoresSafeArea(.container, edges: .bottom)
+                }
             } else {
-                viewport(canvas)
+                viewport(canvas, bottom: 0)
             }
+        }
+        // A card picked (the keys, a banner, the away strip), a section asked for, Jev's pick for the draft, a node opened:
+        // the canvas goes there, the least that shows it.
+        .onChange(of: model.revealRequest, initial: true) { _, request in
+            guard let request, let taken = model.takeReveal(request, by: "canvas"),
+                  let target = RouterCanvasModel.target(forReveal: taken.id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
+            canvas.bringIntoView(target, reduce: reduceMotion)
+        }
+        .onChange(of: model.zoneRequest, initial: true) { _, request in
+            guard let request, let taken = model.takeReveal(request, by: "canvasZone"),
+                  let target = RouterCanvasModel.target(forReveal: taken.id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
+            canvas.bringIntoView(target, reduce: reduceMotion)
+        }
+        .onChange(of: model.highlighted) { _, id in
+            guard let id, let target = RouterCanvasModel.target(forReveal: id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
+            canvas.bringIntoView(target, reduce: reduceMotion)
+        }
+        .onChange(of: [model.expandedNeed, canvas.openRow, canvas.openDone]) { _, open in
+            guard let id = open.compactMap({ $0 }).first else { return }
+            canvas.bringIntoView(id, reduce: reduceMotion)
         }
     }
 
-    private func viewport(_ canvas: RouterCanvasState) -> some View {
+    /// `bottom`: how much of its foot the composer covers.
+    private func viewport(_ canvas: RouterCanvasState, bottom: CGFloat) -> some View {
         GeometryReader { proxy in
             let size = proxy.size
-            let bottom = proxy.safeAreaInsets.bottom
             let free = CGRect(x: CanvasMetrics.pad, y: CanvasMetrics.pad, width: max(0, size.width - 2 * CanvasMetrics.pad),
                               height: max(0, size.height - bottom - 2 * CanvasMetrics.pad))
             ZStack(alignment: .topLeading) {
@@ -161,7 +277,7 @@ struct RouterCanvas: View {
 }
 
 /// The frames, in their columns; read again only as what they show changes, never as the camera moves.
-private struct CanvasContent: View {
+struct CanvasContent: View {
     let store: Store
     let model: RouterModel
     let page: RouterPage
@@ -177,7 +293,12 @@ private struct CanvasContent: View {
                     .canvasColumn(column[folder.id] ?? 0)
             }
         }
+        // Inside the camera's transform: a pan or a zoom moves nothing measured in it.
+        .coordinateSpace(.named(Self.space))
     }
+
+    /// Where the nodes are measured (`RouterCanvasState.nodeRects`).
+    static let space = "canvasContent"
 }
 
 /// The camera's transform: the only view that reads it.
@@ -231,6 +352,129 @@ extension View {
     func canvasPannable(_ pan: CanvasPan) -> some View { gesture(pan.gesture) }
 }
 
+// MARK: - Bar
+
+/// The canvas's chips, over it in Now's bar: one per group with something in it, its count, lit while the canvas shows only
+/// the lit groups (none lit: all); then Summarize what's running and Fit at the column's end. A chip filters, in place:
+/// nothing folds or scrolls.
+struct CanvasBar: View {
+    let store: Store
+    let model: RouterModel
+    let page: RouterPage
+    /// Beside the switch: the groups' names go first when there's no room for them.
+    var compact = false
+    /// The column's margin (`routerGutter`).
+    let gutter: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let done = model.canvasFolders(store, page: page).reduce(0) { n, folder in
+            n + (folder.groups.first { $0.group == .done }.map { $0.items.count + $0.more } ?? 0)
+        }
+        let counts = CanvasGroup.allCases.map { ($0, $0.zone.map(page.count) ?? done) }.filter { $0.1 > 0 }
+        HStack(spacing: 12) {
+            if !counts.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    row(counts, named: true)
+                    row(counts, named: false)
+                }
+            }
+            // The list says it in its Needs you header; the canvas has none.
+            if page.count(.needs) == 0, !model.searching {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle").font(.system(size: 10, weight: .medium))
+                    Text("Nothing needs you").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
+                }
+                .foregroundStyle(CDS.Text.muted)
+                .accessibilityElement(children: .combine)
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 2) {
+                if !page.working.isEmpty {
+                    let summarizer = model.summarizer
+                    SparklesButton(busy: !summarizer.batch.isEmpty, done: Set(page.working.map(\.id)).isSubset(of: summarizer.busy),
+                                   label: "Summarize what's running") { summarizer.requestAll(store: store) }
+                }
+                CanvasFitButton { model.canvas.fit(reduce: reduceMotion) }
+            }
+        }
+        .padding(.leading, compact ? 0 : gutter)
+        .padding(.trailing, gutter)
+    }
+
+    private func row(_ counts: [(CanvasGroup, Int)], named: Bool) -> some View {
+        HStack(spacing: 4) {
+            ForEach(counts, id: \.0) { group, count in
+                CanvasChip(group: group, count: count, named: named, lit: model.canvas.filter.contains(group),
+                           overview: group == .working ? overview : nil) {
+                    withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { model.canvas.toggleFilter(group) }
+                }
+            }
+        }
+        .fixedSize()
+    }
+
+    /// What the Working sessions are on, as Now's folded Working line says it.
+    private var overview: String? { RouterOverviewLine.text(store.overviewItems(page.working, now: Date())) }
+}
+
+/// A group's chip on the canvas: the look of Now's section chips (`ZoneChip`), lit while the canvas shows only it (and the
+/// others lit).
+struct CanvasChip: View {
+    let group: CanvasGroup
+    let count: Int
+    let named: Bool
+    let lit: Bool
+    var overview: String? = nil
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: group.symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(group.tint)
+                if named { Text(group.title).cdsText((12, 16), .regular, hovered || lit ? CDS.Text.primary : CDS.Text.secondary) }
+                Text("\(count)").cdsText((12, 16), .medium, group == .needs ? CDS.Fill.warning : CDS.Text.muted).monospacedDigit()
+            }
+            .padding(.horizontal, 7)
+            .frame(height: ZoneChip.height)
+            .background(Capsule().fill(lit ? CDS.Fill.secondary : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
+            .overlay { if lit { Capsule().strokeBorder(CDS.border, lineWidth: 1) } }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(overview ?? (lit ? "Show it with the rest" : "Show only \(group.title)"))
+        .accessibilityLabel("\(group.title), \(count)")
+        .accessibilityValue(lit ? "Shown only" : "")
+        .accessibilityAddTraits(lit ? .isSelected : [])
+        .accessibilityHint(lit ? "Shows everything again" : "Shows only it on the canvas")
+    }
+}
+
+/// Fit: everything on the canvas in view, as a double-click on its ground does.
+struct CanvasFitButton: View {
+    let action: () -> Void
+    @State private var hovered = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11, weight: .medium))
+                .foregroundStyle(hovered ? CDS.Text.secondary : CDS.Text.muted)
+                .frame(width: 22, height: 20)
+                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                    .fill(hovered ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focused($focused)
+        .onHover { hovered = $0 }
+        .tip("Fit everything", "Double-click the canvas", focused: focused)
+        .accessibilityLabel("Fit everything")
+    }
+}
+
 // MARK: - Notices
 
 /// What Now's list says over its sections, over the canvas: what came while you were away, the Router at work (before
@@ -246,12 +490,18 @@ private struct CanvasNotices: View {
         let nothing = model.searching && empty && model.canvasDone(store).isEmpty
         let away = store.routerAttention.strip?.line(store.routerShownCards) != nil
         let busy: Bool = if #unavailable(macOS 26) { store.routerDispatcher.isBusy } else { false }
-        if away || busy || !page.asks.isEmpty || nothing {
+        // The chips left nothing to show (a search that did is said above).
+        let filtered = !nothing && !model.canvas.filter.isEmpty && model.canvasFolders(store, page: page).allSatisfy { $0.shown.isEmpty }
+        if away || busy || !page.asks.isEmpty || nothing || filtered {
             VStack(alignment: .leading, spacing: 6) {
                 AwayStripView(store: store, model: model)
                 if busy { RouterBusyLine(store: store) }
                 ForEach(page.asks) { ask in AskBackCard(store: store, ask: ask) }
                 if nothing { RouterNothingFound() }
+                if filtered {
+                    Text("Nothing matches · Esc to clear").cdsText((13, 18), .regular, CDS.Text.muted)
+                        .padding(.vertical, 6)
+                }
             }
             .frame(maxWidth: CanvasMetrics.frameWidth, alignment: .leading)
             .padding(.horizontal, CanvasMetrics.pad)
@@ -315,6 +565,28 @@ final class CanvasEventView: NSView {
         return p
     }
 
+    /// Whether what is under the event scrolls on its own: a scroll view inside the canvas with more than it shows.
+    private func scrollsItself(_ event: NSEvent) -> Bool {
+        guard let content = window?.contentView else { return false }
+        let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
+        return Self.scrolls(hit, inside: convert(bounds, to: nil))
+    }
+
+    /// Whether `view` or one of its enclosing views is a scroll view inside `area` (window coordinates) with more content
+    /// than it shows. One as large as the area or larger is the page's, not a card's.
+    static func scrolls(_ view: NSView?, inside area: NSRect) -> Bool {
+        var view = view
+        while let v = view {
+            if let scroll = v as? NSScrollView, let document = scroll.documentView {
+                let frame = scroll.convert(scroll.bounds, to: nil)
+                if frame.width < area.width, frame.height < area.height, area.intersects(frame),
+                   document.frame.height > scroll.contentView.bounds.height + 1 { return true }
+            }
+            view = v.superview
+        }
+        return false
+    }
+
     /// Whether the event is the canvas's (it pans or zooms): consumed.
     @MainActor private func handle(_ event: NSEvent) -> Bool {
         guard let camera else { return false }
@@ -327,7 +599,10 @@ final class CanvasEventView: NSView {
             if event.phase == .ended || event.phase == .cancelled { claimed = false }
             return true
         case .scrollWheel:
-            if event.phase == .began || (event.phase == [] && event.momentumPhase == []) { claimed = point(event) != nil }
+            // Over something that scrolls itself (an open form or plan taller than its cap), the scroll is its own.
+            if event.phase == .began || (event.phase == [] && event.momentumPhase == []) {
+                claimed = point(event) != nil && !scrollsItself(event)
+            }
             guard claimed else { return false }
             camera.moved = true
             let k: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10

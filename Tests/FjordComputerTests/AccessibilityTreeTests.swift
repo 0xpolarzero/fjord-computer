@@ -144,6 +144,7 @@ enum AccessibilityTree {
         var missing: [String] = []
         let places: [(String, (Store) -> AppDestination)] = [
             ("category", { $0.shownCategories[0].id.asDestination }), ("Archive", { _ in .done }), ("Router", { _ in .router }),
+            ("Router canvas", { _ in .router }),
             ("Settings", { _ in .settings }), ("Inbox categories", { _ in .categories }), ("Snippets", { _ in .snippets }),
         ]
         for (name, destination) in places {
@@ -153,6 +154,11 @@ enum AccessibilityTree {
             store.gh.session = StubbedGitHub.session { _ in .init(200, "[]") }
             let model = RouterModel()
             if name == "Router" { model.selection = store.openRouterCards.first { $0.kind == .question }?.id }
+            // The canvas with the question open on it, its form's controls counted too.
+            if name == "Router canvas", let id = store.openRouterCards.first(where: { $0.kind == .question })?.id {
+                model.layout = .canvas
+                model.select(id, store: store)
+            }
             let root = AppRootView(store: store, navigator: AppNavigator(start: destination(store), defaults: nil),
                                    routerModel: model, hub: HubState(), checksClaudeCode: false)
             let tree = try await AccessibilityTree.render(root, size: CGSize(width: 1200, height: 800))
@@ -161,6 +167,10 @@ enum AccessibilityTree {
             if name == "Router" {
                 #expect(model.selection != nil)
                 #expect(tree.all.contains { $0.label == "Message the Router" }, "\(tree.all.map(\.label))")
+            }
+            if name == "Router canvas" {
+                #expect(model.expandedNeed != nil)
+                #expect(tree.all.contains { $0.label == "Router canvas" }, "\(tree.all.map(\.label))")
             }
         }
         #expect(missing.isEmpty, "\(missing)")

@@ -306,6 +306,7 @@ private struct NowColumn: View {
     let height: CGFloat
     let bar: Bool
     @Namespace private var ns
+    @Environment(\.routerGutter) private var gutter
 
     var body: some View {
         let page = model.zones(store)
@@ -351,24 +352,25 @@ private struct NowColumn: View {
         }
     }
 
-    private func chips(_ page: RouterPage) -> some View {
-        HStack(spacing: 12) {
-            if bar { PaneSwitch(store: store, model: model) }
-            ZoneChips(model: model, page: page, compact: bar)
-            // The list says it in its Needs you header; the canvas has none.
-            if model.layout == .canvas, page.count(.needs) == 0, !model.searching {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle").font(.system(size: 10, weight: .medium))
-                    Text("Nothing needs you").cdsText((12, 16), .regular, CDS.Text.muted)
-                }
-                .foregroundStyle(CDS.Text.muted)
-                .accessibilityElement(children: .combine)
+    @ViewBuilder private func chips(_ page: RouterPage) -> some View {
+        if model.layout == .canvas {
+            // The canvas's chips filter it, with its own buttons at the column's end (RouterCanvas.swift).
+            HStack(spacing: 12) {
+                if bar { PaneSwitch(store: store, model: model) }
+                CanvasBar(store: store, model: model, page: page, compact: bar, gutter: gutter)
             }
-            Spacer(minLength: 0)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+        } else {
+            HStack(spacing: 12) {
+                if bar { PaneSwitch(store: store, model: model) }
+                ZoneChips(model: model, page: page, compact: bar)
+                Spacer(minLength: 0)
+            }
+            .measured()
+            .padding(.top, 6)
+            .padding(.bottom, 2)
         }
-        .measured()
-        .padding(.top, 6)
-        .padding(.bottom, 2)
     }
 }
 
@@ -1291,6 +1293,7 @@ struct HistoryCardLine: View, Equatable {
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.canvasNodeID) private var canvasNode
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.card == b.card && a.now == b.now && a.open == b.open && a.marked == b.marked
@@ -1316,6 +1319,11 @@ struct HistoryCardLine: View, Equatable {
                     if opening { model.reply(to: card.id, store: store, reveal: false, expand: false) }
                 }
                 toggleHistoryLine(reduceMotion: reduceMotion) {
+                    // On the canvas it is the one node open.
+                    if canvasNode != nil {
+                        if opening { model.canvasOpen(card.id) }
+                        model.canvas.openDone = opening ? card.id : nil
+                    }
                     if opening { model.expanded.insert(card.id) } else { model.expanded.remove(card.id) }
                 }
             } label: {
@@ -1930,10 +1938,17 @@ struct WorkingCard: View {
     let unanswered: [String]
     /// On the canvas: a card of its own, in its own box, rather than a row of the Working list's.
     var standalone = false
+    /// Whether it is expanded, when its place keeps it (the canvas, one node open at a time); else its own.
+    var open: Binding<Bool>? = nil
     @State private var hovered = false
-    @State private var expanded = false
+    @State private var ownExpanded = false
     @Environment(\.cdsColumnWidth) private var columnWidth
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var expanded: Bool {
+        get { open?.wrappedValue ?? ownExpanded }
+        nonmutating set { if let open { open.wrappedValue = newValue } else { ownExpanded = newValue } }
+    }
 
     var body: some View {
         let summarizer = model.summarizer
@@ -2073,9 +2088,14 @@ struct WaitingCard: View {
     let card: RouterCard
     /// On the canvas: a card of its own, its tint in a rounded box with no bar, rather than a row of a list.
     var standalone = false
+    /// On the canvas, opened in place: a click shows its brief and text in full (Open in Claude stays beside it) rather
+    /// than opening the session.
+    var open: Binding<Bool>? = nil
     @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var triage: RouterTriage { card.triage ?? RouterTriage() }
+    private var expanded: Bool { open?.wrappedValue == true }
 
     private var line: String {
         if triage.told != nil { return "told it to continue" }
@@ -2088,7 +2108,13 @@ struct WaitingCard: View {
         let ready = triage.ready != nil
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                Button { store.openAgent(card.sessionID) } label: {
+                Button {
+                    if let open {
+                        withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { open.wrappedValue.toggle() }
+                    } else {
+                        store.openAgent(card.sessionID)
+                    }
+                } label: {
                     HStack(spacing: 8) {
                         if let row = store.sessionRow(card.sessionID) { SessionGlyph(row: row, size: 18, dot: false) }
                         Text(card.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
@@ -2104,11 +2130,12 @@ struct WaitingCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(card.text)
+                .help(expanded ? "" : card.text)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(card.title)
                 .accessibilityValue(line + (card.brief.map { ". " + $0 } ?? ""))
-                .accessibilityHint("Opens it in Claude")
+                .accessibilityHint(open == nil ? "Opens it in Claude" : expanded ? "Folds it" : "Shows it in full")
+                .accessibilityAddTraits(expanded ? .isSelected : [])
                 .accessibilityAction(named: "Open in Claude") { store.openAgent(card.sessionID) }
                 // Beside the line rather than in it, so the card's text isn't its tooltip too.
                 HoverOpen(title: card.title, quiet: true) { store.openAgent(card.sessionID) }
@@ -2121,9 +2148,14 @@ struct WaitingCard: View {
             // What it waits on and what comes after, in your words' style (RouterBrief.swift).
             if let brief = card.brief {
                 Text(RouterText.inline(brief)).cdsText((12, 16), .regular, CDS.Text.secondary)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(expanded ? nil : 2).fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 26).padding(.trailing, 8)
                     .accessibilityHidden(true)
+            }
+            if expanded {
+                CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
+                    .padding(.leading, 26).padding(.trailing, 8).padding(.top, 4)
+                    .transition(.opacity)
             }
         }
         .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 9)
