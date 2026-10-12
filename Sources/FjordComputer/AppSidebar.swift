@@ -368,7 +368,9 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
                     // On glass hover comes on at once and eases off; the opaque sidebar's stays instant both ways.
                     .hoverMotion(hovered)
             }
-            .contentShape(Rectangle())
+            // The whole row, or on the rail only its tile: the rest of the row is folded out of sight and must not take
+            // the pointer (a click, a hover or a menu) over the page beside the rail.
+            .contentShape(RowHitArea(collapsed: collapsed))
             .overlay(alignment: .leading) {
                 if collapsed {
                     Rectangle().fill(.clear).frame(width: AppSidebar.tile, height: M.rowHeight).contentShape(Rectangle())
@@ -467,5 +469,13 @@ private struct EditButton: View {
         .onHover { hovered = $0 }
         .tip("Edit categories")
         .accessibilityLabel("Edit inbox categories")
+    }
+}
+
+/// A sidebar row's hit area: the row, or on the rail the tile it folds to (4 in, `AppSidebar.tile` wide).
+private struct RowHitArea: Shape {
+    let collapsed: Bool
+    func path(in rect: CGRect) -> Path {
+        Path(collapsed ? CGRect(x: rect.minX + 4, y: rect.minY, width: AppSidebar.tile, height: rect.height) : rect)
     }
 }
