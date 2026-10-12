@@ -408,7 +408,7 @@ import UserNotifications
         #expect(model.projects.count == 2 && model.pointers[0] == .project(second) && model.draft.filter { $0 == MentionText.mark }.count == 2)
         // An @ inside a word (an email) is not a tag.
         #expect(RouterModel.mentionQuery(in: "me@lookout") == nil)
-        #expect(RouterModel.mentionQuery(in: "@look out") == nil)
+        #expect(RouterModel.mentionQuery(in: "@look  out") == nil)
         #expect(RouterModel.mentionQuery(in: "hey @look") == "look")
     }
 

@@ -248,6 +248,78 @@ import Testing
         #expect(model.suggestions(store).isEmpty)
     }
 
+    @Test func anAtWordRunsAcrossSpacesWhileItStillNamesSomething() {
+        func query(_ text: String, caret: Int? = nil) -> String? { RouterModel.mentionQuery(in: text, caret: caret) }
+        #expect(query("ask @fjord comp") == "fjord comp")
+        #expect(query("ask @fjord ") == "fjord ")
+        // Not two spaces in a row, a new line, a space right after the @, a pill, an @ in a word (an email).
+        #expect(query("ask @fjord  comp") == nil && query("ask @fjord \t") == nil)
+        #expect(query("ask @fjord\ncomp") == nil)
+        #expect(query("@ foo") == nil)
+        #expect(query("@fjord \(MentionText.markString) x") == nil)
+        #expect(query("a@b c") == nil && query("a@b") == nil)
+        // A few words, not too long: a stale @ further back doesn't come back.
+        #expect(query("@a b c d") == "a b c d" && query("@a b c d e") == nil)
+        #expect(query("@" + String(repeating: "x", count: 36) + " yyyy") == nil)
+        // The caret after a space: the word past it isn't the @ word's.
+        let text = "@fjord comp"
+        let found = RouterModel.mention(in: text, caret: 7)
+        #expect(found?.query == "fjord " && found.map { String(text[$0.range]) } == "@fjord ")
+        #expect(RouterModel.mention(in: text, caret: nil).map { String(text[$0.range]) } == "@fjord comp")
+
+        // Words across spaces each start a word of the name; nothing looser.
+        #expect(RouterMentions.score("Fjord Computer", query: "fjord comp") == 0)
+        #expect(RouterMentions.score("Fjord Computer", query: "fj co") == 1)
+        #expect(RouterMentions.score("Fjord Computer", query: "comp fj") == 2)
+        #expect(RouterMentions.score("Fjord Computer", query: "fjord ") == 0)
+        #expect(RouterMentions.score("Fjord Computer", query: "ord comp") == nil)
+        #expect(RouterMentions.score("Fjord Computer", query: "fjord please") == nil)
+        #expect(RouterMentions.score("Fjord Computer", query: "fjord") == 0 && RouterMentions.score("Fjord Computer", query: "fcr") == 3)
+    }
+
+    @Test func proseAfterAnAtClosesTheSuggestionsAndAPickTakesEveryWord() {
+        let (store, _, _) = triage()
+        store.claudeSessions["local_b"] = ClaudeSession(id: "local_b", title: "Fjord Computer rebrand", folder: "/code/fjord",
+                                                        lastActivity: Date(), running: false)
+        store.snippets = [Snippet(name: "Fix CI", text: "Find out why CI fails and fix it, please.")]
+        let model = RouterModel()
+        func names() -> [String] { model.suggestions(store).map(\.name) }
+        model.draft = "ask @fjord comp"
+        #expect(model.mention == "fjord comp" && names().contains(store.pointerLook(.session("local_b")).label))
+        model.draft = "ask @fj co"
+        #expect(!names().isEmpty)
+        model.draft = "ask @fjord "
+        #expect(!names().isEmpty)
+        // Prose: nothing found (not the snippet by its text either), so no list, and Return and Esc are the composer's.
+        model.draft = "ask @fix it please"
+        #expect(model.mention == "fix it please" && names().isEmpty)
+        #expect(!store.snippets(matching: "fix it please").isEmpty)
+        var closed = false
+        let keys = RouterKeys(store: store, model: model) { closed = true }
+        model.composerFocused = true
+        let editor = NSTextView()
+        editor.string = model.draft
+        editor.setSelectedRange(NSRange(location: (model.draft as NSString).length, length: 0))
+        let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                   characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 53)!
+        #expect(keys.key(esc, responder: editor) && closed)
+        // Esc on a list: words typed on past a space don't bring it back.
+        model.draft = "ask @fjord"
+        #expect(!names().isEmpty)
+        model.dismissMention()
+        model.draft = "ask @fjord "
+        #expect(names().isEmpty)
+        model.draft = "ask @fjord comp"
+        #expect(names().isEmpty)
+        // Picked: the pill takes the whole "@fjord comp", the rest of the text kept.
+        model.draft = ""
+        model.draft = "ask @fjord comp now"
+        model.caret = 15
+        #expect(model.mention == "fjord comp")
+        model.pickMention(.session("local_b"))
+        #expect(model.draft == "ask \(MentionText.markString) now" && model.pointers == [.session("local_b")] && model.caretRequest == 6)
+    }
+
     /// The composer's text view in a window (whose undo it uses, as in the app), told to the model as `MentionField` tells it.
     @Test(.hostsWindows) func aSnippetPickedInTheComposerIsOneStepOfItsUndo() throws {
         let v = view()

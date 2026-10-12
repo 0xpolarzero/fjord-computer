@@ -455,8 +455,11 @@ extension RouterMentions {
             out.append(MentionSuggestion(section: .categories, pick: .pointer(.category(c.id)), name: c.title,
                                          detail: "\(count) open", look: store.pointerLook(.category(c.id)), keys: [c.title]))
         }
-        // Found by the snippets' own search (their name or their text), so no keys: the word isn't matched again.
+        // Found by the snippets' own search (their name or their text), so no keys: the word isn't matched again. Words
+        // typed across spaces find a snippet by its name only, as they do the rest, so prose after an @ stops finding any.
+        let spaced = query.contains(where: \.isWhitespace)
         for s in store.snippets(matching: query) where !s.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if spaced, score(s.name, query: query) == nil { continue }
             out.append(MentionSuggestion(section: .snippets, pick: .text(s.text), name: s.title, detail: s.preview ?? "",
                                          look: MentionLook(label: s.title, symbol: Snippet.symbol, tint: CDS.Text.secondary),
                                          keys: [], snippet: s.id))
@@ -488,8 +491,9 @@ extension RouterMentions {
     }
 
     /// How well a name fits the typed word (lower is better): it starts with it, a word in it does, it holds it, it holds
-    /// its letters in order; nil when none.
+    /// its letters in order; nil when none. Words typed across spaces ("fj co") are `spacedScore`'s.
     static func score(_ name: String, query: String) -> Int? {
+        if query.contains(where: \.isWhitespace) { return spacedScore(name, query: query) }
         let q = query.lowercased()
         let n = name.lowercased()
         if q.isEmpty || n.hasPrefix(q) { return 0 }
@@ -498,6 +502,26 @@ extension RouterMentions {
         var rest = Substring(q)
         for c in n where c == rest.first { rest = rest.dropFirst() }
         return rest.isEmpty ? 3 : nil
+    }
+
+    /// How well a name fits words typed across spaces ("fj co" for "Fjord Computer"): it starts with them, each starts one
+    /// of its words in order, in any order; nil when one starts none. Never looser (no letters in order, no word held in
+    /// the middle of one), so prose typed after an @ soon matches nothing and the suggestions close.
+    static func spacedScore(_ name: String, query: String) -> Int? {
+        let n = name.lowercased()
+        let q = query.lowercased()
+        let typed = q.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        guard !typed.isEmpty else { return nil }
+        if n.hasPrefix(q.split(whereSeparator: \.isWhitespace).joined(separator: " ")) { return 0 }
+        let words = n.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        var next = words.startIndex
+        var inOrder = true
+        for w in typed {
+            guard let hit = words[next...].firstIndex(where: { $0.hasPrefix(w) }) else { inOrder = false; break }
+            next = words.index(after: hit)
+        }
+        if inOrder { return 1 }
+        return typed.allSatisfy { w in words.contains { $0.hasPrefix(w) } } ? 2 : nil
     }
 }
 

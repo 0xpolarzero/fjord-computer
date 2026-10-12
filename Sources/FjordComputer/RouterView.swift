@@ -381,10 +381,11 @@ final class RouterModel {
         caretRequest = (next as NSString).length
         focusRequest &+= 1
     }
-    /// While an @ is being typed: what follows it, and the suggestion picked with ↑↓.
+    /// While an @ is being typed: what follows it, and the suggestion picked with ↑↓. Words typed across spaces that name
+    /// nothing make no suggestions, and the keys act as with none (`suggestions`).
     private(set) var mention: String?
     var mentionIndex = 0
-    /// The @ word Esc dismissed: its suggestions stay away until it changes.
+    /// The @ word Esc dismissed: its suggestions stay away until it changes (not as words typed on after a space).
     @ObservationIgnored private var dismissedMention: String?
     /// Mirrors the composer's focus, for the keys.
     var composerFocused = false
@@ -679,8 +680,13 @@ final class RouterModel {
     /// The @ word being typed at the end of the draft, if any ("…@look" → "look").
     static func mentionQuery(in text: String, caret: Int? = nil) -> String? { mention(in: text, caret: caret)?.query }
 
+    /// How far an @ word may run across spaces ("@fjord comp"): past this it is prose, not a name being looked up.
+    static let mentionLimit = (characters: 40, words: 4)
+
     /// The @ word the caret is in or just after (`caret`: UTF-16 offset, nil for the end): its range (the whole word, past
-    /// the caret too) and what is typed between the @ and the caret. An @ inside a word (an email) is not one.
+    /// the caret too) and what is typed between the @ and the caret. An @ inside a word (an email) is not one. What is
+    /// typed may run across single spaces (not a new line, a pill, two spaces in a row or one right after the @), a few
+    /// words at most; whether it still names something is the suggestions' to say (none: the list is closed).
     static func mention(in text: String, caret: Int?) -> (range: Range<String.Index>, query: String)? {
         if let caret, caret < 0 { return nil }
         let utf16 = text.utf16
@@ -689,8 +695,16 @@ final class RouterModel {
               let at = text[..<caretIndex].lastIndex(of: "@") else { return nil }
         if at != text.startIndex, !MentionText.isBreak(text[text.index(before: at)]) { return nil }
         let typed = text[text.index(after: at)..<caretIndex]
-        guard !typed.contains(where: MentionText.isBreak) else { return nil }
-        let end = text[caretIndex...].firstIndex(where: MentionText.isBreak) ?? text.endIndex
+        var end = text[caretIndex...].firstIndex(where: MentionText.isBreak) ?? text.endIndex
+        if typed.contains(where: MentionText.isBreak) {
+            guard let first = typed.first, !first.isWhitespace,
+                  !typed.contains(where: { $0.isNewline || $0 == MentionText.mark }),
+                  !zip(typed, typed.dropFirst()).contains(where: { $0.isWhitespace && $1.isWhitespace }),
+                  typed.count <= mentionLimit.characters,
+                  typed.split(whereSeparator: \.isWhitespace).count <= mentionLimit.words else { return nil }
+            // After a space, the word past the caret is the next one, not the @ word's.
+            if typed.last?.isWhitespace == true { end = caretIndex }
+        }
         return (at..<end, String(typed))
     }
 
@@ -710,7 +724,12 @@ final class RouterModel {
     }
 
     private func mentionChanged() {
-        let query = Self.mentionQuery(in: draft, caret: caret)
+        var query = Self.mentionQuery(in: draft, caret: caret)
+        // Words typed on past a space after Esc are the message going on: the list stays away.
+        if let dismissed = dismissedMention, let typed = query, typed.hasPrefix(dismissed),
+           typed.dropFirst(dismissed.count).contains(where: \.isWhitespace) {
+            query = dismissed
+        }
         if query != dismissedMention { dismissedMention = nil }
         let next = query == dismissedMention ? nil : query
         if next != mention {

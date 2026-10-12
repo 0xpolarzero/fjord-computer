@@ -42,7 +42,8 @@ final class RouterKeys {
         if code == kVK_Escape, flags.isEmpty {
             let plan = model.expandedPlan(store)
             if let revising = model.revisingPlan, revising == plan?.id { model.revisingPlan = nil }
-            else if model.mention != nil { model.dismissMention() }
+            // The suggestions shown (an @ word that names nothing shows none, and Esc goes on to what is there).
+            else if !model.suggestions(store).isEmpty { model.dismissMention() }
             else if model.live.prediction != nil { model.dismissPrediction() }
             else if model.live.pinned != nil { model.live.reset() }
             else if model.replyTo != nil { model.replyTo = nil }
