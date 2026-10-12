@@ -192,14 +192,17 @@ extension RouterDecision {
 }
 
 extension Store {
-    /// Forks a session from the page (a session's menu, a sent message's line): a run of the Router's, in its history.
-    func forkSession(_ session: String, point: SessionFork.Point = .whole, message: String = "") {
+    /// Forks a session from the page (a session's menu, a sent message's line, a message edited and resent): a run of the
+    /// Router's, in its history. Its entry, nil when the Router is off.
+    @discardableResult
+    func forkSession(_ session: String, point: SessionFork.Point = .whole, message: String = "", edited: Bool = false) -> UUID? {
         let title = claudeSessions[session].map { "“\(RouterDecision.clip($0.title, 60))”" } ?? "a session"
-        let trigger = switch point {
+        let asked = switch point {
         case .whole: "Fork \(title)"
         case .beforeLast: "Fork \(title) from before your last message"
         case .before(let text): "Fork \(title) from before “\(RouterDecision.clip(text, 60))”"
         }
-        routerDispatcher.fork(SessionFork.Request(session: session, point: point, message: message), trigger: trigger)
+        let trigger = edited ? "Edited and resent to a fork of \(title): \(message)" : asked
+        return routerDispatcher.fork(SessionFork.Request(session: session, point: point, message: message), trigger: trigger)
     }
 }

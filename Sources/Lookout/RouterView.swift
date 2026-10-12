@@ -300,6 +300,25 @@ final class RouterModel {
     }
     /// The card your next message answers: it goes to that card's session ("Replying to …" over the composer).
     var replyTo: String?
+    /// A message of yours being edited ("Edit and resend"): sending the draft forks its session from before it, with the
+    /// draft as the fork's first message. The session stays as it was; files its agent changed aren't rolled back.
+    var editing: Editing?
+    struct Editing: Equatable {
+        var session: String
+        /// The message as it was sent: where the fork is cut.
+        var original: String
+    }
+
+    /// "Edit and resend": the message in the composer, which takes the keyboard; no reply or pin goes with it.
+    func edit(session: String, message: String) {
+        replyTo = nil
+        live.reset()
+        tokens = []
+        editing = Editing(session: session, original: message)
+        draft = message
+        caretRequest = (message as NSString).length
+        focusRequest &+= 1
+    }
     /// In a narrow window, the side of the page shown: it follows what you pick (an open card is in Now, an addressed one and
     /// the Router's conversation in History). A wide window shows both.
     var pane: RouterPane = .now
@@ -586,6 +605,16 @@ final class RouterModel {
     func send(store: Store) {
         let text = plainDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
+        if let editing {
+            // Resent to a fork from before the original: never to the session itself, never routed.
+            guard store.forkSession(editing.session, point: .before(editing.original), message: text, edited: true) != nil else { return }
+            caret = nil
+            tokens = []
+            draft = ""
+            self.editing = nil
+            show(.history)
+            return
+        }
         let toRouter = replyTo == nil
         guard store.sendToRouter(text, context: context(store)) else {
             sendRefused = Self.goneTarget
@@ -635,6 +664,7 @@ final class RouterModel {
     func removeLastChip() -> Bool {
         if live.pinned != nil { live.reset(); return true }
         if replyTo != nil { replyTo = nil; return true }
+        if editing != nil { editing = nil; return true }
         return false
     }
 

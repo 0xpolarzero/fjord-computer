@@ -97,4 +97,49 @@ import Testing
         #expect(SessionFork.request("fork the tests into their own module", pinned: "local_a", store: s) == nil)
         #expect(SessionFork.request("fork it", pinned: nil, store: s) == nil)
     }
+
+    @Test func anEditedMessageIsResentToAForkFromBeforeIt() async throws {
+        let s = InboxFixture.store([])
+        s.router.enabled = true
+        s.agents.enabled = true
+        s.claudeSessions = ["local_a": ClaudeSession(id: "local_a", title: "Fix the login bug", folder: "/code/lookout", lastActivity: Date())]
+        var forked: [SessionFork.Request] = [], sent: [String] = [], done: [UUID] = []
+        let no = RouterTools.Failure("not here")
+        s.routerDispatcher.onFinish = { done.append($0) }
+        s.routerDispatcher.effects = RouterDispatcher.Effects(
+            rank: { _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _, _ in throw no },
+            send: { _, delivery in sent.append(delivery.body); return nil },
+            answer: { _, _, _ in throw no }, run: { _, _, _ in throw no },
+            fork: { _, request in
+                forked.append(request)
+                return RouterDispatcher.Delivery(to: "Fork of Fix the login bug", text: "⟦signed⟧\n" + request.message,
+                                                 body: request.message, original: request.message, rephrased: false,
+                                                 session: "local_fork", newSessionIn: "lookout")
+            })
+        // A sent message's line: what it sent, to which session.
+        var line = RouterDecision(trigger: .you("use postgres"))
+        line.add(.sent(to: "Fix the login bug", text: "use postgres", original: nil), session: "local_a")
+        let sent0 = try #require(line.sentMessage)
+        #expect(sent0.session == "local_a" && sent0.text == "use postgres")
+        #expect(RouterDecision(trigger: .system, done: [.sent(to: "x", text: "y", original: nil)]).sentMessage == nil)
+
+        // Edit and resend: the message in the composer, then sent to a fork from before it, never to the session itself.
+        let model = RouterModel()
+        model.reply(to: "some-card", store: s)
+        model.edit(session: sent0.session, message: sent0.text)
+        #expect(model.draft == "use postgres" && model.replyTo == nil && model.editing == .init(session: "local_a", original: "use postgres"))
+        model.draft = "use sqlite"
+        model.send(store: s)
+        #expect(model.draft.isEmpty && model.editing == nil && model.pane == .history)
+        await waitUntil { done.count == 1 }
+        #expect(forked == [.init(session: "local_a", point: .before("use postgres"), message: "use sqlite")])
+        #expect(sent == ["use sqlite"])
+        let entry = try #require(s.router.decisions.first { $0.id == done.first })
+        #expect(entry.triggerText == "Edited and resent to a fork of “Fix the login bug”: use sqlite")
+        #expect(entry.doneLines == ["started a session in lookout (fork of “Fix the login bug”, before that message)",
+                                    "sent to Fork of Fix the login bug: use sqlite"])
+        // Taking the edit off (backspace at the start) leaves the draft as a message of its own.
+        model.edit(session: "local_a", message: "use postgres")
+        #expect(model.removeLastChip() && model.editing == nil && model.draft == "use postgres")
+    }
 }

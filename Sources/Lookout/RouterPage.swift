@@ -865,7 +865,7 @@ private struct HistoryDecisionLine: View, Equatable {
             .accessibilityLabel(decision.triggerText)
             .accessibilityValue("\(status), \(open ? "expanded" : "collapsed")")
 
-            if open { DecisionDetails(decision: decision, store: store) }
+            if open { DecisionDetails(decision: decision, store: store, model: model) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -879,6 +879,7 @@ private struct HistoryDecisionLine: View, Equatable {
 private struct DecisionDetails: View {
     let decision: RouterDecision
     let store: Store
+    let model: RouterModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -899,8 +900,13 @@ private struct DecisionDetails: View {
                         ClaudeButton("Open \(store.claudeSessions[id]?.title ?? "session")", variant: .ghost, size: .sm,
                                      icon: ClaudeMark.openSymbol) { store.openAgent(id) }
                     }
-                    // The message it sent, taken back in a fork: the session as it was before it (this one stays as it is).
+                    // The message it sent, taken back in a fork: the session as it was before it (this one stays as it is),
+                    // and that again with the message edited.
                     if let sent = decision.sentMessage, store.routerOn, store.claudeSessions[sent.session].map({ !$0.isArchived }) == true {
+                        ClaudeButton("Edit and resend", variant: .ghost, size: .sm, icon: "pencil") {
+                            model.edit(session: sent.session, message: sent.text)
+                        }
+                        .help("Opens it in the composer; sending it starts a fork of the session from before this message. Files the agent changed aren't rolled back")
                         ClaudeButton("Fork from before this", variant: .ghost, size: .sm, icon: "arrow.triangle.branch") {
                             store.forkSession(sent.session, point: .before(sent.text))
                         }
