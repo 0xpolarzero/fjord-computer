@@ -185,6 +185,19 @@ land), so only changes that don't depend on ask gold are decided here.
   written/scripted stress mix not significantly worse (+0.025, CI −0.03 to 0.09). Tried and dropped: the last-told
   session first (−0.16 on real but +0.07 on stress, losing new-session and intent answers), two of the ranking's
   first (−0.05), a BM25 slot (−0.11, worse than recency). Swift: `RouterTools.askCard`.
+- **The fusion refitted on real moments alone** (explore/v2_fusion): six weights (`fin0`, `fin2`, `run`, `reply`, `nxt`,
+  `f_you`) and the sureness. Real top-1 +4.3 points (95% CI +1.6 to +7.3, grouped CV; stable on three fold seeds),
+  calibration error 0.056 → 0.023; in replay wrong sends 3.6% → 2.3%, loss −0.31 (CI −0.67 to +0.03), stress mix
+  −0.17, scripted contracts all pass. Half the gain is messages to a session still working (shipped's `run` weight was
+  −1.26: you often follow up while it works). The more written episodes in the fit, the smaller the real gain: they
+  taught too many switches. Intent picks keep the earlier sureness: your transcripts predate the intents, so the refit
+  learned that an intent pick is always wrong, and a clear setting stopped being sent (a dispatcher test caught it).
+  Dead ends: BM25 absolute strength (A4), Jev's unused confidence/entropy/margins and same-title sibling mass (A3).
+  `parity.py` now checks Swift against the weights Swift carries (an earlier attempt skipped installing the lexical
+  features and produced a wrong fixture; the parity test caught it).
+- **Always checking the session you last messaged** (explore/v2_continuity): −0.196 per message (CI −0.415 to
+  −0.021) but on 3 avoided wrong sends in 2 groups, and as a hedge (a middling yes lowers confidence in a wrong pick)
+  more than a find. Not ported; re-tested with real gold.
 - **Raising the send bar looks large but waits for gold:** a sureness floor of 0.95 would turn 37 sends into asks and
   avoid 9 of the 14 wrong sends (−0.45 per message), but only if those asks count as "allowed".
 - **Runner fixes found on the way:** a session started from an ask is named after its submit; changes to a started
