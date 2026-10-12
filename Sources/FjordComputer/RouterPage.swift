@@ -1265,22 +1265,27 @@ private struct CardSessionMenu: View {
     }
 }
 
-/// Open in Claude on a history line, shown while it is hovered; its room is kept so nothing moves.
+/// Open in Claude on a line. On a history line it shows while the line is hovered, its room kept so nothing moves; `quiet`,
+/// on a working or waiting row, it is always there, muted until the pointer is on it, as the sparkles button.
 private struct HoverOpen: View {
     let title: String
-    let shown: Bool
+    var shown = true
+    var quiet = false
     let action: () -> Void
+    @State private var hovered = false
 
     var body: some View {
         Button(action: action) {
             OpenInClaudeGlyph(size: 13)
-                .foregroundStyle(CDS.Text.secondary)
-                .frame(width: 22, height: 22)
-                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(CDS.Fill.ghostHover))
+                .foregroundStyle(quiet && !hovered ? CDS.Text.muted : CDS.Text.secondary)
+                .frame(width: 22, height: quiet ? 20 : 22)
+                .background(RoundedRectangle(cornerRadius: quiet ? CDS.Density.compact.radius : 5, style: .continuous)
+                    .fill(quiet && !hovered ? .clear : CDS.Fill.ghostHover))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open in Claude")
+        .onHover { hovered = $0 }
+        .tip("Open in Claude")
         .accessibilityLabel("Open \(title) in Claude")
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)
@@ -1637,15 +1642,13 @@ private struct ZoneHeaderButton<Preview: View>: View {
     }
 }
 
-/// A sparkles icon button that makes summaries, the loader in its place while they are made. `shown` false keeps its room but
-/// hides it, until it has the keyboard or is busy.
+/// A sparkles icon button that makes summaries, the loader in its place while they are made.
 private struct SparklesButton: View {
     /// Its summaries are being made: the loader shows.
     let busy: Bool
     /// Nothing more to ask for (each of its summaries is under way): it can't be clicked.
     var done = false
     let label: String
-    var shown = true
     let action: () -> Void
     @State private var hovered = false
     @FocusState private var focused: Bool
@@ -1671,8 +1674,7 @@ private struct SparklesButton: View {
         .disabled(done)
         .focused($focused)
         .onHover { hovered = $0 }
-        .opacity(shown || focused || busy ? 1 : 0)
-        .help(help)
+        .tip(help, focused: focused)
         .accessibilityLabel(help)
     }
 }
@@ -1696,8 +1698,8 @@ private struct WorkingSummary: View {
             }
             .help(time)
         }
-        // The age under the row's duration, past the row's button.
-        .padding(.trailing, 30)
+        // The age under the row's duration, past its two buttons.
+        .padding(.trailing, 60)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Summary \(agoPhrase(at)), at \(time)")
         .accessibilityValue(summary.text)
@@ -1713,9 +1715,9 @@ private extension View {
 // MARK: - Working card
 
 /// A session working on its own: calm and small, one line. Its icon and title, what it is doing now (shimmering), its
-/// folder, what it left running, and for how long; hovering it shows Open in Claude in the time's place (it is in its menu
-/// too). A click expands it in place: every summary of it, newest first, and its subagents and commands with what each is on.
-/// Its sparkles button (on hover) summarizes it, and folded, its newest summary sits under it.
+/// folder, what it left running, and for how long, then Open in Claude (in its menu too). A click expands it in place: every
+/// summary of it, newest first, and its subagents and commands with what each is on. Its sparkles button summarizes it,
+/// and folded, its newest summary sits under it.
 private struct WorkingCard: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -1750,22 +1752,15 @@ private struct WorkingCard: View {
                                 .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).fixedSize().layoutPriority(1)
                         }
                         if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
-                        // Open in Claude takes the time's place on hover, as on the history's lines; its room is kept without one.
-                        Group {
-                            if let start {
-                                TimelineView(.periodic(from: .now, by: 1)) { context in
-                                    Text(AgentRow.duration(context.date.timeIntervalSince(start)))
-                                        .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
-                                }
-                            } else {
-                                Color.clear.frame(width: 22, height: 16)
+                        if let start {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(AgentRow.duration(context.date.timeIntervalSince(start)))
+                                    .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
                             }
+                            .layoutPriority(1)
                         }
-                        .opacity(hovered ? 0 : 1)
-                        .overlay(alignment: .trailing) {
-                            HoverOpen(title: row.session.title, shown: hovered) { store.openAgent(row.id) }
-                        }
-                        .layoutPriority(1)
+                        // In the row's button, so a click on it opens the session without folding the row.
+                        HoverOpen(title: row.session.title, quiet: true) { store.openAgent(row.id) }.layoutPriority(1)
                     }
                     .contentShape(Rectangle())
                 }
@@ -1777,7 +1772,7 @@ private struct WorkingCard: View {
                 .accessibilityAddTraits(expanded ? .isSelected : [])
                 .accessibilityAction(named: "Open in Claude") { store.openAgent(row.id) }
                 .accessibilityAction(named: "Summarize") { summarizer.request(row.id, store: store) }
-                SparklesButton(busy: busy, done: busy, label: "Summarize this session", shown: hovered) {
+                SparklesButton(busy: busy, done: busy, label: "Summarize this session") {
                     summarizer.request(row.id, store: store)
                 }
             }
@@ -1820,7 +1815,7 @@ private struct WorkingCard: View {
                                     .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
                             }
                         }
-                        .padding(.trailing, 30)
+                        .padding(.trailing, 60)
                         .accessibilityElement(children: .combine)
                         .accessibilityLabel("\(task.kind == .agent ? "Subagent" : "Command") \(task.title)")
                         .accessibilityValue(task.activity?.text ?? "")
