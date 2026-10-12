@@ -50,6 +50,17 @@ import Testing
         let system = RouterBriefContext.system(style: "Talk like a pirate.")
         #expect(system.hasPrefix(RouterBriefContext.rules) && system.hasSuffix("Talk like a pirate."))
         #expect(RouterBriefContext.clean("**It** asks:\n which colour. Red or grey. Third.", sentences: 2) == "It asks: which colour. Red or grey.")
+        // Too long, the last sentence goes whole: never one cut off with an ellipsis.
+        let long = "It needs two answers. " + String(repeating: "word ", count: 80) + "end."
+        #expect(RouterBriefContext.clean(long, sentences: 2) == "It needs two answers.")
+    }
+
+    @Test func listedQuestionsAreNotRepeated() {
+        let asks = RouterTriage(state: .asks, questions: ["Where did you expect to see it?", "What told you it was working?"])
+        let listed = subject(.asks, .needsYou, triage: asks)
+        #expect(RouterBriefContext.listsQuestions(listed) && RouterBriefContext.sentences(listed) == 1)
+        #expect(RouterBriefContext.build(listed).contains("don't repeat"))
+        #expect(!RouterBriefContext.listsQuestions(subject(.asks, .needsYou)))
     }
 
     @MainActor @Test func theStyleIsYoursOrTheDefault() {

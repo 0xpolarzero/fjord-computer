@@ -64,7 +64,10 @@ enum RouterBriefContext {
 
     /// What the brief is to explain, by tier (and, for what needs you, by what it stopped on).
     static func ask(_ subject: Subject) -> String {
-        switch subject.tier {
+        if subject.tier == .needsYou, listsQuestions(subject) {
+            return "Its questions are shown to the user word for word right under what you write: don't repeat, list or paraphrase them. Say in one short sentence why it needs the answers."
+        }
+        return switch subject.tier {
         case .needsYou:
             switch subject.kind {
             case .question: "It stopped on a question for the user. Say exactly what each question asks, what the choices mean, and why it needs the answer."
@@ -84,8 +87,13 @@ enum RouterBriefContext {
 
     /// A form with questions, or a plan: what needs you takes a sentence more.
     static func sentences(_ subject: Subject) -> Int {
-        if subject.tier == .done { return 1 }
+        if subject.tier == .done || (subject.tier == .needsYou && listsQuestions(subject)) { return 1 }
         return subject.tier == .needsYou && (!subject.questions.isEmpty || subject.plan != nil) ? 3 : 2
+    }
+
+    /// An Asks you card shows the questions its final message asked, as asked, under the brief: the brief only says why.
+    static func listsQuestions(_ subject: Subject) -> Bool {
+        subject.kind == .asks && subject.questions.isEmpty && subject.plan == nil && !(subject.triage?.questions.isEmpty ?? true)
     }
 
     /// What the brief is made from (a hash): the same is never asked twice.
@@ -135,13 +143,18 @@ enum RouterBriefContext {
         return out.joined(separator: "\n")
     }
 
-    /// Haiku's answer as plain text, as many sentences as its tier allows.
+    /// Haiku's answer as plain text, as many sentences as its tier allows: whole ones, the last dropped while it runs long,
+    /// never one cut off mid-way (but the first, when it alone is far too long).
     static func clean(_ answer: String, sentences: Int) -> String? {
         var text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         for mark in ["**", "__", "`", "#"] { text = text.replacingOccurrences(of: mark, with: "") }
         text = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !text.isEmpty else { return nil }
-        return RouterLive.firstSentences(text, count: sentences, limit: 200 * sentences)
+        let limit = 200 * sentences
+        for count in stride(from: sentences, to: 1, by: -1) {
+            if let kept = RouterLive.firstSentences(text, count: count, limit: .max), kept.count <= limit { return kept }
+        }
+        return RouterLive.firstSentences(text, count: 1, limit: 2 * limit)
     }
 }
 
