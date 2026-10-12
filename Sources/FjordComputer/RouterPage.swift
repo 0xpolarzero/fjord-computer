@@ -1686,10 +1686,10 @@ private extension View {
 
 // MARK: - Working card
 
-/// A session working on its own: calm and small, one line. Its icon and title, what it is doing now (shimmering), what it
-/// left running, and for how long; hovering it shows Open in Claude in the time's place (it is in its menu too). A click
-/// expands it in place: every summary of it, newest first, and its subagents and commands with what each is on. Its sparkles
-/// button (on hover) summarizes it, and folded, its newest summary sits under it.
+/// A session working on its own: calm and small, one line. Its icon and title, what it is doing now (shimmering), its
+/// folder, what it left running, and for how long; hovering it shows Open in Claude in the time's place (it is in its menu
+/// too). A click expands it in place: every summary of it, newest first, and its subagents and commands with what each is on.
+/// Its sparkles button (on hover) summarizes it, and folded, its newest summary sits under it.
 private struct WorkingCard: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -1718,6 +1718,11 @@ private struct WorkingCard: View {
                         ShimmerText(text: doing, role: (12, 16)).truncationMode(.tail).layoutPriority(0)
                             .help(RouterLive.tooltip(title: row.session.title, activity: row.activity, tasks: row.tasks))
                         Spacer(minLength: 4)
+                        // Its folder, as the cards that need you name it; narrower, it goes first, then what it left running.
+                        if columnWidth >= 560 {
+                            ProjectLabel(name: row.projectName, color: row.color)
+                                .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).fixedSize().layoutPriority(1)
+                        }
                         if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
                         // Open in Claude takes the time's place on hover, as on the history's lines; its room is kept without one.
                         Group {
