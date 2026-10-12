@@ -89,6 +89,28 @@ struct RouterFusionParityTests {
                 == ["session:a", "session:c", "session:b"])
     }
 
+    /// The routing trace records what `decide` read: its ranking, its sureness, and whether that was sure.
+    @Test func theTraceHoldsWhatTheFusionDecidedOn() throws {
+        let c = try cases().first { $0.sure }!
+        var facts = RouterTools.Facts()
+        facts.latest = c.latest
+        facts.running = Set(c.running)
+        facts.idleMinutes = c.idle
+        facts.lastTold = c.lastTold
+        facts.targetOf = Dictionary(uniqueKeysWithValues: c.idle.keys.map { ($0, "session:\($0)") })
+        facts.message = c.message
+        facts.leavesItToYou = Set(c.leaves)
+        let signals = RouteFusion.Signals(route: c.route, reply: c.reply, next: c.next, gates: c.gates, lexical: c.lexical)
+        let sessionOf: (String) -> String? = { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil }
+        let answers = c.reply.map { (target: "session:\($0.key)", session: $0.key, p: $0.value) }
+        let v = RouteFusion.decide(signals, facts: facts, answers: answers, sessionOf: sessionOf)
+        let trace = RouterTrace.Inputs(signals: signals, facts: facts, destinations: [], ranked: v.ranked, sure: v.sure,
+                                       card: [], sessionOf: sessionOf)
+        #expect(trace.sure == v.sure && trace.ranked.first?.target == v.ranked.first?.target && trace.ranked.count <= 8)
+        #expect((trace.sureness ?? 0) > 0 && (trace.sureness ?? 1) < 1)
+        #expect(trace.route == c.route && trace.latest == c.latest)
+    }
+
     @Test func theLastMessageLeavesItToYou() {
         #expect(RouterLexical.leavesItToYou("Want me to push it?", waiting: false))
         #expect(RouterLexical.leavesItToYou("I can open the PR next.", waiting: false))

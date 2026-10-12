@@ -82,6 +82,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var sure: Bool? = nil
         /// The ask card's targets in order (`RouterTools.askCard`); nil: the ranking's own order.
         var card: [String]? = nil
+        /// What it was decided on, for the routing trace (`RouterTrace`).
+        var trace: RouterTrace.Inputs? = nil
     }
 
     /// What Jev (or the words alone) made of a message.
@@ -96,6 +98,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var live = false
         /// The ask card's targets in order, if they differ from the ranking's (`RouterTools.askCard`).
         var card: [String]? = nil
+        /// What it was decided on, for the routing trace (`RouterTrace`).
+        var trace: RouterTrace.Inputs? = nil
 
         var top: Scored? { ranked.first }
 
@@ -110,6 +114,7 @@ struct RouterAskBack: Identifiable, Equatable {
             if let sure = ranking.sure {
                 self.init(ranked: ranking.scored, sure: sure, assisted: true)
                 card = ranking.card
+                trace = ranking.trace
                 return
             }
             let route = Dictionary(ranking.scored.map { ($0.target, $0.p) }, uniquingKeysWith: +)
@@ -238,6 +243,8 @@ struct RouterAskBack: Identifiable, Equatable {
         let ask = askBacks.remove(at: i)
         let chosen = describe(target, store: store)
         let corrected = target != ask.suggestion
+        traceLog.append(RouterTrace(kind: corrected ? .corrected : .picked, id: id, target: target,
+                                    index: ask.options.firstIndex { $0.target == target }, from: ask.suggestion))
         // What Jev read while you typed no longer holds against your correction.
         if corrected { forgetLive() }
         store.updateDecision(id) {
@@ -332,17 +339,37 @@ struct RouterAskBack: Identifiable, Equatable {
         guard let store else { return }
         switch Self.plan(text: job.text, context: job.context, store: store) {
         case .reply(let session, let card):
+            trace(job, path: "reply", action: "send", target: card.map { "answer:\($0)" } ?? "session:\(session)")
             // The reply to a card Jev picked while you typed: you went with his pick.
             if let card, job.context.predicted == "answer:\(card)" { confirm(job, "answer:\(card)") } else { chosen(job) }
             try await reply(job, session: session, card: card)
         case .start(let folder):
+            trace(job, path: "start", action: "start", target: "new:\(folder)")
             chosen(job)
             try await start(job, folder: folder)
         case .route(let target):
+            trace(job, path: "pinned", action: "send", target: target)
             confirm(job, target)
             try await route(job, to: target)
         case .classify: try await classifyAndAct(job)
         }
+    }
+
+    /// Where routed messages are traced (`RouterTrace`); a test gives its own.
+    @ObservationIgnored var traceLog = RouterTraceLog.shared
+
+    /// A routing decided: what it was decided on and what it does, as a trace line.
+    private func trace(_ job: Job, path: String, action: String, target: String?, inputs: RouterTrace.Inputs? = nil) {
+        let text = job.text
+        let pills = job.context.pills.compactMap { range -> String? in
+            let chars = Array(text)
+            guard range.lowerBound >= 0, range.upperBound <= chars.count else { return nil }
+            return String(chars[range])
+        }
+        traceLog.append(RouterTrace(kind: .decided, id: job.id, message: RouterTools.redacted(text),
+                                    pills: pills.isEmpty ? nil : pills, pinned: job.context.target, shown: job.context.shown,
+                                    notTo: job.context.notTo, replyTo: job.context.replyTo, path: path, action: action,
+                                    target: target, inputs: inputs))
     }
 
     /// Where it goes is yours (the card you replied to, the project you tagged to start in).
@@ -547,6 +574,7 @@ struct RouterAskBack: Identifiable, Equatable {
         let named = Self.forRouter(job.text, pills: job.context.pills)
             ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
         if let named, named != found.top?.target, named != job.context.notTo, eligible(named, store: store) {
+            trace(job, path: "named", action: "send", target: named, inputs: found.trace)
             confirm(job, named)
             return try await route(job, to: named)
         }
@@ -576,6 +604,8 @@ struct RouterAskBack: Identifiable, Equatable {
         if found.sure, let top = found.top {
             // Where your own words send it: yours, as a pin is, so a follow-up may go there.
             if named == top.target { chosen(job) }
+            trace(job, path: found.live ? "live" : found.assisted ? "jev" : "words", action: "send", target: top.target,
+                  inputs: found.trace)
             return try await route(job, to: top.target)
         }
         askBack(job, found)
@@ -699,6 +729,9 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         let ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
                                 suggestion: found.top?.target, at: Date())
+        var inputs = found.trace
+        inputs?.card = options.map(\.target)
+        trace(job, path: found.assisted ? "jev" : "words", action: "ask", target: found.top?.target, inputs: inputs)
         askBacks.append(ask)
         store.updateDecision(job.id) {
             $0.add(.asked(options.map(\.title)))
@@ -781,7 +814,8 @@ extension RouterDispatcher.Effects {
                 let reader: Claude.ActivityReader? = UnderTest.isRunning ? nil : store.activityReader
                 let lexical = Task.detached(priority: .userInitiated) { RouterTools.lexical(message, sources: sources, reader: reader) }
                 // Keys you paste go to the session, never to Jev.
-                let answers = try await ask(call.questions, ["message": RouterTools.redacted(message)])
+                let state = ["message": RouterTools.redacted(message)]
+                let answers = try await ask(call.questions, state)
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
                 var signals = RouteFusion.Signals(route: [:])
                 for (name, p) in pick.probabilities {
@@ -795,9 +829,13 @@ extension RouterDispatcher.Effects {
                 let verdict = RouteFusion.decide(signals, facts: facts, answers: checks) {
                     RouterDispatcher.session(of: $0, store: store)
                 }
-                return RouterDispatcher.Ranking(scored: verdict.ranked, sure: verdict.sure,
-                                                card: RouterTools.askCard(ranked: verdict.ranked.map(\.target),
-                                                                          recent: RouterTools.recent(facts)))
+                let card = RouterTools.askCard(ranked: verdict.ranked.map(\.target), recent: RouterTools.recent(facts))
+                var trace = RouterTrace.Inputs(signals: signals, facts: facts, destinations: destinations,
+                                               ranked: verdict.ranked, sure: verdict.sure, card: card) {
+                    RouterDispatcher.session(of: $0, store: store)
+                }
+                trace.request = (try? JevClient.requestData(call.questions, about: state)).flatMap { String(data: $0, encoding: .utf8) }
+                return RouterDispatcher.Ranking(scored: verdict.ranked, sure: verdict.sure, card: card, trace: trace)
             },
             prepare: { [weak dispatcher] tools, session in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }

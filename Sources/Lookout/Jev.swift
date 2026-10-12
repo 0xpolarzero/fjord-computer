@@ -79,6 +79,19 @@ struct JevClient {
 
     /// Asks every question about `state` in one call.
     func ask(_ questions: [String: Question], about state: Any) async throws -> [String: Answer] {
+        let (body, keys, ordered) = try Self.request(questions)
+        let data = try await post(["model": "jev-latest", "state": state, "questions": body], ordered: ordered)
+        return try Self.answers(data, questions: questions, keys: keys)
+    }
+
+    /// The request's bytes as `ask` posts them (the routing trace keeps them, so evals can replay real traffic exactly).
+    static func requestData(_ questions: [String: Question], about state: Any) throws -> Data {
+        let (body, _, ordered) = try request(questions)
+        return try encode(["model": "jev-latest", "state": state, "questions": body], ordered: ordered)
+    }
+
+    private static func request(_ questions: [String: Question]) throws
+        -> (body: [String: Any], keys: [String: [String: String]], ordered: [String: Data]) {
         var body: [String: Any] = [:]
         var keys: [String: [String: String]] = [:]
         // A structured choice's options reach Jev in their own order (he leans toward the first: shuffled, the decision
@@ -108,7 +121,11 @@ struct JevClient {
                 body[id] = ["type": "noul", "instructions": instructions, "criteria": NSNull()]
             }
         }
-        let data = try await post(["model": "jev-latest", "state": state, "questions": body], ordered: ordered)
+        return (body, keys, ordered)
+    }
+
+    private static func answers(_ data: Data, questions: [String: Question], keys: [String: [String: String]]) throws
+        -> [String: Answer] {
         guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let answers = json["answers"] as? [String: Any] else { throw Failure.invalidAnswer("Unexpected answer from TypeSafe") }
         var out: [String: Answer] = [:]

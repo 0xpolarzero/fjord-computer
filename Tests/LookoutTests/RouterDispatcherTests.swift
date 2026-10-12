@@ -607,6 +607,48 @@ import Testing
         #expect(decision(s, a)?.decision.confirmed == true)
     }
 
+    // MARK: Trace
+
+    private func traceLines(_ d: RouterDispatcher) -> [RouterTrace] {
+        d.traceLog.flush()
+        guard let url = d.traceLog.url, let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return text.split(separator: "\n").compactMap { try? decoder.decode(RouterTrace.self, from: Data($0.utf8)) }
+    }
+
+    @Test func eachRoutingIsTracedWithHowItWasDecidedAndHowItEnded() async {
+        let (s, d, f) = setup()
+        d.traceLog = RouterTraceLog(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("router-trace-\(UUID().uuidString).jsonl"))
+        defer { d.traceLog.url.map { try? FileManager.default.removeItem(at: $0) } }
+        // Sure: sent, on Jev's reading; the key in it is redacted as it is for Jev.
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
+        let sent = d.submit("add a changelog entry, key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789")
+        await finish(d, f, sent)
+        // Unsure: asked; then a button other than the suggestion picked.
+        f.finished = []
+        f.ranked = [.init(target: "session:local_b", p: 0.5), .init(target: "session:local_a", p: 0.4)]
+        let asked = d.submit("and the docs too")!
+        await finish(d, f, asked)
+        f.finished = []
+        d.pick(asked, target: "session:local_a")
+        await finish(d, f, asked)
+        let lines = traceLines(d)
+        let first = lines.first { $0.id == sent && $0.kind == .decided }
+        #expect(first?.path == "jev" && first?.action == "send" && first?.target == "session:local_b")
+        #expect(first?.message?.contains("sk-ant") == false)
+        let ask = lines.first { $0.id == asked && $0.kind == .decided }
+        #expect(ask?.action == "ask")
+        let pick = lines.first { $0.id == asked && $0.kind == .corrected }
+        #expect(pick?.target == "session:local_a" && pick?.from == "session:local_b" && pick?.index != nil)
+        _ = s
+    }
+
+    @Test func nothingIsTracedUnderATestUnlessItGivesAFile() {
+        #expect(RouterTraceLog.shared.url == nil)
+    }
+
     // MARK: Deterministic
 
     @Test func anArmedReplyIsPreparedSentAndNeverClassified() async {
