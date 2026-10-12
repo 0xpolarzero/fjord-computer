@@ -34,6 +34,8 @@ extension WindowSeams {
             /// Where the pointer was heard but the hub didn't count it as on the hub, though it was drawn there.
             var dropped: [String] = []
             var hoveredSection: HubSection?
+            /// What `drawn` last read: the edges a walk steps either side of.
+            var lastDrawn: [Drawn] = []
 
             init(edge: DockEdge, scenario: Demo.Scenario, origin: NSPoint? = nil) async {
                 _ = NSApplication.shared
@@ -82,16 +84,41 @@ extension WindowSeams {
                 }
             }
 
-            /// Moves the pointer there in 2pt steps, staying on what is drawn (each point is on the bar or the panel).
+            /// Moves the pointer there, staying on what is drawn (each point is on the bar or the panel): every 8pt, and half a
+            /// point either side of each of the hub's edges it crosses (`edges`), so any strip left out of the hub's area
+            /// wider than half a point is stepped on.
             func walk(to target: NSPoint, onHub: Bool = true, _ what: String) async {
                 let start = pointer
-                let d = hypot(target.x - start.x, target.y - start.y)
-                let steps = max(1, Int((d / 2).rounded(.up)))
-                for i in 1...steps {
-                    let t = CGFloat(i) / CGFloat(steps)
-                    await move(to: NSPoint(x: start.x + (target.x - start.x) * t, y: start.y + (target.y - start.y) * t),
-                               expectOnHub: onHub, what)
+                let dx = target.x - start.x, dy = target.y - start.y
+                let d = hypot(dx, dy)
+                var ts: Set<CGFloat> = [1]
+                for along in stride(from: 8, to: d, by: 8) { ts.insert(along / d) }
+                let (xs, ys) = edges()
+                for (from, delta, lines) in [(start.x, dx, xs), (start.y, dy, ys)] where abs(delta) > 0.01 {
+                    for line in lines {
+                        for side: CGFloat in [-0.5, 0.5] {
+                            let t = (line + side - from) / delta
+                            if t > 0, t < 1 { ts.insert(t) }
+                        }
+                    }
                 }
+                for t in ts.sorted() { await move(to: NSPoint(x: start.x + dx * t, y: start.y + dy * t), expectOnHub: onHub, what) }
+            }
+
+            /// Where the hub's area could end: the bar's and the panels' edges, as is and widened by the controller's slack
+            /// (1pt reaching the hub, 4 once it has the pointer), and those of everything drawn when last read (a row's top
+            /// and bottom, so the gap between two rows). That area is those rectangles together, so a strip it leaves out
+            /// starts and ends on one of these lines.
+            func edges() -> (x: Set<CGFloat>, y: Set<CGFloat>) {
+                var xs = Set<CGFloat>(), ys = Set<CGFloat>()
+                for piece in [bar] + hub.panelsOnScreen {
+                    for slack: CGFloat in [0, 1, 4] {
+                        let r = piece.insetBy(dx: -slack, dy: -slack)
+                        xs.formUnion([r.minX, r.maxX]); ys.formUnion([r.minY, r.maxY])
+                    }
+                }
+                for item in lastDrawn { xs.formUnion([item.frame.minX, item.frame.maxX]); ys.formUnion([item.frame.minY, item.frame.maxY]) }
+                return (xs, ys)
             }
 
             /// Lets SwiftUI lay out and draw what it has pending, to the half point: a spring's tail creeps on for another
@@ -121,7 +148,8 @@ extension WindowSeams {
                 }
                 visit(host, clip: nil)
                 // Not the window-sized root.
-                return out.filter { $0.frame.width < 600 && $0.frame.height < 900 }
+                lastDrawn = out.filter { $0.frame.width < 600 && $0.frame.height < 900 }
+                return lastDrawn
             }
 
             var bar: NSRect { controller.barScreenFrame }
