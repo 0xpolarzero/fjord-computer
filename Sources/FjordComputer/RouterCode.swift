@@ -37,7 +37,19 @@ struct RouterMain: View {
     @Bindable var model: RouterModel
     var leadingInset: CGFloat = 0
 
+    /// The window's space under the Router's top: where a message's flight is drawn, from its pending line to its card.
+    static let space = "routerMain"
+
     var body: some View {
+        page
+            .coordinateSpace(.named(Self.space))
+            // Your messages flying to their cards on the canvas (RouterCanvasPending.swift), over everything.
+            .overlay {
+                if model.layout == .canvas { CanvasFlights(canvas: model.canvas) }
+            }
+    }
+
+    @ViewBuilder private var page: some View {
         if #available(macOS 26, *) {
             // The page runs under its top bar (glass-plan §5.3): in a wide window the history, Now's
             // column with a hard edge under its own bar (see `NowColumn`). The composer floats over the page's bottom
@@ -72,10 +84,17 @@ struct RouterMain: View {
     }
 
     private var composer: some View {
-        RouterComposer(store: store, model: model)
-            .frame(maxWidth: RouterCodeView.column)
-            .padding(.horizontal, 32)
-            .padding(.bottom, 16)
+        VStack(alignment: .leading, spacing: 0) {
+            // On the canvas, your messages wait over the composer until they fly to their cards.
+            if model.layout == .canvas { RouterPendingStack(store: store, model: model) }
+            RouterComposer(store: store, model: model)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { rect in
+                    model.canvas.composerFrame = rect
+                }
+        }
+        .frame(maxWidth: RouterCodeView.column)
+        .padding(.horizontal, 32)
+        .padding(.bottom, 16)
     }
 
     /// §3: a 48pt header holding the 32pt session bar: the title (13pt, wght 460, primary).

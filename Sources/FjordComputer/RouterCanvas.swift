@@ -51,6 +51,23 @@ final class RouterCanvasState {
     @ObservationIgnored var doneMemo: (query: String, revision: Int, cards: [RouterCard])?
     @ObservationIgnored private let defaults: UserDefaults?
 
+    // Your messages on their way (RouterCanvasPending.swift).
+    /// Your messages seen settled, or settled when the canvas came: those that flew, or never will. Nil while it is away.
+    @ObservationIgnored var settled: Set<UUID>?
+    /// Each pending line's box in the Router's space (`RouterMain.space`), kept after it goes: where its flight leaves from.
+    @ObservationIgnored var pendingFrames: [UUID: CGRect] = [:]
+    /// The composer's box, and the canvas's viewport, in the same space: where a message with no line leaves from, and how
+    /// a node's box in the content is found in the window.
+    @ObservationIgnored var composerFrame: CGRect = .zero
+    @ObservationIgnored var viewportFrame: CGRect = .zero
+    /// The messages in the air.
+    var flights: [CanvasFlight] = []
+    /// What landed on a node, by its id: its ripple and "You: …" under it, for a few seconds.
+    var landed: [String: CanvasLanding] = [:]
+    @ObservationIgnored private var landingTasks: [String: Task<Void, Never>] = [:]
+    /// Shots: every flight held at this point of its arc, and what landed kept.
+    @ObservationIgnored var freezeFlight: CGFloat?
+
     static let foldsKey = "routerCanvasFolds"
 
     init(defaults: UserDefaults? = nil) {
@@ -106,6 +123,43 @@ final class RouterCanvasState {
                 return
             }
         }
+    }
+
+    /// The camera moved the least that shows `rect` (content space), at once: where it goes, so a flight lands where the
+    /// node will be.
+    @discardableResult
+    func show(_ rect: CGRect, reduce: Bool) -> CanvasTransform {
+        revealTask?.cancel()
+        guard free.width > 0, let next = camera.transform.origin(toShow: rect.insetBy(dx: -8, dy: -8), in: free) else {
+            return camera.transform
+        }
+        camera.moved = true
+        withAnimation(Motion.spatial.resolved(reduce: reduce)) { camera.transform.origin = next }
+        return camera.transform
+    }
+
+    /// Lands a message on a node: its ripple and "You: …" for `CanvasLanding.shown`, then gone (kept in shots).
+    func land(_ text: String, on node: String) {
+        landed[node] = CanvasLanding(text: text)
+        landingTasks[node]?.cancel()
+        guard freezeFlight == nil else { return }
+        landingTasks[node] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(CanvasLanding.shown))
+            guard let self, !Task.isCancelled else { return }
+            self.landed[node] = nil
+            self.landingTasks[node] = nil
+        }
+    }
+
+    /// The canvas goes away: nothing in the air, nothing left to clear, and what comes meanwhile doesn't fly.
+    func stopFlights() {
+        for task in landingTasks.values { task.cancel() }
+        landingTasks = [:]
+        if freezeFlight == nil {
+            flights = []
+            landed = [:]
+        }
+        settled = nil
     }
 
     func zoom(by factor: CGFloat, reduce: Bool) {
@@ -203,6 +257,8 @@ struct RouterCanvas: View {
     let store: Store
     @Bindable var model: RouterModel
     let page: RouterPage
+    /// Now and History one at a time: an answer of the Router's shows the history once its message has gone.
+    var narrow = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -239,6 +295,11 @@ struct RouterCanvas: View {
             guard let id = open.compactMap({ $0 }).first else { return }
             canvas.bringIntoView(id, reduce: reduceMotion)
         }
+        // A message of yours settled: it flies to its card (RouterCanvasPending.swift).
+        .onChange(of: store.routerRevision, initial: true) {
+            canvas.depart(store: store, model: model, page: page, narrow: narrow, reduce: reduceMotion)
+        }
+        .onDisappear { canvas.stopFlights() }
     }
 
     /// `bottom`: how much of its foot the composer covers.
@@ -267,6 +328,7 @@ struct RouterCanvas: View {
                 canvas.free = free
                 canvas.fitFirst()
             }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(RouterMain.space)) } action: { canvas.viewportFrame = $0 }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Router canvas")
@@ -492,11 +554,11 @@ private struct CanvasNotices: View {
         let busy: Bool = if #unavailable(macOS 26) { store.routerDispatcher.isBusy } else { false }
         // The chips left nothing to show (a search that did is said above).
         let filtered = !nothing && !model.canvas.filter.isEmpty && model.canvasFolders(store, page: page).allSatisfy { $0.shown.isEmpty }
-        if away || busy || !page.asks.isEmpty || nothing || filtered {
+        // The questions the Router asks back are over the composer, with the messages they hold (`RouterPendingStack`).
+        if away || busy || nothing || filtered {
             VStack(alignment: .leading, spacing: 6) {
                 AwayStripView(store: store, model: model)
                 if busy { RouterBusyLine(store: store) }
-                ForEach(page.asks) { ask in AskBackCard(store: store, ask: ask) }
                 if nothing { RouterNothingFound() }
                 if filtered {
                     Text("Nothing matches · Esc to clear").cdsText((13, 18), .regular, CDS.Text.muted)

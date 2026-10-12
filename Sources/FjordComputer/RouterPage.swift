@@ -317,7 +317,7 @@ private struct NowColumn: View {
         if model.layout == .canvas {
             // The canvas (RouterCanvas.swift) under the same bar: it places what Now's scroll holds over itself.
             if #available(macOS 26, *) {
-                RouterCanvas(store: store, model: model, page: page)
+                RouterCanvas(store: store, model: model, page: page, narrow: bar)
                     .safeAreaBar(edge: .top, spacing: 0) {
                         VStack(spacing: 0) {
                             chips(page)
@@ -328,7 +328,7 @@ private struct NowColumn: View {
             } else {
                 VStack(spacing: 0) {
                     chips(page)
-                    RouterCanvas(store: store, model: model, page: page)
+                    RouterCanvas(store: store, model: model, page: page, narrow: bar)
                 }
             }
         } else if #available(macOS 26, *) {
@@ -1093,6 +1093,19 @@ private struct HistorySummaryLine: View, Equatable {
     }
 }
 
+extension RouterDecision {
+    /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
+    /// the dispatcher (a held start too: what its first message waits for). The history's line and the canvas's pending
+    /// line say it.
+    @MainActor func status(_ store: Store) -> String {
+        guard outcome == .pending else { return summary }
+        if let progress = store.routerDispatcher.progress[id] { return progress + "…" }
+        // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
+        if let held = store.routerDispatcher.held[id] { return summary + " · " + held }
+        return summary
+    }
+}
+
 /// A run in the history: one line (icon, what set it off, what was done, when), opening to show the trigger, what was done and
 /// its links (the session, the change with its Revert). A message it sent that can still be stopped has Cancel on the line.
 private struct HistoryDecisionLine: View, Equatable {
@@ -1120,15 +1133,8 @@ private struct HistoryDecisionLine: View, Equatable {
     static let cancelWidth: CGFloat = 64
 
     private var key: String { decision.id.uuidString }
-    /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
-    /// the dispatcher (a held start too: what its first message waits for).
-    private var status: String {
-        guard decision.outcome == .pending else { return decision.summary }
-        if let progress = store.routerDispatcher.progress[decision.id] { return progress + "…" }
-        // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
-        if let held = store.routerDispatcher.held[decision.id] { return decision.summary + " · " + held }
-        return decision.summary
-    }
+    /// How far a run under way is, or how it ended (`RouterDecision.status`).
+    private var status: String { decision.status(store) }
 
     var body: some View {
         let status = status

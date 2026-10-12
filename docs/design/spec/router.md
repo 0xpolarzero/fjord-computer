@@ -56,6 +56,8 @@ Every card is told in your words' style: one Haiku call once its triage lands (a
 ## Page
 Bottom-anchored, the more it matters the nearer the composer: the history (the decision log and addressed cards, one line each, expandable; finished turns unread highlighted), Working (live lines) and Waiting under it, Worth a look (quiet, the first three), Needs you (prominent, one card open). The composer has inline @project pills. The badge counts Needs you (amber) and Worth a look (blue); the history's unread lines count for nothing.
 
+Canvas: Now can also be drawn as a canvas, switched from the top bar and kept across launches (router-canvas.md). Each project folder is a frame on a ground you pan and zoom, its sessions under Needs you, Worth a look, Waiting, Working and Done, joined by lines to the same cards; nothing is open until you click, one at a time. History stays beside it. Your messages wait over the composer with what the Router is doing to them, the questions it asks back under them; once sent, each flies to the card of the session it went to, the canvas panning there first, and shows "You: …" under it for a few seconds. One the Router answered itself fades, and its answer is in the history.
+
 ## Removed
 The long-lived process, `--resume`, the transcript (`chat`), peer turns and the ability of a session to message the Router, the single serial queue (runs are independent), the role prompt's header grammar. What stays of the old file: `changes` (the records behind change cards); old `chat` and `claudeSessionID` keys are read (changes migrated) and dropped on the next save.
 

@@ -681,8 +681,9 @@ final class RouterModel {
         draft = ""
         replyTo = nil
         live.reset()
-        // The Router answers in its conversation, in the history.
-        if toRouter { show(.history) }
+        // The Router answers in its conversation, in the history. On the canvas the message waits over the composer and
+        // flies to its card; the history shows only if it went to none (`RouterCanvasState.depart`).
+        if toRouter, layout != .canvas { show(.history) }
     }
 
     /// A card clicked: its session opens in Claude, and the card is picked (it stays open).

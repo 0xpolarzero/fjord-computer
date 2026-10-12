@@ -214,6 +214,20 @@ enum AppWindowShots {
             model.layout = .canvas
             model.search.query = "lcu"
         }, appearance: .aqua),
+        // Your messages over the composer: one being sent, with what the Router is doing, and one it asks you about.
+        Shot(name: "router-canvas-pending", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
+            model.layout = .canvas
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-pending-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
+            model.layout = .canvas
+        }, appearance: .darkAqua),
+        // The message being sent goes to its session once the canvas is up, held mid-arc; an earlier one landed on a card.
+        Shot(name: "router-canvas-flight", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            flight(model, store)
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-flight-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            flight(model, store)
+        }, appearance: .darkAqua),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
         Shot(name: "snippets") { _ in .snippets },
@@ -231,6 +245,26 @@ enum AppWindowShots {
     ]
 
     private static let canvasSize = CGSize(width: 1440, height: 900)
+
+    /// The demo's message under way sent to its session a moment after the canvas is drawn, its flight held halfway; and
+    /// "You: …" on the plan card, as an earlier message left it.
+    private static func flight(_ model: RouterModel, _ store: Store) {
+        model.layout = .canvas
+        model.canvas.freezeFlight = 0.5
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1200))
+            if let card = store.router.cards.first(where: { $0.kind == .plan && $0.isOpen }) {
+                model.canvas.land("run it on the lab box first", on: card.id)
+            }
+            guard let i = store.router.decisions.lastIndex(where: { RouterFlights.isMessage($0) && $0.outcome == .pending
+                                                                    && !store.routerDispatcher.askBacks.map(\.id).contains($0.id) }) else { return }
+            var decisions = store.router.decisions
+            let text = decisions[i].triggerText
+            decisions[i].add(.sent(to: "Repository ownership transfer setup", text: text, original: nil), session: "local_demo-transfer")
+            decisions[i].outcome = .done
+            store.router.decisions = decisions
+        }
+    }
 
     /// Every open card six times over, so the zones would take the page.
     private static func manyNeeds(_ store: Store) {

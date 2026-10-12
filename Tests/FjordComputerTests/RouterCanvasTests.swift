@@ -132,4 +132,33 @@ import Testing
         // Nothing that scrolls under it.
         #expect(!CanvasEventView.scrolls(root, inside: area))
     }
+
+    /// A message sent on the canvas keeps Now in view (it flies to its card there); in the list the history shows at once.
+    @Test func aMessageSentOnTheCanvasStaysOnNowAndFliesOnceToItsCard() throws {
+        let store = demo()
+        let model = canvas(store)
+        let card = try #require(model.zones(store).needs.first)
+        let canvas = model.canvas
+        canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
+        #expect(canvas.settled != nil)
+        model.reply(to: card.id, store: store)
+        model.draft = "use sqlite"
+        model.send(store: store)
+        #expect(model.pane == .now)
+        // The demo's Router settles it at once: it lands on the card it answered (Reduce Motion: no arc, no pan).
+        canvas.nodeRects[card.id] = CGRect(x: 0, y: 0, width: 420, height: 52)
+        canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
+        #expect(canvas.landed[card.id]?.text == "use sqlite" && canvas.flights.isEmpty)
+        canvas.landed = [:]
+        canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
+        #expect(canvas.landed.isEmpty)
+        canvas.stopFlights()
+
+        let list = RouterModel()
+        list.reply(to: card.id, store: store)
+        list.replyTo = nil
+        list.draft = "what's running?"
+        list.send(store: store)
+        #expect(list.pane == .history)
+    }
 }

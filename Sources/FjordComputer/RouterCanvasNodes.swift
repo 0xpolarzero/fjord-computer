@@ -69,7 +69,9 @@ struct CanvasFolderFrame: View {
                         ForEach(nodes) { node in
                             Group {
                                 if let item = node.item {
-                                    CanvasNode(item: item, store: store, model: model, page: page)
+                                    landed(node.id) {
+                                        CanvasNode(item: item, store: store, model: model, page: page)
+                                    }
                                 } else {
                                     more(node)
                                 }
@@ -91,6 +93,11 @@ struct CanvasFolderFrame: View {
         }
         .frame(width: CanvasMetrics.frameWidth, alignment: .leading)
         .motion(.spatial, value: nodes.map(\.id))
+        // Where a message for a session not drawn yet lands (RouterCanvasPending.swift).
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
+            model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = CGRect(origin: rect.origin,
+                                                                               size: CGSize(width: rect.width, height: CanvasMetrics.header))
+        }
         // The lines under the cards, on the frame's ground; the labels over it.
         .backgroundPreferenceValue(CanvasHeaders.self) { heads in
             ZStack(alignment: .topLeading) {
@@ -159,6 +166,18 @@ struct CanvasFolderFrame: View {
         folder.shown.flatMap { g in
             g.items.map { Node(id: $0.id, group: g.group, item: $0) } + (g.more > 0 ? [Node(id: folder.moreID(g.group), group: g.group, more: g.more)] : [])
         }
+    }
+
+    /// A node with what you sent it: its ripple as the message lands, then "You: …" under it for a few seconds.
+    @ViewBuilder private func landed(_ id: String, @ViewBuilder node: () -> some View) -> some View {
+        let landing = model.canvas.landed[id]
+        VStack(alignment: .leading, spacing: 2) {
+            node().overlay { if let landing { CanvasRipple(landing: landing, frozen: model.canvas.freezeFlight != nil) } }
+            if let landing {
+                CanvasLanded(landing: landing).transition(.opacity)
+            }
+        }
+        .motion(.spatial, value: landing)
     }
 
     private func more(_ node: Node) -> some View {
