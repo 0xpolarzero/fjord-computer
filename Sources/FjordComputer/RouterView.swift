@@ -149,7 +149,7 @@ extension RouterCard.Addressed {
     /// What happened to an addressed card, in a few words.
     var label: String {
         switch self {
-        case .you: "Marked addressed"
+        case .you: "Archived"
         case .reply: "You replied"
         case .router: "The Router passed it on"
         case .answered: "Answered"
@@ -162,7 +162,7 @@ extension RouterCard.Addressed {
 }
 
 extension RouterCard {
-    /// Whether it can be opened again (Reopen, Space): an addressed card, unless a newer card of its session replaced it or
+    /// Whether it can be opened again (Reopen): an addressed card, unless a newer card of its session replaced it or
     /// its session was archived or deleted.
     var canReopen: Bool { !isOpen && addressedBy != .superseded && addressedBy != .gone }
 }
@@ -569,16 +569,16 @@ final class RouterModel {
         }
     }
 
-    /// A card's Mark handled: it goes to the history at once (no timed undo: Reopen is there). The pick moves to the next
-    /// open card if it was on this one.
+    /// A card's Archive: it goes to the history at once (no timed undo: Reopen is there). The pick moves to the next open
+    /// card if it was on this one.
     func address(_ id: String, store: Store) {
         reconcile(store: store)
         guard let card = store.router.cards.first(where: { $0.id == id }), card.isOpen else { return }
         let open = cards(store).filter(\.isOpen).map(\.id)
         let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
         store.setCardAddressed(id, true)
-        store.logCardAction("Marked handled", card: id)
-        Announce.say("Addressed")
+        store.logCardAction("Archived", card: id)
+        Announce.say("Archived")
         if selection == id { advance(from: id, to: next, store: store, reveal: true) }
     }
 
@@ -603,28 +603,6 @@ final class RouterModel {
             return
         }
         select(ids[min(max(i + (down ? 1 : -1), 0), ids.count - 1)], store: store)
-    }
-
-    /// Space: addressed, or open again. An addressed card goes up to the history, so the next open card is picked (or the one
-    /// before it). A card superseded by a newer one of its session isn't opened again: the pick goes to that newer card; nor
-    /// is one whose session is gone (`RouterCard.canReopen`, as Reopen).
-    func toggleAddressed(store: Store) {
-        reconcile(store: store)
-        let shown = cards(store)
-        guard let id = selection, let card = shown.first(where: { $0.id == id }) else { return }
-        if !card.isOpen, !store.routerCanReopen(card) {
-            if card.addressedBy == .superseded,
-               let newer = store.routerShownOpenCards.first(where: { $0.sessionID == card.sessionID }) { select(newer.id, store: store) }
-            return
-        }
-        // Open again: as Reopen, which shows the card in Needs you and goes to it.
-        guard card.isOpen else { reopen(id, store: store); return }
-        let open = shown.filter(\.isOpen).map(\.id)
-        let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
-        store.setCardAddressed(id, true)
-        store.logCardAction("Marked handled", card: id)
-        Announce.say("Addressed")
-        advance(from: id, to: next, store: store, reveal: true)
     }
 
     /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the

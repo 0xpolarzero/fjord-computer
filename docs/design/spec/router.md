@@ -37,7 +37,7 @@ Through the Router as a message of yours (logged, visible, "<Category> · …" i
 The decision log: one entry per run (trigger, decision, what was done, outcome: sent, started, changed, reverted, corrected). The last 10 entries are part of every Claude run's context; Jev reads only what you last told each session, on that session's option. Entries where the user chose something other than the suggestion are labelled as corrections. Nothing else.
 
 ## Cards: addressed
-- Explicit: submitting a form, approving or sending back a plan, "Mark handled".
+- Explicit: submitting a form, approving or sending back a plan, "Archive".
 - Otherwise Jev decides, after any message that touches a session with open cards, per card: resolved → history ("addressed by your message"); partly (e.g. 1 of 3 questions) → stays, showing what is left; not → stays. Unsure → stays.
 - Reopen from the history puts a card back in Needs you.
 

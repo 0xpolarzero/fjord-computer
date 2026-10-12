@@ -4,10 +4,10 @@ import Foundation
 
 /// The Router's keys in the app window. In the composer: Return sends, ⇧Return starts a new line, ↑↓ pick a card while it is empty;
 /// with @ suggestions showing, ↑↓ walk them and Return or Tab picks one; Backspace at the very start takes the last chip off.
-/// Elsewhere: ↑↓ pick a card, Space marks it addressed (or open again), Return replies to it, and typing goes to the
-/// composer. The cards are walked in the order the page shows them (`RouterModel.cards`). Esc is first the Back of a plan in
-/// revise mode (its feedback field showing), then dismisses the suggestions, then Jev's pick of a target, then the pinned
-/// target, then the reply chip, then is the Revise… of the plan shown in full, then closes the window.
+/// Elsewhere: ↑↓ pick a card, Return replies to it, and typing goes to the composer; Space is no key of the Router's (a card
+/// leaves only by its Archive button). The cards are walked in the order the page shows them (`RouterModel.cards`). Esc is
+/// first the Back of a plan in revise mode (its feedback field showing), then dismisses the suggestions, then Jev's pick of a
+/// target, then the pinned target, then the reply chip, then is the Revise… of the plan shown in full, then closes the window.
 @MainActor
 final class RouterKeys {
     let store: Store
@@ -89,10 +89,9 @@ final class RouterKeys {
                 model.move(down: code == kVK_DownArrow, store: store)
                 return true
             }
-            if code == kVK_Space {
-                model.toggleAddressed(store: store)
-                return true
-            }
+            // Space archives nothing: it took the picked card, and the pick moving on to the next, a second press took one
+            // you hadn't seen. It goes on to whatever has the keyboard, and starts no reply with a blank.
+            if code == kVK_Space { return false }
             if isReturn {
                 // Only a card that is listed: the pick follows the list first.
                 model.reconcile(store: store)

@@ -35,7 +35,7 @@ import UserNotifications
 
     // MARK: Window keys
 
-    @Test func arrowsWalkTheCardsAndSpaceAddressesThePickedOne() throws {
+    @Test func arrowsWalkTheCardsAndSpaceArchivesNothing() throws {
         let store = demo()
         let model = RouterModel()
         var closed = false
@@ -46,14 +46,19 @@ import UserNotifications
         #expect(model.selection == open[0])
         #expect(keys.key(key(kVK_DownArrow), responder: nil))
         #expect(model.selection == open[1])
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        // Space is no key of the Router's: the picked card stays open and picked, and no reply starts with a blank.
+        let request = model.focusRequest
+        #expect(!keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(store.router.cards.first { $0.id == open[1] }?.isOpen == true)
+        #expect(model.selection == open[1] && model.pendingKeys.isEmpty && model.focusRequest == request)
+        // Archived, the card goes up to the history: the next open one is picked, and replied to (nothing was written).
+        model.address(open[1], store: store)
         #expect(store.router.cards.first { $0.id == open[1] }?.addressedBy == .you)
-        // The addressed card goes up to the history: the next open one is picked, and replied to (nothing was written).
         #expect(model.selection == open[2] && model.replyTo == open[2])
-        // Words written to the picked card stay its own when it is handled: the pick moves on, the reply doesn't, and the
-        // words go to its session, handled or not. The same with Mark handled.
+        // Words written to the picked card stay its own when it is archived: the pick moves on, the reply doesn't, and the
+        // words go to its session, archived or not.
         model.draft = "on it"
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        model.address(open[2], store: store)
         #expect(model.selection == open[0] && model.replyTo == open[2])
         model.send(store: store)
         #expect(store.router.decisions.last?.links.cards == [open[2]])
@@ -120,7 +125,7 @@ import UserNotifications
         #expect(!(store.claudeTasks["local_demo-ci"] ?? []).isEmpty)
         #expect(!store.routerPage.notes.contains { $0.id == hidden.id })
         #expect(!model.cards(store).contains { $0.id == hidden.id })
-        // The arrows never land on it, a pick on it moves off, and Return and Space can't reach it.
+        // The arrows never land on it, a pick on it moves off, and Return can't reach it.
         for _ in 0...model.cards(store).count {
             #expect(keys.key(key(kVK_DownArrow), responder: nil))
             #expect(model.selection != hidden.id)
@@ -156,19 +161,17 @@ import UserNotifications
         #expect(model.cards(store).contains { $0.id == hidden.id })
     }
 
-    @Test func aFinishedTurnNotShownIsNeitherASupersededCardsSuccessorNorATargetOfJevsOrASend() {
+    @Test func aFinishedTurnNotShownIsNeitherATargetOfJevsNorOfASend() {
         let store = demo()
         let model = RouterModel()
-        let keys = RouterKeys(store: store, model: model) {}
         let hidden = store.openRouterCards.first { $0.sessionID == "local_demo-ci" && $0.kind == .done }!
         var older = hidden
         older.id = hidden.id + "-older"
         older.addressedAt = hidden.createdAt
         older.addressedBy = .superseded
         store.router.cards.append(older)
-        // Space on the superseded card in the history: its session's newer card isn't on the page, so the pick stays.
+        // The superseded card picked in the history: it is replied to.
         model.select(older.id, store: store)
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
         #expect(model.selection == older.id && model.replyTo == older.id)
         // Jev neither offers it nor goes to it, and a pin on it doesn't hold; the history's card is still replied to.
         let tools = RouterTools(store: store)
@@ -181,41 +184,33 @@ import UserNotifications
                 == .reply(session: older.sessionID, card: older.id))
         // Once what it ran ends, it is all of these.
         store.claudeTasks["local_demo-ci"] = nil
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
-        #expect(model.selection == hidden.id)
         #expect(tools.targets(store).contains { $0.target == "answer:\(hidden.id)" })
         #expect(store.routerDispatcher.eligible("answer:\(hidden.id)", store: store))
         #expect(RouterModel.targets(store).contains(hidden.id))
     }
 
-    @Test func spaceOpensAgainOnlyWhatReopenDoesNotACardWhoseSessionIsGone() {
+    @Test func reopenOpensAgainACardYouArchivedNotOneWhoseSessionIsGone() {
         let store = demo()
         let model = RouterModel()
-        let keys = RouterKeys(store: store, model: model) {}
         let ids = store.routerShownOpenCards.filter { $0.kind != .waiting }.prefix(2).map(\.id)
         #expect(ids.count == 2)
         let i = store.router.cards.firstIndex { $0.id == ids[0] }!
         store.router.cards[i].addressedAt = now
         store.router.cards[i].addressedBy = .gone
         #expect(!store.router.cards[i].canReopen)
-        // Space on the archived session's card in the history: it stays addressed, with its reason.
-        model.select(ids[0], store: store)
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
-        #expect(store.router.cards[i].addressedBy == .gone && !store.router.cards[i].isOpen)
+        // Reopen on the archived session's card in the history: it stays addressed, with its reason.
         model.reopen(ids[0], store: store)
-        #expect(store.router.cards[i].addressedBy == .gone)
-        // A card you addressed opens again with Space, as with Reopen.
+        #expect(store.router.cards[i].addressedBy == .gone && !store.router.cards[i].isOpen)
+        // A card you archived opens again.
         store.setCardAddressed(ids[1], true)
         #expect(store.router.cards.first { $0.id == ids[1] }!.canReopen)
-        model.select(ids[1], store: store)
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        model.reopen(ids[1], store: store)
         #expect(store.router.cards.first { $0.id == ids[1] }!.isOpen)
     }
 
     @Test func aHandledCardIsNotOpenedAgainOnceItsSessionIsArchivedOrDeleted() {
         let store = demo()
         let model = RouterModel()
-        let keys = RouterKeys(store: store, model: model) {}
         let ids = store.routerShownOpenCards.filter { $0.kind != .waiting }.prefix(2).map(\.id)
         #expect(ids.count == 2)
         let cards = ids.map { id in store.router.cards.first { $0.id == id }! }
@@ -227,17 +222,13 @@ import UserNotifications
         store.claudeSessions[cards[0].sessionID]?.isArchived = true
         store.claudeSessions[cards[1].sessionID] = nil
         for card in handled { #expect(!store.routerCanReopen(card)) }
-        model.reopen(ids[0], store: store)
-        model.select(ids[1], store: store)
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        for id in ids { model.reopen(id, store: store) }
         #expect(ids.allSatisfy { id in store.router.cards.first { $0.id == id }?.isOpen == false })
-        // A read failing since: the sessions last read still say they are gone, for Reopen and Space alike.
+        // A read failing since: the sessions last read still say they are gone.
         for link in [ClaudeLink.unreadable, .missing] {
             store.claudeLink = link
             for card in handled { #expect(!store.routerCanReopen(card)) }
-            model.reopen(ids[0], store: store)
-            model.select(ids[1], store: store)
-            #expect(keys.key(key(kVK_Space, " "), responder: nil))
+            for id in ids { model.reopen(id, store: store) }
             #expect(ids.allSatisfy { id in store.router.cards.first { $0.id == id }?.isOpen == false })
         }
         // Before the sessions are read, nothing is known gone.
@@ -293,28 +284,26 @@ import UserNotifications
         #expect(model.focusRequest != request && model.pendingKeys.count == 1)
     }
 
-    @Test func spaceNeverReopensACardThatWasSupersededUnderIt() {
+    @Test func spaceNeitherArchivesNorOpensAgain() {
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
-        let question = store.openRouterCards.first { $0.kind == .question }!
-        model.select(question.id, store: store)
-        model.reconcile(store: store)
-        // A newer card for the same session supersedes the picked one, which is no longer open.
-        var newer = question
-        newer.id = question.id + "-newer"
-        newer.createdAt = Date()
-        RouterFeed.address(&store.router, question.sessionID, .superseded, Date())
-        store.router.cards.append(newer)
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
-        let old = store.router.cards.first { $0.id == question.id }!
-        #expect(old.addressedBy == .superseded)
-        #expect(model.selection != question.id && !store.openRouterCards.contains { $0.id == question.id })
-        // Nothing picked at all: Space does nothing.
+        let ids = store.routerShownOpenCards.filter { $0.kind != .waiting }.prefix(2).map(\.id)
+        #expect(ids.count == 2)
+        store.setCardAddressed(ids[1], true)
+        // Space, pressed twice, on an open card and on one you archived: the cards and the pick stay as they were, and the
+        // key goes on to whatever has the keyboard.
+        for id in ids {
+            model.select(id, store: store)
+            let before = store.router.cards
+            for _ in 0..<2 { #expect(!keys.key(key(kVK_Space, " "), responder: nil)) }
+            #expect(store.router.cards == before && model.selection == id)
+        }
+        // Nothing picked: the same.
         model.selection = nil
         let before = store.router.cards
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
-        #expect(store.router.cards == before)
+        #expect(!keys.key(key(kVK_Space, " "), responder: nil))
+        #expect(store.router.cards == before && model.selection == nil && model.pendingKeys.isEmpty)
     }
 
     // MARK: Sending
@@ -986,7 +975,7 @@ import UserNotifications
         #expect(after.history.contains { $0.id == card.id })
         // The card, and the decision it logged.
         #expect(after.history.count == before.history.count + 2)
-        #expect(store.router.decisions.last?.trigger == .you("Marked handled"))
+        #expect(store.router.decisions.last?.trigger == .you("Archived"))
         // Its line sits at the time it was addressed, after the older entries.
         #expect(after.history.last { $0.id == card.id }?.date == store.router.cards.first { $0.id == card.id }?.addressedAt)
         model.reopen(card.id, store: store)
@@ -997,14 +986,14 @@ import UserNotifications
         #expect(model.selection == card.id && !model.expanded.contains(card.id))
     }
 
-    @Test func spaceOnAHandledCardReopensItAndShowsIt() {
+    @Test func reopenOnAnArchivedCardOpensItAndShowsIt() {
         let store = demo()
         let model = RouterModel()
         let card = store.routerPage.needs[0]
         model.address(card.id, store: store)
         model.expandedNeed = nil
         model.select(card.id, store: store)
-        model.toggleAddressed(store: store)
+        model.reopen(card.id, store: store)
         #expect(store.router.cards.first { $0.id == card.id }?.isOpen == true)
         // The reopened card is the one shown in full, as Reopen does.
         #expect(model.selection == card.id && model.expandedNeed == card.id && !model.expanded.contains(card.id))
@@ -1122,10 +1111,9 @@ import UserNotifications
         #expect(store.router.decisions.count > before && store.router.decisions.last?.links.cards == [])
     }
 
-    @Test func markHandledOpensTheCardThePickMovesOnTo() throws {
+    @Test func archiveOpensTheCardThePickMovesOnTo() throws {
         let store = demo()
         let model = RouterModel()
-        let keys = RouterKeys(store: store, model: model) {}
         let open = model.cards(store).filter(\.isOpen).map(\.id)
         try #require(open.count == 3)
         // The middle card picked and handled: the next one is picked, shown in full and gone to, not the first one.
@@ -1133,15 +1121,27 @@ import UserNotifications
         model.address(open[1], store: store)
         #expect(model.selection == open[2] && model.expandedNeed == open[2] && model.revealRequest?.id == open[2])
         #expect(store.routerPage.openNeed(preferred: model.expandedNeed) == open[2])
-        // The same with Space, back up to the first card when it was the last.
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
+        // The same again, back up to the first card when it was the last.
+        model.address(open[2], store: store)
         #expect(model.selection == open[0] && model.expandedNeed == open[0] && model.revealRequest?.id == open[0])
+    }
+
+    @Test func archiveTakesOnlyTheFirstClickOfADoubleClick() {
+        func click(_ type: NSEvent.EventType, _ count: Int) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                               eventNumber: 0, clickCount: count, pressure: 1)!
+        }
+        // The card leaves on the first click and the next one's Archive slides under the pointer: the second click is no
+        // press of it.
+        #expect(!CardView.secondClick(click(.leftMouseUp, 1)))
+        #expect(CardView.secondClick(click(.leftMouseUp, 2)) && CardView.secondClick(click(.leftMouseUp, 3)))
+        // A press with no click (a key, VoiceOver) archives.
+        #expect(!CardView.secondClick(nil) && !CardView.secondClick(key(kVK_Space, " ")))
     }
 
     @Test(.hostsWindows) func thePickMovingOnFromAHandledCardArmsNoReplyYouTookOff() async {
         let store = demo()
         let model = RouterModel()
-        let keys = RouterKeys(store: store, model: model) {}
         let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
             .frame(width: 1100, height: 720))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 720), styleMask: .borderless,
@@ -1158,7 +1158,7 @@ import UserNotifications
             }
         }
         await settle()
-        // A card clicked, its reply chip taken off, a general request typed, then its Mark handled: the pick moves on to the
+        // A card clicked, its reply chip taken off, a general request typed, then its Archive: the pick moves on to the
         // next card, but no reply is armed, so the request goes to the Router.
         let open = model.cards(store).filter(\.isOpen).map(\.id)
         #expect(open.count >= 3)
@@ -1171,11 +1171,5 @@ import UserNotifications
         let before = store.router.decisions.count
         model.send(store: store)
         #expect(store.router.decisions.count > before && store.router.decisions.last?.links.cards == [])
-        // The same with Space.
-        model.tap(open[1], store: store)
-        #expect(model.removeLastChip() && model.replyTo == nil)
-        #expect(keys.key(key(kVK_Space, " "), responder: nil))
-        await settle()
-        #expect(model.selection == open[2] && model.replyTo == nil)
     }
 }

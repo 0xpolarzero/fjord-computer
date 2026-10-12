@@ -51,9 +51,9 @@ import Testing
         let s = store()
         s.router.cards = [RouterCard(id: "local_a#w1", sessionID: "local_a", kind: .question, title: "Fix the login bug",
                                      folder: nil, text: "Which?", createdAt: Date())]
-        s.logCardAction("Marked handled", card: "local_a#w1")
+        s.logCardAction("Archived", card: "local_a#w1")
         let d = s.router.decisions[0]
-        #expect(d.trigger == .you("Marked handled") && d.outcome == .done)
+        #expect(d.trigger == .you("Archived") && d.outcome == .done)
         #expect(d.done == [.answered(card: "Fix the login bug")] && d.links.cards == ["local_a#w1"] && d.links.sessions == ["local_a"])
     }
 

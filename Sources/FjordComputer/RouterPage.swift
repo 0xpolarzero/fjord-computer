@@ -1891,7 +1891,7 @@ private struct WaitingCard: View {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .contextMenu {
-            Button("Mark handled") { store.setCardAddressed(card.id, true) }
+            Button("Archive") { store.setCardAddressed(card.id, true) }
             CardSessionMenu(store: store, sessionID: card.sessionID)
         }
     }
@@ -1990,7 +1990,7 @@ struct OriginTag: View {
 typealias RouterProject = (name: String, color: Color?)
 
 /// An open card in Needs you, warm and solid: a summary row (icon, title, kind, a line of what it asks, project, time) and,
-/// for the one shown in full, its form or plan to answer in place, or its text and Mark handled. Clicking its header shows it
+/// for the one shown in full, its form or plan to answer in place, or its text and Archive. Clicking its header shows it
 /// in full with the composer ready to reply to it; hovering it shows Open in Claude. (Addressed, it is a `HistoryCardLine`.)
 struct CardView: View {
     let store: Store
@@ -2004,7 +2004,7 @@ struct CardView: View {
     /// The tallest an open form or plan gets before it scrolls inside.
     var formCap: CGFloat = closedFormCap
     static let closedFormCap: CGFloat = 400
-    /// Worth a look's: neutral instead of warm, no shadow, and "Got it" for Mark handled.
+    /// Worth a look's: neutral instead of warm, no shadow.
     var quiet = false
     @State private var hovered = false
     @FocusState private var focused: Bool
@@ -2061,7 +2061,7 @@ struct CardView: View {
             .accessibilityAction(named: "Open in Claude") { openInClaude() }
     }
 
-    /// Always there on a card, beside Mark handled and alike: what you do with a card isn't hidden until you hover it.
+    /// Always there on a card, beside Archive and alike: what you do with a card isn't hidden until you hover it.
     private var openButton: some View {
         ClaudeButton(icon: ClaudeMark.openSymbol, label: "Open in Claude", variant: .ghost, size: .sm) { openInClaude() }
     }
@@ -2104,7 +2104,7 @@ struct CardView: View {
         .shadow(color: warm.opacity(expanded && !quiet ? 0.10 : 0), radius: 10, y: 2)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(card.kind.label): \(card.title)")
-        .accessibilityAction(named: "Mark handled") { model.address(card.id, store: store) }
+        .accessibilityAction(named: "Archive") { model.address(card.id, store: store) }
     }
 
     /// Who, what kind, what it asks and when: one line when there is room, else two.
@@ -2112,7 +2112,7 @@ struct CardView: View {
         let title = Text(card.title).cdsText(quiet ? (13, 18) : (14, 20), quiet ? .medium : .semibold, CDS.Text.primary).lineLimit(1)
         let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
-        // A form has its own buttons: Mark handled sits in the header beside it.
+        // A form has its own buttons: Archive sits in the header beside it.
         return VStack(alignment: .leading, spacing: 1) {
             if wide {
                 HStack(spacing: 8) {
@@ -2124,14 +2124,14 @@ struct CardView: View {
                     Spacer(minLength: 4)
                     projectLabel(project)
                     age
-                    markHandled
+                    archiveButton
                     openButton
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; markHandled; openButton }
-                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); age; markHandled; openButton }
-                    HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; markHandled; openButton }
+                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); projectLabel(project); age; archiveButton; openButton }
+                    HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); age; archiveButton; openButton }
+                    HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; archiveButton; openButton }
                 }
                 // Under the title, past the glyph's room when it has one.
                 if !expanded { HStack(spacing: 8) { CardLead(store: store, sessionID: card.sessionID, room: true); ask } }
@@ -2142,11 +2142,20 @@ struct CardView: View {
         .contentShape(Rectangle())
     }
 
-    /// Mark handled (Got it, on Worth a look): in the header, always.
-    private var markHandled: some View {
-        ClaudeButton(icon: "checkmark.circle", label: quiet ? "Got it" : "Mark handled", variant: .ghost, size: .sm) {
+    /// Archive, on Needs you and Worth a look alike: in the header, always. The only way a card leaves the list from here.
+    private var archiveButton: some View {
+        ClaudeButton(icon: "archivebox", label: "Archive", variant: .ghost, size: .sm) {
+            guard !Self.secondClick(NSApp.currentEvent) else { return }
             model.address(card.id, store: store)
         }
+    }
+
+    /// Whether `event` is the second click of a double-click (or a later one): Archive takes only the first. The card leaves
+    /// as it is archived and the next one's Archive slides under the pointer, so the second click would archive a card you
+    /// never saw. A press with no click (a key, VoiceOver) archives.
+    static func secondClick(_ event: NSEvent?) -> Bool {
+        guard let event, [.leftMouseDown, .leftMouseUp].contains(event.type) else { return false }
+        return event.clickCount > 1
     }
 
     private var lead: some View { CardLead(store: store, sessionID: card.sessionID) }
