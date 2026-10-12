@@ -284,15 +284,15 @@ import Testing
         do {
             let (hosting, window) = render()
             defer { window.contentView = nil; window.orderOut(nil) }
-            await waitUntil(within: 10) { (Self.fromBottom(hosting) ?? 0) > 1000 }
-            await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+            await waitUntil { (Self.fromBottom(hosting) ?? 0) > 1000 }
+            await waitUntilSteady(turns: 8) { Self.fromBottom(hosting) }
             #expect((Self.fromBottom(hosting) ?? 0) > 1000, "the page opened on the message, far above the bottom")
         }
         // The page left and come back to: it opens at the bottom, not on the message it went to before.
         let (hosting, window) = render()
         defer { window.contentView = nil; window.orderOut(nil) }
-        await waitUntil(within: 10) { Self.fromBottom(hosting) != nil }
-        await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+        await waitUntil { Self.fromBottom(hosting) != nil }
+        await waitUntilSteady(turns: 8) { Self.fromBottom(hosting) }
         #expect(Self.fromBottom(hosting).map { abs($0) <= 1 } == true, "opens at the bottom: \(String(describing: Self.fromBottom(hosting)))")
     }
 
@@ -315,15 +315,15 @@ import Testing
         do {
             let (hosting, window) = render()
             defer { window.contentView = nil; window.orderOut(nil) }
-            await waitUntil(within: 10) { (Self.fromBottom(hosting) ?? 0) > 1000 }
-            await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+            await waitUntil { (Self.fromBottom(hosting) ?? 0) > 1000 }
+            await waitUntilSteady(turns: 8) { Self.fromBottom(hosting) }
             #expect((Self.fromBottom(hosting) ?? 0) > 1000, "the page opened on the line, far above the bottom")
         }
         // The page left and come back to: it opens at the bottom, not on the line it went to before.
         let (hosting, window) = render()
         defer { window.contentView = nil; window.orderOut(nil) }
-        await waitUntil(within: 10) { Self.fromBottom(hosting) != nil }
-        await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+        await waitUntil { Self.fromBottom(hosting) != nil }
+        await waitUntilSteady(turns: 8) { Self.fromBottom(hosting) }
         #expect(Self.fromBottom(hosting).map { abs($0) <= 1 } == true, "opens at the bottom: \(String(describing: Self.fromBottom(hosting)))")
     }
 

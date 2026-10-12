@@ -109,6 +109,6 @@ import Testing
 }
 
 /// Waits for `condition`, which something the test started brings about (see `waitUntil`).
-@MainActor private func eventually(within: TimeInterval = 60, _ condition: () -> Bool) async throws {
+@MainActor private func eventually(within: TimeInterval = waitWatchdog, _ condition: () -> Bool) async throws {
     await waitUntil(within: within, condition)
 }
