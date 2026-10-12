@@ -114,7 +114,7 @@ def check_packets(paths, problems):
             st = p["state"]
             sids, cids = {s["id"] for s in st["sessions"]}, {c["id"] for c in st["cards"]}
             target = p["real"]["went_to"] if p["mode"] == "rewrite" else p["target_hint"]
-            ok = (target in {"change_lookout", "question", "compound"} or
+            ok = (target in {"change_fjord", "question", "compound"} or
                   (target.startswith("new:") and target[4:] in st["projects"]) or
                   (target.startswith("session:") and target[8:] in sids))
             if not ok:

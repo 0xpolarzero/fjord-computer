@@ -254,7 +254,7 @@ FORMATS = {
 
 # ---------------------------------------------------------------- policies
 
-LOW = {"question", "compound", "change_lookout"}
+LOW = {"question", "compound", "change_fjord"}
 
 
 def make_policy(p_session=0.7, lead=0.0, p_new=0.6, p_intent=0.6, g_setting=0.75, g_compound=2.0, reply=0.5,
@@ -270,7 +270,7 @@ def make_policy(p_session=0.7, lead=0.0, p_new=0.6, p_intent=0.6, g_setting=0.75
         if g.get("gate_compound", 0) >= g_compound:
             return ("send", "compound")
         if g.get("gate_setting", 0) >= g_setting:
-            return ("send", "change_lookout")
+            return ("send", "change_fjord")
         if r.get("replies"):
             ys = sorted(r["replies"].items(), key=lambda x: -x[1])
             if ys[0][1] >= reply and (len(ys) < 2 or ys[1][1] <= reply_other):

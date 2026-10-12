@@ -10,7 +10,7 @@ Lookout is a macOS app that shows the user's Claude Code sessions on a board: ea
 idle, a summary, its recent turns) and **cards** (what a finished turn left for the user: `question` form with options,
 `plan`, `asks`, `approval`, `done`, `stuck`, `waiting`). Its **Router** is one composer: the user types a message
 without choosing a destination, and the Router sends it to a session, starts a new session in a project
-(`new:<project>`), handles it itself (`change_lookout` for its own settings/categories/groups/rules/inbox marks,
+(`new:<project>`), handles it itself (`change_fjord` for its own settings/categories/groups/rules/inbox marks,
 `question` for a read-only question about the board, `compound` for a Lookout part plus a session part), or asks back
 with up to four options when unsure.
 
@@ -61,7 +61,7 @@ One JSON object per line, one per packet, in packet order, nothing else (no pros
 ### Targets
 
 `session:<id>` (an id from `state.sessions`, never a title), `new:<project>` (a project from `state.projects`),
-`change_lookout`, `question`, `compound`. A reply to a card is its session. A session started by your submit `eN` is
+`change_fjord`, `question`, `compound`. A reply to a card is its session. A session started by your submit `eN` is
 `session:started-eN` in later events.
 
 ### Gold

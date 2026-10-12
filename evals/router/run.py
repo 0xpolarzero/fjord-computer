@@ -82,7 +82,7 @@ def reading(row):
     for p, pp in project.items():
         if p != "none":
             dests[f"new:{p}"] = kind.get("new_session", 0) * pp
-    for k in ("change_lookout", "question", "compound", "unclear"):
+    for k in ("change_fjord", "question", "compound", "unclear"):
         dests[k] = kind.get(k, 0)
     return {"options": sorted(dests.items(), key=lambda x: -x[1]), "dests": dests, "kind": kind, "yes": yes, "project": project}
 

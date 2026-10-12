@@ -1,4 +1,4 @@
-"""Explorer `intents`: how Lookout's own intents (question, compound, change_lookout) are offered and checked.
+"""Explorer `intents`: how Lookout's own intents (question, compound, change_fjord) are offered and checked.
 
 Every format here is the shipped `swift` one (v3-told + gates, dots in names made underscores) with one thing
 changed about the intents or the gates, so each idea is measured on its own."""
@@ -8,7 +8,7 @@ import analyze
 import formats
 import run
 
-INTENTS = ("question", "compound", "change_lookout")
+INTENTS = ("question", "compound", "change_fjord")
 SETS = ("synth", "heldout", "real", "realA", "realB", "style")
 
 # ---------------------------------------------------------------- intent criteria
@@ -20,7 +20,7 @@ CRIT_WORDED = {
                  "question for a session about its own work or what it said"),
     "compound": ("Requests meant for two or more different places in one message: Lookout itself and a session, or "
                  "two different sessions. Not one long message with several points for one session"),
-    "change_lookout": ("Change how Lookout itself behaves: its settings, notifications, inbox categories, rules or "
+    "change_fjord": ("Change how Lookout itself behaves: its settings, notifications, inbox categories, rules or "
                        "groups. Not asking a session to build or change code"),
 }
 
@@ -36,7 +36,7 @@ CRIT_STRUCT = {
         "not_for": "One message with several points or steps, all for the same session",
         "examples": ["mute the bot notifications and tell the docs one to push", "tell the api one to merge and the web one to rebase"],
     },
-    "change_lookout": {
+    "change_fjord": {
         "what": "Change how Lookout itself behaves: its settings, notifications, inbox categories, rules or groups",
         "not_for": "Asking a session to build, fix or change code, even code of a Lookout feature",
         "examples": ["stop notifying me about drafts", "put the web sessions in one group"],
@@ -66,7 +66,7 @@ G_ADDRESSED_S = {"type": "noul", "instructions": {
 
 
 NAMES_LONG = {"question": "question to Lookout about the board", "compound": "several things for different places",
-              "change_lookout": "change a Lookout setting"}
+              "change_fjord": "change a Lookout setting"}
 
 
 def make(crit=None, gates=None, drop_intents=False, names=None):
@@ -147,7 +147,7 @@ def gated_policy(gc=0.75, gc2=0.0, gs=0.75, gs2=0.0, q_gate=0.0, veto=None, veto
                  hold_gates=("gate_question", "gate_setting", "gate_compound"), renorm=False, c_cap=2):
     """hold: a session send waits (asks) when one of `hold_gates` says yes at least this sure but not enough to decide."""
     """The shipped policy with Lookout's intents checked by gates:
-    compound when gate_compound ≥ gc and gate_compound2 ≥ gc2; change_lookout when gate_setting ≥ gs and gate_setting2 ≥ gs2;
+    compound when gate_compound ≥ gc and gate_compound2 ≥ gc2; change_fjord when gate_setting ≥ gs and gate_setting2 ≥ gs2;
     an intent the route picks needs gate_question ≥ q_gate (for question); any intent is vetoed when `veto_gate` ≥ veto."""
     params = {**FINAL, **(base or {}), "g_compound": 2, "g_setting": 2, "g_question": 2}
     inner = analyze.policy("gates", **params)
@@ -160,7 +160,7 @@ def gated_policy(gc=0.75, gc2=0.0, gs=0.75, gs2=0.0, q_gate=0.0, veto=None, veto
             if g.get("gate_compound", 0) >= gc and g.get("gate_compound2", 1) >= gc2 and one < c_cap:
                 return ("send", "compound")
             if g.get("gate_setting", 0) >= gs and g.get("gate_setting2", 1) >= gs2:
-                return ("send", "change_lookout")
+                return ("send", "change_fjord")
             if g.get(q_send_gate, 0) >= q_send:
                 return ("send", "question")
         k, w = inner(r)

@@ -23,7 +23,7 @@ from . import adapter, rules
 HERE = Path(__file__).resolve().parent
 ROUTER = HERE.parents[1]
 SEALED = HERE.parent / "data" / "episodes" / "sealed"
-INTENTS = {"change_lookout", "question", "compound"}
+INTENTS = {"change_fjord", "question", "compound"}
 
 
 def _is_sealed(path):

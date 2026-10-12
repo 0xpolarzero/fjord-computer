@@ -158,7 +158,7 @@ grouped k-fold by session, stratified by project and first/follow-up, mean and s
 
 ## 10. Destinations barely tested on real (S1)
 
-Real has **0** Lookout-intent golds (question, change_lookout, compound) and 61 new-session golds (35 in A, 26 in B).
+Real has **0** Lookout-intent golds (question, change_fjord, compound) and 61 new-session golds (35 in A, 26 in B).
 6 of realA's 14 wrong sends are first messages (17% of that stratum). Intents are tested only on written sets: synth
 36, heldout 25, style 126, all agent-written. The `gate_you` and question-wording fixes were therefore validated on
 real data only as "never fire", never as "fire when right".

@@ -236,13 +236,13 @@ class RulesTests(unittest.TestCase):
         self.assertIsNone(rules.plan(self.state, "@router what needs me?", context))
         self.assertEqual(self.post("@router what needs me?", "question", context)["target"], "question")
         result = self.post("@router what needs me?", "session:local_a", context)
-        self.assertEqual((result["decision"], result["ranked"]), ("ask", ["question", "change_lookout"]))
+        self.assertEqual((result["decision"], result["ranked"]), ("ask", ["question", "change_fjord"]))
 
     def test_router_only_keeps_only_intents_without_promoting_sureness(self):
         result = self.post("@router what needs me?", "session:local_a", ranked=[
-            "session:local_a", {"target": "question", "p": .2}, "compound", "change_lookout"])
+            "session:local_a", {"target": "question", "p": .2}, "compound", "change_fjord"])
         self.assertEqual(result["decision"], "ask")
-        self.assertEqual(result["ranked"], [{"target": "question", "p": .2}, "compound", "change_lookout"])
+        self.assertEqual(result["ranked"], [{"target": "question", "p": .2}, "compound", "change_fjord"])
 
     def test_router_only_reuses_shown_intent_but_never_sends_shown_session(self):
         context = {"shown": "question", "replyTo": "local_a#w1", "pinned": "session:local_b"}
@@ -252,7 +252,7 @@ class RulesTests(unittest.TestCase):
         context["shown"] = "session:local_b"
         result = rules.plan(self.state, "@router what needs me?", context)
         self.assertEqual((result["decision"], result["target"], result["ranked"]),
-                         ("ask", None, ["question", "change_lookout"]))
+                         ("ask", None, ["question", "change_fjord"]))
 
     def test_router_aside_in_reply_preserves_armed_destination(self):
         text = "SQLite (@router no rush)"
@@ -319,7 +319,7 @@ class RulesTests(unittest.TestCase):
 
     def test_ask_options_canonicalize_cards_deduplicate_and_limit_to_four(self):
         ranked = ["answer:local_a#w1", "session:local_a", "session:local_b",
-                  "new:docs", "question", "change_lookout", "unclear"]
+                  "new:docs", "question", "change_fjord", "unclear"]
         result = self.post("use sqlite", "answer:local_a#w1", sure=False, ranked=ranked)
         self.assertEqual(result["ranked"], ["session:local_a", "session:local_b", "new:docs", "question"])
 

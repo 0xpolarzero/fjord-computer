@@ -168,7 +168,7 @@ def gate_dump(fmt="verify1", sets="realA,synth,heldout,style", dest="question", 
 
 LOOKOUT = {"question": "Lookout's assistant answers it: a question about what is going on (sessions, cards, the inbox)",
            "compound": "Lookout's assistant splits it: several different things for different places",
-           "change_lookout": "Lookout changes itself: a setting, its notifications, inbox categories or groups"}
+           "change_fjord": "Lookout changes itself: a setting, its notifications, inbox categories or groups"}
 
 
 def describe(case, dest):
@@ -308,7 +308,7 @@ RULES = {
 
 
 def tradeoff(fmt="swift", sets="realA,realB,synth,heldout,style", rules="fits,pairmin", ths=(0.3, 0.4, 0.5, 0.6),
-             kinds="session,new,question,compound,change_lookout", t=None):
+             kinds="session,new,question,compound,change_fjord", t=None):
     """Wrong sends removed vs right sends lost, per veto rule, threshold and kind of destination."""
     t = t or table(fmt, sets)
     for name in rules.split(","):
@@ -329,7 +329,7 @@ def tradeoff(fmt="swift", sets="realA,realB,synth,heldout,style", rules="fits,pa
 
 # ---------------------------------------------------------------- policies: the base decision, then the second look
 
-def second_look(session=0.45, new=0.0, intent=None, intent_fits=None, intents=("question", "compound", "change_lookout"),
+def second_look(session=0.45, new=0.0, intent=None, intent_fits=None, intents=("question", "compound", "change_fjord"),
                 reply_route=0.0, reply_pair=0.5, base=None):
     """Send only when the second look agrees: for a session or a new session, every pairwise preference against its
     rivals at least the bar; for Lookout's intents, the same (intent) and/or the fits yes (intent_fits)."""

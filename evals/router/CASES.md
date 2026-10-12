@@ -44,7 +44,7 @@ what a good router does with it.
 ## Gold
 
 - `to`: every acceptable destination. A session id (a reply to its card counts as the session), `new:<project>`,
-  `change_lookout` (change Lookout itself: inbox categories, groups, settings), `question` (a question about what is
+  `change_fjord` (change Lookout itself: inbox categories, groups, settings), `question` (a question about what is
   going on now, for Lookout to answer, not for a session), `compound` (several different things in one message).
   Empty: no destination is right; the router must ask.
 - `ask_ok`: true when asking you is a fine answer too (the message is ambiguous enough that a careful human assistant

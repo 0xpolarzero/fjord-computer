@@ -26,7 +26,7 @@ FAMILIES = {
 }
 
 
-LOW_RISK = {"question", "compound", "change_lookout"}
+LOW_RISK = {"question", "compound", "change_fjord"}
 
 
 def policy(family, p_min=0.75, lead=0.3, ratio=2.0, reply=None, reply_other=0.3, p_new=None, p_intent=None, conflict=None,
@@ -41,7 +41,7 @@ def policy(family, p_min=0.75, lead=0.3, ratio=2.0, reply=None, reply_other=0.3,
         if g_compound is not None and g.get("gate_compound", 0) >= g_compound:
             return ("send", "compound")
         if g_setting is not None and g.get("gate_setting", 0) >= g_setting:
-            return ("send", "change_lookout")
+            return ("send", "change_fjord")
         if g_question is not None and g.get("gate_question", 0) >= g_question:
             return ("send", "question")
         if conflict is not None and reply is not None and r.get("replies"):

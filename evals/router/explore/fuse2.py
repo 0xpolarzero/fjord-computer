@@ -43,7 +43,7 @@ W2 = {"lp": 0.86,                                   # Jev's route probability (l
       "fin0u": 1.26, "idle5u": 2.41,                # latest / finished ≤ 5 min ago, times Jev's `unclear` p
       "nxt": 0.95,                                  # "is it the user's next message in this conversation?" yes
       "new": -0.01,
-      "question": -0.83, "compound": 0.58, "change_lookout": 0.39,
+      "question": -0.83, "compound": 0.58, "change_fjord": 0.39,
       "g_c": 1.94, "g_s": 2.52, "c2": 0.08,         # an intent's own gate
       "you": -1.57,                                 # "does it speak to one agent as you?" yes, against intents
       "ilong": -1.87}                               # an intent for a message over 80 characters

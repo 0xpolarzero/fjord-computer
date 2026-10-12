@@ -47,7 +47,7 @@ def clean(text, limit=None):
 INTENT_TEXT = {
     "question": "a question to Lookout about the board itself (which sessions are working, done or waiting, what a "
                 "session named in the third person is doing); not a question for a session about its own work",
-    "change_lookout": "change how Lookout itself behaves (its settings, notifications, inbox, rules); not asking a "
+    "change_fjord": "change how Lookout itself behaves (its settings, notifications, inbox, rules); not asking a "
                       "session to build or change code",
     "compound": "requests for two or more different places in one message (Lookout and a session, or two sessions); "
                 "not one long message with several points for one session",
@@ -93,7 +93,7 @@ The user's message:
 {clean(case['message'], 2000)}
 >>>
 
-Answer with JSON only, no prose: {{"pick": "<a session id, new:<project>, question, change_lookout, compound, or ask>", \
+Answer with JSON only, no prose: {{"pick": "<a session id, new:<project>, question, change_fjord, compound, or ask>", \
 "confidence": <0-100, how likely your pick is where the user meant it>}}"""
 
 

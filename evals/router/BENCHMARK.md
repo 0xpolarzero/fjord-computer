@@ -66,7 +66,7 @@ One JSON object per line, one episode per object.
 }
 ```
 
-Targets: `session:<id>`, `new:<project>`, `change_lookout`, `question`, `compound`. A reply to a card is its session.
+Targets: `session:<id>`, `new:<project>`, `change_fjord`, `question`, `compound`. A reply to a card is its session.
 `acceptable`: interchangeable successful destinations (sending there is right). `clarify`: competing interpretations
 (sending there is wrong; they belong on the ask card). `ask`: required (no safe send), allowed (asking is fine),
 forbidden (the destination is plain; asking is a needless click).

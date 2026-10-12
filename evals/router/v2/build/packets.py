@@ -80,7 +80,7 @@ FLOW_SPEC = {
                         "showed; you send as shown (gold = shown) or, in a minority, the chip was wrong and gold differs.",
     "prediction-waved-off": "You dismissed the live prediction with Esc: context.notTo = the target you waved off; gold "
                             "is somewhere else (or an ask).",
-    "intent-then-session": "First a message for Lookout itself (change_lookout or question), then a message for a "
+    "intent-then-session": "First a message for Lookout itself (change_fjord or question), then a message for a "
                            "session on the board.",
 }
 FAMILY_SPEC = {
@@ -95,7 +95,7 @@ FAMILY_SPEC = {
     "switch": "goes to a different existing session than your previous message, unnamed",
     "correction": "corrects a wrong delivery by the Router ('no, that was for…')",
     "new-session": "starts new work that belongs in a new session (maybe near a similar sibling)",
-    "lookout-setting": "asks Lookout itself to change a setting, category, group, rule or inbox mark (target change_lookout)",
+    "lookout-setting": "asks Lookout itself to change a setting, category, group, rule or inbox mark (target change_fjord)",
     "board-question": "asks Lookout about the board ('what's waiting on me?', 'is the CI one done?') (target question)",
     "compound": "a Lookout part plus a session part in one message (target compound)",
     "paste": "a pasted error, log, stack trace or URL, with or without a line of text",
@@ -240,7 +240,7 @@ def goal_for(fam, flow, state, rng):
                f'itself, not that session.' if near and rng.random() < .4 else ""
         return ("Ask Lookout to change one of its own settings, categories, groups, rules or inbox marks (notifications, "
                 "Jev labels, a category for some kind of card, mark some cards read, ...), plausibly motivated by this "
-                "board." + trap, "change_lookout")
+                "board." + trap, "change_fjord")
     if fam == "board-question":
         return ("Ask Lookout a read-only question about this board (what's waiting, which session did X, is Y done, "
                 "what failed), answerable from the board.", "question")

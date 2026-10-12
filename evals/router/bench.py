@@ -23,7 +23,7 @@ import run
 HERE = pathlib.Path(__file__).parent
 SETS = {"synth": "cases/*.jsonl", "heldout": "heldout/*.jsonl", "real": "real/data/real.jsonl",
         "style": "real/data/routerstyle_*.jsonl"}
-INTENTS = {"question", "compound", "change_lookout"}
+INTENTS = {"question", "compound", "change_fjord"}
 
 FINAL = dict(p_min=0.7, lead=0, reply=0.5, reply_other=0.4, p_new=0.6, p_intent=0.6, conflict=0.5, g_compound=0.75,
              g_setting=0.75, g_question=2)

@@ -43,7 +43,7 @@ def episode(eid, group, events, source="real", writer="claude", mode="goal", las
 class WalkTests(unittest.TestCase):
     def test_destinations_follow_the_previous_delivery(self):
         e = episode("e", "g", [submit("e1", "go on", "session:a"), submit("e2", "and in c?", "session:c"),
-                               submit("e3", "start one", "new:p"), submit("e4", "tweak lookout", "change_lookout"),
+                               submit("e3", "start one", "new:p"), submit("e4", "tweak lookout", "change_fjord"),
                                submit("e5", "more", "session:started-e3")])
         subs, _ = A.walk(e)
         self.assertEqual([s["dest"] for s in subs], ["same", "switch", "new", "intent", "same"])
@@ -143,7 +143,7 @@ class WeightTests(unittest.TestCase):
                 for i in range(40)]
         written = [episode(f"w{i}", f"g{i}", [submit("e1", "Is it done?" if i < 10 else "fix it", "session:a")],
                            source="written") for i in range(40)]
-        written.append(episode("wi", "gx", [submit("e1", "change lookout", "change_lookout")], source="written"))
+        written.append(episode("wi", "gx", [submit("e1", "change lookout", "change_fjord")], source="written"))
         eps, _ = A.records(real, written)
         w, rows, cells = A.importance_weights(eps)
         self.assertEqual(w["wi"], 1.0)

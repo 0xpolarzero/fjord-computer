@@ -29,7 +29,7 @@ extension RouterTools {
     /// Fjord Computer's own destinations, each worded by who the message is for: worded as "a question about what is going on",
     /// `question` caught questions you ask a session about its own work, p > 0.95, on 1 real message in 10.
     static let intentCriteria: [(name: String, criteria: String)] = [
-        ("change_lookout", "Change how Fjord Computer itself behaves: its settings, its notifications, or Triage's inbox categories, rules or groups. Not asking a session to build or change code"),
+        ("change_fjord", "Change how Fjord Computer itself behaves: its settings, its notifications, or Triage's inbox categories, rules or groups. Not asking a session to build or change code"),
         ("question", "A question to the Router, the assistant that watches the board, about the board: which sessions are working, done or waiting on the user, or what a session named in the third person is doing. Not a question for a session about its own work or what it said"),
         ("compound", "Requests meant for two or more different places in one message: Fjord Computer itself and a session, or two different sessions. Not one long message with several points for one session"),
         ("unclear", "none of these: small talk, a fragment, or nothing says where it goes"),
@@ -330,7 +330,7 @@ extension RouterTools {
             first("compound", p)
             return (ranked, true)
         }
-        if !vetoed, let p = gates["gate_setting"], p >= gateSure { first("change_lookout", p); return (ranked, true) }
+        if !vetoed, let p = gates["gate_setting"], p >= gateSure { first("change_fjord", p); return (ranked, true) }
         // A session's cards are one: its surest check stands for it.
         var surest: [String: (target: String, session: String, p: Double)] = [:]
         for a in answers where a.p > (surest[a.session]?.p ?? -1) { surest[a.session] = a }
@@ -373,7 +373,7 @@ enum RouteFusion {
         "f_you": -0.64,                               // …in what you last told it: a message repeating it starts anew
         "f_title": -0.57,                             // …in its title (it already weighs in Jev's reading)
         "new": 0.66,
-        "question": -0.57, "compound": 1.03, "change_lookout": 0.63,
+        "question": -0.57, "compound": 1.03, "change_fjord": 0.63,
         "g_q": 1.26, "g_c": 2.11, "g_s": 2.26, "c2": 0.18,   // an intent's own gate
         "you": -1.46,                                 // "does it speak to one agent as you?" yes, against intents
         "ilong": -1.51,                               // an intent for a message over 80 characters
@@ -439,7 +439,7 @@ enum RouteFusion {
                     x["g_c"] = s.gates["gate_compound"] ?? 0
                     x["c2"] = s.gates["gate_compound2"] ?? 0
                 }
-                if target == "change_lookout" { x["g_s"] = s.gates["gate_setting"] ?? 0 }
+                if target == "change_fjord" { x["g_s"] = s.gates["gate_setting"] ?? 0 }
                 if target == "question" { x["g_q"] = s.gates["gate_question"] ?? 0 }
             }
             out[target] = x

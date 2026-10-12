@@ -486,7 +486,7 @@ import Testing
         #expect(login?["project"] as? String == "lookout")
         #expect((criteria["Update the docs"] as? [String: Any])?["now"] as? String == "finished 1m ago")
         #expect(names.contains("new session in lookout") && names.contains("new session in docs"))
-        #expect(Set(["change_lookout", "question", "compound", "unclear"]).isSubset(of: Set(names)))
+        #expect(Set(["change_fjord", "question", "compound", "unclear"]).isSubset(of: Set(names)))
         // Asked beside it: whether it answers the waiting card, the gates, and whether it is the next message of the
         // latest session's conversation (the one waiting on you; the docs session said nothing to go on).
         #expect(Set(call.questions.keys) == ["route", "answers0", "gate_setting", "gate_compound", "gate_question", "gate_compound2", "gate_you", "next0"])
@@ -546,17 +546,17 @@ import Testing
         // A setting turned off: Fjord Computer's, when the route leans that way too…
         d.forgetLive()
         call = await routed(d, "turn off the docs notifications") { _, _ in
-            ["route": Self.choice(["Update the docs": 0.4, "change_lookout": 0.6]), "answers0": .noul(0.01),
+            ["route": Self.choice(["Update the docs": 0.4, "change_fjord": 0.6]), "answers0": .noul(0.01),
              "gate_setting": .noul(0.9), "gate_compound": .noul(0.01), "gate_you": .noul(0.05)]
         }
-        #expect(call.found?.top?.target == "change_lookout" && call.found?.sure == true)
+        #expect(call.found?.top?.target == "change_fjord" && call.found?.sure == true)
         // …and when the route leans to the session working on the docs: a sure setting gate outweighs it.
         d.forgetLive()
         call = await routed(d, "turn off the docs notifications") { _, _ in
-            ["route": Self.choice(["Update the docs": 0.9, "change_lookout": 0.1]), "answers0": .noul(0.01),
+            ["route": Self.choice(["Update the docs": 0.9, "change_fjord": 0.1]), "answers0": .noul(0.01),
              "gate_setting": .noul(0.9), "gate_compound": .noul(0.01), "gate_you": .noul(0.05)]
         }
-        #expect(call.found?.top?.target == "change_lookout" && call.found?.sure == true)
+        #expect(call.found?.top?.target == "change_fjord" && call.found?.sure == true)
         // Spoken to an agent as "you": never one of Fjord Computer's own.
         d.forgetLive()
         call = await routed(d, "did you turn off the docs notifications?") { _, _ in
@@ -605,7 +605,7 @@ import Testing
         #expect(verdict(["answer:a#1": 0.9], answers: [("answer:a#1", "a", 0.8)]) == ("answer:a#1", true))
         // A gate decides its intent first.
         #expect(verdict(["session:a": 0.9], gates: ["gate_compound": 0.8]) == ("compound", true))
-        #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.8, "gate_compound": 0.1]) == ("change_lookout", true))
+        #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.8, "gate_compound": 0.1]) == ("change_fjord", true))
         #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.7]) == ("session:a", true))
         // Several points for one session aren't several things; a message spoken to an agent isn't Fjord Computer's.
         #expect(verdict(["session:a": 0.9], gates: ["gate_compound": 0.8, "gate_compound2": 0.2]) == ("session:a", true))
@@ -1308,7 +1308,7 @@ import Testing
         f.rankError = RouterTools.Failure("no TypeSafe key is set")
         let b = d.submit("@router what needs me?", context: RouterContext(replyTo: "local_a#w1"))
         await finish(d, f, b)
-        #expect(f.prepared.isEmpty && d.askBacks.first { $0.id == b }?.options.map(\.target) == ["question", "change_lookout"])
+        #expect(f.prepared.isEmpty && d.askBacks.first { $0.id == b }?.options.map(\.target) == ["question", "change_fjord"])
         // An aside in a reply goes with the reply.
         let c = d.submit("SQLite (@router no rush)", context: RouterContext(replyTo: "local_a#w1"))
         await finish(d, f, c)
@@ -1391,7 +1391,7 @@ import Testing
 
     @Test func changingFjordIsAFreshRunWhoseChangesJoinItsEntry() async {
         let (s, d, f) = setup()
-        f.ranked = [.init(target: "change_lookout", p: 0.92), .init(target: "unclear", p: 0.08)]
+        f.ranked = [.init(target: "change_fjord", p: 0.92), .init(target: "unclear", p: 0.08)]
         // Another entry is in the log: the change must go to this run's entry.
         let other = s.logDecision(RouterDecision(trigger: .you("other")))
         f.whileRunning = { tools in _ = await tools.call("set_setting", ["key": "notifications", "value": false]) }
@@ -1400,7 +1400,7 @@ import Testing
         #expect(f.runs.map(\.intent) == [.changeFjord])
         #expect(f.runs[0].input.contains("The user's message:\nturn the notifications off"))
         let entry = decision(s, id)
-        #expect(entry?.decision.label == "change_lookout" && entry?.reply == "Done." && entry?.note == "set it")
+        #expect(entry?.decision.label == "change_fjord" && entry?.reply == "Done." && entry?.note == "set it")
         #expect(entry?.links.changes.count == 1 && decision(s, other)?.links.changes.isEmpty == true)
         #expect(s.router.changes.count == 1, "a card with Revert")
         #expect(entry?.outcome == .done && entry?.summary == "changed Fjord Computer")

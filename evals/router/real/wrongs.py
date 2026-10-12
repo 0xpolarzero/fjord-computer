@@ -9,14 +9,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import run  # noqa: E402
 import score as sc  # noqa: E402
 
-INTENTS = {"question", "compound", "change_lookout"}
+INTENTS = {"question", "compound", "change_fjord"}
 
 
 def why(r, w):
     g = r.get("gates") or {}
     if w == "compound" and g.get("gate_compound", 0) >= 0.75:
         return "gate compound"
-    if w == "change_lookout" and g.get("gate_setting", 0) >= 0.75:
+    if w == "change_fjord" and g.get("gate_setting", 0) >= 0.75:
         return "gate setting"
     reps = r.get("replies") or {}
     if reps and max(reps.values()) >= 0.5 and max(reps, key=reps.get) == w:

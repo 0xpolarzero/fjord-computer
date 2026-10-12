@@ -176,7 +176,7 @@ def final(r):
     return analyze.policy("gates", **bench.FINAL)(r)
 
 
-INTENT_KEYS = ("question", "compound", "change_lookout")
+INTENT_KEYS = ("question", "compound", "change_fjord")
 
 
 def nexts(r):

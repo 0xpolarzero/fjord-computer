@@ -5,7 +5,7 @@ import random
 
 FENCE_OPEN, FENCE_CLOSE = '<session-content untrusted="true">', "</session-content>"
 INTENTS = {
-    "change_lookout": "The user wants to change Lookout itself: its inbox categories, groups or settings",
+    "change_fjord": "The user wants to change Lookout itself: its inbox categories, groups or settings",
     "question": "A question about what is going on now (cards, working sessions, the inbox, settings), not for any session",
     "compound": "Several different things in one message, such as changing Lookout and telling a session something",
 }
@@ -202,7 +202,7 @@ def history_state(board, names, mode):
 KIND_CRITERIA = {
     "session": "for one of the user's existing Claude Code sessions: a reply to what it asks or said, or something more for it to do",
     "new_session": "a new task to start in a new Claude Code session",
-    "change_lookout": INTENTS["change_lookout"],
+    "change_fjord": INTENTS["change_fjord"],
     "question": INTENTS["question"],
     "compound": INTENTS["compound"],
     "unclear": "unclear what it is for: small talk, a fragment, or too short to tell",
@@ -246,7 +246,7 @@ ROUTE_INSTRUCTIONS_V2B = {
     "focus": ("Decide about `message` alone. A message addressed to a session (\"tell the CI one to…\", \"lcu: …\") goes "
               "to that existing session; a question about a session or about what is going on (\"is the CI one done?\") "
               "is `question`. Turning a Lookout setting on or off, its notifications, inbox categories or groups is "
-              "`change_lookout`, even when a session works on that feature's code; asking for code to change goes to "
+              "`change_fjord`, even when a session works on that feature's code; asking for code to change goes to "
               "that session. Start a new session only when the message asks for one or no existing session does that work."),
 }
 ROUTE_INSTRUCTIONS_V2C = {
@@ -255,7 +255,7 @@ ROUTE_INSTRUCTIONS_V2C = {
     "rules": [
         "Addressed to a session (\"tell the CI one to…\", \"lcu: …\"): that existing session.",
         "A question about a session or about what is going on (\"is the CI one done?\"): `question`.",
-        "A Lookout setting, its notifications, inbox categories or groups: `change_lookout`, even when a session works on that code.",
+        "A Lookout setting, its notifications, inbox categories or groups: `change_fjord`, even when a session works on that code.",
         "A new session only when the message asks for one, or no existing session does that work.",
     ],
 }

@@ -36,7 +36,7 @@ from v2.run import episodes as R
 
 RAW = C.DATA / "episodes" / "raw"
 AUDITS = C.DATA / "audits"
-INTENTS = {"change_lookout", "question", "compound"}
+INTENTS = {"change_fjord", "question", "compound"}
 DESTS = ["same", "switch", "new", "intent"]
 LENGTH_BUCKETS = [(5, "<=5"), (15, "6-15"), (40, "16-40"), (math.inf, ">40")]
 CLIP_LO, CLIP_HI = 0.2, 5.0

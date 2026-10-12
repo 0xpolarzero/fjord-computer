@@ -43,7 +43,7 @@ TRACE = pathlib.Path.home() / "Library/Application Support/Fjord Computer/router
 OUT = DATA / "traffic" / "decisions.jsonl"
 FOLLOW = ("picked", "corrected", "cancelled")
 SENDS = ("send", "start", "intent")
-INTENTS = ("question", "compound", "change_lookout")
+INTENTS = ("question", "compound", "change_fjord")
 SURE_BINS = (0.5, 0.7, 0.8, 0.9, 0.93, 0.96)
 
 
@@ -191,7 +191,7 @@ def features(inputs, message):
             if target == "compound":
                 x["g_c"] = gates.get("gate_compound", 0)
                 x["c2"] = gates.get("gate_compound2", 0)
-            if target == "change_lookout":
+            if target == "change_fjord":
                 x["g_s"] = gates.get("gate_setting", 0)
             if target == "question":
                 x["g_q"] = gates.get("gate_question", 0)

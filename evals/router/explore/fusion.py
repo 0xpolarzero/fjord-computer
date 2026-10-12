@@ -16,7 +16,7 @@ import formats
 
 HERE = pathlib.Path(__file__).parent.parent
 
-INTENTS = ("question", "compound", "change_lookout")
+INTENTS = ("question", "compound", "change_fjord")
 _CASES = None
 
 
@@ -72,7 +72,7 @@ def board_facts(board):
     return facts, len(ordered), len(fin)
 
 
-FEATURES = ["ov", "told10", "direct", "fol", "lp", "jtop", "fin0u", "fin1u", "told0u", "idle5u", "sess", "new", "question", "compound", "change_lookout",
+FEATURES = ["ov", "told10", "direct", "fol", "lp", "jtop", "fin0u", "fin1u", "told0u", "idle5u", "sess", "new", "question", "compound", "change_fjord",
             "fin0", "fin1", "fin2", "run", "idle5", "waits", "reply", "told0", "g_q", "g_c", "g_s"]
 
 
@@ -128,12 +128,12 @@ def features(r, case):
             f[d] = 1
             f["ilong"] = int(len(case["message"]) > 80)
             f["intent"] = 1
-            f["gate"] = g.get({"question": "gate_question", "compound": "gate_compound", "change_lookout": "gate_setting"}[d], 0)
+            f["gate"] = g.get({"question": "gate_question", "compound": "gate_compound", "change_fjord": "gate_setting"}[d], 0)
             dq = min(max(r.get("direct", 0), 0.01), 0.99)
             f["direct"] = math.log(dq / (1 - dq)) * (d == "question")
             f["g_q"] = g.get("gate_question", 0) * (d == "question")
             f["g_c"] = g.get("gate_compound", 0) * (d == "compound")
-            f["g_s"] = g.get("gate_setting", 0) * (d == "change_lookout")
+            f["g_s"] = g.get("gate_setting", 0) * (d == "change_fjord")
         out[d] = f
     return out
 
@@ -470,7 +470,7 @@ def show(res):
 
 
 SMALL = ["lp", "fin0", "fin1", "fin2", "run", "reply", "told0", "fin0u", "idle5u", "new", "question", "compound",
-         "change_lookout", "g_q", "g_c", "g_s", "ilong"]
+         "change_fjord", "g_q", "g_c", "g_s", "ilong"]
 
 
 def decide(P, case, bar=0.8, bar_intent=None, maxlen=None):
@@ -648,7 +648,7 @@ def main():
                 g = r.get("gates") or {}
                 if "-v" in sys.argv:
                     print("   ", jt in c["gold"]["to"], jt, round(r.get("direct", 0), 2), repr(c["message"][:150]))
-                rows.append(dict(right=jt in c["gold"]["to"], fol=max(fol.values(), default=0), g=g.get("gate_" + {"question": "question", "compound": "compound", "change_lookout": "setting"}[jt], 0),
+                rows.append(dict(right=jt in c["gold"]["to"], fol=max(fol.values(), default=0), g=g.get("gate_" + {"question": "question", "compound": "compound", "change_fjord": "setting"}[jt], 0),
                                  direct=r.get("direct", 0), len=len(c["message"]), bestsess=max((q for d, q in r["dests"].items() if d in fs and fs[d].get("sess")), default=0), kind=jt))
             for right in (True, False):
                 rs = [x for x in rows if x["right"] == right]

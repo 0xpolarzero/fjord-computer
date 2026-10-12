@@ -74,7 +74,7 @@ extension Store {
 enum RouterRun {
     /// What the run is for; it decides the tools.
     enum Intent: String, Equatable, CaseIterable {
-        case changeFjord = "change_lookout"
+        case changeFjord = "change_fjord"
         case question
         /// Several things in one message: the Fjord Computer part is done here, the rest is said back.
         case compound

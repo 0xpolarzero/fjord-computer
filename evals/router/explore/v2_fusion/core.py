@@ -16,7 +16,7 @@ from v2.run import adapter, episodes as E
 W0, V0 = E._shipped_weights()
 RANK_FEATS = sorted(W0)
 CASE_FEATS = list(V0)
-INTENTS = ("question", "compound", "change_lookout")
+INTENTS = ("question", "compound", "change_fjord")
 _MODS = None
 
 

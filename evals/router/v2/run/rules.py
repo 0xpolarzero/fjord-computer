@@ -20,7 +20,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-INTENTS = frozenset({"change_lookout", "question", "compound"})
+INTENTS = frozenset({"change_fjord", "question", "compound"})
 
 # SessionStart.requestBoundary and startPhrase, kept literal so punctuation
 # joined to "session" cannot turn a feature name into a start request.
@@ -561,7 +561,7 @@ def post_jev(state: Mapping[str, Any], message: str, context: Mapping[str, Any] 
         first = _target(intents[0]) if intents else None
         if first != top:
             sure, reason = False, "router-only"
-        rows = intents or ["question", "change_lookout"]
+        rows = intents or ["question", "change_fjord"]
         top = _target(rows[0])
         canonical_rows = _ranked(state, rows)
     session = canonical_target(state, top)

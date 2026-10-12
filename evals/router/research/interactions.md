@@ -17,7 +17,7 @@ Legend: **E** covered by a Jev eval set; **P** partly; **U** Swift unit tests on
    else an ask-back with up to 4 options, "Something else…", Dismiss.
 3. `reply()`: a message that is exactly an option of a single-question form answers it (D); plans are never answered by
    text; else the words are sent and Jev judges which of the session's cards they resolved (card judge, separate call).
-4. Intents: a fresh Haiku. `change_lookout` (settings, categories, groups, inbox marks; change cards with Revert),
+4. Intents: a fresh Haiku. `change_fjord` (settings, categories, groups, inbox marks; change cards with Revert),
    `question` (read-only), `compound` (Lookout part done, the rest *said back*: nothing is sent to sessions).
 
 ## 2. Message contexts
@@ -87,9 +87,9 @@ Addressed by: you, reply, router (card judge), answered, opened, superseded, gon
 
 | # | Intent | Example | Correct behaviour | Evals |
 |---|---|---|---|---|
-| L1 | change a setting | "turn off jev labels", "stop notifying me for drafts" | `change_lookout` → Haiku with tools, change card + Revert | **E** 24 gold written; style ~40 |
+| L1 | change a setting | "turn off jev labels", "stop notifying me for drafts" | `change_fjord` → Haiku with tools, change card + Revert | **E** 24 gold written; style ~40 |
 | L2 | categories / groups / rules / inbox marks | "add a category for dependabot", "mark those read" | same | **P** (category 2, groups 5, rules 1) |
-| L3 | setting vs building the feature | "turn off jev labels" with a session building them | `change_lookout`, not the session | **E** (traps 5, setting-vs-code) |
+| L3 | setting vs building the feature | "turn off jev labels" with a session building them | `change_fjord`, not the session | **E** (traps 5, setting-vs-code) |
 | L4 | question about the board | "what's waiting on me?", "is the CI one done?" | `question` | **E** 32 written; style ~50 |
 | L5 | question *to* a session about its work | "what does that flag do?" | the session, never `question` | **E** (real: the cause of round-1 wrong sends) |
 | L6 | compound | "commit it and add a category" | `compound` (Lookout part done, rest said back) | **E** 11 written; style ~30 |
@@ -134,7 +134,7 @@ No set replays a sequence where the board and the log change between messages.
 Data facts behind it:
 - Written sets (360): cards `done` 798, `asks` 97, `question` 49, `approval` 38, `stuck` 19, `plan` 11, `waiting` 0;
   waiting-on-you cards per case: none 225, one 92, two 34, three 1, four 8; 4–25 sessions (mean 11.6); 59 messages under
-  three words. Gold: session ~210, `new` 52, `question` 32, `change_lookout` 24, `compound` 11, must-ask 12.
+  three words. Gold: session ~210, `new` 52, `question` 32, `change_fjord` 24, `compound` 11, must-ask 12.
 - Real (611): `done`/`asks` cards only; gold 550 sessions + 61 new, **no intents**, never a running session; typed
   *inside* a session, so not Router traffic.
 - Style (332): real boards, written messages; `done`/`asks` cards only; covers intents and compound.

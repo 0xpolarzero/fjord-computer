@@ -48,7 +48,7 @@ struct RouterContext: Equatable {
 
 /// "Where should this go?": a message waiting for you to say where. Nothing is sent until you pick.
 struct RouterAskBack: Identifiable, Equatable {
-    /// A target you can pick: `answer:<card>`, `session:<id>`, `new:<folder>`, `change_lookout` or `question`.
+    /// A target you can pick: `answer:<card>`, `session:<id>`, `new:<folder>`, `change_fjord` or `question`.
     struct Option: Identifiable, Equatable, Hashable {
         var target: String
         var title: String
@@ -848,7 +848,7 @@ struct RouterAskBack: Identifiable, Equatable {
         if Self.forRouter(job.text, pills: job.context.pills) {
             let intents = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) != nil }
             if intents.first?.target != found.top?.target { found.sure = false }
-            found.ranked = intents.isEmpty ? [Scored(target: "question", p: 0), Scored(target: "change_lookout", p: 0)] : intents
+            found.ranked = intents.isEmpty ? [Scored(target: "question", p: 0), Scored(target: "change_fjord", p: 0)] : intents
         }
         store.updateDecision(job.id) {
             $0.decision.label = found.top.map { Self.label($0.target) }
@@ -955,7 +955,7 @@ struct RouterAskBack: Identifiable, Equatable {
         store?.jevAsker(.routing, base: asker ?? tools?.chooser.map(JevClient.asker(choosing:)))
     }
 
-    /// The label a target stands for: reply (a card or session), start (a project), change_lookout, question, compound.
+    /// The label a target stands for: reply (a card or session), start (a project), change_fjord, question, compound.
     static func label(_ target: String) -> String {
         if target.hasPrefix("answer:") || target.hasPrefix("session:") { return "reply" }
         if target.hasPrefix("new:") { return "start" }
@@ -1024,7 +1024,7 @@ struct RouterAskBack: Identifiable, Equatable {
             return .init(target: target, title: "New session", detail: store.folderName(folder))
         }
         switch target {
-        case "change_lookout", "compound": return .init(target: target, title: "Change Fjord Computer", detail: "Categories, groups, settings")
+        case "change_fjord", "compound": return .init(target: target, title: "Change Fjord Computer", detail: "Categories, groups, settings")
         case "question": return .init(target: target, title: "Answer from what Fjord Computer knows", detail: "A question about now")
         default: return nil
         }
