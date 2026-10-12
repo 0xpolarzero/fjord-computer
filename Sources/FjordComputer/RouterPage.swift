@@ -235,24 +235,34 @@ struct RouterPageView: View {
     static func gutter(_ width: CGFloat) -> CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
 }
 
-/// The history's side: in a narrow window the switch over it.
+/// The history's side: in a narrow window the switch over it. On macOS 26 the switch is the column's bar and the history
+/// runs under it and the page's top bar, softened by the scroll edge effect; the bar is always there (empty in a wide
+/// window), so the history stays the same view at any width.
 private struct HistoryColumn: View {
     let store: Store
     let model: RouterModel
     let bar: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            if bar {
-                HStack(spacing: 0) {
-                    PaneSwitch(store: store, model: model)
-                    Spacer(minLength: 0)
-                }
-                .measured()
-                .padding(.top, 6)
-            }
+        if #available(macOS 26, *) {
             RouterHistory(store: store, model: model)
+                .safeAreaBar(edge: .top, spacing: 0) { if bar { paneSwitch } }
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            VStack(spacing: 0) {
+                if bar { paneSwitch }
+                RouterHistory(store: store, model: model)
+            }
         }
+    }
+
+    private var paneSwitch: some View {
+        HStack(spacing: 0) {
+            PaneSwitch(store: store, model: model)
+            Spacer(minLength: 0)
+        }
+        .measured()
+        .padding(.top, 6)
     }
 }
 
@@ -270,18 +280,36 @@ private struct NowColumn: View {
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
         let travellingWorking = Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID)))
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                if bar { PaneSwitch(store: store, model: model) }
-                ZoneChips(model: model, page: page, compact: bar)
-                Spacer(minLength: 0)
-            }
-            .measured()
-            .padding(.top, 6)
-            .padding(.bottom, 2)
+        if #available(macOS 26, *) {
+            // The chips and the Router's status line are the column's bar: Now runs under it and the page's top bar, with a
+            // hard edge, as its sections' headers pin under it (glass-plan §5.3).
             RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
-                      travellingWorking: travellingWorking)
+                      travellingWorking: travellingWorking, statusInBar: true)
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    VStack(spacing: 0) {
+                        chips(page)
+                        RouterBusyLine(store: store)
+                    }
+                }
+                .scrollEdgeEffectStyle(.hard, for: .top)
+        } else {
+            VStack(spacing: 0) {
+                chips(page)
+                RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
+                          travellingWorking: travellingWorking)
+            }
         }
+    }
+
+    private func chips(_ page: RouterPage) -> some View {
+        HStack(spacing: 12) {
+            if bar { PaneSwitch(store: store, model: model) }
+            ZoneChips(model: model, page: page, compact: bar)
+            Spacer(minLength: 0)
+        }
+        .measured()
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 }
 
@@ -445,6 +473,35 @@ extension RouterPage {
         if waiting.contains(where: { RouterModel.workingID($0.sessionID) == id }) { return .waiting }
         if working.contains(where: { RouterModel.workingID($0.id) == id }) { return .working }
         return nil
+    }
+}
+
+/// While the Router itself works: one slim line over Now.
+private struct RouterBusyLine: View {
+    let store: Store
+    @Environment(\.routerGutter) private var gutter
+
+    var body: some View {
+        if store.routerDispatcher.isBusy {
+            WorkingStatus(label: "The Router is working")
+                .padding(.horizontal, gutter + CDS.Transcript.textInset)
+                .padding(.vertical, 2)
+                .measured()
+                .transition(.opacity)
+        }
+    }
+}
+
+/// Tells how much of a scroll view's top its bars cover (its top content inset), where the scroll views say it (macOS 15).
+private struct TopInsetWatch: ViewModifier {
+    let changed: (CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, inset in changed(inset) }
+        } else {
+            content
+        }
     }
 }
 
@@ -656,11 +713,15 @@ private struct HistoryAnchoring: ViewModifier {
                 .defaultScrollAnchor(pinned ? .bottom : .top, for: .sizeChanges)
                 .onScrollPhaseChange { _, phase, context in
                     scrolling.on = phase != .idle
-                    if phase == .idle { apply(.pin(HistoryPin.atBottom(context.geometry.contentSize.height,
-                                                                       visibleBottom: context.geometry.visibleRect.maxY))) }
+                    if phase == .idle {
+                        let geometry = HistoryPin.geometry(context.geometry.contentSize.height,
+                                                           visibleMaxY: context.geometry.visibleRect.maxY,
+                                                           bottomInset: context.geometry.contentInsets.bottom)
+                        apply(.pin(HistoryPin.atBottom(geometry.content, visibleBottom: geometry.visibleBottom)))
+                    }
                 }
                 .onScrollGeometryChange(for: HistoryPin.Geometry.self) {
-                    HistoryPin.Geometry(content: $0.contentSize.height, visibleBottom: $0.visibleRect.maxY)
+                    HistoryPin.geometry($0.contentSize.height, visibleMaxY: $0.visibleRect.maxY, bottomInset: $0.contentInsets.bottom)
                 } action: { _, new in
                     if !laidOut.on, new.content > 0 {
                         laidOut.on = true
@@ -708,6 +769,12 @@ enum HistoryPin {
         /// Something other than a scroll (a line arriving or opening, the space under it changing) left a pinned history
         /// short of its bottom: back there.
         case stick
+    }
+
+    /// The content's height and the bottom of what shows of it: the visible rect's, less what covers its bottom (on macOS
+    /// 26 the composer floats over the history, its height a bottom inset), so a line under the composer is not shown.
+    static func geometry(_ contentHeight: CGFloat, visibleMaxY: CGFloat, bottomInset: CGFloat) -> Geometry {
+        Geometry(content: contentHeight, visibleBottom: visibleMaxY - bottomInset)
     }
 
     static func atBottom(_ contentHeight: CGFloat, visibleBottom: CGFloat) -> Bool {
@@ -1189,6 +1256,8 @@ private struct RouterNow: View {
     /// Sessions whose card moves between the zones (matched geometry), from the needs side and from the working side.
     let travelling: Set<String>
     let travellingWorking: Set<String>
+    /// The Router's status line is in the column's bar (macOS 26), not over the scroll.
+    var statusInBar = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
@@ -1196,12 +1265,17 @@ private struct RouterNow: View {
     @State private var showAllNotes = false
     /// A scroll asked for, made once the page has laid out what it opened for it.
     @State private var pending: Pending?
-    /// Where each section starts, as last laid out (above the top: you are inside it). Not view state: nothing is drawn
-    /// from it, a fold reads it.
+    /// Where each section starts, as last laid out (above the top of what shows: you are inside it). Not view state:
+    /// nothing is drawn from it, a fold reads it.
     @State private var tops = Tops()
     static let notesShown = 3
 
-    private final class Tops { var y: [RouterZone: CGFloat] = [:] }
+    /// `y` from the scroll view's top; `inset` how much of that top its bars cover (the page's top bar and the column's on
+    /// macOS 26, where the scroll runs under them), so what shows starts there.
+    private final class Tops {
+        var y: [RouterZone: CGFloat] = [:]
+        var inset: CGFloat = 0
+    }
 
     private struct Pending: Equatable {
         var id: String
@@ -1219,7 +1293,7 @@ private struct RouterNow: View {
     var body: some View {
         let folded = model.folded
         VStack(spacing: 0) {
-            routerStatus
+            if !statusInBar { RouterBusyLine(store: store) }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -1248,6 +1322,7 @@ private struct RouterNow: View {
                     .motion(.spatial, value: page.needs.map(\.id) + page.working.map(\.id))
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                .modifier(TopInsetWatch { tops.inset = $0 })
                 // A card picked (with the keys, a banner, the away strip): its section opens, and the page goes to it.
                 .onChange(of: model.revealRequest, initial: true) { _, request in
                     guard let request, let zone = page.zone(of: request.id),
@@ -1290,7 +1365,7 @@ private struct RouterNow: View {
     /// to its start, so the header stays where you clicked it and the next section comes up under it.
     private func toggle(_ zone: RouterZone, proxy: ScrollViewProxy) {
         let folding = !model.folded.contains(zone)
-        let inside = (tops.y[zone] ?? 0) < -1
+        let inside = (tops.y[zone] ?? 0) < tops.inset - 1
         withAnimation(spring) {
             model.setFolded(zone, folding)
             if folding && inside { proxy.scrollTo(zone.anchorID, anchor: .top) }
@@ -1298,16 +1373,6 @@ private struct RouterNow: View {
         Announce.say(folding ? "\(zone.title) folded" : "\(zone.title) open")
     }
 
-    /// While the Router itself works: one slim line over the page.
-    @ViewBuilder private var routerStatus: some View {
-        if store.routerDispatcher.isBusy {
-            WorkingStatus(label: "The Router is working")
-                .padding(.horizontal, gutter + CDS.Transcript.textInset)
-                .padding(.vertical, 2)
-                .measured()
-                .transition(.opacity)
-        }
-    }
 
     // MARK: Headers
 

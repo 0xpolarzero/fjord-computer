@@ -19,8 +19,8 @@ struct RouterCodeView: View {
     var body: some View {
         RouterMain(store: store, model: model, leadingInset: leadingInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // In the app window, the header shows the window's top bar.
-            .background { CDS.Surface.s1.padding(.top, embedded ? CDS.TitleBar.header : 0) }
+            // In the app window before macOS 26, the header shows the window's top bar.
+            .background { CDS.Surface.s1.padding(.top, embedded ? AppContent.groundTop : 0) }
         .frame(minWidth: embedded ? 0 : 760, minHeight: embedded ? 0 : 520)
         .foregroundStyle(Theme.text)
         .modifier(Brand.Scheme())
@@ -38,16 +38,35 @@ struct RouterMain: View {
     var leadingInset: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            RouterSetupNotice(store: store, model: model)
-            RouterPageView(store: store, model: model)
-                .frame(maxHeight: .infinity)
-            RouterComposer(store: store, model: model)
-                .frame(maxWidth: RouterCodeView.column)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 16)
+        if #available(macOS 26, *) {
+            // The page runs under its top bar (glass-plan §5.3): the history softened by the scroll edge effect, Now's
+            // column with a hard edge under its own bar (see `NowColumn`). The composer floats over the page's bottom
+            // (§5.4): its height is the page's bottom inset, so the last line still lands above it and earlier ones scroll
+            // under it.
+            VStack(spacing: 0) {
+                RouterSetupNotice(store: store, model: model)
+                RouterPageView(store: store, model: model)
+                    .frame(maxHeight: .infinity)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+            .safeAreaBar(edge: .top, spacing: 0) { topBar }
+            .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            VStack(spacing: 0) {
+                topBar
+                RouterSetupNotice(store: store, model: model)
+                RouterPageView(store: store, model: model)
+                    .frame(maxHeight: .infinity)
+                composer
+            }
         }
+    }
+
+    private var composer: some View {
+        RouterComposer(store: store, model: model)
+            .frame(maxWidth: RouterCodeView.column)
+            .padding(.horizontal, 32)
+            .padding(.bottom, 16)
     }
 
     /// §3: a 48pt header holding the 32pt session bar: the glyph and the title (13pt, wght 460, primary).

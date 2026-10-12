@@ -6,7 +6,8 @@ import SwiftUI
 /// card (Return sends, ⇧Return starts a new line, see `RouterKeys`). Typing @ suggests projects over the caret (↑↓, Return
 /// or Tab picks, Esc dismisses); a pick is a pill in the text where the @ was (see `MentionField`). Once typing pauses, Jev's
 /// pick of where the message goes is a ghost chip in the strip, its card or row marked on the page: a click fixes it, Esc
-/// waves it off (see `RouterLiveTarget`). Stop while the Router works.
+/// waves it off (see `RouterLiveTarget`). Stop while the Router works. On macOS 26 it floats over the page (glass-plan
+/// §5.4): the card and the strip are Regular glass (their field and chips as they are), or `s3` where the chrome is opaque.
 struct RouterComposer: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -25,8 +26,19 @@ struct RouterComposer: View {
     @State private var hovering = false
     @State private var overButton = false
     @Environment(\.colorSchemeContrast) private var contrast
+    /// The window's chrome: none outside the app window (a test's composer alone), which draws as opaque.
+    @Environment(Chrome.self) private var chrome: Chrome?
 
     private typealias C = CDS.Composer
+
+    /// Over the page (macOS 26), where something moves under it.
+    private var floats: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+
+    /// Glass rather than the opaque fill.
+    private var glass: Bool { floats && chrome?.mode == .glass }
 
     var body: some View {
         let working = store.routerDispatcher.isBusy
@@ -131,7 +143,8 @@ struct RouterComposer: View {
         }
         .padding(CDS.Density.compact.pad.md)
         .frame(maxWidth: .infinity, minHeight: C.stripHeight, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: C.stripRadius, style: .continuous).fill(CDS.alpha(0.05)))
+        .modifier(ComposerMaterial(shape: RoundedRectangle(cornerRadius: C.stripRadius, style: .continuous), glass: glass,
+                                   fill: floats ? CDS.Surface.s3 : CDS.alpha(0.05)))
     }
 
     // MARK: Card
@@ -139,7 +152,8 @@ struct RouterComposer: View {
     private func card(on: Bool, working: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: C.radius, style: .continuous)
         let hot = focused || (hovering && !overButton)
-        let ring = contrast == .increased ? CDS.Text.primary.opacity(0.5) : hot ? C.ringHot : C.ring
+        // On glass, the material draws its own edge: the ring only says the card is hot.
+        let ring = contrast == .increased ? CDS.Text.primary.opacity(0.5) : hot ? C.ringHot : glass ? .clear : C.ring
         return ZStack(alignment: .bottomTrailing) {
             field(on: on)
                 .padding(.leading, C.pad + C.textInset)
@@ -151,11 +165,12 @@ struct RouterComposer: View {
                 .onHover { overButton = $0 }
                 .padding(C.pad)
         }
-        .background(shape.fill(CDS.Surface.s3))
+        .modifier(ComposerMaterial(shape: shape, glass: glass, fill: CDS.Surface.s3))
         .background(AnchorView(anchor: anchor) { windowHeight = $0 })
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
         .overlay(shape.strokeBorder(ring, lineWidth: 1))
-        .bakedShadow(focused ? C.dropFocus : C.drop, .rounded(C.radius), radius: 10, y: 4)
+        // Glass has a shadow of its own.
+        .bakedShadow(glass ? .clear : focused ? C.dropFocus : C.drop, .rounded(C.radius), radius: 10, y: 4)
         .contentShape(shape)
         .onHover { hovering = $0 }
         .onTapGesture { if on { focusTick &+= 1 } }
@@ -230,6 +245,24 @@ struct RouterComposer: View {
         model.pendingKeys = []
         editor.moveToEndOfDocument(nil)
         keys.forEach(editor.keyDown(with:))
+    }
+}
+
+/// The composer's ground: Regular glass in `shape` (macOS 26, glass chrome), else `fill`. The same views either way, so
+/// a switch of the chrome (Reduce Transparency) keeps the field and its focus.
+private struct ComposerMaterial<S: Shape>: ViewModifier {
+    let shape: S
+    let glass: Bool
+    let fill: Color
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content
+                .background(shape.fill(fill).opacity(glass ? 0 : 1))
+                .glassEffect(glass ? .regular : .identity, in: shape)
+        } else {
+            content.background(shape.fill(fill))
+        }
     }
 }
 

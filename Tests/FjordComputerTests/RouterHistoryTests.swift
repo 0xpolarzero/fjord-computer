@@ -28,6 +28,23 @@ import Testing
         #expect(HistoryPin.next(pinned: false, scrolling: true, .init(content: 1000, visibleBottom: 990)) == .pin(true))
     }
 
+    /// On macOS 26 the composer floats over the history, its height the scroll's bottom inset: the bottom of what shows is
+    /// above it, so a history resting with its last lines under the composer is not at its bottom and goes back there.
+    @Test func theComposersInsetIsNotWhatShows() {
+        let inset: CGFloat = 80
+        // Scrolled right to the end: the last line just above the composer.
+        let end = HistoryPin.geometry(1200, visibleMaxY: 1200 + inset, bottomInset: inset)
+        #expect(end == HistoryPin.Geometry(content: 1200, visibleBottom: 1200))
+        #expect(HistoryPin.atBottom(end.content, visibleBottom: end.visibleBottom))
+        #expect(HistoryPin.next(pinned: true, scrolling: false, end) == .stay)
+        // The last 80 under the composer: pinned, it sticks back to the end; a scroll that stops there unpins it.
+        let under = HistoryPin.geometry(1200, visibleMaxY: 1200, bottomInset: inset)
+        #expect(HistoryPin.next(pinned: true, scrolling: false, under) == .stick)
+        #expect(HistoryPin.next(pinned: true, scrolling: true, under) == .pin(false))
+        // No inset (macOS 14 and 15, the composer under the page): as before.
+        #expect(HistoryPin.geometry(1200, visibleMaxY: 1000, bottomInset: 0) == HistoryPin.Geometry(content: 1200, visibleBottom: 1000))
+    }
+
     /// macOS 14's history: its scroll view says when you scroll, so scrolling up unpins it (and the lines drawn stay).
     @Test func onMacOS14AScrollUpUnpinsTheHistoryAndLayoutDoesNot() {
         final class Flipped: NSView { override var isFlipped: Bool { true } }

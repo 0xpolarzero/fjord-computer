@@ -317,7 +317,8 @@ final class SheenNSView: NSView {
 // MARK: - Top fade
 
 extension View {
-    /// §1's sticky fade strip over a transcript: 32 tall, #151515 to clear, fading in over the first 32 of scroll.
+    /// §1's sticky fade strip over a transcript: 32 tall, #151515 to clear, fading in over the first 32 of scroll. None on
+    /// macOS 26, where the transcript runs under the page's top bar and the system's scroll edge effect does this.
     func cdsTopFade() -> some View { modifier(TopFade()) }
 }
 
@@ -333,7 +334,9 @@ private struct TopFade: ViewModifier {
                                    startPoint: .top, endPoint: .bottom)
             .frame(height: CDS.Transcript.fade)
             .allowsHitTesting(false)
-        if #available(macOS 15, *) {
+        if #available(macOS 26, *) {
+            content
+        } else if #available(macOS 15, *) {
             content
                 .onScrollGeometryChange(for: CGFloat.self) {
                     min(1, max(0, (($0.contentOffset.y + $0.contentInsets.top) / CDS.Transcript.fade * 16).rounded() / 16))

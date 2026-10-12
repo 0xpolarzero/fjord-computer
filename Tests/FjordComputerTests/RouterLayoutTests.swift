@@ -66,6 +66,28 @@ import Testing
         }
     }
 
+    /// On macOS 26 Now and History run under the Router's top bar and under the floating composer: their scrolls reach the
+    /// page's top and bottom, so what scrolls shows through the bars' glass and the composer's (glass-plan §5.3, §5.4).
+    @Test func nowAndHistoryRunUnderTheTopBarAndTheComposer() async {
+        guard #available(macOS 26, *) else { return }
+        let model = RouterModel()
+        let store = demo(copies: 6)
+        for zone in RouterZone.allCases { model.setFolded(zone, false) }
+        let (hosting, window) = mount(store, model, width: 1100, height: 900)
+        defer { window.contentView = nil; window.orderOut(nil) }
+        func pages() -> [NSRect] {
+            hosting.layoutSubtreeIfNeeded()
+            return scrolls(hosting).filter { !($0.documentView is MentionTextView) }
+                .map { $0.convert($0.bounds, to: nil) }.filter { $0.height > 600 }
+        }
+        await waitUntil { pages().count == 2 }
+        await waitUntilSteady(turns: 8) { pages().map { [Int($0.minY), Int($0.maxY)] } }
+        for page in pages() {
+            #expect(page.minY <= 1, "under the composer: \(page)")
+            #expect(page.maxY >= 899, "under the top bar: \(page)")
+        }
+    }
+
     /// The composer grows a line at a time with what is typed and is back to one line once it is cleared.
     @Test func theComposerGrowsWithItsLinesAndShrinksBack() async throws {
         let model = RouterModel()
