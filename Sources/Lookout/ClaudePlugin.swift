@@ -180,7 +180,10 @@ import type { EngineInterface, Register } from 'claude-code'
 // whose text is that delivery's), and answers in the ack, "ok " and how:
 //   before-start  it never started: not seen yet (it will be refused when it comes), or queued behind a running turn, its
 //                 turn then ended the moment it starts
-//   aborted       its turn was running, and is stopped ($.turn.abort: its running tools too)
+//   aborted       its turn was running, and is stopped: the tools it is running are answered at once (else an abort
+//                 sends a running Bash command to the background, and its end wakes the session to carry on), then
+//                 $.turn.abort; a notification from one of its tools after that is dropped, so the session doesn't take
+//                 the cancelled request up again. The command's process itself runs to its end: no hook can stop it.
 //   too-late      its turn is over, or this copy never saw it (a reload since)
 // Nothing an aborted turn already did is undone, and the words stay in the session's history: Claude Code has no way to
 // take a submitted prompt back out.
@@ -393,11 +396,26 @@ const sent = new Map<string, Sent>()
 const SENT_KEPT = 50
 /** The main loop's turn under way, by `turn.start` and `turn.complete`. */
 let running: string | undefined
+/** In a turn a delivery started: the tool calls under way, each with what cuts it short, and the ids of every call made. */
+const calls = new Map<string, { cuts: Set<() => void>; ids: Set<string> }>()
+/** The tool calls of turns taken back: a notification naming one (a background command ending) is dropped. */
+const quiet = new Set<string>()
 
 /** Forgets every delivery and turn (tests: each starts a fresh copy's memory). */
 export const forget = () => {
   sent.clear()
+  calls.clear()
+  quiet.clear()
   running = undefined
+}
+
+/** Stops what a turn's tools are doing, and keeps their notifications out from now on. */
+const silence = (turnId: string) => {
+  const turn = calls.get(turnId)
+  if (!turn) return
+  for (const cut of turn.cuts) cut()
+  for (const id of turn.ids) quiet.add(id)
+  calls.delete(turnId)
 }
 
 const remember = (nonce: string, body: string) => {
@@ -431,6 +449,7 @@ export async function cancel($: EngineInterface, nonce: string, ts: number, now:
   }
   if (running !== s.turnId) return 'too-late'
   try {
+    silence(s.turnId)
     await $.turn.abort({ turnId: s.turnId })
   } catch {
     return 'too-late'
@@ -561,7 +580,10 @@ export const register: Register = (on) => {
   on('turn.start', async ($, e, next) => {
     running = e.turnId
     const mine = startedBy(e.text)
-    if (mine) mine.turnId = e.turnId
+    if (mine) {
+      mine.turnId = e.turnId
+      calls.set(e.turnId, { cuts: new Set(), ids: new Set() })
+    }
     await mark($).catch(() => undefined)
     const started = await next(e)
     // Taken back while it waited its turn: it ends as it begins.
@@ -575,6 +597,31 @@ export const register: Register = (on) => {
     if (e.agentId === undefined) {
       for (const s of sent.values()) if (s.turnId === e.turnId) s.ended = true
       if (running === e.turnId) running = undefined
+      calls.delete(e.turnId)
+    }
+    return next(e)
+  })
+  // A tool call in a turn a delivery started (its subagents' too) can be cut short by a cancel: answered before what runs
+  // beneath is done, which stops it. Any other call passes straight through.
+  on('tool.call', async ($, e, next) => {
+    const turn = running === undefined ? undefined : calls.get(running)
+    if (!turn) return next(e)
+    if (e.tool_use_id) turn.ids.add(e.tool_use_id)
+    let cut = () => {}
+    const stopped = new Promise<'cut'>((resolve) => {
+      cut = () => resolve('cut')
+    })
+    turn.cuts.add(cut)
+    try {
+      const done = await Promise.race([next(e), stopped])
+      return done === 'cut' ? { deny: 'Stopped: the person cancelled this message from Lookout.' } : done
+    } finally {
+      turn.cuts.delete(cut)
+    }
+  }).catch(($, e, next) => next(e))
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind === 'task-notification' && [...quiet].some((id) => e.text.includes(id))) {
+      return { drop: 'A task of a message cancelled from Lookout ended: not taken up again.' }
     }
     return next(e)
   })

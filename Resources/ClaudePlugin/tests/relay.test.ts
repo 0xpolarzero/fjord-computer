@@ -53,6 +53,9 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     order: [] as string[],
     aborted: [] as string[],
     abortFails: false,
+    /** Tool calls that reached the tool, and what lets each finish. */
+    ran: [] as string[],
+    finish: {} as Record<string, () => void>,
     registry: { '4242.json': { pid: 4242, sessionId: TARGET, startedAt: 111 } } as Record<string, Record<string, unknown> | string>,
   }
   forget()
@@ -111,6 +114,13 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on('tool.call', ($, e: any) => {
+    w.ran.push(e.tool_use_id)
+    return new Promise((resolve) => {
+      w.finish[e.tool_use_id] = () => resolve({ result: 'finished', text: 'finished' })
+    })
+  })
   on('turn.abort', ($, e) => {
     if (w.abortFails) throw new Error(`${e.turnId} is not the running turn`)
     w.aborted.push(e.turnId)
@@ -642,5 +652,81 @@ describe('taking a delivery back', () => {
     await receive($, envelope(WIRE))
     await $.turn.start({ text: BODY, turnId: 't1' })
     expect(await abort($, w)).toBe('ok aborted\n')
+  })
+})
+
+describe('taking back a turn that runs tools', () => {
+  const ABORT_NONCE = '423e4567-e89b-12d3-a456-426614174000'
+  const started = new WeakSet<object>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const look = async ($: any, w: ReturnType<typeof world>) => {
+    if (!started.has(w)) {
+      started.add(w)
+      await $.session.start({ cwd: '/code/app', surface: null, isInteractive: false })
+    }
+    await w.clock.advance(500)
+    await settle()
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const running = async ($: any, w: ReturnType<typeof world>, text = BODY) => {
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await $.turn.start({ text, turnId: 't1' })
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const abort = async ($: any, w: ReturnType<typeof world>) => {
+    const mac = await hmac(enc.encode(KEY), abortMacInput(TARGET, ABORT_NONCE, String(TS), NONCE))
+    w.inbox[`${TARGET}/${ABORT_NONCE}.msg`] = `⟦lookout abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${mac}⟧\n`
+    await look($, w)
+    return w.written[`/inbox/${TARGET}/${ABORT_NONCE}.ack`]
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const call = ($: any, id: string): Promise<any> => $.tool.call({ tool: 'Bash', command: 'sleep 90', tool_use_id: id })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const notify = ($: any, text: string): Promise<any> => $.prompt.submit({ text, origin: { kind: 'task-notification' } })
+
+  test('a tool it is running is cut short before the turn is aborted', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    const pending = call($, 'toolu_1')
+    await settle()
+    expect(w.ran).toEqual(['toolu_1'])
+    expect(await abort($, w)).toBe('ok aborted\n')
+    expect(await pending).toEqual({ deny: 'Stopped: the person cancelled this message from Lookout.' })
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a notification from one of its tools afterwards is dropped; others pass', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    void call($, 'toolu_1')
+    await settle()
+    await abort($, w)
+    const dropped = await notify($, '<task-notification><tool-use-id>toolu_1</tool-use-id><status>completed</status></task-notification>')
+    expect(dropped.drop).toBeDefined()
+    const other = await notify($, '<task-notification><tool-use-id>toolu_9</tool-use-id></task-notification>')
+    expect(other.drop).toBeUndefined()
+  })
+
+  test('a tool that finishes is answered as it finished', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    const pending = call($, 'toolu_1')
+    await settle()
+    w.finish.toolu_1()
+    expect((await pending).result).toBe('finished')
+  })
+
+  test('the tools of a turn no delivery started pass straight through, and a cancel leaves them be', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await $.turn.start({ text: 'what you typed yourself', turnId: 't0' })
+    const pending = call($, 'toolu_1')
+    await settle()
+    expect(await abort($, w)).toBe('ok before-start\n')
+    w.finish.toolu_1()
+    expect((await pending).result).toBe('finished')
+    expect(w.aborted).toEqual([])
   })
 })

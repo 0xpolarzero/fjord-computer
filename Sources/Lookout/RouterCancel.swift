@@ -2,7 +2,8 @@ import Foundation
 
 // Cancel: a message the Router delivered to a session, taken back from its history line. The session's plugin (`abort-v1`)
 // gets a signed abort in its inbox naming the delivery, and answers how far it had gone (`RouterDecision.Cancelled`): not
-// started (it never will), working (the turn is stopped, its running tools too), or over. Nothing the agent did is undone,
+// started (it never will), working (the turn is stopped and doesn't carry on; a command it was running finishes on its
+// own, its result unseen), or over. Nothing the agent did is undone,
 // and the words stay in the session's history: Claude Code can't take a submitted prompt back out.
 
 extension Store {

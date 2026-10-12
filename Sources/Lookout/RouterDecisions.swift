@@ -73,7 +73,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         var words: String {
             switch self {
             case .beforeStart: "cancelled before Claude started on it"
-            case .aborted: "cancelled: Claude stopped working on it; what it already did stays done"
+            case .aborted: "cancelled: Claude stopped working on it; what it already did stays done, and a command it was running finishes unseen"
             case .tooLate: "too late to cancel: Claude had finished with it"
             }
         }

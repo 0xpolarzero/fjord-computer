@@ -838,7 +838,8 @@ private struct HistoryDecisionLine: View, Equatable {
 
     /// What Cancel does and doesn't, as its tooltip and beside it when the line is open.
     static let cancelHelp = "Stops this message in its session: if Claude hasn't started on it, it never will; if it's working on it, "
-        + "it stops. Anything it already did (edits, commands) stays done, and your message stays in the session's history."
+        + "it stops, and doesn't carry on. Anything it already did (edits, commands) stays done, a command it was running finishes on "
+        + "its own unseen, and your message stays in the session's history."
 
     static let cancelWidth: CGFloat = 64
 
