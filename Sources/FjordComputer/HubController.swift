@@ -92,10 +92,13 @@ struct HubRoot: View {
     var openRouter: (String?) -> Void = { _ in }
     var openRouterMessage: (UUID) -> Void = { _ in }
     var pickRouterCard: (String) -> Void = { _ in }
+    /// How the bar and its panels draw: the app's, or a fixed one in tests.
+    var chrome: Chrome = .shared
 
     var body: some View {
         GeometryReader { _ in content }
             .coordinateSpace(.named(FjordHub.rootSpace))
+            .environment(chrome)
             .environment(\.openApp, openApp)
             .environment(\.openUpdates, openUpdates)
             .environment(\.openRouter, openRouter)

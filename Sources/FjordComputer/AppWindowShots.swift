@@ -189,7 +189,9 @@ enum AppWindowShots {
         shot.compose?(routerModel, store)
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: HubState(),
                                checksClaudeCode: false,
-                               sidebar: SidebarState(defaults: nil, collapsed: shot.sidebarHidden))
+                               sidebar: SidebarState(defaults: nil, collapsed: shot.sidebarHidden),
+                               // Glass can't be captured: shots draw the opaque chrome, whatever the Mac's settings.
+                               chrome: Chrome(mode: .opaque))
         let controller = NSHostingController(rootView: root)
         controller.sizingOptions = []
         let window = ShotWindow(contentRect: NSRect(origin: .zero, size: shot.size),

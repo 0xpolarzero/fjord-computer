@@ -18,6 +18,8 @@ struct PlaygroundView: View {
     /// Opens the app window on a place; a toast says so when there is none (in shots).
     var openApp: ((AppDestination) -> Void)? = nil
     var pickRouterCard: ((String) -> Void)? = nil
+    /// How the bar and its panels draw: the app's, or a fixed one in shots.
+    var chrome: Chrome = .shared
     @State private var behindClicks = 0
     @State private var leaveTask: Task<Void, Never>?
 
@@ -45,6 +47,7 @@ struct PlaygroundView: View {
             }
         }
         .frame(minWidth: minSize.width, minHeight: minSize.height)
+        .environment(chrome)
         .environment(\.pickRouterCard) { card in pickRouterCard?(card) }
         .environment(\.openApp) { [hub] destination in
             if let openApp { openApp(destination) } else { hub.toast = "Open the window on \(destination.token)" }
@@ -456,7 +459,9 @@ enum PlaygroundShots {
             hub.tab = name == "Done" ? .done : store.categories.first { $0.name == name }.map { .category($0.id) }
         }
         if shot.selection == .firstNeedsYou { hub.selection = store.entries(in: store.tabNeedingYou).first.map { "i:" + $0.id } }
-        let root = PlaygroundView(store: store, ui: ui, hub: hub, showsExplainer: false, minSize: shot.size)
+        // Glass can't be captured: shots draw the opaque chrome, whatever the Mac's settings or FJORD_GLASS.
+        let root = PlaygroundView(store: store, ui: ui, hub: hub, showsExplainer: false, minSize: shot.size,
+                                  chrome: Chrome(mode: .opaque))
             .environment(\.previewTip, shot.tip)
             .shotEnvironment(shot.environment)
             .frame(width: shot.size.width, height: shot.size.height)
@@ -492,6 +497,7 @@ enum PlaygroundShots {
         }
         let size = RouterWindowShot.size
         let root = RouterCodeView(store: store, model: model, checksClaudeCode: false)
+            .environment(Chrome(mode: .opaque))
             .shotEnvironment(environment)
             .frame(width: size.width, height: size.height)
         let hosting = NSHostingView(rootView: root)

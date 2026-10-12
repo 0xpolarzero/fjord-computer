@@ -686,6 +686,8 @@ struct AppRootView: View {
     var search = InboxSearch()
     var checksClaudeCode = true
     var sidebar: SidebarState = .shared
+    /// How the sidebar and the floating controls draw: the app's, or a fixed one in tests and shots.
+    var chrome: Chrome = .shared
 
     static let sidebarWidth: CGFloat = 240
 
@@ -732,6 +734,7 @@ struct AppRootView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 600)
+        .environment(chrome)
         .foregroundStyle(Theme.text)
         .modifier(Brand.Scheme())
         .tipSpace()

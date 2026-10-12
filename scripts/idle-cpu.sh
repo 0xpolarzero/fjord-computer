@@ -16,9 +16,9 @@
 # draws the ring. To say what the ring costs it, the bar is measured once more on `--demo busy`, which has no working
 # session, and the difference is printed.
 #
-# Glass against opaque (AB=1, docs/design/fjord/glass-plan.md §7). Until the app reads FJORD_GLASS (the plan's `Chrome`), both
-# launches are the same app: a pass then says nothing about glass, only that the method's noise is low. The bar on
-# `--demo busy` (no ring turning), on the first
+# Glass against opaque (AB=1, docs/design/fjord/glass-plan.md §7). FJORD_GLASS pins the app's `Chrome.mode`, but until the
+# chrome views read it (the plan's Phases 2 and 3) both launches still draw the same: a pass then says nothing about glass,
+# only that the method's noise is low. The bar on `--demo busy` (no ring turning), on the first
 # of EDGES, at rest and kept open (AB_STATES), launched with FJORD_GLASS=0 and FJORD_GLASS=1 in turn, RUNS times each, the
 # order swapped every run so a drift of the machine falls on both. Each launch is judged on the app's CPU as above; then the
 # medians and spreads (lowest to highest) of the app's and WindowServer's CPU are printed for each state, and WindowServer
