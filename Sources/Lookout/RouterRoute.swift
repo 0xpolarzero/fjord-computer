@@ -288,6 +288,22 @@ extension RouterTools {
     static let nextLead = 0.3
     static let nextAgree = 0.4
 
+    /// The ask card's buttons, in order: the ranking's first; its best new session or Lookout intent among its first
+    /// four, if any; then the sessions by recency; then the rest. The card is chosen for the answer being on it, not
+    /// for its first being safe to send: on real moments the answer is among the four 85% of the time against 77% for
+    /// the ranking's own four (evals/router/v2, `--card top1,other,recent`).
+    static func askCard(ranked: [String], recent: [String]) -> [String] {
+        let ranked = ranked.filter { $0 != "unclear" }
+        let other = ranked.prefix(4).first { !$0.hasPrefix("session:") }
+        var seen = Set<String>()
+        return (Array(ranked.prefix(1)) + [other].compactMap { $0 } + recent + ranked).filter { seen.insert($0).inserted }
+    }
+
+    /// Sessions as targets, latest active first (a tie by id), for the ask card.
+    static func recent(_ facts: Facts) -> [String] {
+        facts.idleMinutes.sorted { ($0.value, $0.key) < ($1.value, $1.key) }.compactMap { facts.targetOf[$0.key] }
+    }
+
     /// Jev's answers made a ranking, and whether its first is sure enough to act on:
     /// 1. one latest session's next-message yes standing out, the route not sure of anything else: that session;
     /// 2. a gate sure enough: its intent (not when the message speaks to one agent as "you");

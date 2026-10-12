@@ -75,6 +75,20 @@ struct RouterFusionParityTests {
         #expect(differ.isEmpty, "\(differ.count) differ: \(differ.prefix(10))")
     }
 
+    /// As `--card top1,other,recent` in evals/router/v2/run/episodes.py: the first, the best non-session in the first
+    /// four, then sessions by recency, then the rest; `unclear` is never a button.
+    @Test func theAskCardHoldsTheFirstAnOtherKindAndTheLatest() {
+        var facts = RouterTools.Facts(message: "")
+        facts.idleMinutes = ["a": 30, "b": 1, "c": 1, "d": 90]
+        facts.targetOf = ["a": "session:a", "b": "session:b", "c": "session:c", "d": "session:d"]
+        #expect(RouterTools.recent(facts) == ["session:b", "session:c", "session:a", "session:d"])
+        let card = RouterTools.askCard(ranked: ["unclear", "session:d", "session:a", "question", "new:x"],
+                                       recent: RouterTools.recent(facts))
+        #expect(Array(card.prefix(4)) == ["session:d", "question", "session:b", "session:c"])
+        #expect(Array(RouterTools.askCard(ranked: ["session:a", "session:b"], recent: ["session:c"]).prefix(3))
+                == ["session:a", "session:c", "session:b"])
+    }
+
     @Test func theLastMessageLeavesItToYou() {
         #expect(RouterLexical.leavesItToYou("Want me to push it?", waiting: false))
         #expect(RouterLexical.leavesItToYou("I can open the PR next.", waiting: false))

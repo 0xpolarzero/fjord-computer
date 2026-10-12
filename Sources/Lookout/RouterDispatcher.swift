@@ -80,6 +80,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var scored: [Scored]
         /// Whether the first is sure enough to act on (`RouterTools.verdict`); nil: by the verdict of the scores alone.
         var sure: Bool? = nil
+        /// The ask card's targets in order (`RouterTools.askCard`); nil: the ranking's own order.
+        var card: [String]? = nil
     }
 
     /// What Jev (or the words alone) made of a message.
@@ -92,6 +94,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var assisted: Bool
         /// Shown over the composer for these words as they were sent (`RouterContext.shown`): you went with it.
         var live = false
+        /// The ask card's targets in order, if they differ from the ranking's (`RouterTools.askCard`).
+        var card: [String]? = nil
 
         var top: Scored? { ranked.first }
 
@@ -105,6 +109,7 @@ struct RouterAskBack: Identifiable, Equatable {
         @MainActor init(_ ranking: Ranking) {
             if let sure = ranking.sure {
                 self.init(ranked: ranking.scored, sure: sure, assisted: true)
+                card = ranking.card
                 return
             }
             let route = Dictionary(ranking.scored.map { ($0.target, $0.p) }, uniquingKeysWith: +)
@@ -675,8 +680,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var options: [RouterAskBack.Option] = []
         var seen = Set<String>()
         // Four: on real moments the fourth holds the answer 3–10% more often (evals/router/explore/selective.py).
-        for scored in found.ranked where scored.target != "unclear" && options.count < 4 {
-            guard let option = option(scored.target, store: store, tools: job.tools), seen.insert(option.id).inserted else { continue }
+        for target in (found.card ?? []) + found.ranked.map(\.target) where target != "unclear" && options.count < 4 {
+            guard let option = option(target, store: store, tools: job.tools), seen.insert(option.id).inserted else { continue }
             options.append(option)
         }
         let ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
@@ -777,7 +782,9 @@ extension RouterDispatcher.Effects {
                 let verdict = RouteFusion.decide(signals, facts: facts, answers: checks) {
                     RouterDispatcher.session(of: $0, store: store)
                 }
-                return RouterDispatcher.Ranking(scored: verdict.ranked, sure: verdict.sure)
+                return RouterDispatcher.Ranking(scored: verdict.ranked, sure: verdict.sure,
+                                                card: RouterTools.askCard(ranked: verdict.ranked.map(\.target),
+                                                                          recent: RouterTools.recent(facts)))
             },
             prepare: { [weak dispatcher] tools, session in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
