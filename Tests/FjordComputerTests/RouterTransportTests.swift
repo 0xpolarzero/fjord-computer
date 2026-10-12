@@ -140,7 +140,7 @@ private final class Client: @unchecked Sendable {
         let (server, port) = try await start(limits)
         defer { server.stop() }
         let held = await off { [Client(port: port), Client(port: port)] }
-        let until = Date().addingTimeInterval(120)
+        let until = Date().addingTimeInterval(waitWatchdog)
         while server.connectionCount() < 2, Date() < until { try await Task.sleep(nanoseconds: 10_000_000) }
         #expect(server.connectionCount() == 2)
         let third = await off { () -> (String, Bool) in
@@ -198,7 +198,7 @@ private final class Client: @unchecked Sendable {
         while !gate.waiting { try await Task.sleep(nanoseconds: 5_000_000) }
         server.stop()
         // Stopping cancelled the request being answered: waited for, not assumed after a pause.
-        let until = Date().addingTimeInterval(120)
+        let until = Date().addingTimeInterval(waitWatchdog)
         while !cancelled.isSet, Date() < until { try await Task.sleep(nanoseconds: 5_000_000) }
         #expect(cancelled.isSet)
         gate.open()
@@ -243,7 +243,7 @@ final class Events: @unchecked Sendable {
 
     /// Until `done` holds, with a watchdog for a slow machine.
     func wait(_ done: ([String]) -> Bool) async {
-        let until = Date().addingTimeInterval(120)
+        let until = Date().addingTimeInterval(waitWatchdog)
         while !done(all), Date() < until { try? await Task.sleep(nanoseconds: 10_000_000) }
     }
 }
