@@ -224,9 +224,7 @@ private struct SectionCellLabel: View {
         SectionGlyph(symbol: symbol, size: 14, color: hover || badge != nil ? Theme.text : Theme.secondary)
             .frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : .clear))
-            .overlay(alignment: .topTrailing) {
-                if let badge { CornerBadge(count: badge.count, fill: badge.fill, ink: badge.ink) }
-            }
+            .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear)
             .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
             .padding(.vertical, vertical ? 3 : 0)
             .padding(.horizontal, vertical ? 0 : 2)

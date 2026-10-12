@@ -323,17 +323,12 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
             HStack(spacing: M.rowGap) {
                 leading(on)
                     .frame(width: M.leadingSlot, height: M.leadingSlot)
+                    // The bar's corner count, on the rail only; it comes in after the labels have gone.
+                    .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear,
+                                 offset: CGSize(width: 2, height: -2), opacity: collapsed ? 1 : 0)
+                    .animation(collapsed ? .easeIn(duration: 0.18).delay(0.12) : .easeOut(duration: 0.08), value: collapsed)
                     // The indent eases out with the sidebar's width, so a nested icon reaches its tile as the rail closes.
                     .padding(.leading, M.railShift + (collapsed ? 0 : indent))
-                    .overlay(alignment: .topTrailing) {
-                        // The bar's corner count, on the rail only; it comes in after the labels have gone.
-                        if let badge {
-                            CornerBadge(count: badge.count, fill: badge.fill, ink: badge.ink)
-                                .offset(x: 2, y: -2)
-                                .opacity(collapsed ? 1 : 0)
-                                .animation(collapsed ? .easeIn(duration: 0.18).delay(0.12) : .easeOut(duration: 0.08), value: collapsed)
-                        }
-                    }
                 Group {
                     Text(title)
                         .font(CDS.sans(M.rowFont))
