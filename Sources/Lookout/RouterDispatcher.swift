@@ -178,7 +178,7 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Jev's questions (tests answer for him); else `RouterTools.chooser` for the routing alone, else TypeSafe with your key.
     @ObservationIgnored var asker: JevAsker?
     /// Jev's routing of drafts asked while you typed, by their words and projects, for a while: sending one asks nothing again.
-    @ObservationIgnored private var liveCache: [String: (at: Date, found: Classification)] = [:]
+    @ObservationIgnored private var liveCache: [String: (at: Date, found: Classification, board: String)] = [:]
     static let liveFor: TimeInterval = 120
     /// Those still being asked, by the same key: a send of the same words waits for the answer instead of asking again.
     @ObservationIgnored private var livePending: [String: (id: UUID, task: Task<Classification?, Never>)] = [:]
@@ -594,6 +594,7 @@ struct RouterAskBack: Identifiable, Equatable {
         // Its own task: a draft that changes, or is sent, doesn't stop it, so the send can take its answer.
         let id = UUID()
         let generation = liveGeneration
+        let board = Self.boardRevision(store)
         let pending = Task { [weak self] () -> Classification? in
             guard let self else { return nil }
             defer { if self.livePending[key]?.id == id { self.livePending[key] = nil } }
@@ -604,7 +605,7 @@ struct RouterAskBack: Identifiable, Equatable {
             guard self.liveGeneration == generation else { return nil }
             let found = Classification(ranking)
             self.liveCache = self.liveCache.filter { Date().timeIntervalSince($0.value.at) < Self.liveFor }
-            self.liveCache[key] = (Date(), found)
+            self.liveCache[key] = (Date(), found, board)
             return found
         }
         livePending[key] = (id, pending)
@@ -615,10 +616,22 @@ struct RouterAskBack: Identifiable, Equatable {
         ([text.trimmingCharacters(in: .whitespacesAndNewlines)] + projects).joined(separator: "\u{1}")
     }
 
-    /// A pick kept from while you typed, while it is fresh and its target is still there to go to.
+    /// What a pick read while you typed depends on beyond its words: the cards shown, the sessions working, the latest
+    /// to finish, where your last message went. Evals decide every message on the board it was sent on, so a pick read
+    /// on an earlier board is read again (one call) rather than sent.
+    static func boardRevision(_ store: Store) -> String {
+        let sessions = store.claudeSessions.values.filter { !$0.isArchived }
+        let running = sessions.filter(\.running).map(\.id).sorted()
+        let latest = sessions.filter { !$0.running }.sorted { ($0.lastActivity, $0.id) > ($1.lastActivity, $1.id) }.prefix(3).map(\.id)
+        let told = store.lastTold().max { $0.value.at < $1.value.at }?.key ?? ""
+        return [store.routerShownOpenCards.map(\.id).sorted(), running, Array(latest), [told]]
+            .map { $0.joined(separator: ",") }.joined(separator: "|")
+    }
+
+    /// A pick kept from while you typed, while it is fresh, read on this board, and its target is still there to go to.
     private func live(_ key: String) -> Classification? {
         guard let hit = liveCache[key], Date().timeIntervalSince(hit.at) < Self.liveFor else { return nil }
-        guard let store, hit.found.top.map({ eligible($0.target, store: store) }) ?? true else {
+        guard let store, hit.board == Self.boardRevision(store), hit.found.top.map({ eligible($0.target, store: store) }) ?? true else {
             liveCache[key] = nil
             return nil
         }

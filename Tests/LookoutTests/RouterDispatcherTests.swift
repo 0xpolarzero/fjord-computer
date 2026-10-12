@@ -168,6 +168,18 @@ import Testing
         #expect(f.ranks == 2 && decision(s, b)?.decision.confirmed == nil, "changed words are asked about again")
     }
 
+    @Test func aPickReadBeforeTheBoardMovedIsReadAgainAtSend() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
+        _ = await d.predict("add a changelog entry for this", projects: [])
+        // The login session finished while you typed: the board it was read on is gone.
+        s.claudeSessions["local_a"]?.running = false
+        let a = d.submit("add a changelog entry for this")
+        await finish(d, f, a)
+        #expect(f.ranks == 2, "read again on the board it is sent on")
+        _ = s
+    }
+
     @Test func aPickReadWhileYouTypedButNeverShownConfirmsNothing() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
