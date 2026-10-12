@@ -180,6 +180,8 @@ enum CDS {
         static let navGap: CGFloat = 0.5
         /// Session rows: 26 + 0.5 margin + 1 list gap = a 27.5 pitch.
         static let sessionGap: CGFloat = 1.5
+        /// The folded rail's tiles: 26 + 8 = a 34 pitch, room for a tile's corner count under the one above.
+        static let railGap: CGFloat = 8
         /// From a group's last row to the next label (MEASURED 11, less the row's own 1.5).
         static let sectionGap: CGFloat = 9.5
         /// Claude's 16pt Anthropicons glyph (wght 533) drawn as an SF Symbol: the point size whose ink matches it.
