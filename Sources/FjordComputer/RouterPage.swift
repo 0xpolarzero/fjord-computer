@@ -265,7 +265,9 @@ private struct HistoryColumn: View {
             Spacer(minLength: 0)
         }
         .measured()
+        // As Now's chips row is, so the switch is in the same place on both sides.
         .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 }
 
@@ -331,13 +333,15 @@ private extension View {
     }
 }
 
-/// Now or History, in a narrow window: what's live with what needs you counted, and the history with its unread.
+/// Now or History, in a narrow window: what's live with what needs you counted, and the history with its unread. Claude's
+/// contained SegmentedControl (forms-buttons.md §5.4) as a pill, as its own app switch is (global-sidebar-titlebar.md
+/// §2): the white-5% track with 1 of padding, the side shown on the white-10% thumb with its ring, the names muted until
+/// shown or hovered. As tall as the sections' chips beside it, and drawn the same on both sides, so it never moves.
 private struct PaneSwitch: View {
     let store: Store
     let model: RouterModel
     @Environment(\.routerGutter) private var gutter
     @State private var hovered: RouterPane?
-    static let height: CGFloat = 24
 
     var body: some View {
         HStack(spacing: 0) {
@@ -345,10 +349,10 @@ private struct PaneSwitch: View {
             segment(.now, "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count, tint: CDS.Fill.warning)
             segment(.history, "History", count: store.routerUnread.count, tint: CDS.Fill.accent)
         }
-        .padding(2)
-        .frame(height: Self.height)
-        .background(RoundedRectangle(cornerRadius: CDS.Segmented.radius + 1, style: .continuous).fill(CDS.Fill.field))
-        .overlay(RoundedRectangle(cornerRadius: CDS.Segmented.radius + 1, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
+        .padding(1)
+        .frame(height: ZoneChip.height)
+        .background(Capsule(style: .continuous).fill(CDS.Segmented.track))
+        .fixedSize()
         .padding(.leading, gutter)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Show")
@@ -356,23 +360,24 @@ private struct PaneSwitch: View {
 
     private func segment(_ pane: RouterPane, _ title: String, count: Int, tint: Color) -> some View {
         let picked = model.pane == pane
+        let thumb = ZoneChip.height - 2
         return Button { model.show(pane) } label: {
-            HStack(spacing: 5) {
-                Text(title).cdsText((12, 16), .medium, picked || hovered == pane ? CDS.Text.primary : CDS.Text.muted)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title).cdsText((12, 16), .regular, picked || hovered == pane ? CDS.Text.primary : CDS.Text.muted)
                 if count > 0 {
-                    Text("\(count)").cdsText((11, 14), .semibold, tint).monospacedDigit()
+                    Text(count > 99 ? "99+" : "\(count)").cdsText((12, 16), .medium, tint).monospacedDigit()
                 }
             }
             .padding(.horizontal, CDS.Segmented.padX)
             .frame(maxHeight: .infinity)
             .background {
                 if picked {
-                    RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous).fill(CDS.Fill.secondary)
-                        .overlay(RoundedRectangle(cornerRadius: CDS.Segmented.radius - 1, style: .continuous)
-                            .strokeBorder(CDS.border, lineWidth: 1))
+                    Capsule(style: .continuous).fill(CDS.Segmented.thumb)
+                        .overlay(Capsule(style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
+                        .bakedShadow(CDS.fieldShadow, .rounded(thumb / 2), radius: 1, y: 1, fill: CDS.Segmented.thumb)
                 }
             }
-            .contentShape(Rectangle())
+            .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 ? pane : (hovered == pane ? nil : hovered) }
@@ -417,6 +422,8 @@ private struct ZoneChips: View {
 }
 
 private struct ZoneChip: View {
+    /// The chips' height, and the switch's beside them.
+    static let height: CGFloat = 20
     let zone: RouterZone
     let count: Int
     let named: Bool
@@ -432,7 +439,7 @@ private struct ZoneChip: View {
                 Text("\(count)").cdsText((12, 16), .medium, zone == .needs ? CDS.Fill.warning : CDS.Text.muted).monospacedDigit()
             }
             .padding(.horizontal, 7)
-            .frame(height: 20)
+            .frame(height: Self.height)
             .background(Capsule().fill(open ? CDS.Fill.secondary : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
             .overlay { if open { Capsule().strokeBorder(CDS.border, lineWidth: 1) } }
             .contentShape(Capsule())
