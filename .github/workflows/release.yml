@@ -50,7 +50,7 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN" > /dev/null
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          echo "SIGN_IDENTITY=${{ vars.SIGN_IDENTITY || 'Lookout Dev' }}" >> "$GITHUB_ENV"
+          echo "SIGN_IDENTITY=${{ vars.SIGN_IDENTITY || 'Fjord Computer Dev' }}" >> "$GITHUB_ENV"
 
       - name: Build universal app
         run: |

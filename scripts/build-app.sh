@@ -44,9 +44,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 # Ad-hoc signatures change with every build, so macOS forgets Accessibility access each time and the in-app
-# updater can't tell a release is really ours. A stable code-signing certificate (default name "Lookout Dev",
+# updater can't tell a release is really ours. A stable code-signing certificate (default name "Fjord Computer Dev",
 # or SIGN_IDENTITY, which is then required) keeps both working across builds.
-IDENTITY="${SIGN_IDENTITY:-Lookout Dev}"
+IDENTITY="${SIGN_IDENTITY:-Fjord Computer Dev}"
 if security find-identity -p codesigning | grep -q "\"$IDENTITY\""; then
   codesign --force --timestamp=none --sign "$IDENTITY" "$APP"
 elif [ -n "${SIGN_IDENTITY:-}" ]; then
