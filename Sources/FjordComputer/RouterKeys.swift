@@ -61,7 +61,7 @@ final class RouterKeys {
                     return true
                 }
                 if isReturn || code == kVK_Tab {
-                    model.pickMention(suggestions[min(model.mentionIndex, suggestions.count - 1)].folder)
+                    model.pickMention(suggestions[min(model.mentionIndex, suggestions.count - 1)])
                     return true
                 }
             }

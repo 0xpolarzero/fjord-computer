@@ -59,7 +59,7 @@ enum AppWindowShots {
         Shot(name: "router") { _ in .router },
         Shot(name: "router-composing", destination: { _ in .router }, compose: { model, store in
             let folder = store.knownFolders.first { !$0.isEmpty } ?? "/Users/me/code/lookout"
-            model.tokens = [folder]
+            model.pointers = [.project(folder)]
             model.draft = "check the failing tests in \(MentionText.markString) and tell me what you find"
         }),
         // Typing paused: Jev's pick of where the draft goes is a ghost chip over the composer, its card marked on the page.

@@ -481,7 +481,7 @@ enum PlaygroundShots {
         if shot.picksQuestion { model.selection = store.openRouterCards.first { $0.kind == .question }?.id }
         if shot.composing, let card = store.openRouterCards.first(where: { $0.kind == .question }) {
             model.replyTo = card.id
-            model.tokens = ["/Users/me/code/lookout"]
+            model.pointers = [.project("/Users/me/code/lookout")]
             model.draft = "yes, ask first; and tell \(MentionText.markString) about it"
         }
         if shot.answered, let card = store.openRouterCards.first(where: { $0.kind == .question }),

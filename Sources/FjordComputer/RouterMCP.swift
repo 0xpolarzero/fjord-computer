@@ -524,6 +524,9 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// Where the @project pills are in the turn's text (`RouterContext.pills`): the only tags taken out of it.
     private(set) var turnPills: [Range<Int>] = []
+    /// The blocks of what the turn's message tags (`RouterPointers.context`): after your words to a session, in Jev's
+    /// routing state and in the Router's run. Nil when it tags no notification or category.
+    var tagged: String?
 
     /// A turn of yours begins.
     func beginTurn(_ text: String, pills: [Range<Int>] = []) {
@@ -539,6 +542,7 @@ final class RouterMCPServer: @unchecked Sendable {
         turn += 1
         turnText = nil
         turnPills = []
+        tagged = nil
         turnChanges = []
         turnMarked = []
         turnNamed = .init()
@@ -1063,13 +1067,16 @@ final class RouterMCPServer: @unchecked Sendable {
         }
         // Settings go only to a plugin that takes them; to an older one the message goes plain (the delivery says so).
         let settings = settings == nil ? nil : (await store.supportsSettings(cli) ? settings : nil)
-        var text = store.signRelay(body: ready.text, target: cli, settings: settings)
+        // What your message tags goes after your words, fenced: Fjord Computer's, never inside them, and never read for an
+        // aside (checked above on your words alone).
+        let body = verbatim ? ready.text : RouterPointers.attach(tagged, to: ready.text)
+        var text = store.signRelay(body: body, target: cli, settings: settings)
         if text == nil {
             // Not cached yet, or the file changed: read it again (bounded), and sign once more if this is still the turn.
             let reload = keyReload ?? { [weak store] in await store?.reloadRelayKey() ?? false }
             await Self.race(deadline: keyReloadWait) { _ = await reload() }
             try live(ticket)
-            text = store.signRelay(body: ready.text, target: cli, settings: settings)
+            text = store.signRelay(body: body, target: cli, settings: settings)
         }
         guard let text else {
             throw Failure("Fjord Computer couldn't sign the message (its plugin key is missing); nothing was sent")

@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// The composer's text with @project mentions inline: each is an atomic pill (one `MentionAttachment` character) where it was
-/// typed. `RouterModel.draft` holds the text with one `mark` per pill, `RouterModel.tokens` the pills' folders in the same
-/// order; what goes to the Router has each mark written back as "@name".
+/// The composer's text with its @ pills inline (a project, a session, a notification, a category: `RouterPointer`): each is
+/// an atomic pill (one `MentionAttachment` character) where it was typed. `RouterModel.draft` holds the text with one `mark`
+/// per pill, `RouterModel.pointers` what the pills point to in the same order; what goes to the Router has each mark written
+/// back as "@name".
 enum MentionText {
     /// The character an attachment is in a text storage.
     static let mark: Character = "\u{FFFC}"
@@ -12,68 +13,56 @@ enum MentionText {
     static func isBreak(_ c: Character) -> Bool { c.isWhitespace || c == mark }
 
     /// The draft as the Router gets it: each pill as "@name".
-    static func plain(_ draft: String, tokens: [String], name: (String) -> String) -> String {
-        var next = tokens.makeIterator()
+    static func plain(_ draft: String, pointers: [RouterPointer], name: (RouterPointer) -> String) -> String {
+        var next = pointers.makeIterator()
         var out = ""
         for c in draft {
-            if c == mark, let folder = next.next() { out += "@" + name(folder) } else { out.append(c) }
+            if c == mark, let pointer = next.next() { out += "@" + name(pointer) } else { out.append(c) }
         }
         return out
     }
 
-    /// The text storage's text (a mark for each pill) and its pills' folders in order.
-    static func serialize(_ text: NSAttributedString) -> (draft: String, tokens: [String]) {
-        var tokens: [String] = []
+    /// The text storage's text (a mark for each pill) and what its pills point to, in order.
+    static func serialize(_ text: NSAttributedString) -> (draft: String, pointers: [RouterPointer]) {
+        var pointers: [RouterPointer] = []
         text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
-            if let pill = value as? MentionAttachment { tokens.append(pill.folder) }
+            if let pill = value as? MentionAttachment { pointers.append(pill.pointer) }
         }
-        return (text.string, tokens)
+        return (text.string, pointers)
     }
 }
 
-/// A pill in the text: the project's colour dot and its name on a rounded fill.
+/// A pill in the text (`MentionPill`): its symbol or its project's colour dot, and its name, on a rounded fill.
 final class MentionAttachment: NSTextAttachment {
-    let folder: String
-    let name: String
+    let pointer: RouterPointer
+    let look: MentionLook
 
-    init(folder: String, name: String, color: Color?, font: NSFont) {
-        self.folder = folder
-        self.name = name
+    init(pointer: RouterPointer, look: MentionLook, font: NSFont) {
+        self.pointer = pointer
+        self.look = look
         super.init(data: nil, ofType: nil)
-        let label = "@" + name
-        let pillFont = NSFont(descriptor: font.fontDescriptor, size: font.pointSize - 1) ?? font
-        let ink = NSAttributedString(string: label, attributes: [.font: pillFont, .foregroundColor: NSColor(CDS.Text.primary)])
-        let textWidth = ceil(ink.size().width)
-        let dot: CGFloat = color == nil ? 0 : 6
-        let width = 6 + (dot > 0 ? dot + 4 : 0) + textWidth + 6
-        let height: CGFloat = 18
-        let dotColor = color.map(NSColor.init)
-        image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
-            let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
-            NSColor(CDS.Fill.secondary).setFill()
-            shape.fill()
-            var x: CGFloat = 6
-            if let dotColor {
-                dotColor.setFill()
-                NSBezierPath(ovalIn: NSRect(x: x, y: (height - dot) / 2, width: dot, height: dot)).fill()
-                x += dot + 4
-            }
-            ink.draw(at: NSPoint(x: x, y: (height - ink.size().height) / 2))
-            return true
-        }
+        let image = MentionPill.image(look, font: font)
+        self.image = image
         // Centred on the text's line.
-        bounds = CGRect(x: 0, y: font.descender + ((font.ascender - font.descender) - height) / 2, width: width, height: height)
+        let height = MentionPill.height
+        bounds = CGRect(x: 0, y: font.descender + ((font.ascender - font.descender) - height) / 2, width: image.size.width,
+                        height: height)
+    }
+
+    /// A project's pill: its colour's dot (none: no dot) and its name.
+    convenience init(folder: String, name: String, color: Color?, font: NSFont) {
+        self.init(pointer: .project(folder), look: MentionLook(label: name, symbol: nil, tint: color), font: font)
     }
 
     required init?(coder: NSCoder) { fatalError("not archived") }
 }
 
-/// The composer's text view: pills copy as "@name", a paste is plain text (a pill is made only by picking a project from the
-/// @ suggestions: pasted code's `@cache` stays the decorator it is), and its focus is told.
+/// The composer's text view: pills copy as "@name", a paste is plain text (a pill is made only by picking from the @
+/// suggestions: pasted code's `@cache` stays the decorator it is), and its focus is told.
 final class MentionTextView: NSTextView {
     var onFocus: (Bool) -> Void = { _ in }
-    var makePill: (String) -> MentionAttachment? = { _ in nil }
-    var name: (String) -> String = { $0 }
+    var makePill: (RouterPointer) -> MentionAttachment? = { _ in nil }
+    var name: (RouterPointer) -> String = { _ in "" }
     var base: [NSAttributedString.Key: Any] = [:]
 
     override func becomeFirstResponder() -> Bool {
@@ -91,8 +80,8 @@ final class MentionTextView: NSTextView {
     /// The selection as text, each pill as "@name".
     func plain(_ range: NSRange) -> String {
         guard let part = textStorage?.attributedSubstring(from: range) else { return "" }
-        let (draft, tokens) = MentionText.serialize(part)
-        return MentionText.plain(draft, tokens: tokens, name: name)
+        let (draft, pointers) = MentionText.serialize(part)
+        return MentionText.plain(draft, pointers: pointers, name: name)
     }
 
     override func copy(_ sender: Any?) {
@@ -160,7 +149,7 @@ struct MentionField: NSViewRepresentable {
         view.insertionPointColor = NSColor(CDS.Text.primary)
         view.selectedTextAttributes = [.backgroundColor: NSColor(CDS.Text.accent).withAlphaComponent(0.35)]
         view.setAccessibilityLabel("Message the Router")
-        view.setAccessibilityHelp("Return sends, Shift Return starts a new line, @ tags a project")
+        view.setAccessibilityHelp("Return sends, Shift Return starts a new line, @ tags a project, a session, a notification or a category")
         view.delegate = context.coordinator
         context.coordinator.view = view
 
@@ -184,21 +173,19 @@ struct MentionField: NSViewRepresentable {
         view.font = font
         view.isEditable = editable
         view.isSelectable = editable
-        view.name = { [store] in store.folderName($0) }
-        view.makePill = { [store] folder in
-            MentionAttachment(folder: folder, name: store.folderName(folder), color: store.projectColor(folder), font: font)
-        }
+        view.name = { [store] in store.pointerName($0) }
+        view.makePill = { [store] pointer in MentionAttachment(pointer: pointer, look: store.pointerLook(pointer), font: font) }
         view.onFocus = onFocus
         // The model's text, when the view isn't already showing it (a pick, a send, a draft set from outside).
         let shown = MentionText.serialize(view.attributedString())
-        if (shown.draft != model.draft || shown.tokens != model.tokens), !view.hasMarkedText() {
+        if (shown.draft != model.draft || shown.pointers != model.pointers), !view.hasMarkedText() {
             c.syncing = true
             let text = NSMutableAttributedString()
-            var tokens = model.tokens.makeIterator()
+            var pointers = model.pointers.makeIterator()
             var run = ""
             func flush() { if !run.isEmpty { text.append(NSAttributedString(string: run, attributes: base)); run = "" } }
             for ch in model.draft {
-                if ch == MentionText.mark, let folder = tokens.next(), let pill = view.makePill(folder) {
+                if ch == MentionText.mark, let pointer = pointers.next(), let pill = view.makePill(pointer) {
                     flush()
                     text.append(NSAttributedString(attachment: pill))
                 } else { run.append(ch) }
@@ -270,8 +257,8 @@ struct MentionField: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !syncing, let view, let model else { return }
-            let (draft, tokens) = MentionText.serialize(view.attributedString())
-            if model.tokens != tokens { model.tokens = tokens }
+            let (draft, pointers) = MentionText.serialize(view.attributedString())
+            if model.pointers != pointers { model.pointers = pointers }
             if model.draft != draft { model.draft = draft }
             view.typingAttributes = view.base
             view.invalidateIntrinsicContentSize()

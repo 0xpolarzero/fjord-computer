@@ -139,6 +139,8 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     var note: String?
     /// The last message it sent to a session, for a Cancel.
     var delivered: Delivered?
+    /// The pills of your message (`.you`), drawn where their "@name" is; nil for anything else and in entries from before.
+    var mentions: [RouterMention]?
     /// Its message was stopped where it was sent (a Cancel that wasn't too late).
     var isCancelled: Bool { delivered?.cancelled?.stopped == true }
 

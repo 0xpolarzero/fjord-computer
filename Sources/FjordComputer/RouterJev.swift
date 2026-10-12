@@ -88,7 +88,7 @@ final class RouterLiveTarget {
         task = Task { [weak self, weak store] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, let store else { return }
-            let found = await store.routerDispatcher.predict(text, projects: context.projects)
+            let found = await store.routerDispatcher.predict(text, projects: context.projects, mentions: context.mentions)
             guard !Task.isCancelled, let self, self.current == key else { return }
             self.asking = nil
             self.task = nil
@@ -172,8 +172,8 @@ extension RouterModel {
     /// What the draft goes with: the reply, the @projects, the target you pinned and the one you waved off.
     func context(_ store: Store) -> RouterContext {
         let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
-        var context = RouterContext(replyTo: reply, projects: projects, target: live.pinned, notTo: live.dismissed,
-                                    pills: sentDraft(store).pills)
+        var context = RouterContext(replyTo: reply, target: live.pinned, notTo: live.dismissed)
+        context.tag(sentDraft(store).mentions)
         // Jev's pick shown over the composer for the draft as it is now: sending it goes with it, as it was shown (the
         // dispatcher's copy of it may have expired, and asking again could go elsewhere).
         let shown = live.valid(text: plainDraft(store), context: context, store: store)
@@ -190,23 +190,9 @@ extension RouterModel {
     /// pasted), only blank lines before it and whitespace after the end left out.
     func plainDraft(_ store: Store) -> String { sentDraft(store).text }
 
-    /// The draft as it will be sent, and where its pills are in it (the character offsets of each "@name").
-    func sentDraft(_ store: Store) -> (text: String, pills: [Range<Int>]) {
-        var out: [Character] = []
-        var pills: [Range<Int>] = []
-        var next = tokens.makeIterator()
-        for c in draft {
-            if c == MentionText.mark, let folder = next.next() {
-                let name = Array("@" + store.folderName(folder))
-                pills.append(out.count..<(out.count + name.count))
-                out += name
-            } else {
-                out.append(c)
-            }
-        }
-        let (text, lead) = Self.sendableCut(String(out))
-        let count = text.count
-        return (text, pills.map { ($0.lowerBound - lead)..<($0.upperBound - lead) }.filter { $0.lowerBound >= 0 && $0.upperBound <= count })
+    /// The draft as it will be sent, and its pills: where each "@name" is in it (character offsets) and what it points to.
+    func sentDraft(_ store: Store) -> (text: String, mentions: [RouterMention]) {
+        RouterPointers.message(draft: draft, pointers: pointers, name: store.pointerName)
     }
 
     /// `text` without the blank lines it starts with or the whitespace it ends with; the rest (the first line's indentation)

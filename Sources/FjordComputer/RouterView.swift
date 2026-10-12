@@ -48,6 +48,8 @@ extension Store {
         if routerIsPretend {
             var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
                                        links: .init(cards: context.replyTo.map { [$0] } ?? []))
+            let mentions = RouterDispatcher.mentions(context.mentions, in: text)
+            entry.mentions = mentions.isEmpty ? nil : mentions
             entry.reply = "In a demo the Router only says what it would do."
             logDecision(entry)
             return true
@@ -318,7 +320,7 @@ final class RouterModel {
     func edit(session: String, message: String, sentAt: Date? = nil) {
         replyTo = nil
         live.reset()
-        tokens = []
+        pointers = []
         editing = Editing(session: session, original: message, sentAt: sentAt)
         draft = message
         caretRequest = (message as NSString).length
@@ -350,13 +352,31 @@ final class RouterModel {
     }
     /// Jev's pick for the draft while you type, and the target you fixed from it (see RouterJev.swift).
     let live = RouterLiveTarget()
-    /// The pills in the draft (their projects' folders), one for each `MentionText.mark` in it, in order.
-    var tokens: [String] = []
+    /// What the pills in the draft point to, one for each `MentionText.mark` in it, in order.
+    var pointers: [RouterPointer] = []
     /// Projects tagged with @ (their folders), in the order they stand in the draft: the Router looks there, and starts a
     /// session there.
     var projects: [String] {
         var seen = Set<String>()
-        return tokens.filter { seen.insert($0).inserted }
+        return pointers.compactMap { if case .project(let folder) = $0 { folder } else { nil } }.filter { seen.insert($0).inserted }
+    }
+
+    /// Pills for `pointers` added to the draft, then `text` (an inbox thing's "Open in Router", a test): the draft as it is
+    /// when blank, else after it; what it tags already isn't tagged again. The composer takes the keyboard, its caret at
+    /// the end.
+    func prefill(_ pointers: [RouterPointer], text: String = "") {
+        var added: [RouterPointer] = []
+        for p in pointers where !self.pointers.contains(p) && !added.contains(p) { added.append(p) }
+        let pills = added.map { _ in MentionText.markString }.joined(separator: " ")
+        let words = text.replacingOccurrences(of: MentionText.markString, with: "")
+        let start = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : draft + (draft.last?.isWhitespace == true ? "" : " ")
+        let tail = [pills, words].filter { !$0.isEmpty }.joined(separator: " ")
+        let next = start + tail + (words.isEmpty && !pills.isEmpty ? " " : "")
+        caret = nil
+        self.pointers = (start.isEmpty ? [] : self.pointers) + added
+        draft = next
+        caretRequest = (next as NSString).length
+        focusRequest &+= 1
     }
     /// While an @ is being typed: what follows it, and the suggestion picked with ↑↓.
     private(set) var mention: String?
@@ -615,7 +635,7 @@ final class RouterModel {
             guard store.forkSession(editing.session, point: .before(editing.original, after: editing.sentAt), message: text,
                                     edited: true) != nil else { return }
             caret = nil
-            tokens = []
+            pointers = []
             draft = ""
             self.editing = nil
             show(.history)
@@ -628,7 +648,7 @@ final class RouterModel {
             return
         }
         caret = nil
-        tokens = []
+        pointers = []
         draft = ""
         replyTo = nil
         live.reset()
@@ -717,15 +737,37 @@ final class RouterModel {
         }
     }
 
-    /// The projects the @ word matches, best first (all of them for a bare @); the ones already tagged left out.
-    func suggestions(_ store: Store) -> [(folder: String, name: String)] {
+    /// What the @ word matches, by section (projects, sessions, notifications, categories), best first in each (a few of
+    /// each for a bare @); what the draft tags already left out.
+    func suggestions(_ store: Store) -> [MentionSuggestion] {
         guard let query = mention else { return [] }
-        let folders = store.knownFolders.filter { !$0.isEmpty && !projects.contains($0) }
-        return RouterMentions.rank(folders.map { ($0, store.folderName($0)) }, query: query, limit: 6)
+        return RouterMentions.suggest(RouterMentions.candidates(store, except: Set(pointers)), query: query)
     }
 
-    /// Return or Tab on a suggestion: the @ word becomes that project's pill, in its place, with a space after it.
-    func pickMention(_ folder: String) {
+    /// Return or Tab on a suggestion: a pill in the @ word's place, or the text it inserts (a snippet's).
+    func pickMention(_ suggestion: MentionSuggestion) {
+        switch suggestion.pick {
+        case .pointer(let pointer): pickMention(pointer)
+        case .text(let text): insertMention(text)
+        }
+    }
+
+    /// The @ word replaced by `text`, as typed (no pill); the caret after it.
+    func insertMention(_ text: String) {
+        guard mention != nil, let found = Self.mention(in: draft, caret: caret) else { return }
+        let start = draft.utf16.distance(from: draft.utf16.startIndex, to: found.range.lowerBound.samePosition(in: draft.utf16)!)
+        let words = text.replacingOccurrences(of: MentionText.markString, with: "")
+        var next = draft
+        next.replaceSubrange(found.range, with: words)
+        let end = start + (words as NSString).length
+        caret = end
+        draft = next
+        caretRequest = end
+        mention = nil
+    }
+
+    /// The @ word becomes the pill for `pointer`, in its place, with a space after it.
+    func pickMention(_ pointer: RouterPointer) {
         guard mention != nil, let found = Self.mention(in: draft, caret: caret) else { return }
         let start = draft.utf16.distance(from: draft.utf16.startIndex, to: found.range.lowerBound.samePosition(in: draft.utf16)!)
         let before = draft[..<found.range.lowerBound].filter { $0 == MentionText.mark }.count
@@ -736,10 +778,10 @@ final class RouterModel {
         let after = text.index(text.startIndex, offsetBy: offset + 1)
         let spaced = after < text.endIndex && text[after] == " "
         if !spaced { text.insert(" ", at: after) }
-        var next = tokens
-        next.insert(folder, at: min(before, next.count))
+        var next = pointers
+        next.insert(pointer, at: min(before, next.count))
         caret = start + 2
-        tokens = next
+        pointers = next
         draft = text
         caretRequest = start + 2
         mention = nil
@@ -920,16 +962,7 @@ struct ShownProbe: NSViewRepresentable {
 /// letters in order (fuzzy); shorter names first within each.
 enum RouterMentions {
     static func rank(_ projects: [(String, String)], query: String, limit: Int) -> [(folder: String, name: String)] {
-        let q = query.lowercased()
-        func score(_ name: String) -> Int? {
-            let n = name.lowercased()
-            if q.isEmpty || n.hasPrefix(q) { return 0 }
-            if n.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).contains(where: { $0.hasPrefix(q) }) { return 1 }
-            if n.contains(q) { return 2 }
-            var rest = Substring(q)
-            for c in n where c == rest.first { rest = rest.dropFirst() }
-            return rest.isEmpty ? 3 : nil
-        }
+        func score(_ name: String) -> Int? { Self.score(name, query: query) }
         struct Hit { var folder: String; var name: String; var score: Int }
         var hits: [Hit] = []
         for (folder, name) in projects {

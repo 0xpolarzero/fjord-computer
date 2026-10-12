@@ -121,7 +121,7 @@ import Testing
     @Test func theSendSaysWhereItsPillsAre() {
         let (s, model, _) = setup()
         model.draft = "\n  \n\(MentionText.mark) fix it, not @lookout typed"
-        model.tokens = ["/code/lookout"]
+        model.pointers = [.project("/code/lookout")]
         #expect(model.plainDraft(s) == "@lookout fix it, not @lookout typed")
         #expect(model.context(s).pills == [0..<8], "only the pill, where it stands in what is sent")
     }

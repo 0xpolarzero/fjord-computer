@@ -1387,6 +1387,60 @@ import Testing
         #expect(decision(s, id)?.outcome == .done && decision(s, id)?.reply == "Dismissed: nothing was sent.")
     }
 
+    // MARK: @ pills
+
+    /// The context of a message built from `parts`, as the composer sends it.
+    private func tagged(_ s: Store, _ parts: [RouterMessagePart]) -> (text: String, context: RouterContext) {
+        let (text, mentions) = s.composeForRouter(parts)
+        var context = RouterContext()
+        context.tag(mentions)
+        return (text, context)
+    }
+
+    @Test func aSessionTaggedIsWhereTheMessageGoesAndItsPillsAreKept() async {
+        let (s, d, f) = setup()
+        let (text, context) = tagged(s, [.pointer(.session("local_b")), .text(" add a changelog entry")])
+        #expect(text == "@Update the docs add a changelog entry" && context.pills == [0..<16] && context.projects.isEmpty)
+        let a = d.submit(text, context: context)
+        await finish(d, f, a)
+        #expect(f.ranks == 0 && f.prepared == ["local_b"], "sent where it was tagged, Jev not asked")
+        #expect(decision(s, a)?.mentions == context.mentions && decision(s, a)?.decision.confirmed == true)
+        // Gone from the app: Jev is asked.
+        s.claudeSessions["local_b"]?.isArchived = true
+        f.ranked = [.init(target: "session:local_a", p: 0.95), .init(target: "unclear", p: 0.05)]
+        let b = d.submit(text, context: context)
+        await finish(d, f, b)
+        #expect(f.ranks == 1)
+    }
+
+    @Test func severalSessionsTaggedAreAllTheMessageCanGoTo() async {
+        let (s, d, f) = setup()
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Ship it", folder: "/code/ci", lastActivity: Date(), running: true)
+        f.ranked = [.init(target: "session:local_c", p: 0.97), .init(target: "unclear", p: 0.03)]
+        let (text, context) = tagged(s, [.text("tell "), .pointer(.session("local_a")), .text(" or "), .pointer(.session("local_b")),
+                                         .text(" to rebase")])
+        let a = d.submit(text, context: context)
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty, "Jev's pick wasn't tagged: you pick")
+        let options = Set(d.askBacks.first { $0.id == a }?.options.map(\.target) ?? [])
+        #expect(!options.isEmpty && options.isSubset(of: ["session:local_a", "answer:local_a#w1", "session:local_b"]))
+    }
+
+    @Test func whatTheMessageTagsGoesToTheRoutersRunFencedAfterTheState() async throws {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "question", p: 0.9), .init(target: "unclear", p: 0.1)]
+        let ci = try #require(s.categories.first)
+        let (text, context) = tagged(s, [.text("what is in "), .pointer(.category(ci.id)), .text("?")])
+        let a = d.submit(text, context: context)
+        await finish(d, f, a)
+        let input = try #require(f.runs.first?.input)
+        let block = try #require(input.range(of: UntrustedFence.triage.open))
+        let message = try #require(input.range(of: "The user's message:\n" + text))
+        #expect(block.upperBound < message.lowerBound && input.contains("@\(ci.title): a category of the Triage inbox"))
+        // A notification or category doesn't say where it goes.
+        #expect(context.pills.isEmpty && RouterDispatcher.plan(text: text, context: context, store: s) == .classify)
+    }
+
     // MARK: Haiku runs
 
     @Test func changingFjordIsAFreshRunWhoseChangesJoinItsEntry() async {

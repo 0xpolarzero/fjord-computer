@@ -941,7 +941,7 @@ private struct HistoryDecisionLine: View, Equatable {
                 HStack(spacing: 8) {
                     Image(systemName: decision.symbol).font(.system(size: 10, weight: .medium))
                         .foregroundStyle(CDS.Text.muted).frame(width: 16, height: 16)
-                    Text(RouterDecision.clip(decision.triggerText, 90))
+                    trigger
                         .cdsText(CDS.Transcript.text, .regular, hovered || open ? CDS.Text.secondary : CDS.Text.muted)
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
                     Text("· \(status)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
@@ -993,6 +993,14 @@ private struct HistoryDecisionLine: View, Equatable {
     private func toggle() {
         toggleHistoryLine(reduceMotion: reduceMotion) { model.toggleExpanded(key) }
     }
+
+    /// What set it off; your message with its pills drawn where they were.
+    private var trigger: Text {
+        guard case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty else {
+            return Text(RouterDecision.clip(decision.triggerText, 90))
+        }
+        return MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+    }
 }
 
 /// An open run's details: what set it off, its reply, what was done, its changes and its sessions, and while its message can
@@ -1005,7 +1013,14 @@ private struct DecisionDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            CDSProse(text: decision.triggerText, color: CDS.Text.secondary, inset: false)
+            if case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty {
+                MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+                    .cdsText(CDS.Transcript.text, .regular, CDS.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else {
+                CDSProse(text: decision.triggerText, color: CDS.Text.secondary, inset: false)
+            }
             if let reply = decision.reply { CDSProse(text: reply, color: CDS.Text.primary, inset: false) }
             ForEach(Array(decision.doneLines.enumerated()), id: \.offset) { _, line in
                 Text(line).cdsText((12, 16), .regular, CDS.Text.muted).fixedSize(horizontal: false, vertical: true)

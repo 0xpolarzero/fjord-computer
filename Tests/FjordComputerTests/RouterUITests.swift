@@ -370,7 +370,7 @@ import UserNotifications
         model.select(card.id, store: store)
         #expect(keys.key(key(kVK_Return, "\r"), responder: nil))
         #expect(model.replyTo == card.id)
-        model.tokens = ["/Users/me/code/lookout"]
+        model.pointers = [.project("/Users/me/code/lookout")]
         model.draft = "go ahead in \(MentionText.markString)"
         model.send(store: store)
         let line = store.router.decisions.last
@@ -397,7 +397,7 @@ import UserNotifications
         #expect(closed)
     }
 
-    @Test func atSuggestsProjectsAndReturnOrTabPicksOne() {
+    @Test func atSuggestsProjectsAndReturnOrTabPicksOne() throws {
         let store = demo()
         let model = RouterModel()
         let keys = RouterKeys(store: store, model: model) {}
@@ -408,15 +408,15 @@ import UserNotifications
         var view = editor(model, "check @lc")
         #expect(model.suggestions(store).first?.name == "lcu")
         #expect(keys.key(key(kVK_DownArrow), responder: view))
-        let second = model.suggestions(store)[1].folder
+        let second = try #require(model.suggestions(store)[1].folder)
         #expect(keys.key(key(kVK_Tab, "\t"), responder: view))
-        #expect(model.projects == [second] && model.tokens == [second])
+        #expect(model.projects == [second] && model.pointers == [.project(second)])
         #expect(model.draft == "check \(MentionText.markString) " && model.caretRequest == 8)
         // Picked projects aren't suggested again; Return picks too.
         view = editor(model, "check \(MentionText.markString) and @")
         #expect(!model.suggestions(store).map(\.folder).contains(second))
         #expect(keys.key(key(kVK_Return, "\r"), responder: view))
-        #expect(model.projects.count == 2 && model.tokens[0] == second && model.draft.filter { $0 == MentionText.mark }.count == 2)
+        #expect(model.projects.count == 2 && model.pointers[0] == .project(second) && model.draft.filter { $0 == MentionText.mark }.count == 2)
         // An @ inside a word (an email) is not a tag.
         #expect(RouterModel.mentionQuery(in: "me@lookout") == nil)
         #expect(RouterModel.mentionQuery(in: "@look out") == nil)

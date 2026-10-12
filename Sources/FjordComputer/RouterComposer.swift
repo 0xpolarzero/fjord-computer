@@ -3,8 +3,9 @@ import SwiftUI
 
 /// Where you write to the Router, drawn as the Claude Code tab's composer (docs/design/spec/composer-overlays.md): the
 /// context strip over the card (the card the message replies to, with its ×; Backspace at the start takes it off) and the
-/// card (Return sends, ⇧Return starts a new line, see `RouterKeys`). Typing @ suggests projects over the caret (↑↓, Return
-/// or Tab picks, Esc dismisses); a pick is a pill in the text where the @ was (see `MentionField`). Once typing pauses, Jev's
+/// card (Return sends, ⇧Return starts a new line, see `RouterKeys`). Typing @ suggests projects, sessions, notifications and
+/// categories over the caret (↑↓, Return or Tab picks, Esc dismisses); a pick is a pill in the text where the @ was (see
+/// `MentionField`, `RouterPointer`). Once typing pauses, Jev's
 /// pick of where the message goes is a ghost chip in the strip, its card or row marked on the page: a click fixes it, Esc
 /// waves it off (see `RouterLiveTarget`). Stop while the Router works. On macOS 26 it floats over the page (glass-plan
 /// §5.4): the card and the strip are Regular glass (their field and chips as they are), or `s3` where the chrome is opaque.
@@ -67,11 +68,11 @@ struct RouterComposer: View {
             // And what it can go to: a chip whose target was addressed, superseded or is gone goes with it.
             LiveTargetWatch(store: store, model: model)
         }
-        .motion(.fade, value: suggestions.map(\.folder))
+        .motion(.fade, value: suggestions.map(\.id))
         .motion(.fade, value: model.live.prediction?.target)
         // Jev's pick follows the draft and what fixes its target; the page marks its card or row while it shows.
         .onChange(of: model.draft) { model.predictTarget(store: store) }
-        .onChange(of: model.tokens) { model.predictTarget(store: store) }
+        .onChange(of: model.pointers) { model.predictTarget(store: store) }
         .onChange(of: model.replyTo) { model.predictTarget(store: store) }
         .onChange(of: model.live.pinned) { model.predictTarget(store: store) }
         .onChange(of: model.live.prediction?.mark) { old, new in model.markPrediction(from: old, to: new) }
@@ -367,13 +368,14 @@ private struct ChipClose: View {
     }
 }
 
-/// The @ suggestions as Claude's MentionDropdown: the projects the word matches, the one ↑↓ (or the pointer) picked lit.
+/// The @ suggestions as Claude's MentionDropdown: what the word matches, under its section's heading (projects, sessions,
+/// notifications, categories), the one ↑↓ (or the pointer) picked lit.
 struct MentionList: View {
-    let suggestions: [(folder: String, name: String)]
+    let suggestions: [MentionSuggestion]
     let index: Int
     var width: CGFloat = CDS.Composer.mentionWidth
     var hover: ((Int) -> Void)? = nil
-    let pick: (String) -> Void
+    let pick: (MentionSuggestion) -> Void
 
     /// Where the list goes under a caret at `caretX` in a card `available` wide (0 while that isn't known yet): no wider than
     /// the card, and moved left as far as it takes to end inside it.
@@ -388,16 +390,23 @@ struct MentionList: View {
         let d = CDS.Density.compact
         let shape = RoundedRectangle(cornerRadius: d.panelRadius, style: .continuous)
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.element.folder) { i, project in
-                Button { pick(project.folder) } label: {
+            ForEach(Array(suggestions.enumerated()), id: \.element.id) { i, row in
+                // A section's heading over its first row, when the list holds more than one section.
+                if i == 0 ? Set(suggestions.map(\.section)).count > 1 : suggestions[i - 1].section != row.section {
+                    Text(row.section.title).font(CDS.sans(d.caption.0, .medium)).foregroundStyle(CDS.Text.muted)
+                        .padding(.horizontal, d.pad.md).padding(.top, i == 0 ? 2 : 6).padding(.bottom, 2)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                Button { pick(row) } label: {
                     HStack(spacing: d.gap.xs) {
-                        Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(CDS.Text.secondary)
+                        Image(systemName: row.look.symbol ?? "folder").font(.system(size: 12))
+                            .foregroundStyle(row.look.tint ?? CDS.Text.secondary)
                             .frame(width: d.icon, height: d.icon)
                         HStack(alignment: .firstTextBaseline, spacing: d.gap.xs) {
-                            Text("@" + project.name).font(CDS.sans(d.body.0)).foregroundStyle(CDS.Text.primary)
+                            Text("@" + row.name).font(CDS.sans(d.body.0)).foregroundStyle(CDS.Text.primary)
                                 .lineLimit(1).layoutPriority(1)
-                            Text(Self.shortPath(project.folder)).font(CDS.sans(d.caption.0)).foregroundStyle(CDS.Text.muted)
-                                .lineLimit(1).truncationMode(.head)
+                            Text(row.detail).font(CDS.sans(d.caption.0)).foregroundStyle(CDS.Text.muted)
+                                .lineLimit(1).truncationMode(row.folder == nil ? .tail : .head)
                         }
                         Spacer(minLength: 0)
                     }
@@ -409,7 +418,7 @@ struct MentionList: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { if $0 { hover?(i) } }
-                .accessibilityLabel("Project \(project.name)")
+                .accessibilityLabel("\(row.section.title.dropLast()) \(row.name), \(row.detail)")
                 .accessibilityAddTraits(i == index ? .isSelected : [])
             }
         }
@@ -420,7 +429,7 @@ struct MentionList: View {
         .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
         .shadow(color: CDS.PanelShadow.far.color, radius: CDS.PanelShadow.far.radius, y: CDS.PanelShadow.far.y)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Projects")
+        .accessibilityLabel("Suggestions")
     }
 
     /// `~/code/lookout` rather than the whole path.

@@ -27,9 +27,13 @@ struct RouterContext: Equatable {
     /// The target of Jev's pick shown over the composer for these very words as they are sent: only then does a send go
     /// with it as your confirmation (what was read while you typed but not shown, or shown for other words, is not).
     var shown: String?
-    /// Where the @project pills are in the message (character offsets of each "@name"): only these are ever taken out of
-    /// your words as tags, never words that happen to match a project or a session's title.
+    /// Where the @project and @session pills are in the message (character offsets of each "@name"): only these are ever
+    /// taken out of your words as tags, never words that happen to match a project or a session's title.
     var pills: [Range<Int>]
+    /// Every pill of the message, what it points to and where (`RouterPointer`; `tag` sets this, `pills` and `projects`
+    /// together): a session tagged is where it goes, a notification or a category goes with it as a fenced block
+    /// (`RouterPointers.context`).
+    var mentions: [RouterMention] = []
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
          predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = []) {
@@ -253,9 +257,13 @@ struct RouterAskBack: Identifiable, Equatable {
         // A pill is an "@name" where it was said; anything else given as one isn't.
         let chars = Array(text)
         context.pills = context.pills.filter { $0.lowerBound >= 0 && $0.upperBound <= chars.count && !$0.isEmpty && chars[$0.lowerBound] == "@" }
-        let id = store.logDecision(RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
-                                                  links: .init(cards: context.replyTo.map { [$0] } ?? [])))
-        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: context.pills)), stage: "starting") { [self] job in
+        context.mentions = Self.mentions(context.mentions, in: text)
+        var entry = RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
+                                   links: .init(cards: context.replyTo.map { [$0] } ?? []))
+        entry.mentions = context.mentions.isEmpty ? nil : context.mentions
+        let id = store.logDecision(entry)
+        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: context.pills, mentions: context.mentions)),
+               stage: "starting") { [self] job in
             try await execute(job)
         }
         return id
@@ -285,7 +293,8 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         // A pick that is Jev's own suggestion confirms it: an example for the next ones.
         if !corrected { store.updateDecision(id) { $0.decision.confirmed = true } }
-        launch(Job(id: id, text: ask.message, context: ask.context, tools: makeTools(id, ask.message, pills: ask.context.pills)),
+        launch(Job(id: id, text: ask.message, context: ask.context,
+                   tools: makeTools(id, ask.message, pills: ask.context.pills, mentions: ask.context.mentions)),
                stage: "starting") { [self] job in
             try await route(job, to: target)
         }
@@ -314,13 +323,26 @@ struct RouterAskBack: Identifiable, Equatable {
 
     // MARK: Runs
 
-    private func makeTools(_ id: UUID, _ text: String, pills: [Range<Int>]) -> RouterTools {
+    private func makeTools(_ id: UUID, _ text: String, pills: [Range<Int>], mentions: [RouterMention] = []) -> RouterTools {
         let tools = RouterTools(store: store!)
         tools.claudePath = { [weak self] in self?.claudePath() }
         tools.decision = id
         tools.beginTurn(text, pills: pills)
+        tools.tagged = RouterPointers.context(mentions, store: store!)
         configure?(tools)
         return tools
+    }
+
+    /// The pills of `text` that are where they say: each an "@name" inside it, none overlapping another.
+    static func mentions(_ mentions: [RouterMention], in text: String) -> [RouterMention] {
+        let chars = Array(text)
+        var end = 0
+        return mentions.sorted { $0.range.lowerBound < $1.range.lowerBound }.filter { m in
+            guard m.range.lowerBound >= end, m.range.upperBound <= chars.count, !m.range.isEmpty,
+                  chars[m.range.lowerBound] == "@" else { return false }
+            end = m.range.upperBound
+            return true
+        }
     }
 
     private func launch(_ job: Job, stage first: String, _ body: @escaping (Job) async throws -> Void) {
@@ -380,7 +402,8 @@ struct RouterAskBack: Identifiable, Equatable {
             trace(job, path: "fork", action: "fork", target: "session:\(request.session)")
             try await fork(job, request)
         case .route(let target):
-            trace(job, path: "pinned", action: "send", target: target)
+            // A target you pinned, or the session you tagged.
+            trace(job, path: job.context.target == target ? "pinned" : "tagged", action: "send", target: target)
             confirm(job, target)
             try await route(job, to: target)
         case .classify: try await classifyAndAct(job)
@@ -444,6 +467,9 @@ struct RouterAskBack: Identifiable, Equatable {
             return .reply(session: card.sessionID, card: id)
         }
         if let target = context.target { return .route(target) }
+        // A session you tagged is where it goes, while it is there; several tagged, Jev picks among them (`classifyAndAct`).
+        let tagged = context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true }
+        if tagged.count == 1 { return .route("session:\(tagged[0])") }
         if context.projects.count == 1, let folder = context.projects.first {
             if wantsNewSession(text, pills: context.pills) { return .start(folder: folder) }
             let other = store.openRouterCards.contains { ($0.folder ?? "") == folder }
@@ -609,8 +635,11 @@ struct RouterAskBack: Identifiable, Equatable {
         let wrong = entry.decision.targetID ?? "session:\(sent.session)"
         forgetLive()
         store.updateDecision(id) { $0.outcome = .pending }
-        let context = RouterContext(notTo: wrong)
-        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: [])), stage: "cancelling") { [self] job in
+        var context = RouterContext(notTo: wrong)
+        // What it tagged goes with it again; where it goes is asked anew, not taken from its pills.
+        context.mentions = entry.mentions ?? []
+        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: [], mentions: context.mentions)),
+               stage: "cancelling") { [self] job in
             let how = await cancel(id, elsewhere: true)
             guard let how, how.stopped else {
                 let why = how.map { "It wasn't stopped there (\($0.words)), so it wasn't sent elsewhere: send it again if it should go somewhere else too." }
@@ -721,12 +750,12 @@ struct RouterAskBack: Identifiable, Equatable {
     /// it be: its line's "Don't send" drops it). Waiting too long, the Router switched off or reset, says the message wasn't
     /// sent; the session stays.
     private func hold(_ job: Job, _ waiting: SessionStart.Held) {
-        hold(job.id, waiting, text: job.text, pills: job.context.pills)
+        hold(job.id, waiting, text: job.text, pills: job.context.pills, mentions: job.context.mentions)
     }
 
     /// The same for a start that isn't a typed run's (an inbox action's, `ActionSessions`): `text` is the message held,
     /// sent as given. Its entry in the log is `id`.
-    func hold(_ id: UUID, _ waiting: SessionStart.Held, text: String, pills: [Range<Int>]? = nil) {
+    func hold(_ id: UUID, _ waiting: SessionStart.Held, text: String, pills: [Range<Int>]? = nil, mentions: [RouterMention] = []) {
         guard let store else { return }
         let session = waiting.waiting.sessionID
         store.noteFjordStarted(session)
@@ -736,7 +765,7 @@ struct RouterAskBack: Identifiable, Equatable {
             return
         }
         held[id] = Self.heldWords
-        let tools = makeTools(id, text, pills: pills ?? [])
+        let tools = makeTools(id, text, pills: pills ?? [], mentions: mentions)
         // An inbox action's message is Fjord Computer's own, taken as it is.
         if pills == nil { tools.verbatim = true }
         heldTools[id] = tools
@@ -787,7 +816,8 @@ struct RouterAskBack: Identifiable, Equatable {
     private func think(_ job: Job, _ intent: RouterRun.Intent) async throws {
         guard let store else { return }
         stage(job, "working")
-        let input = store.routerRunContext(message: job.text, projects: job.context.projects, excluding: job.id).text()
+        let input = store.routerRunContext(message: job.text, projects: job.context.projects, tagged: job.tools.tagged,
+                                           excluding: job.id).text()
         let answer = try await effects.run(job.tools, intent, input)
         let reply = answer.reply.trimmingCharacters(in: .whitespacesAndNewlines)
         let done = answer.done.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -836,10 +866,23 @@ struct RouterAskBack: Identifiable, Equatable {
         // Where your own words send it ("start a session in lookout …", "tell CI to …"), resolved here and not by Jev, is
         // where it goes: his pick of another doesn't send it elsewhere ("tell CI to update the docs" isn't for Docs). Not
         // where you waved it off, nor when it is gone.
+        // The sessions you tagged (more than one: one alone was sent to, `plan`): only they, their cards and the Router's own
+        // runs are gone to; when Jev's pick isn't among them, you pick among them. Not for a message wholly for the Router.
+        let scope = Self.forRouter(job.text, pills: job.context.pills) ? []
+            : Set(job.context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true })
+        let inScope = { (target: String) in
+            scope.isEmpty || RouterRun.Intent(rawValue: target) != nil || Self.session(of: target, store: store).map(scope.contains) == true
+        }
+        if !scope.isEmpty {
+            let kept = found.ranked.filter { inScope($0.target) }
+            if kept.first?.target != found.top?.target { found.sure = false }
+            found.ranked = kept.isEmpty ? scope.sorted().map { Scored(target: "session:\($0)", p: 0) } : kept
+            found.card = found.card?.filter(inScope)
+        }
         let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
         let named = Self.forRouter(job.text, pills: job.context.pills)
             ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
-        if let named, named != found.top?.target, named != job.context.notTo, eligible(named, store: store) {
+        if let named, named != found.top?.target, named != job.context.notTo, inScope(named), eligible(named, store: store) {
             trace(job, path: "named", action: "send", target: named, inputs: found.trace)
             confirm(job, named)
             return try await route(job, to: named)
@@ -879,13 +922,15 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Jev's routing of a draft while you type: the same call a send makes, kept by its words and projects for
     /// `liveFor` so that sending them asks nothing again. Nil when he can't be asked.
-    func predict(_ text: String, projects: [String]) async -> Classification? {
+    func predict(_ text: String, projects: [String], mentions: [RouterMention] = []) async -> Classification? {
         guard let store, store.jevAllows(.drafts) else { return nil }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = Self.liveKey(text, projects)
         if let hit = live(key) { return hit }
         if let pending = livePending[key] { return await pending.task.value }
         let tools = RouterTools(store: store)
+        // What the draft tags is read as the send would have it.
+        tools.tagged = RouterPointers.context(mentions, store: store)
         configure?(tools)
         // Its own task: a draft that changes, or is sent, doesn't stop it, so the send can take its answer.
         let id = UUID()
@@ -1093,8 +1138,10 @@ extension RouterDispatcher.Effects {
                 let sources = tools.lexicalSources(store, facts: facts)
                 let reader: Claude.ActivityReader? = UnderTest.isRunning ? nil : store.activityReader
                 let lexical = Task.detached(priority: .userInitiated) { RouterTools.lexical(message, sources: sources, reader: reader) }
-                // Keys you paste go to the session, never to Jev.
-                let state = ["message": RouterTools.redacted(message)]
+                // Keys you paste go to the session, never to Jev. What the message tags (a notification, a category) goes
+                // with it, fenced.
+                var state = ["message": RouterTools.redacted(message)]
+                if let tagged = tools.tagged { state["tagged in the message"] = RouterTools.redacted(tagged) }
                 let answers = try await ask(call.questions, state)
                 guard let pick = answers["route"]?.choice else { throw RouterTools.Failure("Jev didn't pick a target") }
                 var signals = RouteFusion.Signals(route: [:])
