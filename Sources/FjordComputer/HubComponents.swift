@@ -321,9 +321,10 @@ struct EntryRow: View {
             .frame(width: size, height: size)
     }
 
-    /// Room the controls take over the title line: 24pt buttons 2 apart, 3 from the end, and 4 before them.
+    /// Room the controls take over the title line: 24pt buttons 2 apart, 3 from the end, and 4 before them. As many as
+    /// `actions` draws: read or unread, its toggle, archive and GitHub; archived, back to inbox and GitHub; the Router's.
     private var actionsWidth: CGFloat {
-        let n = CGFloat((unread || entry.isDone ? 3 : 2) + (openInRouter == nil ? 0 : 1))
+        let n = CGFloat((entry.isDone ? 2 : 3) + (openInRouter == nil ? 0 : 1))
         return n * IconButton.Size.row + (n - 1) * CDS.RowControl.gap + CDS.RowControl.inset + 4
     }
 
