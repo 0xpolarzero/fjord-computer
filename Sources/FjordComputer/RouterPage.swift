@@ -588,7 +588,7 @@ private struct RouterHistory: View {
         DispatchQueue.main.async { perform(proxy) }
         // Going to a line leaves the bottom (until the scroll, once done, finds it there after all); going to the bottom pins.
         pinned = scroll.id == RouterModel.endID
-        if scroll.animated, let motion = Theme.Motion.hover.resolved(reduce: reduceMotion) {
+        if scroll.animated, let motion = Motion.scroll.resolved(reduce: reduceMotion) {
             withAnimation(motion) { proxy.scrollTo(scroll.id, anchor: scroll.anchor) }
         } else {
             // A jump, even when what asked for it was animated (a line opening): it doesn't ride that animation.
@@ -757,7 +757,7 @@ private extension Transaction {
 
 /// Runs `change` as a history line opening or closing: animated (unless Reduce Motion is on), and only that animates.
 @MainActor private func toggleHistoryLine(reduceMotion: Bool, _ change: () -> Void) {
-    var transaction = Transaction(animation: Theme.Motion.spring.resolved(reduce: reduceMotion))
+    var transaction = Transaction(animation: Motion.spatial.resolved(reduce: reduceMotion))
     transaction.historyToggle = true
     withTransaction(transaction, change)
 }
@@ -1158,7 +1158,7 @@ private struct HoverOpen: View {
         .accessibilityLabel("Open \(title) in Claude")
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)
-        .motion(.easeOut(duration: 0.12), value: shown)
+        .hoverMotion(shown)
         .accessibilityHidden(!shown)
     }
 }
@@ -1210,7 +1210,7 @@ private struct RouterNow: View {
         init(_ id: String, anchor: UnitPoint) { self.id = id; self.anchor = anchor }
     }
 
-    private var spring: Animation? { Theme.Motion.spring.resolved(reduce: reduceMotion) }
+    private var spring: Animation? { Motion.spatial.resolved(reduce: reduceMotion) }
 
     private var zones: [RouterZone] {
         RouterZone.allCases.filter { $0 == .needs || page.count($0) > 0 }
@@ -1245,7 +1245,7 @@ private struct RouterNow: View {
                     .padding(.top, 2)
                     .padding(.bottom, 12)
                     .measured()
-                    .motion(Theme.Motion.spring, value: page.needs.map(\.id) + page.working.map(\.id))
+                    .motion(.spatial, value: page.needs.map(\.id) + page.working.map(\.id))
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 // A card picked (with the keys, a banner, the away strip): its section opens, and the page goes to it.
@@ -1282,7 +1282,7 @@ private struct RouterNow: View {
         DispatchQueue.main.async {
             guard pending == request else { return }
             pending = nil
-            withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: request.anchor) }
+            withAnimation(Motion.scroll.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: request.anchor) }
         }
     }
 
@@ -1607,7 +1607,7 @@ private struct WorkingCard: View {
         let marked = model.highlighted == RouterModel.workingID(row.id)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Button { withAnimation(Theme.Motion.hover.resolved(reduce: reduceMotion)) { expanded.toggle() } } label: {
+                Button { withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { expanded.toggle() } } label: {
                     HStack(spacing: 8) {
                         SessionGlyph(row: row, size: 18, dot: false)
                         Text(row.session.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
@@ -1931,7 +1931,7 @@ struct CardView: View {
     /// The header: clicking it shows the card in full and arms the reply.
     private func header<Label: View>(@ViewBuilder _ label: () -> Label) -> some View {
         Button {
-            withAnimation(Theme.Motion.spring.resolved(reduce: reduceMotion)) { model.tap(card.id, store: store) }
+            withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { model.tap(card.id, store: store) }
         } label: { label() }
             .buttonStyle(.plain)
             .focused($focused)

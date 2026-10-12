@@ -230,7 +230,7 @@ private struct SectionCellLabel: View {
             .padding(.horizontal, vertical ? 0 : 2)
             .contentShape(Rectangle())
             .onHover { hover = $0 }
-            .motion(Theme.Motion.hover, value: hover)
+            .hoverMotion(hover)
     }
 }
 

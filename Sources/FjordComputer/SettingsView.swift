@@ -57,7 +57,7 @@ struct SettingsView: View {
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
         guard let id = hub.settingsScroll?.id else { return }
         hub.settingsScroll = nil
-        if animated { withAnimation(Theme.Motion.hover.resolved(reduce: reduce)) { proxy.scrollTo(id, anchor: .top) } }
+        if animated { withAnimation(Motion.scroll.resolved(reduce: reduce)) { proxy.scrollTo(id, anchor: .top) } }
         else { proxy.scrollTo(id, anchor: .top) }
     }
 
@@ -770,8 +770,8 @@ struct CDSFieldChrome: ViewModifier {
             }
             .opacity(enabled ? 1 : 0.4)
             .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.06), value: hovering)
-            .animation(.easeOut(duration: 0.06), value: focused)
+            .hoverMotion(hovering)
+            .motion(.easeOut(duration: 0.06), value: focused)
     }
 }
 
@@ -866,7 +866,7 @@ private struct CDSSwitch: View {
                     .offset(x: on ? travel / 2 : -travel / 2)
             }
             .animation(reduce ? nil : .timingCurve(0.34, 1.3, 0.64, 1, duration: 0.12), value: on)
-            .animation(.easeOut(duration: 0.06), value: hot)
+            .hoverMotion(hot)
             .opacity(enabled ? 1 : 0.4)
             .contentShape(Capsule())
             .onTapGesture { if enabled { configuration.isOn.toggle() } }
@@ -1021,9 +1021,9 @@ struct SettingsButtonStyle: ButtonStyle {
                     shape.fill(fill)
                         .bakedShadow(style.variant == .secondary ? CDS.fieldShadow : .clear, .rounded(size.radius), radius: 1, y: 1, fill: fill)
                         .scaleEffect(pressed ? 0.975 : 1)
-                        .animation(pressed ? .easeOut(duration: 0.06) : .spring(duration: 0.45, bounce: 0.35), value: pressed)
+                        .motion(pressed ? .easeOut(duration: 0.06) : .spring(duration: 0.45, bounce: 0.35), value: pressed)
                 }
-                .animation(.easeOut(duration: 0.06), value: hot)
+                .hoverMotion(hot)
                 .contentShape(shape)
                 .opacity(enabled ? 1 : 0.4)
                 .onHover { hovering = $0 }

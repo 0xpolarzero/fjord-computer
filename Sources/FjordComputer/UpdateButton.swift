@@ -95,7 +95,7 @@ private struct UpdateLabel: View {
                         .stroke(CDS.Fill.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .padding(4)
-                        .animation(.linear(duration: 0.2), value: fraction)
+                        .motion(.linear(duration: 0.2), value: fraction)
                 }
                 if updater.phase == .installing {
                     FjordLoader(color: tint, label: "Installing").frame(width: CDS.Sidebar.symbol, height: CDS.Sidebar.symbol)
@@ -113,7 +113,7 @@ private struct UpdateLabel: View {
                     .padding(.trailing, 8)
             }
         }
-        .motion(Theme.Motion.spring, value: hover)
+        .motion(.spatial, value: hover)
     }
 
     private var symbol: String {

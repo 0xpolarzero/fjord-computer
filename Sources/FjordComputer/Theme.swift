@@ -115,6 +115,7 @@ struct Avatar: View {
     var name: String?
 
     @State private var loaded: (url: URL, image: NSImage)?
+    @Environment(\.accessibilityReduceMotion) private var reduce
 
     var body: some View {
         let sized = Self.sizedURL(url, size: size)
@@ -135,7 +136,7 @@ struct Avatar: View {
             loaded = nil
             let img = await ImageCache.shared.load(sized)
             guard !Task.isCancelled, let img else { return }
-            withAnimation(.easeOut(duration: 0.15)) { loaded = (sized, img) }
+            withAnimation(Motion.fade.resolved(reduce: reduce)) { loaded = (sized, img) }
         }
     }
 

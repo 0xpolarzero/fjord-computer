@@ -174,7 +174,7 @@ final class AppWindowKeys {
     func act(_ shortcut: Shortcut) -> Bool {
         if shortcut == store.shortcut(.markAllRead) {
             guard let tab = navigator.selection.tab else { return false }
-            withAnimation(Theme.Motion.fade) {
+            withAnimation(Motion.fade.resolved(reduce: Motion.systemReduce)) {
                 if search.isSearching { store.inboxRows(tab, search: search.query).filter(\.isUnread).forEach(store.markSeen) }
                 else { store.markAllSeen(tab) }
             }
@@ -197,7 +197,7 @@ final class AppWindowKeys {
             // The pick moves on to the next row (the previous one at the end) as this one leaves the list.
             let next = targets.indices.contains(i + 1) ? targets[i + 1] : (i > 0 ? targets[i - 1] : nil)
             pick(next)
-            withAnimation(Theme.Motion.fade) { entry.isDone ? store.restore(entry) : store.finish(entry) }
+            withAnimation(Motion.fade.resolved(reduce: Motion.systemReduce)) { entry.isDone ? store.restore(entry) : store.finish(entry) }
         } else {
             return false
         }

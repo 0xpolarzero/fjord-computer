@@ -788,7 +788,7 @@ struct AppNavButtons: View {
     var body: some View {
         HStack(spacing: CDS.TitleBar.buttonGap) {
             AppIconButton(symbol: "sidebar.left", help: sidebarShown ? "Hide sidebar" : "Show sidebar", enabled: true) {
-                withAnimation(.easeOut(duration: 0.18)) { sidebarShown.toggle() }
+                sidebarShown.toggle()
             }
             AppIconButton(symbol: "chevron.left", help: "Back · ⌘[", enabled: navigator.canGoBack) { navigator.back() }
             AppIconButton(symbol: "chevron.right", help: "Forward · ⌘]", enabled: navigator.canGoForward) { navigator.forward() }

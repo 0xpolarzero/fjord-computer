@@ -55,8 +55,8 @@ struct RouterComposer: View {
             // And what it can go to: a chip whose target was addressed, superseded or is gone goes with it.
             LiveTargetWatch(store: store, model: model)
         }
-        .motion(Theme.Motion.fade, value: suggestions.map(\.folder))
-        .motion(Theme.Motion.fade, value: model.live.prediction?.target)
+        .motion(.fade, value: suggestions.map(\.folder))
+        .motion(.fade, value: model.live.prediction?.target)
         // Jev's pick follows the draft and what fixes its target; the page marks its card or row while it shows.
         .onChange(of: model.draft) { model.predictTarget(store: store) }
         .onChange(of: model.tokens) { model.predictTarget(store: store) }

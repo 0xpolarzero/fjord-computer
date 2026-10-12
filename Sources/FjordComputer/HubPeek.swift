@@ -288,7 +288,7 @@ extension FjordHub {
         } else {
             CappedScroll(cap: 360, hub: hub, lazy: AdaptiveStack<EmptyView>.isLazy(items.count)) {
                 AdaptiveStack(count: items.count, spacing: 1) { ForEach(items) { itemRow($0).id("i:" + $0.id) } }
-                    .motion(Theme.Motion.fade, value: listKey)
+                    .motion(.fade, value: listKey)
             }
         }
     }

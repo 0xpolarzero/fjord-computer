@@ -40,7 +40,7 @@ struct InboxListView: View {
             if unread > 0 {
                 IconButton(symbol: "checkmark.circle", help: "Mark all as seen", detail: store.shortcut(.markAllRead).display,
                            size: IconButton.Size.header) {
-                    withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { entries.filter(\.isUnread).forEach(store.markSeen) }
+                    withAnimation(Motion.fade.resolved(reduce: reduce)) { entries.filter(\.isUnread).forEach(store.markSeen) }
                 }
             }
         } content: {
@@ -64,7 +64,7 @@ struct InboxListView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { undoLine }
-        .motion(Theme.Motion.fade, value: store.inboxRevision)
+        .motion(.fade, value: store.inboxRevision)
         // A new search picks its first result, so ↩ opens it straight away.
         .onChange(of: search.query) { hub.selection = searching ? entries.first.map { "i:" + $0.id } : nil }
     }
@@ -79,7 +79,7 @@ struct InboxListView: View {
 
     private func scroll(_ proxy: ScrollViewProxy, to request: ScrollRequest?) {
         guard let id = request?.id.dropFirst(2) else { return }
-        DispatchQueue.main.async { withAnimation(Theme.Motion.hover.resolved(reduce: reduce)) { proxy.scrollTo(String(id), anchor: .center) } }
+        DispatchQueue.main.async { withAnimation(Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(String(id), anchor: .center) } }
     }
 
     private var title: String {
@@ -136,7 +136,7 @@ struct InboxListView: View {
                 .transition(.opacity)
             }
         }
-        .motion(Theme.Motion.fade, value: store.undoStack.line?.id)
+        .motion(.fade, value: store.undoStack.line?.id)
     }
 }
 

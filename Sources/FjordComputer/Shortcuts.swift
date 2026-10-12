@@ -469,7 +469,7 @@ private struct RecorderField: View {
         }
         .contentShape(shape)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.06), value: hovering)
+        .hoverMotion(hovering)
     }
 }
 

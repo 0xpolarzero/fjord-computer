@@ -23,7 +23,7 @@ extension FjordHub {
     /// unfolds them. Hovering it peeks its first category with something new.
     func sectionCell(_ section: CategorySection, _ part: BarSection) -> some View {
         SectionCell(section: section, badge: store.sectionBadge(part), vertical: !edge.isHorizontal) {
-            withAnimation(Theme.Motion.hover) { store.toggleCollapsed(section.id) }
+            withAnimation(Motion.fade.resolved(reduce: reduce)) { store.toggleCollapsed(section.id) }
         }
         .onHover { over in
             guard over, let first = part.categories.first(where: { store.badge($0) > 0 }) ?? part.categories.first else { return }
@@ -74,14 +74,14 @@ extension FjordHub {
                 IconButton(symbol: "checkmark.circle", help: "Mark all as seen",
                            detail: "Everything in \(store.category(tab)?.name ?? "Done") · \(store.shortcut(.markAllRead).display)",
                            size: IconButton.Size.header) {
-                    withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { store.markAllSeen(tab) }
+                    withAnimation(Motion.fade.resolved(reduce: reduce)) { store.markAllSeen(tab) }
                 }
                 .transition(.opacity)
             }
             categoriesMenu
         }
         .padding(.trailing, 3)
-        .motion(Theme.Motion.fade, value: unread > 0)
+        .motion(.fade, value: unread > 0)
     }
 
     /// The tabs' end fades out where more are scrolled out of sight.
@@ -95,13 +95,13 @@ extension FjordHub {
     func categoryTab(_ category: InboxCategory, selected: Bool) -> some View {
         let n = store.badge(category)
         return CategoryTab(category: category, selected: selected, badge: n, store: store) {
-            withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { hub.tab = .category(category.id) }
+            withAnimation(Motion.fade.resolved(reduce: reduce)) { hub.tab = .category(category.id) }
         }
     }
 
     func doneTab(selected: Bool) -> some View {
         Button {
-            withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { hub.tab = .done }
+            withAnimation(Motion.fade.resolved(reduce: reduce)) { hub.tab = .done }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "archivebox").font(.system(size: 12, weight: .medium))
@@ -175,7 +175,7 @@ extension FjordHub {
                     .transition(.opacity)
             }
         }
-        .motion(Theme.Motion.fade, value: store.undoStack.line?.id)
+        .motion(.fade, value: store.undoStack.line?.id)
     }
 
     // MARK: Section headers
@@ -196,7 +196,7 @@ extension FjordHub {
         .padding(.leading, Theme.Space.md)
         .padding(.trailing, 3)
         .frame(height: Theme.Metrics.line)
-        .motion(Theme.Motion.fade, value: status.map(\.0))
+        .motion(.fade, value: status.map(\.0))
     }
 
     // MARK: Router
@@ -393,6 +393,7 @@ struct CategoryTab: View {
     let action: () -> Void
     @State private var target = false
     @Environment(\.openApp) private var openApp
+    @Environment(\.accessibilityReduceMotion) private var reduce
 
     var body: some View {
         Button(action: action) {
@@ -407,12 +408,12 @@ struct CategoryTab: View {
             .fixedSize()
             .accessibilityLabel(category.title)
             .accessibilityAddTraits(selected ? .isSelected : [])
-            .accessibilityAction(named: "Move earlier") { withAnimation(.spring(duration: 0.25)) { move(-1) } }
-            .accessibilityAction(named: "Move later") { withAnimation(.spring(duration: 0.25)) { move(1) } }
+            .accessibilityAction(named: "Move earlier") { withAnimation(Motion.spatial.resolved(reduce: reduce)) { move(-1) } }
+            .accessibilityAction(named: "Move later") { withAnimation(Motion.spatial.resolved(reduce: reduce)) { move(1) } }
             .contextMenu {
-                Button("Move earlier") { withAnimation(.spring(duration: 0.25)) { move(-1) } }
+                Button("Move earlier") { withAnimation(Motion.spatial.resolved(reduce: reduce)) { move(-1) } }
                     .disabled(!store.canMoveCategory(category.id, by: -1, among: store.shownCategories))
-                Button("Move later") { withAnimation(.spring(duration: 0.25)) { move(1) } }
+                Button("Move later") { withAnimation(Motion.spatial.resolved(reduce: reduce)) { move(1) } }
                     .disabled(!store.canMoveCategory(category.id, by: 1, among: store.shownCategories))
             }
             .overlay(alignment: .leading) {
@@ -428,7 +429,7 @@ struct CategoryTab: View {
             }
             .dropDestination(for: String.self) { ids, _ in
                 guard let raw = ids.first, raw.hasPrefix("category:"), let id = UUID(uuidString: String(raw.dropFirst(9))) else { return false }
-                withAnimation(.spring(duration: 0.25)) { store.moveCategory(id, onto: category.id) }
+                withAnimation(Motion.spatial.resolved(reduce: reduce)) { store.moveCategory(id, onto: category.id) }
                 return true
             } isTargeted: { target = $0 }
             .tip(category.title, "Drag to reorder · ⌃\(store.shownCategories.firstIndex { $0.id == category.id }.map { $0 + 1 } ?? 0)")

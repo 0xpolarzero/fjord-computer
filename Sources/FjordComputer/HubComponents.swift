@@ -101,7 +101,7 @@ struct CappedScroll<Content: View>: View {
                     .coordinateSpace(.named(CappedScrollSpace.name))
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
                         // The first measure lands as is (the hub's own spring reveals it); later ones glide.
-                        if height == 0 { height = h } else { withAnimation(Theme.Motion.fade.resolved(reduce: reduce)) { height = h } }
+                        if height == 0 { height = h } else { withAnimation(Motion.spatial.resolved(reduce: reduce)) { height = h } }
                         settle()
                     }
             }
@@ -135,7 +135,7 @@ struct CappedScroll<Content: View>: View {
                 }
             }
             .onChange(of: hub?.keyboardSelection) { _, request in
-                if let id = request?.id { withAnimation(Theme.Motion.hover.resolved(reduce: reduce)) { proxy.scrollTo(id) } }
+                if let id = request?.id { withAnimation(Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(id) } }
             }
         }
     }
@@ -241,7 +241,7 @@ struct EntryRow: View {
             hover = $0
             if $0 { hub.selection = "i:" + entry.id }
         }
-        .motion(Theme.Motion.hover, value: open)
+        .hoverMotion(open)
     }
 
     /// Jev's tags: his rating when it is high or urgent, and the label that stands out most among the facts' messages.
@@ -693,7 +693,7 @@ private struct InboxCellLabel: View {
             .padding(.horizontal, vertical ? 0 : 2)
             .contentShape(Rectangle())
             .onHover { hover = $0 }
-            .motion(Theme.Motion.hover, value: hover)
+            .hoverMotion(hover)
     }
 }
 
@@ -738,7 +738,7 @@ private struct CategoryCellLabel: View {
             .padding(.horizontal, vertical ? 0 : 2)
             .contentShape(Rectangle())
             .onHover { hover = $0 }
-            .motion(Theme.Motion.hover, value: hover)
+            .hoverMotion(hover)
             // No tooltip: hovering it peeks its list, which says more.
     }
 }
@@ -1062,7 +1062,7 @@ private struct RouterCellLabel: View {
             .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
             .contentShape(Rectangle())
             .onHover { hover = $0 }
-            .motion(Theme.Motion.hover, value: hover)
+            .hoverMotion(hover)
     }
 }
 

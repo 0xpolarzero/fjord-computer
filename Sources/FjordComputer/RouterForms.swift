@@ -500,7 +500,7 @@ private struct CDSButtonStyle: ButtonStyle {
                         .padding(solid ? 0.5 : 0)
                         .scaleEffect(pressed ? 0.975 : 1)
                         .motion(pressed ? .easeOut(duration: 0.06) : .spring(duration: 0.45, bounce: 0.35), value: pressed)
-                        .motion(.easeOut(duration: 0.06), value: hovered)
+                        .hoverMotion(hovered)
                 }
                 .contentShape(shape)
                 .opacity(enabled ? 1 : 0.4)

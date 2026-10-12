@@ -55,7 +55,7 @@ struct OnboardingView: View {
                 needs(tool).padding(.bottom, 4).transition(.opacity)
             }
         }
-        .animation(Theme.Motion.spring.resolved(reduce: reduce), value: on)
+        .animation(Motion.spatial.resolved(reduce: reduce), value: on)
     }
 
     @ViewBuilder private func needs(_ tool: Tool) -> some View {

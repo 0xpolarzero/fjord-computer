@@ -21,15 +21,12 @@ final class SidebarState {
         self.collapsed = collapsed ?? defaults?.bool(forKey: Self.key) ?? false
     }
 
-    /// One spring on the width (and on everything that follows it); under Reduce Motion a short fade, no travel.
-    static var animation: Animation {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .easeOut(duration: 0.12) : .spring(duration: 0.35, bounce: 0.15)
-    }
-
     func set(collapsed value: Bool) {
         guard value != collapsed else { return }
         let fold = LatencySignposts.signposter.beginInterval("Fold")
-        withAnimation(Self.animation, completionCriteria: .logicallyComplete) { collapsed = value } completion: {
+        // One spring on the width and on everything that follows it: the glass token, since the sidebar's glass and the
+        // page's inset move in lockstep with it (under Reduce Motion a short fade, no travel).
+        withAnimation(Motion.glass.resolved(reduce: Motion.systemReduce), completionCriteria: .logicallyComplete) { collapsed = value } completion: {
             LatencySignposts.signposter.endInterval("Fold", fold)
         }
         defaults?.set(value, forKey: Self.key)
@@ -79,6 +76,7 @@ struct AppSidebar: View {
     /// Asks the categories page to open a category's editor (the row's Edit…).
     let hub: HubState
     let collapsed: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduce
     typealias M = CDS.Sidebar
     /// The rail: the bar's 28pt tile centred in 52 (the expanded rows' icons sit at the same centre, so they never move).
     static let railWidth: CGFloat = 52
@@ -205,7 +203,7 @@ struct AppSidebar: View {
         let badge = section.isCollapsed ? store.sectionBadge(part) : nil
         return AppSidebarRow(title: section.title, on: false, badge: badge,
                              tip: badge.map { "\(section.title) · \($0.count) new" } ?? section.title,
-                             action: { withAnimation(SidebarState.animation) { store.toggleCollapsed(section.id) } }) { _ in
+                             action: { withAnimation(Motion.spatial.resolved(reduce: reduce)) { store.toggleCollapsed(section.id) } }) { _ in
             SectionGlyph(symbol: section.symbol, size: M.symbol, color: CDS.Text.secondary)
         } trailing: {
             HStack(spacing: 6) {

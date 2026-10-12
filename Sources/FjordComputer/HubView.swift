@@ -216,7 +216,7 @@ struct FjordHub: View {
                         y: CDS.PanelShadow.far.y)
                 .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
         }
-        .motion(Theme.Motion.fade, value: peeking != nil)
+        .motion(.fade, value: peeking != nil)
         .fixedSize()
         .contextMenu {
             Button("Open Fjord Computer") { openApp(firstDestination) }

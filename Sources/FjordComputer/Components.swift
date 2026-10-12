@@ -16,14 +16,13 @@ import SwiftUI
 //   Space     Theme.Space.xs 4 / sm 6 / md 8 / lg 12 / xl 16.
 //   Metrics   Theme.Metrics.line 30 (header / one-line row), row 36 (session row), bar 46 (bar depth), inset 6 (the
 //             one outer inset), field 32, chip 26.
-//   Motion    Theme.Motion.hover (easeOut .12), spring (.28, bounce .06), fade (easeOut .14).
-//             `.motion(_:value:)` replaces `.animation(_:value:)`: reads Reduce Motion LIVE from the environment and
-//             swaps springs for a short fade. In code with no view: `@Environment(\.accessibilityReduceMotion) var
-//             reduce`, then `withAnimation(Theme.Motion.spring.resolved(reduce: reduce))` or
-//             `.transition(.slide(from: .trailing, reduce: reduce))`.
+//   Motion    Motion.swift: the tokens instant / release / fade / spatial / glass, each with its Reduce Motion
+//             fallback. `.motion(.fade, value:)` replaces `.animation(_:value:)` (Reduce Motion read live from the
+//             environment); `.hoverMotion(hovering)` for hover fills (in instantly, out with `release`); elsewhere
+//             `withAnimation(Motion.spatial.resolved(reduce: reduce))` or `.transition(.slide(from: .trailing, reduce: reduce))`.
 //
 // COMPONENTS (this file)
-//   HoverFillButtonStyle   (respects isEnabled) `.buttonStyle(HoverFillButtonStyle(...))`: hover/active/pressed fill, hover animation. Use
+//   HoverFillButtonStyle   (respects isEnabled) `.buttonStyle(HoverFillButtonStyle(...))`: hover/active/pressed fill: in at once, out eased. Use
 //                          for every button that fills on hover (rows, icon buttons, chips). Any shape.
 //   .rowHighlight(on)      Claude's compact row: 8x5 padding, radius 6, white 7.5% while `on` (hovered or picked).
 //   Hairline(axis:inset:)  CDS divider: 0.5pt white 10%. Never `Rectangle().fill(Theme.stroke)`.
@@ -130,47 +129,11 @@ extension Theme {
         static let chip: CGFloat = 26
     }
 
-    enum Motion {
-        static let hover = Animation.easeOut(duration: 0.12)
-        static let spring = Animation.spring(duration: 0.28, bounce: 0.06)
-        static let fade = Animation.easeOut(duration: 0.14)
-    }
-
     /// Text and glyphs on a tinted (amber, green...) fill.
     static let onTint = Color.black.opacity(0.8)
 }
 
-extension Animation {
-    /// No animation at all when Reduce Motion is on (positions, scales and sizes jump); fades come from `.opacity`
-    /// transitions, which `AnyTransition.slide`/`scaleFade` fall back to. Pass to `withAnimation` / `.animation`.
-    func resolved(reduce: Bool) -> Animation? { reduce ? nil : self }
-}
-
-extension AnyTransition {
-    /// Slides in from an edge; a plain fade with Reduce Motion.
-    static func slide(from edge: Edge, reduce: Bool) -> AnyTransition { reduce ? .opacity : .move(edge: edge) }
-    /// Scales up from `scale` while fading; a plain fade with Reduce Motion.
-    static func scaleFade(_ scale: CGFloat = 0.96, reduce: Bool) -> AnyTransition {
-        reduce ? .opacity : .scale(scale: scale).combined(with: .opacity)
-    }
-}
-
-private struct MotionModifier<V: Equatable>: ViewModifier {
-    let animation: Animation
-    let value: V
-    @Environment(\.accessibilityReduceMotion) private var reduce
-
-    func body(content: Content) -> some View {
-        content.animation(animation.resolved(reduce: reduce), value: value)
-    }
-}
-
 extension View {
-    /// `.animation(_:value:)` that follows Reduce Motion live: animations are dropped.
-    func motion<V: Equatable>(_ animation: Animation = Theme.Motion.spring, value: V) -> some View {
-        modifier(MotionModifier(animation: animation, value: value))
-    }
-
     /// Claude's compact row (sidebar §2.7, two-line rows §5.1): 8 × 5 padding, radius 6, white 7.5% while `on` (hovered
     /// or picked: as in Claude's palette, hovering moves the pick, one fill for both).
     func rowHighlight(_ on: Bool) -> some View {
@@ -179,7 +142,7 @@ extension View {
             .padding(.vertical, 5)
             .background(Theme.Radius.shape(Theme.Radius.md).fill(on ? Theme.Fill.hover : Theme.Fill.rest))
             .contentShape(Theme.Radius.shape(Theme.Radius.md))
-            .motion(Theme.Motion.hover, value: on)
+            .hoverMotion(on)
     }
 
     /// A rounded square filled like a tile (see `Tile`).
@@ -188,7 +151,8 @@ extension View {
     }
 }
 
-/// Fills its shape on hover (and a stronger one while `active` or pressed), animated; for `.buttonStyle`.
+/// Fills its shape on hover (and a stronger one while `active` or pressed): at once, easing only as the pointer leaves;
+/// for `.buttonStyle`.
 /// The label keeps its own colours: labels that should change on hover read `@Environment(\.hoverFillHovering)`.
 struct HoverFillButtonStyle: ButtonStyle {
     var shape: AnyShape = AnyShape(Theme.Radius.shape(Theme.Radius.md))
@@ -227,8 +191,8 @@ struct HoverFillButtonStyle: ButtonStyle {
                 .opacity(enabled ? 1 : 0.4)
                 .contentShape(style.shape)
                 .onHover { hovering = $0 }
-                .motion(Theme.Motion.hover, value: hovering)
-                .motion(Theme.Motion.hover, value: configuration.isPressed)
+                // In at once, out with `release`; a press is instant both ways (nothing animates it).
+                .hoverMotion(hovering)
         }
     }
 }
