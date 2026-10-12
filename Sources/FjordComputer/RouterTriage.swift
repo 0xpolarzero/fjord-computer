@@ -124,7 +124,7 @@ struct RouterTriage: Codable, Hashable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         state = try? c.decodeIfPresent(State.self, forKey: .state)
-        questions = (try? c.decodeIfPresent([String].self, forKey: .questions)) ?? []
+        questions = Self.droppingLeadIns((try? c.decodeIfPresent([String].self, forKey: .questions)) ?? [])
         urgency = try? c.decodeIfPresent(Double.self, forKey: .urgency)
         unverified = (try? c.decodeIfPresent(Bool.self, forKey: .unverified)) ?? false
         work = (try? c.decodeIfPresent(Work.self, forKey: .work)) ?? .unknown
@@ -235,6 +235,14 @@ struct RouterTriage: Codable, Hashable {
         }
         if !current.trimmingCharacters(in: .whitespaces).isEmpty { parts.append(current) }
         return parts.map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// The questions without a lead-in to those after it ("Can you tell me:"): not a question of its own, no reply would
+    /// ever answer it, and its card would stay open on it.
+    static func droppingLeadIns(_ questions: [String]) -> [String] {
+        questions.indices.filter { i in
+            i == questions.count - 1 || !questions[i].trimmingCharacters(in: CharacterSet(charactersIn: " *_")).hasSuffix(":")
+        }.map { questions[$0] }
     }
 
     private static let askPatterns = [
@@ -354,7 +362,7 @@ struct RouterTriage: Codable, Hashable {
             return c.choice
         }
         t.state = sure("state", 0.5).flatMap(State.init)
-        t.questions = candidates.indices.filter { (answers["s\($0)"]?.yes ?? 0) >= 0.6 }.map { candidates[$0] }
+        t.questions = droppingLeadIns(candidates.indices.filter { (answers["s\($0)"]?.yes ?? 0) >= 0.6 }.map { candidates[$0] })
         // Unsure, the card ranks as its kind does.
         t.urgency = answers["urgency"]?.score(sure: sureUrgency)
         t.unverified = (answers["unverified"]?.yes ?? 0) >= 0.7

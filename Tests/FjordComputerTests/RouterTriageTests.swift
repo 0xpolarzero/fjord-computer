@@ -35,6 +35,14 @@ import Testing
         #expect(RouterTriage.candidates(["Nothing here.", "Still nothing."]).isEmpty)
     }
 
+    @Test func aLeadInToQuestionsIsNotOneOfThem() {
+        let asked = ["Can you tell me:", "Where did you expect to see it?", "What told you it was working?"]
+        #expect(RouterTriage.droppingLeadIns(asked) == Array(asked.dropFirst()))
+        #expect(RouterTriage.droppingLeadIns(["Should I push?", "**Can you confirm:**"]) == ["Should I push?", "**Can you confirm:**"])
+        let stored = try! JSONEncoder().encode(RouterTriage(state: .asks, questions: asked))
+        #expect(try! JSONDecoder().decode(RouterTriage.self, from: stored).questions == Array(asked.dropFirst()))
+    }
+
     @Test func theFinalMessageIsTheTextAfterTheLastStep() {
         func line(_ type: String, _ content: Any) -> String {
             String(decoding: try! JSONSerialization.data(withJSONObject: ["type": type, "message": ["content": content]]), as: UTF8.self)
