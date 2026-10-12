@@ -253,8 +253,8 @@ struct AppSidebar: View {
             .disabled(!store.canMoveCategory(category.id, by: 1, among: shown))
     }
 
-    /// The rows' gap, opened up between tiles on the rail so its icons and their corner counts have room; it eases with the fold.
-    private var rowGap: CGFloat { collapsed ? M.railGap : M.sessionGap }
+    /// The same gap between tiles as between rows, so an icon never moves up or down as the sidebar folds.
+    private var rowGap: CGFloat { M.sessionGap }
 
     /// The rule between groups: the rows' width, or the tile's in the rail.
     private var rule: some View {
