@@ -462,5 +462,35 @@ identity).
   motion; traffic lights stay at the system's position; the Router's Now status line joins its bar, `.hard` on the
   scroll view; the history's pin check subtracts the composer's inset; the nav capsule rides the fold's offset; radius
   republished on full screen; one vs two glass containers measured; `.concentric(minimum: .fixed(6))`; citations.
-- **Spike results**: _to be written here (S1–S6)._
-- **Baselines**: _to be written here._
+- **Spike results** (2026-10-12, MacBook built-in display at 120 Hz, light appearance; release builds; hitches from the
+  Hitches + os_signpost instruments, not the Animation Hitches template, which wrote some 58 GB of scratch in 15 minutes):
+  - **S3, the bar at rest: pass on CPU.** 5 interleaved runs each, 60 s windows: the harness at 0.000% median both ways;
+    WindowServer 49.34% opaque (48.84–50.40) against 49.57% glass (48.19–49.83), a delta of +0.23 points, within 0.3
+    and the opaque spread. GPU and WindowServer memory not measured (they need sudo).
+  - **S4, captures: pass → M1.** `cacheDisplay` and `CALayer.render(in:)`, on the theme frame and the hosting view,
+    all leave the glass out (its region is the page behind; the text stays, the secondary label drawn black, not
+    vibrant), so the flag is needed. The flag is processed in-turn: 20/20 captures (and 2541 in a dense run) show the
+    stand-in, the sequence 9–10 ms at 0.5 s spacing and 4.3 ms mean when dense. Never presented: with the flag on about
+    20% of the time (every 20 ms), 0 of 381 window screenshots show the magenta stand-in, where a leak would show in
+    some 76. (The gate's screen recording couldn't be made: this shell has no Screen Recording permission.)
+  - **S5, glass in the overlay: (b) passes.** Hitches during 20 moves: (a) layer 2 (8.3 ms), **(b) `animator()` 0**,
+    (c) SwiftUI 2 (one 16.7 ms). Size, position and corner radius follow the spring in slowed screenshots. Whether the
+    glass keeps sampling the desktop mid-move isn't visible in window screenshots: to see in the visual pass.
+  - **S6(8), the fold: two containers, and the fold needs §5.2 step 2.** 20 folds: one container 64 hitches (91 in
+    all), two containers 12 (14 in all), the longest 16.7 ms both ways. Two containers; and since neither reaches 0,
+    the page lays out once at its final inset and rides an offset (§5.2, 2).
+  - **Not settled here: S1, S2 and S6(1–7).** They are judgements of glass against the desktop (active or subdued in a
+    non-key panel, live backdrop, sidebar glass or plate, label vibrancy, edge effects, the Reduce Transparency
+    switch); screenshots taken from this shell show only the app's windows, without what is behind them. They need the
+    owner's eyes or a screenshot with Screen Recording permission. One seen in passing: a window that loses key draws
+    its glass flatter and lighter (the inactive look), as expected.
+- **Baselines** (2026-10-12, `docs/design/fjord/baselines/`):
+  - `motion.json`, `scripts/motion-trace.sh` on `--demo busy`, open/fold/fold/close/peek/drag × 5: 14 hitches during
+    the app's motions (Drag 4, Fold 4, Peek 3, Bar away 2, Open to first flush 2, Overlay going 1). p50 / p95: Peek 38.7
+    / 46.9 ms; Open to first flush 7.9 / 36.3; Bring in 7.7 / 47.8; Bar away 13.8 / 42.9; Bar capture 2.9; Capture
+    45.9; Handoff 17.7; Overlay going 103.6; Drag 255.5 / 258.9; Fold 366.6 / 379.0 (the spring's length to its
+    logical end). The instrument also reports the app late about 12 times a second at rest while it draws nothing (0
+    CPU, window closed): noise, left out.
+  - `idle-ab.json`, `AB=1 scripts/idle-cpu.sh` (FJORD_GLASS read by `Chrome`, read by no view yet, so both arms draw
+    the same): the app 0.000% median at rest and kept open; WindowServer about 49% of a core for all clients with a
+    3-point spread between runs, so the 0.3-point budget only means something against the opaque spread on this Mac.
