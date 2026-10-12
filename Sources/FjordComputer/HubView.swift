@@ -70,22 +70,29 @@ final class HubState {
     /// The bar is being carried to another edge: no panels meanwhile.
     @ObservationIgnored var dragging = false
     @ObservationIgnored private var dwell: Task<Void, Never>?
+    /// The section a dwell is waiting on, only while it waits: on glass its panel is measured meanwhile, out of sight, so it
+    /// opens already placed and its glass grows out of the bar's.
+    private(set) var arriving: HubSection?
 
     /// The pointer entered a section. The first panel waits for the pointer to settle (so sweeping along the edge
     /// opens nothing); once one is open, moving to another section switches at once, with no transition.
     func enter(_ next: HubSection) {
         dwell?.cancel()
-        guard !barHidden, !quiet, !dragging else { return }
+        guard !barHidden, !quiet, !dragging else { arrive(nil); return }
         if section != nil {
+            arrive(nil)
             guard section != next else { return }
             var instant = Transaction(animation: nil)
             instant.disablesAnimations = true
             withTransaction(instant) { section = next }
             return
         }
+        arrive(next)
         dwell = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
-            guard let self, !Task.isCancelled, !barHidden, !quiet, !dragging else { return }
+            guard let self, !Task.isCancelled else { return }
+            arrive(nil)
+            guard !barHidden, !quiet, !dragging else { return }
             // "Peek": until the commit that carries the panel to the render server, its first frame.
             let peek = LatencySignposts.signposter.beginInterval("Peek")
             section = next
@@ -94,7 +101,15 @@ final class HubState {
     }
 
     /// The pointer left a section before it settled: nothing opens.
-    func cancelDwell() { dwell?.cancel() }
+    func cancelDwell() {
+        dwell?.cancel()
+        arrive(nil)
+    }
+
+    /// Only a change is written, so a bar at rest (or a pointer moving over one section) invalidates nothing.
+    private func arrive(_ next: HubSection?) {
+        if arriving != next { arriving = next }
+    }
 
     /// The bar's and the panels' views (`HubPiece`): where each is drawn, read when the pointer moves.
     @ObservationIgnored let pieces = NSHashTable<HubPieceView>.weakObjects()
@@ -203,7 +218,8 @@ struct FjordHub: View {
         .coordinateSpace(.named(Self.barSpace))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in if barSize != size { barSize = size } }
         surface(bar, barOutline)
-        // On glass the panel's glass grows out of the bar's on the `glass` spring, its corners with it; opaque, it fades.
+        // On glass the panel's glass grows out of the bar's on the `glass` spring, its corners with it (its content fades on
+        // `fade`, `PeekReveal`); opaque, it fades.
         .motion(glass ? Motion.glass : Motion.fade, value: peeking != nil)
         .fixedSize()
         .contextMenu {
@@ -255,8 +271,11 @@ struct FjordHub: View {
                 .background(HubPiece(hub: hub, section: nil))
                 .onHover { overBar = $0; hubPointer(overBar || overPanel) }
                 .overlay(alignment: peekAlignment) { peekPanel }
+                .overlay(alignment: peekAlignment) { peekMeasurer }
         }
         .environment(\.onBarGlass, true)
+        // A panel's size on one edge is not its size on another: measured again on the next dwell.
+        .onChange(of: edge) { peekSizes = [:] }
     }
 
     /// Today's bar: filled black, ringed, with shadows from shapes.

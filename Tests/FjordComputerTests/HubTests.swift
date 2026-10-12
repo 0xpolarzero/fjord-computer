@@ -45,6 +45,45 @@ import Testing
         hub.cancelDwell()
     }
 
+    @Test func aDwellSaysWhichSectionItWaitsOnOnlyWhileItWaits() async {
+        let hub = HubState()
+        hub.enter(.inbox)
+        #expect(hub.arriving == .inbox && hub.section == nil)
+        // The dwell's 100 ms, however long a loaded machine takes to run it.
+        await waitUntil(within: 10) { hub.section != nil }
+        #expect(hub.arriving == nil && hub.section == .inbox)
+        // Switching while open is at once: no dwell to wait on.
+        hub.enter(.router)
+        #expect(hub.arriving == nil && hub.section == .router)
+    }
+
+    @Test func aCancelledDwellWaitsOnNothing() {
+        let hub = HubState()
+        hub.enter(.inbox)
+        hub.enter(.router)
+        #expect(hub.arriving == .router)
+        hub.cancelDwell()
+        #expect(hub.arriving == nil && hub.section == nil)
+    }
+
+    @Test(arguments: Block.allCases) func aBlockedBarWaitsOnNothing(_ block: Block) {
+        let hub = HubState()
+        hub.enter(.inbox)
+        block.set(true, on: hub)
+        hub.enter(.router)
+        #expect(hub.arriving == nil)
+        hub.cancelDwell()
+    }
+
+    @Test(arguments: Block.allCases) func aDwellEndingOnABlockedBarWaitsOnNothing(_ block: Block) async {
+        let hub = HubState()
+        hub.enter(.inbox)
+        block.set(true, on: hub)
+        // The dwell wakes after 100 ms (later on a loaded machine) and finds the bar blocked.
+        await waitUntil(within: 10) { hub.arriving == nil }
+        #expect(hub.arriving == nil && hub.section == nil)
+    }
+
     @Test func hoveringTheCurrentTabKeepsItsPickedRowAndScrollRequest() {
         let store = InboxFixture.store([])
         let hub = HubState()

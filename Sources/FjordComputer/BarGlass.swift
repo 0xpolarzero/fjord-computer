@@ -91,19 +91,62 @@ private struct BarRowHighlight: ViewModifier {
     }
 }
 
-/// A panel's content on glass comes in `BarGlass.contentDelay` behind the glass growing out of the bar. With Reduce Motion
-/// the panel fades as a whole (its transition), so its content is there from the start.
+extension EnvironmentValues {
+    /// The panel on glass is going (`PeekLeave`): its content fades out while its glass goes back into the bar.
+    @Entry var peekLeaving = false
+}
+
+/// The glass panel's going: nothing of its own but telling its content (`PeekReveal`) to fade, so the glass goes back into
+/// the bar on the removal's `glass` spring while the content fades on `fade`.
+struct PeekLeave: Transition {
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content.environment(\.peekLeaving, phase == .didDisappear)
+    }
+}
+
+/// A panel's content on glass comes in `BarGlass.contentDelay` behind the glass growing out of the bar, and goes on `fade`
+/// as the glass goes back into it. With Reduce Motion the panel fades as a whole (its transition), so its content is there
+/// from the start.
 struct PeekReveal: ViewModifier {
     let reduce: Bool
     @State private var shown = false
+    @Environment(\.peekLeaving) private var leaving
 
     func body(content: Content) -> some View {
         content
-            .opacity(reduce || shown ? 1 : 0)
+            .opacity((reduce || shown) && !leaving ? 1 : 0)
+            // Its own curve for going: the removal runs on the glass's spring.
+            .animation(Motion.fade.resolved(reduce: reduce), value: leaving)
             .onAppear {
                 guard !reduce, !shown else { return }
                 withAnimation(Motion.fade.resolved(reduce: reduce).map { $0.delay(BarGlass.contentDelay) }) { shown = true }
             }
+    }
+}
+
+/// On glass, the panels measured out of sight (`FjordHub.toMeasure`): laid out as the open panel lays out its content, never
+/// drawn, never under the pointer, not in the accessibility tree. Its own view, so a dwell starting or ending (`arriving`)
+/// invalidates only this; with nothing to measure (at rest) it is empty.
+struct PeekMeasurer: View {
+    let hub: HubState
+    let peeking: HubSection?
+    let inBar: Set<HubSection>
+    let measured: Set<HubSection>
+    let content: (HubSection) -> AnyView
+    let report: (PeekMeasure) -> Void
+
+    var body: some View {
+        let sections = FjordHub.toMeasure(arriving: hub.arriving, peeking: peeking, inBar: inBar, measured: measured)
+        ForEach(sections, id: \.self) { section in
+            content(section)
+                .onGeometryChange(for: PeekMeasure.self) { PeekMeasure(section: section, size: $0.size) } action: { report($0) }
+                .fixedSize()
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                // Gone at once, not kept through the panel's opening.
+                .transition(.identity)
+        }
     }
 }
 

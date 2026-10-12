@@ -3,7 +3,7 @@ import SwiftUI
 // Hovering a section of the bar opens just that section beside it, in a panel lined up with its cells. The bar
 // itself never moves, so what you're pointing at stays under the pointer. A click goes to the app window.
 
-enum HubSection: Hashable { case inbox, router, controls }
+enum HubSection: Hashable, CaseIterable { case inbox, router, controls }
 
 struct PeekMeasure: Equatable {
     let section: HubSection
@@ -82,7 +82,9 @@ extension FjordHub {
 
     /// The panel for the hovered section, placed beside (or under) its cells in the bar.
     @ViewBuilder var peekPanel: some View {
-        if let section = peeking, let frame = sectionFrames[section] {
+        // On glass it comes in only once placed (measured ahead, `peekMeasurer`), so its glass grows out of the bar's from
+        // the start rather than showing up in place a layout later.
+        if let section = peeking, let frame = sectionFrames[section], !glass || placement(section, frame) != nil {
             let place = placement(section, frame)
             let shape = panelShape(place)
             let content = peekContent(section)
@@ -121,8 +123,7 @@ extension FjordHub {
             .modifier(PeekReveal(reduce: reduce))
             .clipShape(shape)
             .contentShape(shape)
-            // No glass either until it's placed.
-            .glassEffect(place == nil ? .identity : .regular, in: shape)
+            .glassEffect(.regular, in: shape)
             .glassEffectID(BarGlass.ID.panel, in: glassSpace)
             .glassEffectTransition(reduce ? .identity : .matchedGeometry)
     }
@@ -145,10 +146,39 @@ extension FjordHub {
                                                y: edge == .top ? -d : edge == .bottom ? d : 0))
     }
 
-    /// On glass the glass itself does the coming (`glassEffectTransition`): the panel is there at once and its content fades
-    /// in behind (`PeekReveal`); going, it fades as its glass goes back into the bar. Reduce Motion: a plain fade both ways.
+    /// On glass the glass itself does the coming and going (`glassEffectTransition`, on the `glass` spring): the panel is there
+    /// at once and its content fades in behind, and going, its content fades on `fade` as its glass goes back into the bar
+    /// (`PeekReveal`). Reduce Motion: a plain fade both ways.
     var glassPeekTransition: AnyTransition {
-        reduce ? .opacity : .asymmetric(insertion: .identity, removal: .opacity)
+        reduce ? .opacity : AnyTransition(PeekLeave())
+    }
+
+    /// On glass, the panels measured out of sight (`toMeasure`).
+    var peekMeasurer: some View {
+        PeekMeasurer(hub: hub, peeking: peeking, inBar: Set(sectionFrames.keys), measured: Set(peekSizes.keys),
+                     content: { AnyView(peekContent($0)) }, report: takeMeasure)
+    }
+
+    /// The sections whose panels are measured out of sight on glass, so each opens already placed: the one a dwell is
+    /// waiting on, afresh (its content may have changed size since it was last open), and while a dwell waits or a panel is
+    /// open, each section of the bar not measured yet (so switching to one finds it placed). None at rest.
+    static func toMeasure(arriving: HubSection?, peeking: HubSection?, inBar: Set<HubSection>,
+                          measured: Set<HubSection>) -> [HubSection] {
+        // While no panel is open only the one on its way is measured (a sweep along the bar measures one at a time); once
+        // one is open, the others not measured yet too, so switching to them finds their place.
+        guard peeking != nil else { return arriving.map { [$0] } ?? [] }
+        return HubSection.allCases.filter { $0 == arriving || (inBar.contains($0) && !measured.contains($0)) }
+    }
+
+    /// A size measured out of sight. The open section's first one places its panel: on the `glass` spring, so its glass
+    /// grows out of the bar's even then.
+    func takeMeasure(_ m: PeekMeasure) {
+        guard peekSizes[m.section] != m.size else { return }
+        if m.section == peeking, peekSizes[m.section] == nil {
+            withAnimation(Motion.glass.resolved(reduce: reduce)) { peekSizes[m.section] = m.size }
+        } else {
+            peekSizes[m.section] = m.size
+        }
     }
 
     /// Laid over the bar from its top-left (bottom-left on the bottom edge), then moved out beside it.

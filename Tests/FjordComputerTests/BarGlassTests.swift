@@ -49,4 +49,29 @@ import Testing
             #expect(BarStretch.scale(motion, reduce: true) == BarStretch.rest)
         }
     }
+
+    @Test func nothingIsMeasuredAtRest() {
+        #expect(FjordHub.toMeasure(arriving: nil, peeking: nil, inBar: [.inbox, .router, .controls], measured: []).isEmpty)
+        #expect(FjordHub.toMeasure(arriving: nil, peeking: nil, inBar: [.inbox], measured: [.inbox]).isEmpty)
+    }
+
+    @Test func aDwellMeasuresOnlyItsOwnSectionAfresh() {
+        let all: Set<HubSection> = [.inbox, .router, .controls]
+        // Its own section even when measured before (its content may have changed size), and nothing else: a sweep along
+        // the bar measures one section at a time.
+        #expect(FjordHub.toMeasure(arriving: .inbox, peeking: nil, inBar: all, measured: all) == [.inbox])
+        #expect(FjordHub.toMeasure(arriving: .router, peeking: nil, inBar: all, measured: []) == [.router])
+    }
+
+    @Test func anOpenPanelMeasuresOnlyWhatIsNotMeasuredYet() {
+        let all: Set<HubSection> = [.inbox, .router, .controls]
+        // The open panel measures itself once shown; until then it is measured here too.
+        #expect(FjordHub.toMeasure(arriving: nil, peeking: .inbox, inBar: all, measured: [.inbox]) == [.router, .controls])
+        #expect(FjordHub.toMeasure(arriving: nil, peeking: .inbox, inBar: all, measured: []) == [.inbox, .router, .controls])
+        #expect(FjordHub.toMeasure(arriving: nil, peeking: .inbox, inBar: all, measured: all).isEmpty)
+    }
+
+    @Test func sectionsNotInTheBarAreNotMeasured() {
+        #expect(FjordHub.toMeasure(arriving: nil, peeking: .inbox, inBar: [.inbox, .controls], measured: [.inbox]) == [.controls])
+    }
 }
