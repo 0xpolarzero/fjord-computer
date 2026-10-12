@@ -42,13 +42,22 @@ struct RouterMain: View {
             // The page runs under its top bar (glass-plan §5.3): in a wide window the history, Now's
             // column with a hard edge under its own bar (see `NowColumn`). The composer floats over the page's bottom
             // (§5.4): its height is the page's bottom inset, so the last line still lands above it and earlier ones scroll
-            // under it.
+            // under it, fading out under a soft edge down to the window's bottom, as under Claude's composer.
             VStack(spacing: 0) {
                 RouterSetupNotice(store: store, model: model)
                 RouterPageView(store: store, model: model)
                     .frame(maxHeight: .infinity)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                composer
+                    .frame(maxWidth: .infinity)
+                    // The page's ground from the composer's middle down, so no line shows below it or through its glass.
+                    .background {
+                        LinearGradient(colors: [CDS.Surface.s1.opacity(0), CDS.Surface.s1], startPoint: .top, endPoint: .center)
+                            .allowsHitTesting(false)
+                    }
+            }
+            .scrollEdgeEffectStyle(.soft, for: .bottom)
             .safeAreaBar(edge: .top, spacing: 0) { topBar }
             .scrollEdgeEffectHidden(true, for: .top)
         } else {
