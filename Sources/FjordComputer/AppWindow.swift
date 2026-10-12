@@ -862,8 +862,9 @@ struct AppIconButton: View {
     let enabled: Bool
     let action: () -> Void
     @State private var hovered = false
-    /// In the glass capsule: label styles rather than Claude's fixed inks.
+    /// In the glass capsule: label styles and `ChromeFill`'s ink steps rather than Claude's fixed inks and fills.
     @Environment(\.onGlass) private var onGlass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button(action: action) {
@@ -872,7 +873,9 @@ struct AppIconButton: View {
                 .foregroundStyle(ink)
                 .frame(width: CDS.TitleBar.button, height: CDS.TitleBar.button)
                 .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(hovered && enabled ? CDS.Fill.ghostHover : .clear))
+                    .fill(ChromeFill.color(selected: false, hovered: hovered && enabled, glass: onGlass, scheme: scheme))
+                    // On glass hover comes on at once and eases off; elsewhere it stays instant both ways.
+                    .hoverMotion(hovered && enabled))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

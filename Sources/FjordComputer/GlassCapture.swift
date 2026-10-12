@@ -90,11 +90,12 @@ struct GlassLook: Equatable {
 /// G2 stands for the inset sidebar's glass under the window's picture.
 @MainActor
 enum GlassMorph {
-    /// The inset sidebar's frame in a window of `size` (AppKit coordinates, origin at the window's bottom left).
+    /// The inset sidebar's frame in a window of `size` (AppKit coordinates, origin at the window's bottom left): the rail's
+    /// starts under the header's line.
     static func sidebarFrame(windowSize size: NSSize, collapsed: Bool) -> NSRect {
         let inset = WindowChrome.inset
         return NSRect(x: inset, y: inset, width: WindowChrome.panelWidth(collapsed: collapsed),
-                      height: max(0, size.height - 2 * inset))
+                      height: max(0, size.height - WindowChrome.panelTop(collapsed: collapsed) - inset))
     }
 
     /// The sidebar's corner radius: concentric with the window's (its radius less the inset), never under the minimum.

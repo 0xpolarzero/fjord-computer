@@ -17,12 +17,23 @@ enum WindowChrome {
     /// The sidebar panel's width: the rail's, or the sidebar's.
     static func panelWidth(collapsed: Bool) -> CGFloat { collapsed ? AppSidebar.railWidth : AppRootView.sidebarWidth }
 
+    /// The sidebar panel's top, from the window's: the inset when it is out, the window's three buttons on its glass; under
+    /// the header's line as a rail, which leaves that line to the three buttons and the nav capsule after them.
+    static func panelTop(collapsed: Bool) -> CGFloat { collapsed ? CDS.TitleBar.header : inset }
+
+    /// Room over the sidebar's rows inside the panel: down to the header's line when it is out; the inset on the rail.
+    static func rowsTop(collapsed: Bool) -> CGFloat { collapsed ? inset : CDS.TitleBar.header - inset }
+
     /// Where the page starts, from the window's leading edge: the panel and its inset.
     static func pageLeading(collapsed: Bool) -> CGFloat { inset + panelWidth(collapsed: collapsed) }
 
-    /// From the page's start to the nav capsule's: as far as keeps it clear of the window's three buttons when the sidebar
-    /// is a rail, the same when it is out, so the capsule and the title after it never move inside the page.
+    /// From the page's start to the nav capsule's: as far as keeps it clear of the window's three buttons on the header's
+    /// line when the sidebar is a rail, the same when it is out, so the capsule and the title after it never move inside
+    /// the page.
     static var navGap: CGFloat { max(inset, AppNavButtons.leading - pageLeading(collapsed: true)) }
+
+    /// The sidebar's wordmark's start, from the window's edge: a gap after the window's three buttons.
+    static var wordmarkLeading: CGFloat { TrafficLights.end + 12 }
 
     /// Room the nav capsule takes at the page header's start: the page's title goes after it.
     static var headerInset: CGFloat { navGap + AppNavButtons.capsuleWidth }
@@ -55,6 +66,17 @@ enum ChromeInk {
         case .tertiary: return AnyShapeStyle(CDS.Text.muted)
         case .disabled: return AnyShapeStyle(CDS.Text.disabled)
         }
+    }
+}
+
+/// Fills for hover and selection on the window's chrome (sidebar rows, the nav capsule's buttons): over glass the alpha
+/// steps of `Brand.ink` (`BarGlass.alpha`, §5.8), on the opaque fills Claude's ghost tokens, where a selected row hovered
+/// stays selected.
+enum ChromeFill {
+    static func color(selected: Bool, hovered: Bool, glass: Bool, scheme: ColorScheme) -> Color {
+        guard glass else { return selected ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear }
+        let step: BarGlass.Step? = selected ? (hovered ? .selectedHover : .selected) : hovered ? .hover : nil
+        return step.map { Brand.ink.opacity(BarGlass.alpha($0, dark: scheme == .dark)) } ?? .clear
     }
 }
 
@@ -108,14 +130,22 @@ struct InsetWindowLayout: View {
         .padding(.leading, start)
     }
 
-    /// The sidebar: an inset panel of glass (or the sidebar's fill) whose width follows the fold's spring; the sidebar in it
-    /// is laid out at its full width always and clipped, so nothing inside it reflows.
+    /// The sidebar: an inset panel of glass (or the sidebar's fill) whose width and top follow the fold's spring; the
+    /// sidebar in it is laid out at its full width always and clipped, so nothing inside it reflows.
     private func panel(collapsed: Bool, glass: Bool) -> some View {
         let shape = WindowChrome.panelShape
         return GlassEffectContainer {
             AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
-                // Its rows start under the header's line, where the window's three buttons sit.
-                .padding(.top, CDS.TitleBar.header - WindowChrome.inset)
+                // Out, its rows start under the header's line, where the window's three buttons sit on its glass; as a rail
+                // the panel itself starts under that line.
+                .padding(.top, WindowChrome.rowsTop(collapsed: collapsed))
+                // The wordmark on the header's line, after the window's three buttons, centred on them.
+                .overlay(alignment: .topLeading) {
+                    SidebarWordmark(collapsed: collapsed)
+                        .frame(height: CDS.TitleBar.header - 2 * WindowChrome.inset)
+                        .padding(.leading, WindowChrome.wordmarkLeading - WindowChrome.inset)
+                        .allowsHitTesting(false)
+                }
                 .frame(width: WindowChrome.panelWidth(collapsed: collapsed), alignment: .leading)
                 .frame(maxHeight: .infinity)
                 .clipShape(shape)
@@ -126,7 +156,9 @@ struct InsetWindowLayout: View {
                 // morph's G2).
                 .modifier(PanelMaterial(shape: shape, glass: glass, fill: CDS.Surface.sidebar, standsIn: false))
         }
-        .padding([.top, .leading, .bottom], WindowChrome.inset)
+        // Its top moves with its width, on the fold's spring.
+        .padding(.top, WindowChrome.panelTop(collapsed: collapsed))
+        .padding([.leading, .bottom], WindowChrome.inset)
     }
 }
 

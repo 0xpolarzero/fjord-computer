@@ -233,6 +233,14 @@ struct RouterPageView: View {
     }
 
     static func gutter(_ width: CGFloat) -> CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
+
+    /// Room over the history's first line. Before macOS 26 the top fade's height, so the first line starts clear of the
+    /// strip; on 26 the history already starts under its bars (the top fade is gone, the scroll edge effect softens what
+    /// runs under them), so a short gap.
+    static var historyTop: CGFloat {
+        if #available(macOS 26, *) { return 12 }
+        return CDS.Transcript.fade
+    }
 }
 
 /// The history's side: in a narrow window the switch over it. On macOS 26 the switch is the column's bar and the history
@@ -588,7 +596,7 @@ private struct RouterHistory: View {
                     .frame(maxWidth: CDS.Transcript.measure, alignment: .leading)
                     .padding(.horizontal, gutter)
                     .frame(maxWidth: .infinity)
-                    .padding(.top, CDS.Transcript.fade)
+                    .padding(.top, RouterPageView.historyTop)
                 }
                 .cdsTopFade()
                 .modifier(HistoryAnchoring(pinned: $pinned, laidOut: laidOut, ready: { if pending != nil { released = true } }) {

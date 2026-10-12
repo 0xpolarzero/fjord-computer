@@ -305,7 +305,7 @@ private struct CountText: View {
 }
 
 /// A 26pt row (radius 6, a 24pt leading slot shifted 4, a 4 gap, 13pt text; white 7.5% on hover, 15% and primary text when
-/// picked) with something at its end.
+/// picked; on glass `ChromeFill`'s ink steps) with something at its end.
 struct AppSidebarRow<Leading: View, Trailing: View>: View {
     let title: String
     let on: Bool
@@ -319,6 +319,7 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
     @State private var hovered = false
     @Environment(\.sidebarCollapsed) private var collapsed
     @Environment(\.onGlass) private var onGlass
+    @Environment(\.colorScheme) private var scheme
     typealias M = CDS.Sidebar
 
     init(title: String, on: Bool, badge: RailBadge? = nil, indent: CGFloat = 0, tip: String? = nil, action: @escaping () -> Void,
@@ -360,10 +361,12 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
             // The full row, or the bar's tile in the rail: one shape whose width follows the sidebar's.
             .background(alignment: .leading) {
                 RoundedRectangle(cornerRadius: M.radius, style: .continuous)
-                    .fill(on ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear)
+                    .fill(ChromeFill.color(selected: on, hovered: hovered, glass: onGlass, scheme: scheme))
                     .frame(width: collapsed ? AppSidebar.tile : AppRootView.sidebarWidth - 16,
                            height: collapsed ? AppSidebar.tile : M.rowHeight)
                     .padding(.leading, collapsed ? 4 : 0)
+                    // On glass hover comes on at once and eases off; the opaque sidebar's stays instant both ways.
+                    .hoverMotion(hovered)
             }
             .contentShape(Rectangle())
             .overlay(alignment: .leading) {
@@ -407,6 +410,49 @@ private extension View {
     func sidebarText(_ collapsed: Bool) -> some View { modifier(SidebarTextModifier(collapsed: collapsed)) }
 }
 
+/// The wordmark at the top of the expanded sidebar on macOS 26 (glass-plan §9 Phase 5): "fjord" in Geist Medium, as the
+/// brief's wordmark, the j's dot a disc in fonte (as the onboarding's mark, the only other fonte). The disc sits as the
+/// mark's drawing places it
+/// (docs/design/fjord/mark.html): 0.6 into the dotless j's advance, 0.75 of the size over the baseline, a radius of 0.075 of
+/// it. It goes and comes with the labels, so the rail never shows it.
+struct SidebarWordmark: View {
+    let collapsed: Bool
+    @Environment(\.onGlass) private var onGlass
+    static let size: CGFloat = 16
+    /// With U+0237, the dotless j: the disc is its dot.
+    static let text = "f\u{0237}ord"
+    /// The mark's drawing's letter spacing.
+    static let tracking: CGFloat = -0.012 * size
+    static let discRadius: CGFloat = 0.075 * size
+    /// The disc's centre over the baseline.
+    static let discHeight: CGFloat = 0.75 * size
+    /// The disc's centre from the text's start: past the f and 0.6 into the j, both with their tracking.
+    static let discX: CGFloat = {
+        let font = CDS.nsSans(size, .medium)
+        func advance(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width + tracking }
+        return advance("f") + 0.6 * advance("\u{0237}")
+    }()
+
+    var body: some View {
+        Text(Self.text)
+            .font(CDS.sans(Self.size, .medium))
+            .tracking(Self.tracking)
+            .chromeInk(.primary, glass: onGlass)
+            .lineLimit(1)
+            .fixedSize()
+            .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
+                Circle()
+                    .fill(FjordLogo.fonte)
+                    .frame(width: 2 * Self.discRadius, height: 2 * Self.discRadius)
+                    .alignmentGuide(.leading) { $0[HorizontalAlignment.center] - Self.discX }
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Self.discHeight }
+            }
+            .sidebarText(collapsed)
+            // A logo, not navigation: the window's title already names the app.
+            .accessibilityHidden(true)
+    }
+}
+
 /// The sidebar's Inbox label (§2.6, 12/16 muted, its text inset 10), with an edit button at its right on hover that opens the
 /// categories page (shown while that page is open).
 private struct InboxHeading: View {
@@ -447,6 +493,7 @@ private struct EditButton: View {
     let action: () -> Void
     @State private var hovered = false
     @Environment(\.onGlass) private var onGlass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button(action: action) {
@@ -455,7 +502,8 @@ private struct EditButton: View {
                 .chromeInk(on || hovered ? .secondary : .tertiary, glass: onGlass)
                 .frame(width: 18, height: 18)
                 .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(on ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))
+                    .fill(ChromeFill.color(selected: on, hovered: hovered, glass: onGlass, scheme: scheme))
+                    .hoverMotion(hovered))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -126,3 +126,16 @@ import Testing
         }
     }
 }
+
+/// The history's room over its first line: the top fade's height before macOS 26, a short gap under the bars on 26.
+@MainActor
+@Suite struct RouterHistoryTopTests {
+    @Test func theHistoryStartsCloseUnderItsBarsOnGlass() {
+        if #available(macOS 26, *) {
+            #expect(RouterPageView.historyTop < CDS.Transcript.fade)
+            #expect(RouterPageView.historyTop > 0)
+        } else {
+            #expect(RouterPageView.historyTop == CDS.Transcript.fade)
+        }
+    }
+}

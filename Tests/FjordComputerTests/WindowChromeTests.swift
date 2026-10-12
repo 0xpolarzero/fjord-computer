@@ -12,12 +12,51 @@ import Testing
         #expect(WindowChrome.pageLeading(collapsed: true) == WindowChrome.inset + AppSidebar.railWidth)
     }
 
+    /// Out, the panel runs from the inset with the window's three buttons on it; as a rail it starts under the header's
+    /// line, which holds the three buttons and the nav capsule after them, clear of each other. The rows sit at the header's
+    /// line when it is out and an inset into the rail.
+    @Test func theRailStartsUnderTheHeadersLine() {
+        #expect(WindowChrome.panelTop(collapsed: false) == WindowChrome.inset)
+        #expect(WindowChrome.panelTop(collapsed: true) == CDS.TitleBar.header)
+        #expect(WindowChrome.panelTop(collapsed: false) + WindowChrome.rowsTop(collapsed: false) == CDS.TitleBar.header)
+        #expect(WindowChrome.rowsTop(collapsed: true) == WindowChrome.inset)
+        #expect(WindowChrome.panelWidth(collapsed: true) == AppSidebar.railWidth)
+        // The capsule on the rail's header line: after the three buttons, from the page's start.
+        #expect(WindowChrome.pageLeading(collapsed: true) + WindowChrome.navGap >= TrafficLights.end + 10)
+        // Centred on the line, it ends above the rail's top.
+        #expect((CDS.TitleBar.header + CDS.TitleBar.button + 2 * AppNavButtons.capsulePad) / 2 <= WindowChrome.panelTop(collapsed: true))
+    }
+
     /// The capsule sits at the same place in the page either way: clear of the window's three buttons over a rail, beside
     /// the sidebar (never on it) when it is out.
     @Test func theNavCapsuleClearsTheWindowsButtonsAndTheSidebar() {
         #expect(WindowChrome.pageLeading(collapsed: true) + WindowChrome.navGap >= AppNavButtons.leading)
         #expect(WindowChrome.navGap >= WindowChrome.inset)
         #expect(WindowChrome.headerInset > WindowChrome.navGap)
+    }
+
+    /// Opaque, the sidebar's ghost tokens as before; on glass ink steps of their own, nothing at rest either way.
+    @Test func chromeFillsAreInkStepsOnGlassAndTheGhostTokensOpaque() {
+        for scheme in [ColorScheme.dark, .light] {
+            #expect(ChromeFill.color(selected: false, hovered: false, glass: false, scheme: scheme) == .clear)
+            #expect(ChromeFill.color(selected: false, hovered: true, glass: false, scheme: scheme) == CDS.Fill.ghostHover)
+            #expect(ChromeFill.color(selected: true, hovered: false, glass: false, scheme: scheme) == CDS.Fill.ghostSelected)
+            #expect(ChromeFill.color(selected: true, hovered: true, glass: false, scheme: scheme) == CDS.Fill.ghostSelected)
+            #expect(ChromeFill.color(selected: false, hovered: false, glass: true, scheme: scheme) == .clear)
+            #expect(ChromeFill.color(selected: false, hovered: true, glass: true, scheme: scheme) != CDS.Fill.ghostHover)
+            #expect(ChromeFill.color(selected: true, hovered: false, glass: true, scheme: scheme) != CDS.Fill.ghostSelected)
+        }
+    }
+
+    /// The wordmark starts after the window's three buttons and fits the expanded sidebar; its disc sits over the j.
+    @Test func theWordmarkFitsTheSidebarsTitleLine() {
+        // As shipped: in Geist (the app loads it at launch).
+        Brand.loadFonts()
+        let width = (SidebarWordmark.text as NSString).size(withAttributes: [.font: CDS.nsSans(SidebarWordmark.size, .medium)]).width
+        #expect(WindowChrome.wordmarkLeading > TrafficLights.end)
+        #expect(WindowChrome.wordmarkLeading + width <= WindowChrome.inset + AppRootView.sidebarWidth - WindowChrome.inset)
+        #expect(SidebarWordmark.discX > 0 && SidebarWordmark.discX < width / 3)
+        #expect(SidebarWordmark.discHeight + SidebarWordmark.discRadius < CDS.TitleBar.header - 2 * WindowChrome.inset)
     }
 
     @Test func aShapeInsetInTheWindowKeepsTheFloorInFullScreen() {
