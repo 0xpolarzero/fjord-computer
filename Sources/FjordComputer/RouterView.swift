@@ -296,8 +296,9 @@ final class RouterModel {
     /// what you write next goes to the Router.
     var messageRequest: ScrollRequest?
     func show(message: UUID) {
-        // A search could hide the message: it ends.
+        // A search or the Unread filter could hide the message: they end.
         if searching { endSearch() }
+        unreadOnly = false
         selection = nil
         replyTo = nil
         show(.history)
@@ -336,6 +337,14 @@ final class RouterModel {
     var pane: RouterPane = .now
     /// Shows a side of the page, written only when it changes: the page's frame redraws on it.
     func show(_ side: RouterPane) { if pane != side { pane = side } }
+    /// The history shows only its unread lines (the Unread toggle over it). A line read while it does stays until the filter
+    /// goes off, so reading one doesn't pull it from under you.
+    var unreadOnly = false {
+        didSet { if unreadOnly != oldValue { unreadKept = [] } }
+    }
+    /// The lines the filter has shown unread since it went on, kept once read; added to as the history is filtered, so not
+    /// drawn from.
+    @ObservationIgnored var unreadKept: Set<String> = []
 
     /// The sections of Now folded, as you last left them (kept across launches with the window's other preferences, not in
     /// the Router's state: a fold redraws only the page).
@@ -514,6 +523,8 @@ final class RouterModel {
         if searching, let card = store.router.cards.first(where: { $0.id == id }), !matchesSearch(card, store: store) {
             endSearch()
         }
+        // One the Unread filter leaves out, as well: the filter goes off.
+        if let card = store.router.cards.first(where: { $0.id == id }), filtersOut(card) { unreadOnly = false }
         showPick(id, store: store, reveal: shows, expand: expand)
     }
 

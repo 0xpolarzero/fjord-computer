@@ -245,9 +245,9 @@ struct RouterPageView: View {
     }
 }
 
-/// The history's side: in a narrow window the switch over it. On macOS 26 the switch is the column's bar and the history
-/// runs under it, its lines dissolving under the soft scroll edge effect rather than cut off at the switch; the bar is
-/// always there (empty in a wide window), so the history stays the same view at any width.
+/// The history's side: its bar over it, the switch (in a narrow window, else its name) and on the right the Unread filter
+/// and Mark all read. On macOS 26 the bar is the column's and the history runs under it, its lines dissolving under the
+/// soft scroll edge effect rather than cut off at the bar; the history stays the same view at any width.
 private struct HistoryColumn: View {
     let store: Store
     let model: RouterModel
@@ -255,33 +255,42 @@ private struct HistoryColumn: View {
 
     var body: some View {
         if #available(macOS 26, *) {
-            RouterHistory(store: store, model: model)
+            history
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    if bar {
-                        paneSwitch
-                            // The page's ground from the switch's middle up, so no line reads beside it, as under the
-                            // composer; below, the lines fade out under the soft edge.
-                            .background {
-                                LinearGradient(colors: [CDS.Surface.s1, CDS.Surface.s1.opacity(0)], startPoint: .center, endPoint: .bottom)
-                                    .allowsHitTesting(false)
-                            }
-                    }
+                    header
+                        // The page's ground from the bar's middle up, so no line reads beside it, as under the composer;
+                        // below, the lines fade out under the soft edge.
+                        .background {
+                            LinearGradient(colors: [CDS.Surface.s1, CDS.Surface.s1.opacity(0)], startPoint: .center, endPoint: .bottom)
+                                .allowsHitTesting(false)
+                        }
                 }
                 // The page hides its edge effects (its title line has a ground of its own); the history's is shown again.
                 .scrollEdgeEffectHidden(false, for: .top)
                 .scrollEdgeEffectStyle(.soft, for: .top)
         } else {
             VStack(spacing: 0) {
-                if bar { paneSwitch }
-                RouterHistory(store: store, model: model)
+                header
+                history
             }
         }
     }
 
-    private var paneSwitch: some View {
-        HStack(spacing: 0) {
-            PaneSwitch(store: store, model: model)
+    /// A history of its own for each side of the filter: turned on or off, it opens at its bottom, as at first.
+    private var history: some View {
+        RouterHistory(store: store, model: model).id(model.unreadOnly)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            if bar {
+                PaneSwitch(store: store, model: model)
+            } else {
+                HistoryTitle()
+            }
             Spacer(minLength: 0)
+            // The unread counted once on the line: on the switch's History when it is there.
+            HistoryFilters(store: store, model: model, counted: !bar)
         }
         .measured()
         // As Now's chips row is, so the switch is in the same place on both sides.
@@ -404,6 +413,92 @@ private struct PaneSwitch: View {
         .help(pane == .now ? "What's live: what needs you, what waits and what works" : "The Router's conversation and what was handled")
         .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
         .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+}
+
+/// The history's name over it in a wide window, where no switch says it, as tall as the switch would be.
+private struct HistoryTitle: View {
+    @Environment(\.routerGutter) private var gutter
+
+    var body: some View {
+        Text("History").cdsText((12, 16), .medium, CDS.Text.muted)
+            .frame(height: ZoneChip.height)
+            .padding(.leading, gutter + CDS.Transcript.textInset)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Over the history, on the right of its bar: the Unread filter and Mark all read, always there. With nothing unread Mark
+/// all read stays, disabled, so the filter beside it doesn't move.
+private struct HistoryFilters: View {
+    let store: Store
+    let model: RouterModel
+    /// The unread count shown on the filter (none where the switch beside it counts them).
+    let counted: Bool
+    @Environment(\.routerGutter) private var gutter
+
+    var body: some View {
+        let unread = store.routerUnread.count
+        HStack(spacing: 2) {
+            UnreadFilter(count: counted ? unread : 0, on: model.unreadOnly) { model.unreadOnly.toggle() }
+            MarkAllRead { model.markAllRead(store) }.disabled(unread == 0)
+        }
+        .fixedSize()
+        .padding(.trailing, gutter)
+    }
+}
+
+/// The Unread filter: a chip as the sections' are, lit in the accent the unread lines are while it is on.
+private struct UnreadFilter: View {
+    let count: Int
+    let on: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(on ? CDS.Fill.accent : CDS.Text.muted)
+                Text("Unread").cdsText((12, 16), .regular, on || hovered ? CDS.Text.primary : CDS.Text.secondary)
+                if count > 0 {
+                    Text(count > 99 ? "99+" : "\(count)").cdsText((12, 16), .medium, CDS.Fill.accent).monospacedDigit()
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(height: ZoneChip.height)
+            .background(Capsule().fill(on ? CDS.Fill.accent.opacity(hovered ? 0.2 : 0.14) : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
+            .overlay { if on { Capsule().strokeBorder(CDS.Fill.accent.opacity(0.5), lineWidth: 1) } }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(on ? "Show every line of the history" : "Show only the lines you haven't seen")
+        .accessibilityLabel(count > 0 ? "Unread only, \(count)" : "Unread only")
+        .accessibilityValue(on ? "On" : "Off")
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// Mark all read: a ghost button as tall as the chips, its words muted until hovered.
+private struct MarkAllRead: View {
+    let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        let hot = hovered && enabled
+        Button(action: action) {
+            Text("Mark all read").cdsText((12, 16), .regular, hot ? CDS.Text.primary : CDS.Text.muted)
+                .padding(.horizontal, 7)
+                .frame(height: ZoneChip.height)
+                .background(Capsule().fill(hot ? CDS.Fill.ghostHover : .clear))
+                .contentShape(Capsule())
+                .opacity(enabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(enabled ? "Every finished turn in the history, seen" : "Nothing unread")
     }
 }
 
@@ -577,24 +672,11 @@ private struct RouterHistory: View {
                             }
                             .padding(.bottom, 6)
                         }
-                        if !all.isEmpty {
-                            let unread = store.routerUnread.count
-                            HStack(spacing: 6) {
-                                Text("History").cdsText((12, 16), .medium, CDS.Text.muted)
-                                    .accessibilityAddTraits(.isHeader)
-                                if unread > 0 {
-                                    Text("· \(unread) unread").cdsText((12, 16), .regular, CDS.Fill.accent).monospacedDigit()
-                                    Spacer(minLength: 4)
-                                    Button("Mark all read") { store.acknowledgeAllRouterCards() }
-                                        .buttonStyle(.link).font(CDS.sans(12))
-                                        .help("Every finished turn in the history, seen")
-                                }
-                            }
-                            .padding(.leading, CDS.Transcript.textInset)
-                            .padding(.trailing, CDS.Transcript.statusPad)
-                            .padding(.bottom, 12)
-                        } else if model.searching {
+                        if all.isEmpty, model.searching {
                             RouterNothingFound().padding(.leading, CDS.Transcript.textInset - 2)
+                        } else if all.isEmpty, model.unreadOnly {
+                            RouterNothingFound(text: "Nothing unread", symbol: "checkmark.circle")
+                                .padding(.leading, CDS.Transcript.textInset - 2)
                         }
                         ForEach(entries) { entry in
                             row(entry, now: now, open: expanded.contains(entry.id), marked: entry.id == picked || entry.id == highlighted)

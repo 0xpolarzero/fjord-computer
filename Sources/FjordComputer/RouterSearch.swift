@@ -98,10 +98,28 @@ extension RouterModel {
                                           doing: { store.liveExplanation($0) })
     }
 
-    /// The history as the search leaves it.
+    /// The history as the search and the Unread filter leave it.
     func history(_ store: Store) -> [RouterPage.Entry] {
-        guard searching else { return store.routerHistory }
-        return RouterSearch.history(store.routerHistory, query: search.query, project: { store.routerProject($0).name })
+        let entries = searching
+            ? RouterSearch.history(store.routerHistory, query: search.query, project: { store.routerProject($0).name })
+            : store.routerHistory
+        guard unreadOnly else { return entries }
+        return entries.filter { entry in
+            guard case .card(let card) = entry else { return false }
+            if card.unread == true { unreadKept.insert(card.id) }
+            return !filtersOut(card)
+        }
+    }
+
+    /// Whether the Unread filter leaves a history line's card out: read, and not since the filter went on.
+    func filtersOut(_ card: RouterCard) -> Bool {
+        unreadOnly && !card.isOpen && card.unread != true && !unreadKept.contains(card.id)
+    }
+
+    /// Mark all read: every unread line of the history seen; under the filter they go too, as it lists only what is unread.
+    func markAllRead(_ store: Store) {
+        unreadKept = []
+        store.acknowledgeAllRouterCards()
     }
 
     /// Whether a card is listed under the search (any card with none).
@@ -133,10 +151,13 @@ extension RouterModel {
 
 /// A search that left nothing on a side of the page: one quiet line, as the inbox says it.
 struct RouterNothingFound: View {
+    var text = "Nothing found"
+    var symbol = "magnifyingglass"
+
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium))
-            Text("Nothing found").cdsText((13, 18), .regular, CDS.Text.muted)
+            Image(systemName: symbol).font(.system(size: 12, weight: .medium))
+            Text(text).cdsText((13, 18), .regular, CDS.Text.muted)
         }
         .foregroundStyle(CDS.Text.muted)
         .padding(.leading, 2)

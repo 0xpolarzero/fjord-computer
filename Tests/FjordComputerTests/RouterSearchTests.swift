@@ -108,6 +108,43 @@ import Testing
         #expect(model.search.query.isEmpty && model.selection == hidden.id)
     }
 
+    @Test func theUnreadFilterListsWhatIsUnreadAndKeepsALineReadUnderIt() throws {
+        let store = demo()
+        let model = RouterModel()
+        var state = store.router
+        // Three cards in the history: one more addressed.
+        if let i = state.cards.firstIndex(where: \.isOpen) { state.cards[i].addressedAt = Date() }
+        let addressed = state.cards.indices.filter { !state.cards[$0].isOpen }
+        try #require(addressed.count >= 3)
+        for i in addressed { state.cards[i].unread = nil }
+        state.cards[addressed[0]].unread = true
+        state.cards[addressed[1]].unread = true
+        store.router = state
+        let a = state.cards[addressed[0]].id, b = state.cards[addressed[1]].id, read = state.cards[addressed[2]].id
+        let ids = { model.history(store).map(\.id) }
+        #expect(ids() == store.routerHistory.map(\.id))
+        // On: the unread cards only, no runs or summaries; the keys walk only those.
+        model.unreadOnly = true
+        #expect(ids() == store.routerHistory.map(\.id).filter { $0 == a || $0 == b })
+        #expect(model.cards(store).filter { !$0.isOpen }.map(\.id) == ids())
+        // A line read under it stays until the filter goes off.
+        store.acknowledgeRouterCard(a)
+        #expect(ids().contains(a) && store.routerUnread.map(\.id) == [b])
+        model.unreadOnly = false
+        model.unreadOnly = true
+        #expect(ids() == [b])
+        // A read card picked from elsewhere (a banner): the filter goes off so it shows.
+        model.select(read, store: store)
+        #expect(!model.unreadOnly && ids().contains(read))
+        // Mark all read under the filter: nothing is left listed.
+        model.unreadOnly = true
+        model.markAllRead(store)
+        #expect(store.routerUnread.isEmpty && ids().isEmpty)
+        // A message asked for: the filter goes off.
+        model.show(message: UUID())
+        #expect(!model.unreadOnly)
+    }
+
     @Test func aSearchOpensEverySectionAndYourFoldsComeBack() {
         let model = RouterModel()
         #expect(model.shownFolds == RouterZone.foldedAtFirst)
