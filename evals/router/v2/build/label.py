@@ -21,7 +21,8 @@ An adjudicator is not an independent rater. For written episodes it supplies the
 requested third pass; otherwise it is called on disagreements. Independent ask
 majorities remain binding; adjudication breaks ties. An adjudicator contributes
 one additional destination-set vote, still requiring two accepts. Scripted gold
-is authoritative. Historical intended never implies observable acceptability.
+is authoritative. On a real moment, where you really sent it is always acceptable and asking is never needless when
+labellers found the board insufficient (`real_outcome`): the outcome is observed, not counterfactual.
 Dollar cost is reported only when a CLI supplies it; tokens are not dollar cost.
 """
 from __future__ import annotations
@@ -354,9 +355,23 @@ def aggregate_labels(labels, *, source, deterministic_gold=None, historical_inte
     if require_adjudication and (ask == "required" and acceptable or ask == "forbidden" and not acceptable):
         raise NeedsAdjudication("ask majority and accepted destinations are inconsistent")
     consequential = majority("consequential")
-    return {"intended": intended, "acceptable": acceptable, "clarify": clarify, "ask": ask,
+    gold = {"intended": intended, "acceptable": acceptable, "clarify": clarify, "ask": ask,
             "consequential": consequential, "evidence": "Blind annotation; " +
             "; ".join(label["evidence"] for label in all_labels)}
+    return real_outcome(gold) if source == "real-moment" else gold
+
+
+def real_outcome(gold):
+    """On a real moment the outcome is known: where you sent it is right, whatever the board showed. A labeller's
+    "ask required" (the board alone didn't justify sending) then means asking is never needless, not that a send to
+    your real target is wrong: the policy's gambles are already charged when they miss (a send elsewhere), and
+    charging the lucky ones too counted risk twice and made always-ask look best."""
+    gold = dict(gold)
+    gold["acceptable"] = sorted(set(gold["acceptable"]) | {gold["intended"]})
+    gold["clarify"] = sorted(set(gold["clarify"]) - set(gold["acceptable"]))
+    if gold["ask"] == "required":
+        gold["ask"] = "allowed"
+    return gold
 
 
 def krippendorff_alpha(units):
@@ -866,7 +881,7 @@ def soft_gold(labels, record):
                 "consequential": label["consequential"], "family": label["family"]}
         if view["intended"] == "unknown" and view["ask"] == "forbidden":
             view["ask"] = "allowed"  # nothing to send to: asking can't be needless
-        views.append(view)
+        views.append(real_outcome(view) if historical else view)
     primary = min(views, key=lambda view: CAUTION[view["ask"]])
     return {**{k: v for k, v in primary.items() if k != "family"}, "views": views,
             "evidence": "Soft gold; " + "; ".join(label["evidence"] for label in labels)}

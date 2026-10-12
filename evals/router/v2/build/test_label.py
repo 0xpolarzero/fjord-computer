@@ -120,12 +120,16 @@ class AggregationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             aggregate_labels(judgments, source="goal", require_adjudication=True)
 
-    def test_real_historical_intended_does_not_become_observable_acceptance(self):
+    def test_on_a_real_moment_where_you_sent_it_is_acceptable(self):
+        # The outcome is observed: a send there is right even where the labellers found the board insufficient.
         judgments = [label(family, clarify=["session:b"]) for family in ("claude", "gpt", "gemini")]
         result = aggregate_labels(judgments, source="real-moment", historical_intended="session:b")
         self.assertEqual(result["intended"], "session:b")
-        self.assertEqual(result["acceptable"], ["session:a"])
-        self.assertEqual(result["clarify"], ["session:b"])
+        self.assertEqual(result["acceptable"], ["session:a", "session:b"])
+        self.assertEqual(result["clarify"], [])
+        required = [label(family, acceptable=[], ask="required") for family in ("claude", "gpt", "gemini")]
+        result = aggregate_labels(required, source="real-moment", historical_intended="session:b")
+        self.assertEqual((result["ask"], result["acceptable"]), ("allowed", ["session:b"]))
 
     def test_scripted_contract_overrides_model_labels_without_mutating_inputs(self):
         judgments = [label(family, intended="question", acceptable=["question"], ask="allowed")
