@@ -85,28 +85,57 @@ extension FjordHub {
         if let section = peeking, let frame = sectionFrames[section] {
             let place = placement(section, frame)
             let shape = panelShape(place)
-            let panel = peekContent(section)
+            let content = peekContent(section)
                 // The section is part of what's observed: an equal size on switching must still fill that section's entry.
                 .onGeometryChange(for: PeekMeasure.self) { PeekMeasure(section: section, size: $0.size) } action: {
                     if peekSizes[$0.section] != $0.size { peekSizes[$0.section] = $0.size }
                 }
                 .frame(height: edge.isHorizontal ? nil : place?.length, alignment: .top)
-                .background(shape.fill(Theme.bg))
-                .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
-                .clipShape(shape)
-                // No seam where it meets the bar: the two outlines there are painted over, so bar and panel read
-                // as one shape.
-                .overlay(alignment: seamAlignment) { seam(place) }
+            let o = peekOffset(section, place)
+            panelSurface(content, shape, place)
                 .fixedSize()
                 .onHover { overPanel = $0; hubPointer(overBar || overPanel) }
                 // Where it is drawn, for the controller to tell whether the pointer is on it.
                 .background(HubPiece(hub: hub, section: section))
                 // Hidden until it's been measured and placed, so it never shows up in the wrong spot first.
                 .opacity(place == nil ? 0 : 1)
-                .transition(peekTransition)
-            let o = peekOffset(section, place)
-            panel.offset(x: o.width, y: o.height)
+                .transition(glass ? glassPeekTransition : peekTransition)
+                .offset(x: o.width, y: o.height)
         }
+    }
+
+    /// A panel's surface: glass growing out of the bar's, or today's opaque panel.
+    @ViewBuilder func panelSurface(_ content: some View, _ shape: UnevenRoundedRectangle, _ place: Placement?) -> some View {
+        if #available(macOS 26, *) {
+            if glass { glassPanel(content, shape, place) } else { opaquePanel(content, shape, place) }
+        } else {
+            opaquePanel(content, shape, place)
+        }
+    }
+
+    /// On glass the panel's glass comes out of the bar's edge as one shape (the bar's container merges the two, so there
+    /// is no seam to hide), its content fading in just behind. Reduce Motion: no morph, the panel fades as a whole.
+    @available(macOS 26, *)
+    func glassPanel(_ content: some View, _ shape: UnevenRoundedRectangle, _ place: Placement?) -> some View {
+        content
+            .modifier(PeekReveal(reduce: reduce))
+            .clipShape(shape)
+            .contentShape(shape)
+            // No glass either until it's placed.
+            .glassEffect(place == nil ? .identity : .regular, in: shape)
+            .glassEffectID(BarGlass.ID.panel, in: glassSpace)
+            .glassEffectTransition(reduce ? .identity : .matchedGeometry)
+    }
+
+    /// Today's panel: filled black and ringed, the seam where it meets the bar painted over.
+    func opaquePanel(_ content: some View, _ shape: UnevenRoundedRectangle, _ place: Placement?) -> some View {
+        content
+            .background(shape.fill(Theme.bg))
+            .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
+            .clipShape(shape)
+            // No seam where it meets the bar: the two outlines there are painted over, so bar and panel read
+            // as one shape.
+            .overlay(alignment: seamAlignment) { seam(place) }
     }
 
     /// Only the first open and the last close fade and slide; switching sections is instant (no Reduce Motion: no slide).
@@ -114,6 +143,12 @@ extension FjordHub {
         let d: CGFloat = reduce ? 0 : Theme.Space.sm
         return .opacity.combined(with: .offset(x: edge == .right ? d : edge == .left ? -d : 0,
                                                y: edge == .top ? -d : edge == .bottom ? d : 0))
+    }
+
+    /// On glass the glass itself does the coming (`glassEffectTransition`): the panel is there at once and its content fades
+    /// in behind (`PeekReveal`); going, it fades as its glass goes back into the bar. Reduce Motion: a plain fade both ways.
+    var glassPeekTransition: AnyTransition {
+        reduce ? .opacity : .asymmetric(insertion: .identity, removal: .opacity)
     }
 
     /// Laid over the bar from its top-left (bottom-left on the bottom edge), then moved out beside it.
@@ -175,7 +210,7 @@ extension FjordHub {
 
     /// The bar's outline: a corner goes square where a panel is flush with (or runs past) that end of the bar.
     var barOutline: UnevenRoundedRectangle {
-        let r: CGFloat = 20
+        let r = BarGlass.barRadius
         let place = currentPlacement
         let start: CGFloat = place?.atStart == true ? 0 : r
         let end: CGFloat = place?.atEnd == true ? 0 : r
@@ -188,9 +223,9 @@ extension FjordHub {
     }
 
     /// A panel against the bar: square where it meets the bar, rounded elsewhere, and rounded on the bar's side too
-    /// where it runs on past the bar's end.
+    /// where it runs on past the bar's end. On glass its corners are the bar's, so the shape the two make has one radius.
     func panelShape(_ place: Placement?) -> UnevenRoundedRectangle {
-        let r = Self.panelRadius
+        let r = glass ? BarGlass.panelRadius : Self.panelRadius
         let past: CGFloat = place?.pastEnd == true ? r : 0
         return switch edge {
         case .right: UnevenRoundedRectangle(topLeadingRadius: r, bottomLeadingRadius: r, bottomTrailingRadius: past, style: .continuous)
@@ -200,7 +235,7 @@ extension FjordHub {
         }
     }
 
-    /// A panel's free corners: the hub's shell round, larger than Claude's 10pt popovers as it is part of the island.
+    /// A panel's free corners (opaque): the hub's shell round, larger than Claude's 10pt popovers as it is part of the island.
     static let panelRadius: CGFloat = 16
     /// A panel's padding, all round, as Claude's sidebar body (8 at the sides); rows pad their own inside it.
     static let peekPad: CGFloat = Theme.Space.md
@@ -298,11 +333,15 @@ extension FjordHub {
 /// a 24 square, radius 6, secondary glyph going white on a white-7.5% hover.
 struct ControlsGear: View {
     let action: () -> Void
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button(action: action) { ControlsGearLabel() }
             .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous),
-                                              rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
+                                              rest: .clear,
+                                              hover: BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostHover),
+                                              pressed: BarGlass.fill(.selected, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostSelected)))
             .accessibilityLabel("Controls")
             .accessibilityHint("Opens Settings; hover for the window and the last update")
     }
@@ -314,7 +353,7 @@ private struct ControlsGearLabel: View {
     var body: some View {
         Image(systemName: "gearshape")
             .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-            .foregroundStyle(hover ? Brand.ink : CDS.Text.secondary)
+            .chromeInk(hover ? .primary : .secondary, hover ? Brand.ink : CDS.Text.secondary)
             .frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control)
     }
 }
@@ -326,19 +365,21 @@ struct MenuRow: View {
     let title: String
     let key: String?
     let action: () -> Void
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: CDS.Menu.itemGap) {
                 Image(systemName: symbol)
                     .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-                    .foregroundStyle(CDS.Text.secondary)
+                    .chromeInk(.secondary, CDS.Text.secondary)
                     .frame(width: CDS.Density.compact.icon)
                     .accessibilityHidden(true)
-                Text(title).font(CDS.sans(CDS.Density.compact.body.0)).foregroundStyle(CDS.Text.primary)
+                Text(title).font(CDS.sans(CDS.Density.compact.body.0)).chromeInk(.primary, CDS.Text.primary)
                 Spacer(minLength: CDS.Menu.hintGap)
                 if let key {
-                    Text(key).font(CDS.sans(CDS.Density.compact.footnote.0)).foregroundStyle(CDS.Text.muted)
+                    Text(key).font(CDS.sans(CDS.Density.compact.footnote.0)).chromeInk(.tertiary, CDS.Text.muted)
                 }
             }
             .padding(.horizontal, CDS.Menu.itemPadX)
@@ -346,7 +387,9 @@ struct MenuRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Menu.itemRadius, style: .continuous),
-                                          rest: .clear, hover: CDS.Fill.ghostHover, pressed: CDS.Fill.ghostSelected))
+                                          rest: .clear,
+                                          hover: BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostHover),
+                                          pressed: BarGlass.fill(.selected, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostSelected)))
         .accessibilityLabel(title)
     }
 }

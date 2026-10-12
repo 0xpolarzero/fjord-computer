@@ -47,13 +47,16 @@ struct SectionGlyph: View {
     let symbol: String
     var size: CGFloat = 14
     var color: Color = Theme.secondary
+    /// Drawn in this instead of `color` (a label style, on the bar's glass).
+    var style: AnyShapeStyle?
 
     var body: some View {
+        let ink = style ?? AnyShapeStyle(color)
         if symbol == CategorySection.githubMark {
             // Optically the weight of a symbol of `size` beside it.
-            GitHubMark().fill(color).frame(width: size + 1, height: size + 1)
+            GitHubMark().fill(ink).frame(width: size + 1, height: size + 1)
         } else {
-            Image(systemName: symbol).font(Theme.Typography.glyph(size)).foregroundStyle(color)
+            Image(systemName: symbol).font(Theme.Typography.glyph(size)).foregroundStyle(ink)
         }
     }
 }
@@ -219,11 +222,16 @@ private struct SectionCellLabel: View {
     let badge: RailBadge?
     let vertical: Bool
     @State private var hover = false
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        SectionGlyph(symbol: symbol, size: 14, color: hover || badge != nil ? Theme.text : Theme.secondary)
+        let strong = hover || badge != nil
+        SectionGlyph(symbol: symbol, size: 14,
+                     style: BarGlass.ink(strong ? .primary : .secondary, glass: glass, opaque: strong ? Theme.text : Theme.secondary))
             .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : .clear))
+            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous)
+                .fill(hover ? BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: Theme.Fill.hover) : .clear))
             .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear)
             .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
             .padding(.vertical, vertical ? 3 : 0)

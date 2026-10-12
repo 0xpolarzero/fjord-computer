@@ -18,6 +18,8 @@ final class HubLayout {
         didSet { if frame != oldValue { onFrame?() } }
     }
     @ObservationIgnored var onFrame: (() -> Void)?
+    /// The bar's scale while it is carried on glass (`BarStretch`); read only while floating, so never at rest.
+    var stretch: CGSize = BarStretch.rest
 }
 
 /// A transparent window over the bar at rest. The real window lets the mouse through everywhere until the pointer
@@ -117,7 +119,9 @@ struct HubRoot: View {
                 layout.restSize = frame.size
             }
         if layout.floating {
-            view.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // Drawn scaled, laid out as is: the window stays exactly the bar's size.
+            view.scaleEffect(layout.stretch)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             EdgeLayout(edge: ui.edge, position: store.settings.centerPill == true ? 0.5 : ui.position,
                        restLength: layout.restLength) { view }
@@ -158,6 +162,8 @@ final class HubController {
     /// Which departure or return a fade completion belongs to.
     private(set) var barGeneration = 0
     private var dragStart: (mouse: NSPoint, origin: NSPoint)?
+    /// The carried bar has been drawn out along its motion (`BarStretch`), and settles as it lands.
+    private var stretched = false
 
     fileprivate static let debug = ProcessInfo.processInfo.environment["FJORD_DEBUG"] != nil
     private let trigger = HoverTrigger(size: NSSize(width: 10, height: 10))
@@ -247,6 +253,12 @@ final class HubController {
 
     private func dock() {
         layout.floating = false
+        if layout.stretch != BarStretch.rest {
+            var instant = Transaction(animation: nil)
+            instant.disablesAnimations = true
+            withTransaction(instant) { layout.stretch = BarStretch.rest }
+        }
+        stretched = false
         host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout,
                                 openApp: { [weak self] in self?.opened($0) },
                                 openUpdates: { [weak self] in self?.openedUpdates() },
@@ -577,12 +589,31 @@ final class HubController {
         }
         guard let start = dragStart else { return }
         window.setFrameOrigin(NSPoint(x: start.origin.x + mouse.x - start.mouse.x, y: start.origin.y + mouse.y - start.mouse.y))
+        stretch(along: CGVector(dx: mouse.x - start.mouse.x, dy: mouse.y - start.mouse.y))
+    }
+
+    /// On glass, once the motion has a direction, the bar is drawn out along it for the rest of the drag. Under Reduce Motion
+    /// `BarStretch.scale` stays at rest, so nothing changes or animates.
+    private func stretch(along motion: CGVector) {
+        guard !stretched, Chrome.shared.mode == .glass else { return }
+        let reduce = Motion.systemReduce
+        let scale = BarStretch.scale(motion, reduce: reduce)
+        guard scale != BarStretch.rest else { return }
+        stretched = true
+        withAnimation(Motion.spatial.resolved(reduce: reduce)) { layout.stretch = scale }
+    }
+
+    /// The bar settles back to its shape as it glides onto its edge.
+    private func settle() {
+        guard stretched else { return }
+        withAnimation(Motion.spatial.resolved(reduce: Motion.systemReduce)) { layout.stretch = BarStretch.rest }
     }
 
     private func dragEnded(at mouse: NSPoint) {
         screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? screen
         let vf = screen.visibleFrame
         (ui.edge, ui.position) = EdgeSnap.snap(window.frame, in: vf)
+        settle()
         // Let SwiftUI lay the bar out for its new edge (it may turn), then glide it into place and dock.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
             guard let self else { return }
@@ -596,6 +627,8 @@ final class HubController {
             }, completionHandler: {
                 MainActor.assumeIsolated {
                     LatencySignposts.signposter.endInterval("Drag", glide)
+                    // On its edge, on glass: the trackpad's tick, as an alignment guide's.
+                    if Chrome.shared.mode == .glass { BarStretch.landed() }
                     self.dragStart = nil
                     self.hub.dragging = false
                     self.dock()

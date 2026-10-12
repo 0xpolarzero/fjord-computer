@@ -200,13 +200,14 @@ struct EntryRow: View {
                 lead(actor).frame(width: CDS.Sidebar.leadingSlot, height: Self.line * 2 + 2)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 6) {
+                        let strong = (unread && !entry.isNoise) || open
                         Text(thing.title)
                             .font(Theme.Typography.body)
-                            .foregroundStyle((unread && !entry.isNoise) || open ? CDS.Text.primary : CDS.Text.secondary)
+                            .chromeInk(strong ? .primary : .secondary, strong ? CDS.Text.primary : CDS.Text.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         // The actions take the timestamp's place; the title stops short of them.
-                        Text(shortAgo(thing.updatedAt)).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(CDS.Text.muted)
+                        Text(shortAgo(thing.updatedAt)).font(Theme.Typography.meta.monospacedDigit()).chromeInk(.tertiary, CDS.Text.muted)
                             .opacity(open ? 0 : 1)
                             .frame(width: open ? actionsWidth - 6 : nil, alignment: .trailing)
                     }
@@ -214,7 +215,7 @@ struct EntryRow: View {
                     HStack(spacing: 6) {
                         Text(subtitle(actor))
                             .font(Theme.Typography.meta)
-                            .foregroundStyle(CDS.Text.muted)
+                            .chromeInk(.tertiary, CDS.Text.muted)
                             .lineLimit(1)
                         if let tag = ThingStatusTag.shows(thing.status) { ThingStatusTag(status: tag) }
                         ForEach(jevTags, id: \.self) { JevTag(kind: $0) }
@@ -225,7 +226,7 @@ struct EntryRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .rowHighlight(open)
+            .barRowHighlight(open)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(thing.kind == .workflow ? "\(thing.title), \(thing.repo)" : "\(thing.title), \(thing.repo) #\(thing.number ?? 0)")
@@ -458,7 +459,7 @@ struct FactChips: View {
             ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
                 FactChip(fact: fact).opacity(labels[fact.key] == .noise ? 0.55 : 1)
             }
-            Text("···").font(Theme.Typography.caption).foregroundStyle(CDS.Text.muted).fixedSize()
+            Text("···").font(Theme.Typography.caption).chromeInk(.tertiary, CDS.Text.muted).fixedSize()
                 .frame(height: CDS.Badge.height).accessibilityHidden(true)
         }
         .frame(height: CDS.Badge.height)
@@ -680,14 +681,17 @@ struct InboxCell: View {
 private struct InboxCellLabel: View {
     let vertical: Bool
     @State private var hover = false
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         GitHubMark()
-            .fill(hover ? Theme.text : Theme.secondary)
+            .fill(BarGlass.ink(hover ? .primary : .secondary, glass: glass, opaque: hover ? Theme.text : Theme.secondary))
             // Optically the weight of a 14pt symbol next to it.
             .frame(width: 15, height: 15)
             .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : .clear))
+            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous)
+                .fill(hover ? BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: Theme.Fill.hover) : .clear))
             .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
             .padding(.vertical, vertical ? 3 : 0)
             .padding(.horizontal, vertical ? 0 : 2)
@@ -722,16 +726,20 @@ private struct CategoryCellLabel: View {
     let badge: Int
     let vertical: Bool
     @State private var hover = false
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let tint = badge > 0 ? category.color.swatch : hover ? Theme.text : Theme.tertiary
+        let tint = badge > 0 ? AnyShapeStyle(category.color.swatch)
+            : BarGlass.ink(hover ? .primary : .tertiary, glass: glass, opaque: hover ? Theme.text : Theme.tertiary)
         Image(systemName: category.symbol)
             .symbolRenderingMode(.palette)
             .font(Theme.Typography.glyph(14))
             // Its colour only while it holds something; neutral when empty (and CI, when nothing fails).
             .foregroundStyle(tint, tint, tint)
             .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous).fill(hover ? Theme.Fill.hover : .clear))
+            .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous)
+                .fill(hover ? BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: Theme.Fill.hover) : .clear))
             .cornerBadge(badge, fill: category.color.swatch, ink: category.color.ink)
             .frame(width: Theme.Metrics.line, height: Theme.Metrics.line)
             .padding(.vertical, vertical ? 3 : 0)
@@ -1047,15 +1055,17 @@ private struct RouterCellLabel: View {
     let needsYou: Int
     let notes: Int
     @State private var hover = false
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let open = needsYou + notes
         Image(systemName: "arrow.triangle.branch")
             .font(Theme.Typography.glyph(14))
-            .foregroundStyle(hover ? Theme.text : Theme.secondary)
+            .foregroundStyle(BarGlass.ink(hover ? .primary : .secondary, glass: glass, opaque: hover ? Theme.text : Theme.secondary))
             .frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: CDS.Tile.radius, style: .continuous)
-                .fill(hover ? Theme.Fill.hover : Theme.Fill.rest))
+                .fill(hover ? BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: Theme.Fill.hover) : Theme.Fill.rest))
             // Awaiting yellow while one needs you, accent blue for those worth a look.
             .cornerBadge(open, fill: needsYou > 0 ? CDS.Fill.warning : CDS.Fill.accent,
                          ink: needsYou > 0 ? CDS.Text.onPrimary : Color.white)

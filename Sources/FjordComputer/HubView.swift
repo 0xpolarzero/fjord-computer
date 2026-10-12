@@ -176,6 +176,11 @@ struct FjordHub: View {
     @Environment(\.openRouter) var openRouter
     @Environment(\.pickRouterCard) var pickRouterCard
     @Environment(\.hubPointer) var hubPointer
+    /// How the bar and its panels draw (none in a test that draws the bar alone: opaque).
+    @Environment(Chrome.self) var chrome: Chrome?
+    @Environment(\.colorScheme) var colorScheme
+    /// The bar's and the panel's glass shapes, for the panel to grow out of the bar.
+    @Namespace var glassSpace
 
     /// The bar's depth: a cell's width on the sides, the strip's height along the top and bottom.
     static let cell = Theme.Metrics.bar
@@ -188,35 +193,18 @@ struct FjordHub: View {
 
     var edge: DockEdge { ui.edge }
 
+    /// The bar and its panels are glass: macOS 26, and the chrome says so.
+    var glass: Bool { Chrome.glassAvailable && chrome?.mode == .glass }
+
     var body: some View {
-        let shape = barOutline
-        Group {
+        let bar = Group {
             if edge.isHorizontal { horizontal } else { vertical }
         }
         .coordinateSpace(.named(Self.barSpace))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in if barSize != size { barSize = size } }
-        // Where the bar is drawn, for the controller to tell whether the pointer is on it.
-        .background(HubPiece(hub: hub, section: nil))
-        .onHover { overBar = $0; hubPointer(overBar || overPanel) }
-        .background(shape.fill(Theme.bg))
-        // Claude's panel ring (`shadow-panel`'s inset white 10%) against the desktop.
-        .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
-        .clipShape(shape)
-        // The hovered section's panel, outside the bar's clip; the bar's own size doesn't change.
-        .overlay(alignment: peekAlignment) { peekPanel }
-        // Shadows come from shapes alone, in a layer under the bar and its panel (never a blurred composite of their
-        // content, which would be redone on every frame of anything animating inside): the panel's can't fall
-        // across the bar, which is opaque above it.
-        .background(alignment: peekAlignment) { peekShadow }
-        .background {
-            // Claude's `shadow-panel` (its two drops) while a panel is open; at rest, only its near one, so the bar sits light.
-            let open = peeking != nil
-            shape.fill(Theme.bg)
-                .shadow(color: open ? CDS.PanelShadow.far.color : .clear, radius: CDS.PanelShadow.far.radius,
-                        y: CDS.PanelShadow.far.y)
-                .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
-        }
-        .motion(.fade, value: peeking != nil)
+        surface(bar, barOutline)
+        // On glass the panel's glass grows out of the bar's on the `glass` spring, its corners with it; opaque, it fades.
+        .motion(glass ? Motion.glass : Motion.fade, value: peeking != nil)
         .fixedSize()
         .contextMenu {
             Button("Open Fjord Computer") { openApp(firstDestination) }
@@ -239,6 +227,61 @@ struct FjordHub: View {
         }
         .modifier(Brand.Scheme())
         .background(UpdateAnnouncer(updater: store.updater))
+    }
+
+    /// The bar's surface, with the hovered section's panel beside it (outside the bar's clip; the bar's own size doesn't
+    /// change).
+    @ViewBuilder func surface(_ bar: some View, _ shape: UnevenRoundedRectangle) -> some View {
+        if #available(macOS 26, *) {
+            if glass { glassSurface(bar, shape) } else { opaqueSurface(bar, shape) }
+        } else {
+            opaqueSurface(bar, shape)
+        }
+    }
+
+    @available(macOS 26, *)
+    func glassSurface(_ bar: some View, _ shape: UnevenRoundedRectangle) -> some View {
+        // Regular glass, no tint; no ring and no shadows: the material has its own edge and shadow. Bar and panel in one
+        // container, so the panel's glass grows out of the bar's and the two read as one shape. Everything on them
+        // draws with the glass fills and label styles.
+        GlassEffectContainer(spacing: BarGlass.spacing) {
+            bar
+                .clipShape(shape)
+                // The whole shape takes the pointer, as the opaque fill did.
+                .contentShape(shape)
+                .glassEffect(.regular, in: shape)
+                .glassEffectID(BarGlass.ID.bar, in: glassSpace)
+                // Where the bar is drawn, for the controller to tell whether the pointer is on it.
+                .background(HubPiece(hub: hub, section: nil))
+                .onHover { overBar = $0; hubPointer(overBar || overPanel) }
+                .overlay(alignment: peekAlignment) { peekPanel }
+        }
+        .environment(\.onBarGlass, true)
+    }
+
+    /// Today's bar: filled black, ringed, with shadows from shapes.
+    func opaqueSurface(_ bar: some View, _ shape: UnevenRoundedRectangle) -> some View {
+        bar
+            // Where the bar is drawn, for the controller to tell whether the pointer is on it.
+            .background(HubPiece(hub: hub, section: nil))
+            .onHover { overBar = $0; hubPointer(overBar || overPanel) }
+            .background(shape.fill(Theme.bg))
+            // Claude's panel ring (`shadow-panel`'s inset white 10%) against the desktop.
+            .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
+            .clipShape(shape)
+            .overlay(alignment: peekAlignment) { peekPanel }
+            // Shadows come from shapes alone, in a layer under the bar and its panel (never a blurred composite of their
+            // content, which would be redone on every frame of anything animating inside): the panel's can't fall
+            // across the bar, which is opaque above it.
+            .background(alignment: peekAlignment) { peekShadow }
+            .background {
+                // Claude's `shadow-panel` (its two drops) while a panel is open; at rest, only its near one, so the bar sits light.
+                let open = peeking != nil
+                shape.fill(Theme.bg)
+                    .shadow(color: open ? CDS.PanelShadow.far.color : .clear, radius: CDS.PanelShadow.far.radius,
+                            y: CDS.PanelShadow.far.y)
+                    .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
+            }
     }
 
     /// Where the GitHub mark and the bar's Open lead (see `Store.firstPlace`).

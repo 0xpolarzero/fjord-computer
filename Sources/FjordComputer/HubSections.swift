@@ -108,13 +108,15 @@ extension FjordHub {
                 if selected { Text("Done") }
             }
             .font(CDS.sans(13, .medium))
-            .foregroundStyle(selected ? CDS.Text.primary : CDS.Text.muted)
+            .chromeInk(selected ? .primary : .tertiary, selected ? CDS.Text.primary : CDS.Text.muted)
             .padding(.horizontal, selected ? CDS.Tabs.pad : 4)
             .frame(height: CDS.Tabs.height)
         }
         .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
-                                          hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostHover,
-                                          pressed: CDS.Fill.ghostHover, isActive: selected))
+                                          hover: BarGlass.fill(.hover, glass: glass, scheme: colorScheme, opaque: CDS.Fill.ghostHover),
+                                          active: BarGlass.fill(.selected, glass: glass, scheme: colorScheme, opaque: CDS.Fill.ghostHover),
+                                          pressed: BarGlass.fill(.selected, glass: glass, scheme: colorScheme, opaque: CDS.Fill.ghostHover),
+                                          isActive: selected))
         .accessibilityLabel("Done")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .fixedSize()
@@ -140,7 +142,7 @@ extension FjordHub {
             "All caught up"
         }
         return HStack(spacing: 6) {
-            Text(text).font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
+            Text(text).font(Theme.Typography.body).chromeInk(.tertiary, Theme.tertiary)
             if case .category(let id) = tab, store.rulesOff(id) > 0 {
                 RulesOffMark(count: store.rulesOff(id)) { store.editCategory(id, go: openApp) }
             }
@@ -157,7 +159,7 @@ extension FjordHub {
     /// A line of text with a link after it, padded like a row ("No CI shown  Choose repositories").
     func linkRow(_ text: String, action: String, _ perform: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
-            Text(text).foregroundStyle(Theme.tertiary)
+            Text(text).chromeInk(.tertiary, Theme.tertiary)
             Button(action, action: perform).buttonStyle(.link)
             Spacer(minLength: 0)
         }
@@ -184,7 +186,7 @@ extension FjordHub {
     func sectionHeader<Trailing: View>(_ title: String, status: [(String, Color)] = [],
                                        @ViewBuilder trailing: () -> Trailing = { EmptyView() }) -> some View {
         HStack(spacing: 8) {
-            Text(title).font(Theme.Typography.heading).foregroundStyle(Theme.tertiary).lineLimit(1)
+            Text(title).font(Theme.Typography.heading).chromeInk(.tertiary, Theme.tertiary).lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
             ForEach(Array(status.enumerated()), id: \.offset) { _, part in
                 Text(part.0).font(Theme.Typography.meta.monospacedDigit()).foregroundStyle(part.1).lineLimit(1)
@@ -240,7 +242,7 @@ extension FjordHub {
         let cards = store.routerPanelCards
         routerHeader.frame(height: Self.peekLine)
         if cards.isEmpty {
-            Text("Nothing needs you").font(Theme.Typography.body).foregroundStyle(Theme.tertiary)
+            Text("Nothing needs you").font(Theme.Typography.body).chromeInk(.tertiary, Theme.tertiary)
                 .padding(.horizontal, Theme.Space.md).frame(height: Theme.Metrics.line)
         } else {
             VStack(alignment: .leading, spacing: 1) {
@@ -248,7 +250,7 @@ extension FjordHub {
             }
             if cards.count > Self.routerCardLimit {
                 Text("\(cards.count - Self.routerCardLimit) more in the Router").font(Theme.Typography.meta)
-                    .foregroundStyle(Theme.tertiary).padding(.horizontal, Theme.Space.md).padding(.top, 2)
+                    .chromeInk(.tertiary, Theme.tertiary).padding(.horizontal, Theme.Space.md).padding(.top, 2)
             }
         }
         routerWorking
@@ -314,7 +316,10 @@ extension FjordHub {
                     }
                 }
                 .frame(width: 10, height: 10)
-                Text(s.text).font(Theme.Typography.meta).foregroundStyle(s.color == Theme.green ? Theme.tertiary : s.color)
+                // A status colour stays fixed; all well, the words are quiet chrome.
+                Text(s.text).font(Theme.Typography.meta)
+                    .foregroundStyle(s.color == Theme.green ? BarGlass.ink(.tertiary, glass: glass, opaque: Theme.tertiary)
+                                     : AnyShapeStyle(s.color))
                     .lineLimit(1)
             }
             .padding(.horizontal, 8)
@@ -394,6 +399,8 @@ struct CategoryTab: View {
     @State private var target = false
     @Environment(\.openApp) private var openApp
     @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button(action: action) {
@@ -402,8 +409,10 @@ struct CategoryTab: View {
             }
         }
             .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Tabs.radius, style: .continuous),
-                                              hover: CDS.Fill.ghostHover, active: CDS.Fill.ghostHover,
-                                              pressed: CDS.Fill.ghostHover, isActive: selected))
+                                              hover: BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostHover),
+                                              active: BarGlass.fill(.selected, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostHover),
+                                              pressed: BarGlass.fill(.selected, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostHover),
+                                              isActive: selected))
             .padding(.horizontal, CDS.Tabs.pillInset)
             .fixedSize()
             .accessibilityLabel(category.title)
@@ -445,6 +454,8 @@ struct CategoriesMenu: View {
     let store: Store
     let edit: () -> Void
     @State private var hover = false
+    @Environment(\.onBarGlass) private var glass
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Menu {
@@ -458,9 +469,10 @@ struct CategoriesMenu: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: CDS.GhostIcon.glyph(IconButton.Size.header), weight: .medium))
-                .foregroundStyle(hover ? Brand.ink : Theme.secondary)
+                .foregroundStyle(BarGlass.ink(hover ? .primary : .secondary, glass: glass, opaque: hover ? Brand.ink : Theme.secondary))
                 .frame(width: IconButton.Size.header, height: IconButton.Size.header)
-                .background(Theme.Radius.shape(CDS.GhostIcon.radius(IconButton.Size.header)).fill(hover ? Theme.Fill.hover : .clear))
+                .background(Theme.Radius.shape(CDS.GhostIcon.radius(IconButton.Size.header))
+                    .fill(hover ? BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: Theme.Fill.hover) : .clear))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -481,20 +493,23 @@ private struct CategoryTabLabel: View {
     var rulesOff = 0
     var fix: () -> Void = {}
     @Environment(\.hoverFillHovering) private var hover
+    @Environment(\.onBarGlass) private var glass
 
     var body: some View {
         HStack(spacing: selected ? 5 : 3) {
             Image(systemName: category.symbol).font(.system(size: 12, weight: .medium))
-                .foregroundStyle(badge > 0 || selected ? category.color.swatch : CDS.Text.muted)
+                .foregroundStyle(badge > 0 || selected ? AnyShapeStyle(category.color.swatch)
+                                 : BarGlass.ink(.tertiary, glass: glass, opaque: CDS.Text.muted))
             if selected { Text(category.title).lineLimit(1) }
             if badge > 0 { CountBadge(badge, tint: category.color.swatch) }
             if !category.actions.isEmpty {
-                Image(systemName: "bolt.fill").font(.system(size: 8)).foregroundStyle(CDS.Text.muted).accessibilityHidden(true)
+                Image(systemName: "bolt.fill").font(.system(size: 8)).chromeInk(.tertiary, CDS.Text.muted).accessibilityHidden(true)
             }
             if rulesOff > 0 { RulesOffMark(count: rulesOff, size: 8, open: fix) }
         }
         .font(CDS.sans(13, .medium))
-        .foregroundStyle(selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted)
+        .foregroundStyle(BarGlass.ink(selected ? .primary : hover ? .secondary : .tertiary, glass: glass,
+                                      opaque: selected ? CDS.Text.primary : hover ? CDS.Text.secondary : CDS.Text.muted))
         // Only the picked tab has its name: the rest are tight, so all the tabs fit the column.
         .padding(.horizontal, selected ? CDS.Tabs.pad - CDS.Tabs.pillInset : 3)
         .frame(height: CDS.Tabs.height)
