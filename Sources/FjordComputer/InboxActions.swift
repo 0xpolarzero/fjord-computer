@@ -1011,28 +1011,8 @@ enum LocalClones {
         return parts.joined(separator: "/").lowercased()
     }
 
-    /// The GitHub repos a folder's git config names as remotes.
-    static func remotes(of folder: String) -> [String] {
-        let fm = FileManager.default
-        let dotGit = (folder as NSString).appendingPathComponent(".git")
-        var gitDir = dotGit
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: dotGit, isDirectory: &isDir) else { return [] }
-        if !isDir.boolValue {
-            // A worktree: `gitdir: <repo>/.git/worktrees/<name>`; the config is the repo's.
-            guard let text = try? String(contentsOfFile: dotGit, encoding: .utf8),
-                  let line = text.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") }) else { return [] }
-            gitDir = line.dropFirst(7).trimmingCharacters(in: .whitespaces)
-            if let range = gitDir.range(of: "/worktrees/") { gitDir = String(gitDir[..<range.lowerBound]) }
-        }
-        guard let config = try? String(contentsOfFile: (gitDir as NSString).appendingPathComponent("config"), encoding: .utf8) else { return [] }
-        return config.split(separator: "\n").compactMap { line in
-            let t = line.trimmingCharacters(in: .whitespaces)
-            guard t.hasPrefix("url") else { return nil }
-            guard let eq = t.firstIndex(of: "=") else { return nil }
-            return repo(fromRemote: t[t.index(after: eq)...].trimmingCharacters(in: .whitespaces))
-        }
-    }
+    /// The GitHub repos a folder's git config names as remotes (a worktree's are its repo's: see `CodeFolders.configDir`).
+    static func remotes(of folder: String) -> [String] { CodeFolders.remotes(of: folder) }
 
     /// The folders (shortest path first, so a checkout comes before its worktrees) whose remotes name `repo`.
     static func findAll(_ repo: String, in folders: [String], remotes: (String) -> [String] = remotes(of:)) -> [String] {
@@ -1477,7 +1457,7 @@ final class StoreActionPerformer: ActionPerformer {
     private unowned let store: Store
     init(store: Store) { self.store = store }
 
-    func clones(of repo: String) -> [String] { LocalClones.findAll(repo, in: store.knownFolders) }
+    func clones(of repo: String) -> [String] { store.localClones(of: repo) }
 
     /// Stands in for the launcher and Jev (tests); the real ones otherwise.
     var launcher: SessionLauncher?

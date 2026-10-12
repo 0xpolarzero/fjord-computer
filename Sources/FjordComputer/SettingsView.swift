@@ -30,6 +30,7 @@ struct SettingsView: View {
                     if store.triageOn { account }
                     notifications.id(Self.notificationsID)
                     if store.router.enabled { claude }
+                    if store.triageOn || store.router.enabled { CodeFoldersSettings(store: store) }
                     shortcuts
                     updates.id(Self.updatesID)
                     general.id(Self.generalID)

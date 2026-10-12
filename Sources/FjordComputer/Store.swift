@@ -231,6 +231,8 @@ final class Store {
     var folderNames: [String: String] = [:]
     /// The folders `folderNames` was worked out for: the work is skipped while they are the same.
     @ObservationIgnored var namedFoldersSeen: Set<String>?
+    /// The git repos in your code folders, kept fresh (CodeFolders.swift).
+    @ObservationIgnored lazy var codeFolders = CodeFolderScanner(store: self)
     var claudeSessions: [String: ClaudeSession] = [:] {
         didSet {
             agentCache = nil
@@ -459,6 +461,7 @@ final class Store {
         }
         watchClaude()
         startRouter()
+        if !Store.isDemo { codeFolders.start() }
         Task.detached(priority: .utility) {
             let key = Keychain.read(Keychain.typesafe) ?? ""
             await MainActor.run { [weak self] in

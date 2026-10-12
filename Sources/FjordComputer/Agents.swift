@@ -280,8 +280,10 @@ extension Store {
 
     var allAgentRows: [AgentRow] { cache.all }
 
-    /// Every folder a name can be asked for: the ones sessions are in and the ones muted.
-    var namedFolders: Set<String> { Set(claudeSessions.values.map(\.folderKey)).union(agents.mutedFolders).subtracting([""]) }
+    /// Every folder a name can be asked for: the ones sessions are in, the ones muted and the repos in your code folders.
+    var namedFolders: Set<String> {
+        Set(claudeSessions.values.map(\.folderKey)).union(agents.mutedFolders).union(codeFolders.repos.keys).subtracting([""])
+    }
 
     /// A project's name wherever it is named: its own, with as much of the path above it as it takes to tell it from another
     /// project of the same name (`customer-a/app`), the same in every menu, tag and spoken value.
