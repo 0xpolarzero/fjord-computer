@@ -45,6 +45,11 @@ func shortAgo(_ date: Date, now: Date = Date()) -> String {
     return date.formatted(.dateTime.month(.abbreviated).day())
 }
 
+/// The time an age stands for, shown on hovering it: the clock time today, with the date before.
+func exactTime(_ date: Date) -> String {
+    date.formatted(date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated, time: .shortened)
+}
+
 /// `shortAgo` for a sentence: "just now", "3m ago", "on Sep 28" (never "now ago" or "Sep 28 ago").
 func agoPhrase(_ date: Date, now: Date = Date()) -> String {
     let short = shortAgo(date, now: now)

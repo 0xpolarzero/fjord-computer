@@ -250,6 +250,7 @@ struct RouterCardLine: View {
                         Text(card.title).font(Theme.Typography.bodyStrong).foregroundStyle(Theme.text).lineLimit(1)
                         Spacer(minLength: 4)
                         Text(shortAgo(card.createdAt)).font(Theme.Typography.caption.monospacedDigit()).foregroundStyle(Theme.tertiary)
+                            .help(exactTime(card.createdAt))
                     }
                     HStack(spacing: 6) {
                         KindTag(kind: card.kind)
@@ -269,7 +270,7 @@ struct RouterCardLine: View {
         .onHover { hover = $0 }
         .contextMenu { if let session = store.sessionRow(card.sessionID) { SessionMenu(row: session, store: store) } }
         .accessibilityLabel("\(card.kind.label): \(card.title)")
-        .accessibilityValue("\(project.name), \(card.text), \(AgentRow.spokenAge(Date().timeIntervalSince(card.createdAt))) ago")
+        .accessibilityValue("\(project.name), \(card.text), \(AgentRow.spokenAge(Date().timeIntervalSince(card.createdAt))) ago, at \(exactTime(card.createdAt))")
         .accessibilityHint("Opens it in the Router")
     }
 }

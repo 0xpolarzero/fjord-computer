@@ -874,6 +874,7 @@ private struct HistorySummaryLine: View, Equatable {
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
                     Text(shortAgo(summary.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                        .help(exactTime(summary.at))
                 }
                 .padding(.horizontal, CDS.Transcript.statusPad)
                 .frame(height: CDS.Transcript.statusRow)
@@ -889,7 +890,7 @@ private struct HistorySummaryLine: View, Equatable {
             .focused($focused)
             .onHover { hovered = $0 }
             .accessibilityLabel(summary.title.map { "Summary of \($0)" } ?? "Overview")
-            .accessibilityValue("\(summary.text), \(AgentRow.spokenAge(now.timeIntervalSince(summary.at))) ago, \(open ? "expanded" : "collapsed")")
+            .accessibilityValue("\(summary.text), \(AgentRow.spokenAge(now.timeIntervalSince(summary.at))) ago, at \(exactTime(summary.at)), \(open ? "expanded" : "collapsed")")
 
             if open {
                 CDSProse(text: summary.text, color: CDS.Text.primary, inset: false).historyDetails()
@@ -956,6 +957,7 @@ private struct HistoryDecisionLine: View, Equatable {
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
                     Text(shortAgo(decision.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                        .help(exactTime(decision.at))
                     // Room for Cancel, laid over it: the line stays one button, and Cancel one of its own.
                     if cancel != .none { Color.clear.frame(width: Self.cancelWidth, height: 1) }
                 }
@@ -973,7 +975,7 @@ private struct HistoryDecisionLine: View, Equatable {
             .focused($focused)
             .onHover { hovered = $0 }
             .accessibilityLabel(decision.triggerText)
-            .accessibilityValue("\(status), \(open ? "expanded" : "collapsed")")
+            .accessibilityValue("\(status), \(AgentRow.spokenAge(now.timeIntervalSince(decision.at))) ago, at \(exactTime(decision.at)), \(open ? "expanded" : "collapsed")")
             .overlay(alignment: .trailing) {
                 if cancel != .none {
                     ClaudeButton("Cancel", variant: .ghost, size: .sm, busy: cancel == .cancelling) {
@@ -1140,7 +1142,8 @@ private struct HistoryCardLine: View, Equatable {
                     }
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
-                    // Open in Claude takes the time's place on hover, so the line lines up with the runs around it.
+                    // Open in Claude takes the time's place on hover, so the line lines up with the runs around it (and the
+                    // line, not the hidden age, shows the time on hover).
                     Text(shortAgo(when, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
                         .opacity(hovered ? 0 : 1)
                         .overlay(alignment: .trailing) {
@@ -1159,8 +1162,9 @@ private struct HistoryCardLine: View, Equatable {
             }
             .buttonStyle(.plain)
             .focused($focused)
+            .help(exactTime(when))
             .accessibilityLabel("\(unread ? "Unread, " : "")\(card.kind.label): \(card.title)")
-            .accessibilityValue("\(how), \(AgentRow.spokenAge(now.timeIntervalSince(when))) ago, \(open ? "expanded" : "collapsed")")
+            .accessibilityValue("\(how), \(AgentRow.spokenAge(now.timeIntervalSince(when))) ago, at \(exactTime(when)), \(open ? "expanded" : "collapsed")")
             .accessibilityAddTraits(open ? .isSelected : [])
             .accessibilityHint("Shows it in full and replies to it")
             .accessibilityAction(named: "Open in Claude") { store.openAgent(card.sessionID) }
@@ -1661,7 +1665,7 @@ private struct WorkingSummary: View {
 
     var body: some View {
         let at = summary.at
-        let time = at.formatted(date: Calendar.current.isDateInToday(at) ? .omitted : .abbreviated, time: .shortened)
+        let time = exactTime(at)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 9, weight: .medium)).foregroundStyle(CDS.Text.muted)
                 .frame(width: 18)
@@ -1859,6 +1863,7 @@ private struct WaitingCard: View {
                         MinuteTicking { now in
                             Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
                         }
+                        .help(exactTime(card.createdAt))
                     }
                     .contentShape(Rectangle())
                 }
@@ -2111,6 +2116,7 @@ struct CardView: View {
     private func summary(project: RouterProject) -> some View {
         let title = Text(card.title).cdsText(quiet ? (13, 18) : (14, 20), quiet ? .medium : .semibold, CDS.Text.primary).lineLimit(1)
         let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
+            .help(exactTime(when))
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
         // A form has its own buttons: Archive sits in the header beside it.
         return VStack(alignment: .leading, spacing: 1) {
@@ -2221,6 +2227,7 @@ private struct AskBackCard: View {
                 Text("Where should this go?").cdsText((14, 20), .semibold, CDS.Text.primary)
                 Spacer(minLength: 4)
                 Text(shortAgo(ask.at)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
+                    .help(exactTime(ask.at))
             }
             Text((ask.context.action.map { "\($0.origin.category) · " } ?? "") + "“\(RouterDecision.clip(ask.message, 160))”")
                 .cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
