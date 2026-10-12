@@ -15,6 +15,14 @@ extension WindowSeams {
     @Suite(.hostsWindows) struct HubPointerRetention {
         static let edges: [DockEdge] = [.right, .left, .top, .bottom]
 
+        /// Runs `body` for each at once, each on a bar and window of its own: their waits (a dwell, a reveal, a grace) overlap
+        /// rather than add up. Each rig's pointer is its own, so no bar hears another's.
+        static func concurrently<T: Sendable>(_ each: [T], _ body: @escaping @Sendable @MainActor (T) async -> Void) async {
+            await withTaskGroup(of: Void.self) { group in
+                for one in each { group.addTask { await body(one) } }
+            }
+        }
+
         /// An element of the hub as drawn: its label and where it is on screen.
         struct Drawn: Equatable {
             let role: String
@@ -259,135 +267,148 @@ extension WindowSeams {
 
         // MARK: The inbox, each tab from its own cell
 
-        @Test(arguments: edges) func theInboxPanelStaysOpenOverEveryRowOfEveryTabOpenedFromItsCell(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            for category in rig.store.shownCategories {
-                let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
-                #expect(opened, "\(edge) \(category.name): no panel")
-                await rig.hoverEachItem(category.name)
-                await rig.graceElapsed()
-                #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
-                await rig.leave(settling: true)
-                #expect(rig.hub.section == nil, "\(edge) \(category.name): still open after the pointer left")
-                #expect(rig.window.ignoresMouseEvents && !rig.controller.watchesGlobally,
-                        "\(edge) \(category.name): the bar still takes the mouse or watches it system-wide at rest")
+        @Test func theInboxPanelStaysOpenOverEveryRowOfEveryTabOpenedFromItsCell() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .agents)
+                defer { rig.close() }
+                for category in rig.store.shownCategories {
+                    let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
+                    #expect(opened, "\(edge) \(category.name): no panel")
+                    await rig.hoverEachItem(category.name)
+                    await rig.graceElapsed()
+                    #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
+                    await rig.leave(settling: true)
+                    #expect(rig.hub.section == nil, "\(edge) \(category.name): still open after the pointer left")
+                    #expect(rig.window.ignoresMouseEvents && !rig.controller.watchesGlobally,
+                            "\(edge) \(category.name): the bar still takes the mouse or watches it system-wide at rest")
+                }
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
         }
 
         // MARK: Back on the bar as the last panel fades
 
-        @Test(arguments: edges) func aPanelReopenedWhileTheLastOneFadesStaysOpenOverItsRows(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            for category in rig.store.shownCategories + rig.store.shownCategories.prefix(1) {
-                let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
-                #expect(opened, "\(edge) \(category.name): no panel")
-                await rig.hoverEachItem(category.name)
-                await rig.graceElapsed()
-                #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
-                // Off it, and straight back: the closing panel is still fading out as the next opens.
-                await rig.leave()
-                #expect(rig.hub.section == nil)
+        @Test func aPanelReopenedWhileTheLastOneFadesStaysOpenOverItsRows() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .agents)
+                defer { rig.close() }
+                for category in rig.store.shownCategories + rig.store.shownCategories.prefix(1) {
+                    let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
+                    #expect(opened, "\(edge) \(category.name): no panel")
+                    await rig.hoverEachItem(category.name)
+                    await rig.graceElapsed()
+                    #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
+                    // Off it, and straight back: the closing panel is still fading out as the next opens.
+                    await rig.leave()
+                    #expect(rig.hub.section == nil)
+                }
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
         }
 
         // MARK: Switching tabs from the bar with the panel open
 
-        @Test(arguments: edges) func theInboxPanelStaysOpenOverTheRowsOfATabPickedFromTheBarWhileOpen(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            let categories = rig.store.shownCategories
-            guard let first = categories.first else { Issue.record("no categories"); return }
-            #expect(await rig.open(.inbox, cell: first.title, tab: .category(first.id)))
-            for category in categories.reversed() {
-                // Back onto the bar, to another category's cell: its list replaces the panel's.
-                guard let cell = rig.cell(category.title) else { Issue.record("\(edge): no cell \(category.title)"); continue }
-                await rig.back(to: cell.centre, "back to the \(category.title) cell")
-                rig.hover(.inbox, tab: .category(category.id))
-                await rig.settle()
-                await rig.hoverEachItem("\(category.name), switched")
-                #expect(rig.hub.section == .inbox)
+        @Test func theInboxPanelStaysOpenOverTheRowsOfATabPickedFromTheBarWhileOpen() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .agents)
+                defer { rig.close() }
+                let categories = rig.store.shownCategories
+                guard let first = categories.first else { Issue.record("no categories"); return }
+                #expect(await rig.open(.inbox, cell: first.title, tab: .category(first.id)))
+                for category in categories.reversed() {
+                    // Back onto the bar, to another category's cell: its list replaces the panel's.
+                    guard let cell = rig.cell(category.title) else { Issue.record("\(edge): no cell \(category.title)"); continue }
+                    await rig.back(to: cell.centre, "back to the \(category.title) cell")
+                    rig.hover(.inbox, tab: .category(category.id))
+                    await rig.settle()
+                    await rig.hoverEachItem("\(category.name), switched")
+                    #expect(rig.hub.section == .inbox)
+                }
+                await rig.graceElapsed()
+                #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
+                await rig.leave()
+                #expect(rig.hub.section == nil)
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
-            await rig.graceElapsed()
-            #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
-            await rig.leave()
-            #expect(rig.hub.section == nil)
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
         }
 
         // MARK: A list longer than the panel, scrolled
 
-        @Test(arguments: edges) func aScrolledInboxListKeepsThePanelOpenOverItsRows(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .inboxMany)
-            defer { rig.close() }
-            guard let category = rig.store.shownCategories.max(by: { rig.store.entries(in: $0.id).count < rig.store.entries(in: $1.id).count })
-            else { Issue.record("no categories"); return }
-            #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
-            await rig.hoverEachItem("\(category.name), top")
-            if let last = rig.store.entries(in: category.id).last {
-                rig.hub.requestScroll("i:" + last.id)
-                await waitUntil { rig.panelItems().contains { rig.rowID($0.label) == last.id } }
+        @Test func aScrolledInboxListKeepsThePanelOpenOverItsRows() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .inboxMany)
+                defer { rig.close() }
+                guard let category = rig.store.shownCategories.max(by: { rig.store.entries(in: $0.id).count < rig.store.entries(in: $1.id).count })
+                else { Issue.record("no categories"); return }
+                #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
+                await rig.hoverEachItem("\(category.name), top")
+                if let last = rig.store.entries(in: category.id).last {
+                    rig.hub.requestScroll("i:" + last.id)
+                    await waitUntil { rig.panelItems().contains { rig.rowID($0.label) == last.id } }
+                }
+                await rig.settle()
+                await rig.hoverEachItem("\(category.name), scrolled to the end")
+                await rig.graceElapsed()
+                #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
+                await rig.leave()
+                #expect(rig.hub.section == nil)
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
-            await rig.settle()
-            await rig.hoverEachItem("\(category.name), scrolled to the end")
-            await rig.graceElapsed()
-            #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
-            await rig.leave()
-            #expect(rig.hub.section == nil)
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
         }
 
         // MARK: The Router and the controls
 
-        @Test(arguments: edges) func theRouterAndControlsPanelsStayOpenOverTheirItems(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .router)
-            defer { rig.close() }
-            for (section, cell) in [(HubSection.router, "Router"), (.controls, "Controls")] {
-                #expect(await rig.open(section, cell: cell), "\(edge) \(cell): no panel")
-                await rig.hoverEachItem(cell)
-                await rig.graceElapsed()
-                #expect(rig.hub.section == section, "\(edge) \(cell): the panel closed under the pointer")
-                await rig.leave()
-                #expect(rig.hub.section == nil, "\(edge) \(cell): still open after the pointer left")
+        @Test func theRouterAndControlsPanelsStayOpenOverTheirItems() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .router)
+                defer { rig.close() }
+                for (section, cell) in [(HubSection.router, "Router"), (.controls, "Controls")] {
+                    #expect(await rig.open(section, cell: cell), "\(edge) \(cell): no panel")
+                    await rig.hoverEachItem(cell)
+                    await rig.graceElapsed()
+                    #expect(rig.hub.section == section, "\(edge) \(cell): the panel closed under the pointer")
+                    await rig.leave()
+                    #expect(rig.hub.section == nil, "\(edge) \(cell): still open after the pointer left")
+                }
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
         }
 
         // MARK: Slipping off and back
 
-        @Test(arguments: edges) func slippingOffThePanelForAMomentAndBackOntoItKeepsItOpen(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            guard let category = rig.store.shownCategories.first else { return }
-            #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
-            guard let row = rig.panelItems().last else { Issue.record("\(edge): nothing in the panel"); return }
-            await rig.cross(to: row.centre, "the last row")
-            // Off the panel's far side, briefly, and back onto the same row.
-            let back = rig.pointer
-            let off: NSPoint = switch edge {
-            case .right: NSPoint(x: row.frame.minX - 30, y: back.y)
-            case .left: NSPoint(x: row.frame.maxX + 30, y: back.y)
-            case .top: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.minY).min()! - 30)
-            case .bottom: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.maxY).max()! + 30)
+        @Test func slippingOffThePanelForAMomentAndBackOntoItKeepsItOpen() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .agents)
+                defer { rig.close() }
+                guard let category = rig.store.shownCategories.first else { return }
+                #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
+                guard let row = rig.panelItems().last else { Issue.record("\(edge): nothing in the panel"); return }
+                await rig.cross(to: row.centre, "the last row")
+                // Off the panel's far side, briefly, and back onto the same row.
+                let back = rig.pointer
+                let off: NSPoint = switch edge {
+                case .right: NSPoint(x: row.frame.minX - 30, y: back.y)
+                case .left: NSPoint(x: row.frame.maxX + 30, y: back.y)
+                case .top: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.minY).min()! - 30)
+                case .bottom: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.maxY).max()! + 30)
+                }
+                await rig.move(to: off)
+                try? await Task.sleep(for: .milliseconds(40))
+                await rig.move(to: back)
+                await rig.graceElapsed()
+                #expect(rig.hub.section == .inbox, "\(edge): a moment off the panel closed it though the pointer came back")
+                #expect(!rig.window.ignoresMouseEvents, "\(edge): back on the panel, the window lets the pointer through")
+                await rig.leave()
+                #expect(rig.hub.section == nil)
             }
-            await rig.move(to: off)
-            try? await Task.sleep(for: .milliseconds(40))
-            await rig.move(to: back)
-            await rig.graceElapsed()
-            #expect(rig.hub.section == .inbox, "\(edge): a moment off the panel closed it though the pointer came back")
-            #expect(!rig.window.ignoresMouseEvents, "\(edge): back on the panel, the window lets the pointer through")
-            await rig.leave()
-            #expect(rig.hub.section == nil)
         }
 
         // MARK: Anywhere on screen
 
         @Test func theWindowsPlaceOnScreenDoesNotMatter() async {
             // A screen far from the origin, at a fractional place (a second display left of and below the main one).
-            for (edge, origin) in [(DockEdge.right, NSPoint(x: -12_345.5, y: -6_789.25)), (.bottom, NSPoint(x: -20_011.5, y: -9_001.5))] {
+            await Self.concurrently([(DockEdge.right, NSPoint(x: -12_345.5, y: -6_789.25)), (.bottom, NSPoint(x: -20_011.5, y: -9_001.5))]) {
+                let (edge, origin) = $0
                 let rig = await Rig(edge: edge, scenario: .agents, origin: origin)
                 defer { rig.close() }
                 for category in rig.store.shownCategories.prefix(2) {
