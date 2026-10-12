@@ -199,9 +199,8 @@ enum CDS {
         /// `.epitaxy-titlebar`, centred in the header.
         static let bar: CGFloat = 32
         static let endInset: CGFloat = 12
-        /// The origin glyph's left edge from the content edge, and the title's (MEASURED).
+        /// The title's left edge from the content edge, where the origin glyph was (MEASURED).
         static let glyphLeading: CGFloat = 19
-        static let titleLeading: CGFloat = 42
         static let button: CGFloat = 26
         static let buttonGap: CGFloat = 4
         /// The project chip (MEASURED on the reference: 17 tall, white 10%).

@@ -69,21 +69,15 @@ struct RouterMain: View {
             .padding(.bottom, 16)
     }
 
-    /// §3: a 48pt header holding the 32pt session bar: the glyph and the title (13pt, wght 460, primary).
+    /// §3: a 48pt header holding the 32pt session bar: the title (13pt, wght 460, primary).
     private var topBar: some View {
         HStack(spacing: 0) {
-            Image(systemName: "bubble.left")
-                .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-                .foregroundStyle(CDS.Text.secondary)
-                .frame(width: 16, height: 16)
-                // Its place, or 12 past the window's buttons when they are in the header.
-                .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 12))
-                .accessibilityHidden(true)
             Text("Router")
                 .font(CDS.sans(CDS.Density.compact.body.0, .medium))
                 .foregroundStyle(CDS.Text.primary)
                 .lineLimit(1)
-                .padding(.leading, CDS.TitleBar.titleLeading - CDS.TitleBar.glyphLeading - 16)
+                // Its place, or 14 past the window's buttons when they are in the header, as the other pages' titles.
+                .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 14))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 24)
         }
