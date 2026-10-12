@@ -130,6 +130,13 @@ def _legacy_modules(format_name, policy_name):
     return formats, jev, run, policy, lexical, fusion, final3
 
 
+CARDS = ("policy", "top1+recency", "top2+recency")
+# A card spec is either a name above or slots in order, e.g. "top1,last,recent": top<k> the policy's first k, last the
+# session you sent to most recently, recent sessions by least idle time (fills), lex the best BM25 match; then the
+# policy's rest.
+CARD_SLOTS = ("last", "last2", "recent", "lex", "other")
+
+
 class RouterSystem:
     """A named format/policy or unconditional reference baseline.
 
@@ -139,15 +146,53 @@ class RouterSystem:
     """
     def __init__(self, format_name="combo-o", policy_name="explore.final3:best", baseline=None,
                  cache_path=None, cache_only=False, option_seed=None, quiet=True,
-                 legacy_cache=True, max_calls=40):
+                 legacy_cache=True, max_calls=40, card="policy"):
         if baseline not in {None, "always-ask", "recency-only", "lexical-only"}:
             raise ValueError("unknown baseline")
         self.format_name, self.policy_name, self.baseline = format_name, policy_name, baseline
         self.cache_path = Path(cache_path) if cache_path is not None else HERE / "cache"
         self.cache_only, self.option_seed, self.quiet = cache_only, option_seed, quiet
         self.legacy_cache, self.max_calls = legacy_cache, max_calls
+        if card not in CARDS and not all(slot in CARD_SLOTS or re.fullmatch(r"top\d", slot)
+                                         for slot in card.split(",")):
+            raise ValueError("unknown card")
+        self.card = card
         self.new_calls = self.cache_hits = 0
         self._modules = None
+
+    def _card(self, order, case, state, lexical):
+        """Four buttons chosen for the intended target being among them, not for the first being safe."""
+        spec = {"top1+recency": "top1,recent", "top2+recency": "top2,recent"}.get(self.card, self.card)
+        sessions = {"session:" + s["id"] for s in case["board"]["sessions"]}
+        recent = ["session:" + s["id"] for s in sorted(case["board"]["sessions"], key=lambda s: (s["idle_min"], s["id"]))]
+        told = [adapter.canonical_target(h["to"], state) for h in reversed(state.get("history", [])) if h.get("to")]
+        last = [t for t in dict.fromkeys(told) if t in sessions]
+        lex = []
+        if "lex" in spec:
+            scores = lexical.scores(case)
+            lex = ["session:" + sid for sid, score in sorted(scores.items(), key=lambda item: -item[1]) if score > 0]
+        out = []
+
+        def add(targets, n):
+            for target in targets:
+                if n <= 0:
+                    return
+                # Buttons are canonical and unique (rules._ranked drops repeats), and archived sessions can't be one.
+                target = adapter.canonical_target(target, state) or target
+                if target not in out and (targets is order or rules.eligible(state, target)):
+                    out.append(target)
+                    n -= 1
+        for slot in spec.split(","):
+            if slot.startswith("top"):
+                add(order, int(slot[3:]))
+            elif slot == "recent":
+                add(recent, 4 - len(out))
+            else:
+                other = [t for t in order[:4] if not t.startswith("session:")]  # a new session or a Router intent
+                add({"last": last, "last2": last, "lex": lex, "other": other}[slot], 2 if slot == "last2" else 1)
+        add(order, 4 - len(out))
+        add(recent, 4 - len(out))
+        return out
 
     @property
     def name(self):
@@ -233,7 +278,12 @@ class RouterSystem:
         if kind == "ask":
             # Score the actual four buttons chosen by the policy, not Jev's raw
             # route ranking. Keep its probability/feature rank when available.
-            order = list(dict.fromkeys(what))[:4]
+            # As RouterDispatcher.askBack: go down the list until four unique canonical, renderable buttons.
+            order = list(dict.fromkeys(adapter.canonical_target(t, state) or t for t in what))
+            order = [t for t in order if rules._ranked(state, [t])]
+            if self.card != "policy":
+                order = self._card(order, case, state, lexical)
+            order = order[:4]
             ps = dict(ranking)
             ranking = [(target, ps.get(target, 0)) for target in order]
             target = None
@@ -438,6 +488,8 @@ def main(argv=None):
     parser.add_argument("--format", default="combo-o")
     parser.add_argument("--policy", default="explore.final3:best")
     parser.add_argument("--baseline", choices=["always-ask", "recency-only", "lexical-only"])
+    parser.add_argument("--card", default="policy",
+                        help="how an ask card's four buttons are chosen: " + ", ".join(CARDS) + ", or slots like top1,last,recent")
     parser.add_argument("--cache", type=Path, default=HERE / "cache")
     parser.add_argument("--cache-only", action="store_true")
     parser.add_argument("--max-calls", type=int, default=40)
@@ -449,7 +501,7 @@ def main(argv=None):
     try:
         episodes = load_episodes(args.episodes)
         system = RouterSystem(args.format, args.policy, args.baseline, args.cache, args.cache_only,
-                              args.option_seed, max_calls=args.max_calls)
+                              args.option_seed, max_calls=args.max_calls, card=args.card)
         results = [play_episode(episode, system) for episode in episodes]
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
