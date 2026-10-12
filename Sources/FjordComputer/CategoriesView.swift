@@ -383,15 +383,15 @@ private struct NewRow: View {
     }
 }
 
-/// Done is not a category: the things you acknowledged, back when something new matches. Fixed, last.
+/// The archive is not a category: the things you archived, back when something new matches. Fixed, last.
 private struct DoneRow: View {
     let count: Int
 
     var body: some View {
         HStack(spacing: 10) {
-            CategoryTile(symbol: "checkmark", color: .gray)
+            CategoryTile(symbol: "archivebox", color: .gray)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Done").cdsText(body14)
+                Text("Archive").cdsText(body14)
             }
             Spacer(minLength: 8)
             Text("\(count)")

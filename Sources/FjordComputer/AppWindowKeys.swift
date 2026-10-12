@@ -3,9 +3,9 @@ import Carbon
 import SwiftUI
 
 // The inbox's keys in the app window: the arrows pick a row, the configured shortcuts act on it, typing searches, ⌘Z takes
-// back a Done (or, on Inbox categories, a category edit), Esc steps out.
+// back an archive (or, on Inbox categories, a category edit), Esc steps out.
 
-/// The search of the window's inbox: a query over every category and Done, and the field's focus handshake with the keys.
+/// The search of the window's inbox: a query over every category and the archive, and the field's focus handshake with the keys.
 @Observable
 @MainActor
 final class InboxSearch {
@@ -50,7 +50,7 @@ final class InboxSearch {
 }
 
 extension Store {
-    /// What the inbox lists: the tab's entries, or with a search every entry (Done last) matching all its words.
+    /// What the inbox lists: the tab's entries, or with a search every entry (archived last) matching all its words.
     func inboxRows(_ tab: InboxTab, search: String = "") -> [InboxEntry] {
         let words = search.lowercased().split(separator: " ")
         guard !words.isEmpty else { return entries(in: tab) }

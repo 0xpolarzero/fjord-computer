@@ -5,7 +5,7 @@ import SwiftUI
 // act; a click opens the app window (AppWindow.swift) on that item, and the bar leaves the edge until the window
 // closes.
 
-/// A tab of the inbox: a category, or Done at the end.
+/// A tab of the inbox: a category, or the archive at the end.
 enum InboxTab: Hashable {
     case category(UUID)
     case done

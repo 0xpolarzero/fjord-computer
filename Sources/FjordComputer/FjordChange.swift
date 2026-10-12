@@ -22,7 +22,7 @@ struct EntryChange: Codable, Hashable {
 struct FjordChange: Codable, Hashable, Identifiable {
     var id = UUID()
     var date: Date
-    /// One line: "Created category Contributions", "Changed snooze to 1 hour", "Marked 3 done".
+    /// One line: "Created category Contributions", "Changed snooze to 1 hour", "Archived 3".
     var title: String
     /// What the card is about, as the model has it.
     var patch: Patch
@@ -443,7 +443,7 @@ enum FjordTarget: Equatable {
     case categories
     /// Settings, scrolled to a section.
     case settings(section: String)
-    /// A thing in its list (its category, or Done), picked and scrolled to.
+    /// A thing in its list (its category, or the archive), picked and scrolled to.
     case entry(thing: String, category: UUID?, done: Bool)
 }
 

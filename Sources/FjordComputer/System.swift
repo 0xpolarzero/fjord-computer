@@ -415,7 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotKeys.paused = { [weak self] in self?.store.isRecordingShortcut ?? false }
         store.onRecordingShortcutChange = { [weak self] on in self?.globalShortcuts?.suspend(on) }
-        // A banner's click: the window on the thing's category with it picked (on Done if it was done since), or, for a
+        // A banner's click: the window on the thing's category with it picked (on the archive if it was archived since), or, for a
         // summary, on the first category with something unread.
         store.onOpenInbox = { [weak self] category, thing in
             guard let self else { return }

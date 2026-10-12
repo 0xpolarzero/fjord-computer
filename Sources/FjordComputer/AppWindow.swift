@@ -504,7 +504,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         contentChanged()
     }
 
-    /// An inbox entry picked and scrolled to, on its category (Done if it was done since): where a banner's click lands.
+    /// An inbox entry picked and scrolled to, on its category (the archive if it was archived since): where a banner's click lands.
     func show(entry: InboxEntry) {
         show(entry.isDone ? .done : .category(entry.categoryID))
         hub.selection = "i:" + entry.id
@@ -533,7 +533,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     func title(for destination: AppDestination) -> String {
         switch destination {
         case .category(let id): store.categories.first { $0.id == id }?.title ?? "Inbox"
-        case .done: "Done"
+        case .done: "Archive"
         case .router: "Router"
         case .settings: "Settings"
         case .categories: "Inbox categories"

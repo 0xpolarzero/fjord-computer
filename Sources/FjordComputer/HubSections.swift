@@ -6,7 +6,7 @@ import SwiftUI
 // One set of measures for every piece, so the sections read as one surface, Claude's compact density on black:
 // - section headers are 30pt: the title as Claude's sidebar label (12/16 muted), then a status in its state's colour,
 //   trailing actions as Claude's 24pt ghost icon buttons;
-// - the inbox's tabs (a category each, then Done) are Claude's Tabs, its counts Claude's Badges, its facts chips;
+// - the inbox's tabs (a category each, then the archive) are Claude's Tabs, its counts Claude's Badges, its facts chips;
 // - rows pad their content 8 × 5 inside a radius-6 fill (white 7.5% on hover or when picked);
 //   the layout adds the one outer inset, so nothing here pads itself from the outside;
 // - every control has a tooltip: a verb phrase, then what it does and its shortcut, read from the user's settings.
@@ -65,14 +65,14 @@ extension FjordHub {
             }
             .scrollIndicators(.never)
             .mask(tabsFade)
-            // Done is not a category: after a gap and a rule, at the tabs' trailing end.
+            // The archive is not a category: after a gap and a rule, at the tabs' trailing end.
             doneTab(selected: tab == .done).padding(.leading, 6)
             Spacer(minLength: 2)
             // The header's own buttons, apart from the tabs.
             IslandRule(axis: .vertical).frame(height: 14).padding(.horizontal, 3)
             if unread > 0 {
                 IconButton(symbol: "checkmark.circle", help: "Mark all as seen",
-                           detail: "Everything in \(store.category(tab)?.name ?? "Done") · \(store.shortcut(.markAllRead).display)",
+                           detail: "Everything in \(store.category(tab)?.name ?? "Archive") · \(store.shortcut(.markAllRead).display)",
                            size: IconButton.Size.header) {
                     withAnimation(Motion.fade.resolved(reduce: reduce)) { store.markAllSeen(tab) }
                 }
@@ -105,7 +105,7 @@ extension FjordHub {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "archivebox").font(.system(size: 12, weight: .medium))
-                if selected { Text("Done") }
+                if selected { Text("Archive") }
             }
             .font(CDS.sans(13, .medium))
             .chromeInk(selected ? .primary : .tertiary, selected ? CDS.Text.primary : CDS.Text.muted)
@@ -117,10 +117,10 @@ extension FjordHub {
                                           active: BarGlass.fill(.selected, glass: glass, scheme: colorScheme, opaque: CDS.Fill.ghostHover),
                                           pressed: BarGlass.fill(.selected, glass: glass, scheme: colorScheme, opaque: CDS.Fill.ghostHover),
                                           isActive: selected))
-        .accessibilityLabel("Done")
+        .accessibilityLabel("Archive")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .fixedSize()
-        .tip("Done", "What you marked Done · it comes back when something new happens")
+        .tip("Archive", "What you archived · it comes back when something new happens")
     }
 
     /// Like a table's columns menu: a checkmark per category shown. Hidden ones are muted (no notifications, no icon in
@@ -168,7 +168,7 @@ extension FjordHub {
         .frame(minHeight: Theme.Metrics.line)
     }
 
-    /// After a Done, for a few seconds: what happened and a way to take it back (⌘Z does it for 30 s). Nothing otherwise.
+    /// After an archive, for a few seconds: what happened and a way to take it back (⌘Z does it for 30 s). Nothing otherwise.
     var undoLine: some View {
         Group {
             if let entry = store.undoStack.line {

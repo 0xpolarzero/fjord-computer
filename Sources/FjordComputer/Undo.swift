@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import SwiftUI
 
-// Undo for Done: a line under the inbox's header offers it for a few seconds, ⌘Z works for 30.
+// Undo for Archive: a line under the inbox's header offers it for a few seconds, ⌘Z works for 30.
 
 /// The last few things moved out of sight, newest last. Each is good for `validFor` seconds; the line on show is dismissed
 /// by a one-shot timer, cancelled whenever it is replaced, undone or dismissed (nothing ticks at rest).
@@ -11,7 +11,7 @@ import SwiftUI
 final class UndoStack {
     struct Entry: Identifiable {
         let id = UUID()
-        /// The undo line's text: "Moved to Done".
+        /// The undo line's text: "Moved to the archive".
         let message: String
         let at: Date
         /// Whether anything was put back: false once what it concerned is gone.

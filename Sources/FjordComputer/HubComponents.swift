@@ -340,7 +340,7 @@ struct EntryRow: View {
                         store.markUnread(entry)
                     }
                 }
-                IconButton(symbol: "xmark", help: "Done", detail: "Moves it to Done until something new happens · \(store.shortcut(.discard).display)",
+                IconButton(symbol: "archivebox", help: "Archive", detail: "Moves it to the archive until something new happens · \(store.shortcut(.discard).display)",
                            size: size) { store.finish(entry) }
             }
             IconButton(symbol: "arrow.up.right", help: "Open on GitHub", detail: store.shortcut(.openItem).display, size: size) {
@@ -350,7 +350,7 @@ struct EntryRow: View {
     }
 }
 
-/// An entry's context menu: open, copy link, seen, done.
+/// An entry's context menu: open, copy link, seen, archive.
 struct EntryMenu: View {
     let entry: InboxEntry
     let store: Store
@@ -367,7 +367,7 @@ struct EntryMenu: View {
         } else {
             if entry.isUnread { Button("Mark as seen") { store.markSeen(entry) } }
             else { Button("Mark as unread") { store.markUnread(entry) } }
-            Button("Done") { store.finish(entry) }
+            Button("Archive") { store.finish(entry) }
         }
     }
 }
@@ -558,7 +558,7 @@ extension Store {
     /// In the bar's order: section by section (CategorySections.swift).
     var shownCategories: [InboxCategory] { barSections.flatMap(\.categories) }
 
-    /// The tab the inbox peek shows: the one picked while it is still there, else the first category shown, else Done.
+    /// The tab the inbox peek shows: the one picked while it is still there, else the first category shown, else the archive.
     func hubTab(_ hub: HubState) -> InboxTab {
         switch hub.tab {
         case .done?: return .done
@@ -597,14 +597,14 @@ extension Store {
         if entry.isUnread { markSeen(entry) }
     }
 
-    /// Done, with an undo for the next 30 s: it puts the thing back as it was (unread stays unread), unless something else
+    /// Archives it, with an undo for the next 30 s: it puts the thing back as it was (unread stays unread), unless something else
     /// has happened to it since, or it is gone.
     func finish(_ entry: InboxEntry) {
         guard !entry.isDone else { return }
         let before = marks[entry.id] ?? EntryMarks()
         markDone(entry)
         let after = marks[entry.id]
-        undoStack.push("Moved to Done") { [self] in
+        undoStack.push("Moved to the archive") { [self] in
             guard things[entry.id] != nil, let now = marks[entry.id], now.acked == after?.acked, now.doneAt == after?.doneAt else {
                 return false
             }

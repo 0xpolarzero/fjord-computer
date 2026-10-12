@@ -60,13 +60,13 @@ enum AppDestination: Hashable {
         }
     }
 
-    /// The sidebar's destinations in order: the categories shown, Done, the Router, Settings, Inbox categories; those of a
+    /// The sidebar's destinations in order: the categories shown, the archive, the Router, Settings, Inbox categories; those of a
     /// tool that is off left out.
     static func all(shown: [UUID], tools: Set<Tool>) -> [AppDestination] {
         (shown.map { .category($0) } + [.done, .router, .settings, .categories]).filter { $0.tool.map(tools.contains) ?? true }
     }
 
-    /// Where this really goes: a category that is gone or hidden lands on the first category shown (Done when there is none);
+    /// Where this really goes: a category that is gone or hidden lands on the first category shown (the archive when there is none);
     /// a place whose tool is off, on the first place of a tool that is on (Settings when none is).
     func resolved(shown: [UUID], tools: Set<Tool>) -> AppDestination {
         let inbox: AppDestination = shown.first.map { .category($0) } ?? .done

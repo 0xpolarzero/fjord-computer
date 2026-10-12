@@ -128,7 +128,7 @@ enum AccessibilityTree {
                 missing += try await unnamed("peek \(section)", edge: edge) { _, hub in hub.section = section }
             }
         }
-        missing += try await unnamed("Done tab") { _, hub in hub.section = .inbox; hub.tab = .done }
+        missing += try await unnamed("Archive tab") { _, hub in hub.section = .inbox; hub.tab = .done }
         missing += try await unnamed("CI tab") { store, hub in
             hub.section = .inbox
             hub.tab = store.categories.first { $0.isCI }.map { .category($0.id) }
@@ -143,7 +143,7 @@ enum AccessibilityTree {
     @Test func everyPlaceOfTheAppWindowNamesItsControls() async throws {
         var missing: [String] = []
         let places: [(String, (Store) -> AppDestination)] = [
-            ("category", { $0.shownCategories[0].id.asDestination }), ("Done", { _ in .done }), ("Router", { _ in .router }),
+            ("category", { $0.shownCategories[0].id.asDestination }), ("Archive", { _ in .done }), ("Router", { _ in .router }),
             ("Settings", { _ in .settings }), ("Inbox categories", { _ in .categories }),
         ]
         for (name, destination) in places {

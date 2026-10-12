@@ -181,7 +181,7 @@ import Testing
         r.store.categories[0].name = "Renamed"
         history.observe(r.store)
         // Inbox's undo stack is not the one asked.
-        r.store.undoStack.push("Moved to Done") { false }
+        r.store.undoStack.push("Moved to the archive") { false }
         #expect(r.keys.key(key(kVK_ANSI_Z, "z", .command)))
         #expect(r.store.categories[0].name == "Mine")
         #expect(r.keys.key(key(kVK_ANSI_Z, "Z", [.command, .shift])))

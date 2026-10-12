@@ -114,7 +114,7 @@ enum Demo {
             agents(store, now)
             let titles = ["Cache the avatar lookups", "Dark mode for the Settings window", "Snooze until Monday", "Open the right repo on click",
                           "Hide read items after a day", "Keyboard shortcut for Mark all read", "Tab order in the footer", "Menu bar icon option",
-                          "Group by repository", "Notifications repeat after wake", "Sort Done by repository", "Search inside snippets"]
+                          "Group by repository", "Notifications repeat after wake", "Sort the archive by repository", "Search inside snippets"]
             let me = person("0xpolarzero")
             for (index, title) in titles.enumerated() {
                 let n = 30 + index
@@ -250,7 +250,7 @@ enum Demo {
                   [.started(session: nil, project: "zig", model: nil, effort: nil)]),
             entry(9, .you("add a category for my contributions that need a look, and snooze banners for an hour"), "change",
                   changes.prefix(2).map { .changed($0.id) }),
-            entry(3, .you("mark the bot chatter done, and mute reviews for you"), "change",
+            entry(3, .you("archive the bot chatter, and mute reviews for you"), "change",
                   changes.dropFirst(2).map { .changed($0.id) }, outcome: .done),
         ]
         if let last = state.decisions.indices.last, changes.last?.isReverted == true {
@@ -377,7 +377,7 @@ enum Demo {
             message(FjordChange.title(forCategory: nil, look), .category(index: 1, before: nil, after: look), minutes: 8),
             message("Changed snooze to 1 hour",
                     .setting(key: "snooze", before: .date(nil), after: .date(now.addingTimeInterval(3600))), minutes: 8),
-            message("Marked \(doneThings.count) done", .marks(state: "done", doneThings), minutes: 2),
+            message("Archived \(doneThings.count)", .marks(state: "done", doneThings), minutes: 2),
         ]
         if let reviews, let quiet {
             out.append(message(FjordChange.title(forCategory: reviews, quiet), .category(index: 1, before: reviews, after: quiet),

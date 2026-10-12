@@ -670,7 +670,7 @@ import Testing
         let seen = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
         #expect(seen.ok && changes(s).last?.title == "Marked 1 seen")
         let done = await call(t, "mark_entries", ["state": "done", "category": "Mine"])
-        #expect(done.ok && changes(s).last?.title == "Marked 2 done" && s.doneEntries.count == 2)
+        #expect(done.ok && changes(s).last?.title == "Archived 2" && s.doneEntries.count == 2)
         #expect(await call(t, "mark_entries", ["state": "done", "category": "Mine"]).json["changed"] as? String == "nothing")
         #expect(s.entries.allSatisfy { $0.isDone })
         let mark = try #require(s.marks["pr:a/one#1"])

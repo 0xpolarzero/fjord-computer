@@ -124,7 +124,7 @@ enum RuleEditing {
 
     static func sinceTitle(_ since: Since) -> String {
         switch since {
-        case .done: "Done"
+        case .done: "archived"
         case .myLastReview: "my last review"
         case .myLastComment: "my last comment"
         }
@@ -299,7 +299,7 @@ extension Condition {
         }
     }
 
-    static let sinceTip = "Done: since you last marked the thing done (or made the rule). My last review: after your latest review there; with none, nothing matches. My last comment: after your latest comment, review with text or thread reply; with none, since it was opened"
+    static let sinceTip = "Archived: since you last archived the thing (or made the rule). My last review: after your latest review there; with none, nothing matches. My last comment: after your latest comment, review with text or thread reply; with none, since it was opened"
 
     /// What hovering the condition's words says.
     var tip: String? {
