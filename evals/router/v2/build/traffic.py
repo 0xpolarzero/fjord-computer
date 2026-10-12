@@ -91,7 +91,9 @@ def join(lines, since=None):
     stats = collections.Counter()
     for line in lines:
         kind, i = line["kind"], line["id"]
-        if kind == "decided":
+        if kind == "decided" and line.get("path") == "fork":
+            stats["forks"] += 1  # a fork you asked for from the page: not a routing of your words
+        elif kind == "decided":
             stats["duplicate_ids"] += i in decided
             decided.setdefault(i, line)
         elif kind in FOLLOW:
