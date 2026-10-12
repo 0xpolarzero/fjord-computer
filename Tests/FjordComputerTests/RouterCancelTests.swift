@@ -321,6 +321,39 @@ import Testing
         #expect(w.dispatcher.progress[id] == nil)
     }
 
+    @Test func anActionsMessageSentElsewhereFromItsReposOnlyCloneOffersAFolder() async throws {
+        let w = World()
+        w.store.codeFolders.scan = { _ in .init(repos: ["/code/solo": ["o/solo"]]) }
+        w.store.addCodeFolders(["/code"])
+        await w.store.codeFolders.settled()
+        w.store.things["pr:o/solo#3"] = InboxFixture.pr(3, repo: "o/solo", title: "Solo")
+        // The new session's first message is signed, so it can be taken back.
+        w.dispatcher.effects.start = { _, _, title, settings in
+            let signed = RelaySigner.sign(body: "hello", target: "cli-new", key: RelaySigning.key)
+            return RouterDispatcher.Delivery(to: "peer-new", text: signed, body: "hello", original: "hello", rephrased: false,
+                                             session: "local_new", newSessionIn: "solo", settings: settings, settingsSigned: false)
+        }
+        let (text, mentions) = w.store.composeForRouter([.text("Fix "), .pointer(.notification("pr:o/solo#3"))])
+        var context = RouterContext()
+        context.tag(mentions)
+        context.action = RouterActionSource(origin: SessionOrigin(category: "C", thing: "o/solo#3 Solo", actionID: "a", runID: "r"),
+                                            title: "o/solo#3 Solo")
+        w.fakes.ranked = [.init(target: "new:/code/solo", p: 0.97), .init(target: "unclear", p: 0.03)]
+        let id = try #require(w.dispatcher.submit(text, context: context))
+        await w.finish(id)
+        #expect(w.entry(id)?.delivered?.session == "local_new")
+        // Its one clone, and the session started there, are where it went: what is left is a folder of your choosing.
+        w.fakes.finished = []
+        w.dispatcher.sendElsewhere(id)
+        await w.finish(id)
+        let ask = try #require(w.dispatcher.askBacks.first { $0.id == id })
+        #expect(ask.options.map(\.target) == [RouterAskBack.chooseFolder])
+        w.fakes.finished = []
+        #expect(w.dispatcher.pick(id, folder: "/elsewhere/solo"))
+        await w.finish(id)
+        #expect(w.fakes.sent.count == 2)
+    }
+
     @Test func aWrongSendDismissedIsSentNowhereElse() async throws {
         let w = World()
         w.fakes.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "session:local_a", p: 0.04)]

@@ -1590,6 +1590,84 @@ import Testing
         #expect(tools.last?.deliveryCheck == nil && f.sent.map(\.to) == ["peer-local_a"])
     }
 
+    @Test func anActionsMessageWithAnArchivedSessionsPillStaysInItsReposWorld() async throws {
+        let (s, d, f) = setup()
+        await cloned(s)
+        s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Elsewhere", folder: "/code/other", lastActivity: Date(),
+                                                    running: true)
+        let (text, context) = fromAction(s, [.pointer(.session("local_b")), .text(" address "),
+                                             .pointer(.notification("pr:o/lookout#7"))])
+        // The session it tags is archived since: it says nothing of where it goes; the repo does.
+        s.claudeSessions["local_b"]?.isArchived = true
+        #expect(RouterDispatcher.repoWorld(context, store: s)?.clones == ["/code/lookout", "/code/lookout-2"])
+        f.ranked = [.init(target: "session:local_c", p: 0.97), .init(target: "unclear", p: 0.03)]
+        let a = try #require(d.submit(text, context: context))
+        await finish(d, f, a)
+        #expect(f.prepared.isEmpty)
+        let options = d.askBacks.first { $0.id == a }?.options.map(\.target) ?? []
+        #expect(!options.isEmpty && !options.contains("session:local_c"))
+        // Its notification gone from the inbox, nothing says where: Jev's sure pick among every session isn't taken.
+        let (lost, lostContext) = fromAction(s, [.text("Fix "), .pointer(.notification("pr:o/gone#1"))])
+        let b = try #require(d.submit(lost, context: lostContext))
+        await finish(d, f, b)
+        #expect(f.prepared.isEmpty && d.askBacks.contains { $0.id == b })
+    }
+
+    @Test func actionsMessagesArePlacedOneAtATimeSoTheNextCanGoToTheSessionTheFirstStarted() async throws {
+        let (s, d, f) = setup()
+        await cloned(s)
+        let (text, context) = fromAction(s, [.text("Address what "), .pointer(.notification("pr:o/lookout#7")), .text(" is waiting on.")])
+        f.ranked = [.init(target: "new:/code/lookout-2", p: 0.97), .init(target: "unclear", p: 0.03)]
+        f.holdRank = true
+        let a = try #require(d.submit(text, context: context))
+        let b = try #require(d.submit(text, context: context))
+        await waitUntil { f.rankHeld != nil }
+        #expect(f.ranks == 1 && d.progress[b] == "waiting its turn")
+        // The first starts a session: known at once, before the Claude app's next read, and the second may go to it.
+        f.holdRank = false
+        f.rankHeld?.resume()
+        await finish(d, f, a)
+        #expect(s.claudeSessions["local_new"]?.folder == "/code/lookout-2")
+        #expect(RouterDispatcher.repoWorld(context, store: s)?.targets.contains("session:local_new") == true)
+        await finish(d, f, b)
+        #expect(f.ranks == 2 && f.started.count == 2)
+        // Waiting its turn when the Router stops: it never runs, and says why.
+        f.holdRank = true
+        f.rankHeld = nil
+        let c = try #require(d.submit(text, context: context))
+        let e = try #require(d.submit(text, context: context))
+        await waitUntil { f.rankHeld != nil }
+        d.stopAll(reason: RouterDispatcher.unlinkedWords)
+        await finish(d, f, e)
+        #expect(decision(s, e)?.done == [.failed(RouterDispatcher.unlinkedWords)] && decision(s, e)?.outcome == .done)
+        f.holdRank = false
+        f.rankHeld?.resume()
+        await finish(d, f, c)
+    }
+
+    @Test func triageSwitchedOffWhileAnActionsAskWaitsDismissesItSayingWhy() async throws {
+        let (s, _, _) = setup()
+        await cloned(s)
+        let d = s.routerDispatcher
+        let (text, context) = fromAction(s, [.text("Fix "), .pointer(.notification("pr:o/none#9"))])
+        let id = try #require(d.submit(text, context: context))
+        let category = UUID(), action = UUID()
+        s.actionLedger.set(ActionRun(category: category, thing: "pr:o/none#9", action: action, trigger: "enter", state: .running,
+                                     at: Date(), message: id))
+        await waitUntil { d.askBacks.contains { $0.id == id } }
+        // A question of yours waits too: it stays.
+        let mine = try #require(d.submit("hmm"))
+        s.setTriageEnabled(false)
+        #expect(!d.askBacks.contains { $0.id == id })
+        #expect(decision(s, id)?.done.last == .failed(RouterDispatcher.unlinkedWords) && decision(s, id)?.outcome == .done)
+        let run = s.actionLedger.run(category, "pr:o/none#9", action, "enter")
+        #expect(run?.state == .failed && run?.detail == RouterDispatcher.unlinkedWords)
+        // Stopped, a typed ask says it was dismissed, as it did.
+        await waitUntil { d.askBacks.contains { $0.id == mine } || decision(s, mine)?.outcome == .done }
+        d.stopAll()
+        #expect(decision(s, mine)?.done.contains { if case .failed = $0 { true } else { false } } != true)
+    }
+
     @Test func withNoCloneOfTheRepoItAsksForAFolder() async throws {
         let (s, d, f) = setup()
         await cloned(s)

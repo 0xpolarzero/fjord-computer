@@ -301,14 +301,15 @@ struct RouterDecision: Codable, Identifiable, Equatable {
 
 extension RouterState {
     /// Adds an entry, newest last; the oldest go past the cap, but never one linking a change still waiting for your Apply
-    /// or Discard (its only place on the page).
+    /// or Discard (its only place on the page), nor an action's message still under way (its run follows it).
     mutating func log(_ decision: RouterDecision) {
         decisions.append(decision)
         guard decisions.count > RouterDecision.maxKept else { return }
         let waiting = Set(changes.filter(\.isPending).map(\.id))
         var over = decisions.count - RouterDecision.maxKept
         decisions = decisions.filter { entry in
-            guard over > 0, !entry.links.changes.contains(where: waiting.contains) else { return true }
+            guard over > 0, !entry.links.changes.contains(where: waiting.contains),
+                  entry.fromAction == nil || entry.outcome != .pending else { return true }
             over -= 1
             return false
         }

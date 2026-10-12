@@ -185,8 +185,10 @@ extension InboxActions {
             }
         }
         if let started {
-            // Its first message held for the app to run the session: started, and it goes once the session runs.
-            if let failed, !held, sent == nil { return (.failed, failed, started) }
+            // Its first message held for the app to run the session: started, still under way until it goes (a quit
+            // meanwhile says it was interrupted, as the entry does).
+            if held { return (.running, "session started", started) }
+            if let failed, sent == nil { return (.failed, failed, started) }
             return (.done, "session started", started)
         }
         if let sent {
@@ -203,7 +205,17 @@ extension Store {
     /// An action's message moved on in the Router (asked you, was sent, started a session, failed): its runs say so. Nothing
     /// for a message that isn't an action's. `dispatcher`: the one routing it (the store's own unless a test has another).
     func followActionRun(_ decision: UUID, dispatcher: RouterDispatcher? = nil) {
-        guard let entry = router.decisions.last(where: { $0.id == decision }), entry.fromAction != nil else { return }
+        guard let entry = router.decisions.last(where: { $0.id == decision }) else {
+            // Its entry is gone from the history: what became of it can't be told any more.
+            var ledger = actionLedger
+            for (key, run) in ledger.runs where run.message == decision && run.state == .running {
+                ledger.runs[key]?.state = .failed
+                ledger.runs[key]?.detail = "its message is no longer in the Router's history"
+            }
+            if ledger != actionLedger { actionLedger = ledger }
+            return
+        }
+        guard entry.fromAction != nil else { return }
         let dispatcher = dispatcher ?? routerDispatcher
         let (state, detail, session) = InboxActions.outcome(
             of: entry, waiting: dispatcher.askBacks.contains { $0.id == decision }, busy: dispatcher.progress[decision] != nil,

@@ -1043,8 +1043,12 @@ private struct DecisionDetails: View {
                         ClaudeButton("Cancel and send elsewhere…", variant: .ghost, size: .sm) {
                             store.routerDispatcher.sendElsewhere(decision.id)
                         }
-                        .help("Cancels it here, then asks where it should go instead, this session left out. Your pick teaches the Router.")
-                        .disabled(cancel == .cancelling || store.routerDispatcher.progress[decision.id] != nil)
+                        // An action's message goes anywhere only while Triage and the Router are both on.
+                        .help(decision.fromAction != nil && !store.toolsLinked
+                              ? "Triage is off: an action's message can't be sent elsewhere until it is on again"
+                              : "Cancels it here, then asks where it should go instead, this session left out. Your pick teaches the Router.")
+                        .disabled(cancel == .cancelling || store.routerDispatcher.progress[decision.id] != nil
+                                  || (decision.fromAction != nil && !store.toolsLinked))
                     }
                 }
             }

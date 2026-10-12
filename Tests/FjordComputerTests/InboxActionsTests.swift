@@ -1268,6 +1268,45 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(ledger.baselines[category.id]?.rules == InboxActions.fingerprint(category.rules, groups: []))
     }
 
+    @Test func aSendToTheRouterWaitsUntilYourSessionsAndClonesAreKnown() async {
+        let (store, performer) = store([], actions: [session, .make(.comment("hi"))])
+        await store.runActions()
+        // Launch: the Claude app's sessions asked for, not read yet; the code folders' first scan under way.
+        store.claudeReadAsked = true
+        store.codeFolders.scan = { _ in .init(repos: ["/code/one": ["a/one"]]) }
+        store.settings.codeFolders = ["/code"]
+        store.codeFolders.start()
+        add(store, InboxFixture.pr(2))
+        await store.runActions()
+        #expect(performer.asked.isEmpty && performer.comments.count == 1, "the comment needs neither")
+        #expect(!store.routingReady && store.actionsAwaitRouting)
+        #expect(store.actionChips(for: store.entries.first { $0.id == "pr:a/one#2" }!).first?.label == "queued")
+        await store.codeFolders.settled()
+        #expect(!store.routingReady, "the sessions aren't read yet")
+        store.claudeReadOnce = true
+        #expect(store.routingReady)
+        await store.runActions()
+        #expect(performer.asked.count == 1 && store.localClones(of: "a/one") == ["/code/one"])
+    }
+
+    @Test func aRunWhoseEntryIsGoneFromTheHistoryFailsAndAPendingOneIsKept() {
+        let (store, _) = store([], actions: [session])
+        let gone = UUID()
+        let category = UUID(), action = UUID()
+        store.actionLedger.set(ActionRun(category: category, thing: "t", action: action, trigger: "enter", state: .running,
+                                         at: Date(), detail: InboxActions.waitingWords, message: gone))
+        store.followActionRun(gone)
+        let run = store.actionLedger.run(category, "t", action, "enter")
+        #expect(run?.state == .failed && run?.detail == "its message is no longer in the Router's history")
+        // The cap never drops an action's message still under way.
+        var state = RouterState()
+        var waiting = RouterDecision(at: .distantPast, trigger: .you("Fix @o/r#1"))
+        waiting.fromAction = SessionOrigin(category: "C", thing: "o/r#1 T", actionID: "a", runID: "r")
+        state.log(waiting)
+        for _ in 0..<RouterDecision.maxKept { state.log(RouterDecision(trigger: .you("x"), outcome: .done)) }
+        #expect(state.decisions.first?.id == waiting.id && state.decisions.count == RouterDecision.maxKept)
+    }
+
     @Test func atMostTenRunPerRefreshAndTheRestWait() async {
         let (store, performer) = store([], actions: [session])
         await store.runActions()
@@ -1297,7 +1336,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         // Started, its first message held for the app to run the session; then never sent.
         var held = entry
         held.add(.started(session: "s3", project: "r", model: nil, effort: nil), session: "s3")
-        #expect(outcome(held, held: true) == (.done, "session started", "s3"))
+        #expect(outcome(held, held: true) == (.running, "session started", "s3"))
         held.add(.failed("its first message wasn't sent"))
         #expect(outcome(held) == (.failed, "its first message wasn't sent", "s3"))
         var failed = entry
@@ -1325,6 +1364,8 @@ final class DiskCheckingPerformer: ActionPerformer {
         let waiting = chip(.running, InboxActions.waitingWords)
         #expect(waiting?.label == "waiting on you in the Router" && waiting?.target == .router && waiting?.message == message)
         #expect(chip(.running, "")?.label == "running…")
+        let held = chip(.running, "session started", session: "s3")
+        #expect(held?.label == "session started" && held?.target == .session("s3"))
         let sent = chip(.done, "sent to Fix the flaky test", session: "s1")
         #expect(sent?.label == "sent to Fix the flaky test" && sent?.target == .session("s1"))
         let started = chip(.done, "session started", session: "s2")
@@ -1373,6 +1414,9 @@ final class DiskCheckingPerformer: ActionPerformer {
             case .running where run.detail == InboxActions.waitingWords:
                 return InboxActions.Chip(id: action.id, label: InboxActions.waitingWords, tint: .attention, target: .router,
                                          help: "The Router isn't sure where it goes. Open the Router to pick", message: run.message)
+            case .running where run.sessionID != nil:
+                return InboxActions.Chip(id: action.id, label: "session started", tint: .neutral, target: run.sessionID.map { .session($0) },
+                                         help: "Its first message goes once the Claude app runs the session. Open the session in Claude")
             case .running, .baselined:
                 return InboxActions.Chip(id: action.id, label: "running…", tint: .neutral, target: nil, help: action.title)
             case .failed:

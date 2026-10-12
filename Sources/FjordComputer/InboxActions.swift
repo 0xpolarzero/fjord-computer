@@ -789,6 +789,9 @@ enum InboxActions {
         case .running where run.detail == waitingWords:
             return Chip(id: action.id, label: waitingWords, tint: .attention, target: .router,
                         help: "The Router isn't sure where it goes. Open the Router to pick", message: run.message)
+        case .running where run.sessionID != nil:
+            return Chip(id: action.id, label: "session started", tint: .neutral, target: run.sessionID.map { .session($0) },
+                        help: "Its first message goes once the Claude app runs the session. Open the session in Claude")
         case .running, .baselined:
             return Chip(id: action.id, label: "running…", tint: .neutral, target: nil, help: action.title)
         case .failed:
@@ -1221,8 +1224,26 @@ extension Store {
     }
 
     /// Whether a job may still run: one that sends to the Router only while Triage and the Router are both on (switched off
-    /// since it was planned, it isn't run; it is held back from the next plan on).
-    private func runnable(_ job: InboxActions.Job) -> Bool { !job.action.kind.sendsToRouter || toolsLinked }
+    /// since it was planned, it isn't run; it is held back from the next plan on), and once routing is ready
+    /// (`routingReady`): until then it stays due, and runs once it is.
+    private func runnable(_ job: InboxActions.Job) -> Bool {
+        guard job.action.kind.sendsToRouter else { return true }
+        guard toolsLinked else { return false }
+        if !routingReady { actionsAwaitRouting = true }
+        return routingReady
+    }
+
+    /// Whether the Router knows enough to route an action's message: your sessions read from the Claude app (once asked for),
+    /// and your code folders scanned with their remotes read, so a repo's clones are known. At launch the first refresh can
+    /// come before them, and would find "No clone of …" where there are clones.
+    var routingReady: Bool { (!claudeReadAsked || claudeReadOnce) && codeFolders.readyForRouting }
+
+    /// Routing may have become ready: the actions left for it run now.
+    func routingMayBeReady() {
+        guard actionsAwaitRouting, routingReady else { return }
+        actionsAwaitRouting = false
+        scheduleActions()
+    }
 
     /// The most recently updated thing the rules match, with its facts: what "Try on latest match" tries on.
     func latestMatch(of rules: [Rule]) -> (thing: Thing, facts: [Fact])? {

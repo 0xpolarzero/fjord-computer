@@ -73,6 +73,8 @@ extension Store {
             stopPolling()
             inboxMemo.timer?.cancel()
             inboxMemo.timer = nil
+            // An action's message waiting on you, or its turn, goes nowhere now: its run says why.
+            routerDispatcher.unlinked()
         }
     }
 }

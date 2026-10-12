@@ -118,6 +118,12 @@ final class Store {
     }
     /// Does what actions do; nil is the real one (and nothing at all in the playground and tests).
     @ObservationIgnored var actionPerformer: ActionPerformer?
+    /// The Claude app's sessions were asked for, and the first read of them has come: until then a "Send to the Router"
+    /// action waits (`routingReady`), so it isn't routed before your sessions, and the clones among their folders, are known.
+    @ObservationIgnored var claudeReadAsked = false
+    @ObservationIgnored var claudeReadOnce = false
+    /// A "Send to the Router" job was left for when routing is ready (`routingMayBeReady` runs the actions then).
+    @ObservationIgnored var actionsAwaitRouting = false
     @ObservationIgnored var actionsBusy = false
     /// The categories page's undo history while it is open (⌘Z there is the editor's, not Done's).
     @ObservationIgnored var categoryHistory: CategoryHistory?

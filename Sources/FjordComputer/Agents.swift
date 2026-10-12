@@ -321,6 +321,8 @@ extension Store {
     /// timer as backup); calls made while a read is running fold into one more read.
     func refreshClaude() {
         guard agents.enabled else { return }
+        // The app's own reads (a store that doesn't persist, a test's, routes on what it was given).
+        if persists { claudeReadAsked = true }
         claudeFeed.request(full: true, stamp: claudeStamp) { [weak self] in self?.applyClaude($0) }
     }
 
@@ -350,6 +352,12 @@ extension Store {
             ingesting = true
             ingest(sessions, appUnread: snapshot.appUnread, claudeFrontmost: snapshot.frontmost)
             ingesting = false
+        }
+        // A read that found the sessions, or found them missing or unreadable (no Claude app): either way, what routing will
+        // know of them is known, and the actions waiting for it go.
+        if !claudeReadOnce, snapshot.sessions != nil || snapshot.link == .missing || snapshot.link == .unreadable {
+            claudeReadOnce = true
+            routingMayBeReady()
         }
         if let next = snapshot.activity, next != claudeActivity { claudeActivity = next }
         if let next = snapshot.tasks, next != claudeTasks { claudeTasks = next }

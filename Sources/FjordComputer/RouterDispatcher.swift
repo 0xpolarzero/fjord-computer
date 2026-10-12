@@ -276,12 +276,47 @@ struct RouterAskBack: Identifiable, Equatable {
         entry.fromAction = context.action?.origin
         entry.actionStart = context.action.map { .init(title: $0.title, model: $0.model, effort: $0.effort) }
         let id = store.logDecision(entry)
-        launch(Job(id: id, text: text, context: context,
-                   tools: makeTools(id, text, pills: context.pills, mentions: context.mentions, action: context.action != nil)),
-               stage: "starting") { [self] job in
-            try await execute(job)
+        let job = Job(id: id, text: text, context: context,
+                      tools: makeTools(id, text, pills: context.pills, mentions: context.mentions, action: context.action != nil))
+        // Actions' messages one at a time, in order (`nextAction`); yours at once.
+        if context.action != nil {
+            actionQueue.append(job)
+            progress[id] = "waiting its turn"
+            nextAction()
+        } else {
+            launch(job, stage: "starting") { [self] job in try await execute(job) }
         }
         return id
+    }
+
+    /// Actions' messages waiting their turn, oldest first, and the one being placed. A backlog (a refresh brings up to
+    /// `InboxActions.perSync`) is placed one by one: the next starts once the one before is sent, has started a session,
+    /// failed or waits on your pick, so it may go to the session that one started rather than start another beside it.
+    @ObservationIgnored private var actionQueue: [Job] = []
+    @ObservationIgnored private var actionPlacing: UUID?
+
+    private func nextAction() {
+        guard actionPlacing == nil else { return }
+        while !actionQueue.isEmpty {
+            let job = actionQueue.removeFirst()
+            guard store?.toolsLinked == true else { drop(job, Self.unlinkedWords); continue }
+            actionPlacing = job.id
+            launch(job, stage: "starting") { [self] job in try await execute(job) }
+            return
+        }
+    }
+
+    /// An action's message that never ran (Stop, Triage or the Router switched off while it waited its turn): why, as its
+    /// entry's last line.
+    private func drop(_ job: Job, _ reason: String) {
+        job.tools.endTurn()
+        progress[job.id] = nil
+        store?.updateDecision(job.id) {
+            $0.add(.failed(reason))
+            $0.outcome = .done
+        }
+        follow(job.id)
+        onFinish?(job.id)
     }
 
     /// You picked where an ask-back goes. Sends as an armed reply or a start would; the entry says it was a correction when
@@ -340,15 +375,30 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     /// You dismissed an ask-back: nothing is sent.
-    func dismiss(_ id: UUID) {
+    /// `reason`: why it goes when you didn't dismiss it (Stop, a switch turned off): an action's entry says it as its last
+    /// line, so its run fails with why.
+    func dismiss(_ id: UUID, reason: String? = nil) {
         guard let store, let i = askBacks.firstIndex(where: { $0.id == id }) else { return }
-        askBacks.remove(at: i)
+        let ask = askBacks.remove(at: i)
         forgetLive()
         store.updateDecision(id) {
-            $0.reply = $0.delivered == nil ? "Dismissed: nothing was sent." : "Dismissed: sent nowhere else."
+            if let reason, ask.context.action != nil {
+                $0.add(.failed(reason))
+            } else {
+                $0.reply = $0.delivered == nil ? "Dismissed: nothing was sent." : "Dismissed: sent nowhere else."
+            }
             $0.outcome = .done
         }
         follow(id)
+    }
+
+    /// Triage switched off: an action's message no longer goes anywhere. Its asks go, saying why, and those waiting their
+    /// turn with them; one under way is stopped at its next step (`linked`).
+    func unlinked() {
+        for ask in askBacks where ask.context.action != nil { dismiss(ask.id, reason: Self.unlinkedWords) }
+        let queued = actionQueue
+        actionQueue = []
+        for job in queued { drop(job, Self.unlinkedWords) }
     }
 
     /// An action's message moved on: its run says so (`Store.followActionRun`).
@@ -356,11 +406,15 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you. A held start's first
     /// message isn't a run: its own line's "Don't send" drops it (`dropHeld`).
-    func stopAll() {
+    /// `reason`: what an action's entry says of it (its run fails with why).
+    func stopAll(reason: String = "Stopped; nothing was sent") {
         for task in tasks.values { task.cancel() }
         // Their turns end now, not once each run sees it was stopped: a send on its way is refused at its last gate.
         for tools in runTools.values { tools.endTurn() }
-        for ask in askBacks { dismiss(ask.id) }
+        for ask in askBacks { dismiss(ask.id, reason: reason) }
+        let queued = actionQueue
+        actionQueue = []
+        for job in queued { drop(job, reason) }
     }
 
     // MARK: Runs
@@ -376,6 +430,14 @@ struct RouterAskBack: Identifiable, Equatable {
         if action { tools.deliveryCheck = { [weak store = self.store] in store?.toolsLinked == true ? nil : Self.unlinkedWords } }
         configure?(tools)
         return tools
+    }
+
+    /// A session started for an action's message, known before the Claude app's next read catches up: the next action's
+    /// message (`nextAction`) may go to it rather than start another beside it.
+    private func know(_ session: String, for job: Job, in folder: String) {
+        guard let store, let action = job.context.action, store.claudeSessions[session] == nil else { return }
+        store.claudeSessions[session] = ClaudeSession(id: session, title: action.title, folder: folder, lastActivity: Date(),
+                                                      running: true)
     }
 
     /// Why an action's message no longer goes: Triage or the Router switched off since it was sent to the Router.
@@ -427,6 +489,11 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         follow(job.id)
         onFinish?(job.id)
+        // Placed: the next action's message goes.
+        if actionPlacing == job.id {
+            actionPlacing = nil
+            nextAction()
+        }
     }
 
     private func fail(_ job: Job, _ reason: String) {
@@ -722,7 +789,9 @@ struct RouterAskBack: Identifiable, Equatable {
             let away = { (target: String) in target != wrong && Self.session(of: target, store: store) != sent.session }
             found.ranked = found.ranked.filter { away($0.target) }
             found.card = found.card?.filter(away)
-            askBack(job, found, suggestion: wrong, path: "elsewhere", note: noClone ? world?.note : nil, chooseFolder: noClone)
+            // Nothing left for an action's message (the repo's one clone was where it went): a folder of your choosing.
+            let none = unattended && found.ranked.isEmpty && (found.card ?? []).isEmpty
+            askBack(job, found, suggestion: wrong, path: "elsewhere", note: noClone ? world?.note : nil, chooseFolder: noClone || none)
         }
     }
 
@@ -743,8 +812,10 @@ struct RouterAskBack: Identifiable, Equatable {
         do {
             delivery = try await effects.start(job.tools, folder, job.context.action?.title ?? Self.title(for: task), settings)
         } catch let waiting as SessionStart.Held {
+            know(waiting.waiting.sessionID, for: job, in: folder)
             return hold(job, waiting)
         }
+        if let session = delivery.session { know(session, for: job, in: folder) }
         // Started for an action: its cards say where it came from.
         if let action = job.context.action, let session = delivery.session { store.noteOrigin(action.origin, for: session) }
         if delivery.text.isEmpty {
@@ -972,8 +1043,12 @@ struct RouterAskBack: Identifiable, Equatable {
             found.ranked = kept.isEmpty ? scope.sorted().map { Scored(target: "session:\($0)", p: 0) } : kept
             found.card = found.card?.filter(inScope)
         }
+        // An action's message with nothing saying where it may go (its notification gone, a session pill of one archived
+        // since): never sent on Jev's pick among every session; you pick.
+        let unbounded = unattended && world == nil && job.context.projects.isEmpty && scope.isEmpty
+        if unbounded { found.sure = false }
         let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
-        let named = !unattended && Self.forRouter(job.text, pills: job.context.pills)
+        let named = unbounded || (!unattended && Self.forRouter(job.text, pills: job.context.pills))
             ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
         if let named, named != found.top?.target, named != job.context.notTo, inScope(named), inWorld(named),
            eligible(named, store: store) {
@@ -1350,7 +1425,15 @@ extension RouterDispatcher {
     }
 
     static func repoWorld(_ context: RouterContext, store: Store) -> RepoWorld? {
-        guard context.projects.isEmpty, !context.mentions.contains(where: \.pointer.addresses) else { return nil }
+        // Only a pill that still says where: a project, or a session still there (one archived since says nothing).
+        let addressed = context.mentions.contains { m in
+            switch m.pointer {
+            case .project: true
+            case .session(let id): store.claudeSessions[id].map { !$0.isArchived } == true
+            case .notification, .category, .thisItem: false
+            }
+        }
+        guard context.projects.isEmpty, !addressed else { return nil }
         var repos: [String] = []
         for id in context.notifications {
             guard let repo = store.things[id]?.repo, !repos.contains(where: { $0.lowercased() == repo.lowercased() }) else { continue }

@@ -193,6 +193,12 @@ final class CodeFolderScanner {
     private(set) var cutShort = false
     /// A scan has ended since launch (until then, Settings says it is looking).
     private(set) var scanned = false
+    /// The scans began (`start`, at launch).
+    @ObservationIgnored private(set) var started = false
+
+    /// What the clones of a repo are is known: the first scan begun at launch has ended, and every session folder told has
+    /// had its remotes read. Until then a "Send to the Router" action waits (`Store.routingReady`).
+    var readyForRouting: Bool { (!started || scanned) && remotesWork == nil }
     /// Every project folder: your sessions' and the clones found (not the bare repos), sorted as the Router lists projects,
     /// without Scratch. Worked out again only when either changes.
     private(set) var projectFolders: [String] = []
@@ -230,6 +236,7 @@ final class CodeFolderScanner {
 
     /// Scans now, and from then on every `interval` and when the app comes to the front.
     func start() {
+        started = true
         refresh()
         guard timer == nil else { return }
         let timer = Timer(timeInterval: Self.interval, repeats: true) { [weak self] _ in
@@ -298,6 +305,7 @@ final class CodeFolderScanner {
                 self.rebuild()
             }
             self?.remotesWork = nil
+            self?.store?.routingMayBeReady()
         }
     }
 
@@ -319,7 +327,10 @@ final class CodeFolderScanner {
         rebuild()
         if reposChanged { store?.refreshFolderNames() }
         if found.cutShort != cutShort { cutShort = found.cutShort }
-        if !scanned { scanned = true }
+        if !scanned {
+            scanned = true
+            store?.routingMayBeReady()
+        }
     }
 
     /// Works out the projects and the clones of each repo again from the sessions' folders and the repos found.
