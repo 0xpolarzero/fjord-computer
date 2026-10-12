@@ -170,6 +170,27 @@ Episodes rather than single messages: a board, then submits, card changes, picks
   a ~70k-token batch it tries a shell command, which headless mode denies, and returns nothing; it gets small batches
   (≤3 events) and a JSON schema, and is never granted command permissions. It is slow (1.5–3 min per event).
 
+## Round 4 (benchmark v2, dev split; directions ranked in evals/router/v2/DIRECTIONS.md)
+
+The split was frozen by group before gold existed (`v2/data/episodes/groups.json`): dev 575 episodes, calib 312,
+sealed 617. Numbers below are on dev's real moments (393 submits) with provisional ask gold ("allowed" until labels
+land), so only changes that don't depend on ask gold are decided here.
+
+- **Where the loss is (shipped, dev real):** 2.02 per message against 1.41 for always asking. Of the loss, wrong sends
+  44% (14 of 129 sends, 10.9% of sends), asks without the answer in the first four 30%, asks with it 26%. On these
+  numbers shipped does not beat always asking; the gap depends on how many asks are needless, which the labels decide.
+- **The ask card (shipped):** its four were the ranking's first four, chosen for the first being safe to send. Now: the
+  ranking's first, its best new session or Lookout intent among its first four, then sessions by recency. The answer
+  is on the card 85% of the time against 77%; loss per message −0.13 (95% CI −0.23 to −0.03), sends unchanged, the
+  written/scripted stress mix not significantly worse (+0.025, CI −0.03 to 0.09). Tried and dropped: the last-told
+  session first (−0.16 on real but +0.07 on stress, losing new-session and intent answers), two of the ranking's
+  first (−0.05), a BM25 slot (−0.11, worse than recency). Swift: `RouterTools.askCard`.
+- **Raising the send bar looks large but waits for gold:** a sureness floor of 0.95 would turn 37 sends into asks and
+  avoid 9 of the 14 wrong sends (−0.45 per message), but only if those asks count as "allowed".
+- **Runner fixes found on the way:** a session started from an ask is named after its submit; changes to a started
+  session the policy never started are skipped; a scripted pick with no pending ask is skipped; variant cards are
+  deduplicated on canonical targets (a first sweep under-filled them and understated the gain).
+
 ## Mistakes, and what they taught
 
 - **Sorted keys hid option order.** `jev.py` sent `json.dumps(sort_keys=True)`, so named options always reached Jev in
