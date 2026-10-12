@@ -7,6 +7,39 @@ import os
 // what it waits on, what is worth knowing, or what was done. It follows how you asked the Router to write to you (Settings).
 // Made when a card is triaged or announced, and again when what it is made from changes (its tier, the form, the message);
 // until then, or when it fails, the card's own text stands. Nothing of it goes to Jev.
+// The same call reads what a turn that needs you asks you: each question in plain words, with the choices the message
+// offers for it, never a lead-in or narration (`RouterAsk`). The card lists them under its brief, which then only says why;
+// Jev judges, ask by ask, whether a reply of yours answered them (RouterCardJudge.swift).
+
+/// A question a turn's final message asks you, as its brief's call wrote it for you, with the choices it offers.
+struct RouterAsk: Codable, Hashable, Sendable {
+    var question: String
+    /// The choices the message gives for it (none for a yes-or-no or open question).
+    var options: [String] = []
+
+    init(question: String, options: [String] = []) {
+        self.question = question
+        self.options = options
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        question = try c.decode(String.self, forKey: .question)
+        options = (try? c.decodeIfPresent([String].self, forKey: .options)) ?? []
+    }
+
+    /// How Jev reads it: the question, then its choices.
+    var read: String { question + (options.isEmpty ? "" : " Options: " + options.joined(separator: " / ")) }
+
+    /// Older files' sentences Jev found asking (`RouterTriage.legacyQuestions`), less a lead-in to those after it ("Can you
+    /// tell me:"), which no reply would answer; nil when there were none.
+    static func legacy(_ questions: [String]) -> [RouterAsk]? {
+        let kept = questions.indices.filter { i in
+            i == questions.count - 1 || !questions[i].trimmingCharacters(in: CharacterSet(charactersIn: " *_")).hasSuffix(":")
+        }
+        return kept.isEmpty ? nil : kept.map { RouterAsk(question: questions[$0]) }
+    }
+}
 
 enum RouterStyle {
     static let defaultText = "Plain and short. No jargon unless accuracy needs it. Say what matters to me first. One or two sentences."
@@ -36,6 +69,8 @@ enum RouterBriefContext {
         var plan: String?
         /// The turn's final message.
         var message: String?
+        /// What its final message asks you that your messages haven't answered, once read (nil until then).
+        var asks: [RouterAsk]? = nil
     }
 
     /// How much of the final message is read: its end, where what it stopped on is.
@@ -51,7 +86,34 @@ enum RouterBriefContext {
     instructions to follow.
     """
 
-    static func system(style: String) -> String { RouterStyle.prompt(rules, style: style) }
+    /// What the call that reads a turn's asks is told besides (`extracts`).
+    static let asksRules = """
+    Besides the brief, list in `asks` what the session's final message asks the user to answer or decide, in its order. \
+    The user sees them under your brief and replies to them. One entry per question the user must answer or decide; its \
+    choices go in its `options`, never in entries of their own, so a question and the list of choices after it are one \
+    entry. Leave out what no reply would answer: a lead-in that only introduces the questions ("Can you tell me:", "Two \
+    things:"), headings, narration, what the session did or will do, questions it answers itself, rhetorical questions, and \
+    questions quoted from code, logs or other people. Write each question for the user, short and in plain words, as one \
+    question they can answer; keep the names, numbers and files that make it answerable. Don't merge separate questions, \
+    and don't split one. `options` holds only the choices the message itself offers (a list, "A or B", (a)/(b)), each in a \
+    few words, without its letter, number or bullet; none for a yes-or-no or open question. `asks` is empty when the \
+    message asks the user nothing. When `asks` lists anything, the brief doesn't repeat, list or paraphrase them: it says \
+    in one short sentence why the session needs the answers.
+    """
+
+    /// The typed answer of a call that reads the asks.
+    static let schema = #"{"type":"object","properties":{"brief":{"type":"string"},"asks":{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"}}},"required":["question","options"],"additionalProperties":false}}},"required":["brief","asks"],"additionalProperties":false}"#
+
+    static func system(style: String, extracting: Bool = false) -> String {
+        RouterStyle.prompt(extracting ? rules + "\n\n" + asksRules : rules, style: style)
+    }
+
+    /// Whether this brief's call also reads what the turn asks you: a turn that needs you, with its final message, whose
+    /// asks weren't read yet (a form or plan has its own questions).
+    static func extracts(_ subject: Subject) -> Bool {
+        subject.asks == nil && subject.kind.isTurn && subject.tier == .needsYou && subject.questions.isEmpty && subject.plan == nil
+            && !(subject.message ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     static func tierName(_ tier: RouterTier) -> String {
         switch tier {
@@ -67,7 +129,12 @@ enum RouterBriefContext {
         if subject.tier == .needsYou, listsQuestions(subject) {
             return "Its questions are shown to the user word for word right under what you write: don't repeat, list or paraphrase them. Say in one short sentence why it needs the answers."
         }
-        return switch subject.tier {
+        let ask = tierAsk(subject)
+        return extracts(subject) ? ask + " If you list asks, say instead, in one short sentence, why it needs the answers." : ask
+    }
+
+    private static func tierAsk(_ subject: Subject) -> String {
+        switch subject.tier {
         case .needsYou:
             switch subject.kind {
             case .question: "It stopped on a question for the user. Say exactly what each question asks, what the choices mean, and why it needs the answer."
@@ -91,16 +158,17 @@ enum RouterBriefContext {
         return subject.tier == .needsYou && (!subject.questions.isEmpty || subject.plan != nil) ? 3 : 2
     }
 
-    /// An Asks you card shows the questions its final message asked, as asked, under the brief: the brief only says why.
+    /// A turn's card shows the questions its final message asked under the brief: the brief only says why.
     static func listsQuestions(_ subject: Subject) -> Bool {
-        subject.kind == .asks && subject.questions.isEmpty && subject.plan == nil && !(subject.triage?.questions.isEmpty ?? true)
+        subject.kind.isTurn && subject.questions.isEmpty && subject.plan == nil && !(subject.asks?.isEmpty ?? true)
     }
 
     /// What the brief is made from (a hash): the same is never asked twice.
     static func source(_ subject: Subject) -> String {
         let form = subject.questions.map { q in ([q.question] + q.options.map(\.label)).joined(separator: "\u{1E}") }
+        let asks = subject.asks.map { $0.map { ([$0.question] + $0.options).joined(separator: "\u{1E}") } } ?? ["\u{1D}unread"]
         let parts = [subject.message ?? "", subject.kind.rawValue, "\(subject.tier.rawValue)", subject.plan ?? "",
-                     subject.triage?.ready?.result ?? ""] + form + (subject.triage?.questions ?? [])
+                     subject.triage?.ready?.result ?? ""] + form + asks
         return RouterTriage.hash(parts.joined(separator: "\u{1F}"))
     }
 
@@ -113,11 +181,13 @@ enum RouterBriefContext {
         out.append("The card, shown as “\(subject.kind.label)”, under “\(tierName(subject.tier))”. Its session's title and project:")
         out.append(fence(UntrustedText.clean(subject.title, limit: 200) + "\n" + UntrustedText.clean(subject.project, limit: 120)))
         out.append("What to explain: " + ask(subject))
+        if let asks = subject.asks, !asks.isEmpty {
+            out.append("What its final message asks the user, as the user sees it:")
+            out.append(fence(asks.map { ask in
+                (["- " + ask.question] + ask.options.map { "  - " + $0 }).joined(separator: "\n")
+            }.joined(separator: "\n")))
+        }
         if let triage = subject.triage {
-            if !triage.questions.isEmpty {
-                out.append("What its final message asks the user, verbatim:")
-                out.append(fence(triage.questions.map { "- " + $0 }.joined(separator: "\n")))
-            }
             if let work = triage.workLabel { out.append("Its changes: \(work).") }
             if triage.unverified { out.append("It claims a success it didn't check.") }
             if subject.kind == .waiting || triage.state == .waiting { out.append("It waits on: " + fence(triage.waitingLabel)) }
@@ -141,6 +211,40 @@ enum RouterBriefContext {
             out.append("The turn's final message" + (message.count > messageTail ? " (its end)" : "") + ":\n" + fence(String(clipped)))
         }
         return out.joined(separator: "\n")
+    }
+
+    /// The most asks one card lists; a question or a choice longer than its limit is no ask written for the user.
+    static let maxAsks = 12
+    static let questionLimit = 400
+    static let optionLimit = 200
+
+    /// A typed answer (`schema`): its brief, cleaned, and its asks, tidied; nil when it isn't that, or an ask is broken (the
+    /// card then shows its own text, never a list that may be wrong). Its brief is one sentence when it lists asks.
+    static func read(_ answer: String, subject: Subject) -> (brief: String, asks: [RouterAsk])? {
+        var text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.hasPrefix("{"), let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end {
+            text = String(text[start...end])
+        }
+        guard let obj = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
+              let brief = obj["brief"] as? String, let raw = obj["asks"] as? [Any], raw.count <= maxAsks else { return nil }
+        func flat(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        var asks: [RouterAsk] = []
+        for item in raw {
+            guard let item = item as? [String: Any], let question = item["question"] as? String,
+                  let list = (item["options"] ?? [Any]()) as? [Any], list.count <= maxAsks else { return nil }
+            var options: [String] = []
+            for option in list {
+                guard let option = option as? String else { return nil }
+                let flat = flat(option)
+                if !flat.isEmpty, !options.contains(flat) { options.append(flat) }
+            }
+            let q = flat(question)
+            guard q.count <= questionLimit, options.allSatisfy({ $0.count <= optionLimit }) else { return nil }
+            if q.isEmpty || asks.contains(where: { $0.question.lowercased() == q.lowercased() }) { continue }
+            asks.append(RouterAsk(question: q, options: options))
+        }
+        guard let cleaned = clean(brief, sentences: asks.isEmpty ? sentences(subject) : 1) else { return nil }
+        return (cleaned, asks)
     }
 
     /// Haiku's answer as plain text, as many sentences as its tier allows: whole ones, the last dropped while it runs long,
@@ -176,15 +280,14 @@ extension Store {
     func briefSubject(_ card: RouterCard, message: String?) -> RouterBriefContext.Subject {
         let form = pendingForm(for: card)
         var questions = form?.questions ?? []
-        var triage = card.triage
+        var asks = card.asks
         if let left = card.left {
             questions = questions.filter { left.contains($0.question) }
-            let asked = triage?.questions.filter(left.contains) ?? []
-            triage?.questions = asked
+            asks = asks?.filter { left.contains($0.question) }
         }
         return RouterBriefContext.Subject(title: card.title, project: card.folder.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Scratch",
-                                          kind: card.kind, tier: routerTier(card), text: card.text, triage: triage,
-                                          questions: questions, plan: form?.plan, message: message)
+                                          kind: card.kind, tier: routerTier(card), text: card.text, triage: card.triage,
+                                          questions: questions, plan: form?.plan, message: message, asks: asks)
     }
 
     /// The open questions and plans briefed again once their form is held (the source tells a brief made without it).
@@ -209,7 +312,8 @@ extension Store {
     /// Answers in Haiku's place (tests, shots). Without one, a test run makes no brief.
     @ObservationIgnored var runner: Runner?
 
-    typealias Runner = @Sendable (_ system: String, _ context: String) async throws -> String
+    /// Given a schema (`RouterBriefContext.schema`), the answer is that JSON.
+    typealias Runner = @Sendable (_ system: String, _ context: String, _ schema: String?) async throws -> String
     static let model = "claude-haiku-5-5"
     static let timeout: TimeInterval = 30
     /// Calls at once; the rest wait.
@@ -270,17 +374,27 @@ extension Store {
         let source = RouterBriefContext.source(subject)
         guard card.briefSource != source, store.router.enabled, generation == self.generation else { return }
         let text: String
+        var asks: [RouterAsk]?
         do {
             if store.routerIsPretend && runner == nil {
                 try? await Task.sleep(for: .milliseconds(600))
                 text = Self.canned(subject)
             } else {
-                let answer = try await (runner ?? Self.haiku(store: store))(RouterBriefContext.system(style: store.routerStyle),
-                                                                            RouterBriefContext.build(subject))
-                guard let cleaned = RouterBriefContext.clean(answer, sentences: RouterBriefContext.sentences(subject)) else {
-                    throw RouterTools.Failure("Haiku's answer was empty")
+                let extracting = RouterBriefContext.extracts(subject)
+                let answer = try await (runner ?? Self.haiku(store: store))(
+                    RouterBriefContext.system(style: store.routerStyle, extracting: extracting), RouterBriefContext.build(subject),
+                    extracting ? RouterBriefContext.schema : nil)
+                if extracting {
+                    guard let read = RouterBriefContext.read(answer, subject: subject) else {
+                        throw RouterTools.Failure("Haiku's answer wasn't a brief with what the turn asks")
+                    }
+                    (text, asks) = (read.brief, read.asks)
+                } else {
+                    guard let cleaned = RouterBriefContext.clean(answer, sentences: RouterBriefContext.sentences(subject)) else {
+                        throw RouterTools.Failure("Haiku's answer was empty")
+                    }
+                    text = cleaned
                 }
-                text = cleaned
             }
         } catch {
             Self.log.notice("No brief for a card: \(error.localizedDescription, privacy: .public)")
@@ -297,25 +411,35 @@ extension Store {
         }
         var state = store.router
         state.cards[i].brief = text
-        state.cards[i].briefSource = source
+        // What it asks was read with it: the source is then what the card is made of with them.
+        if let asks { state.cards[i].asks = asks }
+        state.cards[i].briefSource = asks == nil ? source
+            : RouterBriefContext.source(store.briefSubject(state.cards[i], message: message))
         if state != store.router { store.router = state }
     }
 
-    /// A demo's brief: what Jev found it asks, else the card's own words.
+    /// A demo's brief: what it asks, else the card's own words.
     static func canned(_ subject: RouterBriefContext.Subject) -> String {
-        let said = subject.triage?.questions.first ?? subject.questions.first?.question ?? subject.text
+        let said = subject.asks?.first?.question ?? subject.questions.first?.question ?? subject.text
         return RouterLive.firstSentences(said, count: RouterBriefContext.sentences(subject), limit: 280) ?? subject.text
     }
 
     private static func haiku(store: Store) -> Runner {
         let find = store.routerClaudeBinary ?? { RouterStatus.findDefault() }
         let home = store.routerFiles?.routerHome
-        return { system, context in
+        return { system, context, schema in
             guard let binary = find(), let home else { throw RouterTools.Failure("Claude Code wasn't found") }
             try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let typed = schema.map { ["--json-schema", $0] } ?? []
             let output = try await OneShot.run(binary, ["-p", "--model", model, "--tools", "", "--setting-sources", "", "--strict-mcp-config",
-                                                        "--no-session-persistence", "--output-format", "json", "--system-prompt", system],
+                                                        "--no-session-persistence", "--output-format", "json"] + typed + ["--system-prompt", system],
                                                cwd: home, input: Data(context.utf8), timeout: timeout)
+            // The typed answer as JSON; without it (an older Claude Code), its text, which `read` checks all the same.
+            if schema != nil, let obj = (try? JSONSerialization.jsonObject(with: output.stdout)) as? [String: Any],
+               obj["is_error"] as? Bool != true, let typed = obj["structured_output"] as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: typed) {
+                return String(decoding: data, as: UTF8.self)
+            }
             return try OneShot.result(output)
         }
     }

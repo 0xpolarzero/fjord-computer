@@ -142,8 +142,8 @@ enum RouterBanners {
         guard !windowIsKey, store.settings.notifications, !store.isSnoozed else { return }
         for card in now {
             let project = store.routerProject(card).name
-            // A turn that asks you says what, as it asked it.
-            let asked = card.triage?.questions ?? []
+            // A turn that asks you says what, as its card lists it.
+            let asked = card.asks?.map(\.question) ?? []
             store.notifier.post(id: prefix + card.id, title: card.title, subtitle: "\(card.kind.label) · \(project)",
                                 body: asked.isEmpty ? card.text : asked.joined(separator: "\n"), quiet: false)
             store.routerAttention.posted(card.id)

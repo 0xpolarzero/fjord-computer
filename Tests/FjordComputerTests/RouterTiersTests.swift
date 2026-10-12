@@ -62,7 +62,7 @@ import Testing
     }
 
     @Test func theQuestionsReadAsTheirOwnBlocker() {
-        let q = RouterTriage.questions(candidates: [], options: [])
+        let q = RouterTriage.questions(options: [])
         guard case .choice(_, let hints, _) = q["state"] else { Issue.record("no state question"); return }
         #expect(hints["waiting"]?.contains("someone other than the user") == true)
         #expect(hints["asks"]?.contains("review, test or action") == true)

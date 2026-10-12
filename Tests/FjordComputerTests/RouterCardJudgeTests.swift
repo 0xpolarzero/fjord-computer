@@ -102,6 +102,25 @@ import Testing
         #expect(calls == 2 && asked.count == 1 && !s.router.cards[0].isOpen && s.router.cards[0].left == nil)
     }
 
+    @Test func aTurnsAsksAreJudgedOneByOneWithTheirChoices() async {
+        var turn = card("a#t3", "a", kind: .asks, text: "Two calls to make.")
+        turn.asks = [RouterAsk(question: "Which database?", options: ["SQLite", "Postgres"]), RouterAsk(question: "Ship today?")]
+        let s = store([turn])
+        var seen = ""
+        await judge(s, asker: { questions, state in
+            seen = state.values.first { $0.contains("q0:") } ?? ""
+            return try await self.yes { $0.contains("database") ? 0.9 : 0.1 }(questions, state)
+        })
+        #expect(seen.contains("q0: Which database? Options: SQLite / Postgres") && seen.contains("q1: Ship today?"))
+        #expect(seen.hasPrefix(SessionFence.open))
+        #expect(s.router.cards[0].isOpen && s.router.cards[0].left == ["Ship today?"] && s.router.cards[0].total == 2)
+        // Not read yet (or asking one thing): the card is judged whole, with what it asks.
+        var unread = card("a#t4", "a", kind: .asks, text: "It asks which database.")
+        #expect(CardJudge.questions(unread, form: nil).isEmpty)
+        unread.asks = [RouterAsk(question: "Which database?", options: ["SQLite", "Postgres"])]
+        #expect(CardJudge.content(unread, form: nil).contains("Which database? Options: SQLite / Postgres\nIt asks which database."))
+    }
+
     @Test func noQuestionAnsweredLeavesTheFormUntouched() async {
         let s = formStore()
         await judge(s, asker: yes { _ in 0.1 })

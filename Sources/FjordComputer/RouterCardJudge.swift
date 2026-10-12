@@ -1,8 +1,8 @@
 import Foundation
 
 // After a message of yours reaches a session, Jev judges each of that session's open cards: does the message resolve it?
-// Resolved cards are addressed; a card with several questions (a form's, or those a turn's final message asked) keeps the
-// ones the message didn't answer, all judged in one call; anything else (not, unsure, an error, no key) leaves the card
+// Resolved cards are addressed; a card with several questions (a form's, or the asks a turn's final message was read to
+// have, RouterBrief.swift) keeps the ones the message didn't answer, all judged in one call; anything else (not, unsure, an error, no key) leaves the card
 // open, because a card is never hidden unless Jev is clearly sure it no longer needs you: his probabilities decide, never
 // his label alone.
 
@@ -35,8 +35,7 @@ enum CardJudge {
         SessionFence.fence(String(text.prefix(3000)))
     }
 
-    /// The questions a card asks one by one: a form's (read with its options), else those Jev found in the final message of
-    /// a turn (`RouterTriage.questions`).
+    /// The questions a card asks one by one, each read with its choices: a form's, else a turn's asks (`RouterCard.asks`).
     static func questions(_ card: RouterCard, form: PendingForm?) -> [(question: String, read: String)] {
         if let form {
             guard !form.isPlan else { return [] }
@@ -44,7 +43,7 @@ enum CardJudge {
                 (q.question, q.question + (q.options.isEmpty ? "" : " Options: " + q.options.map(\.label).joined(separator: " / ")))
             }
         }
-        return (card.triage?.questions ?? []).map { ($0, $0) }
+        return (card.asks ?? []).map { ($0.question, $0.read) }
     }
 
     /// One call, given `timeout`: nil when it fails or takes longer.

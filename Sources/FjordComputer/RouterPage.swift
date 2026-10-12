@@ -1961,7 +1961,7 @@ struct TriageChips: View {
     /// chips, then whether it is shown in full.
     static func spoken(_ card: RouterCard, expanded: Bool) -> String {
         var parts: [String] = []
-        let asked = card.triage?.questions.count ?? 0
+        let asked = card.asks?.count ?? 0
         if let left = card.left, let total = card.total {
             parts.append("\(left.count) of \(total) questions left")
         } else if asked > 1 {
@@ -2024,7 +2024,7 @@ struct CardView: View {
     /// What the card asks, on one line: its brief, else the first question still open, else its text (parsed once per text).
     private var excerpt: AttributedString {
         if let brief = card.brief { return Self.inline(brief) }
-        if let first = openQuestions.first { return Self.inline(first) }
+        if let first = openAsks.first { return Self.inline(first.question) }
         let flat = card.text.split(whereSeparator: \.isNewline).map { $0.drop { "#-* ".contains($0) } }.joined(separator: " ")
         return Self.inline(flat)
     }
@@ -2039,11 +2039,11 @@ struct CardView: View {
         return out
     }
 
-    /// The questions Jev found in the turn's final message that your messages haven't answered.
-    private var openQuestions: [String] {
-        let all = card.triage?.questions ?? []
+    /// What the turn's final message asks (`RouterCard.asks`) that your messages haven't answered.
+    private var openAsks: [RouterAsk] {
+        let all = card.asks ?? []
         guard let left = card.left else { return all }
-        return all.filter(left.contains)
+        return all.filter { left.contains($0.question) }
     }
 
     var body: some View {
@@ -2188,14 +2188,24 @@ struct CardView: View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: formCap)
             .fixedSize(horizontal: false, vertical: true)
-        } else if !openQuestions.isEmpty {
-            // What it asks, as it asked it; what the turn did under it.
+        } else if !openAsks.isEmpty {
+            // What it asks, each with the choices it offers; what the turn did under it.
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(openQuestions, id: \.self) { question in
+                ForEach(openAsks, id: \.question) { ask in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: "questionmark.circle").font(.system(size: 11, weight: .medium)).foregroundStyle(card.kind.color)
-                        Text(RouterText.inline(question)).cdsText((13, 18), .regular, CDS.Text.primary)
-                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(RouterText.inline(ask.question)).cdsText((13, 18), .regular, CDS.Text.primary)
+                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            ForEach(ask.options, id: \.self) { option in
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Image(systemName: "circle").font(.system(size: 6, weight: .semibold)).foregroundStyle(CDS.Text.muted)
+                                    Text(RouterText.inline(option)).cdsText((12, 16), .regular, CDS.Text.secondary)
+                                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                }
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
                     }
                 }
                 if card.text != RouterFeed.placeholder {

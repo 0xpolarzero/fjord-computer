@@ -295,7 +295,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
     var turnMessage: Int64?
     /// Set when an inbox action started the session this is about.
     var origin: SessionOrigin?
-    /// The questions of a form still unanswered after your messages (the form had `total`), so the card says "2 of 3 left".
+    /// The questions of a form, or the asks of a turn (by question), still unanswered after your messages (it had `total`),
+    /// so the card says "2 of 3 left".
     var left: [String]?
     var total: Int?
     /// Your message that resolved the card, when Jev judged it did.
@@ -307,14 +308,18 @@ struct RouterCard: Codable, Identifiable, Hashable {
     var brief: String?
     /// What the brief was made from (a hash): it is made again only when that changes.
     var briefSource: String?
+    /// What a turn's final message asks you, each with its choices, read by its brief's call (RouterBrief.swift): nil until
+    /// then, or when that call failed (the card shows its own text); empty when it asks nothing.
+    var asks: [RouterAsk]?
     /// A finished turn that went to the history on its own (`settled`) and that you haven't acknowledged yet.
     var unread: Bool?
 
-    /// The card less how it is told to you (its brief, read or not): what an action on it goes by.
+    /// The card less how it is told to you (its brief and the asks read with it, read or not): what an action on it goes by.
     var acted: RouterCard {
         var card = self
         card.brief = nil
         card.briefSource = nil
+        card.asks = nil
         card.unread = nil
         return card
     }
@@ -345,7 +350,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage, brief, briefSource, unread
+        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage, brief, briefSource, asks, unread
     }
 
     /// Files from before `createdMs` have `createdAt` (a date) instead.
@@ -374,6 +379,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         triage = try? c.decodeIfPresent(RouterTriage.self, forKey: .triage)
         brief = try? c.decodeIfPresent(String.self, forKey: .brief)
         briefSource = try? c.decodeIfPresent(String.self, forKey: .briefSource)
+        // Older files have the sentences Jev found asking, on the triage: each an ask with no choices.
+        asks = (try? c.decodeIfPresent([RouterAsk].self, forKey: .asks)) ?? triage.flatMap { RouterAsk.legacy($0.legacyQuestions) }
         unread = try? c.decodeIfPresent(Bool.self, forKey: .unread)
     }
 
@@ -398,6 +405,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(triage, forKey: .triage)
         try c.encodeIfPresent(brief, forKey: .brief)
         try c.encodeIfPresent(briefSource, forKey: .briefSource)
+        try c.encodeIfPresent(asks, forKey: .asks)
         try c.encodeIfPresent(unread, forKey: .unread)
     }
 

@@ -309,11 +309,12 @@ enum Demo {
             store.claudeSessions[session.id] = session
             store.agents.entries.append(AgentEntry(id: session.id, seen: session.activity, focusedAt: session.lastFocused, icon: icon))
         }
-        func card(_ session: ClaudeSession, _ triage: RouterTriage, minutes: Double) -> RouterCard {
+        func card(_ session: ClaudeSession, _ triage: RouterTriage, asks: [RouterAsk]? = nil, minutes: Double) -> RouterCard {
             var c = RouterCard(id: "\(session.id)#t\(session.completedTurns)", sessionID: session.id,
                                kind: RouterTriage.kind(blocked: false, triage: triage), title: session.title, folder: session.folder,
                                text: session.summary?.detail ?? "", createdAt: now.addingTimeInterval(-minutes * 60))
             c.triage = triage
+            c.asks = asks
             return c
         }
         let s = { (id: String) in store.claudeSessions[id]! }
@@ -321,11 +322,11 @@ enum Demo {
                                  watch: .init(target: .ci(thing: "pr:me/lookout#212"), label: "CI on me/lookout#212", ref: "me/lookout#212"))
         ready.ready = .init(result: "passing", at: now.addingTimeInterval(-40))
         store.router.cards += [
-            card(s("local_demo-release"), RouterTriage(state: .approval, questions: ["OK to publish 2.4 to the App Store and push the `v2.4.0` tag?"],
-                                                       urgency: 4, work: .committed), minutes: 3),
-            card(s("local_demo-api"), RouterTriage(state: .asks, questions: ["Should the limit be **per API key** or per IP?",
-                                                                              "Is 100 requests a minute the right default?"],
-                                                   urgency: 3, work: .uncommitted), minutes: 8),
+            card(s("local_demo-release"), RouterTriage(state: .approval, urgency: 4, work: .committed),
+                 asks: [RouterAsk(question: "OK to publish 2.4 to the App Store and push the `v2.4.0` tag?")], minutes: 3),
+            card(s("local_demo-api"), RouterTriage(state: .asks, urgency: 3, work: .uncommitted),
+                 asks: [RouterAsk(question: "Should the limit be **per API key** or per IP?", options: ["Per API key", "Per IP"]),
+                        RouterAsk(question: "Is 100 requests a minute the right default?")], minutes: 8),
             card(s("local_demo-docs"), RouterTriage(state: .done, urgency: 0, unverified: true, work: .committed), minutes: 14),
             card(s("local_demo-login"), ready, minutes: 6),
             card(s("local_demo-schema"), RouterTriage(state: .waiting, urgency: 1, work: .none, waitingOn: .session,
