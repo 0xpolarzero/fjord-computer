@@ -65,10 +65,6 @@ struct RouterTriage: Codable, Hashable {
         /// passes it, or the turn ends with its summary written (it may be counted already): one that just stops (Claude
         /// quit mid-turn) is not done. Nil for one that wasn't at work, and for older cards.
         var turnsAtWork: Int? = nil
-        /// The waiting session's own final message names it (the other session's id or title words, the PR's ref or
-        /// number, the workflow's title words), as Fjord Computer read it, not Jev: only then is it continued on its
-        /// own once this is done. Nil for older cards.
-        var named: Bool? = nil
     }
 
     /// The awaited thing finished: what came of it.
@@ -349,7 +345,7 @@ extension Claude {
     /// Sends a session (by id) a message as it is (tests); the Router's send path otherwise (see `Store.sendVerbatim`).
     typealias Sender = (String, String) async throws -> Void
     var sender: Sender?
-    /// A waiting session's wait is over and it wasn't told on its own (banners).
+    /// A waiting session's wait is over: yours to continue (banners).
     var onReady: ((RouterCard) -> Void)?
     /// How many sessions the launch's look back may read.
     static let rescanLimit = 20
@@ -378,8 +374,6 @@ extension Claude {
     var bannerWait: Duration = .seconds(20)
     /// Waiting cards whose session is being told its wait is over (never saved: a send cut short by quitting is not one).
     var telling: Set<String> = []
-    /// Waiting cards whose send on its own failed: yours to continue now (RouterTiers.swift). In memory, as `telling` is.
-    var autoFailed: Set<String> = []
     /// The GitHub repos each folder's git remotes name (`Store.gitRepos`); tests fill it in.
     var repos: [String: Set<String>] = [:]
     /// When each folder's entry in `repos` was read: past `remotesTTL` it is read again (a remote added since, as a fork's
@@ -655,10 +649,6 @@ extension Store {
             if !self.jevReadsInbox { options.removeAll(where: \.fromInbox) }
             var triage = RouterTriage.parse(answers, options: options, source: source)
             for extra in extras { extra.apply(answers, &triage) }
-            if var watch = triage.watch {
-                watch.named = self.waitNamed(watch, in: message, by: session)
-                triage.watch = watch
-            }
             if rescue {
                 self.rescueTurn(session, triage: triage, message: message)
             } else {
@@ -681,7 +671,7 @@ extension Store {
     /// PR and ended waiting on its checks before the inbox had it. Once a PR or workflow of the session's repo comes
     /// whose CI runs, or changed since the turn ended, and the turn's final message names it, by Fjord Computer's own
     /// reading (its ref, its link or number for a PR, as `waitNamed` reads a workflow) and names no other, it is
-    /// watched, named: no call to Jev. The message is kept from the triage (read again once, when it isn't: after a
+    /// watched: no call to Jev. The message is kept from the triage (read again once, when it isn't: after a
     /// relaunch). Nothing of the inbox goes to TypeSafe here, so it is bound whether or not Jev may read the inbox;
     /// only while Triage is on to have it.
     func bindUnwatchedWaits() {
@@ -715,7 +705,7 @@ extension Store {
             }
             guard named.count == 1, let thing = named.first else { continue }
             state.cards[i].triage?.watch = .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing),
-                                                 ref: RouterWaits.ref(thing), named: true)
+                                                 ref: RouterWaits.ref(thing))
             kept[card.id] = nil
         }
         routerTriager.unwatched = kept

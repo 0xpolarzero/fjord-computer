@@ -2,7 +2,7 @@ import Foundation
 
 // Where a card stands, by whose move is next (agreed with the user, 2026-10-11):
 // 1. Needs you: the move is yours (a question, a plan, an OK, an ask, a stuck turn, a last step left to you, a wait that is
-//    over while nothing continues it on its own).
+//    over, until you tell it to continue).
 // 2. Waiting: the move is something else's (CI, a deploy, another session, someone else's review).
 // 3. Worth a look: done, nothing to do, but it tells you something (a caveat, a risk, a decision it took, a claim it didn't
 //    check). Unsure, a finished turn is this, never quieter.
@@ -16,13 +16,12 @@ enum RouterTier: Int, Comparable, CaseIterable {
 }
 
 extension RouterCard {
-    /// Its tier as it stands. `autoContinue`: whether its session is told on its own once its wait is over (a wait that is
-    /// over and isn't is yours to continue).
-    func tier(autoContinue: Bool) -> RouterTier {
+    /// Its tier as it stands (a wait that is over and not told yet is yours to continue).
+    var tier: RouterTier {
         if kind.needsYou { return .needsYou }
         switch kind {
         case .waiting:
-            guard let triage, triage.ready != nil, triage.told == nil, !autoContinue else { return .waiting }
+            guard let triage, triage.ready != nil, triage.told == nil else { return .waiting }
             return .needsYou
         case .done:
             guard let triage else { return .note }
@@ -38,18 +37,12 @@ extension RouterCard {
 
     /// A finished turn the triage found nothing in for you (nor a question your last message left that it went on without):
     /// it goes to the history on its own, unread.
-    var settles: Bool { isOpen && kind == .done && triage != nil && tier(autoContinue: false) == .done && wentAheadWithout.isEmpty }
+    var settles: Bool { isOpen && kind == .done && triage != nil && tier == .done && wentAheadWithout.isEmpty }
 }
 
 extension Store {
-    /// A card's tier, with whether it is continued on its own (`autoContinues`).
-    func routerTier(_ card: RouterCard) -> RouterTier { card.tier(autoContinue: autoContinues(card)) }
-
-    /// Whether a waiting card is told on its own once its wait is over, as `resolveWaits` does it: its session's switch on,
-    /// a wait its message named, and no send on its own that failed. Otherwise continuing it is yours.
-    func autoContinues(_ card: RouterCard) -> Bool {
-        continuesAutomatically(card.sessionID) && card.triage?.watch?.named == true && !routerTriager.autoFailed.contains(card.id)
-    }
+    /// A card's tier.
+    func routerTier(_ card: RouterCard) -> RouterTier { card.tier }
 
     /// The cards the history shows unread: finished turns that went there on their own and you haven't acknowledged.
     var routerUnread: [RouterCard] { router.cards.filter { $0.unread == true && !$0.isOpen } }

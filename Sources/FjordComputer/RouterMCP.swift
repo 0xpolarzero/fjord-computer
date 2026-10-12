@@ -1111,7 +1111,7 @@ final class RouterMCPServer: @unchecked Sendable {
         guard turnText != nil else { return "Only the user's messages are sent" }
         // Switched off, and the switch not seen yet: nothing goes, nothing is used up.
         guard let store, store.router.enabled, store.agents.enabled else { return "The Router is off" }
-        // What the send was for may be over by now (a wait handled, the session going on, auto-continue turned off).
+        // What the send was for may be over by now (a wait handled, the session going on).
         if let refusal = deliveryCheck?() { return refusal }
         guard otherFields.isEmpty else { return "Unexpected fields: \(otherFields.joined(separator: ", ")). Send only `to` and `message`" }
         // What Claude Code adds itself (a preview, the kind of recipient) is checked against the message; nothing else.

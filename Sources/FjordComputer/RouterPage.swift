@@ -37,7 +37,7 @@ struct RouterPage: Equatable {
     /// Open cards whose next move is yours, as the page shows them (the arrow keys walk the same order, see `ranked`): an
     /// OK asked first, then what stops a session on you, stuck turns, then a last step left to you (RouterTiers.swift).
     var needs: [RouterCard] = []
-    /// Sessions whose wait is over and that nothing continues on its own: yours to continue, in Needs you; newest first.
+    /// Sessions whose wait is over and that aren't told yet: yours to continue, in Needs you; newest first.
     var ready: [RouterCard] = []
     /// Sessions whose turn ended waiting on something (CI, another session…), under the working ones; newest first.
     var waiting: [RouterCard] = []
@@ -64,19 +64,16 @@ struct RouterPage: Equatable {
     }
 
     static func make(cards: [RouterCard], working: [AgentRow],
-                     decisions: [RouterDecision] = [], summaries: [RouterSummary] = [], asks: [RouterAskBack] = [],
-                     autoContinue: @escaping (RouterCard) -> Bool = { _ in false }) -> RouterPage {
+                     decisions: [RouterDecision] = [], summaries: [RouterSummary] = [], asks: [RouterAskBack] = []) -> RouterPage {
         make(cards: cards, working: working, asks: asks, history: history(cards: cards, decisions: decisions, summaries: summaries),
-             summaries: summaries, autoContinue: autoContinue)
+             summaries: summaries)
     }
 
     /// The zones on the cards and sessions, around a history worked out already (`Store.routerHistory`). `tasks`: what
     /// sessions whose turn is over still run (`Store.routerTasks`, the map the keys and the counts go by too, a muted
     /// project's sessions with the rest); without it, the Working rows'.
-    /// `autoContinue`: whether a waiting card is told on its own once its wait is over (`Store.autoContinues`).
     static func make(cards: [RouterCard], working: [AgentRow], asks: [RouterAskBack], history: [Entry],
-                     summaries: [RouterSummary] = [], tasks: [String: [ClaudeTask]]? = nil,
-                     autoContinue: (RouterCard) -> Bool = { _ in false }) -> RouterPage {
+                     summaries: [RouterSummary] = [], tasks: [String: [ClaudeTask]]? = nil) -> RouterPage {
         let open = cards.filter(\.isOpen)
         var page = RouterPage()
         let tasks = tasks ?? Dictionary(working.map { ($0.id, $0.tasks) }, uniquingKeysWith: +)
@@ -86,8 +83,8 @@ struct RouterPage: Equatable {
         // A session that is working again shows as working.
         let busy = Set(working.map(\.id))
         let waits = open.filter { $0.kind == .waiting && !busy.contains($0.sessionID) }.sorted(by: newestFirst)
-        page.ready = waits.filter { $0.tier(autoContinue: autoContinue($0)) == .needsYou }
-        page.waiting = waits.filter { $0.tier(autoContinue: autoContinue($0)) != .needsYou }
+        page.ready = waits.filter { $0.tier == .needsYou }
+        page.waiting = waits.filter { $0.tier != .needsYou }
         page.working = working
         page.asks = asks
         page.history = history
@@ -149,7 +146,7 @@ extension Store {
     /// The Router's page on what is stored and what runs now.
     var routerPage: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: routerHistory,
-              summaries: router.summaries, tasks: routerTasks, autoContinue: autoContinues)
+              summaries: router.summaries, tasks: routerTasks)
     }
 
     /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
@@ -179,7 +176,7 @@ extension Store {
     /// The page's zones alone: what the live part of the page redraws on, without the history.
     var routerZones: RouterPage {
         .make(cards: router.cards, working: routerWorkingRows, asks: routerDispatcher.askBacks, history: [],
-              summaries: router.summaries, tasks: routerTasks, autoContinue: autoContinues)
+              summaries: router.summaries, tasks: routerTasks)
     }
 }
 
@@ -1597,7 +1594,7 @@ private struct RouterNow: View {
                     .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
                                             removal: .scaleFade(0.97, reduce: reduceMotion)))
             }
-            // A wait that is over, that nothing continues on its own: yours to continue.
+            // A wait that is over, not told yet: yours to continue.
             ForEach(page.ready) { card in
                 WaitingCard(store: store, card: card)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -1887,8 +1884,7 @@ private struct WorkingCard: View {
 
 /// A session whose turn ended waiting on something (CI, a deploy, another session): with the working ones, in a cool
 /// tint and an hourglass, saying what for. Once Fjord Computer sees that done it says the session is ready to continue,
-/// and Tell it sends the session so; its arrow button continues it on its own next time. Opening it, or the Claude
-/// button beside it, opens the session in Claude.
+/// and Tell it sends the session so. Opening it, or the Claude button beside it, opens the session in Claude.
 private struct WaitingCard: View {
     let store: Store
     let card: RouterCard
@@ -1935,9 +1931,6 @@ private struct WaitingCard: View {
                     ClaudeButton("Tell it", variant: .secondary, size: .sm, icon: "arrow.turn.down.right") { store.tellWaiting(card.id) }
                         .help("Sends it: \(message)")
                 }
-                AutoContinueToggle(on: store.continuesAutomatically(card.sessionID), shown: hovered) {
-                    store.setContinuesAutomatically(card.sessionID, $0)
-                }
             }
             // What it waits on and what comes after, in your words' style (RouterBrief.swift).
             if let brief = card.brief {
@@ -1957,34 +1950,6 @@ private struct WaitingCard: View {
             Button("Archive") { store.setCardAddressed(card.id, true) }
             CardSessionMenu(store: store, sessionID: card.sessionID)
         }
-    }
-}
-
-/// Whether a waiting session is told on its own once its wait is over: a toggle in an icon, shown on hover or when on.
-private struct AutoContinueToggle: View {
-    let on: Bool
-    let shown: Bool
-    let set: (Bool) -> Void
-    @State private var hovered = false
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        Button { set(!on) } label: {
-            Image(systemName: on ? "forward.fill" : "forward").font(.system(size: 10, weight: .medium))
-                .foregroundStyle(on ? RouterTriage.waitingTint : hovered ? CDS.Text.secondary : CDS.Text.muted)
-                .frame(width: 22, height: 20)
-                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(hovered ? CDS.Fill.ghostHover : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .focused($focused)
-        .onHover { hovered = $0 }
-        .opacity(on || shown || focused ? 1 : 0)
-        .help(on ? "Continues it automatically when the wait is over: click to stop" : "Continue it automatically when the wait is over")
-        .accessibilityLabel("Continue it automatically")
-        .accessibilityValue(on ? "on" : "off")
-        .accessibilityAddTraits(.isToggle)
     }
 }
 

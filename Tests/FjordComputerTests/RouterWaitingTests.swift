@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import FjordComputer
 
-/// A session waiting on something Fjord Computer sees finish: ready to continue, told by you or on its own, logged.
+/// A session waiting on something Fjord Computer sees finish: ready to continue, told by you, logged.
 @MainActor
 @Suite(.serialized) struct RouterWaitingTests {
     final class Sent { var messages: [(String, String)] = []; var fail = false }
@@ -14,7 +14,7 @@ import Testing
         return thing
     }
 
-    private func store(watch: RouterTriage.Watch, things: [Thing] = [], auto: Bool? = nil) -> (Store, Sent) {
+    private func store(watch: RouterTriage.Watch, things: [Thing] = []) -> (Store, Sent) {
         let s = InboxFixture.store(things)
         s.router.enabled = true
         s.routerTriager.repos = ["/code/app": ["o/app"], "/code/db": []]
@@ -26,7 +26,6 @@ import Testing
                               createdAt: Date())
         card.triage = RouterTriage(state: .waiting, waitingOn: .ci, watch: watch)
         s.router.cards = [card]
-        if let auto { s.router.autoContinue = auto }
         let sent = Sent()
         s.routerTriager.sender = { session, text in
             if sent.fail { throw RouterTools.Failure("not delivered") }
@@ -37,7 +36,7 @@ import Testing
 
     private func settle() async { for _ in 0..<20 { await Task.yield() } }
 
-    private let ciWatch = RouterTriage.Watch(target: .ci(thing: "pr:o/app#1"), label: "CI on o/app#1", ref: "o/app#1", named: true)
+    private let ciWatch = RouterTriage.Watch(target: .ci(thing: "pr:o/app#1"), label: "CI on o/app#1", ref: "o/app#1")
 
     @Test func ciGoingGreenMakesTheSessionReadyAndSaysSo() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.pending)])
@@ -64,7 +63,7 @@ import Testing
     }
 
     @Test func readyCIUntoldFollowsItsChecksUntilItIsTold() async {
-        let (s, sent) = store(watch: ciWatch, things: [ci(.passing)], auto: false)
+        let (s, sent) = store(watch: ciWatch, things: [ci(.passing)])
         var ready: [String] = []
         s.routerTriager.onReady = { ready.append($0.triage?.ready?.result ?? "") }
         s.resolveWaits()
@@ -84,7 +83,7 @@ import Testing
     }
 
     @Test func aReadyOutcomeThatIsNoLongerTheChecksIsNotSent() async {
-        let (s, sent) = store(watch: ciWatch, things: [ci(.failing)], auto: false)
+        let (s, sent) = store(watch: ciWatch, things: [ci(.failing)])
         var card = s.router.cards[0]
         card.triage?.ready = .init(result: "passing", at: Date())
         s.router.cards = [card]
@@ -287,7 +286,7 @@ import Testing
             // Not from Jev's answer: Fjord Computer's own reading of the message binds the PR it names, sending nothing.
             let card = s.router.cards[0]
             #expect(card.triage?.state == .waiting && card.triage?.watch?.target == .ci(thing: "pr:o/app#1"))
-            #expect(card.triage?.watch?.named == true && offered.count == 1)
+            #expect(offered.count == 1)
         }
     }
 
@@ -317,7 +316,7 @@ import Testing
         // Its PR comes: watched, as named, with no call to Jev; its checks going green make it ready.
         s.things["pr:o/app#1"] = ci(.pending)
         let watch = s.router.cards[0].triage?.watch
-        #expect(watch?.target == .ci(thing: "pr:o/app#1") && watch?.named == true && watch?.ref == "o/app#1" && asked == 1)
+        #expect(watch?.target == .ci(thing: "pr:o/app#1") && watch?.ref == "o/app#1" && asked == 1)
         #expect(s.router.cards[0].triage?.ready == nil)
         s.things["pr:o/app#1"]?.checks = .passing
         #expect(s.router.cards[0].triage?.ready?.result == "passing")
@@ -465,43 +464,12 @@ import Testing
         t.claudeSessions["a"]?.running = true
         await settle()
         #expect(sentT.messages.isEmpty && t.router.cards[0].isOpen)
-        // Continuing automatically turned off while it was on its way.
-        let (u, sentU) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
-        u.things["pr:o/app#1"]?.checks = .passing
-        u.setContinuesAutomatically("a", false)
-        await settle()
-        #expect(sentU.messages.isEmpty && u.router.cards[0].triage?.told == nil)
         // Nothing changed: it goes.
+        let (u, sentU) = store(watch: ciWatch, things: [ci(.passing)])
+        u.resolveWaits()
         u.tellWaiting("a#t3")
         await settle()
         #expect(sentU.messages.count == 1)
-    }
-
-    @Test func continuingAutomaticallySendsOnItsOwnAsFjordsRun() async {
-        let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
-        var ready = 0
-        s.routerTriager.onReady = { _ in ready += 1 }
-        s.things["pr:o/app#1"]?.checks = .passing
-        await settle()
-        #expect(sent.messages.count == 1 && ready == 0)
-        let entry = s.router.decisions.last!
-        #expect(entry.trigger == .system && entry.done.count == 1 && entry.reply != nil)
-    }
-
-    @Test func aContinuationThatFailsOnItsOwnSaysTheSessionIsReadyOnce() async {
-        let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
-        sent.fail = true
-        var ready = 0
-        s.routerTriager.onReady = { _ in ready += 1 }
-        s.things["pr:o/app#1"]?.checks = .passing
-        await settle()
-        // Not delivered: still ready and untold, so you hear of it, as you would had it not been sent on its own.
-        #expect(sent.messages.isEmpty && ready == 1 && s.router.cards[0].triage?.ready != nil && s.router.cards[0].triage?.told == nil)
-        // Once: neither another look nor Tell it failing again says it again.
-        s.resolveWaits()
-        s.tellWaiting("a#t3")
-        await settle()
-        #expect(ready == 1)
     }
 
     @Test func aWorkflowRerunThatFailsTheSameWayIsReadyAgain() {
@@ -513,7 +481,7 @@ import Testing
         lint.branch = "main"
         lint.checks = .failing
         lint.failingJobs = ["lint"]
-        let watch = RouterTriage.Watch(target: .ci(thing: lint.id), label: "CI: lint on main in o/app", ref: "o/app", named: true)
+        let watch = RouterTriage.Watch(target: .ci(thing: lint.id), label: "CI: lint on main in o/app", ref: "o/app")
         let (s, _) = store(watch: watch, things: [lint])
         var ready = 0
         s.routerTriager.onReady = { _ in ready += 1 }
@@ -584,7 +552,7 @@ import Testing
             return InboxSync.workflowThings(repo: "o/app", branch: "main", status: status)[0]
         }
         let first = things([check(1, "lint", "completed", "failure", at: 10), check(2, "build", "in_progress", nil, at: 0)])
-        let watch = RouterTriage.Watch(target: .ci(thing: first.id), label: "CI: Checks on main in o/app", ref: "o/app", named: true)
+        let watch = RouterTriage.Watch(target: .ci(thing: first.id), label: "CI: Checks on main in o/app", ref: "o/app")
         let (s, _) = store(watch: watch, things: [first])
         var ready = 0
         s.routerTriager.onReady = { _ in ready += 1 }
@@ -618,7 +586,7 @@ import Testing
         let status = CIStatus(branch: "main", sha: "s", url: nil, checkedAt: t0, title: "Fix", updatedAt: t0, workflows: reading.workflows)
         for thing in InboxSync.workflowThings(repo: "o/app", branch: "main", status: status) {
             #expect(thing.checks == .failing && thing.ciCancelled)
-            let watch = RouterTriage.Watch(target: .ci(thing: thing.id), label: "CI", ref: "o/app", named: true)
+            let watch = RouterTriage.Watch(target: .ci(thing: thing.id), label: "CI", ref: "o/app")
             #expect(RouterWaits.result(watch, sessions: [:], things: [thing.id: thing]) == "cancelled")
             var triage = RouterTriage(state: .waiting, waitingOn: .ci, watch: watch)
             triage.ready = .init(result: "cancelled", at: t0)
@@ -660,7 +628,7 @@ import Testing
         var workflow = ci(.failing)
         workflow.id = "workflow:o/app:1@main"
         workflow.kind = .workflow
-        let watch = RouterTriage.Watch(target: .ci(thing: workflow.id), label: "CI", ref: "o/app", named: true)
+        let watch = RouterTriage.Watch(target: .ci(thing: workflow.id), label: "CI", ref: "o/app")
         let (w, _) = store(watch: watch, things: [workflow])
         var told = 0
         w.routerTriager.onReady = { _ in told += 1 }
@@ -677,19 +645,8 @@ import Testing
         #expect(told == 2 && w.router.cards[0].triage?.ready?.run == "ci:s:6#1")
     }
 
-    @Test func aWaitItsMessageDidntNameIsNeverContinuedOnItsOwn() async {
-        var unnamed = ciWatch
-        unnamed.named = false
-        let (s, sent) = store(watch: unnamed, things: [ci(.pending)], auto: true)
-        var ready = 0
-        s.routerTriager.onReady = { _ in ready += 1 }
-        s.things["pr:o/app#1"]?.checks = .passing
-        await settle()
-        // Ready, with Tell it, but not sent: Jev alone tied it to this.
-        #expect(sent.messages.isEmpty && ready == 1 && s.router.cards[0].triage?.ready != nil)
-        s.tellWaiting("a#t3")
-        await settle()
-        #expect(sent.messages.count == 1)
+    @Test func whatAWaitingMessageNamesIsFjordsOwnReading() {
+        let (s, _) = store(watch: ciWatch, things: [ci(.pending)])
         // What names it, as Fjord Computer reads the message itself.
         let a = s.claudeSessions["a"]!
         #expect(s.waitNamed(ciWatch, in: "Pushed; waiting on CI for o/app#1.", by: a))
@@ -863,25 +820,6 @@ import Testing
         #expect(FjordGate.names("mark acme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
         #expect(!FjordGate.names("mark acme/api#123 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
         #expect(!FjordGate.names("mark xacme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
-    }
-
-    @Test func aSessionsOwnChoiceOverridesTheDefault() async {
-        let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
-        s.setContinuesAutomatically("a", false)
-        #expect(!s.continuesAutomatically("a") && s.router.autoContinueSessions == ["a": false])
-        s.things["pr:o/app#1"]?.checks = .passing
-        await settle()
-        #expect(sent.messages.isEmpty && s.router.cards[0].triage?.ready != nil)
-        // Back to the default: no override kept.
-        s.setContinuesAutomatically("a", true)
-        #expect(s.router.autoContinueSessions.isEmpty)
-        // Off by default, and on for one session only.
-        let (t, sentT) = store(watch: ciWatch, things: [ci(.pending)])
-        #expect(!t.router.autoContinue)
-        t.setContinuesAutomatically("a", true)
-        t.things["pr:o/app#1"]?.checks = .failing
-        await settle()
-        #expect(sentT.messages.count == 1)
     }
 
     @Test func theWaitOptionsAreTheOtherSessionsAndTheRunningChecksOfTheSessionsRepo() async {

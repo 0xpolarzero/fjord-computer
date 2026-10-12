@@ -350,7 +350,6 @@ enum Demo {
         if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-docs" }) {
             store.router.cards[i].brief = "The new docs layout is in, but it wasn't checked on mobile widths."
         }
-        store.router.autoContinueSessions["local_demo-schema"] = true
         // The finished CI turn opened a PR, which its chip says.
         if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-ci" && $0.isOpen }) {
             store.router.cards[i].triage = RouterTriage(state: .done, urgency: 0, work: .pr)

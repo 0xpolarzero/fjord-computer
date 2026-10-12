@@ -2112,7 +2112,7 @@ import Testing
         withExtendedLifetime(f) {}
     }
 
-    /// What the send is for may be over by the time it would go (a wait handled, auto-continue turned off): every gate asks
+    /// What the send is for may be over by the time it would go (a wait handled, the session going on): every gate asks
     /// again, after every wait, so nothing goes then, by the inbox or by the process it falls back to.
     @Test func aSendWhoseReasonIsGoneMeanwhileGoesByNoGate() async throws {
         final class Reason { var gone = false; var asked = 0 }

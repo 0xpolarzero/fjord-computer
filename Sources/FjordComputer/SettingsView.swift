@@ -183,8 +183,6 @@ struct SettingsView: View {
 
     private var claude: some View {
         SettingsSection("Claude") {
-            autoContinue
-            SettingsDivider()
             routerStyle
             SettingsDivider()
             mutedFolders
@@ -274,16 +272,6 @@ struct SettingsView: View {
                     info: ("Let Jev label new comments", "With a TypeSafe API key, each refresh sends the inbox's new comments, reviews and thread replies (not yours, from the last two weeks), and the review requests and assignments waiting on you, to TypeSafe (api.typesafe.ai). What goes: the comment's text and its author, the one just before it, the PR or issue's title, number and repo, its author, labels, size and checks, and your part in it; and, when a session's turn ends waiting, the titles, numbers and checks of the PRs and workflows of its repo, for what it waits on; and, when an action starts a session for an item, the item's title and number and the action's task (with what GitHub wrote), for which clone it works in. Jev labels each comment (asks you, to do, FYI or noise) and rates how important a request is: a row stands out or is dimmed by them, and a rule of yours can ask for them (a comment labeled, noise or a person, rated at least). They never hide a row or hold back a banner: your rules decide that. Off, nothing of the inbox is sent and nothing is labeled: noise is bots only, and an action's session starts in the clone last used, on your defaults.")) {
             SettingsSwitch("Let Jev label new comments",
                            isOn: Binding(get: { store.jevReadsInbox }, set: { store.settings.jevReadsInbox = $0 }))
-        }
-    }
-
-    /// Whether a session whose turn ended waiting on something Fjord Computer sees finish is told so without asking
-    /// (each waiting row can say otherwise for its session).
-    private var autoContinue: some View {
-        SettingsRow("Continue waiting sessions automatically",
-                    info: ("Continue waiting sessions automatically", "When a session's turn ends waiting on something Fjord Computer can see finish (CI on a PR or workflow in your inbox, another session's turn), the Router shows it ready to continue and Tell it sends it a short message such as “The CI on owner/repo#12 finished: passing.” With this on, that message goes on its own, and is logged in the Router's history. Each waiting session's row can turn it on or off for that session. Needs a TypeSafe key: Jev reads how each turn ended.")) {
-            SettingsSwitch("Continue waiting sessions automatically",
-                           isOn: Binding(get: { store.router.autoContinue }, set: { store.setAutoContinueDefault($0) }))
         }
     }
 

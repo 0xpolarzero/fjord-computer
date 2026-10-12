@@ -2,9 +2,8 @@ import Foundation
 
 // A turn that ended waiting on something Fjord Computer can see (another session's turn, CI on a PR or workflow the
 // inbox tracks) closes its own loop: once that is done its row in Working says it's ready to continue, a banner says
-// so, and "Tell it" sends the session a short message through the Router's usual send path (signed, through the gate).
-// With "Continue it automatically" on (per session, else Settings' default, off) the message goes on its own, logged in
-// the history like any run of the Router's.
+// so, and "Tell it" sends the session a short message through the Router's usual send path (signed, through the gate),
+// logged in the history like any run of the Router's.
 
 enum RouterWaits {
     /// What came of the watched thing, once it is done; nil while it isn't (or when Fjord Computer can't tell). Another session is
@@ -197,7 +196,7 @@ extension Store {
     /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`) or its number (`#12`), never its title's words, unless the message names another PR by its ref, or two PRs at all; a
     /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named on
     /// another branch too is either), from Fjord Computer's own data. A watch whose ref
-    /// isn't its thing's names nothing. A wait it doesn't name is never continued on its own.
+    /// isn't its thing's names nothing.
     func waitNamed(_ watch: RouterTriage.Watch, in message: String, by session: ClaudeSession) -> Bool {
         waitNamed(watch, in: waitReading(message, by: session), by: session)
     }
@@ -323,25 +322,9 @@ extension Store {
                                               options: .regularExpression) != nil
     }
 
-    /// Whether a session is told on its own when its wait is over: its own choice, else Settings'.
-    func continuesAutomatically(_ sessionID: String) -> Bool {
-        router.autoContinueSessions[sessionID] ?? router.autoContinue
-    }
-
-    func setContinuesAutomatically(_ sessionID: String, _ on: Bool) {
-        var state = router
-        state.autoContinueSessions[sessionID] = on == state.autoContinue ? nil : on
-        if state != router { router = state }
-    }
-
-    func setAutoContinueDefault(_ on: Bool) {
-        guard router.autoContinue != on else { return }
-        router.autoContinue = on
-    }
-
-    /// The waiting cards whose watched thing is done: ready to continue, with a banner, or told at once when the session
-    /// continues automatically. CI ready but not told yet follows its checks: running again (a new push) it waits again,
-    /// and an outcome that changed is the one it is ready with (said again).
+    /// The waiting cards whose watched thing is done: ready to continue, with a banner. CI ready but not told yet follows
+    /// its checks: running again (a new push) it waits again, and an outcome that changed is the one it is ready with
+    /// (said again).
     func resolveWaits(now: Date = Date()) {
         bindUnwatchedWaits()
         guard router.enabled, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch != nil }) else { return }
@@ -379,35 +362,28 @@ extension Store {
         for card in ready {
             // Over: its brief says what came of it (its tier, and so its source, changed).
             routerBriefer.request(card.id, message: nil, store: self)
-            // On its own only for a wait its message named: one Jev alone tied it to could be something else that is done.
-            if continuesAutomatically(card.sessionID), card.triage?.watch?.named == true {
-                tellWaiting(card.id, automatic: true, now: now)
-            } else {
-                routerTriager.onReady?(card)
-            }
+            routerTriager.onReady?(card)
         }
     }
 
-    /// Sends a waiting session the message that what it waited on is done, and logs it (`automatic`: as
-    /// Fjord Computer's own run). Once per wait: a send that fails can be tried again. That it is being sent is kept in
-    /// memory only (quitting midway leaves it untold, to be told again); that it was told is saved once it was
-    /// delivered.
-    func tellWaiting(_ cardID: String, automatic: Bool = false, now: Date = Date()) {
+    /// Sends a waiting session the message that what it waited on is done, and logs it. Once per wait: a send that fails
+    /// can be tried again. That it is being sent is kept in memory only (quitting midway leaves it untold, to be told
+    /// again); that it was told is saved once it was delivered.
+    func tellWaiting(_ cardID: String, now: Date = Date()) {
         guard let i = router.cards.firstIndex(where: { $0.id == cardID }), router.cards[i].isOpen,
               let triage = router.cards[i].triage, triage.told == nil, !routerTriager.telling.contains(cardID),
               let text = RouterWaits.message(triage) else { return }
         let card = router.cards[i]
         routerTriager.telling.insert(cardID)
-        var entry = RouterDecision(at: now, trigger: automatic ? .system : .you("Tell it to continue"),
+        let entry = RouterDecision(at: now, trigger: .you("Tell it to continue"),
                                    decision: .init(target: card.title, intent: "continue"),
                                    links: .init(sessions: [card.sessionID], cards: [card.id]))
-        if automatic { entry.reply = "Sent on its own: “Continue it automatically” is on for this session." }
         let id = logDecision(entry)
-        // Bound to this card as it is now: anything that changes it meanwhile (handled, the session going on, auto-continue
-        // turned off) stops the send, checked again right before it is delivered.
+        // Bound to this card as it is now: anything that changes it meanwhile (handled, the session going on) stops the
+        // send, checked again right before it is delivered.
         let revision = cardRevisions[cardID, default: 0]
         let check: @MainActor () throws -> Void = { [weak self] in
-            guard let self, self.waitStillTellable(cardID, revision: revision, automatic: automatic) else {
+            guard let self, self.waitStillTellable(cardID, revision: revision) else {
                 throw RouterTools.Failure("Not sent: it no longer waits for this")
             }
         }
@@ -440,21 +416,13 @@ extension Store {
                     $0.add(.failed(RouterDecision.clip(error.localizedDescription, 120)), session: card.sessionID, card: card.id)
                     $0.outcome = .done
                 }
-                // Sent on its own, it came with no banner: one that didn't go, still ready and untold, is said as one not
-                // sent on its own is (once: only resolveWaits sends on its own, once per wait), so Tell it isn't missed.
-                if automatic { self.routerTriager.autoFailed.insert(card.id) }
-                if automatic, self.waitStillTellable(card.id, revision: self.cardRevisions[card.id, default: 0], automatic: false),
-                   let current = self.router.cards.first(where: { $0.id == card.id }) {
-                    self.routerTriager.onReady?(current)
-                }
             }
         }
     }
 
     /// Whether a waiting card can still be told, as it was when the send began (`revision`): open, ready and untold, of
-    /// the session's latest turn, which isn't running, and (`automatic`) still to be continued on its own. CI's outcome is
-    /// still the one it is ready with.
-    func waitStillTellable(_ cardID: String, revision: Int, automatic: Bool) -> Bool {
+    /// the session's latest turn, which isn't running. CI's outcome is still the one it is ready with.
+    func waitStillTellable(_ cardID: String, revision: Int) -> Bool {
         guard router.enabled, cardRevisions[cardID, default: 0] == revision,
               let card = router.cards.first(where: { $0.id == cardID }), card.isOpen, card.kind == .waiting,
               let ready = card.triage?.ready, card.triage?.told == nil,
@@ -463,13 +431,13 @@ extension Store {
         else { return false }
         if let watch = card.triage?.watch, case .ci(let id) = watch.target, things[id] != nil,
            RouterWaits.result(watch, sessions: claudeSessions, things: things) != ready.result { return false }
-        return !automatic || (continuesAutomatically(card.sessionID) && card.triage?.watch?.named == true)
+        return true
     }
 
     /// The Router's send path with the words as they are (nothing taken out): prepared and signed for the session's plugin, then
     /// through the gate, which lets only exactly this text go, once. `check` stops it by throwing: run after the preparing,
     /// and again at each of the gate's own (the approval, right before the inbox's write, the fallback's permission), after
-    /// every wait, so a wait handled or auto-continue turned off meanwhile sends nothing.
+    /// every wait, so a wait handled meanwhile sends nothing.
     static func sendVerbatim(store: Store, check: @escaping @MainActor () throws -> Void) -> RouterTriager.Sender {
         { [weak store] session, text in
             guard let store else { throw RouterTools.Failure("Fjord Computer isn't ready") }

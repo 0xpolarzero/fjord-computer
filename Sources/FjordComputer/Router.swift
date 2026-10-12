@@ -38,10 +38,6 @@ struct RouterState: Codable, Equatable {
     /// in it yourself from the app (a message no run of Fjord Computer's sent: see `RouterFeed.update`), after which
     /// the usual rules apply.
     var fjordStarted: [String: Date] = [:]
-    /// Tell a waiting session on its own once what it waits on is done (Settings), off by default; and, by session, your
-    /// choice over that.
-    var autoContinue = false
-    var autoContinueSessions: [String: Bool] = [:]
     /// By session, the latest turn whose card was handled and then pruned away (`RouterFeed.prune`): the launch's look back
     /// never makes such a turn a card again, though its card is gone.
     var handledTurns: [String: Int] = [:]
@@ -103,9 +99,10 @@ struct RouterState: Codable, Equatable {
         }
     }
 
-    /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
+    /// `chat` is read, never written (an older file's changes); `claudeSessionID`, and an older file's `autoContinue` and
+    /// `autoContinueSessions`, are ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, autoContinue, autoContinueSessions, handledTurns, replies, style
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, handledTurns, replies, style
     }
 
     func encode(to encoder: Encoder) throws {
@@ -124,8 +121,6 @@ struct RouterState: Codable, Equatable {
         try c.encode(origins, forKey: .origins)
         try c.encode(heldWaits, forKey: .heldWaits)
         try c.encode(fjordStarted, forKey: .fjordStarted)
-        try c.encode(autoContinue, forKey: .autoContinue)
-        try c.encode(autoContinueSessions, forKey: .autoContinueSessions)
         try c.encode(handledTurns, forKey: .handledTurns)
         try c.encode(replies, forKey: .replies)
         try c.encodeIfPresent(style, forKey: .style)
@@ -174,8 +169,6 @@ struct RouterState: Codable, Equatable {
         origins = map(.origins)
         heldWaits = map(.heldWaits)
         fjordStarted = map(.fjordStarted)
-        autoContinue = value(.autoContinue) ?? false
-        autoContinueSessions = map(.autoContinueSessions)
         handledTurns = map(.handledTurns)
         replies = map(.replies)
         style = value(.style)
@@ -665,7 +658,6 @@ enum RouterFeed {
         state.formSeen = state.formSeen.filter { live[$0.key] != nil }
         state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
         state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
-        state.autoContinueSessions = state.autoContinueSessions.filter { live[$0.key] != nil }
         state.replies = state.replies.filter { live[$0.key] != nil }
         // A handled turn outlasts its session's archiving (unarchived, it is no new card): forgotten once the session is gone
         // for good, and past the `maxHandled` sessions active last. `listed`: every session the read listed, archived ones too

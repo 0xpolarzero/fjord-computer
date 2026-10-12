@@ -24,9 +24,9 @@ enum RouterDepends {
         return other.count >= 3 && other != ownProject.lowercased() && message.lowercased().contains(other)
     }
 
-    /// Whether the message names the other session as a session, which a wait continued on its own needs: its title's words
-    /// or its project (as `names` reads them) said of a session, beside the word in the same sentence ("the schema migration
-    /// session", "session “Schema migration”", "the lookout session"). Words it shares with a session's title said of
+    /// Whether the message names the other session as a session: its title's words or its project (as `names` reads them)
+    /// said of a session, beside the word in the same sentence ("the schema migration session", "session “Schema
+    /// migration”", "the lookout session"). Words it shares with a session's title said of
     /// anything else ("waiting for tests", another session being "Fix tests") are not, nor is the turn's own ("this session").
     static func namesSession(_ message: String, title: String, project: String, ownProject: String) -> Bool {
         namesSession(saidOfSessions(message), title: title, project: project, ownProject: ownProject)

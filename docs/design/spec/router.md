@@ -42,7 +42,7 @@ The decision log: one entry per run (trigger, decision, what was done, outcome: 
 - Reopen from the history puts a card back in Needs you.
 
 ## Tiers: whose move is next (agreed 2026-10-11, RouterTiers.swift)
-1. Needs you: the move is yours. Question, plan, OK, asks, stuck; Finish up (done, but a last step is left to you: merge, relaunch and try it, run something, test by hand); a wait that is over while nothing continues it on its own. A wait on you is an ask.
+1. Needs you: the move is yours. Question, plan, OK, asks, stuck; Finish up (done, but a last step is left to you: merge, relaunch and try it, run something, test by hand); a wait that is over, until you tell it to continue. A wait on you is an ask.
 2. Waiting: the move is something else's (CI, a deploy, another session, someone else's review, a rate limit).
 3. Worth a look: done, nothing to do, but it tells you something (a caveat, a risk, a decision it took alone, a claim it didn't check, a finding). Unsure, a finished turn is this, never quieter.
 4. Done: done, nothing to do, nothing to tell. It goes straight to the history (`settled`), unread until you click it, "Got it" or "Mark all read".

@@ -74,46 +74,27 @@ import Testing
     // MARK: Tiers
 
     @Test func eachCardTakesTheTierOfWhoseMoveItIs() {
-        #expect(card(.question).tier(autoContinue: false) == .needsYou)
-        #expect(card(.finish, triage(.done, next: .you)).tier(autoContinue: false) == .needsYou)
-        #expect(card(.stuck).tier(autoContinue: false) == .needsYou)
+        #expect(card(.question).tier == .needsYou)
+        #expect(card(.finish, triage(.done, next: .you)).tier == .needsYou)
+        #expect(card(.stuck).tier == .needsYou)
         // Untriaged, unsure, or a claim it didn't check: worth a look, never quieter.
-        #expect(card(.done).tier(autoContinue: false) == .note)
-        #expect(card(.done, triage(.done)).tier(autoContinue: false) == .note)
-        #expect(card(.done, triage(.done, next: .note)).tier(autoContinue: false) == .note)
-        #expect(card(.done, triage(.done, next: .nothing, unverified: true)).tier(autoContinue: false) == .note)
-        #expect(card(.done, triage(.done, next: .nothing)).tier(autoContinue: false) == .done)
+        #expect(card(.done).tier == .note)
+        #expect(card(.done, triage(.done)).tier == .note)
+        #expect(card(.done, triage(.done, next: .note)).tier == .note)
+        #expect(card(.done, triage(.done, next: .nothing, unverified: true)).tier == .note)
+        #expect(card(.done, triage(.done, next: .nothing)).tier == .done)
         // Trivial settles a done turn, never one partway.
-        #expect(card(.done, triage(.done, trivial: true)).tier(autoContinue: false) == .done)
-        #expect(card(.done, triage(.progress, trivial: true)).tier(autoContinue: false) == .note)
+        #expect(card(.done, triage(.done, trivial: true)).tier == .done)
+        #expect(card(.done, triage(.progress, trivial: true)).tier == .note)
     }
 
-    @Test func aWaitOverIsYoursOnlyWhileNothingContinuesIt() {
+    @Test func aWaitOverIsYoursUntilItIsTold() {
         var t = triage(.waiting)
-        #expect(card(.waiting, t).tier(autoContinue: false) == .waiting)
+        #expect(card(.waiting, t).tier == .waiting)
         t.ready = .init(result: "passing", at: Date())
-        #expect(card(.waiting, t).tier(autoContinue: false) == .needsYou)
-        #expect(card(.waiting, t).tier(autoContinue: true) == .waiting)
+        #expect(card(.waiting, t).tier == .needsYou)
         t.told = Date()
-        #expect(card(.waiting, t).tier(autoContinue: false) == .waiting)
-    }
-
-    @Test func aWaitIsContinuedOnItsOwnOnlyAsResolveWaitsDoesIt() {
-        let store = Store()
-        store.persists = false
-        var t = triage(.waiting)
-        t.ready = .init(result: "passing", at: Date())
-        t.watch = .init(target: .ci(thing: "pr:me/x#1"), label: "CI on me/x#1", ref: "me/x#1")
-        let c = card(.waiting, t)
-        store.router.autoContinueSessions["s1"] = true
-        // A wait its message didn't name isn't sent on its own: yours.
-        #expect(store.routerTier(c) == .needsYou)
-        var named = c
-        named.triage?.watch?.named = true
-        #expect(store.routerTier(named) == .waiting)
-        // Its send on its own failed: yours again.
-        store.routerTriager.autoFailed.insert(named.id)
-        #expect(store.routerTier(named) == .needsYou)
+        #expect(card(.waiting, t).tier == .waiting)
     }
 
     // MARK: The page
@@ -128,8 +109,6 @@ import Testing
         #expect(page.notes.map(\.sessionID) == ["n"])
         #expect(page.waiting.map(\.sessionID) == ["w1"])
         #expect(page.ready.map(\.sessionID) == ["w2"])
-        let auto = RouterPage.make(cards: cards, working: [], autoContinue: { $0.sessionID == "w2" })
-        #expect(auto.ready.isEmpty && auto.waiting.count == 2)
         // A note picked opens there, and no card of Needs you with it.
         #expect(page.openNeed(preferred: cards[2].id) == nil)
         #expect(page.openNeed(preferred: nil) == cards[0].id)

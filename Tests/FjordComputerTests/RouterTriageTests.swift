@@ -560,7 +560,11 @@ import Testing
     @Test func olderFilesDecodeAndTheTriageRoundTrips() throws {
         let old = #"{"enabled":true,"cards":[{"id":"a#t1","sessionID":"a","kind":"done","title":"T","text":"x","createdMs":1000}]}"#
         let state = try JSONDecoder().decode(RouterState.self, from: Data(old.utf8))
-        #expect(state.cards.count == 1 && state.cards[0].triage == nil && state.autoContinue == false && state.autoContinueSessions.isEmpty)
+        #expect(state.cards.count == 1 && state.cards[0].triage == nil)
+        // One saved when waiting sessions could be continued on their own: its switches are ignored, nothing is lost.
+        let switches = #"{"enabled":true,"autoContinue":true,"autoContinueSessions":{"a":false},"cards":[{"id":"a#t1","sessionID":"a","kind":"waiting","title":"T","text":"x","createdMs":1000,"triage":{"state":"waiting","urgency":0,"unverified":false,"watch":{"target":{"ci":{"thing":"pr:o/r#1"}},"label":"CI on o/r#1","named":true}}}]}"#
+        let switched = try JSONDecoder().decode(RouterState.self, from: Data(switches.utf8))
+        #expect(switched.dropped.isEmpty && switched.cards.count == 1 && switched.cards[0].triage?.watch?.target == .ci(thing: "pr:o/r#1"))
 
         var s = RouterState()
         var c = RouterCard(id: "a#t1", sessionID: "a", kind: .waiting, title: "T", folder: nil, text: "x", createdAt: Date())
@@ -570,10 +574,8 @@ import Testing
         c.triage = t
         c.asks = [RouterAsk(question: "Q?", options: ["A", "B"])]
         s.cards = [c]
-        s.autoContinue = true
-        s.autoContinueSessions = ["a": false]
         let back = try JSONDecoder().decode(RouterState.self, from: JSONEncoder().encode(s))
-        #expect(back.cards == s.cards && back.autoContinue && back.autoContinueSessions == ["a": false])
+        #expect(back.cards == s.cards)
 
         // The new kinds are saved as one an older build reads (question, plan, done, stuck), the precise one beside it.
         enum OldKind: String, Decodable { case question, plan, done, stuck }
