@@ -212,6 +212,25 @@ import Testing
         #expect(r.keys.key(key(kVK_ANSI_Z, "z", .command)) && r.store.categories[0].name == "By the Router")
     }
 
+    @Test func undoAndRedoOnTheSnippetsGoToThePageHistory() {
+        let r = rig()
+        let history = SnippetHistory(store: r.store)
+        r.store.snippetHistory = history
+        r.navigator.go(.snippets)
+        let made = r.store.addSnippet(name: "Review")
+        history.observe(r.store)
+        r.store.undoStack.push("Moved to the archive") { false }
+        // Also while its text has the keyboard.
+        #expect(r.keys.key(key(kVK_ANSI_Z, "z", .command), responder: NSTextView()))
+        #expect(r.store.snippets.isEmpty)
+        #expect(r.keys.key(key(kVK_ANSI_Z, "Z", [.command, .shift])))
+        #expect(r.store.snippets == [made])
+        // Without a history there is nothing to handle, and the page's other keys are its fields'.
+        r.store.snippetHistory = nil
+        #expect(!r.keys.key(key(kVK_ANSI_Z, "z", .command)))
+        #expect(!r.keys.key(key(kVK_ANSI_B, "b")))
+    }
+
     @Test func aFieldKeepsItsOwnUndoOnTheInboxButNotOnTheCategories() {
         let r = rig()
         let field = NSTextView()

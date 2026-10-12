@@ -4,7 +4,7 @@ import SwiftUI
 // (docs/design/spec/global-sidebar-titlebar.md §2): flat #111, 26pt rows, a 24pt leading slot, 13pt labels.
 //
 // Inbox: each category shown (its symbol in its colour, what is unread or failing), then the archive. The Router after it, with
-// what needs you and what is done. Settings and the inbox's categories at the bottom.
+// what needs you and what is done. The snippets, Settings and the inbox's categories at the bottom.
 
 /// Whether the sidebar is an icon rail, remembered across launches (a shot or a test passes `defaults: nil`; a demo
 /// remembers nothing, so trying it never changes your own).
@@ -151,6 +151,13 @@ struct AppSidebar: View {
             }
             .scrollIndicators(.never)
             VStack(alignment: .leading, spacing: rowGap) {
+                // The snippets serve both tools: there while either is on.
+                if store.triageOn || store.routerOn {
+                    AppSidebarRow(title: "Snippets", on: navigator.selection == .snippets, tip: "Snippets", action: { navigator.go(.snippets) }) { on in
+                        Image(systemName: Snippet.symbol).font(.system(size: M.symbol, weight: .medium))
+                            .chromeInk(on ? .primary : .secondary, glass: onGlass)
+                    }
+                }
                 AppSidebarRow(title: "Settings", on: navigator.selection == .settings, tip: "Settings", action: { navigator.go(.settings) }) { on in
                     Image(systemName: "gearshape").font(.system(size: M.symbol, weight: .medium))
                         .chromeInk(on ? .primary : .secondary, glass: onGlass)

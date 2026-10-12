@@ -32,6 +32,7 @@ enum Demo {
         store.lastSync = now.addingTimeInterval(-20)
         store.rateRemaining = 4812
         inbox(store, now)
+        store.snippets = Snippet.demo
 
         switch scenario {
         case .busy:

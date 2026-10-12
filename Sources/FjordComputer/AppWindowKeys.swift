@@ -103,6 +103,13 @@ final class AppWindowKeys {
             if flags == .command { history.undo(store) } else { history.redo(store) }
             return true
         }
+        // The snippets too.
+        if navigator.selection == .snippets {
+            guard Self.isUndo(event, flags), let history = store.snippetHistory else { return false }
+            if editing { window?.makeFirstResponder(nil) }
+            if flags == .command { history.undo(store) } else { history.redo(store) }
+            return true
+        }
         guard navigator.selection.tab != nil else { return false }
         if flags == .command, Int(event.keyCode) == kVK_ANSI_F {
             search.start()

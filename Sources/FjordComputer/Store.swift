@@ -20,6 +20,12 @@ final class Store {
     var categorySections: [CategorySection] = [.github] {
         didSet { persistedRevision &+= 1 }
     }
+    /// Prompt texts kept for reuse, in the order you put them (Snippets.swift); @ lists them.
+    var snippets: [Snippet] = [] {
+        didSet { persistedRevision &+= 1 }
+    }
+    /// The Snippets page's undo history while it is open (⌘Z there is the page's).
+    @ObservationIgnored var snippetHistory: SnippetHistory?
     /// A category whose editor the categories page opens when it shows (a rule-off mark's click, from the bar or the window).
     var categoryEditorRequest: UUID?
     /// Who is changing the categories and groups now, for the log (see `InboxLog`); nil is the editor.
@@ -738,6 +744,7 @@ final class Store {
             groups = state.groups ?? []
             categorySections = state.categorySections ?? [.github]
         }
+        snippets = state.snippets ?? []
         things = state.things ?? [:]
         // (A file from before it was saved: the categories it was saved with.)
         if state.things != nil { fetchedFor = state.fetchedFor ?? .categories(categories, groups) }
@@ -890,7 +897,8 @@ final class Store {
                                                        categoryBaselines: categoryBaselines, ownedRepos: ownedRepos,
                                                        contributedRepos: contributedRepos, reposResolvedAt: reposResolvedAt,
                                                        myTeams: myTeams, login: login.isEmpty ? nil : login,
-                                                       fetchedFor: fetchedFor, baselinePending: baselinePending ? true : nil))
+                                                       fetchedFor: fetchedFor, baselinePending: baselinePending ? true : nil,
+                                                       snippets: snippets))
         let write: @Sendable () -> String? = {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601

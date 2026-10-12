@@ -123,13 +123,15 @@ struct PersistedState: Codable {
     var fetchedFor: Store.FetchedScope? = nil
     /// Rules were edited and not yet taken in by the actions when the app quit.
     var baselinePending: Bool? = nil
+    /// The snippets, in order; nil (a file from before them) is none.
+    var snippets: [Snippet]? = nil
 
     init(settings: AppSettings, agents: AgentsState? = nil, router: RouterState? = nil, categories: [InboxCategory]? = nil,
          groups: [InboxGroup]? = nil, categorySections: [CategorySection]? = nil, things: [String: Thing]? = nil,
          marks: [String: EntryMarks]? = nil,
          categoryBaselines: [UUID: Set<UUID>]? = nil, ownedRepos: Set<String>? = nil, contributedRepos: Set<String>? = nil,
          reposResolvedAt: Date? = nil, myTeams: Set<String>? = nil, login: String? = nil,
-         fetchedFor: Store.FetchedScope? = nil, baselinePending: Bool? = nil) {
+         fetchedFor: Store.FetchedScope? = nil, baselinePending: Bool? = nil, snippets: [Snippet]? = nil) {
         self.settings = settings
         self.agents = agents
         self.router = router
@@ -146,6 +148,7 @@ struct PersistedState: Codable {
         self.login = login
         self.fetchedFor = fetchedFor
         self.baselinePending = baselinePending
+        self.snippets = snippets
     }
 
     /// The parts the file had that this build could not read (a damaged file, or one from a build whose parts this one
@@ -154,7 +157,7 @@ struct PersistedState: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case settings, agents, router, categories, groups, categorySections, things, marks, categoryBaselines, ownedRepos,
-             contributedRepos, reposResolvedAt, myTeams, login, fetchedFor, baselinePending
+             contributedRepos, reposResolvedAt, myTeams, login, fetchedFor, baselinePending, snippets
     }
 
     /// Tolerant: a file from before the categories (repos, items, ci) loses that data and loads the rest; a part that no
@@ -203,6 +206,7 @@ struct PersistedState: Codable {
         login = part(.login)
         fetchedFor = part(.fetchedFor)
         baselinePending = part(.baselinePending)
+        snippets = each(.snippets)
         self.dropped = dropped
     }
 }

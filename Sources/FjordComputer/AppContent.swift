@@ -245,6 +245,11 @@ struct AppContent: View {
                 AppPage(title: "Inbox categories", leadingInset: leadingInset, trailing: { EmptyView() }) {
                     column { CategoriesView(store: store, hub: hub) }
                 }
+            case .snippets:
+                AppPage(title: "Snippets", subtitle: store.snippets.isEmpty ? "" : plural(store.snippets.count, "snippet"),
+                        leadingInset: leadingInset, trailing: { EmptyView() }) {
+                    column { SnippetsView(store: store) }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -260,7 +265,7 @@ struct AppContent: View {
         return CDS.TitleBar.header
     }
 
-    /// Settings and the categories were made for a narrow panel: a readable column, centred.
+    /// Settings, the categories and the snippets were made for a narrow panel: a readable column, centred.
     private func column<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .frame(maxWidth: 680)

@@ -11,6 +11,7 @@ enum AppDestination: Hashable {
     case router
     case settings
     case categories
+    case snippets
 
     /// A stable text form, for remembering the last place.
     var token: String {
@@ -20,6 +21,7 @@ enum AppDestination: Hashable {
         case .router: "router"
         case .settings: "settings"
         case .categories: "categories"
+        case .snippets: "snippets"
         }
     }
 
@@ -29,6 +31,7 @@ enum AppDestination: Hashable {
         case "router": self = .router
         case "settings": self = .settings
         case "categories": self = .categories
+        case "snippets": self = .snippets
         default:
             guard token.hasPrefix("category:"), let id = UUID(uuidString: String(token.dropFirst("category:".count))) else { return nil }
             self = .category(id)
@@ -51,26 +54,33 @@ enum AppDestination: Hashable {
         }
     }
 
-    /// The tool whose place this is; nil for Settings, which is always there.
+    /// The tool whose place this is; nil for Settings, which is always there, and for the snippets, which both tools use
+    /// (there while either is on).
     var tool: Tool? {
         switch self {
         case .category, .done, .categories: .triage
         case .router: .router
-        case .settings: nil
+        case .settings, .snippets: nil
         }
     }
 
-    /// The sidebar's destinations in order: the categories shown, the archive, the Router, Settings, Inbox categories; those of a
-    /// tool that is off left out.
+    /// Whether this place is there with `tools` on.
+    func isOn(_ tools: Set<Tool>) -> Bool {
+        if self == .snippets { return !tools.isEmpty }
+        return tool.map(tools.contains) ?? true
+    }
+
+    /// The sidebar's destinations in order: the categories shown, the archive, the Router, the snippets, Settings, Inbox
+    /// categories; those of a tool that is off left out.
     static func all(shown: [UUID], tools: Set<Tool>) -> [AppDestination] {
-        (shown.map { .category($0) } + [.done, .router, .settings, .categories]).filter { $0.tool.map(tools.contains) ?? true }
+        (shown.map { .category($0) } + [.done, .router, .snippets, .settings, .categories]).filter { $0.isOn(tools) }
     }
 
     /// Where this really goes: a category that is gone or hidden lands on the first category shown (the archive when there is none);
     /// a place whose tool is off, on the first place of a tool that is on (Settings when none is).
     func resolved(shown: [UUID], tools: Set<Tool>) -> AppDestination {
         let inbox: AppDestination = shown.first.map { .category($0) } ?? .done
-        if let tool, !tools.contains(tool) {
+        if !isOn(tools) {
             return tools.contains(.triage) ? inbox : tools.contains(.router) ? .router : .settings
         }
         if case .category(let id) = self, !shown.contains(id) { return inbox }

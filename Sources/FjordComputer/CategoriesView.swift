@@ -356,8 +356,9 @@ private struct CategoryRow: View {
     }
 }
 
-/// The last row of the tree: a dashed tile with a plus, and what it makes ("New folder"; "New category" with no sections).
-private struct NewRow: View {
+/// The last row of the tree: a dashed tile with a plus, and what it makes ("New folder"; "New category" with no sections;
+/// "New snippet" on the Snippets page).
+struct NewRow: View {
     let title: String
     let symbol: String
     let action: () -> Void

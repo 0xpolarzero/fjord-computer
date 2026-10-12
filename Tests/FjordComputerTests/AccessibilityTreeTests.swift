@@ -144,7 +144,7 @@ enum AccessibilityTree {
         var missing: [String] = []
         let places: [(String, (Store) -> AppDestination)] = [
             ("category", { $0.shownCategories[0].id.asDestination }), ("Archive", { _ in .done }), ("Router", { _ in .router }),
-            ("Settings", { _ in .settings }), ("Inbox categories", { _ in .categories }),
+            ("Settings", { _ in .settings }), ("Inbox categories", { _ in .categories }), ("Snippets", { _ in .snippets }),
         ]
         for (name, destination) in places {
             let store = Store()

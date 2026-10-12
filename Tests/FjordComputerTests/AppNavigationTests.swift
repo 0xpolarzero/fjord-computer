@@ -47,7 +47,7 @@ import Testing
     }
 
     @Test func tokensRoundTrip() {
-        for d in [AppDestination.category(a), .done, .router, .settings, .categories] {
+        for d in [AppDestination.category(a), .done, .router, .settings, .categories, .snippets] {
             #expect(AppDestination(token: d.token) == d)
         }
         #expect(AppDestination(token: "category:nope") == nil)
@@ -70,13 +70,18 @@ import Testing
         }
         #expect(AppDestination.router.resolved(shown: [a], tools: []) == .settings)
         #expect(AppDestination.settings.resolved(shown: [a], tools: []) == .settings)
+        // The snippets serve both tools: there while either is on.
+        #expect(AppDestination.snippets.resolved(shown: [a], tools: [.router]) == .snippets)
+        #expect(AppDestination.snippets.resolved(shown: [a], tools: [.triage]) == .snippets)
+        #expect(AppDestination.snippets.resolved(shown: [a], tools: []) == .settings)
     }
 
     @Test func theSidebarListsOnlyThePlacesOfToolsThatAreOn() {
         #expect(AppDestination.all(shown: [a, b], tools: [.triage, .router])
-            == [.category(a), .category(b), .done, .router, .settings, .categories])
-        #expect(AppDestination.all(shown: [a, b], tools: [.triage]) == [.category(a), .category(b), .done, .settings, .categories])
-        #expect(AppDestination.all(shown: [a, b], tools: [.router]) == [.router, .settings])
+            == [.category(a), .category(b), .done, .router, .snippets, .settings, .categories])
+        #expect(AppDestination.all(shown: [a, b], tools: [.triage])
+            == [.category(a), .category(b), .done, .snippets, .settings, .categories])
+        #expect(AppDestination.all(shown: [a, b], tools: [.router]) == [.router, .snippets, .settings])
         #expect(AppDestination.all(shown: [a, b], tools: []) == [.settings])
     }
 

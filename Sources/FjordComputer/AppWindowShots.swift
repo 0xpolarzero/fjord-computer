@@ -138,6 +138,7 @@ enum AppWindowShots {
         }),
         Shot(name: "settings") { _ in .settings },
         Shot(name: "categories") { _ in .categories },
+        Shot(name: "snippets") { _ in .snippets },
         // Two sections, one folded: its row with the counts added up and its caret turned, its categories gone from the sidebar.
         Shot(name: "categories-sections", destination: { _ in .categories }, compose: { _, store in
             let builds = store.createSection(name: "Builds")

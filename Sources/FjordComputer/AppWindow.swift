@@ -537,6 +537,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         case .router: "Router"
         case .settings: "Settings"
         case .categories: "Inbox categories"
+        case .snippets: "Snippets"
         }
     }
 
