@@ -699,6 +699,40 @@ import Testing
         #expect(never.prepared.isEmpty)
     }
 
+    @Test func aForkIsCutFromTheOriginalsTranscriptAndItsFirstMessagePrepared() async throws {
+        let dir = TempDir()
+        let s = await store(dir)
+        let project = dir.path("projects/-code-lookout")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try RouterForkTests.transcript().write(to: project.appendingPathComponent("cli-local_a.jsonl"))
+        let t = tools(s, turn: "try SQLite instead")
+        t.transcriptsRoot = dir.path("projects")
+        var plans: [SessionFork.Plan] = []
+        t.forker = { plan in
+            plans.append(plan)
+            return SessionStart.Started(sessionID: "local_new", peer: plan.title)
+        }
+        let out = try await t.forkSession(s, .init(session: "local_a", point: .beforeLast, message: "try SQLite instead"), ticket: t.ticket())
+        #expect(plans == [SessionFork.Plan(cwd: "/code/app/.claude/worktrees/w", cliID: "cli-local_a", at: "a2",
+                                           title: "Fork of Fix the login bug")])
+        #expect(out.contains("local_new") && t.prepared["Fork of Fix the login bug"]?.text.hasPrefix("⟦lookout v1 new ") == true)
+        // No first message: the fork waits for yours, nothing prepared.
+        let quiet = tools(s, turn: "Fork")
+        quiet.transcriptsRoot = dir.path("projects")
+        quiet.forker = { plan in plans.append(plan); return SessionStart.Started(sessionID: "local_new", peer: plan.title) }
+        _ = try await quiet.forkSession(s, .init(session: "local_a"), ticket: quiet.ticket())
+        #expect(plans.last?.at == nil && quiet.prepared.isEmpty)
+        // A session whose conversation isn't found, or one Lookout doesn't know: said, nothing made.
+        let none = tools(s, turn: "Fork")
+        none.transcriptsRoot = dir.path("projects")
+        none.forker = { _ in Issue.record("forked"); throw RouterTools.Failure("no") }
+        await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_b"), ticket: none.ticket()) }
+        await #expect(throws: RouterTools.Failure.self) { try await none.forkSession(s, .init(session: "local_z"), ticket: none.ticket()) }
+        await #expect(throws: SessionFork.Failure.self) {
+            try await none.forkSession(s, .init(session: "local_a", point: .before("never sent")), ticket: none.ticket())
+        }
+    }
+
     @Test func aBodyInAnotherUnicodeFormIsNotThePreparedOne() async throws {
         let dir = TempDir()
         let s = await store(dir)

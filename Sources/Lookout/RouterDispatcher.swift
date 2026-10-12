@@ -127,6 +127,8 @@ struct RouterAskBack: Identifiable, Equatable {
     enum Plan: Equatable {
         case reply(session: String, card: String?)
         case start(folder: String)
+        /// A session forked ("fork <session>…", `SessionFork.request`).
+        case fork(SessionFork.Request)
         /// A target you pinned.
         case route(String)
         case classify
@@ -165,6 +167,10 @@ struct RouterAskBack: Identifiable, Equatable {
         var run: @MainActor (RouterTools, RouterRun.Intent, _ input: String) async throws -> RouterRun.Answer
         /// A held start's first message, prepared once the app runs its session (bounded: `SessionStart.heldWait`).
         var finish: @MainActor (RouterTools, SessionStart.Held) async throws -> Delivery = { _, _ in
+            throw RouterTools.Failure("The Router isn't ready")
+        }
+        /// A session forked, with the prepared first message (none: `text` is empty). Throws `SessionStart.Held` as `start` does.
+        var fork: @MainActor (RouterTools, SessionFork.Request) async throws -> Delivery = { _, _ in
             throw RouterTools.Failure("The Router isn't ready")
         }
     }
@@ -357,6 +363,9 @@ struct RouterAskBack: Identifiable, Equatable {
             trace(job, path: "start", action: "start", target: "new:\(folder)")
             chosen(job)
             try await start(job, folder: folder)
+        case .fork(let request):
+            trace(job, path: "fork", action: "fork", target: "session:\(request.session)")
+            try await fork(job, request)
         case .route(let target):
             trace(job, path: "pinned", action: "send", target: target)
             confirm(job, target)
@@ -409,6 +418,12 @@ struct RouterAskBack: Identifiable, Equatable {
         // Wholly for the Router ("@router what needs me?"): asked of it, whatever reply is armed or target pinned (a session
         // would get nothing of it). An aside in a message for a session goes with that message, taken out.
         if forRouter(text, pills: context.pills) { return .classify }
+        // "fork <session>…": of the session named, else of the one pinned or replied to.
+        let pinned = context.target.flatMap { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil }
+            ?? context.replyTo.flatMap { id in store.router.cards.first { $0.id == id }?.sessionID }
+        if let fork = SessionFork.request(RouterTools.pastLeadingTags(text, pills: context.pills), pinned: pinned, store: store) {
+            return .fork(fork)
+        }
         if let id = context.replyTo, let card = store.router.cards.first(where: { $0.id == id }) {
             return .reply(session: card.sessionID, card: id)
         }
@@ -554,6 +569,60 @@ struct RouterAskBack: Identifiable, Equatable {
         } else {
             note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
         }
+    }
+
+    // MARK: Forks
+
+    /// Forks `session` (`SessionFork`): from `point`, with `message` as the fork's first message (empty: none). A run of
+    /// its own, in the history as `trigger` says. Returns its entry in the log.
+    @discardableResult
+    func fork(_ request: SessionFork.Request, trigger: String) -> UUID? {
+        guard let store, store.routerOn else { return nil }
+        let id = store.logDecision(RouterDecision(trigger: .you(trigger), decision: .init(intent: "fork")))
+        // The turn is the fork's first message: the words the send gate lets through, as yours.
+        let words = request.message.isEmpty ? trigger : request.message
+        launch(Job(id: id, text: words, context: RouterContext(), tools: makeTools(id, words, pills: [])), stage: "starting") { [self] job in
+            trace(job, path: "fork", action: "fork", target: "session:\(request.session)")
+            try await fork(job, request)
+        }
+        return id
+    }
+
+    /// What the history says a fork made: a session in the original's project, forked from it.
+    static func forkLabel(_ request: SessionFork.Request, store: Store) -> String {
+        let session = store.claudeSessions[request.session]
+        let project = session.map { store.folderName($0.folderKey) } ?? "a project"
+        let from = session.map { "“\(RouterDecision.clip($0.title, 40))”" } ?? "a session"
+        return switch request.point {
+        case .whole: "\(project) (fork of \(from))"
+        case .beforeLast: "\(project) (fork of \(from), before your last message)"
+        case .before: "\(project) (fork of \(from), before that message)"
+        }
+    }
+
+    private func fork(_ job: Job, _ request: SessionFork.Request) async throws {
+        guard let store else { return }
+        stage(job, "forking the session")
+        let label = Self.forkLabel(request, store: store)
+        store.updateDecision(job.id) {
+            $0.decision.intent = "fork"
+            $0.decision.label = "fork"
+            $0.decision.target = describe("session:\(request.session)", store: store)
+            $0.decision.targetID = "session:\(request.session)"
+        }
+        let delivery: Delivery
+        do {
+            delivery = try await effects.fork(job.tools, request)
+        } catch var waiting as SessionStart.Held {
+            waiting.project = label
+            return hold(job, waiting)
+        }
+        if let session = delivery.session { store.noteLookoutStarted(session) }
+        note(job, .started(session: delivery.session, project: label, model: nil, effort: nil), session: delivery.session)
+        guard !delivery.text.isEmpty else { return }
+        stage(job, "sending")
+        _ = try await effects.send(job.tools, delivery)
+        note(job, .sent(to: delivery.to, text: delivery.body, original: nil), session: delivery.session)
     }
 
     /// A start the Claude app has but doesn't run yet: done as a start (the session is there), its first message sent once
@@ -970,6 +1039,13 @@ extension RouterDispatcher.Effects {
                 let store = try store(dispatcher)
                 let answer = object(try await tools.finishStart(store, held, ticket: tools.ticket()))
                 return try started(answer, tools, project: held.project, settings: held.settings)
+            },
+            fork: { [weak dispatcher] tools, request in
+                guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
+                let store = try store(dispatcher)
+                let answer = object(try await tools.forkSession(store, request, ticket: tools.ticket()))
+                let project = store.claudeSessions[request.session].map { store.folderName($0.folderKey) } ?? ""
+                return try started(answer, tools, project: project, settings: nil)
             })
     }
 }

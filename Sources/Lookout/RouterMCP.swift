@@ -505,6 +505,10 @@ final class RouterMCPServer: @unchecked Sendable {
     var starter: ((String, String) async throws -> SessionStart.Started)?
     /// Waiting for a held start's process (`finishStart`), by its session id: its peer; tests answer for it.
     var processWaiter: ((String) async throws -> String)?
+    /// Making a fork and waiting for its process; tests answer for it.
+    var forker: ((SessionFork.Plan) async throws -> SessionStart.Started)?
+    /// Where Claude Code keeps transcripts (`<project>/<id>.jsonl`); a test gives its own.
+    var transcriptsRoot: URL = Claude.transcriptsDir
     /// Claude Code's bundled binary, as `RouterStatus` found it.
     var claudePath: () -> String? = { nil }
 
@@ -1226,7 +1230,9 @@ final class RouterMCPServer: @unchecked Sendable {
     }
 
     /// The verified way to make a desktop session: a CLI session with no model call, imported by the app, then its process.
-    private func start(_ store: Store, folder: String, name: String, title: String, ticket: Ticket) async throws -> SessionStart.Started {
+    /// `arguments`: the CLI run for the new session's uuid (a fork's, `SessionFork.arguments`); nil: a plain start.
+    private func start(_ store: Store, folder: String, name: String, title: String, ticket: Ticket,
+                       arguments: ((String) -> [String])? = nil) async throws -> SessionStart.Started {
         guard let binary = claudePath(), let peersDir = store.routerFiles?.claudeDir.appendingPathComponent("sessions") else {
             throw Failure("Claude Code wasn't found, so no session can be started")
         }
@@ -1235,7 +1241,7 @@ final class RouterMCPServer: @unchecked Sendable {
         let output: OneShot.Output
         do {
             output = try await tracked { handle in
-                try await OneShot.run(binary, SessionStart.bootstrapArguments(uuid: uuid, title: title),
+                try await OneShot.run(binary, arguments?(uuid) ?? SessionStart.bootstrapArguments(uuid: uuid, title: title),
                                       cwd: URL(fileURLWithPath: folder), timeout: SessionStart.wait, handle: handle)
             }
         } catch is CancellationError {
@@ -1248,6 +1254,48 @@ final class RouterMCPServer: @unchecked Sendable {
         let peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, imported: { SessionStart.imported(uuid) },
                                                       check: { [weak self] in try self?.live(ticket) })
         return SessionStart.Started(sessionID: "local_\(uuid)", peer: peer)
+    }
+
+    /// Forks a session (`SessionFork`): the new session continues from its conversation, whole or up to before one of
+    /// your messages, with `request.message` as its first message (none: it waits for yours). As `startSession`: the same
+    /// JSON, `SessionStart.Held` when the app has the fork but doesn't run it yet.
+    func forkSession(_ store: Store, _ request: SessionFork.Request, ticket: Ticket) async throws -> String {
+        guard let session = store.claudeSessions[request.session], !session.isArchived, let cli = session.cliID else {
+            throw Failure("That session isn't one Lookout knows (archived, or not found)")
+        }
+        let name = store.folderName(session.folderKey)
+        let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !message.isEmpty {
+            guard store.routerPluginStatus == .installed else {
+                throw Failure("Lookout's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
+            }
+        }
+        // Prepared first: if a part for the Router is left in it, no session is made.
+        let ready = message.isEmpty ? nil : try edited(message, envelope: false)
+        if let ready { try noAside(ready.text) }
+        let root = transcriptsRoot
+        let messages = await OffMain.run { SessionFork.transcript(cli, root: root).map { url in
+            SessionFork.messages(in: (try? Data(contentsOf: url)) ?? Data())
+        } }
+        guard let messages else { throw Failure("That session's conversation wasn't found, so it can't be forked") }
+        let cut = try SessionFork.cut(request.point, messages: messages)
+        let title = SessionStart.cleanTitle(request.title ?? SessionFork.title(of: session.title))
+        let plan = SessionFork.Plan(cwd: cut.cwd ?? session.folder ?? "", cliID: cli, at: cut.at, title: title, fresh: cut.fresh)
+        guard !plan.cwd.isEmpty else { throw Failure("That session has no folder to fork it in") }
+        try live(ticket)
+        let started: SessionStart.Started
+        do {
+            if let forker {
+                started = try await forker(plan)
+            } else {
+                // Cut before its first message: nothing to keep, so a new session where it ran.
+                started = try await start(store, folder: plan.cwd, name: name, title: title, ticket: ticket,
+                                          arguments: plan.fresh ? nil : { SessionFork.arguments(cliID: cli, uuid: $0, title: title, at: plan.at) })
+            }
+        } catch let waiting as SessionStart.NotRunning {
+            throw SessionStart.Held(waiting: waiting, title: title, project: name, ready: ready, settings: nil)
+        }
+        return try await deliverable(store, started, ready: ready, title: title, project: name, settings: nil, ticket: ticket)
     }
 }
 

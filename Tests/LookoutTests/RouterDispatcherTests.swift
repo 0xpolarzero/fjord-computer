@@ -36,6 +36,7 @@ import Testing
         var heldStart: SessionStart.Held?
         var finishHeld: CheckedContinuation<Void, Never>?
         var finishError: String?
+        var forked: [SessionFork.Request] = []
         /// The dispatcher holds its store weakly: the test's stand-ins keep it.
         var store: Store?
 
@@ -82,6 +83,12 @@ import Testing
                     return RouterDispatcher.Delivery(to: "peer-late", text: "⟦signed⟧\nhello", body: "hello", original: "hello",
                                                      rephrased: false, session: held.waiting.sessionID, newSessionIn: held.project,
                                                      settings: held.settings, settingsSigned: settingsSigned)
+                },
+                fork: { [unowned self] _, request in
+                    forked.append(request)
+                    return RouterDispatcher.Delivery(to: "peer-fork", text: request.message.isEmpty ? "" : "⟦signed⟧\n" + request.message,
+                                                     body: request.message, original: request.message, rephrased: false,
+                                                     session: "local_fork", newSessionIn: "lookout")
                 })
         }
 
@@ -852,6 +859,31 @@ import Testing
         f.finishHeld?.resume()
         await waitUntil { decision(s, c)?.outcome == .done }
         #expect(f.sent.count == 1 && decision(s, c)?.doneLines.last?.hasPrefix("failed: Stopped") == true)
+    }
+
+    @Test func aForkAskedForInWordsOrFromThePageIsLoggedAndItsFirstMessageSent() async {
+        let (s, d, f) = setup()
+        // Named by its title: forked from before your last message, the rest its first message; never a routing example.
+        let a = d.submit("fork fix the login bug from before my last message: try SQLite instead")
+        await finish(d, f, a)
+        #expect(f.forked == [.init(session: "local_a", point: .beforeLast, message: "try SQLite instead")] && f.ranks == 0)
+        #expect(decision(s, a)?.doneLines == ["started a session in lookout (fork of “Fix the login bug”, before your last message)",
+                                              "sent to peer-fork: try SQLite instead"])
+        #expect(decision(s, a)?.decision.confirmed == nil && decision(s, a)?.decision.label == "fork")
+        // Pinned, with nothing to send: forked, nothing sent.
+        let b = d.submit("fork it", context: RouterContext(target: "session:local_b"))
+        await finish(d, f, b)
+        #expect(f.forked.last == .init(session: "local_b") && f.sent.count == 1)
+        #expect(decision(s, b)?.doneLines == ["started a session in docs (fork of “Update the docs”)"])
+        // From the page: a run of its own in the history.
+        let c = d.fork(.init(session: "local_a", point: .before("body-local_a")), trigger: "Fork “Fix the login bug” from before …")
+        await finish(d, f, c)
+        #expect(f.forked.last?.point == .before("body-local_a") && decision(s, c)?.triggerText.hasPrefix("Fork “Fix") == true)
+        // A task that happens to start with "fork" isn't one.
+        f.ranked = [.init(target: "session:local_a", p: 0.95)]
+        let e = d.submit("fork the tests into their own module", context: RouterContext(target: "session:local_a"))
+        await finish(d, f, e)
+        #expect(f.forked.count == 3 && f.prepared == ["local_a"])
     }
 
     @Test func aPillOnALineOfItsOwnLeavesTheRequestAndItsSettingsUnderIt() async {

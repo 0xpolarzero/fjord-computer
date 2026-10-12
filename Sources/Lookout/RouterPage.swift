@@ -899,6 +899,13 @@ private struct DecisionDetails: View {
                         ClaudeButton("Open \(store.claudeSessions[id]?.title ?? "session")", variant: .ghost, size: .sm,
                                      icon: ClaudeMark.openSymbol) { store.openAgent(id) }
                     }
+                    // The message it sent, taken back in a fork: the session as it was before it (this one stays as it is).
+                    if let sent = decision.sentMessage, store.routerOn, store.claudeSessions[sent.session].map({ !$0.isArchived }) == true {
+                        ClaudeButton("Fork from before this", variant: .ghost, size: .sm, icon: "arrow.triangle.branch") {
+                            store.forkSession(sent.session, point: .before(sent.text))
+                        }
+                        .help("A new session with this one's conversation up to before this message; files aren't rolled back")
+                    }
                 }
             }
         }
