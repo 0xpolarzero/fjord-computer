@@ -503,6 +503,8 @@ final class RouterMCPServer: @unchecked Sendable {
     var verbatim = false
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
     var starter: ((String, String) async throws -> SessionStart.Started)?
+    /// Waiting for a held start's process (`finishStart`), by its session id: its peer; tests answer for it.
+    var processWaiter: ((String) async throws -> String)?
     /// Claude Code's bundled binary, as `RouterStatus` found it.
     var claudePath: () -> String? = { nil }
 
@@ -1145,20 +1147,55 @@ final class RouterMCPServer: @unchecked Sendable {
             throw Failure("Lookout's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
         // Prepared first: if a part for the Router is left in it, no session is made.
-        var ready = noTask ? Prepared(text: "", original: "", rephrased: false)
+        let ready = noTask ? Prepared(text: "", original: "", rephrased: false)
             // The task is what is left once the request was taken out: it is not taken apart again (only `@router` asides go).
             : try edited(message, envelope: false)
         try noAside(ready.text)
         try live(ticket)
         let started: SessionStart.Started
-        if let starter {
-            started = try await starter(folder, title)
+        do {
+            if let starter {
+                started = try await starter(folder, title)
+            } else {
+                started = try await start(store, folder: folder, name: name, title: title, ticket: ticket)
+            }
+        } catch let waiting as SessionStart.NotRunning {
+            // Made, but the app doesn't run it yet: the start is done, its first message waits for it (`finishStart`).
+            throw SessionStart.Held(waiting: waiting, title: title, project: name, ready: noTask ? nil : ready, settings: settings)
+        }
+        return try await deliverable(store, started, ready: noTask ? nil : ready, title: title, project: name,
+                                     settings: settings, ticket: ticket)
+    }
+
+    /// The rest of a start the app didn't run at once (`SessionStart.Held`), in a turn of its own: waits up to
+    /// `SessionStart.heldWait` for the session's process, then goes on as `startSession` does.
+    func finishStart(_ store: Store, _ held: SessionStart.Held, ticket: Ticket) async throws -> String {
+        let uuid = String(held.waiting.sessionID.dropFirst("local_".count))
+        let peer: String
+        if let waiter = processWaiter {
+            peer = try await waiter(held.waiting.sessionID)
         } else {
-            started = try await start(store, folder: folder, name: name, title: title, ticket: ticket)
+            guard let peersDir = store.routerFiles?.claudeDir.appendingPathComponent("sessions") else {
+                throw Failure("Lookout isn't ready")
+            }
+            do {
+                peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, timeout: SessionStart.heldWait, limit: .max,
+                                                          check: { [weak self] in try self?.live(ticket) })
+            } catch is SessionStart.NotRunning, is Failure {
+                throw Failure("The Claude app didn't run the new session within \(Int(SessionStart.heldWait / 60)) min; nothing was sent to it")
+            }
         }
         try live(ticket)
+        return try await deliverable(store, SessionStart.Started(sessionID: held.waiting.sessionID, peer: peer), ready: held.ready,
+                                     title: held.title, project: held.project, settings: held.settings, ticket: ticket)
+    }
+
+    /// A started session's first message, signed for its plugin once that runs, and prepared for its peer.
+    private func deliverable(_ store: Store, _ started: SessionStart.Started, ready: Prepared?, title: String, project name: String,
+                             settings: SessionSettings?, ticket: Ticket) async throws -> String {
+        try live(ticket)
         // Its plugin comes up with it: waited for (bounded), then the prompt is signed for it.
-        if noTask {
+        guard var ready else {
             // Nothing to say yet: the session waits for your first words.
             return Self.json(["session": started.sessionID, "peer": started.peer, "text": "", "rephrased": false,
                               "next": "The session is started with no first message; nothing to send."])
@@ -1208,7 +1245,8 @@ final class RouterMCPServer: @unchecked Sendable {
         guard let url = SessionStart.importURL(uuid: uuid) else { throw Failure("Couldn't make the link") }
         try live(ticket)
         if let intercept = store.interceptOpen { intercept("New Claude session in \(name)") } else { Link.open(url) }
-        let peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir) { [weak self] in try self?.live(ticket) }
+        let peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, imported: { SessionStart.imported(uuid) },
+                                                      check: { [weak self] in try self?.live(ticket) })
         return SessionStart.Started(sessionID: "local_\(uuid)", peer: peer)
     }
 }

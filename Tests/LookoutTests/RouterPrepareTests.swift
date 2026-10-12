@@ -201,6 +201,34 @@ import Testing
         await #expect(throws: RouterTools.Failure.self) { try await SessionStart.waitForPeer(uuid: "other", dir: peers, timeout: 0.5) }
     }
 
+    @Test func aSessionTheAppHasButDoesntRunIsNotAFailedStart() async throws {
+        let dir = TempDir()
+        let peers = dir.path("sessions")
+        try FileManager.default.createDirectory(at: peers, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: ["pid": Int(getpid()), "hostSessionId": "local_busy", "name": "Busy"])
+        try data.write(to: peers.appendingPathComponent("\(getpid()).json"))
+        // At the app's limit (one running, a limit of one): said at once, with the reason, not after the whole wait.
+        let started = Date()
+        await #expect(throws: SessionStart.NotRunning(sessionID: "local_u-1", full: 1)) {
+            try await SessionStart.waitForPeer(uuid: "u-1", dir: peers, timeout: 120, limit: 1, grace: 0, imported: { true })
+        }
+        #expect(Date().timeIntervalSince(started) < 60)
+        // Under it: waited for, then said without a reason it can't know.
+        await #expect(throws: SessionStart.NotRunning(sessionID: "local_u-1", full: nil)) {
+            try await SessionStart.waitForPeer(uuid: "u-1", dir: peers, timeout: 0.5, limit: 5, imported: { true })
+        }
+        #expect(SessionStart.NotRunning(sessionID: "local_u-1", full: 21).localizedDescription
+                == "The new session is in the Claude app, but the app hasn't run it yet (it runs 21 sessions, its limit): close one you're done with, then open the new one")
+        // Whether the app has it: its file under the app's sessions folder (account/org/local_<uuid>.json).
+        let root = dir.path("claude-code-sessions")
+        let org = root.appendingPathComponent("acct/org")
+        try FileManager.default.createDirectory(at: org, withIntermediateDirectories: true)
+        #expect(!SessionStart.imported("u-1", root: root))
+        try Data("{}".utf8).write(to: org.appendingPathComponent("local_u-1.json"))
+        #expect(SessionStart.imported("u-1", root: root) && !SessionStart.imported("u-2", root: root))
+        #expect(SessionStart.appLimit >= 6)
+    }
+
     // MARK: One run, bounded
 
     private func script(_ dir: TempDir, _ name: String, _ body: String) -> String {

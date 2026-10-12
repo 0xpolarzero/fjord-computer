@@ -825,9 +825,13 @@ private struct HistoryDecisionLine: View, Equatable {
 
     private var key: String { decision.id.uuidString }
     /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
-    /// the dispatcher.
+    /// the dispatcher (a held start too: what its first message waits for).
     private var status: String {
-        decision.outcome == .pending ? store.routerDispatcher.progress[decision.id].map { $0 + "…" } ?? decision.summary : decision.summary
+        guard decision.outcome == .pending else { return decision.summary }
+        if let progress = store.routerDispatcher.progress[decision.id] { return progress + "…" }
+        // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
+        if let held = store.routerDispatcher.held[decision.id] { return decision.summary + " · " + held }
+        return decision.summary
     }
 
     var body: some View {

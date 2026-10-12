@@ -120,7 +120,15 @@ extension SessionLauncher.Effects {
                 _ = try OneShot.result(output)
                 guard let url = SessionStart.importURL(uuid: uuid) else { throw RouterTools.Failure("Couldn't make the link") }
                 if let intercept = store.interceptOpen { intercept("New Claude session in \(store.folderName(folder))") } else { Link.open(url) }
-                let peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir)
+                let imported: @Sendable () -> Bool = { SessionStart.imported(uuid) }
+                let peer: String
+                do {
+                    peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, imported: imported)
+                } catch is SessionStart.NotRunning {
+                    // The app has it but doesn't run it yet (at its limit): its first message waits for it, bounded.
+                    peer = try await SessionStart.waitForPeer(uuid: uuid, dir: peersDir, timeout: SessionStart.heldWait,
+                                                              limit: .max, imported: imported)
+                }
                 return SessionStart.Started(sessionID: "local_\(uuid)", peer: peer)
             },
             pluginReady: { [weak launcher] cli in

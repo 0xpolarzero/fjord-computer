@@ -668,6 +668,37 @@ import Testing
         #expect(never.isError && never.text.contains("plugin didn't come up") && t.prepared["Never"] == nil)
     }
 
+    @Test func aStartTheAppDoesntRunYetIsHeldNotFailed() async throws {
+        let dir = TempDir()
+        let s = await store(dir)
+        let t = tools(s, turn: "start a session in lookout to bump the version")
+        t.starter = { _, _ in throw SessionStart.NotRunning(sessionID: "local_late", full: 21) }
+        // The start is done (the app has the session); its first message is held, prepared but not signed.
+        var held: SessionStart.Held?
+        do {
+            _ = try await t.startSession(s, project: "lookout", title: "Bump it", ticket: t.ticket())
+        } catch let error as SessionStart.Held {
+            held = error
+        }
+        let waiting = try #require(held)
+        #expect(waiting.waiting.sessionID == "local_late" && waiting.project == "lookout" && waiting.title == "Bump it")
+        #expect(waiting.ready?.text == "bump the version" && t.prepared.isEmpty)
+        // Once the app runs it, in a turn of its own: its plugin, then the message signed for it and prepared for its peer.
+        let later = tools(s, turn: "start a session in lookout to bump the version")
+        later.processWaiter = { id in id == "local_late" ? "Bump it" : "?" }
+        later.pluginWait = 120
+        let support = dir.path("support"), claude = dir.path("claude")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { PluginFixture.live("late", support: support, claude: claude) }
+        let out = try await later.finishStart(s, waiting, ticket: later.ticket())
+        #expect(out.contains("local_late") && later.prepared["Bump it"]?.text.hasPrefix("⟦lookout v1 late ") == true)
+        #expect(later.prepared["Bump it"]?.newSessionIn == "lookout")
+        // The app never runs it: said, nothing prepared.
+        let never = tools(s, turn: "start a session in lookout to bump the version")
+        never.processWaiter = { _ in throw RouterTools.Failure("The Claude app didn't run the new session within 30 min; nothing was sent to it") }
+        await #expect(throws: RouterTools.Failure.self) { try await never.finishStart(s, waiting, ticket: never.ticket()) }
+        #expect(never.prepared.isEmpty)
+    }
+
     @Test func aBodyInAnotherUnicodeFormIsNotThePreparedOne() async throws {
         let dir = TempDir()
         let s = await store(dir)

@@ -154,7 +154,8 @@ struct RouterAskBack: Identifiable, Equatable {
         var rank: @MainActor (RouterTools, _ message: String, _ projects: [String]) async throws -> Ranking
         /// The message for a session with its addressing taken out (`Addressing`), and its signature.
         var prepare: @MainActor (RouterTools, _ session: String) async throws -> Delivery
-        /// A new session in a project (folder) with the prepared first message.
+        /// A new session in a project (folder) with the prepared first message. Throws `SessionStart.Held` when the Claude
+        /// app has the session but doesn't run it yet.
         var start: @MainActor (RouterTools, _ folder: String, _ title: String, _ settings: SessionSettings?) async throws -> Delivery
         /// The signed send, through the gate: the plugin's ack when it went through the inbox.
         var send: @MainActor (RouterTools, Delivery) async throws -> String?
@@ -162,6 +163,10 @@ struct RouterAskBack: Identifiable, Equatable {
         var answer: @MainActor (RouterTools, _ card: String, _ answers: [String: String]) async throws -> String
         /// A Haiku run for an intent, given the context it starts from.
         var run: @MainActor (RouterTools, RouterRun.Intent, _ input: String) async throws -> RouterRun.Answer
+        /// A held start's first message, prepared once the app runs its session (bounded: `SessionStart.heldWait`).
+        var finish: @MainActor (RouterTools, SessionStart.Held) async throws -> Delivery = { _, _ in
+            throw RouterTools.Failure("The Router isn't ready")
+        }
     }
 
     /// Asks waiting for a pick, oldest first.
@@ -169,6 +174,10 @@ struct RouterAskBack: Identifiable, Equatable {
     /// How far each run under way is, by its entry in the log ("classifying", "sending"…).
     private(set) var progress: [UUID: String] = [:]
     var isBusy: Bool { !progress.isEmpty }
+    /// Starts whose session the Claude app has but doesn't run yet, by their entry: what their first message waits for. Not
+    /// a run under way (you may send meanwhile); Stop ends them too.
+    private(set) var held: [UUID: String] = [:]
+    @ObservationIgnored private var heldTasks: [UUID: Task<Void, Never>] = [:]
 
     @ObservationIgnored private weak var store: Store?
     @ObservationIgnored var effects: Effects
@@ -278,6 +287,7 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Stops every run under way (nothing more is sent by them) and drops the asks waiting for you.
     func stopAll() {
         for task in tasks.values { task.cancel() }
+        for task in heldTasks.values { task.cancel() }
         // Their turns end now, not once each run sees it was stopped: a send on its way is refused at its last gate.
         for tools in runTools.values { tools.endTurn() }
         for ask in askBacks { dismiss(ask.id) }
@@ -315,7 +325,7 @@ struct RouterAskBack: Identifiable, Equatable {
         tasks[job.id] = nil
         runTools[job.id] = nil
         // Waiting for your pick is not over; anything else not settled is done.
-        if !askBacks.contains(where: { $0.id == job.id }) {
+        if !askBacks.contains(where: { $0.id == job.id }), held[job.id] == nil {
             store?.updateDecision(job.id) { if $0.outcome == .pending { $0.outcome = .done } }
         }
         onFinish?(job.id)
@@ -427,13 +437,33 @@ struct RouterAskBack: Identifiable, Equatable {
         return t.range(of: SessionStart.startPhrase, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    /// A short title for a new session from its task (`SessionStart.task`): the first few words, without the @project.
+    /// A short title for a new session from its task (`SessionStart.task`), without the @project: its first sentence when
+    /// that is short ("Router test, please ignore and do nothing"), else its first few words, never ending on a little word
+    /// ("to", "the") and marked as cut ("add a dark mode badge…").
     static func title(for text: String) -> String {
-        let words = text.split(whereSeparator: \.isWhitespace).filter { !$0.hasPrefix("@") }.prefix(6)
-        let title = SessionStart.cleanTitle(words.joined(separator: " "))
-            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".,:;-–—")))
-        return title.isEmpty ? "New session" : title
+        let line = text.split(whereSeparator: \.isNewline).first { !$0.allSatisfy(\.isWhitespace) } ?? ""
+        var words = line.split(whereSeparator: \.isWhitespace).filter { !$0.hasPrefix("@") }
+        if let end = words.firstIndex(where: { ".!?".contains($0.last ?? " ") }) { words = Array(words[...end]) }
+        let trim = CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".,:;-–—"))
+        var cut = false
+        if words.count > titleWords {
+            words = Array(words.prefix(titleCut))
+            while words.count > 1, let last = words.last, littleWords.contains(last.lowercased().trimmingCharacters(in: trim)) {
+                words.removeLast()
+            }
+            cut = true
+        }
+        let title = SessionStart.cleanTitle(words.joined(separator: " ")).trimmingCharacters(in: trim)
+        return title.isEmpty ? "New session" : cut ? title + "…" : title
     }
+
+    /// A first sentence up to this many words is the title whole; a longer one is cut to `titleCut`.
+    static let titleWords = 8
+    static let titleCut = 6
+    private static let littleWords: Set<String> = [
+        "a", "an", "the", "to", "and", "or", "but", "of", "for", "in", "on", "at", "by", "with", "from", "into", "that", "this",
+        "it", "is", "are", "be", "so", "as", "if", "my", "our", "your", "its",
+    ]
 
     /// The answer a question card's form takes from a message that is exactly an option (or several, for a multiple choice):
     /// anything else is text for the session. Only a single question; a plan is never answered this way.
@@ -501,7 +531,12 @@ struct RouterAskBack: Identifiable, Equatable {
         let project = store.folderName(folder)
         // "…with opus, high effort": set in the session by its plugin before the first message; else your defaults.
         let settings = SessionSettings.parse(SessionStart.request(job.text, pills: job.context.pills))
-        let delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
+        let delivery: Delivery
+        do {
+            delivery = try await effects.start(job.tools, folder, Self.title(for: task), settings)
+        } catch let waiting as SessionStart.Held {
+            return hold(job, waiting)
+        }
         if delivery.text.isEmpty {
             // Nothing to send: the settings travel with the first message, so they can't be applied.
             note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
@@ -518,6 +553,49 @@ struct RouterAskBack: Identifiable, Equatable {
             store.updateDecision(job.id) { applied.record(session: delivery.session, project: project, in: &$0) }
         } else {
             note(job, .started(session: delivery.session, project: project, model: nil, effort: nil), session: delivery.session)
+        }
+    }
+
+    /// A start the Claude app has but doesn't run yet: done as a start (the session is there), its first message sent once
+    /// the app runs it, in a turn of its own and not as a run under way (the composer is free meanwhile). Waiting too long,
+    /// or Stop, says the message wasn't sent; the session stays.
+    private func hold(_ job: Job, _ waiting: SessionStart.Held) {
+        guard let store else { return }
+        let session = waiting.waiting.sessionID
+        store.noteLookoutStarted(session)
+        note(job, .started(session: session, project: waiting.project, model: nil, effort: nil), session: session)
+        guard waiting.ready != nil else {
+            if waiting.settings != nil { note(job, .failed("model/effort: no first message to set them with")) }
+            return
+        }
+        held[job.id] = "the first message waits for the Claude app to run it" + SessionStart.NotRunning.reason(waiting.waiting.full)
+        let tools = makeTools(job.id, job.text, pills: job.context.pills)
+        heldTasks[job.id] = Task { [weak self] in
+            do {
+                guard let self else { return }
+                let delivery = try await effects.finish(tools, waiting)
+                try Task.checkCancellation()
+                held[job.id] = "sending"
+                let ack = try await effects.send(tools, delivery)
+                store.updateDecision(job.id) { entry in
+                    if let settings = waiting.settings {
+                        entry.done.removeAll { if case .started = $0 { true } else { false } }
+                        AppliedSettings.from(ack: ack, requested: settings, supported: delivery.settingsSigned)
+                            .record(session: session, project: waiting.project, in: &entry)
+                    }
+                    entry.add(.sent(to: delivery.to, text: delivery.body, original: nil), session: session)
+                }
+            } catch is CancellationError {
+                self?.note(job, .failed("Stopped: the session stays, its first message wasn't sent"))
+            } catch {
+                let reason = error.localizedDescription.split(separator: "\n").first.map(String.init) ?? "failed"
+                self?.note(job, .failed(RouterDecision.clip(reason, 120)))
+            }
+            tools.endTurn()
+            self?.held[job.id] = nil
+            self?.heldTasks[job.id] = nil
+            store.updateDecision(job.id) { if $0.outcome == .pending { $0.outcome = .done } }
+            self?.onFinish?(job.id)
         }
     }
 
@@ -803,6 +881,18 @@ extension RouterDispatcher.Effects {
         func object(_ json: String) -> [String: Any] {
             (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
         }
+        /// A started session's first message as `startSession` prepared it.
+        func started(_ answer: [String: Any], _ tools: RouterTools, project: String, settings: SessionSettings?) throws -> RouterDispatcher.Delivery {
+            // No task left in the words: the session is started with no first message.
+            if let peer = answer["peer"] as? String, (answer["text"] as? String)?.isEmpty == true, tools.prepared[peer] == nil {
+                return .init(to: peer, text: "", body: "", original: "", rephrased: false, session: answer["session"] as? String,
+                             newSessionIn: project, settings: settings, settingsSigned: false)
+            }
+            guard let peer = answer["peer"] as? String, let ready = tools.prepared[peer] else { throw RouterTools.Failure("Not prepared") }
+            return .init(to: peer, text: ready.text, body: ready.body ?? ready.text, original: ready.original,
+                         rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn,
+                         settings: settings, settingsSigned: ready.text.hasPrefix("⟦lookout v2 "))
+        }
         return Self(
             rank: { [weak dispatcher] tools, message, projects in
                 guard let dispatcher, let store = dispatcher.storeForEffects else { throw RouterTools.Failure("Lookout isn't ready") }
@@ -853,15 +943,7 @@ extension RouterDispatcher.Effects {
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.startSession(store, project: folder, title: title, ticket: tools.ticket(), settings: settings))
-                // No task left in the words: the session is started with no first message.
-                if let peer = answer["peer"] as? String, (answer["text"] as? String)?.isEmpty == true, tools.prepared[peer] == nil {
-                    return .init(to: peer, text: "", body: "", original: "", rephrased: false, session: answer["session"] as? String,
-                                 newSessionIn: store.folderName(folder), settings: settings, settingsSigned: false)
-                }
-                guard let peer = answer["peer"] as? String, let ready = tools.prepared[peer] else { throw RouterTools.Failure("Not prepared") }
-                return .init(to: peer, text: ready.text, body: ready.body ?? ready.text, original: ready.original,
-                             rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn,
-                             settings: settings, settingsSigned: ready.text.hasPrefix("⟦lookout v2 "))
+                return try started(answer, tools, project: store.folderName(folder), settings: settings)
             },
             send: { [weak dispatcher] tools, delivery in
                 guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
@@ -882,6 +964,12 @@ extension RouterDispatcher.Effects {
                 let store = try store(dispatcher)
                 guard let binary = dispatcher.claudePath() else { throw RouterTools.Failure("Claude Code wasn't found") }
                 return try await RouterRun.run(intent, input: input, tools: tools, store: store, binary: binary)
+            },
+            finish: { [weak dispatcher] tools, held in
+                guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
+                let store = try store(dispatcher)
+                let answer = object(try await tools.finishStart(store, held, ticket: tools.ticket()))
+                return try started(answer, tools, project: held.project, settings: held.settings)
             })
     }
 }

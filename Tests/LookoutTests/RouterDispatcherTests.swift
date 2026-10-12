@@ -32,6 +32,10 @@ import Testing
         var hold: [String: CheckedContinuation<Void, Never>] = [:]
         var holdOn: Set<String> = []
         var finished: [UUID] = []
+        /// A start the app has but doesn't run yet; its finish, held until the test lets it go (nil: it fails with `finishError`).
+        var heldStart: SessionStart.Held?
+        var finishHeld: CheckedContinuation<Void, Never>?
+        var finishError: String?
         /// The dispatcher holds its store weakly: the test's stand-ins keep it.
         var store: Store?
 
@@ -53,6 +57,7 @@ import Testing
                 start: { [unowned self] _, folder, title, settings in
                     started.append((folder, title))
                     startSettings.append(settings)
+                    if let heldStart { throw heldStart }
                     return RouterDispatcher.Delivery(to: "peer-new", text: "⟦signed⟧\nhello", body: "hello", original: "hello",
                                                      rephrased: false, session: "local_new", newSessionIn: "x",
                                                      settings: settings, settingsSigned: settingsSigned)
@@ -70,6 +75,13 @@ import Testing
                     runs.append((intent, input))
                     await whileRunning?(tools)
                     return answer
+                },
+                finish: { [unowned self] _, held in
+                    await withCheckedContinuation { finishHeld = $0 }
+                    if let finishError { throw RouterTools.Failure(finishError) }
+                    return RouterDispatcher.Delivery(to: "peer-late", text: "⟦signed⟧\nhello", body: "hello", original: "hello",
+                                                     rephrased: false, session: held.waiting.sessionID, newSessionIn: held.project,
+                                                     settings: held.settings, settingsSigned: settingsSigned)
                 })
         }
 
@@ -806,6 +818,42 @@ import Testing
         #expect(RouterDispatcher.title(for: "") == "New session")
     }
 
+    @Test func aStartTheAppDoesntRunYetIsStartedAndItsFirstMessageFollows() async {
+        let (s, d, f) = setup()
+        let ready = Prepared(text: "fix the typo", original: "fix the typo", rephrased: false)
+        f.heldStart = SessionStart.Held(waiting: .init(sessionID: "local_late", full: 21), title: "fix the typo", project: "lookout",
+                                        ready: ready, settings: nil)
+        let a = d.submit("start a new session to fix the typo", context: RouterContext(projects: ["/code/lookout"]))
+        await waitUntil { f.finishHeld != nil }
+        // Started, not failed; the run is over (you may send meanwhile) and the line says what its first message waits for.
+        #expect(decision(s, a)?.done == [.started(session: "local_late", project: "lookout", model: nil, effort: nil)])
+        #expect(!d.isBusy && decision(s, a)?.outcome == .pending && s.router.lookoutStarted["local_late"] != nil)
+        #expect(d.held[a!]?.contains("waits for the Claude app") == true && d.held[a!]?.contains("21 sessions") == true)
+        // The app runs it: the first message goes, and the line says so.
+        f.finishHeld?.resume()
+        await waitUntil { decision(s, a)?.outcome == .done }
+        #expect(f.sent.map(\.to) == ["peer-late"] && d.held.isEmpty)
+        #expect(decision(s, a)?.doneLines == ["started a session in lookout", "sent to peer-late: hello"])
+        // It never does: the session stays, the line says the message wasn't sent.
+        f.finishHeld = nil
+        f.finishError = "The Claude app didn't run the new session within 30 min; nothing was sent to it"
+        let b = d.submit("start a new session to fix the typo", context: RouterContext(projects: ["/code/lookout"]))
+        await waitUntil { f.finishHeld != nil }
+        f.finishHeld?.resume()
+        await waitUntil { decision(s, b)?.outcome == .done }
+        #expect(decision(s, b)?.doneLines.last == "failed: The Claude app didn't run the new session within 30 min; nothing was sent to it")
+        #expect(f.sent.count == 1)
+        // Stop ends a held start too.
+        f.finishHeld = nil
+        f.finishError = nil
+        let c = d.submit("start a new session to fix the typo", context: RouterContext(projects: ["/code/lookout"]))
+        await waitUntil { f.finishHeld != nil }
+        d.stopAll()
+        f.finishHeld?.resume()
+        await waitUntil { decision(s, c)?.outcome == .done }
+        #expect(f.sent.count == 1 && decision(s, c)?.doneLines.last?.hasPrefix("failed: Stopped") == true)
+    }
+
     @Test func aPillOnALineOfItsOwnLeavesTheRequestAndItsSettingsUnderIt() async {
         let text = "@lookout\nstart a session with opus:\nfix login"
         let pills = Self.pills(text, ["lookout"])
@@ -847,7 +895,7 @@ import Testing
         let (_, d, f) = setup()
         let a = d.submit("start a session to add a settings toggle for high effort", context: RouterContext(projects: ["/code/lookout"]))
         await finish(d, f, a)
-        #expect(f.startSettings == [nil] && f.started.map(\.title) == ["add a settings toggle for high"])
+        #expect(f.startSettings == [nil] && f.started.map(\.title) == ["add a settings toggle for high effort"])
     }
 
     @Test func aTrailingModelIsSettingsOnlyWhenSetApartFromTheTask() {
@@ -999,7 +1047,7 @@ import Testing
         let a = d.submit("@lookout start a session with haiku, low effort: reply with exactly pong and nothing else",
                          context: RouterContext(projects: ["/code/lookout"], pills: [0..<8]))
         await finish(d, f, a)
-        #expect(f.started.last?.title == "reply with exactly pong and nothing")
+        #expect(f.started.last?.title == "reply with exactly pong and nothing else")
         #expect(f.startSettings.last! == SessionSettings(model: "haiku", effort: "low"))
     }
 
@@ -1041,7 +1089,12 @@ import Testing
                    "fix it in the session, not a new session"] {
             #expect(!RouterDispatcher.wantsNewSession(no), "\(no)")
         }
-        #expect(RouterDispatcher.title(for: "@lookout add a dark mode badge to the settings page please") == "add a dark mode badge to")
+        #expect(RouterDispatcher.title(for: "@lookout add a dark mode badge to the settings page please") == "add a dark mode badge…")
+        // A short first sentence is the title whole: no cut mid-phrase.
+        #expect(RouterDispatcher.title(for: "Router test, please ignore and do nothing") == "Router test, please ignore and do nothing")
+        #expect(RouterDispatcher.title(for: "Fix the login bug. Then look at the tests and the docs too")
+                == "Fix the login bug")
+        #expect(RouterDispatcher.title(for: "look into why the build is slow on the CI runners today") == "look into why the build…")
     }
 
     // MARK: Jev
