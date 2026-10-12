@@ -841,7 +841,7 @@ struct AppNavButtons: View {
     static let width: CGFloat = 3 * CDS.TitleBar.button + 2 * CDS.TitleBar.buttonGap
     /// Their end, from the window's edge.
     static var end: CGFloat { leading + width }
-    /// On macOS 26 they sit in a capsule: its padding round them, and its width.
+    /// On macOS 26 the room round them on the title line, and their width with it.
     static let capsulePad: CGFloat = 3
     static var capsuleWidth: CGFloat { width + 2 * capsulePad }
 
@@ -862,7 +862,7 @@ struct AppIconButton: View {
     let enabled: Bool
     let action: () -> Void
     @State private var hovered = false
-    /// In the glass capsule: label styles and `ChromeFill`'s ink steps rather than Claude's fixed inks and fills.
+    /// On glass: label styles and `ChromeFill`'s ink steps rather than Claude's fixed inks and fills.
     @Environment(\.onGlass) private var onGlass
     @Environment(\.colorScheme) private var scheme
 

@@ -27,8 +27,8 @@ import SwiftUI
 // window's frame and corners, moved by `NSAnimationContext` and `animator()` (the one way that moved glass without a
 // dropped frame, §11 S5); the window-shaped `s1` container, fading in over the second half; G2, a glass shape at the inset
 // sidebar's frame riding the container's opacity, so it samples `s1` as the real sidebar does; and the window's picture,
-// whole, in a clip of the window's shape. The window's captures draw the small glass pieces (the nav capsule, the
-// composer) as their opaque fills (`GlassCapture`), and the window's ground is taken out of the sidebar's rounded rect
+// whole, in a clip of the window's shape. The window's captures draw the Router's composer, its small glass piece,
+// as its opaque fill (`GlassCapture`), and the window's ground is taken out of the sidebar's rounded rect
 // after the picture is taken (`punch`, colour-to-alpha), so the picture shows G2 through where the sidebar is with the
 // sidebar's rows, icons and counts still on it. Every layer runs the same curve as the glass (the springs as one cubic,
 // `GlassMorph.curve`), so the glass and the picture move in lockstep. No picture of the bar is taken: G1 is its glass.

@@ -5,8 +5,8 @@ import QuartzCore
 import SwiftUI
 
 // Captures of glass (docs/design/fjord/glass-plan.md §5.6). `cacheDisplay` and `CALayer.render(in:)` leave glass out of a
-// picture altogether (§11, S4), so while the app window is captured for the morph its small glass pieces (the nav capsule
-// and the composer) draw their opaque-mode fills instead, and are in the picture from its first frame. The sidebar keeps
+// picture altogether (§11, S4), so while the app window is captured for the morph its small glass piece (the
+// Router's composer) draws their opaque-mode fills instead, and is in the picture from its first frame. The sidebar keeps
 // its glass (left out of the picture anyway): its place is cleared out of the picture after it is taken
 // (`AppTransition.punch`), for the morph's G2 to show through. The flag is turned on, the root drawn, the picture taken,
 // the flag turned off and the root drawn again, all in one turn of the main run loop with no `CATransaction.flush` inside:

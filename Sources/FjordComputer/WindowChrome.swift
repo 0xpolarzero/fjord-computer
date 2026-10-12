@@ -3,7 +3,7 @@ import SwiftUI
 // The app window's chrome on macOS 26 (docs/design/fjord/glass-plan.md §5.2–§5.3): the sidebar an inset panel, glass (or
 // its opaque fill), folding to a rail of the same shape; the page beside it, laid out once at the fold's end and drawn on
 // the fold's spring by an offset, so a fold never lays the page out again frame by frame (§11, S6(8)); the sidebar toggle,
-// back and forward in a capsule at the page's start, riding the same offset. macOS 14 and 15 keep the flat sidebar.
+// back and forward as plain buttons at the page's start, riding the same offset. macOS 14 and 15 keep the flat sidebar.
 
 /// Where the window's chrome sits on macOS 26.
 @MainActor
@@ -18,7 +18,7 @@ enum WindowChrome {
     static func panelWidth(collapsed: Bool) -> CGFloat { collapsed ? AppSidebar.railWidth : AppRootView.sidebarWidth }
 
     /// The sidebar panel's top, from the window's: the inset when it is out, the window's three buttons on its glass; under
-    /// the header's line as a rail, which leaves that line to the three buttons and the nav capsule after them.
+    /// the header's line as a rail, which leaves that line to the three buttons and the nav buttons after them.
     static func panelTop(collapsed: Bool) -> CGFloat { collapsed ? CDS.TitleBar.header : inset }
 
     /// Room over the sidebar's rows inside the panel: down to the header's line when it is out; the inset on the rail.
@@ -27,15 +27,15 @@ enum WindowChrome {
     /// Where the page starts, from the window's leading edge: the panel and its inset.
     static func pageLeading(collapsed: Bool) -> CGFloat { inset + panelWidth(collapsed: collapsed) }
 
-    /// From the page's start to the nav capsule's: as far as keeps it clear of the window's three buttons on the header's
-    /// line when the sidebar is a rail, the same when it is out, so the capsule and the title after it never move inside
+    /// From the page's start to the nav buttons': as far as keeps it clear of the window's three buttons on the header's
+    /// line when the sidebar is a rail, the same when it is out, so the buttons and the title after them never move inside
     /// the page.
     static var navGap: CGFloat { max(inset, AppNavButtons.leading - pageLeading(collapsed: true)) }
 
     /// The sidebar's wordmark's start, from the window's edge: a gap after the window's three buttons.
     static var wordmarkLeading: CGFloat { TrafficLights.end + 12 }
 
-    /// Room the nav capsule takes at the page header's start: the page's title goes after it.
+    /// Room the nav buttons take at the page header's start: the page's title goes after it.
     static var headerInset: CGFloat { navGap + AppNavButtons.capsuleWidth }
 
     /// The sidebar's shape: concentric with the window's corners (its radius less the inset) under the root's
@@ -69,7 +69,7 @@ enum ChromeInk {
     }
 }
 
-/// Fills for hover and selection on the window's chrome (sidebar rows, the nav capsule's buttons): over glass the alpha
+/// Fills for hover and selection on the window's chrome (sidebar rows, the nav buttons): over glass the alpha
 /// steps of `Brand.ink` (`BarGlass.alpha`, §5.8), on the opaque fills Claude's ghost tokens, where a selected row hovered
 /// stays selected.
 enum ChromeFill {
@@ -113,16 +113,19 @@ struct InsetWindowLayout: View {
         .clipped()
     }
 
-    /// The page and the nav capsule over its header, from `start`: a fold animates it on the fold's own spring, in step with
+    /// The page and the nav buttons over its header, from `start`: a fold animates it on the fold's own spring, in step with
     /// the sidebar's edge. (Laying the page out once at its end and moving it with an offset measured worse, 13 to 14
     /// hitches in 12 folds against 10 to 11, and jumped what is anchored to the page's far side; §11.)
     private func page(start: CGFloat, glass: Bool) -> some View {
         ZStack(alignment: .topLeading) {
             AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
                        checksClaudeCode: checksClaudeCode, leadingInset: WindowChrome.headerInset)
+            // On the title line as plain buttons, no capsule of their own: the window's buttons, these and the page's title
+            // read as one line.
             AppNavButtons(navigator: navigator,
                           sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
-                .navCapsule(glass: glass)
+                .padding(AppNavButtons.capsulePad)
+                .environment(\.onGlass, glass)
                 .padding(.leading, WindowChrome.navGap)
                 .frame(height: CDS.TitleBar.header)
         }
@@ -162,28 +165,6 @@ struct InsetWindowLayout: View {
     }
 }
 
-/// The sidebar toggle, back and forward as one capsule over the page's header: Regular glass in a container of its own
-/// (two small containers draw cheaper than one around the whole window, §11 S6(8)), or `s2` with a hairline.
-@available(macOS 26, *)
-private struct NavCapsule: ViewModifier {
-    let glass: Bool
-
-    func body(content: Content) -> some View {
-        GlassEffectContainer {
-            content
-                .padding(AppNavButtons.capsulePad)
-                .environment(\.onGlass, glass)
-                .modifier(PanelMaterial(shape: Capsule(), glass: glass, fill: CDS.Surface.s2, standsIn: true))
-        }
-    }
-}
-
-extension View {
-    /// The nav buttons in their capsule (see `NavCapsule`).
-    @available(macOS 26, *)
-    func navCapsule(glass: Bool) -> some View { modifier(NavCapsule(glass: glass)) }
-}
-
 /// A chrome piece's material: Regular glass, or `fill` with a hairline (Reduce Transparency, Increase Contrast,
 /// `FJORD_GLASS=0`). The same views either way, so a switch keeps what is inside (the sidebar's scroll, a hover). A piece
 /// that `standsIn` draws its fill instead of glass while the window is captured for the morph (`GlassCapture`); one that
@@ -206,3 +187,4 @@ private struct PanelMaterial<S: Shape>: ViewModifier {
             .glassEffect(look.glass ? .regular : .identity, in: shape)
     }
 }
+
