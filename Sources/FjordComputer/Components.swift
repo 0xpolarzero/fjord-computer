@@ -42,6 +42,12 @@ extension Theme {
         static let lg: CGFloat = 10
 
         static func shape(_ radius: CGFloat) -> RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
+
+        /// The radius of a shape `inset` inside one of radius `outer`, so their corners share a centre; never under
+        /// `minimum`, so a square outer corner (a full-screen window's) still leaves rounded ones inside.
+        static func concentric(_ outer: CGFloat, inset: CGFloat, minimum: CGFloat = sm) -> CGFloat {
+            max(minimum, outer - inset)
+        }
     }
 
     /// Translucent white fills, one per state, so hover looks the same everywhere: Claude's alpha steps (dark mode).

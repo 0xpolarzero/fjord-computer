@@ -70,6 +70,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         self?.close()
     }
     private var monitor: Any?
+    /// The window's corner radius, for the root's shapes.
+    let corner = WindowCorner()
 
     /// `routerModel`: the Router's chat state, shared with whatever else shows the Router. `remembers`: open on the place left
     /// last (off for shots and tests).
@@ -534,7 +536,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// would size it to its own minimum, too small to see).
     private func makeContent(size: NSSize) -> NSViewController {
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                               checksClaudeCode: checksClaudeCode)
+                               checksClaudeCode: checksClaudeCode, corner: corner)
         let controller = NSHostingController(rootView: root)
         // The window sizes the content, not the other way round.
         controller.sizingOptions = []
@@ -587,8 +589,22 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     // AppKit lays the window's three buttons out again on these: they go back on the header's line each time.
     func windowDidResize(_ notification: Notification) { window.map(TrafficLights.place) }
-    func windowDidBecomeKey(_ notification: Notification) { window.map(TrafficLights.place) }
-    func windowDidExitFullScreen(_ notification: Notification) { window.map(TrafficLights.place) }
+    func windowDidBecomeKey(_ notification: Notification) {
+        window.map(TrafficLights.place)
+        readCorner()
+    }
+    func windowDidEnterFullScreen(_ notification: Notification) { readCorner() }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        window.map(TrafficLights.place)
+        readCorner()
+    }
+
+    /// The window's corner radius as it is now, for the root's `containerShape` (none in full screen).
+    private func readCorner() {
+        guard let window else { return }
+        let radius = AppTransition.cornerRadius(of: window)
+        if corner.radius != radius { corner.radius = radius }
+    }
 
     func windowWillClose(_ notification: Notification) {
         if let monitor { NSEvent.removeMonitor(monitor) }
@@ -675,6 +691,15 @@ private extension InboxTab {
     }
 }
 
+/// The window's corner radius as the window reports it (`AppTransition.cornerRadius(of:)`): read when it becomes key and
+/// on entering and leaving full screen, where it is 0.
+@MainActor @Observable
+final class WindowCorner {
+    var radius: CGFloat
+
+    init(radius: CGFloat = AppTransition.fallbackRadius) { self.radius = radius }
+}
+
 /// The window's root: the sidebar and the destination side by side, as Claude's Code tab lays them out (a split view
 /// would draw the system's floating sidebar). The window's buttons sit over the sidebar's top; the sidebar toggle, back and
 /// forward over the content's.
@@ -688,6 +713,8 @@ struct AppRootView: View {
     var sidebar: SidebarState = .shared
     /// How the sidebar and the floating controls draw: the app's, or a fixed one in tests and shots.
     var chrome: Chrome = .shared
+    /// The window's corner radius, which the shapes inside it are concentric with.
+    var corner = WindowCorner()
 
     static let sidebarWidth: CGFloat = 240
 
@@ -735,6 +762,8 @@ struct AppRootView: View {
         }
         .frame(minWidth: 640, minHeight: 600)
         .environment(chrome)
+        // A shape inside the window can be concentric with its corners (`ConcentricRectangle`, `Theme.Radius.concentric`).
+        .containerShape(.rect(cornerRadius: corner.radius))
         .foregroundStyle(Theme.text)
         .modifier(Brand.Scheme())
         .tipSpace()

@@ -87,7 +87,9 @@ enum AppTransition {
     static var isMiniaturized: (NSWindow) -> Bool = { $0.isMiniaturized }
 
     /// The window's own corner radius (macOS 26's are larger than before), so nothing changes when the real window takes over.
+    /// In full screen it has none.
     static func cornerRadius(of window: NSWindow) -> CGFloat {
+        if window.styleMask.contains(.fullScreen) { return 0 }
         guard let frame = window.contentView?.superview else { return fallbackRadius }
         if frame.layer?.cornerRadius ?? 0 > 0 { return frame.layer?.cornerRadius ?? fallbackRadius }
         let key = "_cornerRadius"
