@@ -221,6 +221,22 @@ land), so only changes that don't depend on ask gold are decided here.
   2.05 for always asking and 21.6 for always sending to the latest session; 1.4% wrong sends, 30% of messages sent.
   The loss is mostly asks the labellers found needless (0.81), wrong sends (0.45, 0.13 of it consequential), and asks
   whose card missed the target (0.41).
+- **The send bar, on gold:** the fused pick now sends at 0.93 (was 0.9). With a calibrated sureness, a send pays when
+  (1 − p) × 25 is under an ask's cost (about 2 on real moments): p ≳ 0.92. Dev real loss 1.86 → 1.71 (CI −0.54 to
+  +0.07), wrong sends 1.4% → 0.5%; 0.96 is worse. The rules' bar (0.6), the share it needs (0.5), the short-message
+  bar (0.95) and the word minimum (3) are flat or best as they are. Dead ends: a stricter bar when the words suggest a
+  consequential action (21% of real messages are labelled consequential; a word list finds 70% of them at 47%
+  precision; dev worse at every bar, as the remaining wrong sends aren't those); the last-told check re-tested on gold
+  with the refit (Δ 0.0: the refit absorbed it).
+- **Confirmation, calib (read once, round 3 → round 4):** loss −0.71 per message on the natural mix (CI −1.42 to
+  −0.16), −0.55 on stress (CI −1.20 to −0.11), wrong sends 4.2% → 2.4%; on real moments alone −0.96 (CI −2.68 to
+  +0.48; 106 real episodes), the card's hit@4 +8.6 points (CI +2.1 to +14.9). The refit's top-1 gain shrinks out of
+  sample: +1.1 points (CI −2.5 to +4.7) against +4.3 cross-validated on dev.
+- **Sealed (read once, preregistered `v2.4`):** real moments 2.20 per message (CI 1.53 to 3.17), 1.1% wrong sends,
+  25% sent, card hit@4 84%, top-1 67%; always asking 2.09 (CI 1.98 to 2.21). All sources 2.67 against 2.68. On sealed
+  the Router is level with always asking: two consequential wrong sends (100 each) in 181 real submits outweigh what
+  its sends save. The loss's cost of a wrong send is what decides whether sending is worth it at all; a cheaper wrong
+  send (an undo window, C1) changes that, not a better classifier alone.
 - **Raising the send bar looks large but waits for gold:** a sureness floor of 0.95 would turn 37 sends into asks and
   avoid 9 of the 14 wrong sends (−0.45 per message), but only if those asks count as "allowed".
 - **Runner fixes found on the way:** a session started from an ask is named after its submit; changes to a started
