@@ -141,7 +141,9 @@ struct InboxListView: View {
 }
 
 /// A page under Claude's 48pt header: the title (13pt, medium) and what it holds, muted, then the page's own buttons at the
-/// end. The header's start is left to the window's buttons (sidebar toggle, back, forward).
+/// end. The header's start is left to the window's buttons (sidebar toggle, back, forward). On macOS 26 the header is the
+/// page's top bar and its scroll view runs under it, softened by the system's scroll edge effect (glass-plan §5.3); before,
+/// the header sits over the page.
 struct AppPage<Trailing: View, Content: View>: View {
     let title: String
     var subtitle = ""
@@ -159,25 +161,36 @@ struct AppPage<Trailing: View, Content: View>: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(CDS.sans(CDS.Density.compact.body.0, .medium))
-                    .foregroundStyle(CDS.Text.primary)
-                    .lineLimit(1)
-                    .accessibilityAddTraits(.isHeader)
-                if !subtitle.isEmpty {
-                    Text(subtitle).font(CDS.sans(CDS.Density.compact.footnote.0)).foregroundStyle(CDS.Text.muted).lineLimit(1)
-                }
-                Spacer(minLength: 24)
-                trailing
+        if #available(macOS 26, *) {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .safeAreaBar(edge: .top, spacing: 0) { header }
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            VStack(spacing: 0) {
+                header
+                content.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            // 12 in, or 14 past the window's buttons when they are in the header.
-            .padding(.leading, max(CDS.TitleBar.endInset, leadingInset + 14))
-            .padding(.trailing, CDS.TitleBar.endInset)
-            .frame(height: CDS.TitleBar.header)
-            content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(CDS.sans(CDS.Density.compact.body.0, .medium))
+                .foregroundStyle(CDS.Text.primary)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+            if !subtitle.isEmpty {
+                Text(subtitle).font(CDS.sans(CDS.Density.compact.footnote.0)).foregroundStyle(CDS.Text.muted).lineLimit(1)
+            }
+            Spacer(minLength: 24)
+            trailing
+        }
+        // 12 in, or 14 past the window's buttons when they are in the header.
+        .padding(.leading, max(CDS.TitleBar.endInset, leadingInset + 14))
+        .padding(.trailing, CDS.TitleBar.endInset)
+        .frame(height: CDS.TitleBar.header)
     }
 }
 
@@ -211,9 +224,16 @@ struct AppContent: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Under the window's top bar only: the header shows the bar's ground.
-        .background { CDS.Surface.s1.padding(.top, CDS.TitleBar.header) }
+        // Under the window's top bar only, where it has a ground of its own (before macOS 26): the header shows it.
+        .background { CDS.Surface.s1.padding(.top, Self.groundTop) }
         .clipped()
+    }
+
+    /// Where the page's own ground starts: under the top bar before macOS 26, at the top on 26, where the page runs under
+    /// its header.
+    static var groundTop: CGFloat {
+        if #available(macOS 26, *) { return 0 }
+        return CDS.TitleBar.header
     }
 
     /// Settings and the categories were made for a narrow panel: a readable column, centred.

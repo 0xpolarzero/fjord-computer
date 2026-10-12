@@ -77,6 +77,8 @@ struct AppSidebar: View {
     let hub: HubState
     let collapsed: Bool
     @Environment(\.accessibilityReduceMotion) private var reduce
+    /// On macOS 26's glass panel: label styles rather than Claude's fixed inks.
+    @Environment(\.onGlass) private var onGlass
     typealias M = CDS.Sidebar
     /// The rail: the bar's 28pt tile centred in 52 (the expanded rows' icons sit at the same centre, so they never move).
     static let railWidth: CGFloat = 52
@@ -110,9 +112,9 @@ struct AppSidebar: View {
                                       tip: "Done · \(store.doneEntries.count)", action: { navigator.go(.done) }) { on in
                             Image(systemName: "archivebox")
                                 .font(.system(size: M.symbol, weight: .medium))
-                                .foregroundStyle(on ? CDS.Text.primary : CDS.Text.muted)
+                                .chromeInk(on ? .primary : .tertiary, glass: onGlass)
                         } trailing: {
-                            CountText(store.doneEntries.count, color: CDS.Text.muted)
+                            CountText(store.doneEntries.count, ink: .tertiary)
                         }
                         .padding(.bottom, rowGap)
                     }
@@ -133,7 +135,7 @@ struct AppSidebar: View {
                                       action: { navigator.go(.router) }) { on in
                             Image(systemName: "arrow.triangle.branch")
                                 .font(.system(size: M.symbol, weight: .medium))
-                                .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
+                                .chromeInk(on ? .primary : .secondary, glass: onGlass)
                         } trailing: {
                             HStack(spacing: 6) {
                                 if routerCounts.needsYou > 0 { CountText(routerCounts.needsYou, color: CDS.Fill.warning) }
@@ -151,7 +153,7 @@ struct AppSidebar: View {
             VStack(alignment: .leading, spacing: rowGap) {
                 AppSidebarRow(title: "Settings", on: navigator.selection == .settings, tip: "Settings", action: { navigator.go(.settings) }) { on in
                     Image(systemName: "gearshape").font(.system(size: M.symbol, weight: .medium))
-                        .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
+                        .chromeInk(on ? .primary : .secondary, glass: onGlass)
                 }
             }
             .padding(.top, 6)
@@ -188,7 +190,7 @@ struct AppSidebar: View {
                 if badge > 0 {
                     CountText(badge, color: category.color.swatch)
                 } else if !category.isCI {
-                    CountText(store.count(category.id), color: CDS.Text.muted)
+                    CountText(store.count(category.id), ink: .tertiary)
                 }
             }
         }
@@ -210,7 +212,7 @@ struct AppSidebar: View {
                 if let badge { CountText(badge.count, color: badge.fill) }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(CDS.Text.muted)
+                    .chromeInk(.tertiary, glass: onGlass)
                     .rotationEffect(.degrees(section.isCollapsed ? -90 : 0))
             }
         }
@@ -274,17 +276,27 @@ struct AppSidebar: View {
 
 private struct CountText: View {
     let value: Int
-    let color: Color
+    /// A status colour (fixed), or else an ink level, which follows the glass under it.
+    let color: Color?
+    var ink = ChromeInk.tertiary
+    @Environment(\.onGlass) private var onGlass
+
     init(_ value: Int, color: Color) {
         self.value = value
         self.color = color
+    }
+
+    init(_ value: Int, ink: ChromeInk) {
+        self.value = value
+        color = nil
+        self.ink = ink
     }
 
     var body: some View {
         if value > 0 {
             Text(value > 99 ? "99+" : "\(value)")
                 .font(CDS.sans(12, .medium).monospacedDigit())
-                .foregroundStyle(color)
+                .foregroundStyle(color.map { AnyShapeStyle($0) } ?? ink.style(glass: onGlass))
                 .lineLimit(1)
                 .fixedSize()
                 .accessibilityHidden(true)
@@ -306,6 +318,7 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
     @ViewBuilder let trailing: () -> Trailing
     @State private var hovered = false
     @Environment(\.sidebarCollapsed) private var collapsed
+    @Environment(\.onGlass) private var onGlass
     typealias M = CDS.Sidebar
 
     init(title: String, on: Bool, badge: RailBadge? = nil, indent: CGFloat = 0, tip: String? = nil, action: @escaping () -> Void,
@@ -334,7 +347,7 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
                 Group {
                     Text(title)
                         .font(CDS.sans(M.rowFont))
-                        .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
+                        .chromeInk(on ? .primary : .secondary, glass: onGlass)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 4)
@@ -401,13 +414,14 @@ private struct InboxHeading: View {
     let collapsed: Bool
     let edit: () -> Void
     @State private var hovered = false
+    @Environment(\.onGlass) private var onGlass
     typealias M = CDS.Sidebar
     /// The label's 20 with the room above and below it.
     static let height: CGFloat = M.groupTop - 2 + 20 + 2
 
     var body: some View {
         HStack(spacing: 4) {
-            Text("Inbox").cdsText((M.groupFont, 16), .regular, CDS.Text.muted).lineLimit(1)
+            Text("Inbox").font(CDS.sans(M.groupFont)).chromeInk(.tertiary, glass: onGlass).lineLimit(1)
             Spacer(minLength: 4)
             EditButton(on: on, action: edit)
                 .opacity(hovered || on ? 1 : 0)
@@ -432,12 +446,13 @@ private struct EditButton: View {
     let on: Bool
     let action: () -> Void
     @State private var hovered = false
+    @Environment(\.onGlass) private var onGlass
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "pencil")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(on || hovered ? CDS.Text.secondary : CDS.Text.muted)
+                .chromeInk(on || hovered ? .secondary : .tertiary, glass: onGlass)
                 .frame(width: 18, height: 18)
                 .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(on ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear))

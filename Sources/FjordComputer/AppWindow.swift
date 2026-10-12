@@ -702,7 +702,7 @@ final class WindowCorner {
 
 /// The window's root: the sidebar and the destination side by side, as Claude's Code tab lays them out (a split view
 /// would draw the system's floating sidebar). The window's buttons sit over the sidebar's top; the sidebar toggle, back and
-/// forward over the content's.
+/// forward over the content's. On macOS 26 the sidebar is an inset panel and the page rides the fold (`InsetWindowLayout`).
 struct AppRootView: View {
     let store: Store
     let navigator: AppNavigator
@@ -719,39 +719,13 @@ struct AppRootView: View {
     static let sidebarWidth: CGFloat = 240
 
     var body: some View {
-        let collapsed = sidebar.collapsed
-        // The sidebar toggle, back and forward stay put after the window's three buttons: over the sidebar when it is
-        // out, at the content's start when it is a rail, the page's title after them. The room follows the sidebar's width
-        // on the same spring (an implicit animation here would end up fighting the explicit one).
-        let headerInset = collapsed ? AppNavButtons.end - AppSidebar.railWidth : 0
         Group {
             if store.settings.toolsPicked == true {
-                HStack(spacing: 0) {
-                    AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
-                        .padding(.top, CDS.TitleBar.header)
-                        .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
-                        .frame(maxHeight: .infinity)
-                        .clipped()
-                        .background(CDS.Surface.sidebar)
-                        // Its edge starts under the top bar: the window's three buttons sit above it.
-                        .overlay(alignment: .trailing) {
-                            Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge).padding(.top, CDS.TitleBar.header)
-                        }
-                    AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                               checksClaudeCode: checksClaudeCode, leadingInset: headerInset)
-                }
-                // The top bar: the sidebar's ground the whole width (the pages draw theirs under it), a rule beneath.
-                .background(alignment: .top) { CDS.Surface.sidebar.frame(height: CDS.TitleBar.header) }
-                .overlay(alignment: .top) {
-                    Rectangle().fill(CDS.border).frame(height: CDS.Sidebar.edge)
-                        .padding(.top, CDS.TitleBar.header - CDS.Sidebar.edge)
-                        .allowsHitTesting(false)
-                }
-                .overlay(alignment: .topLeading) {
-                    AppNavButtons(navigator: navigator,
-                                  sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
-                        .padding(.leading, AppNavButtons.leading)
-                        .frame(height: CDS.TitleBar.header)
+                if #available(macOS 26, *) {
+                    InsetWindowLayout(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                                      checksClaudeCode: checksClaudeCode, sidebar: sidebar, chrome: chrome)
+                } else {
+                    flat(collapsed: sidebar.collapsed)
                 }
             } else {
                 OnboardingView(store: store) {
@@ -804,6 +778,41 @@ struct AppRootView: View {
             }
         }
     }
+
+    /// macOS 14 and 15: the flat sidebar beside the page, the top bar the sidebar's ground the whole width. The sidebar
+    /// toggle, back and forward stay put after the window's three buttons: over the sidebar when it is out, at the
+    /// content's start when it is a rail, the page's title after them. The room follows the sidebar's width on the same
+    /// spring (an implicit animation here would end up fighting the explicit one).
+    private func flat(collapsed: Bool) -> some View {
+        let headerInset = collapsed ? AppNavButtons.end - AppSidebar.railWidth : 0
+        return HStack(spacing: 0) {
+            AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
+                .padding(.top, CDS.TitleBar.header)
+                .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
+                .frame(maxHeight: .infinity)
+                .clipped()
+                .background(CDS.Surface.sidebar)
+                // Its edge starts under the top bar: the window's three buttons sit above it.
+                .overlay(alignment: .trailing) {
+                    Rectangle().fill(CDS.border).frame(width: CDS.Sidebar.edge).padding(.top, CDS.TitleBar.header)
+                }
+            AppContent(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                       checksClaudeCode: checksClaudeCode, leadingInset: headerInset)
+        }
+        // The top bar: the sidebar's ground the whole width (the pages draw theirs under it), a rule beneath.
+        .background(alignment: .top) { CDS.Surface.sidebar.frame(height: CDS.TitleBar.header) }
+        .overlay(alignment: .top) {
+            Rectangle().fill(CDS.border).frame(height: CDS.Sidebar.edge)
+                .padding(.top, CDS.TitleBar.header - CDS.Sidebar.edge)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            AppNavButtons(navigator: navigator,
+                          sidebarShown: Binding(get: { !sidebar.collapsed }, set: { sidebar.set(collapsed: !$0) }))
+                .padding(.leading, AppNavButtons.leading)
+                .frame(height: CDS.TitleBar.header)
+        }
+    }
 }
 
 /// Sidebar toggle, back and forward: Claude's 26pt ghost icon buttons, 4 apart.
@@ -816,6 +825,9 @@ struct AppNavButtons: View {
     static let width: CGFloat = 3 * CDS.TitleBar.button + 2 * CDS.TitleBar.buttonGap
     /// Their end, from the window's edge.
     static var end: CGFloat { leading + width }
+    /// On macOS 26 they sit in a capsule: its padding round them, and its width.
+    static let capsulePad: CGFloat = 3
+    static var capsuleWidth: CGFloat { width + 2 * capsulePad }
 
     var body: some View {
         HStack(spacing: CDS.TitleBar.buttonGap) {
@@ -834,12 +846,14 @@ struct AppIconButton: View {
     let enabled: Bool
     let action: () -> Void
     @State private var hovered = false
+    /// In the glass capsule: label styles rather than Claude's fixed inks.
+    @Environment(\.onGlass) private var onGlass
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: CDS.Sidebar.symbol, weight: .medium))
-                .foregroundStyle(!enabled ? CDS.Text.disabled : hovered ? Brand.ink : CDS.Text.secondary)
+                .foregroundStyle(ink)
                 .frame(width: CDS.TitleBar.button, height: CDS.TitleBar.button)
                 .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
                     .fill(hovered && enabled ? CDS.Fill.ghostHover : .clear))
@@ -850,5 +864,11 @@ struct AppIconButton: View {
         .onHover { hovered = $0 }
         .accessibilityLabel(help)
         .help(help)
+    }
+
+    private var ink: AnyShapeStyle {
+        let level: ChromeInk = !enabled ? .disabled : hovered ? .primary : .secondary
+        if onGlass { return level.style(glass: true) }
+        return AnyShapeStyle(!enabled ? CDS.Text.disabled : hovered ? Brand.ink : CDS.Text.secondary)
     }
 }

@@ -494,6 +494,12 @@ identity).
     sidebar's corners stay at 6. (7) Not tried: toggling Reduce Transparency changes a system setting (the owner's).
     Screen captures: `screencapture` from this shell once Screen Recording was granted to Claude Code's own
     `claude.app` (not Claude.app: the shell is a disclaimed process).
+- **The fold as built (Phase 3)**, `motion-trace.sh --steps "open,fold,fold,fold,fold,close x3"`, hitches inside the 12
+  folds: before Phase 3 8 and 8; §5.2 step 2 (laid out once, moved by a `GeometryEffect` offset) 13 opaque and 14 glass;
+  step 1 (the page's inset animating on the `glass` spring) 11 and 10. So the fold animates the layout (step 1): cheaper
+  than the offset, which also jumped whatever is anchored to the page's far side by the whole distance on the first
+  frame. It still costs some 2 to 3 hitches in 12 folds over today, glass or not (the inset panel and the page's new
+  bars, not the material); the morph and peek p95s moved too, to be taken up in Phase 4 with the capture flag.
 - **Baselines** (2026-10-12, `docs/design/fjord/baselines/`):
   - `motion.json`, `scripts/motion-trace.sh` on `--demo busy`, open/fold/fold/close/peek/drag × 5: 14 hitches during
     the app's motions (Drag 4, Fold 4, Peek 3, Bar away 2, Open to first flush 2, Overlay going 1). p50 / p95: Peek 38.7
