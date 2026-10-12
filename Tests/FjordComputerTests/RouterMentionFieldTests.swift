@@ -235,6 +235,12 @@ import Testing
         #expect(snippets().map(\.name) == ["Rebase"])
         model.draft = "please @blank"
         #expect(snippets().isEmpty)
+        // Two alike are two rows, each its own (the list tells its rows apart by their ids).
+        store.snippets.append(store.snippets[3])
+        store.snippets[5].id = UUID()
+        model.draft = "please @rebase"
+        #expect(snippets().count == 2 && Set(snippets().map(\.id)).count == 2)
+        store.snippets.removeLast()
         // Picked: its text in the @ word's place, plain, the caret after it.
         model.draft = "please @main"
         model.pickMention(snippets()[0])
@@ -285,6 +291,60 @@ import Testing
         undo.redo()
         undo.redo()
         #expect(model.draft == "ask \(MentionText.markString) rebase on main")
+    }
+
+    @Test func aMarkThatComesInAsTextIsNoPill() {
+        let v = view()
+        let m = MentionText.markString
+        show(v, "ask \(m) and \(m)", ["/code/lookout", "/code/lcu"])
+        // Pasted from another app's text with an inline image: its attachment character goes.
+        v.setSelectedRange(NSRange(location: 4, length: 0))
+        v.insertPlain("see \(m)here ", replacing: v.selectedRange())
+        #expect(MentionText.serialize(v.attributedString()) == ("ask see here \(m) and \(m)", [.project("/code/lookout"), .project("/code/lcu")]))
+        // Dragged: a pill leaves as its "@name", as copied; what is dropped is plain text, without the character.
+        let board = NSPasteboard(name: .init("fjord-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        v.setSelectedRange(NSRange(location: 13, length: 1))
+        #expect(v.writeSelection(to: board, types: [.string]) && board.string(forType: .string) == "@lookout")
+        board.clearContents()
+        board.setString("x\(m)y", forType: .string)
+        v.setSelectedRange(NSRange(location: (v.string as NSString).length, length: 0))
+        #expect(v.readSelection(from: board, type: .string) && v.string.hasSuffix(" and \(m)xy"))
+        // One that got in some other way is left out of the draft: each mark the model gets is its own pill's, so the
+        // last pill is still sent by its name.
+        v.textStorage?.insert(NSAttributedString(string: m, attributes: v.base), at: 0)
+        let (draft, pointers) = MentionText.serialize(v.attributedString())
+        #expect(draft == "ask see here \(m) and \(m)xy" && pointers == [.project("/code/lookout"), .project("/code/lcu")])
+        #expect(MentionText.plain(draft, pointers: pointers, name: v.name) == "ask see here @lookout and @lcuxy")
+    }
+
+    /// A prefill made while an input method composes: the view keeps the composition, and the pill comes after what it
+    /// commits, the caret after the pill.
+    @Test func aPrefillWhileAnInputMethodComposesComesAfterWhatItCommits() {
+        let v = view()
+        let model = RouterModel()
+        let field = MentionField.Coordinator()
+        field.view = v
+        field.model = model
+        v.delegate = field
+        let m = MentionText.markString
+        let none = NSRange(location: NSNotFound, length: 0)
+        v.insertText("ask ", replacementRange: v.selectedRange())
+        v.setMarkedText("nihon", selectedRange: NSRange(location: 5, length: 0), replacementRange: none)
+        // What is being composed is the input method's until it commits it.
+        #expect(v.hasMarkedText() && model.draft == "ask ")
+        model.prefill([.notification("pr:octo/app#12")])
+        // The next update leaves the composition alone.
+        field.follow(model)
+        #expect(v.string == "ask nihon" && v.hasMarkedText() && field.composing != nil)
+        v.setMarkedText("にほん", selectedRange: NSRange(location: 3, length: 0), replacementRange: none)
+        #expect(v.string == "ask にほん" && model.draft == "ask \(m) " && model.pointers == [.notification("pr:octo/app#12")])
+        // Committed: the view shows the pill after it, the caret at the end.
+        v.insertText("日本", replacementRange: none)
+        #expect(!v.hasMarkedText() && field.composing == nil)
+        #expect(model.draft == "ask 日本 \(m) " && model.pointers == [.notification("pr:octo/app#12")])
+        #expect(MentionText.serialize(v.attributedString()) == (model.draft, model.pointers))
+        #expect(model.caretRequest == nil && v.selectedRange() == NSRange(location: (v.string as NSString).length, length: 0))
     }
 
     @Test func prefillAddsPillsAndTheSendCarriesThem() {

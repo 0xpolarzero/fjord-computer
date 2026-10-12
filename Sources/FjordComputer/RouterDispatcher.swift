@@ -739,14 +739,16 @@ struct RouterAskBack: Identifiable, Equatable {
     // MARK: Forks
 
     /// Forks `session` (`SessionFork`): from `point`, with `message` as the fork's first message (empty: none). A run of
-    /// its own, in the history as `trigger` says. Returns its entry in the log.
+    /// its own, in the history as `trigger` says. Returns its entry in the log. `mentions`: the pills in the message, whose
+    /// blocks go after it, fenced (`RouterTools.tagged`).
     @discardableResult
-    func fork(_ request: SessionFork.Request, trigger: String) -> UUID? {
+    func fork(_ request: SessionFork.Request, trigger: String, mentions: [RouterMention] = []) -> UUID? {
         guard let store, store.routerOn else { return nil }
         let id = store.logDecision(RouterDecision(trigger: .you(trigger), decision: .init(intent: "fork")))
         // The turn is the fork's first message: the words the send gate lets through, as yours.
         let words = request.message.isEmpty ? trigger : request.message
-        launch(Job(id: id, text: words, context: RouterContext(), tools: makeTools(id, words, pills: [])), stage: "starting") { [self] job in
+        launch(Job(id: id, text: words, context: RouterContext(), tools: makeTools(id, words, pills: [], mentions: mentions)),
+               stage: "starting") { [self] job in
             trace(job, path: "fork", action: "fork", target: "session:\(request.session)")
             try await fork(job, request)
         }

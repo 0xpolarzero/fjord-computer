@@ -241,9 +241,11 @@ extension RouterDecision {
 
 extension Store {
     /// Forks a session from the page (a session's menu, a sent message's line, a message edited and resent): a run of the
-    /// Router's, in its history. Its entry, nil when the Router is off.
+    /// Router's, in its history. Its entry, nil when the Router is off. `mentions`: the pills in `message`, whose
+    /// blocks (`RouterPointers.context`) the fork gets fenced after your words, as a session a message is delivered to does.
     @discardableResult
-    func forkSession(_ session: String, point: SessionFork.Point = .whole, message: String = "", edited: Bool = false) -> UUID? {
+    func forkSession(_ session: String, point: SessionFork.Point = .whole, message: String = "", edited: Bool = false,
+                     mentions: [RouterMention] = []) -> UUID? {
         let title = claudeSessions[session].map { "“\(RouterDecision.clip($0.title, 60))”" } ?? "a session"
         let asked = switch point {
         case .whole: "Fork \(title)"
@@ -251,6 +253,7 @@ extension Store {
         case .before(let text, _): "Fork \(title) from before “\(RouterDecision.clip(text, 60))”"
         }
         let trigger = edited ? "Edited and resent to a fork of \(title): \(message)" : asked
-        return routerDispatcher.fork(SessionFork.Request(session: session, point: point, message: message), trigger: trigger)
+        return routerDispatcher.fork(SessionFork.Request(session: session, point: point, message: message), trigger: trigger,
+                                     mentions: mentions)
     }
 }

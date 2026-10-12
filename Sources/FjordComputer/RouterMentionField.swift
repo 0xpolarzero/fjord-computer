@@ -22,13 +22,22 @@ enum MentionText {
         return out
     }
 
-    /// The text storage's text (a mark for each pill) and what its pills point to, in order.
+    /// The text storage's text (a mark for each pill) and what its pills point to, in order. A mark with no pill (one
+    /// that came in as text some way the view doesn't strip) is left out, so each mark of the draft is its pill's.
     static func serialize(_ text: NSAttributedString) -> (draft: String, pointers: [RouterPointer]) {
         var pointers: [RouterPointer] = []
-        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
-            if let pill = value as? MentionAttachment { pointers.append(pill.pointer) }
+        var draft = ""
+        let string = text.string as NSString
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            let part = string.substring(with: range)
+            if let pill = value as? MentionAttachment {
+                pointers.append(pill.pointer)
+                draft += part
+            } else {
+                draft += part.replacingOccurrences(of: markString, with: "")
+            }
         }
-        return (text.string, pointers)
+        return (draft, pointers)
     }
 }
 
@@ -101,9 +110,25 @@ final class MentionTextView: NSTextView {
         insertPlain(text, replacing: selectedRange())
     }
 
-    /// Inserts text as it is: an "@name" in it, a project's or not, stays text.
+    /// A drag of the selection carries it as copying does, each pill as "@name".
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        let range = selectedRange()
+        guard range.length > 0 else { return false }
+        pboard.clearContents()
+        return pboard.setString(plain(range), forType: .string)
+    }
+
+    /// A drop (or a paste) is plain text, as a paste is.
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard let text = pboard.string(forType: .string) else { return false }
+        insertPlain(text, replacing: rangeForUserTextChange)
+        return true
+    }
+
+    /// Inserts text as it is: an "@name" in it, a project's or not, stays text. The attachment character other apps put
+    /// in their text for an inline image is left out: here it would be a pill with nothing behind it.
     func insertPlain(_ text: String, replacing range: NSRange) {
-        let out = NSAttributedString(string: text, attributes: base)
+        let out = NSAttributedString(string: text.replacingOccurrences(of: MentionText.markString, with: ""), attributes: base)
         guard shouldChangeText(in: range, replacementString: out.string) else { return }
         textStorage?.replaceCharacters(in: range, with: out)
         setSelectedRange(NSRange(location: range.location + out.length, length: 0))
@@ -188,28 +213,8 @@ struct MentionField: NSViewRepresentable {
         view.name = { [store] in store.pointerName($0) }
         view.makePill = { [store] pointer in MentionAttachment(pointer: pointer, look: store.pointerLook(pointer), font: font) }
         view.onFocus = onFocus
-        // The model's text, when the view isn't already showing it (a pick, a send, a draft set from outside).
-        let shown = MentionText.serialize(view.attributedString())
-        if (shown.draft != model.draft || shown.pointers != model.pointers), !view.hasMarkedText() {
-            c.syncing = true
-            let text = NSMutableAttributedString()
-            var pointers = model.pointers.makeIterator()
-            var run = ""
-            func flush() { if !run.isEmpty { text.append(NSAttributedString(string: run, attributes: base)); run = "" } }
-            for ch in model.draft {
-                if ch == MentionText.mark, let pointer = pointers.next(), let pill = view.makePill(pointer) {
-                    flush()
-                    text.append(NSAttributedString(attachment: pill))
-                } else { run.append(ch) }
-            }
-            flush()
-            let keep = view.selectedRange()
-            view.textStorage?.setAttributedString(text)
-            view.setSelectedRange(NSRange(location: min(keep.location, text.length), length: 0))
-            view.typingAttributes = base
-            c.fits.removeAll()
-            c.syncing = false
-        }
+        c.view = view
+        c.follow(model)
         if c.focusTick != focusTick {
             c.focusTick = focusTick
             DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
@@ -263,6 +268,80 @@ struct MentionField: NSViewRepresentable {
         var onSelection: ((NSTextView) -> Void)?
         /// The text's height at a width, for the text it had then (a pill is one character of it; pills made anew clear it).
         var fits: [Fit: CGFloat] = [:]
+        /// While an input method composes and the model changed meanwhile (a prefill): the view's text as the model last
+        /// had it. The change is shown, after what was composed, once the composition ends.
+        private(set) var composing: (draft: String, pointers: [RouterPointer])?
+        /// What the view last told the model, or showed of it: where a change of the model's made meanwhile starts from.
+        private var told: (draft: String, pointers: [RouterPointer])?
+
+        /// Shows the model's text when the view isn't already showing it (a pick, a send, a draft set from outside). While an
+        /// input method composes, the text is the input method's: the change waits for the composition to end.
+        func follow(_ model: RouterModel) {
+            guard let view else { return }
+            let shown = MentionText.serialize(view.attributedString())
+            if let base = composing {
+                if !view.hasMarkedText() { endComposing(base, shown: shown, model: model, view: view) }
+                return
+            }
+            guard shown.draft != model.draft || shown.pointers != model.pointers else { return }
+            if view.hasMarkedText() {
+                composing = told ?? shown
+                return
+            }
+            show(model, in: view)
+        }
+
+        /// What the model holds after a change made while you composed: what it added after the text it had then, after the
+        /// view's text now (what was composed), a space between them if neither ends or starts with one; anything else it did
+        /// (cleared, replaced) as it did it.
+        static func merge(view: (draft: String, pointers: [RouterPointer]), base: (draft: String, pointers: [RouterPointer]),
+                          model: (draft: String, pointers: [RouterPointer])) -> (draft: String, pointers: [RouterPointer]) {
+            guard model.draft.hasPrefix(base.draft), model.pointers.starts(with: base.pointers) else { return model }
+            let added = model.draft.dropFirst(base.draft.count)
+            let gap = !view.draft.isEmpty && !added.isEmpty && view.draft.last?.isWhitespace == false
+                && added.first?.isWhitespace == false ? " " : ""
+            return (view.draft + gap + added, view.pointers + model.pointers.dropFirst(base.pointers.count))
+        }
+
+        /// The composition ended: the model's change after what was composed, shown; a caret asked for meanwhile (a
+        /// prefill's) at the end.
+        private func endComposing(_ base: (draft: String, pointers: [RouterPointer]), shown: (draft: String, pointers: [RouterPointer]),
+                                  model: RouterModel, view: MentionTextView) {
+            composing = nil
+            let merged = Self.merge(view: shown, base: base, model: (model.draft, model.pointers))
+            if model.pointers != merged.pointers { model.pointers = merged.pointers }
+            if model.draft != merged.draft { model.draft = merged.draft }
+            show(model, in: view)
+            if model.caretRequest != nil {
+                model.caretRequest = nil
+                view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
+            }
+        }
+
+        /// The view's text made the model's, its pills drawn anew; the caret kept where it was.
+        private func show(_ model: RouterModel, in view: MentionTextView) {
+            told = (model.draft, model.pointers)
+            let shown = MentionText.serialize(view.attributedString())
+            guard shown.draft != model.draft || shown.pointers != model.pointers else { return }
+            syncing = true
+            defer { syncing = false }
+            let text = NSMutableAttributedString()
+            var pointers = model.pointers.makeIterator()
+            var run = ""
+            func flush() { if !run.isEmpty { text.append(NSAttributedString(string: run, attributes: view.base)); run = "" } }
+            for ch in model.draft {
+                if ch == MentionText.mark, let pointer = pointers.next(), let pill = view.makePill(pointer) {
+                    flush()
+                    text.append(NSAttributedString(attachment: pill))
+                } else { run.append(ch) }
+            }
+            flush()
+            let keep = view.selectedRange()
+            view.textStorage?.setAttributedString(text)
+            view.setSelectedRange(NSRange(location: min(keep.location, text.length), length: 0))
+            view.typingAttributes = view.base
+            fits.removeAll()
+        }
 
         struct Fit: Hashable {
             var width: CGFloat
@@ -278,6 +357,7 @@ struct MentionField: NSViewRepresentable {
                 guard !syncing, let model, view?.undoManager?.isUndoing == true || view?.undoManager?.isRedoing == true
                 else { return }
                 let (draft, pointers) = MentionText.serialize(textStorage)
+                told = (draft, pointers)
                 if model.pointers != pointers { model.pointers = pointers }
                 if model.draft != draft { model.draft = draft }
             }
@@ -285,7 +365,19 @@ struct MentionField: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !syncing, let view, let model else { return }
-            let (draft, pointers) = MentionText.serialize(view.attributedString())
+            var (draft, pointers) = MentionText.serialize(view.attributedString())
+            if let base = composing {
+                // A change of the model's waits for the composition: it stays after what is typed meanwhile.
+                guard view.hasMarkedText() else {
+                    endComposing(base, shown: (draft, pointers), model: model, view: view)
+                    view.invalidateIntrinsicContentSize()
+                    view.enclosingScrollView?.invalidateIntrinsicContentSize()
+                    return
+                }
+                composing = (draft, pointers)
+                (draft, pointers) = Self.merge(view: (draft, pointers), base: base, model: (model.draft, model.pointers))
+            }
+            told = (draft, pointers)
             if model.pointers != pointers { model.pointers = pointers }
             if model.draft != draft { model.draft = draft }
             view.typingAttributes = view.base

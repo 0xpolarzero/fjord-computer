@@ -115,7 +115,9 @@ struct RouterComposer: View {
     private func placeCaret() {
         guard let request = model.caretRequest,
               let editor = model.editor ?? (NSApp.keyWindow?.firstResponder as? NSTextView),
-              editor.window?.firstResponder === editor else { return }
+              editor.window?.firstResponder === editor,
+              // While an input method composes, the field places it once the composition ends (`MentionField`).
+              !editor.hasMarkedText() else { return }
         model.caretRequest = nil
         let at = min(request, (editor.string as NSString).length)
         editor.setSelectedRange(NSRange(location: at, length: 0))

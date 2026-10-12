@@ -183,6 +183,39 @@ import Testing
         #expect(model.removeLastChip() && model.editing == nil && model.draft == "use postgres")
     }
 
+    /// A notification tagged in an edited message (prefilled by its "Open in Router" during the edit): the fork gets the
+    /// thing's block after your words, fenced, as a session a message is delivered to does; your words stay yours alone.
+    @Test func anEditedMessageTaggingANotificationTakesItsBlockToTheFork() async throws {
+        let pr = InboxFixture.pr(12, repo: "octo/app", title: "Fix it")
+        let s = InboxFixture.store([pr])
+        s.router.enabled = true
+        s.agents.enabled = true
+        s.claudeSessions = ["local_a": ClaudeSession(id: "local_a", title: "Fix the login bug", folder: "/code/lookout", lastActivity: Date())]
+        var forked: [(message: String, tagged: String?)] = [], done: [UUID] = []
+        let no = RouterTools.Failure("not here")
+        s.routerDispatcher.onFinish = { done.append($0) }
+        s.routerDispatcher.effects = RouterDispatcher.Effects(
+            rank: { _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _, _ in throw no },
+            send: { _, _ in nil }, answer: { _, _, _ in throw no }, run: { _, _, _ in throw no },
+            fork: { tools, request in
+                forked.append((request.message, tools.tagged))
+                return RouterDispatcher.Delivery(to: "Fork of Fix the login bug", text: request.message, body: request.message,
+                                                 original: request.message, rephrased: false, session: "local_fork",
+                                                 newSessionIn: "lookout")
+            })
+        let model = RouterModel()
+        model.edit(session: "local_a", message: "use postgres")
+        model.prefill([.notification(pr.id)], text: "is fixed by this")
+        #expect(model.editing != nil)
+        model.send(store: s)
+        await waitUntil { done.count == 1 }
+        let fork = try #require(forked.first)
+        #expect(fork.message == "use postgres @octo/app#12 is fixed by this")
+        let tagged = try #require(fork.tagged)
+        #expect(tagged.contains("@octo/app#12: a pull request in the Triage inbox."))
+        #expect(tagged.contains(UntrustedFence.github.open) && !fork.message.contains(UntrustedFence.github.open))
+    }
+
     @Test func aHeldStartCutShortByAQuitSaysItsMessageWasntSent() {
         var state = RouterState()
         state.decisions = [

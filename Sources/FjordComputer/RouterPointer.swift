@@ -388,6 +388,8 @@ struct MentionSuggestion: Identifiable, Equatable {
     /// What the typed word is matched against, the name first. None: it was matched already, and its order is the match's
     /// (a snippet's row, found by `Store.snippets(matching:)`).
     var keys: [String]
+    /// The snippet a row inserts: its id is the row's (two snippets can have the same name and text).
+    var snippet: UUID? = nil
 
     var id: String {
         switch pick {
@@ -396,7 +398,7 @@ struct MentionSuggestion: Identifiable, Equatable {
         case .pointer(.notification(let v)): "notification:" + v
         case .pointer(.category(let v)): "category:" + v.uuidString
         case .pointer(.thisItem): "this"
-        case .text(let v): "text:\(section.rawValue):" + name + ":" + String(v.hashValue)
+        case .text(let v): snippet.map { "snippet:" + $0.uuidString } ?? "text:\(section.rawValue):" + name + ":" + String(v.hashValue)
         }
     }
 
@@ -457,7 +459,7 @@ extension RouterMentions {
         for s in store.snippets(matching: query) where !s.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             out.append(MentionSuggestion(section: .snippets, pick: .text(s.text), name: s.title, detail: s.preview ?? "",
                                          look: MentionLook(label: s.title, symbol: Snippet.symbol, tint: CDS.Text.secondary),
-                                         keys: []))
+                                         keys: [], snippet: s.id))
         }
         return out
     }

@@ -628,12 +628,13 @@ final class RouterModel {
     /// Sends the draft with its reply, its @pills (written as "@name" where they stand, their projects going with it) and the
     /// target you pinned; the composer keeps the focus for the next one.
     func send(store: Store) {
-        let text = plainDraft(store)
+        let (text, mentions) = sentDraft(store)
         guard !text.isEmpty, canSend(store) else { return }
         if let editing {
-            // Resent to a fork from before the original: never to the session itself, never routed.
+            // Resent to a fork from before the original: never to the session itself, never routed. What it tags goes with
+            // it, fenced after your words, as to a session it is delivered to.
             guard store.forkSession(editing.session, point: .before(editing.original, after: editing.sentAt), message: text,
-                                    edited: true) != nil else { return }
+                                    edited: true, mentions: mentions) != nil else { return }
             caret = nil
             pointers = []
             draft = ""
