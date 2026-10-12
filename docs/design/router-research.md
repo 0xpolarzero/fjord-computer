@@ -209,6 +209,18 @@ land), so only changes that don't depend on ask gold are decided here.
   sees (A9: −21 to −36% tokens, but 2–3 more wrong sends below 12 options, as the sureness reads Jev's mass on full
   lists; last-told, BM25 and waiting cards add no recall beyond recency); two wordings of the route in one call (A12:
   no gain, +68% tokens, and the second question shifts the answer to the first).
+- **Gold landed** (Claude and GPT on all 2,815 events, Gemini on 203): the labellers agree on the target 88% of the
+  time, on asking at α 0.25. 1,787 events agree; the 1,028 that don't are **soft gold**: each labeller's view is
+  kept and an event's loss is their mean (no fourth pass by one of the labellers' own families picks a side).
+- **A scoring mistake, caught by decomposing the loss:** a first run put shipped at 2.84 per real message against 2.05
+  for always asking. The largest part (0.89) was sends to where you really sent the message, charged as wrong (×100
+  when a labeller marked it consequential) because a labeller found the board alone insufficient. On a real moment the
+  outcome is observed: such a send is right, and the policy's gambles are already charged when they miss. Now: where
+  you sent it is always acceptable, and "ask required" means asking is never needless.
+- **Dev real moments on labelled gold** (current Lookout, with the new card and the refit): 1.86 per message against
+  2.05 for always asking and 21.6 for always sending to the latest session; 1.4% wrong sends, 30% of messages sent.
+  The loss is mostly asks the labellers found needless (0.81), wrong sends (0.45, 0.13 of it consequential), and asks
+  whose card missed the target (0.41).
 - **Raising the send bar looks large but waits for gold:** a sureness floor of 0.95 would turn 37 sends into asks and
   avoid 9 of the 14 wrong sends (−0.45 per message), but only if those asks count as "allowed".
 - **Runner fixes found on the way:** a session started from an ask is named after its submit; changes to a started
