@@ -547,12 +547,12 @@ import Testing
                   RouterAsk(question: "Tag it?")]
         s.router.cards = [c]
         await s.judgeCards(session: "a", message: "yes push", eligible: s.openCardRevisions(session: "a")) { questions, state in
-            let asked = state.values.first { $0.contains("q0:") } ?? ""
+            let asked = state.values.first { $0.contains("q1:") } ?? ""
             return questions.keys.reduce(into: [:]) { out, key in
-                out[key] = .noul(asked.contains("\(key): Push to main? Options: Push to main / Open a PR") ? 0.95 : 0.05)
+                out[key] = .noul(asked.contains("\(key): Push to main? Options: Push to main / Open a PR") ? 0.95 : 0.03)
             }
         }
-        #expect(s.router.cards[0].isOpen && s.router.cards[0].left == ["Bump the version?", "Tag it?"] && s.router.cards[0].total == 3)
+        #expect(s.router.cards[0].addressedBy == .router && s.router.cards[0].skipped == ["Bump the version?", "Tag it?"])
     }
 
     // MARK: Saved state

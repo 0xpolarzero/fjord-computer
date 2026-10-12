@@ -36,8 +36,9 @@ extension RouterCard {
         }
     }
 
-    /// A finished turn the triage found nothing in for you: it goes to the history on its own, unread.
-    var settles: Bool { isOpen && kind == .done && triage != nil && tier(autoContinue: false) == .done }
+    /// A finished turn the triage found nothing in for you (nor a question your last message left that it went on without):
+    /// it goes to the history on its own, unread.
+    var settles: Bool { isOpen && kind == .done && triage != nil && tier(autoContinue: false) == .done && wentAheadWithout.isEmpty }
 }
 
 extension Store {

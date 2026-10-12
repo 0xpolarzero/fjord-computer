@@ -344,6 +344,8 @@ extension Claude {
     /// Sessions whose message is being judged against their cards, with that message (ms), and the judging (tests wait on it).
     var judgingReplies: [String: Int64] = [:]
     var replyJudging: [String: Task<Void, Never>] = [:]
+    /// The waits before reading a transcript again that doesn't have your message yet (tests shorten them).
+    var replyRereads = Store.replyRereads
     /// Sends a session (by id) a message as it is (tests); the Router's send path otherwise (see `Store.sendVerbatim`).
     typealias Sender = (String, String) async throws -> Void
     var sender: Sender?

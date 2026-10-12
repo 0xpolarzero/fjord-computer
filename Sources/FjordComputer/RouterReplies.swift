@@ -1,9 +1,9 @@
 import Foundation
 
-// A message you write in a session (in Claude, not through the Router) settles its open turn cards only as Jev judges it
-// does (CardJudge, as for the Router's own sends): the feed notes the message (`RouterState.replies`), and its text, read
-// from the transcript, is judged against the cards older than it. Unsure, failing or not asked, the cards stay open, until
-// you mark them. Without Jev at all (no key, a demo), the message addresses them, as it used to.
+// A message you write in a session (in Claude, not through the Router) clears its open turn cards as the feed sees it
+// (`RouterFeed.queueReply`), and is noted (`RouterState.replies`): its text, read from the transcript, then tells what
+// the cards it cleared asked that it left untouched, and what an earlier message left (CardJudge, as for the Router's own
+// sends). The transcript may not have the message yet when the app says it was sent: it is read again a few times.
 
 extension Claude {
     /// Your latest reply in a transcript's tail: what you wrote since the session last spoke, oldest first, as one text
@@ -31,29 +31,31 @@ extension Claude {
 }
 
 extension Store {
-    /// Judges each session's noted message against its open turn cards older than it, one at a time per session.
+    /// Reads each session's noted message for the questions it left (`checkSkipped`), one at a time per session.
     func judgeReplies() {
         guard router.enabled else { return }
         for (sessionID, ms) in router.replies.sorted(by: { $0.key < $1.key }) where routerTriager.judgingReplies[sessionID] != ms {
             guard let session = claudeSessions[sessionID] else { continue }
-            let cards = router.cards.filter { $0.sessionID == sessionID && $0.isOpen && $0.kind.isTurn && ms > $0.replyAfter }
-            guard !cards.isEmpty else { settleReply(sessionID, ms); continue }
-            let base = routerTriager.asker
-            guard base != nil || !routerIsPretend, jevAsker(.cards, base: base) != nil else {
-                // No Jev to ask: the message addresses them.
-                var state = router
-                RouterFeed.address(&state, sessionID, .reply, Date()) { card in cards.contains { $0.id == card.id } }
-                state.replies[sessionID] = nil
-                router = state
-                continue
+            // The turn cards it cleared (as it was seen), and the questions an earlier message left.
+            let cleared = router.cards.filter { card in
+                card.sessionID == sessionID && card.kind.isTurn && card.addressedBy == .reply && ms > card.replyAfter
+                    && card.addressedAt.map { RouterFeed.Stamp.ms($0) >= ms } == true
             }
-            let eligible = Dictionary(cards.map { ($0.id, cardRevisions[$0.id, default: 0]) }, uniquingKeysWith: { a, _ in a })
-            let after = cards.map(\.replyAfter).min() ?? ms
+            let pending = RouterFeed.unanswered(router.cards, sessionID, turns: session.completedTurns)
+            guard !cleared.isEmpty || pending != nil else { settleReply(sessionID, ms); continue }
+            let after = cleared.map(\.replyAfter).min() ?? ms - 1
+            let base = routerTriager.asker
             routerTriager.judgingReplies[sessionID] = ms
             routerTriager.replyJudging[sessionID] = Task { [weak self] in
                 guard let self else { return }
                 if let message = await self.replyText(session, after: after) {
-                    await self.judgeCards(session: sessionID, message: message, eligible: eligible, asker: base, by: .reply)
+                    var state = self.router
+                    for card in cleared {
+                        guard let i = state.cards.firstIndex(where: { $0.id == card.id }), state.cards[i].addressedBy == .reply else { continue }
+                        state.cards[i].addressedNote = message
+                    }
+                    if state != self.router { self.router = state }
+                    await self.checkSkipped(session: sessionID, message: message, cleared: cleared, pending: pending, asker: base)
                 }
                 if self.routerTriager.judgingReplies[sessionID] == ms { self.routerTriager.judgingReplies[sessionID] = nil }
                 self.settleReply(sessionID, ms)
@@ -61,7 +63,7 @@ extension Store {
         }
     }
 
-    /// The message has been judged (or there was nothing to judge): forgotten, unless a newer one came meanwhile.
+    /// The message has been read (or there was nothing to read it for): forgotten, unless a newer one came meanwhile.
     private func settleReply(_ sessionID: String, _ ms: Int64) {
         guard router.replies[sessionID] == ms else { return }
         var state = router
@@ -69,7 +71,19 @@ extension Store {
         router = state
     }
 
+    /// How long to wait before each new read of a transcript that doesn't have the message yet.
+    static let replyRereads: [Duration] = [.milliseconds(500), .seconds(1), .seconds(2), .seconds(4)]
+
     private func replyText(_ session: ClaudeSession, after ms: Int64) async -> String? {
+        for wait in [Duration.zero] + routerTriager.replyRereads {
+            if wait > .zero { try? await Task.sleep(for: wait) }
+            guard !Task.isCancelled else { return nil }
+            if let text = await readReply(session, after: ms) { return text }
+        }
+        return nil
+    }
+
+    private func readReply(_ session: ClaudeSession, after ms: Int64) async -> String? {
         if let reader = routerTriager.replyReader { return await reader(session, ms) }
         let reader = activityReader
         let cli = session.cliID

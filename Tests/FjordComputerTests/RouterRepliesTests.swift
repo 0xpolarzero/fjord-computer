@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import FjordComputer
 
-/// A message you write in a session in Claude settles its open turn cards only as Jev judges it does.
+/// A message you write in a session in Claude clears its open turn cards at once; Jev reads it for the questions it left.
 @MainActor
 @Suite struct RouterRepliesTests {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
@@ -14,8 +14,9 @@ import Testing
                       cliID: "cli-local_a")
     }
 
-    /// The Router on, with a finished turn's card open; Jev answers the card's judgement with `verdict` (nil: no Jev).
-    private func store(_ dir: TempDir, verdict: String?) async -> Store {
+    /// The Router on, with a finished turn's card open that asks two questions; Jev finds the message responds to each
+    /// with the probability `responds` gives for it (nil: no Jev).
+    private func store(_ dir: TempDir, responds: ((String) -> Double)?) async -> Store {
         let s = Store()
         s.persists = false
         s.routerPaths = RouterPaths(support: dir.path("support"), claudeDir: dir.path("claude"))
@@ -28,10 +29,15 @@ import Testing
         s.routerTriager.rescanned = true
         s.routerTriager.reader = { _ in nil }
         s.routerTriager.replyReader = { _, _ in "ship it" }
-        if let verdict {
-            s.routerTriager.asker = { questions, _ in
-                guard questions["card"] != nil else { return [:] }
-                return ["card": .choice(JevClient.Choice(choice: verdict, confidence: 1, probabilities: [verdict: 1]))]
+        s.routerTriager.replyRereads = [.milliseconds(1), .milliseconds(1)]
+        if let responds {
+            s.routerTriager.asker = { questions, state in
+                let asked = state.values.first { $0.contains("q1:") } ?? ""
+                guard !asked.isEmpty else { return [:] }
+                return questions.keys.reduce(into: [:]) { out, key in
+                    let line = asked.split(separator: "\n").first { $0.contains("\(key): ") }.map(String.init) ?? ""
+                    out[key] = .noul(responds(line))
+                }
             }
         }
         s.ingest([session(turns: 1)], appUnread: [], claudeFrontmost: false, now: now)
@@ -39,6 +45,9 @@ import Testing
         await s.routerHookWork?.value
         s.ingest([session(turns: 2)], appUnread: [], claudeFrontmost: false, now: now)
         s.feedRouter(now: now.addingTimeInterval(1))
+        if let i = s.router.cards.firstIndex(where: { $0.id == "local_a#t2" }) {
+            s.router.cards[i].asks = [RouterAsk(question: "Ship it?"), RouterAsk(question: "Tag it?")]
+        }
         return s
     }
 
@@ -48,27 +57,39 @@ import Testing
         await s.routerTriager.replyJudging["local_a"]?.value
     }
 
-    @Test func aReplyJevJudgesSettledAddressesTheCard() async {
+    @Test func aReplyClearsTheCardAtOnceAndKeepsTheQuestionsItLeft() async {
         let dir = TempDir()
-        let s = await store(dir, verdict: "resolved")
+        let s = await store(dir) { $0.contains("Tag it?") ? 0.02 : 0.97 }
         #expect(s.openRouterCards.map(\.id) == ["local_a#t2"])
-        await reply(s)
-        #expect(s.router.cards[0].addressedBy == .reply && s.router.cards[0].addressedNote == "ship it")
+        s.ingest([session(turns: 2, message: 30)], appUnread: [], claudeFrontmost: false, now: now)
+        s.feedRouter(now: now.addingTimeInterval(31))
+        // Cleared as the feed sees it, before anything is read.
+        #expect(s.openRouterCards.isEmpty && s.router.cards[0].addressedBy == .reply)
+        await s.routerTriager.replyJudging["local_a"]?.value
+        #expect(s.router.cards[0].addressedNote == "ship it" && s.router.cards[0].skipped == ["Tag it?"])
         #expect(s.router.replies.isEmpty)
     }
 
-    @Test func aReplyJevDoesntJudgeSettledLeavesTheCardOpen() async {
+    @Test func withoutJevAReplyClearsTheCardAndKeepsNothing() async {
         let dir = TempDir()
-        let s = await store(dir, verdict: "not")
+        let s = await store(dir, responds: nil)
         await reply(s)
-        #expect(s.openRouterCards.map(\.id) == ["local_a#t2"] && s.router.replies.isEmpty)
+        #expect(s.router.cards[0].addressedBy == .reply && s.router.cards[0].skipped == nil && s.router.replies.isEmpty)
     }
 
-    @Test func withoutJevAReplyAddressesTheCard() async {
+    @Test func aTranscriptWithoutTheMessageYetIsReadAgain() async {
         let dir = TempDir()
-        let s = await store(dir, verdict: nil)
+        let s = await store(dir) { $0.contains("Tag it?") ? 0.02 : 0.97 }
+        var reads = 0
+        s.routerTriager.replyReader = { _, _ in reads += 1; return reads < 3 ? nil : "ship it" }
         await reply(s)
-        #expect(s.router.cards[0].addressedBy == .reply && s.router.replies.isEmpty)
+        #expect(reads == 3 && s.router.cards[0].skipped == ["Tag it?"])
+        // Never there: given up after the last read, the card cleared all the same.
+        let t = await store(TempDir()) { $0.contains("Tag it?") ? 0.02 : 0.97 }
+        reads = 0
+        t.routerTriager.replyReader = { _, _ in reads += 1; return nil }
+        await reply(t)
+        #expect(reads == 3 && t.router.cards[0].addressedBy == .reply && t.router.cards[0].skipped == nil && t.router.replies.isEmpty)
     }
 
     @Test func theReplyIsWhatYouWroteSinceTheSessionLastSpoke() {

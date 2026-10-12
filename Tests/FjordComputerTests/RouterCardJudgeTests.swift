@@ -68,10 +68,11 @@ import Testing
         return s
     }
 
-    /// Each question asked (`q0`…) answered yes with the probability `p` gives for its text.
+    /// Each question asked (`q0`… for a form, `q1`… for what a message left) answered yes with the probability `p` gives
+    /// for its text.
     private func yes(_ p: @escaping (String) -> Double) -> JevAsker {
         { questions, state in
-            let asked = state.values.first { $0.contains("q0:") } ?? ""
+            let asked = state.values.first { $0.contains("q0:") || $0.contains("q1:") } ?? ""
             var out: [String: JevClient.Answer] = [:]
             for key in questions.keys {
                 let line = asked.split(separator: "\n").first { $0.hasPrefix("\(key): ") }.map(String.init) ?? ""
@@ -102,23 +103,92 @@ import Testing
         #expect(calls == 2 && asked.count == 1 && !s.router.cards[0].isOpen && s.router.cards[0].left == nil)
     }
 
-    @Test func aTurnsAsksAreJudgedOneByOneWithTheirChoices() async {
+    @Test func aTurnCardIsClearedAtOnceAndReadForTheQuestionsTheMessageLeft() async {
         var turn = card("a#t3", "a", kind: .asks, text: "Two calls to make.")
         turn.asks = [RouterAsk(question: "Which database?", options: ["SQLite", "Postgres"]), RouterAsk(question: "Ship today?")]
         let s = store([turn])
+        s.claudeSessions["a"]?.completedTurns = 3
+        let id = s.logDecision(RouterDecision(trigger: .you("use sqlite"), outcome: .pending))
         var seen = ""
-        await judge(s, asker: { questions, state in
-            seen = state.values.first { $0.contains("q0:") } ?? ""
-            return try await self.yes { $0.contains("database") ? 0.9 : 0.1 }(questions, state)
-        })
-        #expect(seen.contains("q0: Which database? Options: SQLite / Postgres") && seen.contains("q1: Ship today?"))
+        var asked: [String: JevClient.Question] = [:]
+        await s.judgeCards(session: "a", message: "use sqlite", eligible: s.openCardRevisions(session: "a"), asker: { questions, state in
+            // Cleared before Jev is asked.
+            #expect(!s.router.cards[0].isOpen)
+            seen = state.values.first { $0.contains("q1:") } ?? ""
+            asked = questions
+            return try await self.yes { $0.contains("database") ? 0.95 : 0.02 }(questions, state)
+        }, decision: id, timeout: Self.patient)
+        #expect(seen.contains("q1: Which database? Options: SQLite / Postgres") && seen.contains("q2: Ship today?"))
         #expect(seen.hasPrefix(SessionFence.open))
-        #expect(s.router.cards[0].isOpen && s.router.cards[0].left == ["Ship today?"] && s.router.cards[0].total == 2)
-        // Not read yet (or asking one thing): the card is judged whole, with what it asks.
-        var unread = card("a#t4", "a", kind: .asks, text: "It asks which database.")
-        #expect(CardJudge.questions(unread, form: nil).isEmpty)
-        unread.asks = [RouterAsk(question: "Which database?", options: ["SQLite", "Postgres"])]
-        #expect(CardJudge.content(unread, form: nil).contains("Which database? Options: SQLite / Postgres\nIt asks which database."))
+        if case .noul(let instructions, _, _) = asked["q2"] { #expect(instructions.contains("respond to question q2")) } else { Issue.record("not a yes or no") }
+        #expect(s.router.cards[0].addressedBy == .router && s.router.cards[0].addressedNote == "use sqlite")
+        #expect(s.router.cards[0].skipped == ["Ship today?"] && s.router.cards[0].left == nil)
+        #expect(s.router.decisions.first { $0.id == id }?.done == [.resolved(card: "T a#t3", message: "use sqlite")])
+        // Yours to answer while it works: the next message is read for it alone, and answers it.
+        #expect(RouterFeed.unanswered(s.router.cards, "a", turns: 3)?.id == "a#t3")
+        var again: [String] = []
+        await s.judgeCards(session: "a", message: "and ship it today", eligible: s.openCardRevisions(session: "a"), asker: { questions, state in
+            again = (state.values.first { $0.contains("q1:") } ?? "").split(separator: "\n").map(String.init).filter { $0.hasPrefix("q") }
+            return try await self.yes { _ in 0.9 }(questions, state)
+        }, timeout: Self.patient)
+        #expect(again.count == 1 && again[0].contains("q1: Ship today?"))
+        #expect(s.router.cards[0].skipped == nil && RouterFeed.unanswered(s.router.cards, "a", turns: 3) == nil)
+    }
+
+    @Test func aQuestionIsKeptAsSkippedOnlyWhenJevIsAllButSureAndTheMessageAnsweredAnother() async {
+        // The message answers the database question (0.9); how sure Jev is that it says nothing of shipping decides.
+        for (p, kept) in [(0.01, true), (CardJudge.skippedBelow, true), (0.1, false), (0.5, false)] {
+            var turn = card("a#t3", "a", kind: .asks)
+            turn.asks = [RouterAsk(question: "Which database?"), RouterAsk(question: "Ship today?")]
+            let s = store([turn])
+            await judge(s, asker: yes { $0.contains("database") ? 0.9 : p })
+            #expect(!s.router.cards[0].isOpen && (s.router.cards[0].skipped == ["Ship today?"]) == kept, "\(p)")
+        }
+        // Nothing of either: it moved the session on, which isn't skipping them.
+        var turn = card("a#t3", "a", kind: .asks)
+        turn.asks = [RouterAsk(question: "Which database?"), RouterAsk(question: "Ship today?")]
+        let s = store([turn])
+        await judge(s, asker: yes { _ in 0.01 })
+        #expect(s.router.cards[0].skipped == nil)
+        // One question alone: Jev isn't asked.
+        var one = card("a#t3", "a", kind: .asks)
+        one.asks = [RouterAsk(question: "Which database?")]
+        let o = store([one])
+        var calls = 0
+        await judge(o, asker: { _, _ in calls += 1; return [:] })
+        #expect(calls == 0 && o.router.cards[0].addressedBy == .router)
+        // No key, a failure: cleared all the same, nothing kept.
+        struct Boom: Error {}
+        for asker: JevAsker? in [nil, { _, _ in throw Boom() }] {
+            let s = store([turn])
+            await judge(s, asker: asker)
+            #expect(s.router.cards[0].addressedBy == .router && s.router.cards[0].skipped == nil)
+        }
+    }
+
+    @Test func aTurnThatAskedNothingIsClearedWithoutAskingJev() async {
+        let s = store([card("a#t3", "a", kind: .done, text: "Done.")])
+        var calls = 0
+        await judge(s, asker: { _, _ in calls += 1; return [:] })
+        #expect(calls == 0 && s.router.cards[0].addressedBy == .router)
+    }
+
+    @Test func whatItWentOnWithoutIsSaidUnlessItAsksItAgain() {
+        var next = card("a#t4", "a", kind: .done, text: "Shipped the fix.")
+        next.wentAhead = ["Should I also tag the release?"]
+        #expect(next.wentAheadWithout == ["Should I also tag the release?"])
+        next.kind = .asks
+        next.asks = [RouterAsk(question: "Tag the release now?")]
+        #expect(next.wentAheadWithout.isEmpty)
+        next.asks = [RouterAsk(question: "Which branch?")]
+        #expect(next.wentAheadWithout == ["Should I also tag the release?"])
+        // Kept out of the history's quiet end: it is worth a look.
+        var done = card("a#t5", "a", kind: .done, text: "Shipped.")
+        done.triage = RouterTriage(state: .done)
+        done.triage?.trivial = true
+        #expect(done.settles)
+        done.wentAhead = ["Tag it?"]
+        #expect(!done.settles)
     }
 
     @Test func noQuestionAnsweredLeavesTheFormUntouched() async {

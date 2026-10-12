@@ -313,6 +313,12 @@ struct RouterCard: Codable, Identifiable, Hashable {
     var asks: [RouterAsk]?
     /// A finished turn that went to the history on its own (`settled`) and that you haven't acknowledged yet.
     var unread: Bool?
+    /// What the turn asked that your message clearing the card left untouched, as Jev was clearly sure (RouterCardJudge.swift):
+    /// said on the session's working line until you answer it or its next turn ends. Nil when none, or not judged.
+    var skipped: [String]?
+    /// The previous turn's `skipped`: what the session went on without. The card says so unless its final message asks it
+    /// again (`wentAheadWithout`).
+    var wentAhead: [String]?
 
     /// The card less how it is told to you (its brief and the asks read with it, read or not): what an action on it goes by.
     var acted: RouterCard {
@@ -321,6 +327,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         card.briefSource = nil
         card.asks = nil
         card.unread = nil
+        card.skipped = nil
+        card.wentAhead = nil
         return card
     }
 
@@ -350,7 +358,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage, brief, briefSource, asks, unread
+        case id, sessionID, kind, kindDetail, title, folder, text, createdMs, createdAt, addressedAt, addressedBy, toolUseID, turnMessage, origin, left, total, addressedNote, triage, brief, briefSource, asks, unread, skipped, wentAhead
     }
 
     /// Files from before `createdMs` have `createdAt` (a date) instead.
@@ -382,6 +390,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         // Older files have the sentences Jev found asking, on the triage: each an ask with no choices.
         asks = (try? c.decodeIfPresent([RouterAsk].self, forKey: .asks)) ?? triage.flatMap { RouterAsk.legacy($0.legacyQuestions) }
         unread = try? c.decodeIfPresent(Bool.self, forKey: .unread)
+        skipped = try? c.decodeIfPresent([String].self, forKey: .skipped)
+        wentAhead = try? c.decodeIfPresent([String].self, forKey: .wentAhead)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -407,6 +417,8 @@ struct RouterCard: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(briefSource, forKey: .briefSource)
         try c.encodeIfPresent(asks, forKey: .asks)
         try c.encodeIfPresent(unread, forKey: .unread)
+        try c.encodeIfPresent(skipped, forKey: .skipped)
+        try c.encodeIfPresent(wentAhead, forKey: .wentAhead)
     }
 
     /// The turn a turn's card was made for (`<session>#t<completedTurns>`), from its id; nil for a question or plan.
@@ -551,7 +563,7 @@ enum RouterFeed {
                 // What addresses the cards there are, before any new one is made (a new one is newer than all of it).
                 if stamp.message != before.message, let message = stamp.message {
                     address(&state, id, .reply, now) { !$0.kind.isTurn && message > $0.replyAfter }
-                    queueReply(&state, id, turns: stamp.turns, message)
+                    queueReply(&state, id, turns: stamp.turns, message, now: now)
                 }
                 if let previous, ongoing != previous {
                     address(&state, id, .answered, now) { !$0.kind.isTurn }
@@ -672,13 +684,31 @@ enum RouterFeed {
         prune(&state)
     }
 
-    /// Your message to judge the session's open turn cards against, when one is older than it. Not one a run of
-    /// Fjord Computer's sent: the Router judges those as it sends them. `turns`: the session's finished turns now.
-    static func queueReply(_ state: inout RouterState, _ session: String, turns: Int, _ message: Int64) {
-        guard !fjordSent(state, session, turns: turns, atMs: message),
-              state.cards.contains(where: { $0.sessionID == session && $0.isOpen && $0.kind.isTurn && message > $0.replyAfter })
-        else { return }
+    /// A message after the session's open turn cards clears them at once: the session has the ball again. Yours is noted
+    /// too (`RouterState.replies`), for Jev to read for the questions it left untouched (RouterReplies.swift), and so is one
+    /// that may answer those an earlier message left (`unanswered`). One a run of Fjord Computer's sent clears them as the
+    /// Router's; the Router reads its own as it sends them. `turns`: the session's finished turns now.
+    static func queueReply(_ state: inout RouterState, _ session: String, turns: Int, _ message: Int64, now: Date) {
+        let fjord = fjordSent(state, session, turns: turns, atMs: message)
+        let older = { (card: RouterCard) in card.kind.isTurn && message > card.replyAfter }
+        let cleared = state.cards.contains { $0.sessionID == session && $0.isOpen && older($0) }
+        address(&state, session, fjord ? .router : .reply, now, where: older)
+        guard !fjord, cleared || unanswered(state.cards, session, turns: turns) != nil else { return }
         state.replies[session] = max(state.replies[session] ?? 0, message)
+    }
+
+    /// The card of the session's latest turn when a message of yours cleared it leaving questions untouched (`skipped`):
+    /// they are yours to answer while it works, until its next turn ends.
+    static func unanswered(_ cards: [RouterCard], _ session: String, turns: Int) -> RouterCard? {
+        guard let card = cards.last(where: { $0.sessionID == session && $0.turn == turns }), !card.isOpen,
+              card.addressedBy == .reply || card.addressedBy == .router, card.skipped?.isEmpty == false else { return nil }
+        return card
+    }
+
+    /// What the session went on without when its turn `turns` ended: its previous turn's questions your message left.
+    static func wentAhead(_ cards: [RouterCard], _ session: String, turns: Int) -> [String]? {
+        cards.last { $0.sessionID == session && $0.turn == turns - 1 && ($0.addressedBy == .reply || $0.addressedBy == .router) }?
+            .skipped
     }
 
     /// Whether Fjord Computer sent the session the user message at `ms` (`turns`: the session's finished turns now): its
@@ -706,9 +736,11 @@ enum RouterFeed {
     private static func addTurn(_ state: inout RouterState, _ session: ClaudeSession, turns: Int, message: Int64?, now: Date) {
         let blocked = session.summary?.blocked == true
         let detail = session.summary?.detail ?? ""
-        add(&state, RouterCard(id: "\(session.id)#t\(turns)", sessionID: session.id, kind: blocked ? .stuck : .done,
-                               title: session.title, folder: session.folder, text: detail.isEmpty ? placeholder : detail,
-                               createdAt: now, turnMessage: message), now)
+        var card = RouterCard(id: "\(session.id)#t\(turns)", sessionID: session.id, kind: blocked ? .stuck : .done,
+                              title: session.title, folder: session.folder, text: detail.isEmpty ? placeholder : detail,
+                              createdAt: now, turnMessage: message)
+        card.wentAhead = wentAhead(state.cards, session.id, turns: turns)
+        add(&state, card, now)
     }
 
     /// The card of a finished turn found after the fact (the launch's look back, see `Store.rescanTurns`), with its triage
@@ -721,6 +753,7 @@ enum RouterFeed {
                               title: session.title, folder: session.folder, text: text, createdAt: at,
                               turnMessage: session.lastUserMessage.map(Stamp.ms))
         card.triage = triage
+        card.wentAhead = wentAhead(state.cards, session.id, turns: session.completedTurns)
         add(&state, card, now)
         return state.cards.last
     }
@@ -746,7 +779,7 @@ enum RouterFeed {
                 if !card.kind.isTurn, let message = stamp.message, message > card.replyAfter || change.message {
                     by = .reply
                 } else if card.kind.isTurn, let message = stamp.message, message > card.replyAfter {
-                    queueReply(&state, session.id, turns: stamp.turns, message)
+                    queueReply(&state, session.id, turns: stamp.turns, message, now: now)
                 } else if !card.kind.isTurn, change.turns {
                     by = .answered
                 } else if !card.kind.isTurn, let ms = card.waitMs,

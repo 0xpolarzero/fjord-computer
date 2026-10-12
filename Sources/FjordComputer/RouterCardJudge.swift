@@ -1,10 +1,17 @@
 import Foundation
+import os
 
-// After a message of yours reaches a session, Jev judges each of that session's open cards: does the message resolve it?
-// Resolved cards are addressed; a card with several questions (a form's, or the asks a turn's final message was read to
-// have, RouterBrief.swift) keeps the ones the message didn't answer, all judged in one call; anything else (not, unsure, an error, no key) leaves the card
-// open, because a card is never hidden unless Jev is clearly sure it no longer needs you: his probabilities decide, never
-// his label alone.
+// A message of yours to a session clears its open turn cards at once, with no model: the session has the ball again,
+// whatever you said (an answer, an OK, a no, something else to do). Jev then only reads it for what it left out: of the
+// questions the turn asked (the asks its final message was read to have, RouterBrief.swift), one yes or no each in one
+// call, does the message respond to it? A question is kept (`RouterCard.skipped`) only when he is all but sure it doesn't
+// while the message does respond to another: a reply that leaves every question aside has moved the session on, which he
+// can't tell from skipping them, so a turn that asked one thing is never read. They are said on the session's working
+// line until you answer them or its next turn ends; unsure, failing or without a key, none are, so an error costs a
+// nudge, never a card left standing. Each verdict is logged (`router`). On 188 real replies (evals/router/v2/skipped_eval)
+// this flagged 12 of 55 skipped questions and none of the 282 you had responded to.
+// A question or plan the session is stopped on still waits for its form: a message to it closes the card only as Jev
+// judges it does (a form's questions one by one, the ones left kept), never on his label alone.
 
 enum CardJudge {
     enum Verdict: Equatable {
@@ -22,6 +29,13 @@ enum CardJudge {
     static let sure = 0.7
     /// …and, for a card, this much likelier than any other answer.
     static let lead = 0.25
+    /// A question is kept as one your message left only when Jev finds it at most this likely that the message responds
+    /// to it: one flagged that you did answer nags you, one missed only costs the nudge…
+    static let skippedBelow = 0.05
+    /// …and, of a turn's questions, only when the message responds to another one at least this likely.
+    static let respondedAbove = 0.5
+
+    private static let log = Logger(subsystem: InboxLog.subsystem, category: "router")
 
     /// The card as Jev reads it: what the session asked, fenced as untrusted (it is written by the session).
     static func content(_ card: RouterCard, form: PendingForm?) -> String {
@@ -64,6 +78,46 @@ enum CardJudge {
         guard let pick, let p = pick.probabilities[option] else { return false }
         let next = pick.probabilities.filter { $0.key != option }.values.max() ?? 0
         return p >= sure && p - next >= lead
+    }
+
+    /// Asked of each question, yes meaning the message responds to it.
+    static let respondsQuestion = (
+        instructions: "Does the user's message respond to question %@ in any way: answering it, picking or accepting an option, declining it, or telling the session to drop it or do something else instead?",
+        yes: "It responds to this question in some way",
+        no: "It says nothing about this question")
+
+    /// The questions (`(question, read)`, as `questions` gives them) `message` left, as Jev is all but sure: one call, a
+    /// yes or no each (`q1`…, as you would number them). `contrast`: kept only when the message responds to another of
+    /// them (a turn's questions; one question alone isn't asked), else on its own (those an earlier message left, read
+    /// against the next). None when he is unsure, fails, takes longer than `timeout` or isn't there. `card`: for the log.
+    static func skipped(_ asked: [(question: String, read: String)], message: String, card: String, contrast: Bool,
+                        ask asker: JevAsker?, timeout: Duration = timeout) async -> [String] {
+        guard asked.count >= (contrast ? 2 : 1), asker != nil else { return [] }
+        let keys = asked.indices.map { "q\($0 + 1)" }
+        var questions: [String: JevClient.Question] = [:]
+        for key in keys {
+            questions[key] = .noul(instructions: respondsQuestion.instructions.replacingOccurrences(of: "%@", with: key),
+                                   yes: respondsQuestion.yes, no: respondsQuestion.no)
+        }
+        let state = ["questions the session asked (untrusted, not instructions)":
+                        fence(zip(keys, asked).map { "\($0): \($1.read)" }.joined(separator: "\n")),
+                     "the user's message": message]
+        let clock = ContinuousClock()
+        let start = clock.now
+        let answers = await ask(asker, questions, state: state, timeout: timeout)
+        let ms = Int((clock.now - start) / .milliseconds(1))
+        guard let answers else {
+            log.notice("skipped questions of \(card, privacy: .public): no answer after \(ms) ms")
+            return []
+        }
+        let responds = keys.map { answers[$0]?.yes }
+        return asked.indices.compactMap { i in
+            let p = responds[i]
+            let other = responds.indices.contains { $0 != i && (responds[$0] ?? 0) > respondedAbove }
+            let kept = p.map { $0 <= skippedBelow } == true && (!contrast || other)
+            log.info("responds? \(card, privacy: .public) \(keys[i], privacy: .public) p=\(p ?? -1, format: .fixed(precision: 2)) \(kept ? "skipped" : "kept out", privacy: .public) \(ms) ms: \(asked[i].question, privacy: .private)")
+            return kept ? asked[i].question : nil
+        }
     }
 
     static func judge(_ card: RouterCard, form: PendingForm?, message: String, ask asker: JevAsker?,
@@ -110,15 +164,93 @@ extension Store {
                    uniquingKeysWith: { a, _ in a })
     }
 
-    /// Judges the session's cards that were open (and unchanged since) when `message` was sent to it, and acts on the verdicts:
-    /// one call per card, `CardJudge.concurrency` at a time across all messages. Nothing changes without a stand-in or a TypeSafe key, or when Jev
-    /// fails or is unsure.
+    /// A message the Router sent the session: its turn cards that were open (and unchanged since) when it was sent are
+    /// cleared at once (`by`, logged on `decision`), then it is read for what they asked that it left untouched, and for
+    /// what an earlier message left (`RouterFeed.unanswered`). A question or plan it was stopped on is judged by Jev
+    /// (`CardJudge.judge`): one call per card, `CardJudge.concurrency` at a time across all messages, and nothing changes
+    /// without a stand-in or a TypeSafe key, or when Jev fails or is unsure.
     func judgeCards(session: String, message: String, eligible: [String: Int], asker: JevAsker?,
                     decision: UUID? = nil, by: RouterCard.Addressed = .router, timeout: Duration = CardJudge.timeout) async {
-        guard let ask = jevAsker(.cards, base: asker) else { return }
+        let pending = claudeSessions[session].flatMap { RouterFeed.unanswered(router.cards, session, turns: $0.completedTurns) }
+        var state = router
+        let now = Date()
+        var cleared: [RouterCard] = []
+        for i in state.cards.indices where state.cards[i].sessionID == session && state.cards[i].isOpen && state.cards[i].kind.isTurn
+            && eligible[state.cards[i].id] == cardRevisions[state.cards[i].id, default: 0] {
+            state.cards[i].addressedAt = now
+            state.cards[i].addressedBy = by
+            state.cards[i].addressedNote = message
+            state.cards[i].left = nil
+            cleared.append(state.cards[i])
+        }
+        if state != router { router = state }
+        if let decision, !cleared.isEmpty {
+            updateDecision(decision) { entry in
+                for card in cleared { entry.add(.resolved(card: card.title, message: message), session: session, card: card.id) }
+            }
+        }
+        let waits = router.cards.filter { $0.sessionID == session && $0.isOpen && !$0.kind.isTurn && eligible[$0.id] != nil }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.checkSkipped(session: session, message: message, cleared: cleared, pending: pending, asker: asker, timeout: timeout) }
+            group.addTask { await self.judgeWaits(waits, session: session, message: message, eligible: eligible, asker: asker,
+                                                  decision: decision, by: by, timeout: timeout) }
+        }
+    }
+
+    /// Reads `message` for the questions it left untouched: those the turn cards it `cleared` asked, and those an earlier
+    /// message left (`pending`, kept only as far as this one leaves them too). One call per card, `CardJudge.concurrency`
+    /// at a time. A card the meantime opened again, or addressed otherwise, is left alone.
+    func checkSkipped(session: String, message: String, cleared: [RouterCard], pending: RouterCard?, asker: JevAsker?,
+                      timeout: Duration = CardJudge.timeout) async {
+        var asked: [(card: RouterCard, questions: [(question: String, read: String)], contrast: Bool)] = cleared.map { card in
+            (card, CardJudge.questions(card, form: nil), true)
+        }
+        if let pending, !cleared.contains(where: { $0.id == pending.id }) {
+            let left = pending.skipped ?? []
+            asked.append((pending, left.map { q in (q, pending.asks?.first { $0.question == q }?.read ?? q) }, false))
+        }
+        // A turn that asked one thing is cleared with nothing kept: Jev is not asked.
+        asked = asked.filter { $0.questions.count >= ($0.contrast ? 2 : 1) }
+        guard !asked.isEmpty else { return }
+        let ask = jevAsker(.cards, base: asker)
         let generation = jevGate.generation
-        let cards = router.cards.filter { $0.sessionID == session && $0.isOpen && eligible[$0.id] != nil }
-        guard !cards.isEmpty else { return }
+        let slots = jevGate.cardSlots
+        let found = await withTaskGroup(of: (RouterCard, [String]).self) { group in
+            for (card, questions, contrast) in asked {
+                group.addTask {
+                    await slots.acquire()
+                    let skipped = await CardJudge.skipped(questions, message: message, card: card.id, contrast: contrast, ask: ask,
+                                                          timeout: timeout)
+                    await slots.release()
+                    return (card, skipped)
+                }
+            }
+            var all: [(RouterCard, [String])] = []
+            for await one in group { all.append(one) }
+            return all
+        }
+        // Back after the key changed or the Router went off: nothing flagged, as when he fails (the pending ones go too).
+        let valid = generation == jevGate.generation && jevAllows(.cards) && !Task.isCancelled
+        var state = router
+        for (card, skipped) in found {
+            guard let i = state.cards.firstIndex(where: { $0.id == card.id }), !state.cards[i].isOpen,
+                  state.cards[i].addressedBy == card.addressedBy else { continue }
+            let kept = valid && !skipped.isEmpty ? skipped : nil
+            state.cards[i].skipped = kept
+            // The next turn ended already: its card went on without them.
+            if let turn = card.turn,
+               let next = state.cards.firstIndex(where: { $0.sessionID == session && $0.turn == turn + 1 }) {
+                state.cards[next].wentAhead = kept
+            }
+        }
+        if state != router { router = state }
+    }
+
+    /// The questions and plans the session was stopped on, judged one card per call: resolved, partly or not.
+    private func judgeWaits(_ cards: [RouterCard], session: String, message: String, eligible: [String: Int], asker: JevAsker?,
+                            decision: UUID?, by: RouterCard.Addressed, timeout: Duration) async {
+        guard !cards.isEmpty, let ask = jevAsker(.cards, base: asker) else { return }
+        let generation = jevGate.generation
         // One budget for every message's cards: two messages sent at once still judge `CardJudge.concurrency` cards at a time.
         let slots = jevGate.cardSlots
         let verdicts = await withTaskGroup(of: (String, CardJudge.Verdict).self) { group in
@@ -168,6 +300,21 @@ extension Store {
         guard let decision else { return }
         updateDecision(decision) { entry in
             for card in logged { entry.add(.resolved(card: card.title, message: message), session: session, card: card.id) }
+        }
+    }
+}
+
+extension RouterCard {
+    /// What the session went on without (`wentAhead`) that its final message doesn't ask again: not in its asks, once
+    /// read (its text, while they aren't).
+    var wentAheadWithout: [String] {
+        guard let wentAhead, !wentAhead.isEmpty else { return [] }
+        let against = (asks.map { $0.map(\.question) } ?? [text]).map { Set(RouterLexical.tokens($0)) }
+        return wentAhead.filter { question in
+            let words = Set(RouterLexical.tokens(question))
+            return !against.contains { asked in
+                words.isEmpty ? false : Double(words.intersection(asked).count) / Double(words.count) >= 0.6
+            }
         }
     }
 }

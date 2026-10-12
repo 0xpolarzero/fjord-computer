@@ -742,7 +742,7 @@ struct RouterAskBack: Identifiable, Equatable {
         note(job, .sent(to: delivery.to, text: delivery.body, original: delivery.rephrased ? delivery.original : nil),
              session: session, card: card)
         await delivered(job, delivery, session: session, turns: before?.completedTurns ?? 0, busy: before?.running ?? false)
-        // Which of the session's open cards the message resolves is Jev's call; none are addressed just for being sent to.
+        // Its turn cards are cleared by it; Jev reads it for the questions it left, and judges a question or plan it waits on.
         stage(job, "checking its cards")
         await store.judgeCards(session: session, message: job.text, eligible: eligible,
                                asker: job.tools.chooser.map(JevClient.asker(choosing:)), decision: job.id)
