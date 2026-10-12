@@ -235,27 +235,44 @@ struct RouterPageView: View {
     static func gutter(_ width: CGFloat) -> CGFloat { width < 560 ? CDS.Transcript.narrowGutter : CDS.Transcript.gutter }
 
     /// Room over the history's first line. Before macOS 26 the top fade's height, so the first line starts clear of the
-    /// strip; on 26 there is no top fade (the history starts under the switch, or runs under the page's top bar in a wide
-    /// window), so a short gap.
+    /// strip; on 26 there is no top fade (the history runs under the switch, or the page's top bar in a wide window, the
+    /// scroll edge effect softening what passes under them), so a short gap.
     static var historyTop: CGFloat {
         if #available(macOS 26, *) { return 12 }
         return CDS.Transcript.fade
     }
 }
 
-/// The history's side: in a narrow window the switch over it, the history starting under it rather than running under it.
-/// The page hides its scroll edge effects and the switch has no ground of its own, so lines scrolled under it would show
-/// through it and take its clicks. The history is the stack's same child with the switch or without it, so it stays the
-/// same view at any width.
+/// The history's side: in a narrow window the switch over it. On macOS 26 the switch is the column's bar and the history
+/// runs under it, its lines dissolving under the soft scroll edge effect rather than cut off at the switch; the bar is
+/// always there (empty in a wide window), so the history stays the same view at any width.
 private struct HistoryColumn: View {
     let store: Store
     let model: RouterModel
     let bar: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            if bar { paneSwitch }
+        if #available(macOS 26, *) {
             RouterHistory(store: store, model: model)
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    if bar {
+                        paneSwitch
+                            // The page's ground from the switch's middle up, so no line reads beside it, as under the
+                            // composer; below, the lines fade out under the soft edge.
+                            .background {
+                                LinearGradient(colors: [CDS.Surface.s1, CDS.Surface.s1.opacity(0)], startPoint: .center, endPoint: .bottom)
+                                    .allowsHitTesting(false)
+                            }
+                    }
+                }
+                // The page hides its edge effects (its title line has a ground of its own); the history's is shown again.
+                .scrollEdgeEffectHidden(false, for: .top)
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            VStack(spacing: 0) {
+                if bar { paneSwitch }
+                RouterHistory(store: store, model: model)
+            }
         }
     }
 
@@ -351,7 +368,8 @@ private struct PaneSwitch: View {
         }
         .padding(1)
         .frame(height: ZoneChip.height)
-        .background(Capsule(style: .continuous).fill(CDS.Segmented.track))
+        // The track on the page's ground, so no history line scrolled under the switch shows through its names.
+        .background(Capsule(style: .continuous).fill(CDS.Segmented.track).background(Capsule(style: .continuous).fill(CDS.Surface.s1)))
         .fixedSize()
         .padding(.leading, gutter)
         .accessibilityElement(children: .contain)
