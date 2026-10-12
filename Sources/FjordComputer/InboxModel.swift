@@ -102,7 +102,7 @@ extension Scope: Codable {
     private enum CodingKeys: String, CodingKey { case kinds, kind, by, to, toRoles, `in`, on, named }
     /// Set (to anything) in an encoder's userInfo: the legacy `kind` is written too (the saved state; not the rules'
     /// fingerprint, which must not change for it, nor what the Router reads and writes).
-    static let withLegacyKind = CodingUserInfoKey(rawValue: "lookout.scope.withLegacyKind")!
+    static let withLegacyKind = CodingUserInfoKey(rawValue: "fjord.scope.withLegacyKind")!
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

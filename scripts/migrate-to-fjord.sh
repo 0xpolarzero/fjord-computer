@@ -62,6 +62,52 @@ else
   say "No Lookout data folder; nothing to move."
 fi
 
+step "2b. Saved state"
+# Names the app saves that said Lookout: the Router's sessions it started (`lookoutStarted`, now `fjordStarted`) and the
+# GitHub folder's mark (`lookout.github`, now `fjord.github`). The file as it was is kept beside it, once.
+STATE="$NEW_DATA/state.json"
+$DRY && [ ! -d "$NEW_DATA" ] && STATE="$OLD_DATA/state.json"  # not moved in a dry run
+if [ ! -f "$STATE" ]; then
+  say "No state.json; nothing to rename."
+else
+  # 0 found, 1 not found; anything else (unreadable) stops here rather than being taken as nothing to do.
+  found=0; grep -q '"lookoutStarted"\|"lookout\.github"' "$STATE" || found=$?
+  if [ "$found" -gt 1 ]; then die "couldn't read \"$STATE\"."
+  elif [ "$found" -eq 1 ]; then say "state.json has nothing named after Lookout."
+  elif $DRY; then say "Would rename lookoutStarted and lookout.github in \"$STATE\" (a copy kept as state.json.pre-fjord)."
+  else
+    say "Renaming lookoutStarted and lookout.github in state.json (the file as it was: state.json.pre-fjord)."
+    # The copy is complete before it has its name: one left by a run that stopped halfway is never taken for it.
+    if [ ! -e "$STATE.pre-fjord" ]; then
+      if ! { cp -p "$STATE" "$STATE.pre-fjord.partial" && mv "$STATE.pre-fjord.partial" "$STATE.pre-fjord"; }; then
+        rm -f "$STATE.pre-fjord.partial"
+        die "couldn't copy state.json aside; nothing was changed."
+      fi
+    fi
+    "$PY" -I -c '
+import json, os, sys, tempfile
+path = sys.argv[1]
+def rename(v):
+    if isinstance(v, dict):
+        return {("fjordStarted" if k == "lookoutStarted" else k):
+                ("fjord.github" if k == "symbol" and x == "lookout.github" else rename(x)) for k, x in v.items()}
+    if isinstance(v, list):
+        return [rename(x) for x in v]
+    return v
+with open(path) as f:
+    state = json.load(f)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".state.json.")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(rename(state), f, ensure_ascii=False)
+    os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise' "$STATE" || die "couldn't rewrite state.json (the original is in state.json.pre-fjord)."
+  fi
+fi
+
 step "3. Preferences"
 if ! defaults read "$OLD_ID" >/dev/null 2>&1; then
   say "No $OLD_ID preferences; nothing to copy."
@@ -76,6 +122,14 @@ else
   run defaults import "$NEW_ID" "$tmp/prefs.plist"
   run defaults delete "$OLD_ID"
   $DRY || rm -rf "$tmp"
+fi
+# The window's place, saved under its old autosave name: kept under the new one.
+OLD_FRAME="NSWindow Frame LookoutApp"
+if frame=$(defaults read "$NEW_ID" "$OLD_FRAME" 2>/dev/null) \
+    && ! defaults read "$NEW_ID" "NSWindow Frame FjordApp" >/dev/null 2>&1; then
+  say "Keeping the window's place under its new name."
+  run defaults write "$NEW_ID" "NSWindow Frame FjordApp" "$frame"
+  run defaults delete "$NEW_ID" "$OLD_FRAME"
 fi
 
 step "4. Keychain"

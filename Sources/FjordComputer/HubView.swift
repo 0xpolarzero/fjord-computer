@@ -154,7 +154,7 @@ struct HubPiece: NSViewRepresentable {
 }
 
 /// The bar, and beside it the peek of the section the pointer is on: each cell of the bar stays beside the content it stands for.
-struct LookoutHub: View {
+struct FjordHub: View {
     let store: Store
     let ui: UIState
     @Bindable var hub: HubState

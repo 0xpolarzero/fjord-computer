@@ -19,14 +19,14 @@ struct SectionProbe: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(LookoutHub.barSpace)) } action: { frame in
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(FjordHub.barSpace)) } action: { frame in
                 if frames[section] != frame { frames[section] = frame }
             }
             .onHover { if $0 { hub.enter(section) } else { hub.cancelDwell() } }
     }
 }
 
-extension LookoutHub {
+extension FjordHub {
     static let barSpace = "hub-bar"
     /// Between the bar and a section's panel: none, so the pointer never falls between them.
     static let peekGap: CGFloat = 0

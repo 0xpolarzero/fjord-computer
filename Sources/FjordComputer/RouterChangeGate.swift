@@ -8,14 +8,14 @@ import Foundation
 // it never asked for) is not applied: its card says why, with Apply and Discard. A local change you asked for applies
 // at once, with Revert.
 
-enum LookoutGate {
+enum FjordGate {
     /// Things marked at once beyond which marking waits for Apply.
     static let manyMarks = 5
 
     /// Why `change` waits for your Apply, or nil when it applies at once. `request`: your message for the run;
     /// `categories`: the categories as they are now; `pending`: the changes waiting for your Apply, whose categories count as
     /// made (a group or category one depends on can't change unseen under it).
-    static func reason(_ change: LookoutChange, request: String, categories: [InboxCategory], pending: [LookoutChange] = []) -> String? {
+    static func reason(_ change: FjordChange, request: String, categories: [InboxCategory], pending: [FjordChange] = []) -> String? {
         let said = words(request)
         let categories = prospective(categories, pending: pending)
         switch change.patch {
@@ -153,7 +153,7 @@ enum LookoutGate {
     }
 
     /// The categories as they would be with the waiting changes' categories applied, each where it would go.
-    static func prospective(_ categories: [InboxCategory], pending: [LookoutChange]) -> [InboxCategory] {
+    static func prospective(_ categories: [InboxCategory], pending: [FjordChange]) -> [InboxCategory] {
         var out = categories
         for change in pending where change.isPending {
             guard case .category(let index, _, let after?) = change.patch else { continue }
@@ -196,7 +196,7 @@ enum LookoutGate {
     }
 }
 
-extension LookoutChange {
+extension FjordChange {
     /// Made, but waiting for your Apply (or Discard): nothing of it is applied yet.
     var isPending: Bool { pending != nil && !isReverted }
     /// Discarded before it was applied.
@@ -207,15 +207,15 @@ extension Store {
     /// Applies a change that waited for you, as it was made: what it touched goes to its state after. Nil when it can't
     /// (not waiting, or no longer kept).
     @discardableResult
-    func applyLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
+    func applyFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
         guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
         var change = router.changes[i]
         // What its Details showed of the groups it uses is what it applies with: changed since, it waits again, saying how,
         // and its Details show them as they are now.
         if case .category(_, _, let after?) = change.patch {
-            let now = LookoutGate.groups(of: after, in: groups), shown = change.groups ?? []
+            let now = FjordGate.groups(of: after, in: groups), shown = change.groups ?? []
             if now != shown {
-                let what = LookoutGate.groupChanges(from: shown, to: now)
+                let what = FjordGate.groupChanges(from: shown, to: now)
                 change.groups = now
                 change.revertNote = nil
                 change.pending = "A group it uses changed since you could see it (" + what.joined(separator: "; ") + "); check the details again"
@@ -239,7 +239,7 @@ extension Store {
 
     /// Lets a waiting change go: nothing of it was applied, and nothing is.
     @discardableResult
-    func discardLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
+    func discardFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
         guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
         var change = router.changes[i]
         change.revertedAt = now
@@ -250,7 +250,7 @@ extension Store {
     }
 
     /// What a change makes of what it touched: its after.
-    func applyPatch(_ patch: LookoutChange.Patch) throws {
+    func applyPatch(_ patch: FjordChange.Patch) throws {
         switch patch {
         case .category(let index, let before, let after):
             if let after {
@@ -272,7 +272,7 @@ extension Store {
             categories = Self.ordered(categories, by: after)
             categoriesChangedByRouter()
         case .setting(let key, _, let after):
-            try LookoutSetting.named(key)?.apply(self, after)
+            try FjordSetting.named(key)?.apply(self, after)
         case .marks(_, let changes):
             for item in changes { marks[item.thing] = item.after }
         }

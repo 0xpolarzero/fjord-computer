@@ -135,7 +135,7 @@ extension WindowSeams {
             /// The pointer reached a cell of the bar: SwiftUI's hovers for it.
             func hover(_ section: HubSection, tab: InboxTab? = nil) {
                 hub.enter(section)
-                if let tab { LookoutHub(store: store, ui: controller.ui, hub: hub).hoverTab(tab) }
+                if let tab { FjordHub(store: store, ui: controller.ui, hub: hub).hoverTab(tab) }
             }
 
             /// Open `section` from its cell, as the pointer comes to rest on it.

@@ -650,7 +650,7 @@ struct RouterAskBack: Identifiable, Equatable {
             }
             return
         }
-        if let session = delivery.session { store.noteLookoutStarted(session) }
+        if let session = delivery.session { store.noteFjordStarted(session) }
         stage(job, "sending")
         let ack = try await effects.send(job.tools, delivery)
         await delivered(job, delivery, session: delivery.session, turns: 0, busy: false)
@@ -708,7 +708,7 @@ struct RouterAskBack: Identifiable, Equatable {
             waiting.project = label
             return hold(job, waiting)
         }
-        if let session = delivery.session { store.noteLookoutStarted(session) }
+        if let session = delivery.session { store.noteFjordStarted(session) }
         note(job, .started(session: delivery.session, project: label, model: nil, effort: nil), session: delivery.session)
         guard !delivery.text.isEmpty else { return }
         stage(job, "sending")
@@ -729,7 +729,7 @@ struct RouterAskBack: Identifiable, Equatable {
     func hold(_ id: UUID, _ waiting: SessionStart.Held, text: String, pills: [Range<Int>]? = nil) {
         guard let store else { return }
         let session = waiting.waiting.sessionID
-        store.noteLookoutStarted(session)
+        store.noteFjordStarted(session)
         store.updateDecision(id) { $0.add(.started(session: session, project: waiting.project, model: nil, effort: nil), session: session) }
         guard waiting.ready != nil else {
             if waiting.settings != nil { store.updateDecision(id) { $0.add(.failed("model/effort: no first message to set them with")) } }

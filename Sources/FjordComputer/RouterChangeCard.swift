@@ -6,11 +6,11 @@ import SwiftUI
 
 extension EnvironmentValues {
     /// Shows a change's place in the app window (the window's own; a shot or a hub shows nothing).
-    @Entry var openChange: (LookoutChange) -> Void = { _ in }
+    @Entry var openChange: (FjordChange) -> Void = { _ in }
 }
 
 struct ChangeCard: View {
-    let change: LookoutChange
+    let change: FjordChange
     let store: Store
     @Environment(\.openChange) private var openChange
     @Environment(\.cdsColumnWidth) private var width
@@ -63,12 +63,12 @@ struct ChangeCard: View {
                 EmptyView()
             } else if change.isPending {
                 failure
-                ClaudeButton("Discard", variant: .ghost, size: .sm) { store.discardLookoutChange(change.id) }
-                ClaudeButton("Apply", variant: .primary, size: .sm) { store.applyLookoutChange(change.id) }
+                ClaudeButton("Discard", variant: .ghost, size: .sm) { store.discardFjordChange(change.id) }
+                ClaudeButton("Apply", variant: .primary, size: .sm) { store.applyFjordChange(change.id) }
             } else {
                 failure
                 ClaudeButton("Open", variant: .ghost, size: .sm) { openChange(change) }
-                ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertLookoutChange(change.id) }
+                ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertFjordChange(change.id) }
             }
         }
         .padding(.horizontal, CDS.Density.compact.pad.xs)
@@ -124,7 +124,7 @@ struct ChangeCard: View {
         case .order(_, let after):
             OrderPreview(names: after.compactMap { id in store.categories.first { $0.id == id }?.title })
         case .setting(let key, let before, let after):
-            if let setting = LookoutSetting.named(key) {
+            if let setting = FjordSetting.named(key) {
                 HStack(spacing: 6) {
                     Text(setting.display(before)).cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
                     Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(CDS.Text.muted)
@@ -202,7 +202,7 @@ private struct CategoryPreview: View {
         let words = RuleWords(store: store)
         VStack(alignment: .leading, spacing: 10) {
             if let before, let after {
-                let diff = LookoutChange.diff(before, after)
+                let diff = FjordChange.diff(before, after)
                 if !diff.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(diff, id: \.self) { Text($0).cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary) }

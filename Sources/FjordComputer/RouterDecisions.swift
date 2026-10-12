@@ -335,7 +335,7 @@ extension Store {
     }
 
     /// A change made in Fjord Computer: part of the run under way, else an entry of its own.
-    func logChange(_ change: LookoutChange, into run: UUID? = nil) {
+    func logChange(_ change: FjordChange, into run: UUID? = nil) {
         if let id = run, router.decisions.contains(where: { $0.id == id }) {
             updateDecision(id) { $0.add(.changed(change.id)) }
         } else {

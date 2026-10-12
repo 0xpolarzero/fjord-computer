@@ -86,7 +86,7 @@ import Testing
         ((try? FileManager.default.contentsOfDirectory(atPath: dir.path("forms").path)) ?? []).filter { $0 != ".enabled" }
     }
 
-    @Test func anAnswerFromLookoutIsPrintedAsTheDecision() throws {
+    @Test func anAnswerFromFjordIsPrintedAsTheDecision() throws {
         let dir = TempDir()
         var seenPending: PendingForm?
         let (outcome, box) = run(dir, input: request(transcript: nil), step: { n, forms in

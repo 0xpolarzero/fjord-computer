@@ -4,7 +4,7 @@ import Foundation
 /// What the editor refuses to save, asked of what the Router sends: the same reasons, in the same words, from the same checks
 /// (`RuleEditing.problems`), plus the few the editor makes impossible by what its menus offer.
 @MainActor
-enum LookoutValidate {
+enum FjordValidate {
     /// Every reason `category` can't be saved, empty when it can. `old`: the category it replaces, if any.
     static func category(_ c: InboxCategory, old: InboxCategory?, in store: Store) -> [String] {
         var out: [String] = []

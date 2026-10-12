@@ -19,7 +19,7 @@ struct EntryChange: Codable, Hashable {
     var after: EntryMarks?
 }
 
-struct LookoutChange: Codable, Hashable, Identifiable {
+struct FjordChange: Codable, Hashable, Identifiable {
     var id = UUID()
     var date: Date
     /// One line: "Created category Contributions", "Changed snooze to 1 hour", "Marked 3 done".
@@ -29,7 +29,7 @@ struct LookoutChange: Codable, Hashable, Identifiable {
     var revertedAt: Date?
     /// What the revert said ("Reverted (later edits to it were undone too)").
     var revertNote: String?
-    /// Why it waits for your Apply: made by the Router but not applied (`LookoutGate`). Nil once applied, or for one that
+    /// Why it waits for your Apply: made by the Router but not applied (`FjordGate`). Nil once applied, or for one that
     /// applied at once.
     var pending: String?
     /// A waiting category change: the groups its rules name, as they were when it was made (or last refused). Its Details
@@ -76,12 +76,12 @@ struct LookoutChange: Codable, Hashable, Identifiable {
         /// The two together change nothing (made, then deleted; changed, then changed back): neither is kept.
         case cancelled
         /// One record for both: the earlier one's before, the later one's after.
-        case merged(LookoutChange)
+        case merged(FjordChange)
     }
 
     /// The one record that stands for `self` and then `later`, when they touch the same category, group, the order or
     /// setting. A marks change never joins another.
-    func coalesced(with later: LookoutChange) -> Coalesced {
+    func coalesced(with later: FjordChange) -> Coalesced {
         var merged = self
         switch (patch, later.patch) {
         case (.category(let index, let before, let middle), .category(let laterIndex, let laterBefore, let after))
@@ -169,7 +169,7 @@ struct ChangePayload: Equatable {
     var after: [String]
 }
 
-extension LookoutChange {
+extension FjordChange {
     @MainActor
     func payload(store: Store) -> ChangePayload {
         let words = RuleWords(store: store)
@@ -183,7 +183,7 @@ extension LookoutChange {
             out += c.rules.isEmpty ? ["Rules: none"] : c.rules.enumerated().map { "Rule \($0.offset + 1): " + words.summary($0.element) }
             out += c.actions.isEmpty ? ["Actions: none"] : c.actions.items.enumerated().map { "Action \($0.offset + 1): " + Self.describe($0.element) }
             // Every member of every group its rules name: what a rule by a group takes is its members.
-            out += LookoutGate.groups(of: c, in: groups ?? store.groups).map { g in
+            out += FjordGate.groups(of: c, in: groups ?? store.groups).map { g in
                 "Group \(g.name) (\(g.kind.rawValue)): " + (g.members.isEmpty ? "no members" : g.members.joined(separator: ", "))
             }
             return out
@@ -204,7 +204,7 @@ extension LookoutChange {
         case .group(_, let before, let after): return ChangePayload(before: group(before), after: group(after))
         case .order(let before, let after): return ChangePayload(before: order(before), after: order(after))
         case .setting(let key, let before, let after):
-            let display = LookoutSetting.named(key)?.display ?? { "\($0)" }
+            let display = FjordSetting.named(key)?.display ?? { "\($0)" }
             return ChangePayload(before: ["\(key): \(display(before))"], after: ["\(key): \(display(after))"])
         case .marks(_, let changes):
             func name(_ thing: String) -> String {
@@ -242,7 +242,7 @@ extension LookoutChange {
 /// Never the GitHub token, the account, quitting, or the Router's own switch. One table gives `get_settings`,
 /// `set_setting`'s schema and the cards' words, so they can't disagree.
 @MainActor
-struct LookoutSetting {
+struct FjordSetting {
     let key: String
     /// "snooze", for "Changed snooze to 1 hour".
     let label: String
@@ -289,11 +289,11 @@ struct LookoutSetting {
         }
     }
 
-    static let all: [LookoutSetting] = [
-        LookoutSetting(key: "notifications", label: "desktop notifications", doc: "Desktop notifications for the inbox and the Router.",
+    static let all: [FjordSetting] = [
+        FjordSetting(key: "notifications", label: "desktop notifications", doc: "Desktop notifications for the inbox and the Router.",
                        schema: ["type": "boolean"], read: { .on($0.settings.notifications) }, parse: { v, _ in try flag(v) },
                        apply: { s, v in if case .on(let on) = v { s.settings.notifications = on } }, display: onOff),
-        LookoutSetting(key: "snooze", label: "snooze", doc: "Silences banners for a while: `off`, `30m`, `1h`, `3h`, or `tomorrow` (9:00).",
+        FjordSetting(key: "snooze", label: "snooze", doc: "Silences banners for a while: `off`, `30m`, `1h`, `3h`, or `tomorrow` (9:00).",
                        schema: ["type": "string", "enum": snoozes.map(\.word)],
                        read: { .date($0.isSnoozed ? $0.settings.snoozeUntil : nil) },
                        parse: { v, now in
@@ -307,7 +307,7 @@ struct LookoutSetting {
                            guard case .date(let date) = v, let date else { return "off" }
                            return "until " + date.formatted(date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated, time: .shortened)
                        }),
-        LookoutSetting(key: "pollInterval", label: "check interval", doc: "How often Triage asks GitHub: 30, 60, 120 or 300 seconds.",
+        FjordSetting(key: "pollInterval", label: "check interval", doc: "How often Triage asks GitHub: 30, 60, 120 or 300 seconds.",
                        schema: ["type": "integer", "enum": intervals.map { Int($0) }], read: { .number($0.settings.pollInterval) },
                        parse: { v, _ in
                            guard let n = v as? NSNumber, intervals.contains(n.doubleValue) else {
@@ -319,18 +319,18 @@ struct LookoutSetting {
                            if case .number(let n) = v, s.settings.pollInterval != n { s.settings.pollInterval = n; s.restartPolling() }
                        },
                        display: { v in if case .number(let n) = v { intervalText(n) } else { "?" } }),
-        LookoutSetting(key: "centerBar", label: "centering the bar", doc: "Keep the bar at the middle of its screen edge (dragging only picks the edge).",
+        FjordSetting(key: "centerBar", label: "centering the bar", doc: "Keep the bar at the middle of its screen edge (dragging only picks the edge).",
                        schema: ["type": "boolean"], read: { .on($0.settings.centerPill ?? false) }, parse: { v, _ in try flag(v) },
                        apply: { s, v in if case .on(let on) = v { s.settings.centerPill = on } }, display: onOff),
-        LookoutSetting(key: "launchAtLogin", label: "launch at login", doc: "Open Fjord Computer when the Mac starts.",
+        FjordSetting(key: "launchAtLogin", label: "launch at login", doc: "Open Fjord Computer when the Mac starts.",
                        schema: ["type": "boolean"], read: { _ in .on(launchAtLogin.read()) }, parse: { v, _ in try flag(v) },
                        apply: { _, v in if case .on(let on) = v { try launchAtLogin.write(on) } }, display: onOff),
-        LookoutSetting(key: "sessionIcons", label: "icons picked for sessions", doc: "Icons picked for Claude sessions in the Router (their titles go to TypeSafe; needs its key).",
+        FjordSetting(key: "sessionIcons", label: "icons picked for sessions", doc: "Icons picked for Claude sessions in the Router (their titles go to TypeSafe; needs its key).",
                        schema: ["type": "boolean"], read: { .on($0.agents.iconsEnabled) }, parse: { v, _ in try flag(v) },
                        apply: { s, v in if case .on(let on) = v, s.agents.iconsEnabled != on { s.setIconsEnabled(on) } }, display: onOff),
     ]
 
-    static func named(_ key: String) -> LookoutSetting? { all.first { $0.key == key } }
+    static func named(_ key: String) -> FjordSetting? { all.first { $0.key == key } }
 
     /// The change's one line: "Changed snooze to 1 hour", "Turned off desktop notifications".
     func title(after: SettingValue, word: String?) -> String {
@@ -358,11 +358,11 @@ extension Store {
     /// Takes a change back: only what it touched goes to its state before. A thing edited since is put back all the same,
     /// and the note says so. Nil when it can't (already reverted, or no longer kept).
     @discardableResult
-    func revertLookoutChange(_ id: UUID, now: Date = Date()) -> LookoutChange? {
-        changingInbox(.revert) { revertingLookoutChange(id, now: now) }
+    func revertFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
+        changingInbox(.revert) { revertingFjordChange(id, now: now) }
     }
 
-    private func revertingLookoutChange(_ id: UUID, now: Date) -> LookoutChange? {
+    private func revertingFjordChange(_ id: UUID, now: Date) -> FjordChange? {
         guard let message = router.changes.firstIndex(where: { $0.id == id }), !router.changes[message].isReverted,
               router.changes[message].pending == nil else { return nil }
         var change = router.changes[message]
@@ -402,7 +402,7 @@ extension Store {
             categories = Self.ordered(categories, by: before)
             categoriesChangedByRouter()
         case .setting(let key, let before, let after):
-            if let setting = LookoutSetting.named(key) {
+            if let setting = FjordSetting.named(key) {
                 edited = setting.read(self) != after
                 do { try setting.apply(self, before) } catch {
                     change.revertNote = "Couldn't put it back: \(error.localizedDescription)"
@@ -434,7 +434,7 @@ extension Store {
 // MARK: - Where Open goes
 
 /// The place in the app a change's Open button shows.
-enum LookoutTarget: Equatable {
+enum FjordTarget: Equatable {
     /// The categories page, on this category's editor.
     case category(UUID)
     /// The categories page, with this group unfolded.
@@ -447,12 +447,12 @@ enum LookoutTarget: Equatable {
     case entry(thing: String, category: UUID?, done: Bool)
 }
 
-extension LookoutChange {
+extension FjordChange {
     /// It changed Triage (its categories, groups or inbox), not the app's settings.
     var touchesTriage: Bool { if case .setting = patch { false } else { true } }
 
     /// Where Open goes now: a category or group that is gone opens the page that listed it.
-    @MainActor func target(in store: Store) -> LookoutTarget {
+    @MainActor func target(in store: Store) -> FjordTarget {
         switch patch {
         case .category(_, let before, let after):
             guard let id = (after ?? before)?.id, store.categories.contains(where: { $0.id == id }) else { return .categories }

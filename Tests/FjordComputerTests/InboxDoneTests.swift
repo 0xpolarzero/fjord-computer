@@ -48,7 +48,7 @@ import Testing
         #expect(seen != nil && s.things[thing.id]?.commits.last?.seenAt == seen)
     }
 
-    @Test func aCommitYouReviewedWhileLookoutWasClosedIsNotNewSinceYourReview() {
+    @Test func aCommitYouReviewedWhileFjordWasClosedIsNotNewSinceYourReview() {
         var thing = InboxFixture.pr(1)
         thing.commits = [ThingCommit(id: "c0", author: "alice", at: Date().addingTimeInterval(-7200))]
         thing.headSha = "c0"

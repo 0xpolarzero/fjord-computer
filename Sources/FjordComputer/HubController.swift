@@ -95,7 +95,7 @@ struct HubRoot: View {
 
     var body: some View {
         GeometryReader { _ in content }
-            .coordinateSpace(.named(LookoutHub.rootSpace))
+            .coordinateSpace(.named(FjordHub.rootSpace))
             .environment(\.openApp, openApp)
             .environment(\.openUpdates, openUpdates)
             .environment(\.openRouter, openRouter)
@@ -106,8 +106,8 @@ struct HubRoot: View {
     }
 
     @ViewBuilder private var content: some View {
-        let view = LookoutHub(store: store, ui: ui, hub: hub)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(LookoutHub.rootSpace)) } action: { frame in
+        let view = FjordHub(store: store, ui: ui, hub: hub)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(FjordHub.rootSpace)) } action: { frame in
                 if HubController.debug { NSLog("Fjord Computer hub frame \(frame)") }
                 layout.frame = frame
                 layout.restLength = ui.edge.isHorizontal ? frame.width : frame.height
@@ -232,7 +232,7 @@ final class HubController {
         if UnderTest.isRunning { vf.origin = UnderTest.away }
         switch ui.edge {
         case .right, .left:
-            let depth = LookoutHub.cell + LookoutHub.detail + 40
+            let depth = FjordHub.cell + FjordHub.detail + 40
             let x = ui.edge == .right ? vf.maxX - depth : vf.minX
             return NSRect(x: x, y: vf.minY, width: depth, height: vf.height)
         case .top, .bottom:
@@ -424,10 +424,10 @@ final class HubController {
         lastCellAlong = along
         let cell: NSRect
         if ui.edge.isHorizontal {
-            let x = min(max(along ?? frame.minX + LookoutHub.inset + 1 + LookoutHub.cell / 2, frame.minX + tile / 2), frame.maxX - tile / 2)
+            let x = min(max(along ?? frame.minX + FjordHub.inset + 1 + FjordHub.cell / 2, frame.minX + tile / 2), frame.maxX - tile / 2)
             cell = NSRect(x: x - tile / 2, y: frame.midY - tile / 2, width: tile, height: tile)
         } else {
-            let y = min(max(along ?? frame.maxY - LookoutHub.cell / 2 - 2, frame.minY + tile / 2), frame.maxY - tile / 2)
+            let y = min(max(along ?? frame.maxY - FjordHub.cell / 2 - 2, frame.minY + tile / 2), frame.maxY - tile / 2)
             cell = NSRect(x: frame.midX - tile / 2, y: y - tile / 2, width: tile, height: tile)
         }
         return BarMorph(frame: frame, snapshot: image, cell: cell)

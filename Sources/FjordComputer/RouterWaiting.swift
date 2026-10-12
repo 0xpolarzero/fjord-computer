@@ -256,7 +256,7 @@ extension Store {
                 // A PR named too: which it waits on isn't clear.
                 if !Self.prsNamed(lower, repo: thing.repo).isEmpty { return false }
                 if lower.contains(thingID.lowercased()) { return true }
-                guard let ref, LookoutGate.mentions(lower, ref: ref),
+                guard let ref, FjordGate.mentions(lower, ref: ref),
                       let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty,
                       lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w])"#,
                                   options: .regularExpression) != nil,
@@ -284,7 +284,7 @@ extension Store {
             guard Self.prsNamed(lower, repo: thing.repo).count <= 1 else { return false }
             // A workflow named too: which it waits on isn't clear.
             guard reading.ci.subtracting(reading.prs).isEmpty else { return false }
-            if let ref, LookoutGate.mentions(lower, ref: ref) { return true }
+            if let ref, FjordGate.mentions(lower, ref: ref) { return true }
             if let number = thing.number, Self.linksPR(lower, repo: thing.repo, number: number) { return true }
             // Another PR named by its ref: this one's number or title words in the same message are about that one.
             if lower.range(of: #"(?<![\w./-])[a-z0-9][a-z0-9-]*/[a-z0-9._-]+#\d"#, options: .regularExpression) != nil { return false }
@@ -299,7 +299,7 @@ extension Store {
     func namedCI(_ lower: String, excluding: String?) -> Set<String> {
         var found = Self.prsNamed(lower)
         for thing in things.values where thing.kind == .workflow && thing.id != excluding {
-            guard let ref = RouterWaits.ref(thing), LookoutGate.mentions(lower, ref: ref),
+            guard let ref = RouterWaits.ref(thing), FjordGate.mentions(lower, ref: ref),
                   let name = thing.workflowName?.lowercased().trimmingCharacters(in: .whitespaces), !name.isEmpty,
                   lower.range(of: #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w])"#,
                               options: .regularExpression) != nil,

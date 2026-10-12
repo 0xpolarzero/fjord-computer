@@ -462,7 +462,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
 // MARK: - Tools
 
-/// What a Router run can use: the board and Fjord Computer's own tools (RouterLookout.swift), and what the dispatcher calls
+/// What a Router run can use: the board and Fjord Computer's own tools (RouterFjord.swift), and what the dispatcher calls
 /// directly (prepare, answer a form, start a session, the gate). Each acts on the store, on the main thread.
 @MainActor final class RouterTools {
     private(set) weak var store: Store?
@@ -519,8 +519,8 @@ final class RouterMCPServer: @unchecked Sendable {
     var turnChanges: [UUID] = []
     /// The things this turn marked (or asked to): many at once wait for you however the marking is split.
     var turnMarked: Set<String> = []
-    /// What your message names, read as the turn began, before its run changed anything (`LookoutGate.Named`).
-    var turnNamed = LookoutGate.Named()
+    /// What your message names, read as the turn began, before its run changed anything (`FjordGate.Named`).
+    var turnNamed = FjordGate.Named()
 
     /// Where the @project pills are in the turn's text (`RouterContext.pills`): the only tags taken out of it.
     private(set) var turnPills: [Range<Int>] = []
@@ -531,7 +531,7 @@ final class RouterMCPServer: @unchecked Sendable {
         turnPills = pills
         turnChanges = []
         turnMarked = []
-        turnNamed = store.map { LookoutGate.named(text, store: $0) } ?? .init()
+        turnNamed = store.map { FjordGate.named(text, store: $0) } ?? .init()
     }
 
     /// The turn ended or was stopped: unused preparations go, runs under way are stopped, late work acts on nothing.
@@ -580,8 +580,8 @@ final class RouterMCPServer: @unchecked Sendable {
     /// `live` as a yes/no, for a check made later (the form writer's, right before it writes).
     private func isLive(_ ticket: Ticket) -> Bool { (try? live(ticket)) != nil }
 
-    /// Every tool a run may be offered: the board and Fjord Computer's own (RouterLookout.swift).
-    static let specs: [[String: Any]] = [boardSpec] + LookoutTools.specs
+    /// Every tool a run may be offered: the board and Fjord Computer's own (RouterFjord.swift).
+    static let specs: [[String: Any]] = [boardSpec] + FjordTools.specs
 
     private static let boardSpec: [String: Any] = [
         "name": "board",
@@ -598,7 +598,7 @@ final class RouterMCPServer: @unchecked Sendable {
             do { try live(ticket, acting: false) } catch { return .error(error.localizedDescription) }
             return RouterRPC.ToolResult(text: text)
         }
-        return await lookout(name, args, store: store, ticket: ticket)
+        return await fjord(name, args, store: store, ticket: ticket)
     }
 
     struct Failure: LocalizedError {

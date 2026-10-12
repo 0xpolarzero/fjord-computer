@@ -799,7 +799,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.comments.count == 1)
     }
 
-    @Test func aReviewMadeWhileLookoutWasClosedIsNewWhenThisBuildReadsTheReviewsBack() async {
+    @Test func aReviewMadeWhileFjordWasClosedIsNewWhenThisBuildReadsTheReviewsBack() async {
         func review(_ id: String, _ at: TimeInterval) -> ThingReview {
             ThingReview(id: id, author: Person(login: "bob"), state: id == "r1" ? .changesRequested : .commented,
                         at: Date().addingTimeInterval(at))
@@ -865,7 +865,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         #expect(performer.comments.count == 1)
     }
 
-    @Test func aCommitPushedWhileLookoutWasClosedRunsThoughTheReviewThatHoldsThePRInAnAllOfCategoryCameBack() async {
+    @Test func aCommitPushedWhileFjordWasClosedRunsThoughTheReviewThatHoldsThePRInAnAllOfCategoryCameBack() async {
         var action = CategoryAction.make(.comment("thanks"))
         action.trigger = .eachFact
         let performer = FakePerformer()

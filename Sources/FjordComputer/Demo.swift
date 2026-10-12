@@ -218,7 +218,7 @@ enum Demo {
         if let i = state.cards.firstIndex(where: { $0.sessionID == linux }) { state.cards[i].toolUseID = "toolu_demo_linux" }
         // The question is the wait the session is on now, so its form shows on its card.
         state.waits[lcu] = state.cards.last?.waitMs
-        state.changes = lookoutChanges(store, now)
+        state.changes = fjordChanges(store, now)
         // The decision log behind the same story: what you said and what the Router did with it.
         func entry(_ minutes: Double, _ trigger: RouterDecision.Trigger, _ intent: String, _ done: [RouterDecision.Done],
                    outcome: RouterDecision.Outcome = .done) -> RouterDecision {
@@ -351,7 +351,7 @@ enum Demo {
     }
 
     /// The Router changing Fjord Computer itself: a record for each change (one taken back).
-    private static func lookoutChanges(_ store: Store, _ now: Date) -> [LookoutChange] {
+    private static func fjordChanges(_ store: Store, _ now: Date) -> [FjordChange] {
         let look = InboxCategory(
             name: "Needs a look", symbol: "eye", color: .aqua,
             rules: [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.maintainers], except: [.bots]), in: Pick(include: [.contributed])),
@@ -364,8 +364,8 @@ enum Demo {
         var quiet = reviews
         quiet?.notifies = false
         quiet?.hidden = true
-        func message(_ title: String, _ patch: LookoutChange.Patch, minutes: Double, reverted: Bool = false) -> LookoutChange {
-            var change = LookoutChange(date: now.addingTimeInterval(-minutes * 60), title: title, patch: patch)
+        func message(_ title: String, _ patch: FjordChange.Patch, minutes: Double, reverted: Bool = false) -> FjordChange {
+            var change = FjordChange(date: now.addingTimeInterval(-minutes * 60), title: title, patch: patch)
             if reverted {
                 change.revertedAt = now.addingTimeInterval(-60)
                 change.revertNote = "Reverted"
@@ -374,13 +374,13 @@ enum Demo {
         }
         let doneThings = store.entries.prefix(3).map { EntryChange(thing: $0.id, before: nil, after: EntryMarks(doneAt: now)) }
         var out = [
-            message(LookoutChange.title(forCategory: nil, look), .category(index: 1, before: nil, after: look), minutes: 8),
+            message(FjordChange.title(forCategory: nil, look), .category(index: 1, before: nil, after: look), minutes: 8),
             message("Changed snooze to 1 hour",
                     .setting(key: "snooze", before: .date(nil), after: .date(now.addingTimeInterval(3600))), minutes: 8),
             message("Marked \(doneThings.count) done", .marks(state: "done", doneThings), minutes: 2),
         ]
         if let reviews, let quiet {
-            out.append(message(LookoutChange.title(forCategory: reviews, quiet), .category(index: 1, before: reviews, after: quiet),
+            out.append(message(FjordChange.title(forCategory: reviews, quiet), .category(index: 1, before: reviews, after: quiet),
                                minutes: 2, reverted: true))
         }
         return out

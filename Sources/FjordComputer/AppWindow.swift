@@ -32,7 +32,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     static weak var active: AppWindowController?
     /// The controllers whose window has been brought in: whether another is still open when one's close is tidied.
     private static let broughtIn = NSHashTable<AppWindowController>.weakObjects()
-    static let autosave = "LookoutApp"
+    static let autosave = "FjordApp"
     static let minSize = NSSize(width: 1000, height: 600)
 
     let store: Store

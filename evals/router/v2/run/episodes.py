@@ -97,7 +97,7 @@ def validate_episode(episode):
 def _shipped_weights():
     """Read only Swift's numeric tables; source text never controls execution."""
     # ROUTER_SWIFT: an earlier RouterRoute.swift (e.g. from git) to replay an earlier Lookout as a baseline.
-    source = Path(os.environ.get("ROUTER_SWIFT") or ROUTER.parents[1] / "Sources" / "Lookout" / "RouterRoute.swift")
+    source = Path(os.environ.get("ROUTER_SWIFT") or ROUTER.parents[1] / "Sources" / "FjordComputer" / "RouterRoute.swift")
     text = source.read_text()
     tables = []
     for name in ("weights", "sureness", "surenessIntent"):

@@ -48,7 +48,7 @@ import Testing
     @Test func hoveringTheCurrentTabKeepsItsPickedRowAndScrollRequest() {
         let store = InboxFixture.store([])
         let hub = HubState()
-        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: hub)
+        let view = FjordHub(store: store, ui: UIState(persists: false, edge: .right), hub: hub)
         let tab = store.hubTab(hub)
         // With no explicit tab, the first category is already shown.
         hub.selection = "i:a"
@@ -69,7 +69,7 @@ import Testing
     @Test(arguments: Block.allCases) func aBlockedBarDoesNotChangeItsTab(_ block: Block) {
         let store = InboxFixture.store([])
         let hub = HubState()
-        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: hub)
+        let view = FjordHub(store: store, ui: UIState(persists: false, edge: .right), hub: hub)
         hub.selection = "i:a"
         hub.requestScroll("i:a")
         let scroll = hub.keyboardSelection
@@ -92,7 +92,7 @@ import Testing
 
     @Test func aSaveThatCannotBeMadeIsSaidEvenOfflineOrSignedOut() {
         let store = InboxFixture.store([])
-        let hub = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: HubState())
+        let hub = FjordHub(store: store, ui: UIState(persists: false, edge: .right), hub: HubState())
         store.actionsSaveProblem = "Saving actions.json failed: full"
         store.unreachable = true
         var s = hub.sync(now: Date())
@@ -111,7 +111,7 @@ import Testing
         ])
         made.actions = ActionList([CategoryAction.make(.comment("Thanks"))])
         let store = InboxFixture.store([], category: made)
-        let hub = LookoutHub(store: store, ui: UIState(persists: false, edge: .right), hub: HubState())
+        let hub = FjordHub(store: store, ui: UIState(persists: false, edge: .right), hub: HubState())
         store.fetchedFor = .keys([])
         store.inboxError = "Something went wrong"
         #expect(hub.sync(now: Date()).detail?.contains("Actions paused") == false)

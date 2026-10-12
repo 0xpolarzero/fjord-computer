@@ -5,7 +5,7 @@ import Testing
 /// The Router's second surface, Fjord Computer itself: its tools' schemas, what each change applies and refuses, the
 /// record each leaves in the history and what taking it back restores.
 @MainActor
-@Suite(.serialized) struct RouterLookout {
+@Suite(.serialized) struct RouterFjord {
     private let me = "me"
 
     /// A store with the default CI category (and "Mine", which holds PRs with a low Greptile score, when asked).
@@ -39,7 +39,7 @@ import Testing
 
     private let prByMe: [String: Any] = ["scope": ["kinds": ["pr"], "by": ["include": [["me": [String: Any]()]]]]]
 
-    private var changes: (Store) -> [LookoutChange] { { $0.router.changes } }
+    private var changes: (Store) -> [FjordChange] { { $0.router.changes } }
 
     // MARK: Schemas and grammar
 
@@ -69,7 +69,7 @@ import Testing
         let specs = RouterTools.specs
         let names = specs.compactMap { $0["name"] as? String }
         #expect(Set(names).count == names.count, "tool names repeat")
-        for name in LookoutTools.names { #expect(names.contains(name)) }
+        for name in FjordTools.names { #expect(names.contains(name)) }
         for spec in specs {
             let name = spec["name"] as? String ?? "?"
             #expect((spec["description"] as? String)?.isEmpty == false, "\(name) has no description")
@@ -97,9 +97,9 @@ import Testing
         guard case .tagged(let variants) = Shapes.resolve(.named("Condition")) else { Issue.record("no Condition shape"); return }
         #expect(Set(variants.map(\.tag)) == Set(conditions.map(RuleEditing.tag)))
         for condition in conditions {
-            let object = LookoutJSON.object(condition)
+            let object = FjordJSON.object(condition)
             let normalized = try Shapes.normalize(object, as: .named("Condition"))
-            #expect(try LookoutJSON.decode(Condition.self, from: normalized) == condition, "\(condition)")
+            #expect(try FjordJSON.decode(Condition.self, from: normalized) == condition, "\(condition)")
         }
         let people: [PersonRef] = [.me, .user("a"), .group(UUID()), .maintainers, .bots, .team("o/t"), .myTeams]
         let repos: [RepoRef] = [.repo("a/b"), .owner("a"), .group(UUID()), .owned, .contributed, .involved]
@@ -129,18 +129,18 @@ import Testing
         #expect(Set(personVariants.map(\.tag)) == Set(people.map(tag)))
         #expect(Set(repoVariants.map(\.tag)) == Set(repos.map(tag)))
         for p in people {
-            let n = try Shapes.normalize(LookoutJSON.object(p), as: .named("Person"))
-            #expect(try LookoutJSON.decode(PersonRef.self, from: n) == p)
+            let n = try Shapes.normalize(FjordJSON.object(p), as: .named("Person"))
+            #expect(try FjordJSON.decode(PersonRef.self, from: n) == p)
         }
         for r in repos {
-            let n = try Shapes.normalize(LookoutJSON.object(r), as: .named("Repo"))
-            #expect(try LookoutJSON.decode(RepoRef.self, from: n) == r)
+            let n = try Shapes.normalize(FjordJSON.object(r), as: .named("Repo"))
+            #expect(try FjordJSON.decode(RepoRef.self, from: n) == r)
         }
         // The action kinds come from the model's own encoding.
         let actions = [CategoryAction.make(.askRouter(prompt: "go")), .make(.comment("hi")), .make(.rerun)]
         for action in actions {
-            let n = try Shapes.normalize(LookoutJSON.object(action), as: .named("Action"))
-            #expect(try LookoutJSON.decode(CategoryAction.self, from: n).kind == action.kind)
+            let n = try Shapes.normalize(FjordJSON.object(action), as: .named("Action"))
+            #expect(try FjordJSON.decode(CategoryAction.self, from: n).kind == action.kind)
         }
         // A whole category the model makes is a category the shape takes.
         let offered = Set(RuleEditing.offered([.pr]).map(RuleEditing.tag))
@@ -150,17 +150,17 @@ import Testing
                                        in: Pick(include: [.involved])), match: .all, conditions: prConditions),
                      Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/b")]), on: ["main"], named: ["ci"]), conditions: [.workflow([.failing])])]
         all.actions = ActionList(actions)
-        let n = try Shapes.normalize(LookoutJSON.object(all), as: .named("Category"))
-        #expect(try LookoutJSON.decode(InboxCategory.self, from: n).rules.count == 2)
+        let n = try Shapes.normalize(FjordJSON.object(all), as: .named("Category"))
+        #expect(try FjordJSON.decode(InboxCategory.self, from: n).rules.count == 2)
     }
 
     @Test func theWorkedExamplesAreTakenAndHaveNoProblems() throws {
         let s = store()
-        for example in LookoutDocs.examples {
+        for example in FjordDocs.examples {
             let object = try #require(try JSONSerialization.jsonObject(with: Data(example.json.utf8)) as? [String: Any])
             let n = try Shapes.normalize(object, as: .named("Category"))
-            let c = try LookoutJSON.decode(InboxCategory.self, from: n)
-            #expect(LookoutValidate.category(c, old: nil, in: s).isEmpty, "\(example.title): \(LookoutValidate.category(c, old: nil, in: s))")
+            let c = try FjordJSON.decode(InboxCategory.self, from: n)
+            #expect(FjordValidate.category(c, old: nil, in: s).isEmpty, "\(example.title): \(FjordValidate.category(c, old: nil, in: s))")
         }
     }
 
@@ -320,10 +320,10 @@ import Testing
         #expect(await call(t, "update_category", ["category": ["id": ci.id.uuidString, "isCI": false]]).ok == false)
         let delete = await call(t, "delete_category", ["category": ci.id.uuidString])
         #expect(delete.ok && delete.json["waiting"] as? String == "Deleted category Pipelines" && s.categories.count == 1)
-        s.applyLookoutChange(try #require(changes(s).last).id)
+        s.applyFjordChange(try #require(changes(s).last).id)
         #expect(s.categories.isEmpty)
         // And the tool says so.
-        let doc = try #require(LookoutTools.tools.first { $0.name == "delete_category" }?.doc)
+        let doc = try #require(FjordTools.tools.first { $0.name == "delete_category" }?.doc)
         #expect(doc.contains("the CI category too") && !doc.contains("can't be deleted"))
     }
 
@@ -339,15 +339,15 @@ import Testing
         let renamed = try #require(changes(s).last)
         #expect(renamed.title == "Renamed category One to Uno" || renamed.title == "Changed category Uno")
 
-        let reverted = try #require(s.revertLookoutChange(renamed.id))
+        let reverted = try #require(s.revertFjordChange(renamed.id))
         #expect(reverted.revertNote == "Reverted" && reverted.isReverted)
         #expect(s.categories.first { $0.id == one.id } == one, "back to what it was")
         #expect(s.categories.first { $0.id == two.id } == two, "the other one is not touched")
         #expect(s.router.changes.last?.isReverted == true, "the card in the history says so")
-        #expect(s.revertLookoutChange(renamed.id) == nil, "once")
+        #expect(s.revertFjordChange(renamed.id) == nil, "once")
         // Taking back a creation removes it.
         let created = try #require(changes(s).first)
-        s.revertLookoutChange(created.id)
+        s.revertFjordChange(created.id)
         #expect(!s.categories.contains { $0.id == one.id })
     }
 
@@ -362,12 +362,12 @@ import Testing
         let second = try #require(changes(s).last)
         // By hand, in the editor, after both.
         s.categories[1].name = "Edited by hand"
-        let note = try #require(s.revertLookoutChange(second.id)).revertNote
+        let note = try #require(s.revertFjordChange(second.id)).revertNote
         #expect(note == "Reverted (later edits to it were undone too)")
         #expect(s.categories[1] == made, "back to its state before the change, the hand edit gone")
         // The first change: the category is as it made it, so nothing was edited since it... but a later change was.
         s.categories[1].notifies = false
-        #expect(s.revertLookoutChange(first.id)?.revertNote == "Reverted (later edits to it were undone too)")
+        #expect(s.revertFjordChange(first.id)?.revertNote == "Reverted (later edits to it were undone too)")
         #expect(!s.categories.contains { $0.id == made.id })
     }
 
@@ -398,7 +398,7 @@ import Testing
         let entry = try #require(s.router.decisions.first { $0.id == run.id })
         #expect(entry.done.filter { if case .changed = $0 { true } else { false } }.count == 1 && entry.links.changes == [record.id])
         // Taking it back removes the category.
-        let reverted = try #require(s.revertLookoutChange(record.id))
+        let reverted = try #require(s.revertFjordChange(record.id))
         #expect(reverted.revertNote == "Reverted" && !s.categories.contains { $0.id == made.id })
     }
 
@@ -416,7 +416,7 @@ import Testing
         #expect(record.title == "Changed category Mine")
         guard case .category(_, let before, let after) = record.patch else { Issue.record("not a category"); return }
         #expect(before == original && after == s.categories.last)
-        s.revertLookoutChange(record.id)
+        s.revertFjordChange(record.id)
         #expect(s.categories.last == original)
     }
 
@@ -461,9 +461,9 @@ import Testing
         let record = try #require(changes(s).last)
         #expect(changes(s).count == 3 && record.title == "Deleted category Mine" && record.isPending)
         #expect(s.categories.last == edited)
-        s.applyLookoutChange(record.id)
+        s.applyFjordChange(record.id)
         #expect(!s.categories.contains { $0.id == original.id })
-        s.revertLookoutChange(record.id)
+        s.revertFjordChange(record.id)
         #expect(s.categories.last == edited)
     }
 
@@ -490,9 +490,9 @@ import Testing
         let out = await call(t, "delete_category", ["category": "b"])
         let card = try #require(changes(s).last)
         #expect(out.ok && card.title == "Deleted category B" && card.isPending)
-        s.applyLookoutChange(card.id)
+        s.applyFjordChange(card.id)
         #expect(!s.categories.contains { $0.id == b.id })
-        s.revertLookoutChange(card.id)
+        s.revertFjordChange(card.id)
         #expect(s.categories.map(\.name) == ["CI", "A", "B", "C"] && s.categories[2] == b)
     }
 
@@ -505,7 +505,7 @@ import Testing
         #expect(!partial.ok && partial.text.contains("CI"))
         let out = await call(t, "reorder_categories", ["order": ["A", "CI"]])
         #expect(out.ok && s.categories.map(\.name) == ["A", "CI"])
-        s.revertLookoutChange(try #require(changes(s).last).id)
+        s.revertFjordChange(try #require(changes(s).last).id)
         #expect(s.categories.map(\.id) == before)
         #expect(await call(t, "reorder_categories", ["order": ["A", "Nope"]]).ok == false)
     }
@@ -533,15 +533,15 @@ import Testing
         t.beginTurn("members")
         let update = await call(t, "update_group", ["group": ["id": group.id.uuidString, "members": ["carol"]]])
         #expect(update.ok && s.groups[0].members == ["carol"] && s.groups[0].name == "Crew")
-        s.revertLookoutChange(try #require(changes(s).last).id)
+        s.revertFjordChange(try #require(changes(s).last).id)
         #expect(s.groups[0].members == ["alice", "bob"])
         // Unused, it goes, and comes back.
         s.categories.removeAll { $0.name == "Crew PRs" }
         t.beginTurn("delete it")
         #expect(await call(t, "delete_group", ["group": group.id.uuidString]).ok && s.groups.count == 1)
-        s.applyLookoutChange(try #require(changes(s).last).id)
+        s.applyFjordChange(try #require(changes(s).last).id)
         #expect(s.groups.isEmpty)
-        s.revertLookoutChange(try #require(changes(s).last).id)
+        s.revertFjordChange(try #require(changes(s).last).id)
         #expect(s.groups.first?.id == group.id)
     }
 
@@ -550,7 +550,7 @@ import Testing
     @Test func onlyTheUserFacingSettingsCanBeChanged() async throws {
         let s = store()
         let t = tools(s)
-        let keys = LookoutSetting.all.map(\.key)
+        let keys = FjordSetting.all.map(\.key)
         #expect(Set(keys) == ["notifications", "snooze", "pollInterval", "centerBar", "launchAtLogin", "sessionIcons"])
         let listed = await call(t, "get_settings", [:])
         #expect((listed.json["settings"] as? [[String: Any]])?.compactMap { $0["key"] as? String } == keys)
@@ -576,27 +576,27 @@ import Testing
         #expect(center.ok && s.settings.centerPill == true)
 
         // Taking back restores the value before, and only it.
-        s.revertLookoutChange(try #require(changes(s).first { $0.title.hasPrefix("Changed snooze") }).id)
+        s.revertFjordChange(try #require(changes(s).first { $0.title.hasPrefix("Changed snooze") }).id)
         #expect(!s.isSnoozed && s.settings.pollInterval == 120 && s.settings.centerPill == true)
-        s.revertLookoutChange(try #require(changes(s).first { $0.title.hasPrefix("Turned off") }).id)
+        s.revertFjordChange(try #require(changes(s).first { $0.title.hasPrefix("Turned off") }).id)
         #expect(s.settings.notifications)
     }
 
     @Test func theLoginItemAndSessionIconsGoThroughTheirOwnSwitches() async throws {
         let s = store()
         var login = false
-        let saved = LookoutSetting.launchAtLogin
-        LookoutSetting.launchAtLogin = ({ login }, { login = $0 })
-        defer { LookoutSetting.launchAtLogin = saved }
+        let saved = FjordSetting.launchAtLogin
+        FjordSetting.launchAtLogin = ({ login }, { login = $0 })
+        defer { FjordSetting.launchAtLogin = saved }
         let t = tools(s, turn: "launch at login, and pick icons for sessions")
         #expect(await call(t, "set_setting", ["key": "launchAtLogin", "value": true]).ok && login)
-        s.revertLookoutChange(try #require(changes(s).last).id)
+        s.revertFjordChange(try #require(changes(s).last).id)
         #expect(!login)
         // Session titles go to TypeSafe: that waits for Apply, asked or not.
         #expect(await call(t, "set_setting", ["key": "sessionIcons", "value": true]).ok && !s.agents.iconsEnabled)
-        s.applyLookoutChange(try #require(changes(s).last).id)
+        s.applyFjordChange(try #require(changes(s).last).id)
         #expect(s.agents.iconsEnabled)
-        LookoutSetting.launchAtLogin = ({ login }, { _ in throw CocoaError(.userCancelled) })
+        FjordSetting.launchAtLogin = ({ login }, { _ in throw CocoaError(.userCancelled) })
         let failed = await call(t, "set_setting", ["key": "launchAtLogin", "value": true])
         #expect(!failed.ok && failed.text.contains("Couldn't change launchAtLogin"))
     }
@@ -604,25 +604,25 @@ import Testing
     @Test func aFailedApplyOrRevertStaysOnTheCardUntilALaterSuccess() throws {
         let s = store()
         var login = false, fails = true
-        let saved = LookoutSetting.launchAtLogin
-        LookoutSetting.launchAtLogin = ({ login }, { if fails { throw CocoaError(.userCancelled) }; login = $0 })
-        defer { LookoutSetting.launchAtLogin = saved }
-        var waiting = LookoutChange(title: "Changed launch at login", patch: .setting(key: "launchAtLogin", before: .on(false), after: .on(true)))
+        let saved = FjordSetting.launchAtLogin
+        FjordSetting.launchAtLogin = ({ login }, { if fails { throw CocoaError(.userCancelled) }; login = $0 })
+        defer { FjordSetting.launchAtLogin = saved }
+        var waiting = FjordChange(title: "Changed launch at login", patch: .setting(key: "launchAtLogin", before: .on(false), after: .on(true)))
         waiting.pending = "it changes how the Mac starts Fjord Computer"
         s.router.changes = [waiting]
         // Apply refused: the card is still waiting and says why.
-        let refused = try #require(s.applyLookoutChange(waiting.id))
+        let refused = try #require(s.applyFjordChange(waiting.id))
         #expect(refused.isPending && refused.failureNote?.hasPrefix("Couldn't apply it") == true)
         // A later Apply that goes through clears it.
         fails = false
-        let applied = try #require(s.applyLookoutChange(waiting.id))
+        let applied = try #require(s.applyFjordChange(waiting.id))
         #expect(!applied.isPending && applied.failureNote == nil && login)
         // Revert refused: still active, says why, and can be tried again.
         fails = true
-        let stuck = try #require(s.revertLookoutChange(waiting.id))
+        let stuck = try #require(s.revertFjordChange(waiting.id))
         #expect(!stuck.isReverted && stuck.failureNote?.hasPrefix("Couldn't put it back") == true)
         fails = false
-        let back = try #require(s.revertLookoutChange(waiting.id))
+        let back = try #require(s.revertFjordChange(waiting.id))
         #expect(back.isReverted && back.failureNote == nil && back.revertNote == "Reverted" && !login)
     }
 
@@ -674,10 +674,10 @@ import Testing
         #expect(await call(t, "mark_entries", ["state": "done", "category": "Mine"]).json["changed"] as? String == "nothing")
         #expect(s.entries.allSatisfy { $0.isDone })
         let mark = try #require(s.marks["pr:a/one#1"])
-        s.revertLookoutChange(try #require(changes(s).last).id)
+        s.revertFjordChange(try #require(changes(s).last).id)
         #expect(s.doneEntries.isEmpty)
         #expect(s.marks["pr:a/one#1"]?.seen == mark.seen, "what was seen stays seen")
-        s.revertLookoutChange(try #require(changes(s).first).id)
+        s.revertFjordChange(try #require(changes(s).first).id)
         #expect(s.marks == seenBefore)
         let restored = await call(t, "mark_entries", ["state": "restore", "entries": ["pr:a/one#1"]])
         #expect(restored.json["changed"] as? String == "nothing")
@@ -701,9 +701,9 @@ import Testing
         t.beginTurn("mark a/one#4 done")
         let other = await call(t, "mark_entries", ["state": "seen", "entries": ["a/one#1"]])
         #expect(other.json["waiting"] != nil && s.marks["pr:a/one#1"] == before["pr:a/one#1"])
-        #expect(LookoutGate.names("close #12 please", thing: InboxFixture.pr(12), category: nil))
-        #expect(!LookoutGate.names("close #123 please", thing: InboxFixture.pr(12), category: nil))
-        #expect(LookoutGate.names("clear out Reviews", thing: InboxFixture.pr(12), category: "Reviews"))
+        #expect(FjordGate.names("close #12 please", thing: InboxFixture.pr(12), category: nil))
+        #expect(!FjordGate.names("close #123 please", thing: InboxFixture.pr(12), category: nil))
+        #expect(FjordGate.names("clear out Reviews", thing: InboxFixture.pr(12), category: "Reviews"))
     }
 
     @Test func marksAreBoundToWhatYourMessageNamedAsTheTurnBegan() async throws {
@@ -729,7 +729,7 @@ import Testing
         s.things["pr:a/one#5"]?.title = "Polish the docs"
         t.beginTurn("mark Polish the docs done")
         #expect(await call(t, "mark_entries", ["state": "done", "entries": ["pr:a/one#5"]]).json["waiting"] == nil)
-        #expect(!LookoutGate.names("mark acme/api#123 done", thing: InboxFixture.pr(9, title: "123 done"), category: "done"))
+        #expect(!FjordGate.names("mark acme/api#123 done", thing: InboxFixture.pr(9, title: "123 done"), category: "done"))
     }
 
     @Test func knownValuesAreListedForTheRulesToUse() async throws {
@@ -785,10 +785,10 @@ import Testing
         let s = store()
         let t = tools(s)
         await call(t, "create_category", ["category": category("Mine", rules: [prByMe], extra: ["actions": [["kind": ["askRouter": ["prompt": "look"]]]]])])
-        s.applyLookoutChange(try #require(changes(s).first).id)
+        s.applyFjordChange(try #require(changes(s).first).id)
         t.beginTurn("snooze 30 minutes")
         await call(t, "set_setting", ["key": "snooze", "value": "30m"])
-        s.revertLookoutChange(try #require(changes(s).first).id)
+        s.revertFjordChange(try #require(changes(s).first).id)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let decoder = JSONDecoder()
@@ -817,15 +817,15 @@ import Testing
         let card = try #require(changes(s).last)
         #expect(card.isPending && card.pending?.contains("runs by itself") == true)
         // Not revertible before it is applied; Discard lets it go, and Apply then does nothing.
-        #expect(s.revertLookoutChange(card.id) == nil)
-        s.discardLookoutChange(card.id)
-        #expect(s.applyLookoutChange(card.id) == nil && s.categories[1].actions.isEmpty)
+        #expect(s.revertFjordChange(card.id) == nil)
+        s.discardFjordChange(card.id)
+        #expect(s.applyFjordChange(card.id) == nil && s.categories[1].actions.isEmpty)
         #expect(try #require(changes(s).last).isDiscarded)
         // Applied, it is what it would have been, and Revert takes it back.
         let again = await update(t, s.categories[1], ["actions": [["kind": ["comment": ["_0": "LGTM"]]]]])
         let waiting = try #require(changes(s).last)
         #expect(again["waiting"] != nil && waiting.isPending)
-        s.applyLookoutChange(waiting.id)
+        s.applyFjordChange(waiting.id)
         #expect(s.categories[1].actions.items.count == 1 && !waiting.isReverted)
         // What a category with actions runs on waits too, and so does marking many at once.
         let rules = await update(t, s.categories[1], ["rules": [prByMe]])
@@ -835,11 +835,11 @@ import Testing
         let many = await call(t, "mark_entries", ["state": "done", "category": "Reviews"])
         #expect(many.json["waiting"] != nil && s.doneEntries.isEmpty)
         // A waiting change is saved as one, and an older record reads as applied.
-        let back = try JSONDecoder().decode(LookoutChange.self, from: JSONEncoder().encode(try #require(changes(s).last)))
+        let back = try JSONDecoder().decode(FjordChange.self, from: JSONEncoder().encode(try #require(changes(s).last)))
         #expect(back.isPending)
         var old = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(card)) as? [String: Any])
         old["pending"] = nil
-        #expect(try JSONDecoder().decode(LookoutChange.self, from: JSONSerialization.data(withJSONObject: old)).pending == nil)
+        #expect(try JSONDecoder().decode(FjordChange.self, from: JSONSerialization.data(withJSONObject: old)).pending == nil)
     }
 
     @Test func theGateSaysWhatWaitsAndWhy() {
@@ -849,8 +849,8 @@ import Testing
         let group = InboxGroup(name: "Crew", kind: .people, members: ["a"])
         var using = acting
         using.rules = [Rule(scope: Scope(kinds: [.pr], by: Pick(include: [.group(group.id)])))]
-        func reason(_ patch: LookoutChange.Patch, _ request: String = "do it", _ categories: [InboxCategory] = []) -> String? {
-            LookoutGate.reason(LookoutChange(title: "x", patch: patch), request: request, categories: categories)
+        func reason(_ patch: FjordChange.Patch, _ request: String = "do it", _ categories: [InboxCategory] = []) -> String? {
+            FjordGate.reason(FjordChange(title: "x", patch: patch), request: request, categories: categories)
         }
         #expect(reason(.category(index: 0, before: ci, after: nil), "delete it") != nil)
         #expect(reason(.category(index: 0, before: nil, after: acting)) != nil)
@@ -869,7 +869,7 @@ import Testing
         let few = (1...2).map { EntryChange(thing: "t\($0)", before: nil, after: nil) }
         #expect(reason(.marks(state: "done", few), "mark those done") == nil)
         #expect(reason(.marks(state: "done", few), "rename it") != nil)
-        let many = (1...(LookoutGate.manyMarks + 1)).map { EntryChange(thing: "t\($0)", before: nil, after: nil) }
+        let many = (1...(FjordGate.manyMarks + 1)).map { EntryChange(thing: "t\($0)", before: nil, after: nil) }
         #expect(reason(.marks(state: "done", many), "mark everything done") != nil)
     }
 
@@ -892,14 +892,14 @@ import Testing
         let edit = try #require(changes(s).last)
         #expect(edit.pending?.contains("Crew") == true)
         // Applied anyway (or changed in the editor): the category's Apply then refuses once, saying what changed, and shows it.
-        s.applyLookoutChange(edit.id)
+        s.applyFjordChange(edit.id)
         #expect(s.groups[0].members.last == "mallory")
-        let refused = try #require(s.applyLookoutChange(card.id))
+        let refused = try #require(s.applyFjordChange(card.id))
         #expect(refused.isPending && refused.pending?.contains("added mallory") == true && refused.pending?.contains("removed member11") == true)
         #expect(!s.categories.contains { $0.name == "Crew" })
         #expect(refused.payload(store: s).after.contains { $0.hasPrefix("Group Crew (people): ") && $0.hasSuffix("mallory") })
         // Seen as it is now, it applies.
-        #expect(s.applyLookoutChange(card.id)?.isPending == false && s.categories.contains { $0.name == "Crew" })
+        #expect(s.applyFjordChange(card.id)?.isPending == false && s.categories.contains { $0.name == "Crew" })
     }
 
     @Test func aCardPreviewReadsLikeTheEditorsSentence() async throws {
@@ -925,7 +925,7 @@ import Testing
         changed.name = "Other"
         changed.color = .red
         changed.rules.append(Rule(scope: Scope(kinds: [.issue])))
-        #expect(LookoutChange.diff(base, changed) == ["Name: Mine → Other", "Color: blue → red", "Rules: 1 added"])
+        #expect(FjordChange.diff(base, changed) == ["Name: Mine → Other", "Color: blue → red", "Rules: 1 added"])
     }
 
     @Test func aWaitingChangeShowsEverythingApplyAllowsWhole() async throws {
@@ -945,7 +945,7 @@ import Testing
         #expect(payload.after.contains("Action 1: Ask the Router (for each new fact, model your default, effort your default), prompt: " + prompt))
         var sized = CategoryAction.make(.askRouter(prompt: "go"))
         (sized.model, sized.effort) = ("opus", "max")
-        #expect(LookoutChange.describe(sized) == "Ask the Router (when a thing comes in, model opus, effort max), prompt: go")
+        #expect(FjordChange.describe(sized) == "Ask the Router (when a thing comes in, model opus, effort max), prompt: go")
         #expect(payload.after.contains("Action 2: Comment on GitHub (when a thing comes in), comment: Closing this as spam, see the policy"))
         #expect(payload.after.filter { $0.hasPrefix("Rule ") }.count == mine.rules.count && !mine.rules.isEmpty)
         // A setting's before and after.
@@ -963,16 +963,16 @@ import Testing
         s.categories[s.categories.firstIndex { $0.id == mine.id }!] = mine
         let t = tools(s, turn: "tidy Mine")
         // The same action twice, by its id: refused.
-        let twice = LookoutJSON.object(action)
+        let twice = FjordJSON.object(action)
         let copied = await call(t, "update_category", ["category": ["id": mine.id.uuidString, "actions": [twice, twice]]])
         #expect(!copied.ok && copied.text.contains("each action is there once"))
         // Once more of what is there is as new as one never there: it waits for Apply.
         var doubled = mine
         doubled.actions = ActionList([action, action])
-        let change = LookoutChange(title: "x", patch: .category(index: 1, before: mine, after: doubled))
-        #expect(LookoutGate.reason(change, request: "tidy Mine", categories: s.categories)?.contains("runs by itself") == true)
-        let same = LookoutChange(title: "x", patch: .category(index: 1, before: mine, after: mine))
-        #expect(LookoutGate.reason(same, request: "tidy Mine", categories: s.categories) == nil)
+        let change = FjordChange(title: "x", patch: .category(index: 1, before: mine, after: doubled))
+        #expect(FjordGate.reason(change, request: "tidy Mine", categories: s.categories)?.contains("runs by itself") == true)
+        let same = FjordChange(title: "x", patch: .category(index: 1, before: mine, after: mine))
+        #expect(FjordGate.reason(same, request: "tidy Mine", categories: s.categories) == nil)
     }
 
     @Test func whatAnEarlierCategoryTakesWaitsWhenALaterOneHasActions() throws {
@@ -985,8 +985,8 @@ import Testing
         acting.name = "Acting"
         acting.actions = ActionList([.make(.comment("Thanks"))])
         s.categories = [early, acting]
-        func reason(_ patch: LookoutChange.Patch) -> String? {
-            LookoutGate.reason(LookoutChange(title: "x", patch: patch), request: "change Early", categories: s.categories)
+        func reason(_ patch: FjordChange.Patch) -> String? {
+            FjordGate.reason(FjordChange(title: "x", patch: patch), request: "change Early", categories: s.categories)
         }
         // Emptied, hidden, or a new one before it: more or fewer things reach Acting.
         var emptied = early
@@ -1023,7 +1023,7 @@ import Testing
         #expect(try #require(changes(s).last).target(in: s) == .settings(section: SettingsView.notificationsID))
         t.beginTurn("delete it and mark a/one#1 done")
         await call(t, "delete_category", ["category": "Mine too"])
-        s.applyLookoutChange(try #require(changes(s).last).id)
+        s.applyFjordChange(try #require(changes(s).last).id)
         #expect(try #require(changes(s).last).target(in: s) == .categories, "a category that is gone opens the page that listed it")
         await call(t, "mark_entries", ["state": "done", "entries": ["a/one#1"]])
         #expect(try #require(changes(s).last).target(in: s) == .entry(thing: "pr:a/one#1", category: s.categories[1].id, done: true))
@@ -1047,11 +1047,11 @@ import Testing
         for intent in RouterRun.Intent.allCases {
             #expect(RouterRun.role(intent).contains("don't act on GitHub"), "\(intent)")
         }
-        #expect(RouterRun.role(.changeLookout).contains("Revert"))
-        #expect(RouterRun.toolNames(.changeLookout, triage: true) == LookoutTools.names)
+        #expect(RouterRun.role(.changeFjord).contains("Revert"))
+        #expect(RouterRun.toolNames(.changeFjord, triage: true) == FjordTools.names)
         // A question only reads; the board and Fjord Computer's own tools are all a run is offered.
-        #expect(RouterRun.toolNames(.question, triage: true).isSubset(of: LookoutTools.names.union(["board"])))
-        #expect(RouterRun.specs(.changeLookout, triage: true).count == LookoutTools.names.count)
-        #expect(Set(RouterTools.specs.compactMap { $0["name"] as? String }) == LookoutTools.names.union(["board"]))
+        #expect(RouterRun.toolNames(.question, triage: true).isSubset(of: FjordTools.names.union(["board"])))
+        #expect(RouterRun.specs(.changeFjord, triage: true).count == FjordTools.names.count)
+        #expect(Set(RouterTools.specs.compactMap { $0["name"] as? String }) == FjordTools.names.union(["board"]))
     }
 }

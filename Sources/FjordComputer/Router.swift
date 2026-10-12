@@ -11,8 +11,8 @@ struct RouterState: Codable, Equatable {
     /// Oldest first.
     var cards: [RouterCard] = []
     /// What the Router changed in Fjord Computer itself, oldest first: the records behind the decision log's change
-    /// cards (see LookoutChange.swift).
-    var changes: [LookoutChange] = []
+    /// cards (see FjordChange.swift).
+    var changes: [FjordChange] = []
     /// The decision log, oldest first (see RouterDecisions.swift).
     var decisions: [RouterDecision] = []
     /// The sessions' summaries you asked for, oldest first (see RouterSummary.swift); kept under the key of the overviews of
@@ -37,7 +37,7 @@ struct RouterState: Codable, Equatable {
     /// such a session on its own, so "viewed" and "read" mean nothing for it: its cards come at once, until you write
     /// in it yourself from the app (a message no run of Fjord Computer's sent: see `RouterFeed.update`), after which
     /// the usual rules apply.
-    var lookoutStarted: [String: Date] = [:]
+    var fjordStarted: [String: Date] = [:]
     /// Tell a waiting session on its own once what it waits on is done (Settings), off by default; and, by session, your
     /// choice over that.
     var autoContinue = false
@@ -96,16 +96,16 @@ struct RouterState: Codable, Equatable {
     /// A line of the chat an older file kept: only the change it may hold is read (one there that can't be read fails the
     /// line, and is counted as lost).
     private struct LegacyLine: Decodable {
-        var change: LookoutChange?
+        var change: FjordChange?
         enum CodingKeys: String, CodingKey { case change }
         init(from decoder: Decoder) throws {
-            change = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(LookoutChange.self, forKey: .change)
+            change = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(FjordChange.self, forKey: .change)
         }
     }
 
     /// `chat` is read, never written (an older file's changes); `claudeSessionID` is ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, lookoutStarted, autoContinue, autoContinueSessions, handledTurns, replies, style
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, autoContinue, autoContinueSessions, handledTurns, replies, style
     }
 
     func encode(to encoder: Encoder) throws {
@@ -123,7 +123,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(pendingTurns, forKey: .pendingTurns)
         try c.encode(origins, forKey: .origins)
         try c.encode(heldWaits, forKey: .heldWaits)
-        try c.encode(lookoutStarted, forKey: .lookoutStarted)
+        try c.encode(fjordStarted, forKey: .fjordStarted)
         try c.encode(autoContinue, forKey: .autoContinue)
         try c.encode(autoContinueSessions, forKey: .autoContinueSessions)
         try c.encode(handledTurns, forKey: .handledTurns)
@@ -173,7 +173,7 @@ struct RouterState: Codable, Equatable {
         pendingTurns = map(.pendingTurns)
         origins = map(.origins)
         heldWaits = map(.heldWaits)
-        lookoutStarted = map(.lookoutStarted)
+        fjordStarted = map(.fjordStarted)
         autoContinue = value(.autoContinue) ?? false
         autoContinueSessions = map(.autoContinueSessions)
         handledTurns = map(.handledTurns)
@@ -515,7 +515,7 @@ enum RouterFeed {
             let stamp = Stamp(session)
             // A session Fjord Computer started has no backlog: seen for the first time after its first turn ended (a
             // quick reply can end before the next look), that turn is still new.
-            let before = state.seen[id].flatMap(Stamp.init) ?? (state.lookoutStarted[id] != nil ? Stamp.start : nil)
+            let before = state.seen[id].flatMap(Stamp.init) ?? (state.fjordStarted[id] != nil ? Stamp.start : nil)
             let busy = !(tasks[id] ?? []).isEmpty
             let previous = state.waits[id]
             let read = session.running ? activity[id] : nil
@@ -532,11 +532,11 @@ enum RouterFeed {
             // A session Fjord Computer started is yours to read only once you've written in it from the app: a message
             // that none of Fjord Computer's runs on it sent. Until then the app showing it (it brings it to the front
             // itself) means nothing.
-            if let before, state.lookoutStarted[id] != nil, stamp.message != before.message, let message = stamp.message,
-               !lookoutSent(state, id, atMs: message) {
-                state.lookoutStarted[id] = nil
+            if let before, state.fjordStarted[id] != nil, stamp.message != before.message, let message = stamp.message,
+               !fjordSent(state, id, atMs: message) {
+                state.fjordStarted[id] = nil
             }
-            let watching = id == viewing && state.lookoutStarted[id] == nil
+            let watching = id == viewing && state.fjordStarted[id] == nil
 
             // First sight: only what it is now, so turning the Router on doesn't bring the backlog.
             if let before {
@@ -657,17 +657,17 @@ enum RouterFeed {
             state.handledTurns = state.handledTurns.filter { kept.contains($0.key) }
         }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
-        state.lookoutStarted = state.lookoutStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
+        state.fjordStarted = state.fjordStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
         // What started a session goes with it, past the same hour (a session is noted as Fjord Computer's before its
         // origin is): its cards keep their own copy.
-        state.origins = state.origins.filter { live[$0.key] != nil || state.lookoutStarted[$0.key] != nil }
+        state.origins = state.origins.filter { live[$0.key] != nil || state.fjordStarted[$0.key] != nil }
         prune(&state)
     }
 
     /// Your message to judge the session's open turn cards against, when one is older than it. Not one a run of
     /// Fjord Computer's sent: the Router judges those as it sends them.
     static func queueReply(_ state: inout RouterState, _ session: String, _ message: Int64) {
-        guard !lookoutSent(state, session, atMs: message),
+        guard !fjordSent(state, session, atMs: message),
               state.cards.contains(where: { $0.sessionID == session && $0.isOpen && $0.kind.isTurn && message > $0.replyAfter })
         else { return }
         state.replies[session] = max(state.replies[session] ?? 0, message)
@@ -675,9 +675,9 @@ enum RouterFeed {
 
     /// Whether a run of Fjord Computer's on the session sent the user message at `ms`: one that was started shortly
     /// before it (delivering takes up to a minute or two) and is linked to the session.
-    private static func lookoutSent(_ state: RouterState, _ session: String, atMs ms: Int64) -> Bool {
+    private static func fjordSent(_ state: RouterState, _ session: String, atMs ms: Int64) -> Bool {
         // The session's own first message goes out as soon as it is made, before any run links it.
-        if let made = state.lookoutStarted[session], Stamp.ms(made) - 5_000 <= ms, ms <= Stamp.ms(made) + 300_000 { return true }
+        if let made = state.fjordStarted[session], Stamp.ms(made) - 5_000 <= ms, ms <= Stamp.ms(made) + 300_000 { return true }
         return state.decisions.contains { entry in
             guard entry.links.sessions.contains(session) else { return false }
             let started = Stamp.ms(entry.at)

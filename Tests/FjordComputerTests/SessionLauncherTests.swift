@@ -68,7 +68,7 @@ private final class LauncherLog {
         #expect(log.signed.map(\.cli) == ["abc"])
         #expect(log.sent.count == 1 && log.sent[0].peer == "peer-abc")
         #expect(log.sent[0].prepared.text == "SIGNED:Do it" && log.sent[0].prepared.body == "Do it")
-        #expect(store.router.lookoutStarted["local_abc"] != nil)
+        #expect(store.router.fjordStarted["local_abc"] != nil)
     }
 
     @Test func aValueTheCLIDoesNotTakeIsDroppedAndTheDefaultsOmitTheFlags() async throws {
@@ -262,7 +262,7 @@ private final class LauncherLog {
         await #expect(throws: SessionStart.Held.self) {
             try await self.launcher(store, log).start(folder: "/code/r", title: "t", firstMessage: "Do it", model: "opus")
         }
-        #expect(store.router.lookoutStarted["local_late"] != nil && log.sent.isEmpty)
+        #expect(store.router.fjordStarted["local_late"] != nil && log.sent.isEmpty)
         // The inbox action: tagged and logged as started at once; its message goes through the Router's held starts.
         var finished: [SessionStart.Held] = [], sent: [String] = []
         let no = RouterTools.Failure("not here")

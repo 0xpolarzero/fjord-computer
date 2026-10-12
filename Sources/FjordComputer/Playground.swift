@@ -59,7 +59,7 @@ struct PlaygroundView: View {
     }
 
     @ViewBuilder private var docked: some View {
-        let hubView = LookoutHub(store: store, ui: ui, hub: hub).environment(\.hubPointer, hover)
+        let hubView = FjordHub(store: store, ui: ui, hub: hub).environment(\.hubPointer, hover)
         switch ui.edge {
         case .right: hubView.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(.top, menuBar + 40)
         case .left: hubView.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.top, menuBar + 40)

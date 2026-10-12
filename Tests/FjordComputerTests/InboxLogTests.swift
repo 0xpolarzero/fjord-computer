@@ -74,7 +74,7 @@ import Testing
         #expect(s.inboxSource == nil)
 
         guard let change = s.router.changes.last else { Issue.record("no change"); return }
-        s.revertLookoutChange(change.id)
+        s.revertFjordChange(change.id)
         #expect(lines().contains { $0.hasPrefix("category deleted “My repos”") && $0.hasSuffix("by revert") })
     }
 

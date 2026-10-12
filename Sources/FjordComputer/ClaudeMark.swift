@@ -8,7 +8,7 @@ enum ClaudeMark {
     @MainActor static let image: NSImage? = sparkMask() ?? trayIcon()
 
     /// What `ClaudeButton` and the icon buttons take, in place of a symbol's name, for Open in Claude.
-    static let openSymbol = "lookout.open-in-claude"
+    static let openSymbol = "fjord.open-in-claude"
 
     /// Claude's clay: the spark's colour, the same in both looks.
     static let clay = Color(.sRGB, red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)

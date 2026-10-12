@@ -188,52 +188,52 @@ import Testing
         #expect(state.cards.count == 1)
     }
 
-    @Test func aSessionLookoutStartedIsCardedAtOnceEvenWhileTheAppShowsIt() {
+    @Test func aSessionFjordStartedIsCardedAtOnceEvenWhileTheAppShowsIt() {
         var state = seen([session(turns: 0)])
-        state.lookoutStarted["local_a"] = at(-10)
+        state.fjordStarted["local_a"] = at(-10)
         update(&state, [session(turns: 1, running: true)], viewing: "local_a", now: 1)
         update(&state, [session(turns: 1)], viewing: "local_a", unread: [], now: 2)
         #expect(state.cards.map(\.id) == ["local_a#t1"])
         #expect(state.pendingTurns.isEmpty)
-        #expect(state.lookoutStarted["local_a"] != nil)
+        #expect(state.fjordStarted["local_a"] != nil)
     }
 
-    @Test func aSessionLookoutStartedWhoseTurnEndedBeforeTheFeedSawItIsCarded() {
+    @Test func aSessionFjordStartedWhoseTurnEndedBeforeTheFeedSawItIsCarded() {
         var state = RouterState()
-        state.lookoutStarted["local_a"] = at(-10)
+        state.fjordStarted["local_a"] = at(-10)
         update(&state, [session(turns: 3, message: -9)], viewing: "local_a", unread: [], now: 1)
         #expect(state.cards.map(\.id) == ["local_a#t3"])
-        #expect(state.lookoutStarted["local_a"] != nil)
+        #expect(state.fjordStarted["local_a"] != nil)
     }
 
-    @Test func aQuestionInASessionLookoutStartedIsCardedWhileTheAppShowsIt() {
+    @Test func aQuestionInASessionFjordStartedIsCardedWhileTheAppShowsIt() {
         var state = seen([session(turns: 0, running: true)])
-        state.lookoutStarted["local_a"] = at(-10)
+        state.fjordStarted["local_a"] = at(-10)
         update(&state, [session(turns: 0, running: true)], activity: ["local_a": question(1)], viewing: "local_a", now: 1)
         #expect(state.cards.map(\.kind) == [.question])
         #expect(state.heldWaits.isEmpty)
     }
 
-    @Test func onceYouWriteInASessionLookoutStartedTheUsualRulesApply() {
+    @Test func onceYouWriteInASessionFjordStartedTheUsualRulesApply() {
         var state = seen([session(turns: 1)])
-        state.lookoutStarted["local_a"] = at(-10)
+        state.fjordStarted["local_a"] = at(-10)
         // A message of yours, well after the start and none of Fjord Computer's runs sent it.
         update(&state, [session(turns: 1, message: 20)], viewing: "local_a", now: 21)
-        #expect(state.lookoutStarted["local_a"] == nil)
+        #expect(state.fjordStarted["local_a"] == nil)
         update(&state, [session(turns: 2, message: 20)], viewing: "local_a", unread: [], now: 22)
         #expect(state.cards.isEmpty)
         update(&state, [session(turns: 2, message: 20)], unread: [], now: 100)
         #expect(state.cards.isEmpty)
     }
 
-    @Test func aMessageLookoutSentIsNotYouWritingInTheSession() {
+    @Test func aMessageFjordSentIsNotYouWritingInTheSession() {
         var state = seen([session(turns: 1)])
-        state.lookoutStarted["local_a"] = at(-10)
+        state.fjordStarted["local_a"] = at(-10)
         var run = RouterDecision(at: at(19.5), trigger: .system)
         run.add(.sent(to: "x", text: "hi", original: nil), session: "local_a")
         state.decisions = [run]
         update(&state, [session(turns: 1, message: 20)], viewing: "local_a", now: 21)
-        #expect(state.lookoutStarted["local_a"] != nil)
+        #expect(state.fjordStarted["local_a"] != nil)
     }
 
     @Test func whatStartedASessionIsForgottenWithIt() {
@@ -241,7 +241,7 @@ import Testing
         let origin = SessionOrigin(category: "Mine", thing: "o/r#1 T", actionID: "a", runID: "r")
         state.origins = ["local_a": origin, "local_gone": origin, "local_new": origin]
         // Just made: the app doesn't list it yet.
-        state.lookoutStarted["local_new"] = at(-10)
+        state.fjordStarted["local_new"] = at(-10)
         update(&state, [session(turns: 0)], now: 1)
         #expect(state.origins.keys.sorted() == ["local_a", "local_new"])
         // An hour on, it never came.
@@ -249,12 +249,12 @@ import Testing
         #expect(state.origins.keys.sorted() == ["local_a"])
     }
 
-    @Test func lookoutStartedDecodesFromOlderState() throws {
+    @Test func missingFjordStartedDefaultsToEmpty() throws {
         let data = try JSONEncoder().encode(RouterState())
         var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        json["lookoutStarted"] = nil
+        json["fjordStarted"] = nil
         let state = try JSONDecoder().decode(RouterState.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(state.lookoutStarted.isEmpty)
+        #expect(state.fjordStarted.isEmpty)
     }
 
     @Test func aTurnEndedWhileTheAppIsNotInFrontIsCarded() {
@@ -357,7 +357,7 @@ import Testing
     @Test func theChangesKeepTheLatest() {
         var state = RouterState()
         state.changes = (0..<510).map {
-            LookoutChange(date: at(Double($0)), title: "\($0)", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+            FjordChange(date: at(Double($0)), title: "\($0)", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
         }
         RouterFeed.prune(&state)
         #expect(state.changes.count == RouterFeed.maxChanges && state.changes.first?.title == "10")
@@ -365,10 +365,10 @@ import Testing
 
     @Test func aChangeWaitingForYourApplyOutlivesTheCap() {
         var state = RouterState()
-        var waiting = LookoutChange(date: at(0), title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        var waiting = FjordChange(date: at(0), title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
         waiting.pending = "asks first"
         state.changes = [waiting] + (1...510).map {
-            LookoutChange(date: at(Double($0)), title: "\($0)", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+            FjordChange(date: at(Double($0)), title: "\($0)", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
         }
         RouterFeed.prune(&state)
         #expect(state.changes.count == RouterFeed.maxChanges)
@@ -380,7 +380,7 @@ import Testing
         dec.dateDecodingStrategy = .iso8601
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
-        let change = LookoutChange(date: at(1), title: "Changed snooze", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        let change = FjordChange(date: at(1), title: "Changed snooze", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
         let line = try JSONSerialization.jsonObject(with: enc.encode(change))
         let old: [String: Any] = [
             "enabled": true, "claudeSessionID": "abc",

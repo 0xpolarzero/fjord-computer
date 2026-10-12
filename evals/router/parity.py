@@ -1,6 +1,6 @@
-"""What the measured policy decided, with its inputs, for Lookout's tests to check RouteFusion and RouterLexical against.
+"""What the measured policy decided, with its inputs, for Fjord Computer's tests to check RouteFusion and RouterLexical against.
 
-python3 parity.py  →  Tests/LookoutTests/Fixtures/router-fusion-parity.json (written cases, synth and heldout, their boards
+python3 parity.py  →  Tests/FjordComputerTests/Fixtures/router-fusion-parity.json (written cases, synth and heldout, their boards
 scrubbed of real text by `scrub`;
 real boards stay on this machine). Policy: explore.final3 (round 3), format combo-o."""
 import copy
@@ -54,7 +54,7 @@ def target(dest, board_ids):
 
 
 def main():
-    # The weights Lookout carries (RouteFusion's tables), so the fixture checks Swift computes as Python does with them.
+    # The weights Fjord Computer carries (RouteFusion's tables), so the fixture checks Swift computes as Python does with them.
     # final3.fitted's setup without its fit: the lexical fields as features, the tie-inclusive `agree`.
     from v2.run.episodes import _shipped_weights
     L.install()

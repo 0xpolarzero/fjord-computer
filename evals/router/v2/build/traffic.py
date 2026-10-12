@@ -1,9 +1,9 @@
-"""Lookout's routing trace (Sources/Lookout/RouterTrace.swift) turned into labelled traffic for the evals.
+"""Fjord Computer's routing trace (Sources/FjordComputer/RouterTrace.swift) turned into labelled traffic for the evals.
 
     python3 -m v2.build.traffic summary [--trace PATH] [--since DATE]
     python3 -m v2.build.traffic export  [--trace PATH] [--since DATE] [--out v2/data/traffic/decisions.jsonl]
 
-The trace (~/Library/Application Support/Lookout/router-trace.jsonl, on this Mac only) has one `decided` line per routed
+The trace (~/Library/Application Support/Fjord Computer/router-trace.jsonl, on this Mac only) has one `decided` line per routed
 message, then lines by the same id for how it ended: `picked` (a button on the ask that was the suggestion), `corrected`
 (another button; or, later, a send moved elsewhere) and `cancelled` (undone or dismissed). Kinds this doesn't know are
 counted and skipped. A partial last line (the app writing as we read), a duplicate `decided` id (the later one wins: it
@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 
 V2 = pathlib.Path(__file__).resolve().parents[1]
 DATA = V2 / "data"
-TRACE = pathlib.Path.home() / "Library/Application Support/Lookout/router-trace.jsonl"
+TRACE = pathlib.Path.home() / "Library/Application Support/Fjord Computer/router-trace.jsonl"
 OUT = DATA / "traffic" / "decisions.jsonl"
 FOLLOW = ("picked", "corrected", "cancelled")
 SENDS = ("send", "start", "intent")

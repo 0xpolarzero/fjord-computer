@@ -2,11 +2,11 @@ import Foundation
 
 // The Router's second surface: Fjord Computer itself (Triage's categories, groups and inbox, and the settings), besides
 // the Claude Code sessions. It never touches GitHub. Reads answer from the store; a change applies at once and leaves a
-// record in the history (a card with Open and Revert, see LookoutChange).
+// record in the history (a card with Open and Revert, see FjordChange).
 
 // MARK: - JSON
 
-enum LookoutJSON {
+enum FjordJSON {
     static func object<T: Encodable>(_ value: T) -> Any {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -46,7 +46,7 @@ enum LookoutJSON {
 // MARK: - The tools
 
 @MainActor
-enum LookoutTools {
+enum FjordTools {
     struct Tool {
         let name: String
         let doc: String
@@ -64,7 +64,7 @@ enum LookoutTools {
     static let tools: [Tool] = [
         Tool(name: "list_categories", doc: "Lists Triage's inbox categories in priority order (a thing is in the first one a rule matches), each with its rules as JSON (the form create_category and update_category take), a plain-words summary of each rule, its actions and how many open and unread things it holds. Also says how many things are done.", fields: [], reads: true),
         Tool(name: "get_category", doc: "One category as JSON (the form update_category takes), with its rules in plain words and its open things.", fields: [categoryRef], reads: true),
-        Tool(name: "create_category", doc: "Creates an inbox category: a named, coloured list of the PRs, issues and workflows that need the user, by rules. It goes last (or at `at`, 0 is first); a thing is in the first category that matches. Rejected, with every reason as the editor shows it, if a rule can never match. Actions run by themselves for things that come in: add one only when the user asked, and never a GitHub comment on your own.\(changeNote)\n\n\(LookoutDocs.ruleGrammar)",
+        Tool(name: "create_category", doc: "Creates an inbox category: a named, coloured list of the PRs, issues and workflows that need the user, by rules. It goes last (or at `at`, 0 is first); a thing is in the first category that matches. Rejected, with every reason as the editor shows it, if a rule can never match. Actions run by themselves for things that come in: add one only when the user asked, and never a GitHub comment on your own.\(changeNote)\n\n\(FjordDocs.ruleGrammar)",
              fields: [.init("category", .named("Category"), "The category."), .init("at", .int, "Position, 0 is first. Left out: last.", fallback: .absent)]),
         Tool(name: "update_category", doc: "Changes a category. Give its `id` and the fields that change (name, symbol, color, rules, notifies, hidden, actions); fields left out keep their value, and `rules` or `actions`, when given, replace the whole list (keep each rule's `id` from get_category so its history stays). The same JSON and the same refusals as create_category.\(changeNote)",
              fields: [.init("category", .named("Category"), "The category's `id` and what changes.")]),
@@ -92,8 +92,8 @@ enum LookoutTools {
         Tool(name: "set_setting", doc: "Changes one setting (get_settings lists the keys and what each takes).\(changeNote)", fields: [],
              schema: ["type": "object", "additionalProperties": false, "required": ["key", "value"],
                       "properties": [
-                          "key": ["type": "string", "enum": LookoutSetting.all.map(\.key)],
-                          "value": ["description": LookoutSetting.all.map { s in
+                          "key": ["type": "string", "enum": FjordSetting.all.map(\.key)],
+                          "value": ["description": FjordSetting.all.map { s in
                               "\(s.key): " + (String(data: (try? JSONSerialization.data(withJSONObject: s.schema, options: [.sortedKeys])) ?? Data(), encoding: .utf8) ?? "")
                           }.joined(separator: "; ")],
                       ]] as [String: Any]),
@@ -115,12 +115,12 @@ enum LookoutTools {
 // MARK: - Running them
 
 extension RouterTools {
-    func lookout(_ name: String, _ args: [String: Any], store: Store, ticket: Ticket) async -> RouterRPC.ToolResult? {
-        guard LookoutTools.names.contains(name) else { return nil }
+    func fjord(_ name: String, _ args: [String: Any], store: Store, ticket: Ticket) async -> RouterRPC.ToolResult? {
+        guard FjordTools.names.contains(name) else { return nil }
         // Offered only with Triage on (`RouterRun.toolNames`), and refused if it was switched off since the run began.
-        if LookoutTools.triageNames.contains(name), !store.triageOn { return .error("Triage is off; nothing was done") }
+        if FjordTools.triageNames.contains(name), !store.triageOn { return .error("Triage is off; nothing was done") }
         do {
-            let reads = LookoutTools.tools.first { $0.name == name }?.reads == true
+            let reads = FjordTools.tools.first { $0.name == name }?.reads == true
             try live(ticket, acting: !reads)
             // What a tool does to the categories and groups is the Router's, in this run, in the log.
             let source = store.inboxSource
@@ -159,7 +159,7 @@ extension RouterTools {
     /// What the Router sent, checked against the tool's own schema (unknown fields, wrong types, missing parts), with the
     /// left-out fields filled in.
     private func checked(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
-        guard let shape = LookoutTools.shape(of: name) else { return args }
+        guard let shape = FjordTools.shape(of: name) else { return args }
         return (try Shapes.normalize(args, as: shape)) as? [String: Any] ?? args
     }
 
@@ -191,7 +191,7 @@ extension RouterTools {
     private func stamp(_ date: Date) -> String { Shapes.formatDate(date) }
 
     private func categoryJSON(_ store: Store, _ c: InboxCategory, counts: Bool = true) -> [String: Any] {
-        var object = LookoutJSON.object(c) as? [String: Any] ?? [:]
+        var object = FjordJSON.object(c) as? [String: Any] ?? [:]
         let words = RuleWords(store: store)
         object["summary"] = c.rules.map(words.summary)
         if counts {
@@ -233,7 +233,7 @@ extension RouterTools {
     /// The record of a change, for the card. A change to what an earlier change of this turn touched joins that one's
     /// record (one card, one `changed` in the decision); nil when the two together change nothing, and none is kept.
     @discardableResult
-    private func record(_ store: Store, _ change: LookoutChange) -> LookoutChange? {
+    private func record(_ store: Store, _ change: FjordChange) -> FjordChange? {
         var state = store.router
         // A change that waits for the user stands alone: nothing joins it, and it joins nothing.
         for id in turnChanges.reversed() where change.pending == nil {
@@ -264,7 +264,7 @@ extension RouterTools {
         return change
     }
 
-    private func done(_ store: Store, _ change: LookoutChange?, _ extra: [String: Any] = [:]) -> String {
+    private func done(_ store: Store, _ change: FjordChange?, _ extra: [String: Any] = [:]) -> String {
         var out = extra
         guard let change else {
             out["changed"] = "nothing"
@@ -284,24 +284,24 @@ extension RouterTools {
     }
 
     /// A change the Router makes: applied by `apply` (which gives the record, as it came out) and recorded, unless the gate
-    /// holds it for the user (`LookoutGate`): then nothing is applied, and the record waits for their Apply.
+    /// holds it for the user (`FjordGate`): then nothing is applied, and the record waits for their Apply.
     /// `reason`: why it waits, worked out by the caller (the gate's own reasons still apply).
-    private func commit(_ store: Store, _ change: LookoutChange, reason given: String? = nil,
-                        apply: () throws -> LookoutChange) throws -> LookoutChange? {
+    private func commit(_ store: Store, _ change: FjordChange, reason given: String? = nil,
+                        apply: () throws -> FjordChange) throws -> FjordChange? {
         if !undoesThisTurn(store, change),
-           let reason = LookoutGate.reason(change, request: turnText ?? "", categories: store.categories,
+           let reason = FjordGate.reason(change, request: turnText ?? "", categories: store.categories,
                                            pending: store.router.changes.filter(\.isPending)) ?? given {
             var waiting = change
             waiting.pending = reason
-            if case .category(_, _, let after?) = change.patch { waiting.groups = LookoutGate.groups(of: after, in: store.groups) }
+            if case .category(_, _, let after?) = change.patch { waiting.groups = FjordGate.groups(of: after, in: store.groups) }
             return record(store, waiting)
         }
         return record(store, try apply())
     }
 
     /// Whether a deletion takes away what this turn made (and applied): nothing that was there before goes.
-    private func undoesThisTurn(_ store: Store, _ change: LookoutChange) -> Bool {
-        let made: (LookoutChange.Patch) -> UUID? = {
+    private func undoesThisTurn(_ store: Store, _ change: FjordChange) -> Bool {
+        let made: (FjordChange.Patch) -> UUID? = {
             switch $0 {
             case .category(_, nil, let after?): after.id
             case .group(_, nil, let after?): after.id
@@ -353,7 +353,7 @@ extension RouterTools {
             }
             old = found
             // What isn't given keeps its value; a rule that comes back by its id keeps its date.
-            var merged = LookoutJSON.object(found) as? [String: Any] ?? [:]
+            var merged = FjordJSON.object(found) as? [String: Any] ?? [:]
             for (key, value) in given { merged[key] = value }
             if var rules = given["rules"] as? [[String: Any]] {
                 for i in rules.indices where rules[i]["createdAt"] == nil {
@@ -381,21 +381,21 @@ extension RouterTools {
             }
             json["rules"] = rules
         }
-        var c = try LookoutJSON.decode(InboxCategory.self, from: json)
+        var c = try FjordJSON.decode(InboxCategory.self, from: json)
         c.name = c.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reasons = LookoutValidate.category(c, old: old, in: store)
+        let reasons = FjordValidate.category(c, old: old, in: store)
         guard reasons.isEmpty else { throw Failure("Not saved:\n- " + reasons.joined(separator: "\n- ")) }
         var warnings: [String] = []
         if c.rules.isEmpty { warnings.append("It has no rules, so nothing will be in it.") }
         var notes: [String: Any] = warnings.isEmpty ? [:] : ["warnings": warnings]
-        let change: LookoutChange
+        let change: FjordChange
         if let old {
             guard let index = store.categories.firstIndex(where: { $0.id == old.id }) else { throw Failure("The category is gone") }
             guard c != old else { return Self.json(["changed": "nothing", "note": "It already is that."]) }
-            change = LookoutChange(title: LookoutChange.title(forCategory: old, c), patch: .category(index: index, before: old, after: c))
+            change = FjordChange(title: FjordChange.title(forCategory: old, c), patch: .category(index: index, before: old, after: c))
         } else {
             let at = min(max((checkedInput["at"] as? Int) ?? store.categories.count, 0), store.categories.count)
-            change = LookoutChange(title: LookoutChange.title(forCategory: nil, c), patch: .category(index: at, before: nil, after: c))
+            change = FjordChange(title: FjordChange.title(forCategory: nil, c), patch: .category(index: at, before: nil, after: c))
         }
         let recorded = try commit(store, change) { try store.applyPatch(change.patch); return change }
         notes["category"] = categoryJSON(store, c)
@@ -405,7 +405,7 @@ extension RouterTools {
     func deleteCategory(_ store: Store, _ args: [String: Any]) throws -> String {
         let c = try category(store, Self.string(try checked("delete_category", args), "category"))
         guard let index = store.categories.firstIndex(where: { $0.id == c.id }) else { throw Failure("The category is gone") }
-        let change = LookoutChange(title: LookoutChange.title(forCategory: c, nil), patch: .category(index: index, before: c, after: nil))
+        let change = FjordChange(title: FjordChange.title(forCategory: c, nil), patch: .category(index: index, before: c, after: nil))
         return done(store, try commit(store, change) { try store.applyPatch(change.patch); return change })
     }
 
@@ -419,7 +419,7 @@ extension RouterTools {
         }
         let before = store.categories.map(\.id)
         guard before != wanted else { return Self.json(["changed": "nothing", "note": "They already are in that order."]) }
-        let change = LookoutChange(title: "Reordered categories", patch: .order(before: before, after: wanted))
+        let change = FjordChange(title: "Reordered categories", patch: .order(before: before, after: wanted))
         let recorded = try commit(store, change) { try store.applyPatch(change.patch); return change }
         return done(store, recorded, ["order": store.categories.map(\.title)])
     }
@@ -427,8 +427,8 @@ extension RouterTools {
     // MARK: Groups
 
     private func groupJSON(_ store: Store, _ g: InboxGroup) -> [String: Any] {
-        var object = LookoutJSON.object(g) as? [String: Any] ?? [:]
-        object["usedBy"] = LookoutValidate.users(of: g.id, in: store)
+        var object = FjordJSON.object(g) as? [String: Any] ?? [:]
+        object["usedBy"] = FjordValidate.users(of: g.id, in: store)
         return object
     }
 
@@ -449,25 +449,25 @@ extension RouterTools {
                 throw Failure("No group with id \(id); call list_groups")
             }
             old = found
-            var merged = LookoutJSON.object(found) as? [String: Any] ?? [:]
+            var merged = FjordJSON.object(found) as? [String: Any] ?? [:]
             for (key, value) in given { merged[key] = value }
             given = merged
         }
         let checkedInput = try checked(tool, ["group": given])
-        var g = try LookoutJSON.decode(InboxGroup.self, from: checkedInput["group"] as Any)
+        var g = try FjordJSON.decode(InboxGroup.self, from: checkedInput["group"] as Any)
         g.name = g.name.trimmingCharacters(in: .whitespacesAndNewlines)
         var seen = Set<String>()
         g.members = g.members.map { $0.trimmingCharacters(in: .whitespaces) }.map { g.kind == .people && $0.hasPrefix("@") ? String($0.dropFirst()) : $0 }
             .filter { seen.insert($0.lowercased()).inserted }
-        let reasons = LookoutValidate.group(g, old: old, in: store)
+        let reasons = FjordValidate.group(g, old: old, in: store)
         guard reasons.isEmpty else { throw Failure("Not saved:\n- " + reasons.joined(separator: "\n- ")) }
-        let change: LookoutChange
+        let change: FjordChange
         if let old {
             guard let index = store.groups.firstIndex(where: { $0.id == old.id }) else { throw Failure("The group is gone") }
             guard g != old else { return Self.json(["changed": "nothing", "note": "It already is that."]) }
-            change = LookoutChange(title: LookoutChange.title(forGroup: old, g), patch: .group(index: index, before: old, after: g))
+            change = FjordChange(title: FjordChange.title(forGroup: old, g), patch: .group(index: index, before: old, after: g))
         } else {
-            change = LookoutChange(title: LookoutChange.title(forGroup: nil, g), patch: .group(index: store.groups.count, before: nil, after: g))
+            change = FjordChange(title: FjordChange.title(forGroup: nil, g), patch: .group(index: store.groups.count, before: nil, after: g))
         }
         let recorded = try commit(store, change) { try store.applyPatch(change.patch); return change }
         return done(store, recorded, ["group": groupJSON(store, g)])
@@ -475,10 +475,10 @@ extension RouterTools {
 
     func deleteGroup(_ store: Store, _ args: [String: Any]) throws -> String {
         let g = try group(store, Self.string(try checked("delete_group", args), "group"))
-        let users = LookoutValidate.users(of: g.id, in: store)
+        let users = FjordValidate.users(of: g.id, in: store)
         guard users.isEmpty else { throw Failure("“\(g.name)” is used by \(users.joined(separator: ", ")): take it out of their rules first") }
         guard let index = store.groups.firstIndex(where: { $0.id == g.id }) else { throw Failure("The group is gone") }
-        let change = LookoutChange(title: LookoutChange.title(forGroup: g, nil), patch: .group(index: index, before: g, after: nil))
+        let change = FjordChange(title: FjordChange.title(forGroup: g, nil), patch: .group(index: index, before: g, after: nil))
         return done(store, try commit(store, change) { try store.applyPatch(change.patch); return change })
     }
 
@@ -575,12 +575,12 @@ extension RouterTools {
         let changes = wanted.map { e in EntryChange(thing: e.id, before: store.marks[e.id], after: Self.marked(store.marks[e.id], e, state, now)) }
         let n = changes.count
         let title = state == "restore" ? "Restored \(n)" : "Marked \(n) \(state)"
-        let change = LookoutChange(title: title, patch: .marks(state: state, changes))
+        let change = FjordChange(title: title, patch: .marks(state: state, changes))
         // Bound to what your message named as the turn began, and counted over the turn: split into small calls, many still wait.
         let named = Set(wanted.filter { e in
             turnNamed.things.contains(e.id) || c.map { turnNamed.categories.contains($0.id) } == true
         }.map(\.id))
-        let bound = LookoutGate.marksReason(changes, named: named, markedThisTurn: turnMarked)
+        let bound = FjordGate.marksReason(changes, named: named, markedThisTurn: turnMarked)
         turnMarked.formUnion(changes.map(\.thing))
         let recorded = try commit(store, change, reason: bound) { try store.applyPatch(change.patch); return change }
         return done(store, recorded, ["things": wanted.prefix(10).map { reference($0.thing) }])
@@ -620,7 +620,7 @@ extension RouterTools {
 
     func getSettings(_ store: Store, _ args: [String: Any]) throws -> String {
         _ = try checked("get_settings", args)
-        let rows = LookoutSetting.all.map { s -> [String: Any] in
+        let rows = FjordSetting.all.map { s -> [String: Any] in
             let value = s.read(store)
             var shown: Any = s.display(value)
             if case .on(let on) = value { shown = on } else if case .number(let n) = value { shown = Int(n) }
@@ -630,19 +630,19 @@ extension RouterTools {
     }
 
     func setSetting(_ store: Store, _ args: [String: Any]) throws -> String {
-        guard let key = args["key"] as? String, let setting = LookoutSetting.named(key) else {
-            throw Failure("`key` must be one of " + LookoutSetting.all.map(\.key).joined(separator: ", "))
+        guard let key = args["key"] as? String, let setting = FjordSetting.named(key) else {
+            throw Failure("`key` must be one of " + FjordSetting.all.map(\.key).joined(separator: ", "))
         }
         guard args.keys.allSatisfy({ ["key", "value"].contains($0) }), let raw = args["value"] else { throw Failure("Give `key` and `value`") }
         let after: SettingValue
         do { after = try setting.parse(raw, Date()) } catch { throw Failure("`value` for \(key) \(error.localizedDescription)") }
         let before = setting.read(store)
         guard before != after else { return Self.json(["changed": "nothing", "note": "\(key) already is \(setting.display(after))."]) }
-        let asked = LookoutChange(title: setting.title(after: after, word: raw as? String), patch: .setting(key: key, before: before, after: after))
+        let asked = FjordChange(title: setting.title(after: after, word: raw as? String), patch: .setting(key: key, before: before, after: after))
         let recorded = try commit(store, asked) {
             do { try setting.apply(store, after) } catch { throw Failure("Couldn't change \(key): \(error.localizedDescription)") }
             let now = setting.read(store)
-            return LookoutChange(title: setting.title(after: now, word: raw as? String), patch: .setting(key: key, before: before, after: now))
+            return FjordChange(title: setting.title(after: now, word: raw as? String), patch: .setting(key: key, before: before, after: now))
         }
         return done(store, recorded, ["setting": key, "value": setting.display(recorded?.pending == nil ? setting.read(store) : after)])
     }

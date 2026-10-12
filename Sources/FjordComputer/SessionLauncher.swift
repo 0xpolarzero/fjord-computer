@@ -94,14 +94,14 @@ final class SessionLauncher {
         } catch let waiting as SessionStart.NotRunning {
             // Made, but the app doesn't run it yet: started, its first message held (never waited for here, where the inbox's
             // other actions would wait behind it).
-            store.noteLookoutStarted(waiting.sessionID)
+            store.noteFjordStarted(waiting.sessionID)
             let project = store.folderName(folder)
             throw SessionStart.Held(waiting: waiting, title: title, project: project,
                                     ready: Prepared(text: firstMessage, original: firstMessage, rephrased: false, newSessionIn: project,
                                                     body: firstMessage),
                                     settings: requested)
         }
-        store.noteLookoutStarted(started.sessionID)
+        store.noteFjordStarted(started.sessionID)
         try await effects.pluginReady(started.cliID)
         // Only a plugin that says it takes settings is sent them; an older one gets the plain message.
         let supported = requested == nil ? false : await effects.supportsSettings(started.cliID)
@@ -286,10 +286,10 @@ enum ActionSessions {
 
 extension Store {
     /// Marks a session as started by Fjord Computer: its cards are never held for the app showing it (see
-    /// `RouterState.lookoutStarted`).
-    func noteLookoutStarted(_ session: String, at date: Date = Date()) {
-        guard router.lookoutStarted[session] == nil else { return }
-        router.lookoutStarted[session] = date
+    /// `RouterState.fjordStarted`).
+    func noteFjordStarted(_ session: String, at date: Date = Date()) {
+        guard router.fjordStarted[session] == nil else { return }
+        router.fjordStarted[session] = date
     }
 
     /// Tags a session with what started it; its cards (open or not yet made) say so.

@@ -84,7 +84,7 @@ import Testing
         let ui = UIState(persists: false, edge: .right)
         s.finish(entry(s, 1)!)
         // The line as the inbox peek shows it, its Undo button on the Tab ring.
-        let host = NSHostingView(rootView: LookoutHub(store: s, ui: ui, hub: HubState()).undoLine.frame(width: 400))
+        let host = NSHostingView(rootView: FjordHub(store: s, ui: ui, hub: HubState()).undoLine.frame(width: 400))
         let window = AwayWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 60), styleMask: .titled, backing: .buffered, defer: false)
         window.contentView = host
         window.isReleasedWhenClosed = false

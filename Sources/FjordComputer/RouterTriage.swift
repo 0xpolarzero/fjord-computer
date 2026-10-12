@@ -778,7 +778,7 @@ extension Store {
         guard thing.kind == .pr else { return true }
         guard let number = thing.number, let ref = RouterWaits.ref(thing) else { return false }
         let lower = message.lowercased()
-        return LookoutGate.mentions(lower, ref: ref) || Self.linksPR(lower, repo: thing.repo, number: number)
+        return FjordGate.mentions(lower, ref: ref) || Self.linksPR(lower, repo: thing.repo, number: number)
             || lower.range(of: #"(?<![\w/])#\#(number)(?!\d)"#, options: .regularExpression) != nil
     }
 

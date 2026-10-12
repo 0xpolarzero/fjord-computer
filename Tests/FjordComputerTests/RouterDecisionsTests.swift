@@ -20,13 +20,13 @@ import Testing
 
     @Test func aChangeJoinsItsRunOrStandsAlone() async throws {
         let s = store()
-        let alone = LookoutChange(title: "Changed snooze", patch: .setting(key: "k", before: .on(false), after: .on(true)))
+        let alone = FjordChange(title: "Changed snooze", patch: .setting(key: "k", before: .on(false), after: .on(true)))
         s.logChange(alone)
         #expect(s.router.decisions.count == 1 && s.router.decisions[0].trigger == .system)
         #expect(s.router.decisions[0].done == [.changed(alone.id)] && s.router.decisions[0].links.changes == [alone.id])
 
         let run = s.logDecision(RouterDecision(trigger: .you("snooze")))
-        let joined = LookoutChange(title: "Changed other", patch: .setting(key: "k", before: .on(false), after: .on(true)))
+        let joined = FjordChange(title: "Changed other", patch: .setting(key: "k", before: .on(false), after: .on(true)))
         s.logChange(joined, into: run)
         #expect(s.router.decisions.count == 2)
         #expect(s.router.decisions[1].done == [.changed(joined.id)])
@@ -42,7 +42,7 @@ import Testing
         let change = try #require(s.router.changes.last)
         #expect(s.router.decisions.count == 1 && s.router.decisions[0].links.changes == [change.id])
         #expect(s.router.decisions[0].outcome == .done)
-        s.revertLookoutChange(change.id)
+        s.revertFjordChange(change.id)
         #expect(s.router.decisions[0].outcome == .reverted)
         #expect(s.router.decisions[0].summary == "reverted")
     }
@@ -81,7 +81,7 @@ import Testing
 
     @Test func theEntryOfAChangeWaitingForYourApplyOutlivesTheCap() {
         var state = RouterState()
-        var change = LookoutChange(title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
+        var change = FjordChange(title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))
         change.pending = "asks first"
         state.changes = [change]
         state.log(RouterDecision(trigger: .you("change it"), done: [.changed(change.id)], links: .init(changes: [change.id])))

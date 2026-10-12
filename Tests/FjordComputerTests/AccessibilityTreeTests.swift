@@ -38,7 +38,7 @@ enum AccessibilityTree {
         let store = Store()
         Demo.populate(store, scenario)
         let hub = HubState()
-        let view = LookoutHub(store: store, ui: UIState(persists: false, edge: edge), hub: hub)
+        let view = FjordHub(store: store, ui: UIState(persists: false, edge: edge), hub: hub)
             .frame(width: size.width, height: size.height, alignment: .topLeading)
         let hosting = NSHostingView(rootView: view)
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: .borderless, backing: .buffered, defer: false)

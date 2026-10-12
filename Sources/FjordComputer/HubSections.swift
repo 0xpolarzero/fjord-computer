@@ -11,7 +11,7 @@ import SwiftUI
 //   the layout adds the one outer inset, so nothing here pads itself from the outside;
 // - every control has a tooltip: a verb phrase, then what it does and its shortcut, read from the user's settings.
 
-extension LookoutHub {
+extension FjordHub {
     // MARK: Inbox
 
     /// The GitHub mark: opens the window on the first category with something unread (the first, when none has).

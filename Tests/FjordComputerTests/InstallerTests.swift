@@ -14,7 +14,7 @@ import Testing
         ["matcher": "AskUserQuestion|ExitPlanMode", "hooks": [["type": "command", "command": installer.command, "timeout": 86400]]]
     }
 
-    @Test func anOlderLookoutsQuestionsOnlyHookIsOutdatedAndMovesToTheNewMatcher() throws {
+    @Test func anOlderFjordsQuestionsOnlyHookIsOutdatedAndMovesToTheNewMatcher() throws {
         let dir = TempDir()
         let installer = FormHookInstaller(claudeDir: dir.url)
         try installer.install(executable: exe)

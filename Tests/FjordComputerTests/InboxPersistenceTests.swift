@@ -361,10 +361,10 @@ import Testing
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try enc.encode(value), as: UTF8.self) }
-        var waiting = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
+        var waiting = FjordChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
                                     patch: .order(before: [], after: []))
         waiting.pending = "made by the Router"
-        let applied = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_100), title: "Changed the order back",
+        let applied = FjordChange(date: Date(timeIntervalSince1970: 1_800_000_100), title: "Changed the order back",
                                     patch: .order(before: [], after: []))
         let linked = RouterDecision(at: Date(timeIntervalSince1970: 1_800_000_200), trigger: .you("hi"), outcome: .done)
         // Its entry can't be read: the change waiting for your Apply is still reached, through an entry of
@@ -389,7 +389,7 @@ import Testing
         let file = folder.appendingPathComponent("state.json")
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
-        let good = LookoutChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
+        let good = FjordChange(date: Date(timeIntervalSince1970: 1_800_000_000), title: "Changed the order",
                                  patch: .order(before: [], after: []))
         let original = Data("""
         {"settings": {"pollInterval": 60, "notifications": true},

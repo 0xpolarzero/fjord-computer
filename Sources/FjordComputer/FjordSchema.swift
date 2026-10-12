@@ -3,7 +3,7 @@ import Foundation
 // What the Router is told about Triage's own data: one description of each value (categories, rules, conditions,
 // groups) from which the tools' JSON schemas, the grammar written in their descriptions, the examples, the defaults
 // filled in and the check of what the Router sends are all made. A change to the model that this does not follow fails
-// a test (see LookoutSchemaTests), so the Router is never told something the model doesn't take.
+// a test (see RouterFjordTests, its schemas), so the Router is never told something the model doesn't take.
 //
 // The JSON is the model's own Codable form (enums with a payload are `{"case": {…}}`), so what `get_category` shows is what
 // `update_category` takes back.

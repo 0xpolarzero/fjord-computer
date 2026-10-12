@@ -23,7 +23,7 @@ struct CategorySection: Codable, Hashable, Identifiable {
     var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : name }
 
     /// Not an SF Symbol: the GitHub mark, drawn by `GitHubMark`.
-    static let githubMark = "lookout.github"
+    static let githubMark = "fjord.github"
     /// The section every inbox starts with, holding every category: the bar as it always looked.
     static let github = CategorySection(id: UUID(uuidString: "6A1B0000-0000-4000-8000-000000000001")!, name: "GitHub", symbol: githubMark)
 }

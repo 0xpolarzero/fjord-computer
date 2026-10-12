@@ -261,7 +261,7 @@ import Testing
         #expect(s.routerTriager.telling.isEmpty)
     }
 
-    @Test func theInboxsChecksTurnedOffWhileATurnIsReadGoNowhereAndAreBoundOnlyByLookout() async {
+    @Test func theInboxsChecksTurnedOffWhileATurnIsReadGoNowhereAndAreBoundOnlyByFjord() async {
         for when in ["reading", "answering"] {
             let (s, _) = store(watch: ciWatch, things: [ci(.pending)])
             s.router.cards = [RouterCard(id: "a#t3", sessionID: "a", kind: .done, title: "Deploy fix", folder: "/code/app",
@@ -477,7 +477,7 @@ import Testing
         #expect(sentU.messages.count == 1)
     }
 
-    @Test func continuingAutomaticallySendsOnItsOwnAsLookoutsRun() async {
+    @Test func continuingAutomaticallySendsOnItsOwnAsFjordsRun() async {
         let (s, sent) = store(watch: ciWatch, things: [ci(.pending)], auto: true)
         var ready = 0
         s.routerTriager.onReady = { _ in ready += 1 }
@@ -860,9 +860,9 @@ import Testing
         #expect(!s.waitNamed(wfDev, in: "Waiting for Release on o/app on main and dev", by: a))
         #expect(!s.waitNamed(wfDev, in: "Waiting for Release on o/app on develop", by: a))
         // The gate's own reading of a ref is as whole.
-        #expect(LookoutGate.names("mark acme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
-        #expect(!LookoutGate.names("mark acme/api#123 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
-        #expect(!LookoutGate.names("mark xacme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
+        #expect(FjordGate.names("mark acme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
+        #expect(!FjordGate.names("mark acme/api#123 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
+        #expect(!FjordGate.names("mark xacme/api#12 done", thing: InboxFixture.pr(12, repo: "acme/api"), category: nil))
     }
 
     @Test func aSessionsOwnChoiceOverridesTheDefault() async {

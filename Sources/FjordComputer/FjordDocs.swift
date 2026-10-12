@@ -3,7 +3,7 @@ import Foundation
 /// The words the Router reads about Triage's data, written from the shapes (so they follow the model) and a few worked
 /// examples (each checked by a test: it must take, decode and have no problems).
 @MainActor
-enum LookoutDocs {
+enum FjordDocs {
     /// Worked examples of a category as the Router writes it (left-out fields are filled in).
     static let examples: [(title: String, json: String)] = [
         ("Review requests", #"{"name":"Review requests","symbol":"eye","color":"amber","rules":[{"scope":{"kinds":["pr"],"to":{"include":[{"me":{}}]},"toRoles":["reviewRequested"]}}]}"#),
