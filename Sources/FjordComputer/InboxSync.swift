@@ -1931,7 +1931,7 @@ enum InboxCheck {
                 ]),
                 InboxCategory(name: "All mine", symbol: "list.bullet", color: .blue, rules: [Rule(scope: scope, createdAt: past)]),
                 InboxCategory(name: "CI", symbol: "xmark.seal", color: .red, rules: [
-                    Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("amontlabs/lcu"), .repo("0xpolarzero/lookout")])),
+                    Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("amontlabs/lcu"), .repo("0xpolarzero/fjord-computer")])),
                          conditions: [.workflow([.failing])], createdAt: past),
                 ]),
                 InboxCategory(name: "Probe", symbol: "magnifyingglass", color: .gray, rules: [

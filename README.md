@@ -11,7 +11,7 @@ Each works alone. Triage alone hides the actions that would start a Claude sessi
 
 ## Install
 
-Grab the latest zip from [Releases](https://github.com/0xpolarzero/lookout/releases), move **Fjord Computer.app** to `/Applications`, then clear the quarantine once (the app isn't notarized yet):
+Grab the latest zip from [Releases](https://github.com/0xpolarzero/fjord-computer/releases), move **Fjord Computer.app** to `/Applications`, then clear the quarantine once (the app isn't notarized yet):
 
     xattr -dr com.apple.quarantine "/Applications/Fjord Computer.app"
 
