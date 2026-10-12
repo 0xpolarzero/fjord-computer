@@ -96,11 +96,15 @@ def validate_episode(episode):
 
 def _shipped_weights():
     """Read only Swift's numeric tables; source text never controls execution."""
-    source = ROUTER.parents[1] / "Sources" / "Lookout" / "RouterRoute.swift"
+    # ROUTER_SWIFT: an earlier RouterRoute.swift (e.g. from git) to replay an earlier Lookout as a baseline.
+    source = Path(os.environ.get("ROUTER_SWIFT") or ROUTER.parents[1] / "Sources" / "Lookout" / "RouterRoute.swift")
     text = source.read_text()
     tables = []
     for name in ("weights", "sureness", "surenessIntent"):
         match = re.search(r"static let " + name + r": \[String: Double\] = \[(.*?)\n    \]", text, re.S)
+        if match is None and name == "surenessIntent":  # before round 4 intents shared the sureness
+            tables.append(tables[1])
+            continue
         if match is None:
             raise RuntimeError("shipped Swift fusion table missing")
         tables.append({key: float(value) for key, value in re.findall(r'"([\w]+)":\s*(-?[\d.]+)', match[1])})
