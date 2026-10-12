@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "4817", "--directory", "docs/design/fjord"],
       "port": 4817
+    },
+    {
+      "name": "router-flight",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4820", "--directory", "docs/design/router-flight"],
+      "port": 4820
     }
   ]
 }
