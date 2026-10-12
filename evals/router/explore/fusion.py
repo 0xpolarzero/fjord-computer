@@ -413,8 +413,11 @@ def fit_conf(items, w, l2=1.0, feats=CASE_FEATURES):
 def confidence(r, c, fs, w, v):
     P = probs(fs, w)
     cf = case_features(r, c, fs, P)
-    z = sum(v.get(k, 0) * x for k, x in cf.items())
-    return max(P.items(), key=lambda x: x[1])[0], 1 / (1 + math.exp(-z))
+    top = max(P.items(), key=lambda x: x[1])[0]
+    # An intent pick may carry its own sureness table (Lookout's RouteFusion.surenessIntent).
+    table = v["_intent"] if top in INTENTS and isinstance(v.get("_intent"), dict) else v
+    z = sum(table.get(k, 0) * x for k, x in cf.items() if not isinstance(table.get(k, 0), dict))
+    return top, 1 / (1 + math.exp(-z))
 
 
 def load_eval(fmt, sets):

@@ -99,12 +99,14 @@ def _shipped_weights():
     source = ROUTER.parents[1] / "Sources" / "Lookout" / "RouterRoute.swift"
     text = source.read_text()
     tables = []
-    for name in ("weights", "sureness"):
+    for name in ("weights", "sureness", "surenessIntent"):
         match = re.search(r"static let " + name + r": \[String: Double\] = \[(.*?)\n    \]", text, re.S)
         if match is None:
             raise RuntimeError("shipped Swift fusion table missing")
         tables.append({key: float(value) for key, value in re.findall(r'"([\w]+)":\s*(-?[\d.]+)', match[1])})
-    return tuple(tables)
+    weights, sureness, intent = tables
+    # An intent pick's sureness has its own table (RouteFusion.surenessIntent); fusion.confidence reads it there.
+    return weights, {**sureness, "_intent": intent}
 
 
 def _legacy_modules(format_name, policy_name):

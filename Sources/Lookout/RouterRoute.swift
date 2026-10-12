@@ -379,7 +379,13 @@ enum RouteFusion {
     ]
     static let sureness: [String: Double] = [
         "bias": -0.47, "lPtop": 0.69, "lgap": 0.09, "ljev": -0.10, "agree": 0.06, "u": -0.47, "lenlog": 0.00,
-        "recent2": 0.10, "top_fin0": 0.07, "top_intent": -0.24, "top_new": 0.81, "top_reply": 0.32,
+        "recent2": 0.10, "top_fin0": 0.07, "top_intent": 0.46, "top_new": 0.81, "top_reply": 0.32,
+    ]
+    /// The sureness of a pick that is one of Lookout's intents: the earlier fit, which saw them. Real moments can't
+    /// refit it, since your transcripts predate the intents (every intent there would count as wrong).
+    static let surenessIntent: [String: Double] = [
+        "bias": 0.88, "lPtop": 1.28, "lgap": -0.3, "ljev": -0.21, "agree": 0.44, "u": -1.44, "lenlog": -0.35,
+        "recent2": -0.4, "top_fin0": -0.02, "top_intent": 0.46, "top_new": 0.82, "top_reply": 0.31,
     ]
     /// The rules' send stands when the fused P gives it at least this and the fused pick is the same at `rulesSure`;
     /// else the fused pick is sent at `sure`. On real moments the rules made 24 of 25 wrong sends; the fused pick at 0.9
@@ -461,7 +467,8 @@ enum RouteFusion {
             "recent2": recent >= 2 ? 1 : 0, "top_fin0": x["fin0"] ?? 0,
             "top_intent": RouterRun.Intent(rawValue: top) != nil ? 1 : 0, "top_new": x["new"] ?? 0, "top_reply": x["reply"] ?? 0,
         ]
-        let z = moment.reduce(0) { $0 + (sureness[$1.key] ?? 0) * $1.value }
+        let table = RouterRun.Intent(rawValue: top) != nil ? surenessIntent : sureness
+        let z = moment.reduce(0) { $0 + (table[$1.key] ?? 0) * $1.value }
         return (top, 1 / (1 + exp(-z)))
     }
 
