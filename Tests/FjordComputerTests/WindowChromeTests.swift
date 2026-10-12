@@ -148,4 +148,42 @@ import Testing
         await click(towards: .now, from: 4, to: 40)
         #expect(model.pane == .now)
     }
+
+    /// Beside a rail, a scroll over the page's first 180 points scrolls the page: it went to the sidebar's scroll view, laid
+    /// out at its full width under the rail's clip, so the Router's history (or Now) wouldn't scroll with the pointer there.
+    @Test(arguments: [RouterPane.history, .now])
+    func aScrollBesideARailIsThePages(pane: RouterPane) async throws {
+        guard #available(macOS 26, *) else { return }
+        let store = Store()
+        store.persists = false
+        Demo.populate(store, .router)
+        store.interceptOpen = { _ in }
+        store.settings.toolsPicked = true
+        let model = RouterModel()
+        model.show(pane)
+        let root = AppRootView(store: store, navigator: AppNavigator(start: .router, defaults: nil), routerModel: model,
+                               hub: HubState(), checksClaudeCode: false, sidebar: SidebarState(defaults: nil, collapsed: true))
+        let size = AppWindowController.minSize
+        let hosting = NSHostingView(rootView: root)
+        let window = AwayWindow(contentRect: NSRect(origin: .zero, size: size),
+                                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                backing: .buffered, defer: false)
+        AppWindowController.style(window)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        await waitUntilSteady(turns: 8) { hosting.layoutSubtreeIfNeeded(); return scrolls(hosting).count }
+        let frame = try #require(hosting.superview)
+        let leading = WindowChrome.pageLeading(collapsed: true)
+
+        // The scroll view a wheel over a point goes to: the one enclosing the view the window finds there.
+        for x in stride(from: leading + 4, through: WindowChrome.inset + AppRootView.sidebarWidth + 8, by: 12) {
+            let point = NSPoint(x: x, y: size.height / 2)
+            let scroll = frame.hitTest(point)?.enclosingScrollView
+            let rect = scroll.map { $0.convert($0.bounds, to: nil) }
+            #expect(rect.map { $0.minX >= leading - 0.5 } == true, "\(pane) at \(x): \(rect.map { "\($0)" } ?? "no scroll")")
+        }
+    }
 }
