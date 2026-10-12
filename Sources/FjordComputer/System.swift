@@ -546,8 +546,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // The Router's runs go with the app.
-        store?.routerDispatcher.stopAll()
+        // The Router's runs go with the app, the actions' too (a send's `claude` process is ended, not left behind).
+        store?.routerDispatcher.stopAll(actions: true)
         store?.flushSave()
     }
 

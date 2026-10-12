@@ -1698,6 +1698,13 @@ import Testing
         #expect(ask.note?.contains("couldn't take it: “Fix the login bug” isn't running") == true)
         #expect(!ask.options.contains { $0.target == "session:local_a" } && ask.options.contains { $0.target == "new:/code/lookout-2" })
         #expect(f.sent.isEmpty && decision(s, b)?.outcome == .pending)
+        // Sent elsewhere and that one couldn't take it either: where it was taken back from isn't offered again.
+        var elsewhere = context
+        elsewhere.notTo = "new:/code/lookout-2"
+        let c = try #require(d.submit(text, context: elsewhere))
+        await finish(d, f, c)
+        let again = try #require(d.askBacks.first { $0.id == c })
+        #expect(!again.options.contains { $0.target == "new:/code/lookout-2" || $0.target == "session:local_a" })
         await waitUntil { f.finishHeld != nil }
         f.finishHeld?.resume()
         await waitUntil { decision(s, a)?.outcome == .done }

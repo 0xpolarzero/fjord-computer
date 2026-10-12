@@ -449,11 +449,16 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     /// An action's message its session couldn't take: asked where it goes instead, among its repo's world without that
-    /// session, why said on the card.
+    /// session (nor the one it was taken back from, when it was sent elsewhere), why said on the card.
     private func couldntReach(_ job: Job, session: String, _ error: Error) {
         guard let store else { return }
         let world = Self.repoWorld(job.context, store: store)
-        let others = (world?.targets ?? []).filter { Self.session(of: $0, store: store) != session }
+        let notTo = job.context.notTo
+        let away = notTo.flatMap { Self.session(of: $0, store: store) }
+        let others = (world?.targets ?? []).filter {
+            let s = Self.session(of: $0, store: store)
+            return s != session && $0 != notTo && (away == nil || s != away)
+        }
         let title = store.claudeSessions[session].map { "“\(RouterDecision.clip($0.title, 40))”" } ?? "Its session"
         let why = error.localizedDescription.split(separator: "\n").first.map(String.init) ?? "it can't take a message now"
         askBack(job, Classification(ranked: others.map { Scored(target: $0, p: 0) }, sure: false, assisted: false),
