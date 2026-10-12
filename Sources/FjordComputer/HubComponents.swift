@@ -240,7 +240,9 @@ struct EntryRow: View {
         .contextMenu { EntryMenu(entry: entry, store: store) }
         .onHover {
             hover = $0
-            if $0 { hub.selection = "i:" + entry.id }
+            // The pointer picks the row it is on, and leaving the row unpicks it (if nothing picked another since), so no
+            // row stays lit once the pointer is off the list.
+            if $0 { hub.selection = "i:" + entry.id } else if hub.selection == "i:" + entry.id { hub.selection = nil }
         }
         .hoverMotion(open)
     }
