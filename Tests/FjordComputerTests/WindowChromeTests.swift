@@ -19,7 +19,8 @@ import Testing
         #expect(WindowChrome.panelTop(collapsed: false) == WindowChrome.inset)
         #expect(WindowChrome.panelTop(collapsed: true) == CDS.TitleBar.header)
         #expect(WindowChrome.panelTop(collapsed: false) + WindowChrome.rowsTop(collapsed: false) == CDS.TitleBar.header)
-        #expect(WindowChrome.rowsTop(collapsed: true) == WindowChrome.inset)
+        // The rows start at the header's line either way, so they don't move as it folds.
+        #expect(WindowChrome.panelTop(collapsed: true) + WindowChrome.rowsTop(collapsed: true) == CDS.TitleBar.header)
         #expect(WindowChrome.panelWidth(collapsed: true) == AppSidebar.railWidth)
         // The nav buttons, centred on the line, end above the rail's top.
         #expect((CDS.TitleBar.header + CDS.TitleBar.button + 2 * AppNavButtons.capsulePad) / 2 <= WindowChrome.panelTop(collapsed: true))

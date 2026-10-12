@@ -22,8 +22,9 @@ enum WindowChrome {
     /// the header's line as a rail, which leaves that line to the three buttons and the nav buttons after them.
     static func panelTop(collapsed: Bool) -> CGFloat { collapsed ? CDS.TitleBar.header : inset }
 
-    /// Room over the sidebar's rows inside the panel: down to the header's line when it is out; the inset on the rail.
-    static func rowsTop(collapsed: Bool) -> CGFloat { collapsed ? inset : CDS.TitleBar.header - inset }
+    /// Room over the sidebar's rows inside the panel: down to the header's line either way (the rail's panel starts there),
+    /// so its rows are at the same height folded or not.
+    static func rowsTop(collapsed: Bool) -> CGFloat { CDS.TitleBar.header - panelTop(collapsed: collapsed) }
 
     /// Where the page starts, from the window's leading edge: the panel and its inset.
     static func pageLeading(collapsed: Bool) -> CGFloat { inset + panelWidth(collapsed: collapsed) }

@@ -89,9 +89,9 @@ struct AppSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if store.triageOn {
-                        // On the rail its label is gone, and its room with it: the icons start under the top bar.
+                        // On the rail its label is gone but its room stays, so every icon is at the same height folded or not.
                         InboxHeading(on: navigator.selection == .categories, collapsed: collapsed) { navigator.go(.categories) }
-                            .frame(height: collapsed ? M.rowGap + 2 : InboxHeading.height, alignment: .bottom)
+                            .frame(height: InboxHeading.height, alignment: .bottom)
                             .clipped()
                             .allowsHitTesting(!collapsed)
                         // Section by section: its row (a caret folds it, its categories' counts then added up on it), then its
@@ -246,8 +246,8 @@ struct AppSidebar: View {
             .disabled(!store.canMoveCategory(category.id, by: 1, among: shown))
     }
 
-    /// Tiles sit a little further apart than rows (28 against 26).
-    private var rowGap: CGFloat { collapsed ? 4 : M.sessionGap }
+    /// The same gap between tiles as between rows, so an icon never moves up or down as the sidebar folds.
+    private var rowGap: CGFloat { M.sessionGap }
 
     /// The rule between groups: the rows' width, or the tile's in the rail.
     private var rule: some View {
@@ -362,8 +362,8 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
             .background(alignment: .leading) {
                 RoundedRectangle(cornerRadius: M.radius, style: .continuous)
                     .fill(ChromeFill.color(selected: on, hovered: hovered, glass: onGlass, scheme: scheme))
-                    .frame(width: collapsed ? AppSidebar.tile : AppRootView.sidebarWidth - 16,
-                           height: collapsed ? AppSidebar.tile : M.rowHeight)
+                    // The row's height on the rail too (its tile 28 by 26), so the rows keep their place as it folds.
+                    .frame(width: collapsed ? AppSidebar.tile : AppRootView.sidebarWidth - 16, height: M.rowHeight)
                     .padding(.leading, collapsed ? 4 : 0)
                     // On glass hover comes on at once and eases off; the opaque sidebar's stays instant both ways.
                     .hoverMotion(hovered)
@@ -371,7 +371,7 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
             .contentShape(Rectangle())
             .overlay(alignment: .leading) {
                 if collapsed {
-                    Rectangle().fill(.clear).frame(width: AppSidebar.tile, height: AppSidebar.tile).contentShape(Rectangle())
+                    Rectangle().fill(.clear).frame(width: AppSidebar.tile, height: M.rowHeight).contentShape(Rectangle())
                         .padding(.leading, 4).tip(tip)
                 }
             }
