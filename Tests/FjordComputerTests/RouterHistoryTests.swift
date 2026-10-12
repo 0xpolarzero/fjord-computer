@@ -127,6 +127,23 @@ import Testing
         var height: Int
     }
 
+    /// The history: of the page's scrolls, the one holding the most.
+    private static func history(in hosting: NSView) -> NSScrollView? {
+        func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
+        return scrolls(hosting).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
+    /// How far the history's end is below the bottom of what shows, read as its pin reads it (`HistoryPin.geometry`): on
+    /// macOS 26 the composer floats over the history, its height the scroll's bottom inset, and what is under it doesn't show.
+    /// 0 at the bottom; nil while the history isn't laid out.
+    private static func fromBottom(_ hosting: NSView) -> Int? {
+        hosting.layoutSubtreeIfNeeded()
+        guard let view = history(in: hosting), let doc = view.documentView, doc.frame.height > 0 else { return nil }
+        let shown = HistoryPin.geometry(doc.frame.height, visibleMaxY: view.contentView.bounds.maxY,
+                                        bottomInset: view.contentInsets.bottom)
+        return Int((shown.content - shown.visibleBottom).rounded())
+    }
+
     @Test func itOpensAtTheBottomFollowsWhileThereAndHoldsWhileScrolledUp() async throws {
         let store = store()
         let model = RouterModel()
@@ -140,13 +157,12 @@ import Testing
         window.orderFrontRegardless()
         defer { window.contentView = nil; window.orderOut(nil) }
 
-        func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
-        func history() -> NSScrollView? { scrolls(hosting).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) } }
+        func history() -> NSScrollView? { Self.history(in: hosting) }
         func geometry() -> Geometry {
-            hosting.layoutSubtreeIfNeeded()
-            guard let view = history(), let doc = view.documentView else { return Geometry(top: 0, fromBottom: 0, height: 0) }
-            let r = view.contentView.bounds
-            return Geometry(top: Int(r.minY), fromBottom: Int(doc.frame.height - r.maxY), height: Int(doc.frame.height))
+            guard let fromBottom = Self.fromBottom(hosting), let view = history(), let doc = view.documentView else {
+                return Geometry(top: 0, fromBottom: 0, height: 0)
+            }
+            return Geometry(top: Int(view.contentView.bounds.minY), fromBottom: fromBottom, height: Int(doc.frame.height))
         }
         func settled() async -> Geometry {
             // The scroll to a line is animated (0.12 s) and the lines under it lay out after: a second of no change, not
@@ -158,14 +174,14 @@ import Testing
 
         await waitUntil { history() != nil }
         let start = await settled()
-        #expect(start.fromBottom <= 1, "opens at the bottom: \(start)")
+        #expect(start.height > 0 && abs(start.fromBottom) <= 1, "opens at the bottom: \(start)")
         // Only the newest lines are drawn: far less than 300 lines' worth.
         #expect(start.height < 100 * 40, "\(start)")
 
         // At the bottom, a new line keeps it there.
         line("arrives at the bottom")
         let followed = await settled()
-        #expect(followed.fromBottom <= 1, "\(followed)")
+        #expect(abs(followed.fromBottom) <= 1, "\(followed)")
 
         // Asked for an old line, it scrolls up to it (drawing the lines down from it); a line arriving then moves nothing.
         let old = store.routerHistory[store.routerHistory.count - 160].id
@@ -179,7 +195,7 @@ import Testing
         // Back to the bottom (the Router picked), then clicking the newest card's line opens it there.
         model.select(nil, store: store)
         let back = await settled()
-        #expect(back.fromBottom <= 1, "\(back)")
+        #expect(abs(back.fromBottom) <= 1, "\(back)")
         var card = RouterCard(id: "history#newest", sessionID: store.router.cards[0].sessionID, kind: .done, title: "Newest",
                               folder: nil, text: "What was done.", createdAt: Date())
         card.addressedAt = Date()
@@ -188,7 +204,7 @@ import Testing
         _ = await settled()
         model.tap(card.id, store: store)
         let opened = await settled()
-        #expect(model.expanded.contains(card.id) && opened.height > back.height && opened.fromBottom <= 1, "\(back) → \(opened)")
+        #expect(model.expanded.contains(card.id) && opened.height > back.height && abs(opened.fromBottom) <= 1, "\(back) → \(opened)")
     }
 
     /// A scroll asked for while you scroll (here the Router picking, which goes to the bottom) leaves SwiftUI's scroll phase
@@ -211,13 +227,8 @@ import Testing
         window.orderFrontRegardless()
         defer { window.contentView = nil; window.orderOut(nil) }
 
-        func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
-        func history() -> NSScrollView? { scrolls(hosting).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) } }
-        func fromBottom() -> Int {
-            hosting.layoutSubtreeIfNeeded()
-            guard let view = history(), let doc = view.documentView else { return Int.min }
-            return Int(doc.frame.height - view.contentView.bounds.maxY)
-        }
+        func history() -> NSScrollView? { Self.history(in: hosting) }
+        func fromBottom() -> Int { Self.fromBottom(hosting) ?? .min }
         /// A trackpad's step over the history, `dy` up: an event with no window is placed by its screen point, given as the
         /// window's own.
         func wheel(_ dy: Double, _ phase: CGScrollPhase) async throws {
@@ -270,26 +281,19 @@ import Testing
             window.orderFrontRegardless()
             return (hosting, window)
         }
-        func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
-        func fromBottom(_ hosting: NSView) -> Int {
-            hosting.layoutSubtreeIfNeeded()
-            guard let view = scrolls(hosting).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }),
-                  let doc = view.documentView else { return -1 }
-            return Int(doc.frame.height - view.contentView.bounds.maxY)
-        }
         do {
             let (hosting, window) = render()
             defer { window.contentView = nil; window.orderOut(nil) }
-            await waitUntil { fromBottom(hosting) > 1000 }
-            await waitUntilSteady(turns: 8) { fromBottom(hosting) }
-            #expect(fromBottom(hosting) > 1000, "the page opened on the message, far above the bottom")
+            await waitUntil(within: 10) { (Self.fromBottom(hosting) ?? 0) > 1000 }
+            await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+            #expect((Self.fromBottom(hosting) ?? 0) > 1000, "the page opened on the message, far above the bottom")
         }
         // The page left and come back to: it opens at the bottom, not on the message it went to before.
         let (hosting, window) = render()
         defer { window.contentView = nil; window.orderOut(nil) }
-        await waitUntil { fromBottom(hosting) >= 0 }
-        await waitUntilSteady(turns: 8) { fromBottom(hosting) }
-        #expect(fromBottom(hosting) <= 1)
+        await waitUntil(within: 10) { Self.fromBottom(hosting) != nil }
+        await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+        #expect(Self.fromBottom(hosting).map { abs($0) <= 1 } == true, "opens at the bottom: \(String(describing: Self.fromBottom(hosting)))")
     }
 
     @Test func aLineAskedForBeforeThePageShowsIsWhereItOpensAndOnlyThatOnce() async {
@@ -308,26 +312,19 @@ import Testing
             window.orderFrontRegardless()
             return (hosting, window)
         }
-        func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
-        func fromBottom(_ hosting: NSView) -> Int {
-            hosting.layoutSubtreeIfNeeded()
-            guard let view = scrolls(hosting).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }),
-                  let doc = view.documentView else { return -1 }
-            return Int(doc.frame.height - view.contentView.bounds.maxY)
-        }
         do {
             let (hosting, window) = render()
             defer { window.contentView = nil; window.orderOut(nil) }
-            await waitUntil { fromBottom(hosting) > 1000 }
-            await waitUntilSteady(turns: 8) { fromBottom(hosting) }
-            #expect(fromBottom(hosting) > 1000, "the page opened on the line, far above the bottom")
+            await waitUntil(within: 10) { (Self.fromBottom(hosting) ?? 0) > 1000 }
+            await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+            #expect((Self.fromBottom(hosting) ?? 0) > 1000, "the page opened on the line, far above the bottom")
         }
         // The page left and come back to: it opens at the bottom, not on the line it went to before.
         let (hosting, window) = render()
         defer { window.contentView = nil; window.orderOut(nil) }
-        await waitUntil { fromBottom(hosting) >= 0 }
-        await waitUntilSteady(turns: 8) { fromBottom(hosting) }
-        #expect(fromBottom(hosting) <= 1)
+        await waitUntil(within: 10) { Self.fromBottom(hosting) != nil }
+        await waitUntilSteady(within: 10, turns: 8) { Self.fromBottom(hosting) }
+        #expect(Self.fromBottom(hosting).map { abs($0) <= 1 } == true, "opens at the bottom: \(String(describing: Self.fromBottom(hosting)))")
     }
 
     @Test func aCardAskedForBeforeThePageShowsIsScrolledToInNeedsYou() async {
