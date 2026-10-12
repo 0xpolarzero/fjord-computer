@@ -30,14 +30,17 @@ import type { EngineInterface, Register } from 'claude-code'
 //   ⟦lookout abort v1 <target> <nonce> <ms> <nonce of the delivery> <hex HMAC-SHA256>⟧
 // with the MAC over "abort-v1\n<target>\n<nonce>\n<ms>\n<nonce of the delivery>\n" (no body). Its own nonce is claimed as a
 // delivery's is (no replay). This copy remembers each delivery it submitted and the turn it started (the next main turn
-// whose text is that delivery's), and answers in the ack, "ok " and how:
+// whose text is that delivery's, or holds it with other deliveries), and answers in the ack, "ok " and how:
 //   before-start  it never started: not seen yet (it will be refused when it comes), or queued behind a running turn, its
-//                 turn then ended the moment it starts
+//                 turn then ended the moment it starts (unless Claude Code reads it together with words of the
+//                 person's own: those are never stopped)
 //   aborted       its turn was running, and is stopped: the tools it is running are answered at once (else an abort
 //                 sends a running Bash command to the background, and its end wakes the session to carry on), then
 //                 $.turn.abort; a notification from one of its tools after that is dropped, so the session doesn't take
 //                 the cancelled request up again. The command's process itself runs to its end: no hook can stop it.
-//   too-late      its turn is over, or this copy never saw it (a reload since)
+//   together      its turn also holds words of the person's own: it isn't stopped, so neither are they
+//   too-late      its turn is over
+//   unknown       this copy never saw it, but one did (a reload since): it can't tell
 // Nothing an aborted turn already did is undone, and the words stay in the session's history: Claude Code has no way to
 // take a submitted prompt back out.
 //
@@ -242,17 +245,23 @@ const claim = ($: EngineInterface, nonce: string, ts: number, now: number) =>
     return true
   })
 
-/** A delivery this copy submitted, by its nonce: its words, the turn it started once one did, and whether that turn is
- * over or was taken back before it began. The latest few are kept: an abort comes within minutes. */
-type Sent = { body: string; turnId?: string; ended?: boolean; cancelled?: boolean }
+/** A delivery this copy submitted, by its nonce: its words and when, the turn it started once one did (and whether that
+ * turn holds words of the person's own too, or is still starting), and whether that turn is over or was taken back before
+ * it began. Kept for the window an abort is taken in, the latest few at most. */
+type Sent = { body: string; at: number; turnId?: string; mixed?: boolean; starting?: boolean; ended?: boolean; cancelled?: boolean }
 const sent = new Map<string, Sent>()
 const SENT_KEPT = 50
+/** A body this long is told apart inside a turn that holds other words too; a shorter one only as the whole turn. */
+const DISTINCT = 24
 /** The main loop's turn under way, by `turn.start` and `turn.complete`. */
 let running: string | undefined
-/** In a turn a delivery started: the tool calls under way, each with what cuts it short, and the ids of every call made. */
-const calls = new Map<string, { cuts: Set<() => void>; ids: Set<string> }>()
-/** The tool calls of turns taken back: a notification naming one (a background command ending) is dropped. */
-const quiet = new Set<string>()
+/** In a turn a delivery started: the tool calls under way, each with what cuts it short, the ids of every call made, and
+ * the subagents it spawned. */
+const calls = new Map<string, { cuts: Set<() => void>; ids: Set<string>; agents: Set<string> }>()
+/** The tool calls of turns taken back, with when: a notification naming only them (a background command ending) is
+ * dropped. Kept an hour. */
+const quiet = new Map<string, number>()
+const QUIET_MS = 60 * 60 * 1000
 
 /** Forgets every delivery and turn (tests: each starts a fresh copy's memory). */
 export const forget = () => {
@@ -263,51 +272,82 @@ export const forget = () => {
 }
 
 /** Stops what a turn's tools are doing, and keeps their notifications out from now on. */
-const silence = (turnId: string) => {
+const silence = (turnId: string, now: number) => {
   const turn = calls.get(turnId)
   if (!turn) return
   for (const cut of turn.cuts) cut()
-  for (const id of turn.ids) quiet.add(id)
+  for (const id of turn.ids) quiet.set(id, now)
   calls.delete(turnId)
 }
 
-const remember = (nonce: string, body: string) => {
-  sent.set(nonce, { body })
+/** Forgets deliveries past the window (an abort of one is refused as stale anyway) and notifications kept long enough. */
+const prune = (now: number) => {
+  for (const [nonce, s] of sent) if (!(Math.abs(now - s.at) < WINDOW_MS)) sent.delete(nonce)
+  for (const [id, at] of quiet) if (!(Math.abs(now - at) < QUIET_MS)) quiet.delete(id)
+}
+
+const remember = (nonce: string, body: string, now: number) => {
+  prune(now)
+  sent.set(nonce, { body, at: now })
   while (sent.size > SENT_KEPT) sent.delete(sent.keys().next().value as string)
 }
 
-/** The delivery a main turn starts with: the oldest one waiting whose words the turn's text is (or holds, when Claude Code
- * read queued prompts together). */
-const startedBy = (text: string) => {
+/** Submits a delivery's words; one a hook drops, or that fails, started nothing and is forgotten (else a later turn of the
+ * person's own could be taken for its turn). */
+const submit = ($: EngineInterface, nonce: string, body: string) => {
+  const forgotten = () => {
+    if (sent.get(nonce)?.turnId === undefined) sent.delete(nonce)
+  }
+  void $.prompt.submit({ text: body, asUser: true }).then((r) => {
+    if (r && 'drop' in r && r.drop !== undefined) forgotten()
+  }, forgotten)
+}
+
+/** The deliveries a main turn starts with: each one waiting whose words are the turn's text, or, when Claude Code read
+ * queued prompts together, whose (distinctive) words it holds. `mixed`: the turn holds words of no delivery too (the
+ * person's own). */
+const startedBy = (text: string, now: number) => {
+  prune(now)
   const said = text.trim()
+  const mine: Sent[] = []
+  let rest = said
   for (const s of sent.values()) {
     if (s.turnId !== undefined) continue
     const body = s.body.trim()
-    if (body && (said === body || said.includes(body))) return s
+    if (!body) continue
+    if (said === body) return { mine: [s], mixed: false }
+    if (body.length >= DISTINCT && rest.includes(body)) {
+      mine.push(s)
+      rest = rest.replace(body, '')
+    }
   }
-  return undefined
+  return { mine, mixed: rest.trim() !== '' }
 }
 
 /** Takes back the delivery `nonce`, as far as can still be: the ack's word for how. */
 export async function cancel($: EngineInterface, nonce: string, ts: number, now: number) {
+  prune(now)
   const s = sent.get(nonce)
   if (!s) {
     // Never submitted here: claimed now, it is refused when it comes; claimed already, an earlier copy took it.
-    return (await claim($, nonce, ts, now)) ? 'before-start' : 'too-late'
+    return (await claim($, nonce, ts, now)) ? 'before-start' : 'unknown'
   }
   if (s.ended) return 'too-late'
-  if (s.turnId === undefined) {
+  if (s.mixed) return 'together'
+  // Not started, or starting (its turn.start hasn't finished): ended as turn.start finishes.
+  if (s.turnId === undefined || s.starting) {
     s.cancelled = true
     return 'before-start'
   }
   if (running !== s.turnId) return 'too-late'
   try {
-    silence(s.turnId)
     await $.turn.abort({ turnId: s.turnId })
   } catch {
     return 'too-late'
   }
-  s.ended = true
+  // Only once the abort is taken: the tools it was running, and what they would say afterwards.
+  silence(s.turnId, now)
+  for (const other of sent.values()) if (other.turnId === s.turnId) other.ended = true
   return 'aborted'
 }
 
@@ -374,8 +414,8 @@ export async function accept(
       }
     }
   }
-  remember(signed.nonce, body)
-  void $.prompt.submit({ text: body, asUser: true })
+  remember(signed.nonce, body, now)
+  submit($, signed.nonce, body)
   return applied.length ? { ok: true, applied: applied.join(' ') } : { ok: true }
 }
 
@@ -432,19 +472,23 @@ export const register: Register = (on) => {
   })
   on('turn.start', async ($, e, next) => {
     running = e.turnId
-    const mine = startedBy(e.text)
-    if (mine) {
-      mine.turnId = e.turnId
-      calls.set(e.turnId, { cuts: new Set(), ids: new Set() })
+    const now = await $.clock.now()
+    const { mine, mixed } = startedBy(e.text, now)
+    for (const s of mine) Object.assign(s, { turnId: e.turnId, mixed, starting: true })
+    if (mine.length) calls.set(e.turnId, { cuts: new Set(), ids: new Set(), agents: new Set() })
+    try {
+      await mark($).catch(() => undefined)
+      return await next(e)
+    } finally {
+      for (const s of mine) s.starting = false
+      // Taken back while it waited its turn (or as it started), and wholly Lookout's: it ends as it begins. One that holds
+      // words of the person's own isn't stopped.
+      if (!mixed && mine.some((s) => s.cancelled)) {
+        for (const s of mine) s.ended = true
+        await $.turn.abort({ turnId: e.turnId }).catch(() => undefined)
+        silence(e.turnId, now)
+      }
     }
-    await mark($).catch(() => undefined)
-    const started = await next(e)
-    // Taken back while it waited its turn: it ends as it begins.
-    if (mine?.cancelled) {
-      mine.ended = true
-      await $.turn.abort({ turnId: e.turnId }).catch(() => undefined)
-    }
-    return started
   })
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -454,11 +498,20 @@ export const register: Register = (on) => {
     }
     return next(e)
   })
-  // A tool call in a turn a delivery started (its subagents' too) can be cut short by a cancel: answered before what runs
-  // beneath is done, which stops it. Any other call passes straight through.
+  // The subagents a delivery's turn spawns are its own: their tool calls are cut with its.
+  on('agent.spawn', async ($, e, next) => {
+    const turn = running === undefined ? undefined : calls.get(running)
+    const spawned = await next(e)
+    const id = (spawned as { agentId?: unknown })?.agentId
+    if (turn && typeof id === 'string') turn.agents.add(id)
+    return spawned
+  }).catch(($, e, next) => next(e))
+  // A tool call of a turn a delivery started (on the main loop, or in a subagent it spawned) can be cut short by a cancel:
+  // answered before what runs beneath is done. Any other call (a background agent of an earlier turn's) passes straight
+  // through.
   on('tool.call', async ($, e, next) => {
     const turn = running === undefined ? undefined : calls.get(running)
-    if (!turn) return next(e)
+    if (!turn || (e.agentId !== undefined && !turn.agents.has(e.agentId))) return next(e)
     if (e.tool_use_id) turn.ids.add(e.tool_use_id)
     let cut = () => {}
     const stopped = new Promise<'cut'>((resolve) => {
@@ -472,9 +525,13 @@ export const register: Register = (on) => {
       turn.cuts.delete(cut)
     }
   }).catch(($, e, next) => next(e))
+  // A notification only of tasks of a turn taken back is dropped; one that tells of others too goes as it is.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind === 'task-notification' && [...quiet].some((id) => e.text.includes(id))) {
-      return { drop: 'A task of a message cancelled from Lookout ended: not taken up again.' }
+    if (e.origin.kind === 'task-notification' && quiet.size) {
+      const ids = [...e.text.matchAll(/<tool-use-id>([^<\s]+)<\/tool-use-id>/g)].map((m) => m[1])
+      if (ids.length && ids.every((id) => quiet.has(id))) {
+        return { drop: 'A task of a message cancelled from Lookout ended: not taken up again.' }
+      }
     }
     return next(e)
   })

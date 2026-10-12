@@ -60,6 +60,10 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case aborted
         /// Its turn was already over.
         case tooLate = "too-late"
+        /// Claude read it together with words you typed in that session yourself: not stopped, so neither are they.
+        case together
+        /// The session's plugin was reloaded since it took it: it can't tell.
+        case unknown
 
         /// The plugin's ack ("ok aborted"); nil for anything else.
         init?(ack: String) {
@@ -67,14 +71,16 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             self = how
         }
 
-        /// Whether the message was stopped (else it had done its work already).
-        var stopped: Bool { self != .tooLate }
+        /// Whether the message was stopped.
+        var stopped: Bool { self == .beforeStart || self == .aborted }
 
         var words: String {
             switch self {
             case .beforeStart: "cancelled before Claude started on it"
             case .aborted: "cancelled: Claude stopped working on it; what it already did stays done, and a command it was running finishes unseen"
             case .tooLate: "too late to cancel: Claude had finished with it"
+            case .together: "not cancelled: Claude read it together with words you typed there, which a cancel would stop too"
+            case .unknown: "couldn't tell whether it was cancelled: the session's Lookout plugin was reloaded since"
             }
         }
     }
