@@ -162,6 +162,12 @@ struct RouterAskBack: Identifiable, Equatable {
         var answer: @MainActor (RouterTools, _ card: String, _ answers: [String: String]) async throws -> String
         /// A Haiku run for an intent, given the context it starts from.
         var run: @MainActor (RouterTools, RouterRun.Intent, _ input: String) async throws -> RouterRun.Answer
+        /// Whether the plugin of the session (by Claude Code's id) takes back a delivery (`abort-v1`).
+        var abortable: @MainActor (_ cli: String) async -> Bool = { _ in false }
+        /// Takes a delivery back through the session's inbox: how far it had gone, as its plugin answered.
+        var cancel: @MainActor (RouterDecision.Delivered) async throws -> RouterDecision.Cancelled = { _ in
+            throw RouterTools.Failure("The Router isn't ready")
+        }
     }
 
     /// Asks waiting for a pick, oldest first.
@@ -169,6 +175,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// How far each run under way is, by its entry in the log ("classifying", "sending"…).
     private(set) var progress: [UUID: String] = [:]
     var isBusy: Bool { !progress.isEmpty }
+    /// Sends being taken back, by their entry in the log.
+    private(set) var cancelling: Set<UUID> = []
 
     @ObservationIgnored private weak var store: Store?
     @ObservationIgnored var effects: Effects
@@ -270,7 +278,7 @@ struct RouterAskBack: Identifiable, Equatable {
         askBacks.remove(at: i)
         forgetLive()
         store.updateDecision(id) {
-            $0.reply = "Dismissed: nothing was sent."
+            $0.reply = $0.delivered == nil ? "Dismissed: nothing was sent." : "Dismissed: sent nowhere else."
             $0.outcome = .done
         }
     }
@@ -359,7 +367,8 @@ struct RouterAskBack: Identifiable, Equatable {
     @ObservationIgnored var traceLog = RouterTraceLog.shared
 
     /// A routing decided: what it was decided on and what it does, as a trace line.
-    private func trace(_ job: Job, path: String, action: String, target: String?, inputs: RouterTrace.Inputs? = nil) {
+    private func trace(_ job: Job, path: String, action: String, target: String?, inputs: RouterTrace.Inputs? = nil,
+                       kind: RouterTrace.Kind = .decided) {
         let text = job.text
         let pills = job.context.pills.compactMap { range -> String? in
             let chars = Array(text)
@@ -370,7 +379,7 @@ struct RouterAskBack: Identifiable, Equatable {
         let does = action != "send" ? action
             : target?.hasPrefix("new:") == true ? "start"
             : target.flatMap { RouterRun.Intent(rawValue: $0) } != nil ? "intent" : "send"
-        traceLog.append(RouterTrace(kind: .decided, id: job.id, message: RouterTools.redacted(text),
+        traceLog.append(RouterTrace(kind: kind, id: job.id, message: RouterTools.redacted(text),
                                     pills: pills.isEmpty ? nil : pills, pinned: job.context.target, shown: job.context.shown,
                                     notTo: job.context.notTo, replyTo: job.context.replyTo, path: path, action: does,
                                     target: target, inputs: inputs))
@@ -482,13 +491,82 @@ struct RouterAskBack: Identifiable, Equatable {
         // The cards open now, as they are: one that changes while this goes isn't addressed by it.
         let eligible = Dictionary(store.router.cards.filter(\.isOpen).map { ($0.id, store.cardRevisions[$0.id, default: 0]) },
                                   uniquingKeysWith: { a, _ in a })
+        let before = store.claudeSessions[session]
         _ = try await effects.send(job.tools, delivery)
         note(job, .sent(to: delivery.to, text: delivery.body, original: delivery.rephrased ? delivery.original : nil),
              session: session, card: card)
+        await delivered(job, delivery, session: session, turns: before?.completedTurns ?? 0, busy: before?.running ?? false)
         // Which of the session's open cards the message resolves is Jev's call; none are addressed just for being sent to.
         stage(job, "checking its cards")
         await store.judgeCards(session: session, message: job.text, eligible: eligible,
                                asker: job.tools.chooser.map(JevClient.asker(choosing:)), decision: job.id)
+    }
+
+    /// A send went: what it delivered, for a Cancel (`turns` and `busy`: the session as it was just before).
+    private func delivered(_ job: Job, _ delivery: Delivery, session: String?, turns: Int, busy: Bool) async {
+        guard let session, let header = RelayInbox.header(of: delivery.text) else { return }
+        let at = Date()
+        let abortable = await effects.abortable(header.target)
+        store?.updateDecision(job.id) {
+            $0.delivered = .init(session: session, cli: header.target, nonce: header.nonce, at: at, turns: turns, busy: busy,
+                                 abortable: abortable)
+        }
+    }
+
+    // MARK: Cancel
+
+    /// Takes back what a run sent: if Claude hadn't started on it, it never will; if it was working on it, its turn stops.
+    /// Anything it already did stays done, and the message stays in the session's history. The entry says how it went
+    /// (and the trace, `elsewhere` when it is to be sent elsewhere); nil when there's nothing to take back, or it failed.
+    @discardableResult
+    func cancel(_ id: UUID, elsewhere: Bool = false) async -> RouterDecision.Cancelled? {
+        guard let store, let entry = store.router.decisions.first(where: { $0.id == id }), let sent = entry.delivered,
+              sent.cancelled == nil, sent.abortable, !cancelling.contains(id) else { return nil }
+        cancelling.insert(id)
+        defer { cancelling.remove(id) }
+        do {
+            let how = try await effects.cancel(sent)
+            store.updateDecision(id) {
+                guard $0.delivered?.nonce == sent.nonce else { return }
+                $0.delivered?.cancelled = how
+                $0.add(.cancelled(how))
+            }
+            traceLog.append(RouterTrace(kind: .cancelled, id: id, target: entry.decision.targetID ?? "session:\(sent.session)",
+                                        how: how.rawValue, after: (Date().timeIntervalSince(sent.at) * 10).rounded() / 10,
+                                        elsewhere: elsewhere ? true : nil))
+            return how
+        } catch {
+            let first = error.localizedDescription.split(separator: "\n").first.map(String.init) ?? "failed"
+            store.updateDecision(id) { $0.add(.failed("couldn't cancel: " + RouterDecision.clip(first, 100))) }
+            return nil
+        }
+    }
+
+    /// A wrong send: taken back where it went, then asked again with that place left out. The button you pick is a
+    /// correction of it, an example for the next routings, as a correction on an ask is. Only once it was stopped there: a
+    /// cancel that fails, or comes too late, sends no second copy (the entry says so, and you can send it again yourself).
+    func sendElsewhere(_ id: UUID) {
+        guard let store, store.routerOn, progress[id] == nil, !askBacks.contains(where: { $0.id == id }),
+              let entry = store.router.decisions.first(where: { $0.id == id }), case .you(let text) = entry.trigger,
+              let sent = entry.delivered else { return }
+        let wrong = entry.decision.targetID ?? "session:\(sent.session)"
+        forgetLive()
+        store.updateDecision(id) { $0.outcome = .pending }
+        let context = RouterContext(notTo: wrong)
+        launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: [])), stage: "cancelling") { [self] job in
+            let how = await cancel(id, elsewhere: true)
+            guard let how, how.stopped else {
+                let why = how.map { "It wasn't stopped there (\($0.words)), so it wasn't sent elsewhere: send it again if it should go somewhere else too." }
+                store.updateDecision(id) { $0.reply = why ?? "Couldn't cancel it, so it wasn't sent elsewhere." }
+                return
+            }
+            stage(job, "classifying")
+            var found = await classify(job, projects: [])
+            let away = { (target: String) in target != wrong && Self.session(of: target, store: store) != sent.session }
+            found.ranked = found.ranked.filter { away($0.target) }
+            found.card = found.card?.filter(away)
+            askBack(job, found, suggestion: wrong, path: "elsewhere")
+        }
     }
 
     /// Starts a session in a project with your words as its first message.
@@ -513,6 +591,7 @@ struct RouterAskBack: Identifiable, Equatable {
         if let session = delivery.session { store.noteLookoutStarted(session) }
         stage(job, "sending")
         let ack = try await effects.send(job.tools, delivery)
+        await delivered(job, delivery, session: delivery.session, turns: 0, busy: false)
         if let settings {
             let applied = AppliedSettings.from(ack: ack, requested: settings, supported: delivery.settingsSigned)
             store.updateDecision(job.id) { applied.record(session: delivery.session, project: project, in: &$0) }
@@ -722,7 +801,8 @@ struct RouterAskBack: Identifiable, Equatable {
 
     // MARK: Ask back
 
-    private func askBack(_ job: Job, _ found: Classification) {
+    /// `suggestion`: what a pick corrects, when it isn't Jev's top (a wrong send asked again); `path` for the trace likewise.
+    private func askBack(_ job: Job, _ found: Classification, suggestion: String? = nil, path: String? = nil) {
         guard let store else { return }
         var options: [RouterAskBack.Option] = []
         var seen = Set<String>()
@@ -732,10 +812,11 @@ struct RouterAskBack: Identifiable, Equatable {
             options.append(option)
         }
         let ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
-                                suggestion: found.top?.target, at: Date())
+                                suggestion: suggestion ?? found.top?.target, at: Date())
         var inputs = found.trace
         inputs?.card = options.map(\.target)
-        trace(job, path: found.assisted ? "jev" : "words", action: "ask", target: found.top?.target, inputs: inputs)
+        trace(job, path: path ?? (found.assisted ? "jev" : "words"), action: "ask", target: found.top?.target, inputs: inputs,
+              kind: path == "elsewhere" ? .reasked : .decided)
         askBacks.append(ask)
         store.updateDecision(job.id) {
             $0.add(.asked(options.map(\.title)))
@@ -882,6 +963,14 @@ extension RouterDispatcher.Effects {
                 let store = try store(dispatcher)
                 guard let binary = dispatcher.claudePath() else { throw RouterTools.Failure("Claude Code wasn't found") }
                 return try await RouterRun.run(intent, input: input, tools: tools, store: store, binary: binary)
+            },
+            abortable: { [weak dispatcher] cli in
+                guard let store = dispatcher?.storeForEffects else { return false }
+                return await store.supportsAbort(cli)
+            },
+            cancel: { [weak dispatcher] sent in
+                guard let dispatcher else { throw RouterTools.Failure("Lookout isn't ready") }
+                return try await store(dispatcher).cancelDelivery(sent)
             })
     }
 }

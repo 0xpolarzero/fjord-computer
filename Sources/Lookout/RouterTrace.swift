@@ -2,7 +2,9 @@ import Foundation
 
 /// The Router's routing trace: one JSON line per routed message, with what it was decided on (the board as the Router saw
 /// it, Jev's answers, the fused ranking and its sureness, the ask card) and how it was decided, then lines for how it
-/// ended (a button picked on the ask, a correction). It stays on this Mac, in Application Support/Lookout/router-trace.jsonl,
+/// ended (a button picked on the ask, a correction, a message sent and then cancelled, and asked again to send it elsewhere).
+/// The first `decided` line of a message is what its outcomes join to; a re-ask is a `reasked` line, with what it was
+/// decided on. It stays on this Mac, in Application Support/Lookout/router-trace.jsonl,
 /// with the message redacted as it is for Jev. evals/router turns it into benchmark episodes of your real traffic, and the
 /// corrections into labels: what in-session moments can only approximate.
 struct RouterTrace: Codable, Equatable {
@@ -39,7 +41,7 @@ struct RouterTrace: Codable, Equatable {
         var request: String?
     }
 
-    enum Kind: String, Codable { case decided, picked, corrected }
+    enum Kind: String, Codable { case decided, picked, corrected, cancelled, reasked }
 
     var kind: Kind
     var id: UUID
@@ -58,6 +60,11 @@ struct RouterTrace: Codable, Equatable {
     /// `picked`: the button and its place on the card (0 first); `corrected`: also what was suggested.
     var index: Int?
     var from: String?
+    /// `cancelled`: how far the message had gone (`RouterDecision.Cancelled`), seconds after it was sent, and whether it is
+    /// to be sent elsewhere (a wrong send: `target` is where it went).
+    var how: String?
+    var after: Double?
+    var elsewhere: Bool?
 }
 
 /// Appends trace lines off the main thread. Nowhere under a test unless a test gives it a file.

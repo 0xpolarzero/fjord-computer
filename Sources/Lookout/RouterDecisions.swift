@@ -48,6 +48,69 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         /// A card your message resolved, by Jev's judgement (its title, and what you wrote).
         case resolved(card: String, message: String)
         case failed(String)
+        /// A message sent here taken back (`RouterDispatcher.cancel`): how far it had gone.
+        case cancelled(Cancelled)
+    }
+
+    /// How a cancel went, as the session's plugin answered it.
+    enum Cancelled: String, Codable, Equatable {
+        /// Claude hadn't started on it: it never will.
+        case beforeStart = "before-start"
+        /// Claude was working on it: the turn was stopped.
+        case aborted
+        /// Its turn was already over.
+        case tooLate = "too-late"
+        /// Claude read it together with words you typed in that session yourself: not stopped, so neither are they.
+        case together
+        /// The session's plugin was reloaded since it took it: it can't tell.
+        case unknown
+
+        /// The plugin's ack ("ok aborted"); nil for anything else.
+        init?(ack: String) {
+            guard ack.hasPrefix("ok "), let how = Self(rawValue: String(ack.dropFirst(3))) else { return nil }
+            self = how
+        }
+
+        /// Whether the message was stopped.
+        var stopped: Bool { self == .beforeStart || self == .aborted }
+
+        var words: String {
+            switch self {
+            case .beforeStart: "cancelled before Claude started on it"
+            case .aborted: "cancelled: Claude stopped working on it; what it already did stays done, and a command it was running finishes unseen"
+            case .tooLate: "too late to cancel: Claude had finished with it"
+            case .together: "not cancelled: Claude read it together with words you typed there, which a cancel would stop too"
+            case .unknown: "couldn't tell whether it was cancelled: the session's Lookout plugin was reloaded since"
+            }
+        }
+    }
+
+    /// The message a send put in a session, so it can be taken back (`RouterDispatcher.cancel`): the session (Lookout's id,
+    /// and Claude Code's, which its inbox goes by), the delivery's nonce, when, how many turns the session had finished then
+    /// and whether one was running, whether its plugin takes aborts, and how a cancel went. Nil for anything else and in
+    /// entries from before.
+    struct Delivered: Codable, Equatable {
+        var session: String
+        var cli: String
+        var nonce: String
+        var at: Date
+        var turns: Int
+        var busy: Bool
+        var abortable: Bool
+        var cancelled: Cancelled?
+
+        /// How long a Cancel is offered after a send: past it, the turn has nearly always finished.
+        static let window: TimeInterval = 10 * 60
+
+        /// Whether a Cancel can still stop it, as Lookout sees the session (`now`, and its turns finished now): not cancelled
+        /// yet, its plugin takes aborts, sent within `window`, the session not archived, and its turn not seen to finish (the
+        /// one it waited behind, then its own). A session Lookout hasn't read yet (one just started) is given the window. The
+        /// plugin has the last word: a turn over meanwhile is told as too late.
+        func cancellable(session: ClaudeSession?, now: Date) -> Bool {
+            guard cancelled == nil, abortable, now.timeIntervalSince(at) < Self.window else { return false }
+            guard let session else { return true }
+            return !session.isArchived && session.completedTurns < turns + (busy ? 2 : 1)
+        }
     }
 
     enum Outcome: Codable, Equatable {
@@ -74,6 +137,10 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     /// What a typed run said back (shown when the line opens), and the one phrase it gave for what it did.
     var reply: String?
     var note: String?
+    /// The last message it sent to a session, for a Cancel.
+    var delivered: Delivered?
+    /// Its message was stopped where it was sent (a Cancel that wasn't too late).
+    var isCancelled: Bool { delivered?.cancelled?.stopped == true }
 
     init(id: UUID = UUID(), at: Date = Date(), trigger: Trigger, decision: Decided = Decided(), done: [Done] = [],
          outcome: Outcome = .pending, links: Links = Links()) {
@@ -119,6 +186,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             case .asked(let options): "asked which: " + options.joined(separator: " / ")
             case .resolved(let card, let message): "addressed \(card) by your message: \(Self.clip(message, 80))"
             case .failed(let reason): "failed: \(reason)"
+            case .cancelled(let how): how.words
             }
         }
     }
@@ -130,6 +198,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .corrected(_, let to): return "corrected to \(to)"
         default: break
         }
+        if isCancelled { return "cancelled" }
         guard let first = done.first else { return note.map { Self.clip($0, 80) } ?? (outcome == .pending ? "working" : "replied") }
         let more = done.count > 1 ? " +\(done.count - 1)" : ""
         switch first {
@@ -140,11 +209,13 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .asked: return "asked you" + more
         case .resolved: return "addressed a card" + more
         case .failed: return "failed" + more
+        case .cancelled: return "cancelled" + more
         }
     }
 
     var symbol: String {
         if outcome == .reverted { return "arrow.uturn.backward" }
+        if isCancelled, outcome == .done || outcome == .pending { return "xmark.circle" }
         if case .action = trigger { return "bolt" }
         switch done.first {
         case .sent: return "paperplane"
@@ -154,6 +225,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .asked: return "questionmark.bubble"
         case .resolved: return "checkmark"
         case .failed: return "exclamationmark.triangle"
+        case .cancelled: return "xmark.circle"
         case nil: return "text.bubble"
         }
     }

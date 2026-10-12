@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { CAPABILITIES, fromBase64, hmac, invalid, keyId, macInput, parse, type Settings } from '../hooks/register.ts'
+import { abortMacInput, CAPABILITIES, forget, fromBase64, hmac, invalid, keyId, macInput, parse, parseAbort, type Settings } from '../hooks/register.ts'
 
 // The vector Lookout's Swift tests check too (ClaudePluginTests): the same key, fields and body give the same MAC and
 // the same wire text.
@@ -51,8 +51,18 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     commands: [] as { command: string; args?: string }[],
     commandFails: {} as Record<string, string>,
     order: [] as string[],
+    aborted: [] as string[],
+    abortFails: false,
+    /** Tool calls that reached the tool, and what lets each finish. */
+    ran: [] as string[],
+    finish: {} as Record<string, () => void>,
+    /** A prompt.submit hook beneath that drops what it's given. */
+    dropSubmit: false,
+    /** Holds turn.start beneath until let go. */
+    holdStart: undefined as Promise<void> | undefined,
     registry: { '4242.json': { pid: 4242, sessionId: TARGET, startedAt: 111 } } as Record<string, Record<string, unknown> | string>,
   }
+  forget()
   mock.store(on, store)
   const clock = mock.clock(on, { now })
   on('session.id', () => ({ value: w.sessionId }))
@@ -96,6 +106,7 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     return { ok: true }
   })
   on('prompt.submit', ($, e) => {
+    if (w.dropSubmit) return { drop: 'a hook beneath said no' }
     w.order.push('submit')
     w.submitted.push({ text: e.text, asUser: e.origin?.kind === 'plugin' ? e.origin.asUser : undefined })
     return { text: e.text }
@@ -106,7 +117,23 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.start', async ($, e) => {
+    await w.holdStart
+    return { turnId: e.turnId }
+  })
+  on('turn.complete', ($, e) => ({ text: e.answer }))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on('tool.call', ($, e: any) => {
+    w.ran.push(e.tool_use_id)
+    return new Promise((resolve) => {
+      w.finish[e.tool_use_id] = () => resolve({ result: 'finished', text: 'finished' })
+    })
+  })
+  on('turn.abort', ($, e) => {
+    if (w.abortFails) throw new Error(`${e.turnId} is not the running turn`)
+    w.aborted.push(e.turnId)
+    return { value: undefined }
+  })
   return Object.assign(w, { clock })
 }
 
@@ -386,7 +413,7 @@ describe('the inbox', () => {
   })
 
   test('presence names the capability', () => {
-    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1'])
+    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1', 'abort-v1'])
   })
 
   const SETTINGS_NONCE = '223e4567-e89b-12d3-a456-426614174000'
@@ -478,5 +505,346 @@ describe('the inbox', () => {
 
   test('a v2 header is unknown to a v1-only reader: the old pattern finds nothing', async () => {
     expect(/⟦lookout v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧/.test(await sign(BODY, { settings: { model: 'opus' } }))).toBe(false)
+  })
+})
+
+describe('taking a delivery back', () => {
+  const ABORT_NONCE = '323e4567-e89b-12d3-a456-426614174000'
+  // The vector Lookout's Swift tests sign the same abort with (RouterCancelTests.theAbortIsSignedAsThePluginChecksIt).
+  const ABORT_MAC = '0dbaf1b1ec9728c6d3c3e507515ae0c1ba74dccda5c17011ccfb04a3f688a66a'
+  const signAbort = async (cancels = NONCE, { target = TARGET, nonce = ABORT_NONCE, ts = TS, key = KEY } = {}) =>
+    `⟦lookout abort v1 ${target} ${nonce} ${ts} ${cancels} ${await hmac(enc.encode(key), abortMacInput(target, nonce, String(ts), cancels))}⟧\n`
+  const started = new WeakSet<object>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const look = async ($: any, w: ReturnType<typeof world>) => {
+    if (!started.has(w)) {
+      started.add(w)
+      await $.session.start({ cwd: '/code/app', surface: null, isInteractive: false })
+    }
+    await w.clock.advance(500)
+    await settle()
+  }
+  const ack = (name: string) => `/inbox/${TARGET}/${name}.ack`
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deliver = async ($: any, w: ReturnType<typeof world>) => {
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const abort = async ($: any, w: ReturnType<typeof world>, text?: string) => {
+    w.inbox[`${TARGET}/${ABORT_NONCE}.msg`] = text ?? (await signAbort())
+    await look($, w)
+    return w.written[ack(ABORT_NONCE)]
+  }
+  const complete = { durationMs: 1, isAborted: false, reason: 'answer' as const, answer: 'done' }
+
+  test('the wire format matches the vector Lookout signs with', async () => {
+    const text = await signAbort()
+    expect(text).toBe(`⟦lookout abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${ABORT_MAC}⟧\n`)
+    expect(parseAbort(text)).toEqual({ target: TARGET, nonce: ABORT_NONCE, ts: String(TS), cancels: NONCE, mac: ABORT_MAC })
+    // Not a delivery: nothing would be submitted from it, whatever reads it.
+    expect(parse(text)).toBeUndefined()
+  })
+
+  test('a running turn the delivery started is aborted', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok aborted\n')
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a delivery queued behind a running turn ends the moment its turn starts', async ($, on) => {
+    const w = world(on)
+    await $.turn.start({ text: 'what you typed before', turnId: 't0' })
+    await deliver($, w)
+    expect(await abort($, w)).toBe('ok before-start\n')
+    expect(w.aborted).toEqual([])
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    await settle()
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('read together with words of the person’s own, its turn is not stopped: neither are they', async ($, on) => {
+    const w = world(on)
+    await $.turn.start({ text: 'first', turnId: 't0' })
+    await deliver($, w)
+    expect(await abort($, w)).toBe('ok before-start\n')
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    await $.turn.start({ text: `something typed\n\n${BODY}`, turnId: 't1' })
+    await settle()
+    expect(w.aborted).toEqual([])
+  })
+
+  test('running together with words of the person’s own, a cancel says so and stops nothing', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: `something typed\n\n${BODY}`, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok together\n')
+    expect(w.aborted).toEqual([])
+  })
+
+  test('two deliveries read together are one turn, taken back with either', async ($, on) => {
+    const w = world(on)
+    const second = 'And then update the changelog for it'
+    const NONCE2 = '523e4567-e89b-12d3-a456-426614174000'
+    await deliver($, w)
+    w.inbox[`${TARGET}/${NONCE2}.msg`] = await sign(second, { nonce: NONCE2 })
+    await look($, w)
+    await $.turn.start({ text: `${BODY}\n\n${second}`, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok aborted\n')
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a short delivery is only its turn when it is the whole turn', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${NONCE}.msg`] = await sign('yes')
+    await look($, w)
+    // The person's later "yes, run the tests again" is not it.
+    await $.turn.start({ text: 'yes, run the tests again', turnId: 't1' })
+    expect(await abort($, w)).toBe('ok before-start\n')
+    await $.turn.complete({ ...complete, turnId: 't1' })
+    expect(w.aborted).toEqual([])
+  })
+
+  test('a delivery is forgotten past the window: a later turn of the person’s with its words is never aborted', async ($, on) => {
+    const w = world(on)
+    await $.turn.start({ text: 'first', turnId: 't0' })
+    await deliver($, w)
+    expect(await abort($, w)).toBe('ok before-start\n')
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    await w.clock.advance(11 * 60 * 1000)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    await settle()
+    expect(w.aborted).toEqual([])
+  })
+
+  test('a delivery a hook dropped started nothing, and is forgotten', async ($, on) => {
+    const w = world(on)
+    w.dropSubmit = true
+    await deliver($, w)
+    await settle()
+    // The person then types the same words: theirs, not Lookout's.
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok unknown\n')
+    expect(w.aborted).toEqual([])
+  })
+
+  test('cancelled while its turn is starting, it ends as it starts', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    let go = () => {}
+    w.holdStart = new Promise((resolve) => {
+      go = resolve
+    })
+    const starting = $.turn.start({ text: BODY, turnId: 't1' })
+    await settle()
+    w.abortFails = true
+    expect(await abort($, w)).toBe('ok before-start\n')
+    w.abortFails = false
+    go()
+    await starting
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a turn that is over is too late, and nothing is aborted', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    await $.turn.complete({ ...complete, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok too-late\n')
+    expect(w.aborted).toEqual([])
+  })
+
+  test('another turn starting is not mistaken for it, nor is a subagent ending', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: 'something else entirely', turnId: 't1' })
+    await $.turn.complete({ ...complete, turnId: 't1', agentId: 'a1' })
+    // Still waiting for its own turn: taken back before it starts.
+    expect(await abort($, w)).toBe('ok before-start\n')
+  })
+
+  test('a delivery not seen yet is refused when it comes', async ($, on) => {
+    const w = world(on)
+    expect(await abort($, w)).toBe('ok before-start\n')
+    await deliver($, w)
+    expect(w.submitted).toEqual([])
+    expect(w.written[ack(NONCE)]).toBe('refused: already delivered\n')
+  })
+
+  test('one an earlier copy submitted (a reload since) can’t be told', async ($, on) => {
+    const w = world(on, { store: { [`nonce.${NONCE}`]: TS } })
+    expect(await abort($, w)).toBe('ok unknown\n')
+  })
+
+  test('a turn that won’t abort is too late', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    w.abortFails = true
+    expect(await abort($, w)).toBe('ok too-late\n')
+  })
+
+  test('an abort is taken once', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    await abort($, w)
+    delete w.inbox[`${TARGET}/${ABORT_NONCE}.ack`]
+    expect(await abort($, w)).toBe('refused: already delivered\n')
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  const refused: [string, () => Promise<string>, string, number?][] = [
+    ['a bad MAC', async () => (await signAbort()).replace(/[0-9a-f]{64}⟧/, `${'0'.repeat(64)}⟧`), 'bad signature'],
+    ['another key', async () => signAbort(NONCE, { key: '00'.repeat(32) }), 'bad signature'],
+    ['another delivery named after signing', async () => (await signAbort()).replace(` ${NONCE} `, ' 00000000-0000-0000-0000-000000000000 '), 'bad signature'],
+    ['another session', async () => signAbort(NONCE, { target: 'cli-other' }), 'addressed to another session'],
+    ['a stale abort', async () => signAbort(), 'stale', TS + 11 * 60 * 1000],
+  ]
+  for (const [name, make, reason, now] of refused) {
+    test(`refuses ${name}`, async ($, on) => {
+      const w = world(on, { now })
+      if (now === undefined) {
+        await deliver($, w)
+        await $.turn.start({ text: BODY, turnId: 't1' })
+      }
+      expect(await abort($, w, await make())).toBe(`refused: ${reason}\n`)
+      expect(w.aborted).toEqual([])
+    })
+  }
+
+  test('over the peer channel an abort is nothing: it passes on as the peer message it is', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    const text = envelope(await signAbort())
+    const result = await receive($, text)
+    expect(result.consumed).toBeUndefined()
+    expect(w.aborted).toEqual([])
+  })
+
+  test('a delivery over the peer channel can be taken back too', async ($, on) => {
+    const w = world(on)
+    await receive($, envelope(WIRE))
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok aborted\n')
+  })
+})
+
+describe('taking back a turn that runs tools', () => {
+  const ABORT_NONCE = '423e4567-e89b-12d3-a456-426614174000'
+  const started = new WeakSet<object>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const look = async ($: any, w: ReturnType<typeof world>) => {
+    if (!started.has(w)) {
+      started.add(w)
+      await $.session.start({ cwd: '/code/app', surface: null, isInteractive: false })
+    }
+    await w.clock.advance(500)
+    await settle()
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const running = async ($: any, w: ReturnType<typeof world>, text = BODY) => {
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await $.turn.start({ text, turnId: 't1' })
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const abort = async ($: any, w: ReturnType<typeof world>) => {
+    const mac = await hmac(enc.encode(KEY), abortMacInput(TARGET, ABORT_NONCE, String(TS), NONCE))
+    w.inbox[`${TARGET}/${ABORT_NONCE}.msg`] = `⟦lookout abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${mac}⟧\n`
+    await look($, w)
+    return w.written[`/inbox/${TARGET}/${ABORT_NONCE}.ack`]
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const call = ($: any, id: string): Promise<any> => $.tool.call({ tool: 'Bash', command: 'sleep 90', tool_use_id: id })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const notify = ($: any, text: string): Promise<any> => $.prompt.submit({ text, origin: { kind: 'task-notification' } })
+
+  test('a tool it is running is cut short before the turn is aborted', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    const pending = call($, 'toolu_1')
+    await settle()
+    expect(w.ran).toEqual(['toolu_1'])
+    expect(await abort($, w)).toBe('ok aborted\n')
+    expect(await pending).toEqual({ deny: 'Stopped: the person cancelled this message from Lookout.' })
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a notification from one of its tools afterwards is dropped; others pass', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    void call($, 'toolu_1')
+    await settle()
+    await abort($, w)
+    const dropped = await notify($, '<task-notification><tool-use-id>toolu_1</tool-use-id><status>completed</status></task-notification>')
+    expect(dropped.drop).toBeDefined()
+    const other = await notify($, '<task-notification><tool-use-id>toolu_9</tool-use-id></task-notification>')
+    expect(other.drop).toBeUndefined()
+  })
+
+  test('an abort that fails cuts nothing, and mutes nothing', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    const pending = call($, 'toolu_1')
+    await settle()
+    w.abortFails = true
+    expect(await abort($, w)).toBe('ok too-late\n')
+    w.finish.toolu_1()
+    expect((await pending).result).toBe('finished')
+    expect((await notify($, '<task-notification><tool-use-id>toolu_1</tool-use-id></task-notification>')).drop).toBeUndefined()
+  })
+
+  test('a background agent of an earlier turn is left be; one this turn spawned is cut with it', async ($, on) => {
+    const w = world(on)
+    on('agent.spawn', () => ({ model: 'haiku', agentId: 'a-new' }))
+    await running($, w)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ($ as any).agent.spawn({ prompt: 'look around' })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const old = ($ as any).tool.call({ tool: 'Bash', command: 'make', tool_use_id: 'toolu_old', agentId: 'a-old' })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mine = ($ as any).tool.call({ tool: 'Bash', command: 'make', tool_use_id: 'toolu_mine', agentId: 'a-new' })
+    await settle()
+    expect(await abort($, w)).toBe('ok aborted\n')
+    expect((await mine).deny).toBeDefined()
+    w.finish.toolu_old()
+    expect((await old).result).toBe('finished')
+  })
+
+  test('a notification of several tasks is dropped only when all are the cancelled turn’s', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    void call($, 'toolu_1')
+    await settle()
+    await abort($, w)
+    const both = '<task-notification><tool-use-id>toolu_1</tool-use-id></task-notification>\n<task-notification><tool-use-id>toolu_9</tool-use-id></task-notification>'
+    expect((await notify($, both)).drop).toBeUndefined()
+  })
+
+  test('a tool that finishes is answered as it finished', async ($, on) => {
+    const w = world(on)
+    await running($, w)
+    const pending = call($, 'toolu_1')
+    await settle()
+    w.finish.toolu_1()
+    expect((await pending).result).toBe('finished')
+  })
+
+  test('the tools of a turn no delivery started pass straight through, and a cancel leaves them be', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await $.turn.start({ text: 'what you typed yourself', turnId: 't0' })
+    const pending = call($, 'toolu_1')
+    await settle()
+    expect(await abort($, w)).toBe('ok before-start\n')
+    w.finish.toolu_1()
+    expect((await pending).result).toBe('finished')
+    expect(w.aborted).toEqual([])
   })
 })

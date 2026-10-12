@@ -598,12 +598,20 @@ private struct RouterHistory: View {
         }
     }
 
+    /// Whether a run's message can be cancelled now, and whether it is being.
+    private func cancelState(_ decision: RouterDecision, now: Date) -> HistoryDecisionLine.Cancel {
+        guard decision.delivered != nil else { return .none }
+        if store.routerDispatcher.cancelling.contains(decision.id) { return .cancelling }
+        return store.canCancel(decision, now: now) ? .offered : .none
+    }
+
     @ViewBuilder private func row(_ entry: RouterPage.Entry, now: Date, open: Bool, marked: Bool) -> some View {
         switch entry {
         case .card(let card):
             HistoryCardLine(card: card, now: now, open: open, marked: marked, store: store, model: model).equatable()
         case .decision(let decision):
-            HistoryDecisionLine(decision: decision, now: now, open: open, store: store, model: model).equatable()
+            HistoryDecisionLine(decision: decision, now: now, open: open, cancel: cancelState(decision, now: now),
+                                store: store, model: model).equatable()
         case .summary(let summary):
             HistorySummaryLine(summary: summary, now: now, open: open, model: model).equatable()
         }
@@ -813,18 +821,30 @@ private struct HistorySummaryLine: View, Equatable {
 }
 
 /// A run in the history: one line (icon, what set it off, what was done, when), opening to show the trigger, what was done and
-/// its links (the session, the change with its Revert).
+/// its links (the session, the change with its Revert). A message it sent that can still be stopped has Cancel on the line.
 private struct HistoryDecisionLine: View, Equatable {
+    enum Cancel: Equatable { case none, offered, cancelling }
+
     let decision: RouterDecision
     let now: Date
     let open: Bool
+    let cancel: Cancel
     let store: Store
     let model: RouterModel
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.decision == b.decision && a.now == b.now && a.open == b.open }
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.decision == b.decision && a.now == b.now && a.open == b.open && a.cancel == b.cancel
+    }
+
+    /// What Cancel does and doesn't, as its tooltip and beside it when the line is open.
+    static let cancelHelp = "Stops this message in its session: if Claude hasn't started on it, it never will; if it's working on it, "
+        + "it stops, and doesn't carry on. Anything it already did (edits, commands) stays done, a command it was running finishes on "
+        + "its own unseen, and your message stays in the session's history."
+
+    static let cancelWidth: CGFloat = 64
 
     private var key: String { decision.id.uuidString }
     /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
@@ -847,6 +867,8 @@ private struct HistoryDecisionLine: View, Equatable {
                     StatusCaret(hot: hovered, open: open)
                     Spacer(minLength: 8)
                     Text(shortAgo(decision.at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                    // Room for Cancel, laid over it: the line stays one button, and Cancel one of its own.
+                    if cancel != .none { Color.clear.frame(width: Self.cancelWidth, height: 1) }
                 }
                 .padding(.horizontal, CDS.Transcript.statusPad)
                 .frame(height: CDS.Transcript.statusRow)
@@ -863,8 +885,20 @@ private struct HistoryDecisionLine: View, Equatable {
             .onHover { hovered = $0 }
             .accessibilityLabel(decision.triggerText)
             .accessibilityValue("\(status), \(open ? "expanded" : "collapsed")")
+            .overlay(alignment: .trailing) {
+                if cancel != .none {
+                    ClaudeButton("Cancel", variant: .ghost, size: .sm, busy: cancel == .cancelling) {
+                        let id = decision.id
+                        Task { await store.routerDispatcher.cancel(id) }
+                    }
+                    .help(Self.cancelHelp)
+                    .accessibilityHint(Self.cancelHelp)
+                    .frame(width: Self.cancelWidth, alignment: .trailing)
+                    .padding(.trailing, CDS.Transcript.statusPad - 6)
+                }
+            }
 
-            if open { DecisionDetails(decision: decision, store: store) }
+            if open { DecisionDetails(decision: decision, cancel: cancel, store: store) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -874,9 +908,11 @@ private struct HistoryDecisionLine: View, Equatable {
     }
 }
 
-/// An open run's details: what set it off, its reply, what was done, its changes and its sessions.
+/// An open run's details: what set it off, its reply, what was done, its changes and its sessions, and while its message can
+/// still be stopped, what Cancel does with Cancel and Send elsewhere.
 private struct DecisionDetails: View {
     let decision: RouterDecision
+    let cancel: HistoryDecisionLine.Cancel
     let store: Store
 
     var body: some View {
@@ -889,6 +925,23 @@ private struct DecisionDetails: View {
             ForEach(decision.links.changes, id: \.self) { id in
                 if let change = store.router.changes.first(where: { $0.id == id }) {
                     ChangeCard(change: change, store: store)
+                }
+            }
+            if cancel != .none {
+                Text(HistoryDecisionLine.cancelHelp).cdsText((12, 16), .regular, CDS.Text.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    ClaudeButton("Cancel", variant: .secondary, size: .sm, busy: cancel == .cancelling) {
+                        let id = decision.id
+                        Task { await store.routerDispatcher.cancel(id) }
+                    }
+                    if case .you = decision.trigger {
+                        ClaudeButton("Cancel and send elsewhere…", variant: .ghost, size: .sm) {
+                            store.routerDispatcher.sendElsewhere(decision.id)
+                        }
+                        .help("Cancels it here, then asks where it should go instead, this session left out. Your pick teaches the Router.")
+                        .disabled(cancel == .cancelling || store.routerDispatcher.progress[decision.id] != nil)
+                    }
                 }
             }
             let sessions = decision.links.sessions.filter { store.claudeSessions[$0] != nil }

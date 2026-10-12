@@ -104,6 +104,8 @@ enum ClaudePlugin {
     static let inboxCapability = "inbox-v1"
     /// The plugin reads v2 messages (a model and an effort inside the signed bytes) from its inbox and applies them.
     static let settingsCapability = "settings-v1"
+    /// The plugin takes back a delivery it was given, on a signed abort in its inbox (`RelaySigner.signAbort`).
+    static let abortCapability = "abort-v1"
 
     /// How long a presence lasts without being renewed: the plugin renews it every 10 s.
     static let lease: TimeInterval = 30
@@ -171,6 +173,24 @@ import type { EngineInterface, Register } from 'claude-code'
 // model switch resets the effort), with `/model` and `/effort` run for this session only, and only then submits the
 // text, so the turn it starts uses them. The ack says what happened: "ok model=opus effort=high", or "model=error:why".
 //
+// `abort-v1`: Lookout can take back a delivery it made, with a control file in the same inbox, signed the same way:
+//   ⟦lookout abort v1 <target> <nonce> <ms> <nonce of the delivery> <hex HMAC-SHA256>⟧
+// with the MAC over "abort-v1\n<target>\n<nonce>\n<ms>\n<nonce of the delivery>\n" (no body). Its own nonce is claimed as a
+// delivery's is (no replay). This copy remembers each delivery it submitted and the turn it started (the next main turn
+// whose text is that delivery's, or holds it with other deliveries), and answers in the ack, "ok " and how:
+//   before-start  it never started: not seen yet (it will be refused when it comes), or queued behind a running turn, its
+//                 turn then ended the moment it starts (unless Claude Code reads it together with words of the
+//                 person's own: those are never stopped)
+//   aborted       its turn was running, and is stopped: the tools it is running are answered at once (else an abort
+//                 sends a running Bash command to the background, and its end wakes the session to carry on), then
+//                 $.turn.abort; a notification from one of its tools after that is dropped, so the session doesn't take
+//                 the cancelled request up again. The command's process itself runs to its end: no hook can stop it.
+//   together      its turn also holds words of the person's own: it isn't stopped, so neither are they
+//   too-late      its turn is over
+//   unknown       this copy never saw it, but one did (a reload since): it can't tell
+// Nothing an aborted turn already did is undone, and the words stay in the session's history: Claude Code has no way to
+// take a submitted prompt back out.
+//
 // Lookout writes this file; edits are overwritten.
 
 const HEADER = /(?:^|\n)⟦lookout (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)) ([0-9a-f]{64})⟧\n/
@@ -178,7 +198,7 @@ const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const CLOSE = '</cross-session-message>'
 const WINDOW_MS = 10 * 60 * 1000
 const NONCE = 'nonce.'
-export const CAPABILITIES = ['inbox-v1', 'settings-v1']
+export const CAPABILITIES = ['inbox-v1', 'settings-v1', 'abort-v1']
 const POLL_MS = 500
 const ACTIVATION = crypto.randomUUID()
 
@@ -202,6 +222,18 @@ export const hmac = async (key: Uint8Array, message: Uint8Array) => {
   const inner = block.map((x) => x ^ 0x36)
   const outer = block.map((x) => x ^ 0x5c)
   return hex(await sha256(outer, await sha256(inner, message)))
+}
+
+const ABORT = /^⟦lookout abort v1 (\S+) (\S+) (\d+) (\S+) ([0-9a-f]{64})⟧\n?/
+
+/** What an abort's MAC covers: its kind, the target, its nonce, its time and the delivery it takes back, one per line. */
+export const abortMacInput = (target: string, nonce: string, ts: string, cancels: string) =>
+  enc.encode(`abort-v1\n${target}\n${nonce}\n${ts}\n${cancels}\n`)
+
+/** An abort's fields; undefined for anything else. */
+export const parseAbort = (text: string) => {
+  const m = ABORT.exec(text)
+  return m ? { target: m[1], nonce: m[2], ts: m[3], cancels: m[4], mac: m[5] } : undefined
 }
 
 /** The model and effort a v2 message asks for; `-` on the wire is none. */
@@ -346,6 +378,144 @@ async function unmark($: EngineInterface) {
   marked = undefined
 }
 
+/** Claims a nonce: false when it was claimed before. Each nonce is a key of its own in the store (it outlives reloads and
+ * restarts), kept while its message's time is inside the window: past it the message is refused as stale anyway. */
+const claim = ($: EngineInterface, nonce: string, ts: number, now: number) =>
+  exclusive(async () => {
+    if ((await $.store.get(NONCE + nonce)) !== undefined) return false
+    await $.store.set(NONCE + nonce, ts)
+    for (const name of await $.store.keys()) {
+      if (!name.startsWith(NONCE)) continue
+      const at = Number(await $.store.get(name))
+      if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
+    }
+    return true
+  })
+
+/** A delivery this copy submitted, by its nonce: its words and when, the turn it started once one did (and whether that
+ * turn holds words of the person's own too, or is still starting), and whether that turn is over or was taken back before
+ * it began. Kept for the window an abort is taken in, the latest few at most. */
+type Sent = { body: string; at: number; turnId?: string; mixed?: boolean; starting?: boolean; ended?: boolean; cancelled?: boolean }
+const sent = new Map<string, Sent>()
+const SENT_KEPT = 50
+/** A body this long is told apart inside a turn that holds other words too; a shorter one only as the whole turn. */
+const DISTINCT = 24
+/** The main loop's turn under way, by `turn.start` and `turn.complete`. */
+let running: string | undefined
+/** In a turn a delivery started: the tool calls under way, each with what cuts it short, the ids of every call made, and
+ * the subagents it spawned. */
+const calls = new Map<string, { cuts: Set<() => void>; ids: Set<string>; agents: Set<string> }>()
+/** The tool calls of turns taken back, with when: a notification naming only them (a background command ending) is
+ * dropped. Kept an hour. */
+const quiet = new Map<string, number>()
+const QUIET_MS = 60 * 60 * 1000
+
+/** Forgets every delivery and turn (tests: each starts a fresh copy's memory). */
+export const forget = () => {
+  sent.clear()
+  calls.clear()
+  quiet.clear()
+  running = undefined
+}
+
+/** Stops what a turn's tools are doing, and keeps their notifications out from now on. */
+const silence = (turnId: string, now: number) => {
+  const turn = calls.get(turnId)
+  if (!turn) return
+  for (const cut of turn.cuts) cut()
+  for (const id of turn.ids) quiet.set(id, now)
+  calls.delete(turnId)
+}
+
+/** Forgets deliveries past the window (an abort of one is refused as stale anyway) and notifications kept long enough. */
+const prune = (now: number) => {
+  for (const [nonce, s] of sent) if (!(Math.abs(now - s.at) < WINDOW_MS)) sent.delete(nonce)
+  for (const [id, at] of quiet) if (!(Math.abs(now - at) < QUIET_MS)) quiet.delete(id)
+}
+
+const remember = (nonce: string, body: string, now: number) => {
+  prune(now)
+  sent.set(nonce, { body, at: now })
+  while (sent.size > SENT_KEPT) sent.delete(sent.keys().next().value as string)
+}
+
+/** Submits a delivery's words; one a hook drops, or that fails, started nothing and is forgotten (else a later turn of the
+ * person's own could be taken for its turn). */
+const submit = ($: EngineInterface, nonce: string, body: string) => {
+  const forgotten = () => {
+    if (sent.get(nonce)?.turnId === undefined) sent.delete(nonce)
+  }
+  void $.prompt.submit({ text: body, asUser: true }).then((r) => {
+    if (r && 'drop' in r && r.drop !== undefined) forgotten()
+  }, forgotten)
+}
+
+/** The deliveries a main turn starts with: each one waiting whose words are the turn's text, or, when Claude Code read
+ * queued prompts together, whose (distinctive) words it holds. `mixed`: the turn holds words of no delivery too (the
+ * person's own). */
+const startedBy = (text: string, now: number) => {
+  prune(now)
+  const said = text.trim()
+  const mine: Sent[] = []
+  let rest = said
+  for (const s of sent.values()) {
+    if (s.turnId !== undefined) continue
+    const body = s.body.trim()
+    if (!body) continue
+    if (said === body) return { mine: [s], mixed: false }
+    if (body.length >= DISTINCT && rest.includes(body)) {
+      mine.push(s)
+      rest = rest.replace(body, '')
+    }
+  }
+  return { mine, mixed: rest.trim() !== '' }
+}
+
+/** Takes back the delivery `nonce`, as far as can still be: the ack's word for how. */
+export async function cancel($: EngineInterface, nonce: string, ts: number, now: number) {
+  prune(now)
+  const s = sent.get(nonce)
+  if (!s) {
+    // Never submitted here: claimed now, it is refused when it comes; claimed already, an earlier copy took it.
+    return (await claim($, nonce, ts, now)) ? 'before-start' : 'unknown'
+  }
+  if (s.ended) return 'too-late'
+  if (s.mixed) return 'together'
+  // Not started, or starting (its turn.start hasn't finished): ended as turn.start finishes.
+  if (s.turnId === undefined || s.starting) {
+    s.cancelled = true
+    return 'before-start'
+  }
+  if (running !== s.turnId) return 'too-late'
+  try {
+    await $.turn.abort({ turnId: s.turnId })
+  } catch {
+    return 'too-late'
+  }
+  // Only once the abort is taken: the tools it was running, and what they would say afterwards.
+  silence(s.turnId, now)
+  for (const other of sent.values()) if (other.turnId === s.turnId) other.ended = true
+  return 'aborted'
+}
+
+/** Checks an abort the way a delivery is checked (its signature, its session, its time, its nonce never seen) and acts on
+ * it: the ack's text. */
+export async function control($: EngineInterface, text: string) {
+  const abort = parseAbort(text)
+  if (!abort) return 'refused: unsigned'
+  const { keyPath } = await config($)
+  if (!keyPath) return 'refused: no key configured'
+  const key = (await $.fs.read(keyPath)).trim()
+  const expected = await hmac(enc.encode(key), abortMacInput(abort.target, abort.nonce, abort.ts, abort.cancels))
+  const now = await $.clock.now()
+  const ts = Number(abort.ts)
+  if (!same(expected, abort.mac)) return 'refused: bad signature'
+  if (abort.target !== (await $.session.id())) return 'refused: addressed to another session'
+  if (!(Math.abs(now - ts) < WINDOW_MS)) return 'refused: stale'
+  if (!(await claim($, abort.nonce, ts, now))) return 'refused: already delivered'
+  return `ok ${await cancel($, abort.cancels, ts, now)}`
+}
+
 /** Checks a signed text the way both ways in must, and submits it as the person's own words. `unsigned` means it isn't
  * Lookout's at all (the peer channel then passes it on); anything else is a refusal with its reason. */
 export async function accept(
@@ -375,19 +545,7 @@ export async function accept(
   }
   const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
   const body = bom ? `\uFEFF${decoded}` : decoded
-  // Each nonce is a key of its own in the store (it outlives reloads and restarts), kept while its message's time is
-  // inside the window: past it the message is refused as stale anyway.
-  const claimed = await exclusive(async () => {
-    if ((await $.store.get(NONCE + signed.nonce)) !== undefined) return false
-    await $.store.set(NONCE + signed.nonce, ts)
-    for (const name of await $.store.keys()) {
-      if (!name.startsWith(NONCE)) continue
-      const at = Number(await $.store.get(name))
-      if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
-    }
-    return true
-  })
-  if (!claimed) return { ok: false, reason: 'already delivered' }
+  if (!(await claim($, signed.nonce, ts, now))) return { ok: false, reason: 'already delivered' }
   // The settings first, so the turn the text starts uses them: the model, then the effort (a model resets it). Each can fail
   // on its own; the person's words go either way. Only from the inbox (`apply`): never from inside a hook a turn waits on.
   const applied: string[] = []
@@ -403,7 +561,8 @@ export async function accept(
       }
     }
   }
-  void $.prompt.submit({ text: body, asUser: true })
+  remember(signed.nonce, body, now)
+  submit($, signed.nonce, body)
   return applied.length ? { ok: true, applied: applied.join(' ') } : { ok: true }
 }
 
@@ -426,6 +585,11 @@ export async function poll($: EngineInterface) {
       if (!name.endsWith('.msg') || names.has(`${name.slice(0, -4)}.ack`)) continue
       const text = await $.fs.read(`${dir}/${name}`).catch(() => undefined)
       if (text === undefined) continue
+      if (parseAbort(text)) {
+        const reply = await control($, text).catch((error) => `refused: ${String(error?.message ?? error)}`)
+        await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, `${reply}\n`)
+        continue
+      }
       const outcome = await accept($, text, true).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
       await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? `ok${outcome.applied ? ` ${outcome.applied}` : ''}\n` : `refused: ${outcome.reason}\n`)
     }
@@ -454,7 +618,68 @@ export const register: Register = (on) => {
     return next(e)
   })
   on('turn.start', async ($, e, next) => {
-    await mark($).catch(() => undefined)
+    running = e.turnId
+    const now = await $.clock.now()
+    const { mine, mixed } = startedBy(e.text, now)
+    for (const s of mine) Object.assign(s, { turnId: e.turnId, mixed, starting: true })
+    if (mine.length) calls.set(e.turnId, { cuts: new Set(), ids: new Set(), agents: new Set() })
+    try {
+      await mark($).catch(() => undefined)
+      return await next(e)
+    } finally {
+      for (const s of mine) s.starting = false
+      // Taken back while it waited its turn (or as it started), and wholly Lookout's: it ends as it begins. One that holds
+      // words of the person's own isn't stopped.
+      if (!mixed && mine.some((s) => s.cancelled)) {
+        for (const s of mine) s.ended = true
+        await $.turn.abort({ turnId: e.turnId }).catch(() => undefined)
+        silence(e.turnId, now)
+      }
+    }
+  })
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      for (const s of sent.values()) if (s.turnId === e.turnId) s.ended = true
+      if (running === e.turnId) running = undefined
+      calls.delete(e.turnId)
+    }
+    return next(e)
+  })
+  // The subagents a delivery's turn spawns are its own: their tool calls are cut with its.
+  on('agent.spawn', async ($, e, next) => {
+    const turn = running === undefined ? undefined : calls.get(running)
+    const spawned = await next(e)
+    const id = (spawned as { agentId?: unknown })?.agentId
+    if (turn && typeof id === 'string') turn.agents.add(id)
+    return spawned
+  }).catch(($, e, next) => next(e))
+  // A tool call of a turn a delivery started (on the main loop, or in a subagent it spawned) can be cut short by a cancel:
+  // answered before what runs beneath is done. Any other call (a background agent of an earlier turn's) passes straight
+  // through.
+  on('tool.call', async ($, e, next) => {
+    const turn = running === undefined ? undefined : calls.get(running)
+    if (!turn || (e.agentId !== undefined && !turn.agents.has(e.agentId))) return next(e)
+    if (e.tool_use_id) turn.ids.add(e.tool_use_id)
+    let cut = () => {}
+    const stopped = new Promise<'cut'>((resolve) => {
+      cut = () => resolve('cut')
+    })
+    turn.cuts.add(cut)
+    try {
+      const done = await Promise.race([next(e), stopped])
+      return done === 'cut' ? { deny: 'Stopped: the person cancelled this message from Lookout.' } : done
+    } finally {
+      turn.cuts.delete(cut)
+    }
+  }).catch(($, e, next) => next(e))
+  // A notification only of tasks of a turn taken back is dropped; one that tells of others too goes as it is.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind === 'task-notification' && quiet.size) {
+      const ids = [...e.text.matchAll(/<tool-use-id>([^<\s]+)<\/tool-use-id>/g)].map((m) => m[1])
+      if (ids.length && ids.every((id) => quiet.has(id))) {
+        return { drop: 'A task of a message cancelled from Lookout ended: not taken up again.' }
+      }
+    }
     return next(e)
   })
   on('session.end', async ($, e, next) => {
@@ -505,6 +730,17 @@ enum RelaySigner {
         let m = model ?? "-", e = effort ?? "-"
         return "⟦lookout v2 \(target) \(id) \(ts) \(m) \(e) \(mac(key: key, target: target, nonce: id, ts: ts, body: bytes, model: m, effort: e))⟧\n"
             + bytes.base64EncodedString()
+    }
+
+    /// An abort for the session `target`, taking back the delivery whose nonce is `cancels`: a header line alone,
+    /// `⟦lookout abort v1 <target> <nonce> <ms> <cancels> <hex HMAC-SHA256>⟧`, its MAC over
+    /// `abort-v1\n<target>\n<nonce>\n<ms>\n<cancels>\n`. Only a plugin that says `abort-v1` reads it, from its inbox alone.
+    static func signAbort(target: String, cancels: String, key: String, nonce: UUID = UUID(), now: Date = Date()) -> String {
+        let ts = String(RouterFeed.Stamp.ms(now))
+        let id = nonce.uuidString.lowercased()
+        let input = Data("abort-v1\n\(target)\n\(id)\n\(ts)\n\(cancels)\n".utf8)
+        let code = HMAC<SHA256>.authenticationCode(for: input, using: SymmetricKey(data: Data(key.utf8)))
+        return "⟦lookout abort v1 \(target) \(id) \(ts) \(cancels) \(code.map { String(format: "%02x", $0) }.joined())⟧\n"
     }
 
     /// The v2 MAC: `v2\n<target>\n<nonce>\n<ts>\n<model|->\n<effort|->\n` and the body.
@@ -868,11 +1104,11 @@ struct RelayInbox: Sendable {
     /// Files older than this are leftovers (a crash between writing and reading the ack): removed on the next delivery.
     static let leftover: TimeInterval = 15 * 60
 
-    /// The target and the nonce in a signed text's header line.
+    /// The target and the nonce in a signed text's header line (a delivery's, or an abort's).
     static func header(of text: String) -> (target: String, nonce: String)? {
         guard let line = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first,
               line.hasSuffix("⟧") else { return nil }
-        for (prefix, count) in [("⟦lookout v1 ", 4), ("⟦lookout v2 ", 6)] where line.hasPrefix(prefix) {
+        for (prefix, count) in [("⟦lookout v1 ", 4), ("⟦lookout v2 ", 6), ("⟦lookout abort v1 ", 5)] where line.hasPrefix(prefix) {
             let fields = line.dropFirst(prefix.count).dropLast().split(separator: " ")
             guard fields.count == count else { return nil }
             return (String(fields[0]), String(fields[1]))
@@ -983,10 +1219,15 @@ extension Store {
 
     /// Whether `cli`'s plugin applies a model and an effort carried in a message (it says `settings-v1`, under the key held
     /// now). An older plugin doesn't: nothing with settings is sent to it.
-    func supportsSettings(_ cli: String) async -> Bool {
+    func supportsSettings(_ cli: String) async -> Bool { await supports(ClaudePlugin.settingsCapability, cli) }
+
+    /// Whether `cli`'s plugin takes back a delivery on a signed abort (it says `abort-v1`, under the key held now).
+    func supportsAbort(_ cli: String) async -> Bool { await supports(ClaudePlugin.abortCapability, cli) }
+
+    private func supports(_ capability: String, _ cli: String) async -> Bool {
         guard let paths = routerFiles, let keyID = relayKeyCache?.keyID else { return false }
         return await OffMain.run {
-            ClaudePlugin.sessions(with: ClaudePlugin.settingsCapability, in: paths.pluginSessions,
+            ClaudePlugin.sessions(with: capability, in: paths.pluginSessions,
                                   registry: ClaudePeers.registry(dir: paths.claudeDir.appendingPathComponent("sessions", isDirectory: true)),
                                   keyID: keyID).contains(cli)
         }
