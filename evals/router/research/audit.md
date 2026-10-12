@@ -116,7 +116,7 @@ Use "both labellers name gold first" as the clean-clear subset.
 
 ## 7. Statistics (S1)
 
-Cases cluster heavily. bf923f69 ("Logo and branding colors") alone is 65 cases, 10.6% of real and 16% of realA. The
+Cases cluster heavily. One session alone is 65 cases, 10.6% of real and 16% of realA. The
 next sessions have 27, 24, 23 and 17; 62 sessions have one case each. The docs' "±5–7" is a Wilson interval on
 independent cases. A session-cluster bootstrap on the shipped policy gives:
 
