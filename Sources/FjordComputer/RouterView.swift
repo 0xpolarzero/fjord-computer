@@ -296,6 +296,8 @@ final class RouterModel {
     /// what you write next goes to the Router.
     var messageRequest: ScrollRequest?
     func show(message: UUID) {
+        // A search could hide the message: it ends.
+        if searching { endSearch() }
         selection = nil
         replyTo = nil
         show(.history)
@@ -350,9 +352,17 @@ final class RouterModel {
         self.defaults = defaults
         folded = RouterZone.folds(in: defaults)
     }
+    /// A fold of yours, or while a search is on, of the search's (`shownFolds`).
     func setFolded(_ zone: RouterZone, _ on: Bool) {
+        if searching {
+            if on { searchFolds.insert(zone) } else { searchFolds.remove(zone) }
+            return
+        }
         if on { folded.insert(zone) } else { folded.remove(zone) }
     }
+    /// The search over Now and History, in the page's header (RouterSearch.swift), and the folds made while it is on.
+    let search = InboxSearch()
+    var searchFolds: Set<RouterZone> = []
     /// Jev's pick for the draft while you type, and the target you fixed from it (see RouterJev.swift).
     let live = RouterLiveTarget()
     /// What the pills in the draft point to, one for each `MentionText.mark` in it, in order.
@@ -408,7 +418,7 @@ final class RouterModel {
     /// The plan of the card shown in full in Needs you, while it can still be decided: Esc opens its revise mode (Revise…)
     /// once nothing else is there to dismiss, and is Back while it is in it.
     func expandedPlan(_ store: Store) -> PendingForm? {
-        guard let id = store.routerZones.openNeed(preferred: expandedNeed),
+        guard let id = zones(store).openNeed(preferred: expandedNeed),
               let card = store.router.cards.first(where: { $0.id == id }),
               let form = store.pendingForm(for: card), form.isPlan, !locked(form) else { return nil }
         return form
@@ -433,10 +443,10 @@ final class RouterModel {
     /// either end of a side, the keys go on to the other, which shows.
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
         // Only what the page shows, as it shows it: a finished turn whose session still runs things isn't there yet; a wait
-        // over that is yours to continue is at the end of Needs you.
-        let page = store.routerZones
+        // over that is yours to continue is at the end of Needs you. What a search leaves out isn't there either.
+        let page = zones(store)
         let byID = Dictionary(store.router.cards.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let earlier = store.routerHistory.compactMap { entry -> RouterCard? in
+        let earlier = history(store).compactMap { entry -> RouterCard? in
             guard case .card(let card) = entry, let now = byID[card.id], !now.isOpen else { return nil }
             return now
         }
@@ -500,6 +510,10 @@ final class RouterModel {
         selection = id
         replyTo = id
         guard let id else { reveal(Self.endID, highlight: false); return }
+        // A card picked that the search leaves out (a banner's, the away strip's): the search ends, so it shows.
+        if searching, let card = store.router.cards.first(where: { $0.id == id }), !matchesSearch(card, store: store) {
+            endSearch()
+        }
         showPick(id, store: store, reveal: shows, expand: expand)
     }
 
@@ -530,7 +544,7 @@ final class RouterModel {
 
     /// A section's chip: a folded one opens and the page goes there, an open one folds.
     func chip(_ zone: RouterZone) {
-        guard !folded.contains(zone) else { return jump(to: zone) }
+        guard !shownFolds.contains(zone) else { return jump(to: zone) }
         zoneRequest = ScrollRequest(id: RouterZone.foldPrefix + zone.rawValue, seq: (zoneRequest?.seq ?? 0) + 1)
     }
 

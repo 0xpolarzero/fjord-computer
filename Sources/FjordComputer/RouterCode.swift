@@ -89,10 +89,13 @@ struct RouterMain: View {
                 .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 14))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 24)
+            // The inbox's search field, on the Router's own search: it filters Now and History as you type.
+            InboxSearchField(search: model.search, label: "Search the Router")
         }
         .padding(.trailing, CDS.TitleBar.endInset)
         .frame(height: CDS.TitleBar.bar)
         .frame(height: CDS.TitleBar.header)
+        .onChange(of: model.search.query) { model.searchChanged(store: store) }
         // The page's ground behind its title line, so nothing scrolled under it shows through the title.
         .background(CDS.Surface.s1)
     }

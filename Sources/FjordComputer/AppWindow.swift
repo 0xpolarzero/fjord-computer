@@ -784,6 +784,7 @@ struct AppRootView: View {
         // Another place has its own pick and search; a row asked for there (a banner's click) stays.
         .onChange(of: navigator.selection) { _, place in
             search.end()
+            routerModel.endSearch()
             if let pick = hub.selection, let tab = place.tab, store.entries(in: tab).contains(where: { "i:" + $0.id == pick }) { return }
             hub.selection = nil
             hub.keyboardSelection = nil

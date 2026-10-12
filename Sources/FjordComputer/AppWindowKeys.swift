@@ -279,9 +279,12 @@ final class AppWindowKeys {
 }
 
 /// The search field in the inbox's header: a real text field (paste, dead keys and input methods work, VoiceOver reads it).
-/// Typing elsewhere in the list opens it and hands it the key (see `AppWindowKeys`).
+/// Typing elsewhere in the list opens it and hands it the key (see `AppWindowKeys`). The Router's header has one too, on a
+/// search of its own (RouterSearch.swift).
 struct InboxSearchField: View {
     @Bindable var search: InboxSearch
+    /// What VoiceOver calls it.
+    var label = "Search the inbox"
     @FocusState private var focused: Bool
     @State private var hover = false
 
@@ -294,7 +297,7 @@ struct InboxSearchField: View {
                 .font(CDS.sans(CDS.Sidebar.rowFont))
                 .foregroundStyle(CDS.Text.primary)
                 .lineLimit(1)
-                .accessibilityLabel("Search the inbox")
+                .accessibilityLabel(label)
                 .focused($focused)
                 .focusEffectDisabled()
         }

@@ -7,7 +7,9 @@ import Foundation
 /// Elsewhere: ↑↓ pick a card, Return replies to it, and typing goes to the composer; Space is no key of the Router's (a card
 /// leaves only by its Archive button). The cards are walked in the order the page shows them (`RouterModel.cards`). Esc is
 /// first the Back of a plan in revise mode (its feedback field showing), then dismisses the suggestions, then Jev's pick of a
-/// target, then the pinned target, then the reply chip, then is the Revise… of the plan shown in full, then closes the window.
+/// target, then the pinned target, then the search, then the reply chip, then is the Revise… of the plan shown in full, then
+/// closes the window. ⌘F puts the keyboard in the search field (RouterSearch.swift), where ↑↓ walk what it lists, Return
+/// replies to the pick and Esc ends the search first; typing elsewhere still goes to the composer.
 @MainActor
 final class RouterKeys {
     let store: Store
@@ -39,13 +41,25 @@ final class RouterKeys {
             store.routerDispatcher.pick(ask.id, target: options[index].target)
             return true
         }
+        // ⌘F: the search field takes the keyboard (by key position, as the inbox's).
+        if flags == .command, code == kVK_ANSI_F {
+            model.search.start()
+            return true
+        }
         if code == kVK_Escape, flags.isEmpty {
             let plan = model.expandedPlan(store)
-            if let revising = model.revisingPlan, revising == plan?.id { model.revisingPlan = nil }
+            // In the search field: the search ends, its words and the field's focus, as the inbox's does.
+            if model.search.focused {
+                if responder is NSText { event.window?.makeFirstResponder(nil) }
+                model.endSearch()
+            }
+            else if let revising = model.revisingPlan, revising == plan?.id { model.revisingPlan = nil }
             // The suggestions shown (an @ word that names nothing shows none, and Esc goes on to what is there).
             else if !model.suggestions(store).isEmpty { model.dismissMention() }
             else if model.live.prediction != nil { model.dismissPrediction() }
             else if model.live.pinned != nil { model.live.reset() }
+            // A search on, the field left: it ends before the pick's reply goes.
+            else if !model.search.query.isEmpty { model.endSearch() }
             else if model.replyTo != nil { model.replyTo = nil }
             else if let plan { model.revisingPlan = plan.id }
             else { close() }
@@ -54,6 +68,19 @@ final class RouterKeys {
         let editing = responder is NSText
         let isReturn = code == kVK_Return || code == kVK_ANSI_KeypadEnter
         if editing {
+            // The search field: ↑↓ walk what it lists, Return replies to the pick; the rest is the field's own.
+            if model.search.focused {
+                guard flags.isEmpty else { return false }
+                if code == kVK_UpArrow || code == kVK_DownArrow {
+                    model.move(down: code == kVK_DownArrow, store: store)
+                    return true
+                }
+                guard isReturn else { return false }
+                model.reconcile(store: store)
+                guard let id = model.selection, model.cards(store).contains(where: { $0.id == id }) else { return false }
+                model.reply(to: id, store: store)
+                return true
+            }
             guard model.composerFocused else { return false }
             let suggestions = model.suggestions(store)
             if !suggestions.isEmpty, flags.isEmpty {

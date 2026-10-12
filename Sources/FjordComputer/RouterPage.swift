@@ -297,7 +297,7 @@ private struct NowColumn: View {
     @Namespace private var ns
 
     var body: some View {
-        let page = store.routerZones
+        let page = model.zones(store)
         // A session moving between the zones is the same card travelling, unless it has one in both.
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
@@ -430,7 +430,7 @@ private struct ZoneChips: View {
     private func row(_ zones: [RouterZone], named: Bool) -> some View {
         HStack(spacing: 4) {
             ForEach(zones) { zone in
-                ZoneChip(zone: zone, count: page.count(zone), named: named, open: !model.folded.contains(zone)) {
+                ZoneChip(zone: zone, count: page.count(zone), named: named, open: !model.shownFolds.contains(zone)) {
                     model.chip(zone)
                 }
             }
@@ -559,7 +559,7 @@ private struct RouterHistory: View {
     static let page = 100
 
     var body: some View {
-        let all = store.routerHistory
+        let all = model.history(store)
         let entries = HistoryWindow.drawn(all, from: oldest, page: Self.page)
         let expanded = model.expanded, picked = model.selection, highlighted = model.highlighted
         // One clock for every age in the history, on the minute.
@@ -591,6 +591,8 @@ private struct RouterHistory: View {
                             .padding(.leading, CDS.Transcript.textInset)
                             .padding(.trailing, CDS.Transcript.statusPad)
                             .padding(.bottom, 12)
+                        } else if model.searching {
+                            RouterNothingFound().padding(.leading, CDS.Transcript.textInset - 2)
                         }
                         ForEach(entries) { entry in
                             row(entry, now: now, open: expanded.contains(entry.id), marked: entry.id == picked || entry.id == highlighted)
@@ -1350,18 +1352,22 @@ private struct RouterNow: View {
 
     private var spring: Animation? { Motion.spatial.resolved(reduce: reduceMotion) }
 
+    /// The sections shown: Needs you always (it says when nothing needs you), the others with something in them; while
+    /// a search is on, only those with a match.
     private var zones: [RouterZone] {
-        RouterZone.allCases.filter { $0 == .needs || page.count($0) > 0 }
+        RouterZone.allCases.filter { ($0 == .needs && !model.searching) || page.count($0) > 0 }
     }
 
     var body: some View {
-        let folded = model.folded
+        let folded = model.shownFolds
+        let zones = self.zones
         VStack(spacing: 0) {
             if !statusInBar { RouterBusyLine(store: store) }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         AwayStripView(store: store, model: model).padding(.bottom, 4)
+                        if zones.isEmpty { RouterNothingFound() }
                         ForEach(zones) { zone in
                             let isFolded = folded.contains(zone) && page.count(zone) > 0
                             Color.clear.frame(height: 0).id(zone.anchorID)
@@ -1404,7 +1410,7 @@ private struct RouterNow: View {
                         pending = Pending(zone.anchorID, anchor: .top)
                     } else if request.id.hasPrefix(RouterZone.foldPrefix),
                               let zone = RouterZone(rawValue: String(request.id.dropFirst(RouterZone.foldPrefix.count))) {
-                        if !model.folded.contains(zone) { toggle(zone, proxy: proxy) }
+                        if !model.shownFolds.contains(zone) { toggle(zone, proxy: proxy) }
                     }
                 }
                 .onChange(of: pending) { perform(proxy) }
@@ -1413,7 +1419,7 @@ private struct RouterNow: View {
     }
 
     private func open(_ zone: RouterZone) {
-        guard model.folded.contains(zone) else { return }
+        guard model.shownFolds.contains(zone) else { return }
         withAnimation(spring) { model.setFolded(zone, false) }
     }
 
@@ -1430,7 +1436,7 @@ private struct RouterNow: View {
     /// Folds a section or opens it. Folding the one whose header is held at the top (you are inside it) takes the page back
     /// to its start, so the header stays where you clicked it and the next section comes up under it.
     private func toggle(_ zone: RouterZone, proxy: ScrollViewProxy) {
-        let folding = !model.folded.contains(zone)
+        let folding = !model.shownFolds.contains(zone)
         let inside = (tops.y[zone] ?? 0) < tops.inset - 1
         withAnimation(spring) {
             model.setFolded(zone, folding)
@@ -1489,7 +1495,7 @@ private struct RouterNow: View {
 
     @ViewBuilder private func accessory(_ zone: RouterZone, folded: Bool) -> some View {
         switch zone {
-        case .notes where !folded && page.notes.count > Self.notesShown:
+        case .notes where !folded && !model.searching && page.notes.count > Self.notesShown:
             let all = showsAllNotes
             Button(all ? "Show fewer" : "Show all") {
                 withAnimation(spring) { showAllNotes = !all }
@@ -1541,10 +1547,11 @@ private struct RouterNow: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    /// One picked past the first few of Worth a look shows them all, so the keys never land on a card that isn't drawn.
+    /// One picked past the first few of Worth a look shows them all, so the keys never land on a card that isn't drawn; a
+    /// search shows every match.
     private var showsAllNotes: Bool {
         let picked = [model.selection, model.highlighted, model.expandedNeed].compactMap { $0 }
-        return showAllNotes || page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
+        return showAllNotes || model.searching || page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
     }
 
     /// Finished turns with nothing to do but something to tell: quieter than Needs you, a line each, the first few shown.
