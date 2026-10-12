@@ -1,6 +1,7 @@
 import AppKit
 import OSLog
 import QuartzCore
+import SwiftUI
 
 // The morph between the bar and the app window: the window grows out of the bar's cell when it opens, and shrinks back into
 // it when it closes. One borderless overlay covers the morph and hosts a few Core Animation layers (the window's exact
@@ -16,7 +17,22 @@ import QuartzCore
 //
 // Each step is a signpost interval (subsystem com.amontlabs.fjord, category "morph"), to see in Instruments where an
 // opening's time goes: the request to the first flush, bringing the window in, each capture and picture installed, the
-// handoff, and the overlay going.
+// handoff, and the overlay going; on glass, inside each capture, the capture flag's two passes ("Capture flag on", "Capture
+// flag off": the stand-ins drawn, then the glass restored). G1, G2 and their hosts are made once, at idle with the overlay
+// (`prepareOverlay`), and taken up by each glass morph, so a morph makes no view before its first frame.
+//
+// On glass (macOS 26, `Chrome.Mode.glass`) the morph starts as the bar's glass (docs/design/fjord/glass-plan.md §5.6, M1).
+// The overlay holds, bottom to top: the shadow; G1, a glass shape (`NSGlassEffectView`) growing from the bar's cell to the
+// window's frame and corners, moved by `NSAnimationContext` and `animator()` (the one way that moved glass without a
+// dropped frame, §11 S5); the window-shaped `s1` container, fading in over the second half; G2, a glass shape at the inset
+// sidebar's frame riding the container's opacity, so it samples `s1` as the real sidebar does; and the window's picture,
+// whole, in a clip of the window's shape. The window's captures draw the small glass pieces (the nav capsule, the
+// composer) as their opaque fills (`GlassCapture`), and the sidebar's rounded rect is cleared out of the picture after it
+// is taken (`punch`), so the picture shows G2 through where the sidebar is. Every layer runs the same curve
+// as the glass (the springs as one cubic, `GlassMorph.curve`), so the glass and the picture move in lockstep. No picture of
+// the bar is taken: G1 is its glass. Closing mirrors it, G1 fading into the bar's glass as the bar fades in beneath.
+// Reduce Motion: the cross-fade at the window's frame, G2 and the picture fading with the container. Opaque mode and macOS
+// 14 and 15: the morph above, unchanged.
 
 /// The morph's signposts.
 enum MorphSignposts {
@@ -59,6 +75,10 @@ enum AppTransition {
 
     /// Off under a test: the window opens and closes at once.
     static var enabled = !UnderTest.isRunning
+    /// The glass morph (M1) may run: off under a test (whose morphs check today's layers) unless the test turns it on.
+    static var glassMorph = !UnderTest.isRunning
+    /// The morph that runs now is the glass one: allowed, and the chrome draws glass.
+    static var usesGlass: Bool { glassMorph && GlassCapture.chromeIsGlass }
     static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     /// `FJORD_SLOW_MORPH=10` runs the morph ten times slower, to look at it.
     static var slowdown: Float {
@@ -102,34 +122,107 @@ enum AppTransition {
     /// How many pictures of a window were taken (the tests count them).
     private(set) static var captures = 0
 
-    /// The window's pixels as they are now: its whole frame (title bar and buttons included) at the screen's scale.
-    static func snapshot(of window: NSWindow) -> CGImage? {
+    /// A place left clear in a window's picture: the inset sidebar's rounded rect (window coordinates), which the glass
+    /// morph's G2 shows through.
+    struct Hole: Equatable {
+        var rect: NSRect
+        var radius: CGFloat
+    }
+
+    /// The window's pixels as they are now: its whole frame (title bar and buttons included) at the screen's scale. With
+    /// the window's capture flag (`capture`) and glass on, its small glass pieces are drawn as their stand-ins for the
+    /// picture and restored, in this turn (`GlassCapture.around`); `hole` is then cleared out of the picture.
+    static func snapshot(of window: NSWindow, capture: GlassCapture? = nil, hole: Hole? = nil) -> CGImage? {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
         captures += 1
         let signpost = MorphSignposts.signposter.beginInterval("Capture")
         defer { MorphSignposts.signposter.endInterval("Capture", signpost) }
+        let glass = GlassCapture.chromeIsGlass
+        let cleared = glass ? hole : nil
+        let draw = { () -> CGImage? in
+            // With alpha whatever the window's opacity, where there is a hole: it must come out clear, not black.
+            let made = cleared != nil ? alphaRep(for: view) : view.bitmapImageRepForCachingDisplay(in: view.bounds)
+            guard let rep = made else { return nil }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            if let cleared { punch(rep, cleared) }
+            return rep.cgImage
+        }
+        if let capture, glass {
+            // The capture itself still runs on the theme frame; the flag is the content's root's.
+            return capture.around(glass: true,
+                                  settle: { GlassCapture.settle(host: window.contentView, root: view, window: window) },
+                                  draw)
+        }
         view.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
+        return draw()
+    }
+
+    /// A bitmap to cache `view`'s display in, at its backing scale, with an alpha channel, in the colour space the view's
+    /// own would have (a P3 display's included), so the picture matches the live window.
+    private static func alphaRep(for view: NSView) -> NSBitmapImageRep? {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        return rep.cgImage
+        if rep.hasAlpha { return rep }
+        guard let alpha = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh,
+                                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        // Retagged before anything is drawn: the pixels are converted to that space as they are drawn.
+        let tagged = alpha.colorSpace == rep.colorSpace ? alpha : (alpha.retagging(with: rep.colorSpace) ?? alpha)
+        tagged.size = rep.size
+        return tagged
+    }
+
+    /// Clears `hole` (in points, the rep's `size`) out of `rep`: transparent there, untouched elsewhere. Drawn in the
+    /// bitmap's own pixels whatever scale its context starts with; the shape is the sidebar's (continuous corners).
+    static func punch(_ rep: NSBitmapImageRep, _ hole: Hole) {
+        guard rep.hasAlpha, rep.size.width > 0, rep.size.height > 0,
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return }
+        let cg = context.cgContext
+        cg.saveGState()
+        cg.concatenate(cg.ctm.inverted())
+        cg.scaleBy(x: CGFloat(rep.pixelsWide) / rep.size.width, y: CGFloat(rep.pixelsHigh) / rep.size.height)
+        cg.setBlendMode(.clear)
+        cg.addPath(RoundedRectangle(cornerRadius: hole.radius, style: .continuous).path(in: hole.rect).cgPath)
+        cg.fillPath()
+        cg.restoreGState()
+        context.flushGraphics()
+    }
+
+    /// What the glass morph needs of the window beyond its frame: its capture flag, and its inset sidebar's frame in the
+    /// window (nil: none, as during the onboarding).
+    struct GlassWindow {
+        var capture: GlassCapture?
+        var sidebar: NSRect?
+
+        /// The hole a glass morph's picture of a window with corners of `radius` leaves where the sidebar is (nil: today's
+        /// morph, or no sidebar).
+        @MainActor func hole(glass: Bool, radius: CGFloat) -> Hole? {
+            guard glass, let sidebar else { return nil }
+            return Hole(rect: sidebar, radius: GlassMorph.sidebarRadius(windowRadius: radius))
+        }
     }
 
     /// An overlay for `window` (laid out at its frame) on the window's picture as it is now, ready to show; nil when there
-    /// is nothing to draw.
-    static func makeRun(for window: NSWindow, bar: BarMorph?) -> Run? {
-        guard let image = snapshot(of: window), let screen = window.screen ?? NSScreen.main else { return nil }
+    /// is nothing to draw. `glass`: the glass morph (M1).
+    static func makeRun(for window: NSWindow, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
+                        glass: Bool? = nil) -> Run? {
+        let isGlass = glass ?? usesGlass
+        let radius = cornerRadius(of: window)
+        guard let image = snapshot(of: window, capture: glassWindow.capture,
+                                   hole: glassWindow.hole(glass: isGlass, radius: radius)),
+              let screen = window.screen ?? NSScreen.main else { return nil }
         return Run(window: window, image: image, imageIsKey: isKey(window), screen: screen, bar: bar,
-                   radius: cornerRadius(of: window))
+                   radius: radius, glassWindow: glassWindow, glass: isGlass)
     }
 
     /// An overlay for `window` with nothing captured: on `image` (a picture kept from before), else on the window's bare
     /// surface until `refresh` brings one.
-    static func makeRun(for window: NSWindow, image: CGImage?, bar: BarMorph?) -> Run? {
+    static func makeRun(for window: NSWindow, image: CGImage?, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
+                        glass: Bool? = nil) -> Run? {
         guard let screen = window.screen ?? NSScreen.main else { return nil }
         // A picture kept was taken at a close, with the window key.
         return Run(window: window, image: image, imageIsKey: image != nil, screen: screen, bar: bar,
-                   radius: cornerRadius(of: window))
+                   radius: cornerRadius(of: window), glassWindow: glassWindow, glass: glass ?? usesGlass)
     }
 
     /// The window's picture at its last close, taken while it had the keyboard (its buttons in colour, as the real window
@@ -141,12 +234,19 @@ enum AppTransition {
         var scale: CGFloat
         /// What it shows: another place opening draws a fresh picture over it.
         var destination: AppDestination
+        /// Taken for the glass morph (its sidebar cleared, its small glass pieces opaque): only that morph may use it.
+        var glass = false
 
         /// Whether it can stand for `window` as it opens: the same size, at the scale a picture of it would be taken at now
         /// (the window's own, as `scale` is: a window off every screen keeps that of the last one it was on, which need not
         /// be the main screen's).
         @MainActor func fits(_ window: NSWindow) -> Bool {
-            frame.size == window.frame.size && scale == window.backingScaleFactor
+            fits(window, glass: AppTransition.usesGlass)
+        }
+
+        /// `fits`, for a morph that is the glass one (`glass`) or not: a picture taken for the other never stands in.
+        @MainActor func fits(_ window: NSWindow, glass: Bool) -> Bool {
+            frame.size == window.frame.size && scale == window.backingScaleFactor && self.glass == glass
         }
     }
 
@@ -187,9 +287,20 @@ enum AppTransition {
 
     /// Kept on the same display, resized between runs. Screen identity is separate from the frame: equal bounds (and
     /// especially equal away frames under test) do not mean the same display.
-    final class OverlayCache {
+    @MainActor final class OverlayCache {
         private var screen: ScreenIdentity?
         private var overlay: NSWindow?
+        /// The glass morph's views, made once and taken up by each glass morph (whatever the display).
+        private var pieces: GlassPieces?
+
+        /// The glass morph's views, made the first time they are asked for.
+        @available(macOS 26, *)
+        fileprivate func glassPieces() -> GlassPieces {
+            if let pieces { return pieces }
+            let made = GlassPieces()
+            pieces = made
+            return made
+        }
 
         /// The window made ahead of a first morph (its frame is set again when one starts); one on screen is left alone.
         func prepare(on screen: ScreenIdentity, frame: NSRect) -> NSWindow {
@@ -223,7 +334,8 @@ enum AppTransition {
     /// Make the shared overlay at idle, without showing it or disturbing a morph already on screen.
     @discardableResult
     static func prepareOverlay(on screen: NSScreen) -> NSWindow {
-        sharedOverlay.prepare(on: ScreenIdentity(screen), frame: screen.frame)
+        if usesGlass, #available(macOS 26, *) { _ = sharedOverlay.glassPieces() }
+        return sharedOverlay.prepare(on: ScreenIdentity(screen), frame: screen.frame)
     }
 
     /// Where the layers are, and how they look.
@@ -235,6 +347,8 @@ enum AppTransition {
         var bar: Float = 0
         var shadow: Float = 1
         var container: Float = 1
+        /// G1's opacity (the glass morph only).
+        var glass: Float = 1
 
         /// The pose's own shadow, from the shadow layer's opacity as drawn: that is the pose's shadow times its container's
         /// (see `containers(set:)`), which an animation from this pose multiplies by the container again.
@@ -263,6 +377,12 @@ enum AppTransition {
         private let container = CALayer()
         private let windowLayer = CALayer()
         private let barLayer = CALayer()
+        /// The glass morph's pieces (M1); nil: today's morph.
+        private let glass: GlassPieces?
+        /// The window's capture flag, for the pictures taken of it.
+        private let capture: GlassCapture?
+        /// The window's inset sidebar (window coordinates), cleared out of its pictures on glass.
+        private let sidebar: NSRect?
         /// The real window's frame and the bar's, on screen.
         let windowFrame: NSRect
         let windowRadius: CGFloat
@@ -287,13 +407,17 @@ enum AppTransition {
         private var fadeEnds: CFTimeInterval = 0
         /// A fresh picture is still fading in over the last.
         var isFadingPicture: Bool { windowLayer.animation(forKey: kCATransition) != nil }
+        /// Whether this is the glass morph (M1).
+        var isGlass: Bool { glass != nil }
 
         fileprivate init(window: NSWindow, image: CGImage?, imageIsKey: Bool, screen: NSScreen, bar: BarMorph?,
-                         radius: CGFloat) {
+                         radius: CGFloat, glassWindow: GlassWindow, glass useGlass: Bool) {
             self.screen = screen
             self.bar = bar
             self.image = image
             self.imageIsKey = imageIsKey
+            capture = glassWindow.capture
+            sidebar = glassWindow.sidebar
             windowFrame = window.frame
             windowRadius = radius
             let scale = screen.backingScaleFactor
@@ -301,11 +425,22 @@ enum AppTransition {
             overlay = AppTransition.sharedOverlay.window(on: ScreenIdentity(screen), frame: geometry.frame)
             // Above the window, and above the bar (floating) which fades in or out beneath.
             overlay.level = NSWindow.Level(rawValue: max(window.level.rawValue, NSWindow.Level.floating.rawValue) + 1)
-            host = NSView(frame: NSRect(origin: .zero, size: geometry.frame.size))
-            root.frame = host.bounds
-            root.speed = 1 / AppTransition.slowdown
-            host.layer = root
-            host.wantsLayer = true
+            let bounds = NSRect(origin: .zero, size: geometry.frame.size)
+            var pieces: GlassPieces?
+            if useGlass, #available(macOS 26, *) { pieces = AppTransition.sharedOverlay.glassPieces() }
+            glass = pieces
+            if let pieces {
+                // The views made once (`prepareOverlay`), taken up by this morph: its layers in their hosts.
+                host = pieces.host
+                pieces.adopt(by: self, bounds: bounds, window: window.frame.size, radius: radius,
+                             sidebar: glassWindow.sidebar, shadow: shadow, container: container, picture: windowLayer)
+            } else {
+                host = NSView(frame: bounds)
+                root.frame = host.bounds
+                root.speed = 1 / AppTransition.slowdown
+                host.layer = root
+                host.wantsLayer = true
+            }
             overlay.contentView = host
 
             root.contentsScale = scale
@@ -314,18 +449,20 @@ enum AppTransition {
             shadow.shadowRadius = AppTransition.shadowRadius
             shadow.shadowOffset = AppTransition.shadowOffset
             shadow.shadowOpacity = 0
-            root.addSublayer(shadow)
             container.masksToBounds = true
             container.cornerCurve = .continuous
             container.backgroundColor = NSColor(CDS.Surface.s1).cgColor
             container.contentsScale = scale
-            root.addSublayer(container)
             windowLayer.contents = image
             windowLayer.contentsScale = scale
             windowLayer.contentsGravity = .resize
             windowLayer.bounds = CGRect(origin: .zero, size: windowFrame.size)
             windowLayer.opacity = 0
-            container.addSublayer(windowLayer)
+            if pieces == nil {
+                root.addSublayer(shadow)
+                root.addSublayer(container)
+                container.addSublayer(windowLayer)
+            }
             if let bar, let cg = bar.snapshot?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                 barLayer.contents = cg
                 barLayer.contentsScale = scale
@@ -333,10 +470,11 @@ enum AppTransition {
                 barLayer.bounds = CGRect(origin: .zero, size: bar.frame.size)
                 barLayer.position = local(bar.frame).center
                 barLayer.opacity = 0
-                root.addSublayer(barLayer)
+                if let pieces { pieces.pictureRoot.addSublayer(barLayer) } else { root.addSublayer(barLayer) }
             }
+            pieces?.clip.contentsScale = scale
             container.opacity = 0
-            apply(Pose(rect: windowFrame, radius: radius, window: 1, bar: 0, shadow: 0, container: 0))
+            apply(Pose(rect: windowFrame, radius: radius, window: 1, bar: 0, shadow: 0, container: 0, glass: 0))
         }
 
         /// A screen rect in the overlay's layer coordinates.
@@ -352,7 +490,8 @@ enum AppTransition {
         /// A newer picture of the window (it was built, or its content changed since): the same frame. `crossFade`: the
         /// picture shown is another (none, or another place's), so the new one fades in over it rather than popping in.
         func refresh(_ window: NSWindow, crossFade: Bool = false) {
-            guard let image = AppTransition.snapshot(of: window) else { return }
+            let hole = GlassWindow(sidebar: sidebar).hole(glass: isGlass, radius: windowRadius)
+            guard let image = AppTransition.snapshot(of: window, capture: capture, hole: hole) else { return }
             self.image = image
             imageIsKey = AppTransition.isKey(window)
             let signpost = MorphSignposts.signposter.beginInterval("Install picture")
@@ -382,11 +521,15 @@ enum AppTransition {
             CATransaction.commit()
         }
 
-        private func containers(set pose: Pose) {
+        /// The layers moved with the window's shape: the container and the shadow, and on glass the picture's clip.
+        private var shaped: [CALayer] { glass.map { [container, shadow, $0.clip] } ?? [container, shadow] }
+
+        /// `glassFrames` false: the glass shapes stay where they are (a motion moves them after).
+        private func containers(set pose: Pose, glassFrames: Bool = true) {
             // The handoff's cut-out (see `letGo`) is no part of any pose: the whole shadow shows again.
             shadow.mask = nil
             let rect = local(pose.rect)
-            for layer in [container, shadow] {
+            for layer in shaped {
                 layer.bounds = CGRect(origin: .zero, size: rect.size)
                 layer.position = rect.center
             }
@@ -398,9 +541,10 @@ enum AppTransition {
             shadow.shadowPath = Self.path(rect.size, pose.radius)
             shadow.shadowOpacity = pose.shadow * pose.container
             shadow.opacity = 1
+            glass?.set(pose, local: rect, frames: glassFrames)
         }
 
-        private static func path(_ size: CGSize, _ radius: CGFloat) -> CGPath {
+        fileprivate static func path(_ size: CGSize, _ radius: CGFloat) -> CGPath {
             let r = min(radius, size.width / 2, size.height / 2)
             return CGPath(roundedRect: CGRect(origin: .zero, size: size), cornerWidth: r, cornerHeight: r, transform: nil)
         }
@@ -416,13 +560,19 @@ enum AppTransition {
                         window: windowLayer.presentation()?.opacity ?? windowLayer.opacity,
                         bar: barLayer.presentation()?.opacity ?? barLayer.opacity,
                         shadow: Pose.shadow(drawn: s.shadowOpacity, container: c.opacity),
-                        container: c.opacity)
+                        container: c.opacity,
+                        glass: glass?.opacity ?? 1)
         }
 
         /// The poses the two ends of a morph have.
         var windowPose: Pose { Pose(rect: windowFrame, radius: windowRadius) }
+        /// The bar's cell: today's morph starts on the bar's picture over an `s1` cell; the glass morph on G1 alone, which
+        /// comes in at once over the bar's own glass.
         private var cellPose: Pose? {
             guard let bar else { return nil }
+            if isGlass {
+                return Pose(rect: bar.cellFrame, radius: bar.cellRadius, window: 0, bar: 1, shadow: 0, container: 0, glass: 0)
+            }
             return Pose(rect: bar.cellFrame, radius: bar.cellRadius, window: 0, bar: 1, shadow: 0, container: 1)
         }
 
@@ -447,7 +597,7 @@ enum AppTransition {
             // Not showing: the start is set here, and taken as it is (its layers are not on screen yet, so they have no
             // presentation to read it from).
             guard !reduced, let cell = cellPose else {
-                let hidden = Pose(rect: windowFrame, radius: windowRadius, window: 1, bar: 0, shadow: 1, container: 0)
+                let hidden = Pose(rect: windowFrame, radius: windowRadius, window: 1, bar: 0, shadow: 1, container: 0, glass: 0)
                 if !wasShowing { apply(hidden) }
                 fade(to: 1, from: wasShowing ? nil : hidden, done: done)
                 return
@@ -455,8 +605,8 @@ enum AppTransition {
             if !wasShowing { apply(cell) }
             // The handoff starts two refreshes before the spring settles: the real window is composited by then, and the
             // overlay over it stays until it has.
-            play(to: windowPose, from: wasShowing ? nil : cell, spring: .opening, opacities: .opening, lead: 2 * frameDuration,
-                 done: done)
+            play(to: windowPose, from: wasShowing ? nil : cell, spring: .opening,
+                 opacities: isGlass ? .glassOpening : .opening, lead: 2 * frameDuration, done: done)
         }
 
         /// One refresh of the overlay's screen.
@@ -479,15 +629,19 @@ enum AppTransition {
             end.bar = 0
             end.shadow = 0
             end.container = 0
-            play(to: end, spring: .closing, opacities: .closing, lead: 0, done: done)
+            end.glass = 0
+            play(to: end, spring: .closing, opacities: isGlass ? .glassClosing : .closing, lead: 0, done: done)
         }
 
-        /// A cross-fade of the overlay alone, at the window's frame, from `start` (else from where it is now).
+        /// A cross-fade of the overlay alone, at the window's frame, from `start` (else from where it is now). On glass G1
+        /// stays out of it, and the picture's clip and G2 fade with the container.
         private func fade(to opacity: Float, from start: Pose? = nil, done: @escaping () -> Void) {
             var from = start ?? pose
             from.rect = windowFrame
+            from.glass = 0
             var end = windowPose
             end.container = opacity
+            end.glass = 0
             token += 1
             let mine = token
             // A handoff under way is called off.
@@ -505,6 +659,7 @@ enum AppTransition {
             a.duration = AppTransition.reducedDuration
             a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             container.add(a, forKey: "opacity")
+            glass?.fade(a, to: opacity)
             let s = CABasicAnimation(keyPath: "shadowOpacity")
             s.fromValue = from.shadow * from.container
             s.toValue = end.shadow * end.container
@@ -523,8 +678,27 @@ enum AppTransition {
             var window: (Double, Double)
             var shadow: (Double, Double)
             var container: (Double, Double)
+            /// G1's (the glass morph only); G2 rides the container's.
+            var glass: (Double, Double) = (0, 0)
             static let opening = Opacities(bar: (0, 0.4), window: (0.08, 0.5), shadow: (0, 0.5), container: (0, 0.1))
             static let closing = Opacities(bar: (0, 0.3), window: (0.1, 0.4), shadow: (0, 0.45), container: (0.45, 0.4))
+            /// The glass morph: G1 comes in at once over the bar's glass; the picture as today; the container (with G2 and
+            /// the shadow) over the second half, so the first shows the bar's glass growing.
+            static let glassOpening = Opacities(bar: (0, 0.4), window: (0.08, 0.5), shadow: (0.45, 0.45),
+                                                container: (0.45, 0.45), glass: (0, 0.1))
+            /// Its mirror: the container goes first, the window shrinking as glass, G1 fading into the bar's glass at the end.
+            static let glassClosing = Opacities(bar: (0, 0.3), window: (0.05, 0.4), shadow: (0, 0.45),
+                                                container: (0.1, 0.45), glass: (0.7, 0.3))
+        }
+
+        /// The length of the motion for `spring`: its settling time; on glass, the critically damped spring's as one curve
+        /// (`GlassMorph`), which the glass can run.
+        func motionLength(_ spring: Spring) -> TimeInterval {
+            if isGlass { return GlassMorph.duration(spring) }
+            let total = CASpringAnimation(keyPath: "x")
+            total.stiffness = spring.stiffness
+            total.damping = spring.damping
+            return total.settlingDuration
         }
 
         /// From `start` (else from where the layers are now). `lead`: how long before the spring settles `done` runs.
@@ -539,35 +713,45 @@ enum AppTransition {
             completion = done
             let fromRect = local(from.rect)
             let toRect = local(end.rect)
+            let length = motionLength(spring)
+            let glassCurve = isGlass ? GlassMorph.curve : nil
             // Every animation starts at this one time: fades timed against the spring stay where they belong on it.
             let start = CACurrentMediaTime()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             removeMotion()
-            containers(set: end)
+            containers(set: end, glassFrames: false)
+            // The glass shapes start where the layers do (a reversal included); they move once this is committed.
+            glass?.setFrames(from, local: fromRect)
             func add(_ layer: CALayer, _ key: String, _ a: Any, _ b: Any) {
-                let s = CASpringAnimation(keyPath: key)
-                s.mass = 1
-                s.stiffness = spring.stiffness
-                s.damping = spring.damping
-                s.initialVelocity = 0
-                s.fromValue = a
-                s.toValue = b
-                s.duration = s.settlingDuration
-                s.beginTime = layer.convertTime(start, from: nil)
-                s.fillMode = .backwards
-                layer.add(s, forKey: key)
+                let animation: CABasicAnimation
+                if let glassCurve {
+                    // On glass every layer runs the glass's curve, so the picture and the glass move in lockstep.
+                    animation = CABasicAnimation(keyPath: key)
+                    animation.timingFunction = glassCurve
+                    animation.duration = length
+                } else {
+                    let s = CASpringAnimation(keyPath: key)
+                    s.mass = 1
+                    s.stiffness = spring.stiffness
+                    s.damping = spring.damping
+                    s.initialVelocity = 0
+                    s.duration = s.settlingDuration
+                    animation = s
+                }
+                animation.fromValue = a
+                animation.toValue = b
+                animation.beginTime = layer.convertTime(start, from: nil)
+                animation.fillMode = .backwards
+                layer.add(animation, forKey: key)
             }
-            let total = CASpringAnimation(keyPath: "x")
-            total.stiffness = spring.stiffness
-            total.damping = spring.damping
-            let length = total.settlingDuration
-            for layer in [container, shadow] {
+            for layer in shaped {
                 add(layer, "bounds", NSValue(rect: CGRect(origin: .zero, size: fromRect.size)),
                            NSValue(rect: CGRect(origin: .zero, size: toRect.size)))
                 add(layer, "position", NSValue(point: fromRect.center), NSValue(point: toRect.center))
             }
             add(container, "cornerRadius", from.radius, end.radius)
+            if let clip = glass?.clip { add(clip, "cornerRadius", from.radius, end.radius) }
             add(shadow, "shadowPath", Self.path(fromRect.size, from.radius), Self.path(toRect.size, end.radius))
             add(windowLayer, "position", NSValue(point: CGPoint(x: fromRect.width / 2, y: fromRect.height / 2)),
                        NSValue(point: CGPoint(x: toRect.width / 2, y: toRect.height / 2)))
@@ -586,7 +770,14 @@ enum AppTransition {
             fadeLayer(windowLayer, "opacity", from.window, end.window, opacities.window)
             fadeLayer(shadow, "shadowOpacity", from.shadow * from.container, end.shadow * end.container, opacities.shadow)
             fadeLayer(container, "opacity", from.container, end.container, opacities.container)
+            if let glass {
+                if let g1 = glass.g1.layer { fadeLayer(g1, "opacity", from.glass, end.glass, opacities.glass) }
+                // G2 rides the container: it comes with the `s1` it samples.
+                if let g2 = glass.g2.layer { fadeLayer(g2, "opacity", from.container, end.container, opacities.container) }
+            }
             CATransaction.commit()
+            // Out of the transaction above, whose actions are off: the glass moves by its views' own animations.
+            glass?.animate(to: end, local: toRect, duration: length, curve: GlassMorph.curve)
             // The layers run at 1/slowdown; `lead` is in real refreshes.
             let real = length * Double(AppTransition.slowdown)
             settlesAt = start + real
@@ -601,6 +792,7 @@ enum AppTransition {
         private func removeMotion() {
             for layer in [container, shadow, barLayer] { layer.removeAllAnimations() }
             for key in windowLayer.animationKeys() ?? [] where key != kCATransition { windowLayer.removeAnimation(forKey: key) }
+            glass?.stop()
         }
 
         private func finishAnimation(_ mine: Int) {
@@ -619,6 +811,7 @@ enum AppTransition {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for layer in [container, shadow, windowLayer, barLayer] { layer.removeAllAnimations() }
+            glass?.stop()
             CATransaction.commit()
             done()
         }
@@ -662,7 +855,8 @@ enum AppTransition {
         static let shadowHandoff: TimeInterval = 0.1
 
         /// The window's picture goes at once (the real window under it has the same pixels, and its own are live), the
-        /// overlay's shadow gives way to the window's own, then the overlay goes.
+        /// overlay's shadow gives way to the window's own, then the overlay goes. On glass G1, G2 and the picture's clip go
+        /// with the container: the real sidebar replaces G2 on the same `s1`.
         private func letGo(_ mine: Int, finished: @escaping () -> Void) {
             handedOver = true
             endHandoffSignpost()
@@ -670,6 +864,7 @@ enum AppTransition {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             container.opacity = 0
+            glass?.hide()
             // A layer's shadow is drawn under its shape too: only what lies outside the window may show now.
             let mask = CAShapeLayer()
             mask.frame = shadow.bounds
@@ -712,10 +907,165 @@ enum AppTransition {
             endHandoffSignpost()
             completion = nil
             token += 1
+            // The glass views are shared too: a newer glass morph may have taken them up.
+            if let glass {
+                guard glass.owner === self else { return }
+                glass.owner = nil
+            }
             // The overlay is shared: a newer morph may have it already.
             guard overlay.contentView === host else { return }
             overlay.orderOut(nil)
             overlay.contentView = nil
+        }
+    }
+
+    /// The glass morph's pieces (M1): G1 and G2, the layers' hosts between them, and the picture's clip. Made once and
+    /// taken up by each glass morph (`adopt`), which puts its own layers in the hosts.
+    @MainActor
+    fileprivate final class GlassPieces {
+        /// The overlay's content: bottom to top, the shadow's host, G1, the container's host, G2, the picture's host.
+        let host = NSView()
+        /// G1: the bar's glass growing into the window.
+        let g1: NSView
+        /// G2: the inset sidebar's glass, under the window's picture (hidden when the window has no sidebar).
+        let g2: NSView
+        /// The window-shaped clip the picture is drawn in, above G2 (the container is below it).
+        let clip = CALayer()
+        private let shadowRoot = CALayer()
+        private let containerRoot = CALayer()
+        let pictureRoot = CALayer()
+        private let hosts: [NSView]
+        /// The morph using them now: only it may take the overlay away.
+        weak var owner: Run?
+        /// The window's size, and its sidebar's frame and radius in it, for the morph using them.
+        private var window = NSSize.zero
+        private var sidebar: NSRect?
+        private var sidebarRadius: CGFloat = 0
+
+        @available(macOS 26, *)
+        init() {
+            let g1 = NSGlassEffectView(frame: .zero)
+            g1.wantsLayer = true
+            self.g1 = g1
+            let g2 = NSGlassEffectView(frame: .zero)
+            g2.wantsLayer = true
+            self.g2 = g2
+            hosts = [NSView(), NSView(), NSView()]
+            clip.masksToBounds = true
+            clip.cornerCurve = .continuous
+            pictureRoot.addSublayer(clip)
+            // Layer-backed, its layers in layer-hosting views between the glass views (a layer-hosting view takes no
+            // subviews).
+            host.wantsLayer = true
+            for (view, layer) in zip(hosts, [shadowRoot, containerRoot, pictureRoot]) {
+                view.layer = layer
+                view.wantsLayer = true
+            }
+            host.addSubview(hosts[0])
+            host.addSubview(g1)
+            host.addSubview(hosts[1])
+            host.addSubview(g2)
+            host.addSubview(hosts[2])
+        }
+
+        /// Taken up by `run`: sized to its overlay, its layers in the hosts (the last morph's let go), the window's
+        /// sidebar for G2, every animation of the last morph taken off.
+        func adopt(by run: Run, bounds: NSRect, window: NSSize, radius: CGFloat, sidebar: NSRect?, shadow: CALayer,
+                   container: CALayer, picture: CALayer) {
+            owner = run
+            self.window = window
+            self.sidebar = sidebar
+            sidebarRadius = GlassMorph.sidebarRadius(windowRadius: radius)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            stop()
+            for layer in [shadowRoot, containerRoot, clip] {
+                layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            }
+            pictureRoot.sublayers?.filter { $0 !== clip }.forEach { $0.removeFromSuperlayer() }
+            host.frame = bounds
+            host.layer?.speed = 1 / AppTransition.slowdown
+            for view in hosts {
+                view.frame = bounds
+                view.layer?.frame = bounds
+            }
+            shadowRoot.addSublayer(shadow)
+            containerRoot.addSublayer(container)
+            clip.addSublayer(picture)
+            g2.isHidden = sidebar == nil
+            CATransaction.commit()
+        }
+
+        /// G1's opacity now (the render server's value mid-flight).
+        var opacity: Float { g1.layer?.presentation()?.opacity ?? Float(g1.alphaValue) }
+
+        /// G2's frame for the window-shaped rect `rect` (overlay coordinates), and its radius.
+        private func sidebarPlace(in rect: CGRect) -> (frame: NSRect, radius: CGFloat)? {
+            guard let sidebar else { return nil }
+            return (GlassMorph.scaled(sidebar, window: window, in: rect),
+                    GlassMorph.scaledRadius(sidebarRadius, piece: sidebar.size, window: window, in: rect))
+        }
+
+        /// Every piece at `pose` (its rect `rect` in overlay coordinates), with no animation.
+        func set(_ pose: Pose, local rect: CGRect, frames: Bool = true) {
+            if frames { setFrames(pose, local: rect) }
+            g1.alphaValue = CGFloat(pose.glass)
+            g2.alphaValue = CGFloat(pose.container)
+            clip.opacity = 1
+            clip.cornerRadius = pose.radius
+        }
+
+        /// The glass shapes at `pose`, with no animation.
+        func setFrames(_ pose: Pose, local rect: CGRect) {
+            g1.frame = rect
+            Self.round(g1, pose.radius, animated: false)
+            if let place = sidebarPlace(in: rect) {
+                g2.frame = place.frame
+                Self.round(g2, place.radius, animated: false)
+            }
+        }
+
+        /// The glass shapes moved to `pose` by their views' animations (S5's method (b)), on `curve` over `duration`.
+        func animate(to pose: Pose, local rect: CGRect, duration: TimeInterval, curve: CAMediaTimingFunction) {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = curve
+                context.allowsImplicitAnimation = false
+                self.g1.animator().frame = rect
+                Self.round(self.g1, pose.radius, animated: true)
+                if let place = self.sidebarPlace(in: rect) {
+                    self.g2.animator().frame = place.frame
+                    Self.round(self.g2, place.radius, animated: true)
+                }
+            }
+        }
+
+        /// The cross-fade's opacity `animation` on the picture's clip and G2 too (Reduce Motion), to `opacity`.
+        func fade(_ animation: CABasicAnimation, to opacity: Float) {
+            clip.opacity = opacity
+            clip.add(animation, forKey: "opacity")
+            g2.alphaValue = CGFloat(opacity)
+            g2.layer?.add(animation, forKey: "opacity")
+        }
+
+        /// Every animation of the pieces taken off: they stay at their model values.
+        func stop() {
+            clip.removeAllAnimations()
+            g1.layer?.removeAllAnimations()
+            g2.layer?.removeAllAnimations()
+        }
+
+        /// Gone at once (the handoff): the real window shows under the overlay.
+        func hide() {
+            stop()
+            clip.opacity = 0
+            g1.alphaValue = 0
+            g2.alphaValue = 0
+        }
+
+        private static func round(_ view: NSView, _ radius: CGFloat, animated: Bool) {
+            guard #available(macOS 26, *), let glass = view as? NSGlassEffectView else { return }
+            if animated { glass.animator().cornerRadius = radius } else { glass.cornerRadius = radius }
         }
     }
 }

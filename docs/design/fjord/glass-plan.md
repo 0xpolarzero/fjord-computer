@@ -500,6 +500,13 @@ identity).
   than the offset, which also jumped whatever is anchored to the page's far side by the whole distance on the first
   frame. It still costs some 2 to 3 hitches in 12 folds over today, glass or not (the inset panel and the page's new
   bars, not the material); the morph and peek p95s moved too, to be taken up in Phase 4 with the capture flag.
+- **The morph as built (Phase 4, M1)**: the glass (G1, and G2 for the sidebar) moves by `animator()` in the overlay,
+  every layer on one cubic fitted to the critically damped spring so glass and picture stay in lockstep. The capture
+  flag swaps only the nav capsule and the composer for their fills; the sidebar's glass stays on (a capture leaves glass
+  out anyway) and its place is cut out of the picture afterwards, in the bitmap. A first version that flipped the
+  sidebar and the window's ground for each capture cost 14 ms per capture and tripled the hitches (41 against 14); with
+  the cut-out, the glass views made once at idle, and no capture of the bar on glass, two runs gave 16 and 4 hitches
+  in motions, capture p50 47.9 and 15.6 ms (flag on about 3–4 ms, off 2): within the noise between runs on this Mac.
 - **Baselines** (2026-10-12, `docs/design/fjord/baselines/`):
   - `motion.json`, `scripts/motion-trace.sh` on `--demo busy`, open/fold/fold/close/peek/drag × 5: 14 hitches during
     the app's motions (Drag 4, Fold 4, Peek 3, Bar away 2, Open to first flush 2, Overlay going 1). p50 / p95: Peek 38.7

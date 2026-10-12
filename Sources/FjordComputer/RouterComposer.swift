@@ -249,17 +249,20 @@ struct RouterComposer: View {
 }
 
 /// The composer's ground: Regular glass in `shape` (macOS 26, glass chrome), else `fill`. The same views either way, so
-/// a switch of the chrome (Reduce Transparency) keeps the field and its focus.
+/// a switch of the chrome (Reduce Transparency) keeps the field and its focus. While the window is captured for the morph,
+/// glass draws `fill` instead (`GlassCapture`).
 private struct ComposerMaterial<S: Shape>: ViewModifier {
     let shape: S
     let glass: Bool
     let fill: Color
+    @Environment(\.glassCapture) private var capture
 
     func body(content: Content) -> some View {
         if #available(macOS 26, *) {
+            let look = GlassLook.of(glass: glass, capturing: capture?.on == true)
             content
-                .background(shape.fill(fill).opacity(glass ? 0 : 1))
-                .glassEffect(glass ? .regular : .identity, in: shape)
+                .background(shape.fill(fill).opacity(look.fill ? 1 : 0))
+                .glassEffect(look.glass ? .regular : .identity, in: shape)
         } else {
             content.background(shape.fill(fill))
         }

@@ -122,7 +122,9 @@ struct InsetWindowLayout: View {
                 // The rows past a rail's edge are clipped out of sight, and out of reach: clicks there are the page's.
                 .contentShape(shape)
                 .environment(\.onGlass, glass)
-                .modifier(PanelMaterial(shape: shape, glass: glass, fill: CDS.Surface.sidebar))
+                // Its glass stays on for the morph's capture (left out of the picture, its place cleared there for the
+                // morph's G2).
+                .modifier(PanelMaterial(shape: shape, glass: glass, fill: CDS.Surface.sidebar, standsIn: false))
         }
         .padding([.top, .leading, .bottom], WindowChrome.inset)
     }
@@ -139,7 +141,7 @@ private struct NavCapsule: ViewModifier {
             content
                 .padding(AppNavButtons.capsulePad)
                 .environment(\.onGlass, glass)
-                .modifier(PanelMaterial(shape: Capsule(), glass: glass, fill: CDS.Surface.s2))
+                .modifier(PanelMaterial(shape: Capsule(), glass: glass, fill: CDS.Surface.s2, standsIn: true))
         }
     }
 }
@@ -151,19 +153,24 @@ extension View {
 }
 
 /// A chrome piece's material: Regular glass, or `fill` with a hairline (Reduce Transparency, Increase Contrast,
-/// `FJORD_GLASS=0`). The same views either way, so a switch keeps what is inside (the sidebar's scroll, a hover).
+/// `FJORD_GLASS=0`). The same views either way, so a switch keeps what is inside (the sidebar's scroll, a hover). A piece
+/// that `standsIn` draws its fill instead of glass while the window is captured for the morph (`GlassCapture`); one that
+/// doesn't never reads the flag, so a capture never redraws it.
 @available(macOS 26, *)
 private struct PanelMaterial<S: Shape>: ViewModifier {
     let shape: S
     let glass: Bool
     let fill: Color
+    let standsIn: Bool
+    @Environment(\.glassCapture) private var capture
 
     func body(content: Content) -> some View {
+        let look = GlassLook.of(glass: glass, capturing: standsIn && capture?.on == true, hairline: true)
         content
-            .background(shape.fill(fill).opacity(glass ? 0 : 1))
+            .background(shape.fill(fill).opacity(look.fill ? 1 : 0))
             // Twice the width, clipped to the shape: the hairline sits inside it (`ConcentricRectangle` can't be inset).
-            .overlay(shape.stroke(CDS.border, lineWidth: 2 * CDS.Sidebar.edge).clipShape(shape).opacity(glass ? 0 : 1)
+            .overlay(shape.stroke(CDS.border, lineWidth: 2 * CDS.Sidebar.edge).clipShape(shape).opacity(look.hairline ? 1 : 0)
                 .allowsHitTesting(false))
-            .glassEffect(glass ? .regular : .identity, in: shape)
+            .glassEffect(look.glass ? .regular : .identity, in: shape)
     }
 }

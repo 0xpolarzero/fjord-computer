@@ -72,6 +72,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private var monitor: Any?
     /// The window's corner radius, for the root's shapes.
     let corner = WindowCorner()
+    /// The window's capture flag: its glass pieces draw their stand-ins while the morph takes its picture (`GlassCapture`).
+    let capture = GlassCapture()
 
     /// `routerModel`: the Router's chat state, shared with whatever else shows the Router. `remembers`: open on the place left
     /// last (off for shots and tests).
@@ -245,7 +247,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             current = run
         } else {
             run?.end()
-            current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar)
+            current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar, glassWindow: glassWindow(window))
             current?.shows = kept?.destination
         }
         run = current
@@ -333,6 +335,16 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         keyWatch = nil
     }
 
+    /// What the glass morph needs of `window`: its capture flag, and its inset sidebar's frame (none during the onboarding,
+    /// nor before macOS 26).
+    private func glassWindow(_ window: NSWindow) -> AppTransition.GlassWindow {
+        var sidebar: NSRect?
+        if #available(macOS 26, *), store.settings.toolsPicked == true {
+            sidebar = GlassMorph.sidebarFrame(windowSize: window.frame.size, collapsed: SidebarState.shared.collapsed)
+        }
+        return AppTransition.GlassWindow(capture: capture, sidebar: sidebar)
+    }
+
     /// The real window, shown (under the overlay), with the keyboard.
     private func reveal(_ window: NSWindow) {
         window.alphaValue = 1
@@ -375,7 +387,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             current = existing
         } else {
             run?.end()
-            current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar())
+            current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar(),
+                                            glassWindow: glassWindow(sender))
             current?.shows = navigator.selection
         }
         guard let current else {
@@ -387,7 +400,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // cut short may still show the place it started on), unless memory is short.
         if !memoryShort, let image = current.image, current.imageIsKey, let place = current.shows {
             closedPicture = AppTransition.Picture(image: image, frame: sender.frame, scale: sender.backingScaleFactor,
-                                                  destination: place)
+                                                  destination: place, glass: current.isGlass)
         }
         let start = { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }
@@ -536,7 +549,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// would size it to its own minimum, too small to see).
     private func makeContent(size: NSSize) -> NSViewController {
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                               checksClaudeCode: checksClaudeCode, corner: corner)
+                               checksClaudeCode: checksClaudeCode, corner: corner, capture: capture)
         let controller = NSHostingController(rootView: root)
         // The window sizes the content, not the other way round.
         controller.sizingOptions = []
@@ -715,6 +728,8 @@ struct AppRootView: View {
     var chrome: Chrome = .shared
     /// The window's corner radius, which the shapes inside it are concentric with.
     var corner = WindowCorner()
+    /// The window's capture flag (`GlassCapture`): none in shots and tests, which draw no glass to capture.
+    var capture: GlassCapture? = nil
 
     static let sidebarWidth: CGFloat = 240
 
@@ -736,6 +751,7 @@ struct AppRootView: View {
         }
         .frame(minWidth: 640, minHeight: 600)
         .environment(chrome)
+        .environment(\.glassCapture, capture)
         // A shape inside the window can be concentric with its corners (`ConcentricRectangle`, `Theme.Radius.concentric`).
         .containerShape(.rect(cornerRadius: corner.radius))
         .foregroundStyle(Theme.text)

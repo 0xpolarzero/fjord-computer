@@ -420,15 +420,19 @@ final class HubController {
     }
 
     /// The bar's picture and place, and the cell it grows out of (the one under the pointer, else the one last used, else the
-    /// GitHub mark's), for the window to grow out of or shrink into.
-    var morph: BarMorph? {
+    /// GitHub mark's), for the window to grow out of or shrink into. The glass morph (M1) takes no picture: its glass is the
+    /// bar's, so the opening's first frame doesn't wait for one.
+    var morph: BarMorph? { morph(picture: !AppTransition.usesGlass) }
+
+    /// `morph`, with the bar's picture or without (the glass morph needs none, so on glass none is taken).
+    func morph(picture: Bool) -> BarMorph? {
         guard layout.frame != .zero else { return nil }
         let frame = hubScreenFrame
         var image: NSImage?
-        if window.isVisible, !barApplied, let rep = host.bitmapImageRepForCachingDisplay(in: layout.frame) {
-            let capture = LatencySignposts.signposter.beginInterval("Bar capture")
+        if picture, window.isVisible, !barApplied, let rep = host.bitmapImageRepForCachingDisplay(in: layout.frame) {
+            let signpost = LatencySignposts.signposter.beginInterval("Bar capture")
             host.cacheDisplay(in: layout.frame, to: rep)
-            LatencySignposts.signposter.endInterval("Bar capture", capture)
+            LatencySignposts.signposter.endInterval("Bar capture", signpost)
             image = NSImage(size: layout.frame.size)
             image?.addRepresentation(rep)
         }

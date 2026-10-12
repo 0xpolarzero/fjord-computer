@@ -1,0 +1,315 @@
+import AppKit
+import SwiftUI
+import Testing
+@testable import FjordComputer
+
+/// The glass morph (glass-plan §5.6, M1) and the capture flag: the flag's in-turn sequence, what each glass piece draws
+/// while its root is captured, and the morph's geometry and timing.
+@MainActor @Suite struct GlassMorphTests {
+    // MARK: The capture flag
+
+    @Test func onGlassTheFlagIsOnForTheCaptureOnlyAndTheRootIsDrawnEachWay() {
+        var steps: [String] = []
+        let picture = GlassCapture.sequence(glass: true, set: { steps.append($0 ? "on" : "off") },
+                                            settle: { steps.append("settle") }, draw: { steps.append("draw"); return 7 })
+        #expect(picture == 7)
+        #expect(steps == ["on", "settle", "draw", "off", "settle"])
+    }
+
+    @Test func withNoGlassOnlyTheCaptureRuns() {
+        var steps: [String] = []
+        let picture = GlassCapture.sequence(glass: false, set: { steps.append($0 ? "on" : "off") },
+                                            settle: { steps.append("settle") }, draw: { steps.append("draw"); return 1 })
+        #expect(picture == 1 && steps == ["draw"])
+    }
+
+    @Test func theFlagIsOnDuringTheCaptureAndOffAfter() {
+        let capture = GlassCapture()
+        var during: Bool?
+        capture.around(glass: true, settle: {}) { during = capture.on }
+        #expect(during == true && !capture.on)
+        capture.around(glass: false, settle: {}) { during = capture.on }
+        #expect(during == false && !capture.on)
+    }
+
+    // MARK: Which pieces swap
+
+    /// The small pieces (nav capsule, composer) draw their fill under a capture; the sidebar never reads the flag, so it
+    /// keeps its glass (`PanelMaterial(standsIn: false)`).
+    @Test func aPieceDrawsItsFillOnlyOnGlassUnderACapture() {
+        // Opaque mode: the fill, and the hairline where the piece has one, capture or not.
+        for capturing in [false, true] {
+            #expect(GlassLook.of(glass: false, capturing: capturing, hairline: true)
+                    == GlassLook(glass: false, fill: true, hairline: true))
+            #expect(GlassLook.of(glass: false, capturing: capturing) == GlassLook(glass: false, fill: true, hairline: false))
+        }
+        #expect(GlassLook.of(glass: true, capturing: false, hairline: true) == GlassLook(glass: true, fill: false, hairline: false))
+        #expect(GlassLook.of(glass: true, capturing: true, hairline: true) == GlassLook(glass: false, fill: true, hairline: false))
+    }
+
+    // MARK: The sidebar's hole
+
+    /// The sidebar's rounded rect comes out clear and nothing else changes, at 2x as at 1x (the rect is in points).
+    @Test(arguments: [1, 2]) func thePunchedPictureIsClearInsideTheSidebarOnly(scale: Int) throws {
+        let size = NSSize(width: 200, height: 120)
+        let rep = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 200 * scale, pixelsHigh: 120 * scale,
+                                                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = size
+        let context = try #require(NSGraphicsContext(bitmapImageRep: rep))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor.red.setFill()
+        // Larger than the bitmap whatever scale its context starts with: every pixel opaque.
+        NSRect(x: 0, y: 0, width: 10_000, height: 10_000).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        let hole = AppTransition.Hole(rect: NSRect(x: 8, y: 8, width: 60, height: 104), radius: 8)
+        AppTransition.punch(rep, hole)
+        // `colorAt` counts pixels from the top: the hole is symmetric top to bottom, so it reads the same.
+        func alpha(_ x: CGFloat, _ y: CGFloat) -> CGFloat {
+            rep.colorAt(x: Int(x * CGFloat(scale)), y: Int(y * CGFloat(scale)))?.alphaComponent ?? -1
+        }
+        #expect(alpha(38, 60) == 0)
+        #expect(alpha(10, 60) == 0 && alpha(66, 60) == 0 && alpha(38, 10) == 0 && alpha(38, 110) == 0)
+        #expect(alpha(4, 60) == 1 && alpha(72, 60) == 1 && alpha(150, 60) == 1 && alpha(38, 4) == 1 && alpha(38, 116) == 1)
+        // The corner itself stays (rounded, not square).
+        #expect(alpha(8.5, 8.5) == 1)
+    }
+
+    @Test func aWindowWithoutASidebarOrNotOnGlassHasNoHole() {
+        let sidebar = NSRect(x: 8, y: 8, width: 240, height: 584)
+        #expect(AppTransition.GlassWindow(sidebar: sidebar).hole(glass: true, radius: 16)
+                == AppTransition.Hole(rect: sidebar, radius: 8))
+        #expect(AppTransition.GlassWindow(sidebar: sidebar).hole(glass: false, radius: 16) == nil)
+        #expect(AppTransition.GlassWindow(sidebar: nil).hole(glass: true, radius: 16) == nil)
+    }
+
+    /// A picture kept from a close stands in only for the same morph: one taken for glass (its sidebar cleared) never
+    /// opens an opaque morph, nor the other way round.
+    @Test func aKeptPictureFitsOnlyTheMorphItWasTakenFor() throws {
+        let window = AwayWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 100, height: 80)),
+                                styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let bitmap = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
+                                           space: CGColorSpaceCreateDeviceRGB(),
+                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        for glass in [false, true] {
+            let picture = AppTransition.Picture(image: try #require(bitmap.makeImage()), frame: window.frame,
+                                                scale: window.backingScaleFactor, destination: .settings, glass: glass)
+            #expect(picture.fits(window, glass: glass))
+            #expect(!picture.fits(window, glass: !glass))
+        }
+    }
+
+    // MARK: Geometry
+
+    @Test func theSidebarsFrameAndRadiusAreTheInsetPanels() {
+        let size = NSSize(width: 1180, height: 760)
+        #expect(GlassMorph.sidebarFrame(windowSize: size, collapsed: false)
+                == NSRect(x: 8, y: 8, width: AppRootView.sidebarWidth, height: 744))
+        #expect(GlassMorph.sidebarFrame(windowSize: size, collapsed: true).width == AppSidebar.railWidth)
+        #expect(GlassMorph.sidebarRadius(windowRadius: 16) == 8)
+        #expect(GlassMorph.sidebarRadius(windowRadius: 26) == 18)
+        // Full screen (no radius) and small radii keep the floor.
+        #expect(GlassMorph.sidebarRadius(windowRadius: 0) == WindowChrome.minimumRadius)
+        #expect(GlassMorph.sidebarRadius(windowRadius: 10) == WindowChrome.minimumRadius)
+    }
+
+    @Test func g2IsTheSidebarAtTheWindowsRectAndScalesWithIt() {
+        let window = NSSize(width: 1000, height: 600)
+        let sidebar = NSRect(x: 8, y: 8, width: 240, height: 584)
+        let frame = NSRect(x: 300, y: 200, width: 1000, height: 600)
+        #expect(GlassMorph.scaled(sidebar, window: window, in: frame) == sidebar.offsetBy(dx: 300, dy: 200))
+        #expect(GlassMorph.scaledRadius(8, piece: sidebar.size, window: window, in: frame) == 8)
+        let half = NSRect(x: 100, y: 50, width: 500, height: 300)
+        #expect(GlassMorph.scaled(sidebar, window: window, in: half) == NSRect(x: 104, y: 54, width: 120, height: 292))
+        #expect(GlassMorph.scaledRadius(8, piece: sidebar.size, window: window, in: half) == 4)
+        // A cell-sized rect: the radius never passes half the shape's side.
+        let cell = NSRect(x: 0, y: 0, width: 40, height: 4)
+        #expect(GlassMorph.scaledRadius(100, piece: sidebar.size, window: window, in: cell) <= 240 * 0.04 / 2)
+        #expect(GlassMorph.scaled(sidebar, window: .zero, in: frame).size == .zero)
+    }
+
+    // MARK: Timing
+
+    @Test func bothSpringsAreCriticallyDamped() {
+        for spring in [AppTransition.Spring.opening, .closing] {
+            let critical = 2 * spring.stiffness.squareRoot()
+            #expect(abs(spring.damping - critical) / critical < 0.01)
+        }
+    }
+
+    /// The glass's curve stands for the critically damped spring within 3% all the way, and starts and ends where it does.
+    @Test func theGlassCurveFollowsTheSpring() {
+        let (x1, y1, x2, y2) = GlassMorph.controlPoints
+        func bezier(_ u: Double) -> Double {
+            func point(_ s: Double, _ a: Double, _ b: Double) -> Double {
+                3 * (1 - s) * (1 - s) * s * a + 3 * (1 - s) * s * s * b + s * s * s
+            }
+            var lo = 0.0, hi = 1.0
+            for _ in 0..<60 {
+                let s = (lo + hi) / 2
+                if point(s, Double(x1), Double(x2)) < u { lo = s } else { hi = s }
+            }
+            return point((lo + hi) / 2, Double(y1), Double(y2))
+        }
+        var worst = 0.0
+        for i in 0...200 {
+            let u = Double(i) / 200
+            worst = max(worst, abs(bezier(u) - GlassMorph.springProgress(u)))
+        }
+        #expect(worst < 0.03)
+        #expect(GlassMorph.springProgress(0) == 0 && GlassMorph.springProgress(1) > 0.998)
+        #expect(y2 == 1 && y1 <= 1)
+    }
+
+    @Test func theGlassMorphLastsTheSpringsSettlingTime() {
+        #expect(abs(GlassMorph.duration(.opening) - 9.23 / 600.0.squareRoot()) < 0.0001)
+        #expect(abs(GlassMorph.duration(.closing) - 9.23 / 20) < 0.0001)
+        #expect(GlassMorph.duration(.opening) < GlassMorph.duration(.closing))
+        #expect(GlassMorph.duration(.opening) < 0.4)
+    }
+
+    /// Opening: G1 in at once, the container (and G2 with it) over the second half, in before the handoff; closing: the
+    /// container goes first, G1 last, into the bar's glass.
+    @Test func theGlassMorphsFadesAreOrderedAsThePlanSays() {
+        typealias O = AppTransition.Run.Opacities
+        let open = O.glassOpening
+        #expect(open.glass.0 == 0 && open.glass.1 <= 0.1)
+        #expect(open.container.0 >= 0.4 && open.container.0 + open.container.1 <= 0.95)
+        #expect(open.shadow == open.container)
+        let close = O.glassClosing
+        #expect(close.container.0 + close.container.1 <= close.glass.0)
+        #expect(close.glass.0 + close.glass.1 <= 1)
+        #expect(close.window.0 + close.window.1 <= close.container.0 + close.container.1)
+        // Today's morph has no glass to fade.
+        #expect(O.opening.glass == (0, 0) && O.closing.glass == (0, 0))
+    }
+}
+
+extension WindowSeams {
+    /// The glass morph's overlay: G1 under the container, G2 over it, the picture on top; the glass moved to the window on
+    /// an opening, G1 kept out of Reduce Motion's fade.
+    @MainActor
+    @Suite(.hostsWindows) struct GlassMorphOverlayTests {
+        private func makeRun(sidebar: NSRect?) throws -> (run: AppTransition.Run, window: NSWindow)? {
+            guard #available(macOS 26, *) else { return nil }
+            _ = NSApplication.shared
+            let screen = try #require(NSScreen.main)
+            let window = AwayWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 600, height: 400)),
+                                    styleMask: [.borderless], backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            let bar = BarMorph(frame: NSRect(x: screen.frame.minX + 100, y: screen.frame.minY + 100, width: 46, height: 200))
+            let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: bar,
+                                                         glassWindow: .init(sidebar: sidebar), glass: true))
+            return (run, window)
+        }
+
+        private static let sidebar = NSRect(x: 8, y: 8, width: 240, height: 384)
+
+        /// The flag's change is taken in by a hosting view within the turn: the capture sees the stand-in, and the root is back
+        /// as it was before the turn ends. Another root's flag is never touched.
+        @Test func aHostingViewTakesTheFlagInWithinTheTurn() {
+            _ = NSApplication.shared
+            let capture = GlassCapture()
+            let other = GlassCapture()
+            let seen = Seen()
+            let otherSeen = Seen()
+            let host = NSHostingView(rootView: Probe(seen: seen).environment(\.glassCapture, capture))
+            let otherHost = NSHostingView(rootView: Probe(seen: otherSeen).environment(\.glassCapture, other))
+            let window = AwayWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 40, height: 40)),
+                                    styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = NSView(frame: NSRect(x: 0, y: 0, width: 40, height: 40))
+            host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
+            otherHost.frame = NSRect(x: 20, y: 0, width: 20, height: 20)
+            root.addSubview(host)
+            root.addSubview(otherHost)
+            window.contentView = root
+            root.layoutSubtreeIfNeeded()
+            #expect(seen.values.last == false)
+            let otherBodies = otherSeen.values.count
+            var during: Bool?
+            capture.around(glass: true, settle: { GlassCapture.settle(host: host, root: host, window: window) }) {
+                during = seen.values.last
+            }
+            #expect(during == true)
+            #expect(seen.values.last == false && !capture.on)
+            #expect(otherSeen.values.count == otherBodies && !other.on)
+        }
+
+        @Test func theOverlayStacksTheGlassBetweenItsLayers() throws {
+            guard #available(macOS 26, *), let made = try makeRun(sidebar: Self.sidebar) else { return }
+            defer { made.run.end(); made.window.close() }
+            #expect(made.run.isGlass)
+            let views = try #require(made.run.overlay.contentView?.subviews)
+            #expect(views.count == 5)
+            #expect(views[1] is NSGlassEffectView && views[3] is NSGlassEffectView)
+            #expect(!(views[0] is NSGlassEffectView) && !(views[2] is NSGlassEffectView) && !(views[4] is NSGlassEffectView))
+        }
+
+        @Test func noSidebarNoG2() throws {
+            guard #available(macOS 26, *), let made = try makeRun(sidebar: nil) else { return }
+            defer { made.run.end(); made.window.close() }
+            let views = try #require(made.run.overlay.contentView?.subviews)
+            #expect(views.count == 5 && views[3].isHidden && !views[1].isHidden)
+        }
+
+        /// The glass views are made once: the next glass morph takes up the same ones, and an older morph's end leaves the
+        /// newer one's overlay alone.
+        @Test func theGlassViewsAreTakenUpByEachMorph() throws {
+            guard #available(macOS 26, *), let first = try makeRun(sidebar: Self.sidebar) else { return }
+            let views = try #require(first.run.overlay.contentView?.subviews)
+            defer { first.window.close() }
+            let second = try #require(try makeRun(sidebar: nil))
+            defer { second.run.end(); second.window.close() }
+            let again = try #require(second.run.overlay.contentView?.subviews)
+            #expect(again.count == views.count && zip(again, views).allSatisfy { $0 === $1 })
+            #expect(again[3].isHidden)
+            second.run.show()
+            first.run.end()
+            #expect(second.run.overlay.isVisible && second.run.overlay.contentView?.subviews.count == 5)
+        }
+
+        @Test func anOpeningStartsAsGlassAtTheBarsCell() throws {
+            guard #available(macOS 26, *), let made = try makeRun(sidebar: Self.sidebar) else { return }
+            let run = made.run
+            defer { run.end(); made.window.close() }
+            var done = false
+            run.open(reduced: false) { done = true }
+            #expect(run.startPose?.rect == run.bar?.cellFrame && run.startPose?.glass == 0 && run.startPose?.container == 0)
+            run.complete()
+            let views = try #require(run.overlay.contentView?.subviews)
+            #expect(done && views[1].alphaValue == 1 && views[3].alphaValue == 1)
+        }
+
+        /// Reduce Motion: the shapes sit at the window's frame and the sidebar's (set, not animated), G1 out of the fade.
+        @Test func reduceMotionFadesWithoutG1() throws {
+            guard #available(macOS 26, *), let made = try makeRun(sidebar: Self.sidebar) else { return }
+            let run = made.run
+            defer { run.end(); made.window.close() }
+            run.open(reduced: true) {}
+            let views = try #require(run.overlay.contentView?.subviews)
+            let local = run.geometry.local(made.window.frame)
+            #expect(views[1].alphaValue == 0 && views[1].frame == local)
+            #expect(views[3].frame == Self.sidebar.offsetBy(dx: local.minX, dy: local.minY))
+            run.complete()
+            #expect(views[3].alphaValue == 1)
+        }
+    }
+}
+
+@MainActor private final class Seen { var values: [Bool] = [] }
+
+/// Records the capture flag each time its body runs.
+private struct Probe: View {
+    let seen: Seen
+    @Environment(\.glassCapture) private var capture
+
+    var body: some View {
+        seen.values.append(capture?.on == true)
+        return Color.clear.frame(width: 20, height: 20)
+    }
+}
