@@ -47,6 +47,8 @@ import Testing
         #expect(RouterDecision.Cancelled(ack: "ok before-start") == .beforeStart)
         #expect(RouterDecision.Cancelled(ack: "ok aborted") == .aborted)
         #expect(RouterDecision.Cancelled(ack: "ok too-late") == .tooLate)
+        #expect(RouterDecision.Cancelled(ack: "ok together") == .together && !RouterDecision.Cancelled.together.stopped)
+        #expect(RouterDecision.Cancelled(ack: "ok unknown") == .unknown && !RouterDecision.Cancelled.unknown.stopped)
         #expect(RouterDecision.Cancelled(ack: "ok") == nil)
         #expect(RouterDecision.Cancelled(ack: "ok model=opus") == nil)
         #expect(RouterDecision.Cancelled(ack: "aborted") == nil)
@@ -270,7 +272,9 @@ import Testing
         #expect(entry.delivered?.session == "local_a" && entry.delivered?.cancelled == nil)
         let lines = w.trace()
         #expect(lines.contains { $0.kind == .cancelled && $0.elsewhere == true && $0.target == "session:local_b" })
-        #expect(lines.contains { $0.kind == .decided && $0.path == "elsewhere" && $0.action == "ask" })
+        // The re-ask is a line of its own kind: the first decided line stays the wrong send's.
+        #expect(lines.contains { $0.kind == .reasked && $0.path == "elsewhere" && $0.action == "ask" })
+        #expect(lines.filter { $0.kind == .decided && $0.id == id }.map(\.action) == ["send"])
         #expect(lines.contains { $0.kind == .corrected && $0.from == "session:local_b" && $0.target == "session:local_a" })
     }
 
@@ -285,5 +289,22 @@ import Testing
         w.dispatcher.dismiss(id)
         #expect(w.entry(id)?.reply == "Dismissed: sent nowhere else." && w.entry(id)?.outcome == .done)
         #expect(w.fakes.sent.count == 1)
+    }
+
+    @Test func aWrongSendThatWasntStoppedIsNotSentElsewhere() async throws {
+        for answer in [Result<RouterDecision.Cancelled, Error>.success(.tooLate), .success(.together), .success(.unknown),
+                       .failure(RouterTools.Failure("The session's plugin didn't pick the message up"))] {
+            let w = World()
+            w.answer = answer
+            w.fakes.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "session:local_a", p: 0.04)]
+            let id = try #require(w.dispatcher.submit("fix the login redirect"))
+            await w.finish(id)
+            w.fakes.finished = []
+            w.dispatcher.sendElsewhere(id)
+            await w.finish(id)
+            #expect(w.dispatcher.askBacks.isEmpty && w.fakes.sent.count == 1 && w.fakes.ranks == 1)
+            #expect(w.entry(id)?.outcome == .done && w.entry(id)?.reply?.contains("wasn't sent elsewhere") == true)
+            #expect(!w.trace().contains { $0.kind == .reasked })
+        }
     }
 }

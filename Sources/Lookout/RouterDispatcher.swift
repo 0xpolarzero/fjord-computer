@@ -367,7 +367,8 @@ struct RouterAskBack: Identifiable, Equatable {
     @ObservationIgnored var traceLog = RouterTraceLog.shared
 
     /// A routing decided: what it was decided on and what it does, as a trace line.
-    private func trace(_ job: Job, path: String, action: String, target: String?, inputs: RouterTrace.Inputs? = nil) {
+    private func trace(_ job: Job, path: String, action: String, target: String?, inputs: RouterTrace.Inputs? = nil,
+                       kind: RouterTrace.Kind = .decided) {
         let text = job.text
         let pills = job.context.pills.compactMap { range -> String? in
             let chars = Array(text)
@@ -378,7 +379,7 @@ struct RouterAskBack: Identifiable, Equatable {
         let does = action != "send" ? action
             : target?.hasPrefix("new:") == true ? "start"
             : target.flatMap { RouterRun.Intent(rawValue: $0) } != nil ? "intent" : "send"
-        traceLog.append(RouterTrace(kind: .decided, id: job.id, message: RouterTools.redacted(text),
+        traceLog.append(RouterTrace(kind: kind, id: job.id, message: RouterTools.redacted(text),
                                     pills: pills.isEmpty ? nil : pills, pinned: job.context.target, shown: job.context.shown,
                                     notTo: job.context.notTo, replyTo: job.context.replyTo, path: path, action: does,
                                     target: target, inputs: inputs))
@@ -542,7 +543,8 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     /// A wrong send: taken back where it went, then asked again with that place left out. The button you pick is a
-    /// correction of it, an example for the next routings, as a correction on an ask is.
+    /// correction of it, an example for the next routings, as a correction on an ask is. Only once it was stopped there: a
+    /// cancel that fails, or comes too late, sends no second copy (the entry says so, and you can send it again yourself).
     func sendElsewhere(_ id: UUID) {
         guard let store, store.routerOn, progress[id] == nil, !askBacks.contains(where: { $0.id == id }),
               let entry = store.router.decisions.first(where: { $0.id == id }), case .you(let text) = entry.trigger,
@@ -552,7 +554,12 @@ struct RouterAskBack: Identifiable, Equatable {
         store.updateDecision(id) { $0.outcome = .pending }
         let context = RouterContext(notTo: wrong)
         launch(Job(id: id, text: text, context: context, tools: makeTools(id, text, pills: [])), stage: "cancelling") { [self] job in
-            await cancel(id, elsewhere: true)
+            let how = await cancel(id, elsewhere: true)
+            guard let how, how.stopped else {
+                let why = how.map { "It wasn't stopped there (\($0.words)), so it wasn't sent elsewhere: send it again if it should go somewhere else too." }
+                store.updateDecision(id) { $0.reply = why ?? "Couldn't cancel it, so it wasn't sent elsewhere." }
+                return
+            }
             stage(job, "classifying")
             var found = await classify(job, projects: [])
             let away = { (target: String) in target != wrong && Self.session(of: target, store: store) != sent.session }
@@ -808,7 +815,8 @@ struct RouterAskBack: Identifiable, Equatable {
                                 suggestion: suggestion ?? found.top?.target, at: Date())
         var inputs = found.trace
         inputs?.card = options.map(\.target)
-        trace(job, path: path ?? (found.assisted ? "jev" : "words"), action: "ask", target: found.top?.target, inputs: inputs)
+        trace(job, path: path ?? (found.assisted ? "jev" : "words"), action: "ask", target: found.top?.target, inputs: inputs,
+              kind: path == "elsewhere" ? .reasked : .decided)
         askBacks.append(ask)
         store.updateDecision(job.id) {
             $0.add(.asked(options.map(\.title)))

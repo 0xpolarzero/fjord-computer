@@ -937,7 +937,7 @@ private struct DecisionDetails: View {
                             store.routerDispatcher.sendElsewhere(decision.id)
                         }
                         .help("Cancels it here, then asks where it should go instead, this session left out. Your pick teaches the Router.")
-                        .disabled(cancel == .cancelling)
+                        .disabled(cancel == .cancelling || store.routerDispatcher.progress[decision.id] != nil)
                     }
                 }
             }
