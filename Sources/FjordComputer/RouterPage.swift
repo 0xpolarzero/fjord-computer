@@ -836,14 +836,18 @@ private struct HistoryAnchoring: ViewModifier {
                         apply(.pin(HistoryPin.atBottom(geometry.content, visibleBottom: geometry.visibleBottom)))
                     }
                 }
-                .onScrollGeometryChange(for: HistoryPin.Geometry.self) {
-                    HistoryPin.geometry($0.contentSize.height, visibleMaxY: $0.visibleRect.maxY, bottomInset: $0.contentInsets.bottom)
-                } action: { _, new in
-                    if !laidOut.on, new.content > 0 {
+                .onScrollGeometryChange(for: HistoryPin.Reading.self) {
+                    HistoryPin.Reading(
+                        geometry: HistoryPin.geometry($0.contentSize.height, visibleMaxY: $0.visibleRect.maxY,
+                                                      bottomInset: $0.contentInsets.bottom),
+                        frame: .init(content: $0.contentSize, container: $0.containerSize, insets: $0.contentInsets))
+                } action: { old, new in
+                    if !laidOut.on, new.geometry.content > 0 {
                         laidOut.on = true
                         ready()
                     }
-                    apply(HistoryPin.next(pinned: pinned, scrolling: scrolling.on, new))
+                    let scrolled = scrolling.on || HistoryPin.scrolled(from: old, to: new)
+                    apply(HistoryPin.next(pinned: pinned, scrolling: scrolled, new.geometry))
                 }
         } else {
             content
@@ -874,6 +878,25 @@ enum HistoryPin {
     struct Geometry: Equatable {
         var content: CGFloat
         var visibleBottom: CGFloat
+    }
+
+    /// The geometry, and what lays out what shows: the content's size, the view's and what covers its edges.
+    struct Reading: Equatable {
+        var geometry: Geometry
+        var frame: Frame
+
+        struct Frame: Equatable {
+            var content: CGSize
+            var container: CGSize
+            var insets: EdgeInsets
+        }
+    }
+
+    /// What shows moved and nothing else: a scroll (yours, or one asked for), whatever the scroll phase says. A scroll asked
+    /// for during yours (the Router picking the bottom, the history sticking back there) leaves SwiftUI's phase idle for the
+    /// rest of your gesture, and each step of it read as layout stuck the history back to its bottom.
+    static func scrolled(from old: Reading, to new: Reading) -> Bool {
+        old.frame == new.frame && old.geometry != new.geometry
     }
 
     final class Scrolling { var on = false }

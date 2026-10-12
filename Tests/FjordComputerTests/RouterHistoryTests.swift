@@ -28,6 +28,19 @@ import Testing
         #expect(HistoryPin.next(pinned: false, scrolling: true, .init(content: 1000, visibleBottom: 990)) == .pin(true))
     }
 
+    @Test func whatShowsMovingAloneIsAScroll() {
+        func reading(content: CGFloat, bottom: CGFloat, inset: CGFloat = 0) -> HistoryPin.Reading {
+            .init(geometry: .init(content: content, visibleBottom: bottom),
+                  frame: .init(content: CGSize(width: 600, height: content), container: CGSize(width: 600, height: 400),
+                               insets: EdgeInsets(top: 0, leading: 0, bottom: inset, trailing: 0)))
+        }
+        // Moved, all else the same: a scroll, whatever the phase says.
+        #expect(HistoryPin.scrolled(from: reading(content: 1000, bottom: 1000), to: reading(content: 1000, bottom: 990)))
+        // A line arriving, the composer growing: layout.
+        #expect(!HistoryPin.scrolled(from: reading(content: 1000, bottom: 1000), to: reading(content: 1040, bottom: 1000)))
+        #expect(!HistoryPin.scrolled(from: reading(content: 1000, bottom: 1000), to: reading(content: 1000, bottom: 960, inset: 40)))
+    }
+
     /// On macOS 26 the composer floats over the history, its height the scroll's bottom inset: the bottom of what shows is
     /// above it, so a history resting with its last lines under the composer is not at its bottom and goes back there.
     @Test func theComposersInsetIsNotWhatShows() {
@@ -176,6 +189,68 @@ import Testing
         model.tap(card.id, store: store)
         let opened = await settled()
         #expect(model.expanded.contains(card.id) && opened.height > back.height && opened.fromBottom <= 1, "\(back) → \(opened)")
+    }
+
+    /// A scroll asked for while you scroll (here the Router picking, which goes to the bottom) leaves SwiftUI's scroll phase
+    /// idle for the rest of your gesture: each step of it was read as layout leaving the pinned history short of its bottom,
+    /// and stuck back there, so the lines stayed put while only the hover moved from line to line under the pointer.
+    @Test func yourScrollGoesOnAfterAScrollAskedForDuringIt() async throws {
+        let store = store()
+        let model = RouterModel()
+        let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
+            .frame(width: 1100, height: 900))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: .borderless, backing: .buffered,
+                              defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        // A scroll view moves on its display's frames: the window is on a screen by one point at its corner, and unseen.
+        let screen = try #require(NSScreen.screens.first).frame
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.setFrameOrigin(NSPoint(x: screen.minX - 1099, y: screen.minY - 899))
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+
+        func scrolls(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrolls) }
+        func history() -> NSScrollView? { scrolls(hosting).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) } }
+        func fromBottom() -> Int {
+            hosting.layoutSubtreeIfNeeded()
+            guard let view = history(), let doc = view.documentView else { return Int.min }
+            return Int(doc.frame.height - view.contentView.bounds.maxY)
+        }
+        /// A trackpad's step over the history, `dy` up: an event with no window is placed by its screen point, given as the
+        /// window's own.
+        func wheel(_ dy: Double, _ phase: CGScrollPhase) async throws {
+            let view = try #require(history())
+            let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(dy),
+                                             wheel2: 0, wheel3: 0))
+            event.location = CGPoint(x: point.x, y: screen.height - point.y)
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            event.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: dy)
+            event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: dy)
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            window.sendEvent(try #require(NSEvent(cgEvent: event)))
+            // About a frame's time: the scroll view moves on the next one.
+            try await Task.sleep(for: .milliseconds(8))
+        }
+
+        await waitUntil { history() != nil }
+        await waitUntilSteady(turns: 8, quiet: 0.5) { fromBottom() }
+        let bottom = fromBottom()
+        // A few points up, still within the bottom's slack, and the Router picks (the bottom) as you go on.
+        try await wheel(0, .mayBegin)
+        try await wheel(4, .began)
+        for _ in 0..<2 { try await wheel(4, .changed) }
+        model.select(nil, store: store)
+        var seen: [Int] = []
+        for _ in 0..<40 {
+            try await wheel(6, .changed)
+            seen.append(fromBottom())
+        }
+        try await wheel(0, .ended)
+        await waitUntilSteady(turns: 8, quiet: 0.5) { fromBottom() }
+        #expect(fromBottom() > bottom + 150, "your scroll went up and stayed: \(seen) → \(fromBottom())")
     }
 
     @Test func aMessageAskedForBeforeThePageShowsIsWhereItOpensAndOnlyThatOnce() async {
