@@ -32,7 +32,8 @@ struct InboxListView: View {
         // Worked out once per redraw: the header, the list and the toolbar read the same rows.
         let entries = entries
         let unread = unread(entries)
-        AppPage(title: title, subtitle: subtitle(entries, unread: unread), leadingInset: leadingInset) {
+        AppPage(title: title, subtitle: subtitle(entries, unread: unread), leadingInset: leadingInset,
+                column: AppPage<EmptyView, EmptyView>.inboxColumn) {
             if case .category(let id) = tab, store.rulesOff(id) > 0 {
                 RulesOffMark(count: store.rulesOff(id), size: 12) { store.editCategory(id, go: openApp) }
             }
@@ -56,6 +57,8 @@ struct InboxListView: View {
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)
                         .frame(maxWidth: .infinity)
+                        // A scroller showing up never moves the column.
+                        .overlayScrollers()
                     }
                     // An entry asked for (a banner's click) is scrolled to, also when the list is made after the request.
                     .onAppear { scroll(proxy, to: hub.keyboardSelection) }
@@ -148,14 +151,20 @@ struct AppPage<Trailing: View, Content: View>: View {
     let title: String
     var subtitle = ""
     var leadingInset: CGFloat = 0
+    /// The page's content column: at most `width` wide, `padding` in from the page's edges, centred. The header's title
+    /// and its buttons line up with its edges.
+    var column: (width: CGFloat, padding: CGFloat)
     @ViewBuilder let trailing: Trailing
     @ViewBuilder let content: Content
+    @State private var pageWidth: CGFloat = 0
 
-    init(title: String, subtitle: String = "", leadingInset: CGFloat = 0, @ViewBuilder trailing: () -> Trailing,
-         @ViewBuilder content: () -> Content) {
+    init(title: String, subtitle: String = "", leadingInset: CGFloat = 0,
+         column: (width: CGFloat, padding: CGFloat) = AppPage.settingsColumn,
+         @ViewBuilder trailing: () -> Trailing, @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
         self.leadingInset = leadingInset
+        self.column = column
         self.trailing = trailing()
         self.content = content()
     }
@@ -174,6 +183,16 @@ struct AppPage<Trailing: View, Content: View>: View {
         }
     }
 
+    /// The inbox's list column (`InboxListView.column`, 20 in), and Settings' and Categories' (680 with 24 inside it).
+    static var inboxColumn: (width: CGFloat, padding: CGFloat) { (InboxListView.column, 20) }
+    static var settingsColumn: (width: CGFloat, padding: CGFloat) { (680 - 2 * CDS.Settings.pagePadX, CDS.Settings.pagePadX) }
+
+    /// From the page's edges to its content column's.
+    private var columnInset: CGFloat {
+        guard pageWidth > 0 else { return column.padding }
+        return max(column.padding, (pageWidth - min(column.width, pageWidth - 2 * column.padding)) / 2)
+    }
+
     private var header: some View {
         HStack(spacing: 8) {
             Text(title)
@@ -187,10 +206,13 @@ struct AppPage<Trailing: View, Content: View>: View {
             Spacer(minLength: 24)
             trailing
         }
-        // 12 in, or 14 past the window's buttons when they are in the header.
-        .padding(.leading, max(CDS.TitleBar.endInset, leadingInset + 14))
-        .padding(.trailing, CDS.TitleBar.endInset)
+        // On the content column's edges, so the title starts where the content does and the buttons end where it ends;
+        // the title 14 past the window's buttons at least when they are in the header.
+        .padding(.leading, max(columnInset, leadingInset + 14))
+        .padding(.trailing, columnInset)
         .frame(height: CDS.TitleBar.header)
+        .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
         // The page's own ground behind its title line, so nothing scrolled under it shows through the title.
         .background(CDS.Surface.s1)
     }

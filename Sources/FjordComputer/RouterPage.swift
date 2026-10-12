@@ -578,6 +578,8 @@ private struct RouterHistory: View {
                         // The bottom's margin: scrolling to it is scrolling to the very bottom.
                         Color.clear.frame(height: 18).id(RouterModel.endID)
                     }
+                    // A scroller showing up never moves the column.
+                    .overlayScrollers()
                     // Lines arrive, leave and change without moving; only a line opened or closed by its click animates.
                     .transaction { if !$0.historyToggle { $0.animation = nil } }
                     // macOS 14 has no scroll phases to read: the scroll view itself says when you scroll up, so the lines you
@@ -1323,6 +1325,8 @@ private struct RouterNow: View {
                             }
                         }
                     }
+                    // A scroller showing up never moves the column.
+                    .overlayScrollers()
                     .padding(.horizontal, gutter)
                     .padding(.top, 2)
                     .padding(.bottom, 12)
