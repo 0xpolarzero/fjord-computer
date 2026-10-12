@@ -1849,8 +1849,8 @@ private struct WorkingCard: View {
 
 /// A session whose turn ended waiting on something (CI, a deploy, another session): with the working ones, in a cool
 /// tint and an hourglass, saying what for. Once Fjord Computer sees that done it says the session is ready to continue,
-/// and Tell it sends the session so; its arrow button continues it on its own next time. Opening it opens the session
-/// in Claude.
+/// and Tell it sends the session so; its arrow button continues it on its own next time. Opening it, or the Claude
+/// button beside it, opens the session in Claude.
 private struct WaitingCard: View {
     let store: Store
     let card: RouterCard
@@ -1890,6 +1890,9 @@ private struct WaitingCard: View {
                 .accessibilityLabel(card.title)
                 .accessibilityValue(line + (card.brief.map { ". " + $0 } ?? ""))
                 .accessibilityHint("Opens it in Claude")
+                .accessibilityAction(named: "Open in Claude") { store.openAgent(card.sessionID) }
+                // Beside the line rather than in it, so the card's text isn't its tooltip too.
+                HoverOpen(title: card.title, quiet: true) { store.openAgent(card.sessionID) }
                 if ready, triage.told == nil, store.triageOn || triage.watch?.onCI != true, let message = RouterWaits.message(triage) {
                     ClaudeButton("Tell it", variant: .secondary, size: .sm, icon: "arrow.turn.down.right") { store.tellWaiting(card.id) }
                         .help("Sends it: \(message)")
