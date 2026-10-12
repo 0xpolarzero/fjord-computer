@@ -89,14 +89,16 @@ enum RouterBriefContext {
     /// What the call that reads a turn's asks is told besides (`extracts`).
     static let asksRules = """
     Besides the brief, list in `asks` what the session's final message asks the user to answer or decide, in its order. \
-    The user sees them under your brief and replies to them. One entry per question the user must answer or decide; its \
-    choices go in its `options`, never in entries of their own, so a question and the list of choices after it are one \
-    entry. Leave out what no reply would answer: a lead-in that only introduces the questions ("Can you tell me:", "Two \
-    things:"), headings, narration, what the session did or will do, questions it answers itself, rhetorical questions, and \
-    questions quoted from code, logs or other people. Write each question for the user, short and in plain words, as one \
-    question they can answer; keep the names, numbers and files that make it answerable. Don't merge separate questions, \
-    and don't split one. `options` holds only the choices the message itself offers (a list, "A or B", (a)/(b)), each in a \
-    few words, without its letter, number or bullet; none for a yes-or-no or open question. `asks` is empty when the \
+    The user sees them under your brief and replies to them. One entry per question the user must answer or decide, and \
+    per request to do something and report back ("try it and tell me what feels off"); its choices go in its `options`, \
+    never in entries of their own, so a question and the list of choices after it are one entry. Leave out what no reply \
+    would answer: a lead-in that only introduces the questions ("Can you tell me:", "Two things:"), headings, narration, \
+    what the session did or will do, questions it raises and answers itself, rhetorical questions, and questions quoted \
+    from code, logs or other people. Write each question for the user, short and in plain words, as one question they can \
+    answer; keep the names, numbers and files that make it answerable, and who would act ("Want me to…" stays the \
+    session's offer). Don't merge separate questions, and don't split one. `options` holds every choice the message itself \
+    offers (a list, "A or B", (a)/(b)), not only those it recommends, each in a few words, without its letter, number or \
+    bullet; none for a yes-or-no or open question. `asks` is empty when the \
     message asks the user nothing. When `asks` lists anything, the brief doesn't repeat, list or paraphrase them: it says \
     in one short sentence why the session needs the answers.
     """
