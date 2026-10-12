@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { CAPABILITIES, fromBase64, hmac, invalid, keyId, macInput, parse, type Settings } from '../hooks/register.ts'
+import { abortMacInput, CAPABILITIES, forget, fromBase64, hmac, invalid, keyId, macInput, parse, parseAbort, type Settings } from '../hooks/register.ts'
 
 // The vector Lookout's Swift tests check too (ClaudePluginTests): the same key, fields and body give the same MAC and
 // the same wire text.
@@ -51,8 +51,11 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     commands: [] as { command: string; args?: string }[],
     commandFails: {} as Record<string, string>,
     order: [] as string[],
+    aborted: [] as string[],
+    abortFails: false,
     registry: { '4242.json': { pid: 4242, sessionId: TARGET, startedAt: 111 } } as Record<string, Record<string, unknown> | string>,
   }
+  forget()
   mock.store(on, store)
   const clock = mock.clock(on, { now })
   on('session.id', () => ({ value: w.sessionId }))
@@ -107,6 +110,12 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('turn.abort', ($, e) => {
+    if (w.abortFails) throw new Error(`${e.turnId} is not the running turn`)
+    w.aborted.push(e.turnId)
+    return { value: undefined }
+  })
   return Object.assign(w, { clock })
 }
 
@@ -386,7 +395,7 @@ describe('the inbox', () => {
   })
 
   test('presence names the capability', () => {
-    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1'])
+    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1', 'abort-v1'])
   })
 
   const SETTINGS_NONCE = '223e4567-e89b-12d3-a456-426614174000'
@@ -478,5 +487,160 @@ describe('the inbox', () => {
 
   test('a v2 header is unknown to a v1-only reader: the old pattern finds nothing', async () => {
     expect(/⟦lookout v1 (\S+) (\S+) (\d+) ([0-9a-f]{64})⟧/.test(await sign(BODY, { settings: { model: 'opus' } }))).toBe(false)
+  })
+})
+
+describe('taking a delivery back', () => {
+  const ABORT_NONCE = '323e4567-e89b-12d3-a456-426614174000'
+  // The vector Lookout's Swift tests sign the same abort with (ClaudePluginTests).
+  const ABORT_MAC = '0dbaf1b1ec9728c6d3c3e507515ae0c1ba74dccda5c17011ccfb04a3f688a66a'
+  const signAbort = async (cancels = NONCE, { target = TARGET, nonce = ABORT_NONCE, ts = TS, key = KEY } = {}) =>
+    `⟦lookout abort v1 ${target} ${nonce} ${ts} ${cancels} ${await hmac(enc.encode(key), abortMacInput(target, nonce, String(ts), cancels))}⟧\n`
+  const started = new WeakSet<object>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const look = async ($: any, w: ReturnType<typeof world>) => {
+    if (!started.has(w)) {
+      started.add(w)
+      await $.session.start({ cwd: '/code/app', surface: null, isInteractive: false })
+    }
+    await w.clock.advance(500)
+    await settle()
+  }
+  const ack = (name: string) => `/inbox/${TARGET}/${name}.ack`
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deliver = async ($: any, w: ReturnType<typeof world>) => {
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const abort = async ($: any, w: ReturnType<typeof world>, text?: string) => {
+    w.inbox[`${TARGET}/${ABORT_NONCE}.msg`] = text ?? (await signAbort())
+    await look($, w)
+    return w.written[ack(ABORT_NONCE)]
+  }
+  const complete = { durationMs: 1, isAborted: false, reason: 'answer' as const, answer: 'done' }
+
+  test('the wire format matches the vector Lookout signs with', async () => {
+    const text = await signAbort()
+    expect(text).toBe(`⟦lookout abort v1 ${TARGET} ${ABORT_NONCE} ${TS} ${NONCE} ${ABORT_MAC}⟧\n`)
+    expect(parseAbort(text)).toEqual({ target: TARGET, nonce: ABORT_NONCE, ts: String(TS), cancels: NONCE, mac: ABORT_MAC })
+    // Not a delivery: nothing would be submitted from it, whatever reads it.
+    expect(parse(text)).toBeUndefined()
+  })
+
+  test('a running turn the delivery started is aborted', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok aborted\n')
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a delivery queued behind a running turn ends the moment its turn starts', async ($, on) => {
+    const w = world(on)
+    await $.turn.start({ text: 'what you typed before', turnId: 't0' })
+    await deliver($, w)
+    expect(await abort($, w)).toBe('ok before-start\n')
+    expect(w.aborted).toEqual([])
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    await settle()
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('read together with other queued words, its turn still ends', async ($, on) => {
+    const w = world(on)
+    await $.turn.start({ text: 'first', turnId: 't0' })
+    await deliver($, w)
+    await abort($, w)
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    await $.turn.start({ text: `something typed\n\n${BODY}`, turnId: 't1' })
+    await settle()
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a turn that is over is too late, and nothing is aborted', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    await $.turn.complete({ ...complete, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok too-late\n')
+    expect(w.aborted).toEqual([])
+  })
+
+  test('another turn starting is not mistaken for it, nor is a subagent ending', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: 'something else entirely', turnId: 't1' })
+    await $.turn.complete({ ...complete, turnId: 't1', agentId: 'a1' })
+    // Still waiting for its own turn: taken back before it starts.
+    expect(await abort($, w)).toBe('ok before-start\n')
+  })
+
+  test('a delivery not seen yet is refused when it comes', async ($, on) => {
+    const w = world(on)
+    expect(await abort($, w)).toBe('ok before-start\n')
+    await deliver($, w)
+    expect(w.submitted).toEqual([])
+    expect(w.written[ack(NONCE)]).toBe('refused: already delivered\n')
+  })
+
+  test('one an earlier copy submitted (a reload since) is too late', async ($, on) => {
+    const w = world(on, { store: { [`nonce.${NONCE}`]: TS } })
+    expect(await abort($, w)).toBe('ok too-late\n')
+  })
+
+  test('a turn that won’t abort is too late', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    w.abortFails = true
+    expect(await abort($, w)).toBe('ok too-late\n')
+  })
+
+  test('an abort is taken once', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    await abort($, w)
+    delete w.inbox[`${TARGET}/${ABORT_NONCE}.ack`]
+    expect(await abort($, w)).toBe('refused: already delivered\n')
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  const refused: [string, () => Promise<string>, string, number?][] = [
+    ['a bad MAC', async () => (await signAbort()).replace(/[0-9a-f]{64}⟧/, `${'0'.repeat(64)}⟧`), 'bad signature'],
+    ['another key', async () => signAbort(NONCE, { key: '00'.repeat(32) }), 'bad signature'],
+    ['another delivery named after signing', async () => (await signAbort()).replace(` ${NONCE} `, ' 00000000-0000-0000-0000-000000000000 '), 'bad signature'],
+    ['another session', async () => signAbort(NONCE, { target: 'cli-other' }), 'addressed to another session'],
+    ['a stale abort', async () => signAbort(), 'stale', TS + 11 * 60 * 1000],
+  ]
+  for (const [name, make, reason, now] of refused) {
+    test(`refuses ${name}`, async ($, on) => {
+      const w = world(on, { now })
+      if (now === undefined) {
+        await deliver($, w)
+        await $.turn.start({ text: BODY, turnId: 't1' })
+      }
+      expect(await abort($, w, await make())).toBe(`refused: ${reason}\n`)
+      expect(w.aborted).toEqual([])
+    })
+  }
+
+  test('over the peer channel an abort is nothing: it passes on as the peer message it is', async ($, on) => {
+    const w = world(on)
+    await deliver($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    const text = envelope(await signAbort())
+    const result = await receive($, text)
+    expect(result.consumed).toBeUndefined()
+    expect(w.aborted).toEqual([])
+  })
+
+  test('a delivery over the peer channel can be taken back too', async ($, on) => {
+    const w = world(on)
+    await receive($, envelope(WIRE))
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    expect(await abort($, w)).toBe('ok aborted\n')
   })
 })

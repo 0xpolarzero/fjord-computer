@@ -26,6 +26,18 @@ import type { EngineInterface, Register } from 'claude-code'
 // model switch resets the effort), with `/model` and `/effort` run for this session only, and only then submits the
 // text, so the turn it starts uses them. The ack says what happened: "ok model=opus effort=high", or "model=error:why".
 //
+// `abort-v1`: Lookout can take back a delivery it made, with a control file in the same inbox, signed the same way:
+//   ⟦lookout abort v1 <target> <nonce> <ms> <nonce of the delivery> <hex HMAC-SHA256>⟧
+// with the MAC over "abort-v1\n<target>\n<nonce>\n<ms>\n<nonce of the delivery>\n" (no body). Its own nonce is claimed as a
+// delivery's is (no replay). This copy remembers each delivery it submitted and the turn it started (the next main turn
+// whose text is that delivery's), and answers in the ack, "ok " and how:
+//   before-start  it never started: not seen yet (it will be refused when it comes), or queued behind a running turn, its
+//                 turn then ended the moment it starts
+//   aborted       its turn was running, and is stopped ($.turn.abort: its running tools too)
+//   too-late      its turn is over, or this copy never saw it (a reload since)
+// Nothing an aborted turn already did is undone, and the words stay in the session's history: Claude Code has no way to
+// take a submitted prompt back out.
+//
 // Lookout writes this file; edits are overwritten.
 
 const HEADER = /(?:^|\n)⟦lookout (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)) ([0-9a-f]{64})⟧\n/
@@ -33,7 +45,7 @@ const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const CLOSE = '</cross-session-message>'
 const WINDOW_MS = 10 * 60 * 1000
 const NONCE = 'nonce.'
-export const CAPABILITIES = ['inbox-v1', 'settings-v1']
+export const CAPABILITIES = ['inbox-v1', 'settings-v1', 'abort-v1']
 const POLL_MS = 500
 const ACTIVATION = crypto.randomUUID()
 
@@ -57,6 +69,18 @@ export const hmac = async (key: Uint8Array, message: Uint8Array) => {
   const inner = block.map((x) => x ^ 0x36)
   const outer = block.map((x) => x ^ 0x5c)
   return hex(await sha256(outer, await sha256(inner, message)))
+}
+
+const ABORT = /^⟦lookout abort v1 (\S+) (\S+) (\d+) (\S+) ([0-9a-f]{64})⟧\n?/
+
+/** What an abort's MAC covers: its kind, the target, its nonce, its time and the delivery it takes back, one per line. */
+export const abortMacInput = (target: string, nonce: string, ts: string, cancels: string) =>
+  enc.encode(`abort-v1\n${target}\n${nonce}\n${ts}\n${cancels}\n`)
+
+/** An abort's fields; undefined for anything else. */
+export const parseAbort = (text: string) => {
+  const m = ABORT.exec(text)
+  return m ? { target: m[1], nonce: m[2], ts: m[3], cancels: m[4], mac: m[5] } : undefined
 }
 
 /** The model and effort a v2 message asks for; `-` on the wire is none. */
@@ -201,6 +225,91 @@ async function unmark($: EngineInterface) {
   marked = undefined
 }
 
+/** Claims a nonce: false when it was claimed before. Each nonce is a key of its own in the store (it outlives reloads and
+ * restarts), kept while its message's time is inside the window: past it the message is refused as stale anyway. */
+const claim = ($: EngineInterface, nonce: string, ts: number, now: number) =>
+  exclusive(async () => {
+    if ((await $.store.get(NONCE + nonce)) !== undefined) return false
+    await $.store.set(NONCE + nonce, ts)
+    for (const name of await $.store.keys()) {
+      if (!name.startsWith(NONCE)) continue
+      const at = Number(await $.store.get(name))
+      if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
+    }
+    return true
+  })
+
+/** A delivery this copy submitted, by its nonce: its words, the turn it started once one did, and whether that turn is
+ * over or was taken back before it began. The latest few are kept: an abort comes within minutes. */
+type Sent = { body: string; turnId?: string; ended?: boolean; cancelled?: boolean }
+const sent = new Map<string, Sent>()
+const SENT_KEPT = 50
+/** The main loop's turn under way, by `turn.start` and `turn.complete`. */
+let running: string | undefined
+
+/** Forgets every delivery and turn (tests: each starts a fresh copy's memory). */
+export const forget = () => {
+  sent.clear()
+  running = undefined
+}
+
+const remember = (nonce: string, body: string) => {
+  sent.set(nonce, { body })
+  while (sent.size > SENT_KEPT) sent.delete(sent.keys().next().value as string)
+}
+
+/** The delivery a main turn starts with: the oldest one waiting whose words the turn's text is (or holds, when Claude Code
+ * read queued prompts together). */
+const startedBy = (text: string) => {
+  const said = text.trim()
+  for (const s of sent.values()) {
+    if (s.turnId !== undefined) continue
+    const body = s.body.trim()
+    if (body && (said === body || said.includes(body))) return s
+  }
+  return undefined
+}
+
+/** Takes back the delivery `nonce`, as far as can still be: the ack's word for how. */
+export async function cancel($: EngineInterface, nonce: string, ts: number, now: number) {
+  const s = sent.get(nonce)
+  if (!s) {
+    // Never submitted here: claimed now, it is refused when it comes; claimed already, an earlier copy took it.
+    return (await claim($, nonce, ts, now)) ? 'before-start' : 'too-late'
+  }
+  if (s.ended) return 'too-late'
+  if (s.turnId === undefined) {
+    s.cancelled = true
+    return 'before-start'
+  }
+  if (running !== s.turnId) return 'too-late'
+  try {
+    await $.turn.abort({ turnId: s.turnId })
+  } catch {
+    return 'too-late'
+  }
+  s.ended = true
+  return 'aborted'
+}
+
+/** Checks an abort the way a delivery is checked (its signature, its session, its time, its nonce never seen) and acts on
+ * it: the ack's text. */
+export async function control($: EngineInterface, text: string) {
+  const abort = parseAbort(text)
+  if (!abort) return 'refused: unsigned'
+  const { keyPath } = await config($)
+  if (!keyPath) return 'refused: no key configured'
+  const key = (await $.fs.read(keyPath)).trim()
+  const expected = await hmac(enc.encode(key), abortMacInput(abort.target, abort.nonce, abort.ts, abort.cancels))
+  const now = await $.clock.now()
+  const ts = Number(abort.ts)
+  if (!same(expected, abort.mac)) return 'refused: bad signature'
+  if (abort.target !== (await $.session.id())) return 'refused: addressed to another session'
+  if (!(Math.abs(now - ts) < WINDOW_MS)) return 'refused: stale'
+  if (!(await claim($, abort.nonce, ts, now))) return 'refused: already delivered'
+  return `ok ${await cancel($, abort.cancels, ts, now)}`
+}
+
 /** Checks a signed text the way both ways in must, and submits it as the person's own words. `unsigned` means it isn't
  * Lookout's at all (the peer channel then passes it on); anything else is a refusal with its reason. */
 export async function accept(
@@ -230,19 +339,7 @@ export async function accept(
   }
   const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
   const body = bom ? `\uFEFF${decoded}` : decoded
-  // Each nonce is a key of its own in the store (it outlives reloads and restarts), kept while its message's time is
-  // inside the window: past it the message is refused as stale anyway.
-  const claimed = await exclusive(async () => {
-    if ((await $.store.get(NONCE + signed.nonce)) !== undefined) return false
-    await $.store.set(NONCE + signed.nonce, ts)
-    for (const name of await $.store.keys()) {
-      if (!name.startsWith(NONCE)) continue
-      const at = Number(await $.store.get(name))
-      if (!(Math.abs(now - at) < WINDOW_MS)) await $.store.delete(name)
-    }
-    return true
-  })
-  if (!claimed) return { ok: false, reason: 'already delivered' }
+  if (!(await claim($, signed.nonce, ts, now))) return { ok: false, reason: 'already delivered' }
   // The settings first, so the turn the text starts uses them: the model, then the effort (a model resets it). Each can fail
   // on its own; the person's words go either way. Only from the inbox (`apply`): never from inside a hook a turn waits on.
   const applied: string[] = []
@@ -258,6 +355,7 @@ export async function accept(
       }
     }
   }
+  remember(signed.nonce, body)
   void $.prompt.submit({ text: body, asUser: true })
   return applied.length ? { ok: true, applied: applied.join(' ') } : { ok: true }
 }
@@ -281,6 +379,11 @@ export async function poll($: EngineInterface) {
       if (!name.endsWith('.msg') || names.has(`${name.slice(0, -4)}.ack`)) continue
       const text = await $.fs.read(`${dir}/${name}`).catch(() => undefined)
       if (text === undefined) continue
+      if (parseAbort(text)) {
+        const reply = await control($, text).catch((error) => `refused: ${String(error?.message ?? error)}`)
+        await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, `${reply}\n`)
+        continue
+      }
       const outcome = await accept($, text, true).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
       await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? `ok${outcome.applied ? ` ${outcome.applied}` : ''}\n` : `refused: ${outcome.reason}\n`)
     }
@@ -309,7 +412,23 @@ export const register: Register = (on) => {
     return next(e)
   })
   on('turn.start', async ($, e, next) => {
+    running = e.turnId
+    const mine = startedBy(e.text)
+    if (mine) mine.turnId = e.turnId
     await mark($).catch(() => undefined)
+    const started = await next(e)
+    // Taken back while it waited its turn: it ends as it begins.
+    if (mine?.cancelled) {
+      mine.ended = true
+      await $.turn.abort({ turnId: e.turnId }).catch(() => undefined)
+    }
+    return started
+  })
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      for (const s of sent.values()) if (s.turnId === e.turnId) s.ended = true
+      if (running === e.turnId) running = undefined
+    }
     return next(e)
   })
   on('session.end', async ($, e, next) => {
