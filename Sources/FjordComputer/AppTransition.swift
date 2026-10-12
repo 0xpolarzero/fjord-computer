@@ -29,7 +29,6 @@ struct BarMorph {
     var frame: NSRect
     /// The bar as it looks, when it can be shown (it is on screen).
     var snapshot: NSImage?
-    var radius: CGFloat = 18
     /// The cell the window grows out of (the one clicked, else the GitHub mark's); nil: derived from the bar's frame.
     var cell: NSRect?
     var cellRadius: CGFloat = 10

@@ -5,8 +5,6 @@ enum Theme {
     // Claude's own palette (CDS, dark mode), read from the Claude app: Fjord Computer is part of it.
     /// The bar and its panels: black.
     static let bg = Brand.map(Color.black)
-    /// Tooltip bubbles and popovers: CDS surface-3.
-    static let popover = Brand.map(Color(red: 0x20 / 255, green: 0x20 / 255, blue: 0x1F / 255))
     static let raised = CDS.alpha(0.05)
     static let hover = CDS.alpha(0.075)
     static let stroke = CDS.alpha(0.10)
@@ -25,9 +23,6 @@ enum Theme {
     static let purple = Brand.map(Color(red: 0xA0 / 255, green: 0x96 / 255, blue: 0xEB / 255))
     /// Claude's clay, for anything about Claude sessions.
     static let claude = Brand.map(Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255))
-    /// The Router, as Claude's Code tab: sidebar (surface-1) and content (surface-2).
-    static let sidebar = Brand.map(Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x15 / 255))
-    static let panel = Brand.map(Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x19 / 255))
     /// Project colours for Claude sessions: as far apart as possible, and nowhere near the status colours (amber
     /// needs you, blue unread, clay working) or CI's red. In assignment order, so the first projects differ most.
     static let projectColors: [Color] = [

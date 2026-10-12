@@ -41,7 +41,6 @@ extension Theme {
         static let sm: CGFloat = 6
         static let md: CGFloat = 6
         static let lg: CGFloat = 10
-        static let panel: CGFloat = 14
 
         static func shape(_ radius: CGFloat) -> RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
     }

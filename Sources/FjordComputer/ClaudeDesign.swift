@@ -164,10 +164,6 @@ enum CDS {
 
     /// The Code tab's sidebar, compact density with the hub rail (spec §2): `--df-*` variables.
     enum Sidebar {
-        /// `--df-sidebar-width` default (200–420).
-        static let width: CGFloat = 288
-        /// The title row under the traffic lights (web variant).
-        static let titleRow: CGFloat = 46
         static let rowHeight: CGFloat = 26
         static let rowPadding: CGFloat = 2
         static let rowGap: CGFloat = 4
