@@ -1717,7 +1717,7 @@ private extension View {
 /// A session working on its own: calm and small, one line. Its icon and title, what it is doing now (shimmering), its
 /// folder, what it left running, and for how long, then Open in Claude (in its menu too). A click expands it in place: every
 /// summary of it, newest first, and its subagents and commands with what each is on. Its sparkles button summarizes it,
-/// and folded, its newest summary sits under it.
+/// expanding it to show the summary come in; folded, its newest summary sits under it.
 private struct WorkingCard: View {
     let store: Store
     @Bindable var model: RouterModel
@@ -1771,10 +1771,8 @@ private struct WorkingCard: View {
                 .accessibilityHint(expanded ? "Folds its details" : "Shows its summaries, subagents and commands")
                 .accessibilityAddTraits(expanded ? .isSelected : [])
                 .accessibilityAction(named: "Open in Claude") { store.openAgent(row.id) }
-                .accessibilityAction(named: "Summarize") { summarizer.request(row.id, store: store) }
-                SparklesButton(busy: busy, done: busy, label: "Summarize this session") {
-                    summarizer.request(row.id, store: store)
-                }
+                .accessibilityAction(named: "Summarize") { summarize() }
+                SparklesButton(busy: busy, done: busy, label: "Summarize this session") { summarize() }
             }
             if expanded { details } else if let summary { WorkingSummary(summary: summary) }
             if let error = summarizer.errors[row.id] {
@@ -1787,6 +1785,12 @@ private struct WorkingCard: View {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .contextMenu { SessionMenu(row: row, store: store) }
+    }
+
+    /// Asks for a summary, expanding it if folded so the new one comes in with the others.
+    private func summarize() {
+        if !expanded { withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { expanded = true } }
+        model.summarizer.request(row.id, store: store)
     }
 
     /// Expanded: its summaries, newest first, then its subagents and commands.
