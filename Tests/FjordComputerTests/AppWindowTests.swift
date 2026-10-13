@@ -964,8 +964,28 @@ extension WindowSeams {
                 controller.pick(message: UUID())
                 controller.keepPicture()
                 #expect(AppTransition.glances == glances + 1 && AppTransition.captures == taken + 1)
+                // At the slowest pace a glance checks the window moved no further than noise, unmarked.
                 controller.keepPicture()
-                #expect(AppTransition.glances == glances + 1)
+                #expect(AppTransition.glances == glances + 2 && AppTransition.captures == taken + 1)
+                #expect(controller.keepsPicture)
+            }
+        }
+
+        /// What the window shows of Claude besides the inbox and the Router (sessions, their activity, forms pending) marks
+        /// it too; and a picture an opening's handoff faded from is forgiven nothing.
+        @Test func claudesSessionsMarkTheWindowAndAFadedHandoffsPictureIsForgivenNothing() {
+            morphing { controller, ticks in
+                let before = controller.marks
+                controller.store.pendingForms = [:]
+                #expect(controller.marks != before)
+                let marked = controller.marks
+                controller.store.claudeActivity = [:]
+                #expect(controller.marks != marked)
+                closeWithKeptPicture(controller, ticks, on: .done)
+                controller.show(.done)
+                guard let picture = controller.run?.picture else { return #expect(Bool(false), "no kept picture") }
+                #expect(picture.marks != nil && picture.handedOver(fading: false).marks != nil)
+                #expect(picture.handedOver(fading: true).marks == nil)
             }
         }
 

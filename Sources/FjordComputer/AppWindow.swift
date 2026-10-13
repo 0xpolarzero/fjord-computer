@@ -461,7 +461,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// What may have changed the window since a picture was taken, besides its pixels (see `AppTransition.Marks`).
     var marks: AppTransition.Marks {
         AppTransition.Marks(changes: changes, inbox: store.inboxRevision, inboxDisplay: store.inboxDisplayRevision,
-                            router: store.routerRevision)
+                            router: store.routerRevision, shown: store.shownRevision)
     }
 
     /// Counts the user's input to the window (a key, a click, a scroll; not the pointer's moves, whose hovers are noise),
@@ -594,9 +594,18 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // As good as the keeper would make it (sharp, or soft when sharp costs too much).
         let good = kept.map { $0.exact || (planned?.scale ?? soft) < full } ?? false
         // Nothing typed, clicked, asked or synced since the kept picture: it still stands, with no glance (what moved
-        // since is the window's own noise, a ticking duration or the thinking dots, which a close forgives).
-        if let kept, good, kept.marks == marks { return slower() }
-        let now = AppTransition.glance(of: window, page: page)
+        // since is the window's own noise, a ticking duration or the thinking dots, which a close forgives), but at the
+        // slowest pace, when a glance checks it moved no further than noise (what changes on its own, unmarked).
+        let now: AppTransition.Glance?
+        if let kept, good, kept.marks == marks {
+            guard keeperPace >= Self.keeperPaces.longest else { return slower() }
+            now = AppTransition.glance(of: window, page: page)
+            if now?.within(AppTransition.Glance.closeTolerance, of: kept.glance) == true { return }
+            // Moved on unmarked: no longer forgiven, and taken again once at rest.
+            closedPicture?.marks = nil
+        } else {
+            now = AppTransition.glance(of: window, page: page)
+        }
         if let kept, good, now?.same(as: kept.glance) == true {
             closedPicture?.marks = marks
             return slower()
@@ -653,8 +662,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         guard generation == mine else { return }
         // The picture the overlay handed over on is kept as it was taken (with the glance of what it shows), so a close at
         // once starts on it when the window is still that (near enough); the idle keeper takes another once it has moved on.
-        if let picture = run?.picture, picture.key, picture.glance != nil, !memoryShort {
-            closedPicture = picture
+        if let run, let picture = run.picture, picture.key, picture.glance != nil, !memoryShort {
+            closedPicture = picture.handedOver(fading: run.fadesOut)
         } else {
             closedPicture = nil
         }

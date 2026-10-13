@@ -228,6 +228,7 @@ final class Store {
             agentCache = nil
             agentEntryIndex = nil
             persistedRevision &+= 1
+            shownRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
             refreshSessionRows(sessionRowsChanged(from: oldValue))
@@ -271,7 +272,9 @@ final class Store {
     /// How many times each card has changed (see `countCardChanges`).
     @ObservationIgnored var cardRevisions: [String: Int] = [:]
     /// The question forms Fjord Computer's hook holds, by Claude Code session id (`ClaudeSession.cliID`).
-    var pendingForms: [String: PendingForm] = [:]
+    var pendingForms: [String: PendingForm] = [:] {
+        didSet { shownRevision &+= 1 }
+    }
     /// Why installing or removing the form hook failed, if it did.
     var routerHookError: String?
     /// The form hook as last checked (nil until the Router has been switched on in this run).
@@ -306,6 +309,7 @@ final class Store {
     var claudeSessions: [String: ClaudeSession] = [:] {
         didSet {
             claudeSessionsRevision &+= 1
+            shownRevision &+= 1
             agentCache = nil
             refreshFolderNames()
             refreshSessionRows(sessionRowsChanged(oldValue, claudeSessions))
@@ -315,8 +319,13 @@ final class Store {
     }
     /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
     @ObservationIgnored private(set) var claudeSessionsRevision = 0
+    /// Bumped on every change to what the window shows of Claude besides the inbox and the Router (the sessions, their
+    /// activity, the agents, the forms pending, a recent session ageing out): the window's kept picture is not forgiven
+    /// a small difference across one (`AppTransition.Marks`). Unobserved.
+    @ObservationIgnored private(set) var shownRevision = 0
     var claudeActivity: [String: ClaudeActivity] = [:] {
         didSet {
+            shownRevision &+= 1
             agentCache = nil
             refreshSessionRows(sessionRowsChanged(oldValue, claudeActivity))
         }
@@ -324,6 +333,7 @@ final class Store {
     /// Bumped when a recent session ages out of the list (see `Store.recentWindow`).
     var recentTick = 0 {
         didSet {
+            shownRevision &+= 1
             agentCache = nil
         }
     }

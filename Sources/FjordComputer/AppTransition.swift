@@ -320,6 +320,8 @@ enum AppTransition {
         var inbox = 0
         var inboxDisplay = 0
         var router = 0
+        /// Claude's sessions, their activity, the agents and the forms pending (`Store.shownRevision`).
+        var shown = 0
     }
 
     /// How a picture stands against the window as it is now.
@@ -707,6 +709,14 @@ enum AppTransition {
         var exact: Bool { (pixelScale ?? scale) >= scale }
         /// What had happened to the window when it was taken (nil: not known, so no difference is forgiven).
         var marks: Marks?
+
+        /// As kept after an opening handed over on it: one the handoff faded from was not the window then, so no small
+        /// difference is forgiven it.
+        func handedOver(fading: Bool) -> Picture {
+            var kept = self
+            if fading { kept.marks = nil }
+            return kept
+        }
 
         /// Whether it can stand for `window` as it opens: the same size, at the scale a picture of it would be taken at now
         /// (the window's own, as `scale` is: a window off every screen keeps that of the last one it was on, which need not
