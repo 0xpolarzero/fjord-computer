@@ -347,6 +347,12 @@ import UserNotifications
                                        attributes: [.posixPermissions: 0o755])
         await model.checkClaudeCode(store)
         #expect(model.claudeCodeMissing == false && model.canSend(store))
+        // The app's copy taken away: the window showing again sees it is gone.
+        #expect(store.routerStatus.claudeCode != nil, "the Router's runs take the path found")
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("2.1.293"))
+        await model.checkClaudeCode(store)
+        #expect(model.claudeCodeMissing == true && !model.canSend(store))
+        #expect(store.routerStatus.claudeCode == nil, "no run is given the path gone")
     }
 
     // MARK: Reply and @

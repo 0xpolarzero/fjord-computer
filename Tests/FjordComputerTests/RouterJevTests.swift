@@ -193,8 +193,16 @@ import Testing
         model.predictTarget(store: s)
         await waitUntil { model.live.prediction != nil }
         #expect(calls() == 1 && model.live.prediction?.target == "answer:local_a#w1")
+        // Gone and back with the same words: the pick is still theirs, and nothing is asked again.
         model.live.suspend()
+        model.predictTarget(store: s)
+        try? await Task.sleep(for: .milliseconds(250))
+        #expect(calls() == 1 && model.live.prediction?.target == "answer:local_a#w1")
+        // Back with other words: they are asked about.
+        model.live.suspend()
+        type("use postgres for the database instead", model, s)
         #expect(model.live.prediction == nil)
+        await waitUntil { calls() == 2 }
     }
 
     @Test func aPickWhoseCardIsAddressedGoesWithItsMark() async {
@@ -215,6 +223,18 @@ import Testing
         // No longer working: its open card is where the page shows it.
         model.revalidateTarget(store: s)
         #expect(model.live.prediction?.mark == "local_a#w1")
+    }
+
+    @Test func aKeptPickTakesItsSessionsNewTitleWithoutAskingJevAgain() {
+        let (s, model, calls) = setup()
+        model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "", text: "x", mark: nil))
+        s.claudeSessions["local_b"]?.title = "Rewrite the docs"
+        model.revalidateTarget(store: s)
+        #expect(model.live.prediction?.title == "Rewrite the docs" && calls() == 0)
+        // The composer's watch sees a rename of the pick's target as a change, though no target came or went.
+        let before = RouterModel.targets(s, predicted: "session:local_b")
+        s.claudeSessions["local_b"]?.title = "Rewrite the docs again"
+        #expect(RouterModel.targets(s, predicted: "session:local_b") != before)
     }
 
     @Test func aPinnedSessionThatIsGoneIsUnpinned() {

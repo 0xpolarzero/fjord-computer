@@ -625,6 +625,18 @@ extension WindowSeams {
         }
 
         /// A wait for several refreshes runs once, after them (or after its fallback, a display giving none).
+        /// A stalled link is given up on about as long as its refreshes take: a 120 Hz screen's at 60 Hz, a 24 Hz one's at
+        /// 24, with half a refresh more so a late tick still wins.
+        @Test func aWaitGivesUpAfterTheScreensOwnRefreshes() {
+            #expect(abs(FrameTick.fallback(2, on: nil) - 2.5 / 60) < 1e-9)
+            // At the screen's slowest refresh (an adaptive display runs below its maximum rate), at least a 60 Hz one.
+            for screen in NSScreen.screens {
+                let slowest = max(1.0 / 60, screen.maximumRefreshInterval)
+                #expect(abs(FrameTick.fallback(1, on: screen) - 1.5 * slowest) < 1e-9)
+            }
+            #expect(abs(FrameTick.fallback(3, frame: 1.0 / 24) - 3.5 / 24) < 1e-9)
+        }
+
         @Test func aWaitForSeveralRefreshesRunsOnce() async {
             var runs = 0
             FrameTick.wait(2, on: NSScreen.main) { runs += 1 }
@@ -650,6 +662,13 @@ extension WindowSeams {
         /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on. A window under
         /// test never has the keyboard (the test runner is not the active app): `AppTransition.isKey` may say otherwise.
         private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
+            let (window, ticks, restore) = beginMorphing()
+            defer { restore() }
+            try body(window, ticks)
+        }
+
+        /// The same stepped morph kept alive while an asynchronous test waits for the overlay's real fade to finish.
+        private func beginMorphing() -> (AppWindowController, Ticks, @MainActor () -> Void) {
             let saved = (AppTransition.enabled, AppTransition.nextFrames, AppTransition.nextTurn, AppTransition.isKey,
                          AppTransition.isMiniaturized, AppTransition.flushInitial)
             // The app's policy as found: the morph's close never gets to its tidying turn here, which would put it back, and a
@@ -663,6 +682,7 @@ extension WindowSeams {
                 wait(count)
             }
             AppTransition.nextTurn = { block in ticks.turns.append(block) }
+            let keeper = (AppTransition.inputIdle, AppTransition.isFront, AppTransition.costs, AppTransition.lastCapture)
             _ = NSApplication.shared
             let store = Store()
             store.persists = false
@@ -671,7 +691,7 @@ extension WindowSeams {
             window.bar = { BarMorph(frame: NSRect(x: 1400, y: 300, width: 46, height: 300)) }
             // Every seam put back, and the window closed while its turns are still the test's (none of them run), even
             // when the test stops early.
-            defer {
+            let restore: @MainActor () -> Void = {
                 window.run?.end()
                 window.close()
                 AppTransition.enabled = saved.0
@@ -680,20 +700,26 @@ extension WindowSeams {
                 AppTransition.isKey = saved.3
                 AppTransition.isMiniaturized = saved.4
                 AppTransition.flushInitial = saved.5
+                (AppTransition.inputIdle, AppTransition.isFront, AppTransition.costs, AppTransition.lastCapture) = keeper
                 AppPolicy.update(windowOpen: policy == .regular)
+                // A morph the test left under way holds no other test's waiting work.
+                MotionGate.ended()
             }
-            try body(window, ticks)
+            return (window, ticks, restore)
         }
 
         @Test func theRealWindowIsShownBeforeTheOverlayGoes() {
             morphing { controller, ticks in
                 controller.show(.settings)
                 guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
-                // Waiting at its frame, invisible, while the overlay grows out of the bar.
+                // Waiting at its frame, invisible and taking no clicks, while the overlay grows out of the bar.
                 #expect(controller.phase == .opening && window.alphaValue == 0 && run.overlay.isVisible)
+                ticks.runTurns()
+                #expect(window.ignoresMouseEvents && window.alphaValue == 0)
                 run.complete()
-                // At the end: the real window is in under the overlay at once, and the overlay stays until two refreshes later.
-                #expect(window.alphaValue == 1 && run.overlay.isVisible && !run.ended)
+                // At the end: the real window is in under the overlay at once, taking clicks, and the overlay stays until two
+                // refreshes later.
+                #expect(window.alphaValue == 1 && !window.ignoresMouseEvents && run.overlay.isVisible && !run.ended)
                 #expect(ticks.blocks.count == 1)
                 ticks.blocks.removeFirst()()
                 #expect(window.alphaValue == 1 && run.overlay.isVisible && ticks.blocks.count == 1)
@@ -723,6 +749,28 @@ extension WindowSeams {
             }
         }
 
+        @Test(arguments: [false, true]) func closingBeforeBringInReversesWithoutWarmingContent(prepared: Bool) throws {
+            try morphing { controller, ticks in
+                if prepared { controller.prepare() }
+                let content = controller.content
+                controller.show(.settings)
+                let run = try #require(controller.run)
+                let window = try #require(controller.window)
+                let glances = AppTransition.glances, captures = AppTransition.captures
+                #expect(!window.isVisible && window.contentViewController == nil)
+                controller.close()
+                #expect(controller.phase == .closing && controller.run === run && run.overlay.isVisible)
+                #expect(!window.isVisible && window.contentViewController == nil && controller.content === content)
+                ticks.runTurns() // The cancelled bring-in must stay cancelled.
+                #expect(!window.isVisible && window.contentViewController == nil && controller.content === content)
+                #expect(AppTransition.glances == glances && AppTransition.captures == captures)
+                controller.show(.settings)
+                #expect(controller.run === run && controller.phase == .opening)
+                ticks.runTurns()
+                #expect(window.contentViewController != nil && window.isVisible)
+            }
+        }
+
         @Test func theMorphMovesBeforeTheWindowIsBuilt() {
             morphing { controller, ticks in
                 controller.show(.settings)
@@ -734,9 +782,12 @@ extension WindowSeams {
                 #expect(ticks.turns.count == 1)
                 ticks.turns.removeFirst()()
                 #expect(window.isVisible && window.alphaValue == 0 && window.contentViewController != nil)
-                // The picture is there before the real window takes over.
+                // No picture is taken as the real window takes over (it would hold the handoff up): the window never had the
+                // keyboard here, so none was, and the overlay fades into the real window rather than cutting to it.
+                let taken = AppTransition.captures
                 run.complete()
-                #expect(run.image != nil && window.alphaValue == 1 && run.overlay.isVisible)
+                #expect(AppTransition.captures == taken && run.image == nil && run.fadesOut)
+                #expect(window.alphaValue == 1 && run.overlay.isVisible)
             }
         }
 
@@ -757,16 +808,17 @@ extension WindowSeams {
                 ticks.turns = []
                 turns.dropLast().forEach { $0() }
                 #expect(closed == 0 && controller.isOpen && AppPolicy.current == .regular)
-                #expect(controller.window?.contentViewController != nil)
+                #expect(controller.window?.contentViewController == nil)
                 turns.last?()
+                #expect(controller.window?.contentViewController != nil)
                 #expect(closed == 0 && controller.window?.isVisible == true)
             }
         }
 
-        /// Once the overlay has let go of its picture (the real window's live pixels show, the overlay's shadow still fading),
-        /// a close is a close of the window as it is: a fresh picture, shown before the real window goes, which then shrinks
-        /// into the bar, rather than the opening's overlay turned round from nothing to see.
-        @Test func closingAsTheOverlayLetsGoMorphsFromAFreshPicture() {
+        /// Once the overlay has let go of its picture, a close is a close of the window as it is: on the kept picture when
+        /// it is still the window, else, with nothing captured, the live window fading out in place above the overlay
+        /// already shrinking beneath it.
+        @Test func aCloseWithNoPictureOfTheWindowFadesTheLiveWindowAndCapturesNothing() {
             morphing { controller, ticks in
                 controller.show(.settings)
                 guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
@@ -775,12 +827,118 @@ extension WindowSeams {
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
                 #expect(opened.handedOver && controller.phase == .opening && window.isVisible)
+                // Its overlay gone already.
+                opened.end()
+                let taken = AppTransition.captures
+                let level = window.level
                 controller.close()
                 guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
-                #expect(controller.phase == .closing && closing !== opened && closing.image != nil)
-                // The overlay shows the window before the real one goes.
-                #expect(window.isVisible && closing.overlay.isVisible && ticks.blocks.count == 1)
+                #expect(controller.phase == .closing && AppTransition.captures == taken && closing.image == nil)
+                // The motion starts at once, the window above the overlay until its fade is over.
+                #expect(closing.overlay.isVisible && ticks.blocks.isEmpty && closing.startPose?.container == 1)
+                #expect(window.isVisible && window.level.rawValue > closing.overlay.level.rawValue)
+                closing.complete()
+                #expect(window.level == level)
+            }
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func reopeningDuringTheLiveCloseFadeKeepsTheWindowVisible(reduced: Bool, glass: Bool) async throws {
+            let (controller, ticks, restore) = beginMorphing()
+            defer { restore() }
+            let glassMorph = AppTransition.glassMorph
+            AppTransition.glassMorph = glass
+            defer { AppTransition.glassMorph = glassMorph }
+            controller.show(.done)
+            ticks.runTurns()
+            controller.run?.complete()
+            ticks.blocks.removeFirst()()
+            ticks.blocks.removeFirst()()
+            controller.run?.end()
+            let window = try #require(controller.window)
+            if reduced { controller.bar = { nil } }
+            let level = window.level, fadeWindow = AppTransition.fadeWindow
+            var fades: [(from: CGFloat, to: CGFloat, done: @MainActor () -> Void)] = []
+            AppTransition.fadeWindow = { window, alpha, done in fades.append((window.alphaValue, alpha, done)) }
+            defer { AppTransition.fadeWindow = fadeWindow }
+            controller.close()
+            let run = try #require(controller.run)
+            #expect(run.isGlass == (glass && GlassCapture.chromeIsGlass))
+            #expect(fades.count == 1 && fades[0].to == 0 && run.image == nil)
+            window.alphaValue = 0.4 // Step the live fade to its presentation halfway through the close.
+            let lifted = window.level
+            controller.show(.done)
+            #expect(controller.phase == .opening && controller.run === run)
+            #expect(window.alphaValue == 0.4 && window.level == lifted && lifted.rawValue > run.overlay.level.rawValue)
+            #expect(fades.count == 2 && fades[1].from == 0.4 && fades[1].to == 1)
+            fades[0].done() // The superseded close cannot hide or lower the reopened window.
+            ticks.runTurns()
+            #expect(window.isVisible && window.alphaValue == 0.4 && window.level == lifted)
+            run.complete()
+            #expect(window.alphaValue == 1 && window.level == lifted && !window.ignoresMouseEvents)
+            #expect(run.overlay.isVisible && !run.handedOver)
+            ticks.blocks.removeFirst()()
+            #expect(window.level == lifted && run.overlay.isVisible && !run.handedOver)
+            ticks.blocks.removeFirst()()
+            #expect(window.level == lifted && run.overlay.isVisible && run.handedOver)
+            await waitUntil { controller.phase == .idle }
+            #expect(run.ended && !run.overlay.isVisible && window.level == level && window.isVisible)
+        }
+
+        /// A close while the opening's picture is still fading into the real window goes on from that blend: the same
+        /// overlay, not shown whole again, the live window fading out under it, nothing captured.
+        @Test func aCloseDuringTheHandoffsFadeGoesOnFromTheBlend() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                ticks.turns.removeFirst()()
+                opened.complete()
                 ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                #expect(opened.fadingContent)
+                let taken = AppTransition.captures
+                let level = window.level
+                controller.close()
+                #expect(controller.run === opened && controller.phase == .closing && !opened.handedOver)
+                #expect(AppTransition.captures == taken && window.isVisible && window.level == level)
+                // From where the fade had got to, not the picture whole.
+                #expect((opened.startPose?.container ?? 1) <= 1)
+            }
+        }
+
+        /// The overlay still fading out is taken over only when it stands where the close would put one: the window resized
+        /// meanwhile, the close starts an overlay of its own.
+        @Test func aCloseTakesOverTheFadingOverlayOnlyWhereItStands() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                ticks.turns.removeFirst()()
+                opened.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                window.setFrame(window.frame.insetBy(dx: 20, dy: 20), display: false)
+                controller.close()
+                #expect(controller.phase == .closing && controller.run !== opened && opened.ended)
+            }
+        }
+
+        /// With the window's picture kept, the close starts on it: the overlay shows it and the real window goes in the same
+        /// turn, nothing captured.
+        @Test func aCloseStartsOnTheKeptPictureAtOnce() {
+            morphing { controller, ticks in
+                AppTransition.isKey = { _ in true }
+                controller.show(.done)
+                ticks.runTurns()
+                guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                opened.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                opened.end()
+                controller.keepPictureNow()
+                let taken = AppTransition.captures
+                controller.close()
+                guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
+                #expect(AppTransition.captures == taken && closing.image != nil && ticks.blocks.isEmpty)
                 #expect(!window.isVisible && closing.startPose?.container == 1 && closing.startPose?.window == 1)
             }
         }
@@ -794,6 +952,9 @@ extension WindowSeams {
                 opened.complete()
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
+                opened.end()
+                AppTransition.isKey = { _ in true }
+                controller.keepPictureNow()
                 var restored = false
                 controller.onClosing = {
                     restored = true
@@ -803,7 +964,6 @@ extension WindowSeams {
                 defer { controller.onClosing = nil }
                 controller.close()
                 guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
-                ticks.blocks.removeFirst()()
                 #expect(restored && controller.phase == .opening && controller.run === closing)
                 // The callback's opening is the animation completed now, so the real window takes over.
                 closing.complete()
@@ -815,13 +975,15 @@ extension WindowSeams {
         private func openAndStartClosing(_ controller: AppWindowController, _ ticks: Ticks, on place: AppDestination) {
             AppTransition.isKey = { _ in true }
             controller.show(place)
-            ticks.turns.forEach { $0() }
+            ticks.runTurns()
             ticks.turns = []
             controller.run?.complete()
             ticks.blocks.removeFirst()()
             ticks.blocks.removeFirst()()
+            // A while later: the opening's overlay gone, the picture kept as the idle keeper would.
+            controller.run?.end()
+            controller.keepPictureNow()
             controller.close()
-            ticks.blocks.removeFirst()()
         }
 
         /// Short of memory as a morphing close is under way, its picture is not kept for the next open, and the content the
@@ -838,6 +1000,258 @@ extension WindowSeams {
             }
         }
 
+        /// Work that can wait holds from the morph's start (the opening's, then the close's that takes over) until it is over.
+        @Test func theMotionGateHoldsWhileTheWindowMorphs() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                #expect(MotionGate.moving)
+                ticks.runTurns()
+                ticks.turns = []
+                controller.close()
+                #expect(controller.phase == .closing && MotionGate.moving)
+                controller.run?.complete()
+                #expect(controller.phase == .idle && !MotionGate.moving)
+            }
+        }
+
+        /// The window open with no morph, in front and with the keyboard, the user idle, no picture taken lately.
+        private func openForTheKeeper(_ controller: AppWindowController) -> NSWindow? {
+            AppTransition.enabled = false
+            controller.show(.done)
+            AppTransition.enabled = true
+            AppTransition.isKey = { _ in true }
+            AppTransition.isFront = { _ in true }
+            AppTransition.inputIdle = { _ in true }
+            AppTransition.lastCapture = -.infinity
+            // A flat page isolates the keeper's decisions from SwiftUI's drawing cost and appearing callbacks.
+            if let window = controller.window {
+                let page = NSViewController()
+                page.view = NSView(frame: window.contentView?.bounds ?? .zero)
+                page.view.wantsLayer = true
+                page.view.layer?.backgroundColor = NSColor.white.cgColor
+                window.contentViewController = page
+            }
+            // Pictures of this page known to be cheap (a debug build's own would not be).
+            AppTransition.costs = AppTransition.CaptureCosts()
+            if let window = controller.window {
+                for scale in [window.backingScaleFactor, AppTransition.reducedScale(of: window)] {
+                    let cost = scale == window.backingScaleFactor ? 0.01 : 0.0025
+                    AppTransition.costs.record(cost, size: AppTransition.drawnSize(window), pixelScale: scale,
+                                               page: AppTransition.page(.done))
+                }
+            }
+            return controller.window
+        }
+
+        @Test(arguments: ["none", "size", "place", "key"])
+        func aCloseWithoutAnEligiblePictureDrawsNoGlance(reason: String) throws {
+            try morphing { controller, ticks in
+                AppTransition.isKey = { _ in true }
+                controller.show(.done)
+                ticks.runTurns()
+                controller.run?.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                controller.run?.end()
+                let window = try #require(controller.window)
+                if reason != "none" {
+                    controller.keepPictureNow()
+                    #expect(controller.keepsPicture)
+                }
+                switch reason {
+                case "size": window.setContentSize(NSSize(width: 1100, height: 700))
+                case "place": controller.navigator.go(.settings)
+                case "key": AppTransition.isKey = { _ in false }
+                default: break
+                }
+                let glances = AppTransition.glances, captures = AppTransition.captures
+                controller.close()
+                #expect(controller.phase == .closing && controller.run?.image == nil)
+                #expect(AppTransition.glances == glances && AppTransition.captures == captures)
+            }
+        }
+
+        /// The idle keeper keeps off the user's input, waiting three times what its picture would cost, and keeps a soft
+        /// picture when a sharp one would cost over its budget, so no look holds a key typed meanwhile for long.
+        @Test func theIdleKeeperBoundsWhatItCosts() throws {
+            try morphing { controller, _ in
+                let window = try #require(openForTheKeeper(controller))
+                AppTransition.inputIdle = { _ in false }
+                controller.keepPicture()
+                #expect(!controller.keepsPicture)
+                var asked: TimeInterval = 0
+                AppTransition.inputIdle = { asked = $0; return true }
+                let size = AppTransition.drawnSize(window), page = AppTransition.page(.done)
+                // Sharp costs over the budget on this page: soft, and the wait is three times its cost (half a second).
+                AppTransition.costs.record(0.5, size: size, pixelScale: window.backingScaleFactor, page: page)
+                let soft = AppTransition.reducedScale(of: window)
+                // Two looks: a picture only of a window at rest.
+                controller.keepPicture()
+                controller.keepPicture()
+                #expect(controller.keepsPicture && controller.keptPictureIsSoft && asked == 0.5)
+                // Soft over it too: no picture at all (a close fades the live window instead).
+                let taken = AppTransition.captures
+                AppTransition.costs.record(0.2, size: size, pixelScale: soft, page: page)
+                controller.pick(message: UUID())
+                controller.keepPicture()
+                controller.keepPicture()
+                #expect(AppTransition.captures == taken)
+            }
+        }
+
+        /// The idle keeper settles: a picture only once two looks agree, then no glance at all while nothing is typed, clicked,
+        /// asked or synced (what ticks on its own is noise a close forgives), its looks further and further apart; something
+        /// asked of the window has it look again, and a window drawn alike keeps its picture.
+        @Test func theIdleKeeperSettles() throws {
+            try morphing { controller, _ in
+                _ = try #require(openForTheKeeper(controller))
+                let taken = AppTransition.captures
+                controller.keepPicture()
+                #expect(!controller.keepsPicture && controller.keeperPace == 0.5)
+                controller.keepPicture()
+                #expect(controller.keepsPicture && AppTransition.captures == taken + 1 && controller.keeperPace == 1)
+                let glances = AppTransition.glances
+                controller.keepPicture()
+                controller.keepPicture()
+                #expect(AppTransition.glances == glances && AppTransition.captures == taken + 1)
+                #expect(controller.keeperPace == 4)
+                controller.pick(message: UUID())
+                controller.keepPicture()
+                #expect(AppTransition.glances == glances + 1 && AppTransition.captures == taken + 1)
+                // At the slowest pace a glance checks the window moved no further than noise, unmarked.
+                controller.keepPicture()
+                #expect(AppTransition.glances == glances + 2 && AppTransition.captures == taken + 1)
+                #expect(controller.keepsPicture)
+            }
+        }
+
+        /// What the window shows of Claude besides the inbox and the Router (sessions, their activity, forms pending) marks
+        /// it too; and a picture an opening's handoff faded from is forgiven nothing.
+        @Test func claudesSessionsMarkTheWindowAndAFadedHandoffsPictureIsForgivenNothing() {
+            morphing { controller, ticks in
+                let before = controller.marks
+                controller.store.pendingForms = [:]
+                #expect(controller.marks != before)
+                let marked = controller.marks
+                controller.store.claudeActivity = [:]
+                #expect(controller.marks != marked)
+                closeWithKeptPicture(controller, ticks, on: .done)
+                controller.show(.done)
+                guard let picture = controller.run?.picture else { return #expect(Bool(false), "no kept picture") }
+                #expect(picture.marks != nil && picture.handedOver(fading: false).marks != nil)
+                #expect(picture.handedOver(fading: true).marks == nil)
+            }
+        }
+
+        @Test func aChangedTaskTitleIsNotForgivenAsPictureNoise() throws {
+            try morphing { controller, _ in
+                controller.store.claudeTasks = ["session": [ClaudeTask(id: "task", kind: .agent, title: "Read logs", since: .now)]]
+                let bitmap = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
+                                                    space: CGColorSpaceCreateDeviceRGB(),
+                                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let pixels = [UInt8](repeating: 100, count: 20 * 20 * 4)
+                let before = AppTransition.Glance(width: 20, height: 20, pixels: pixels)
+                var changed = pixels
+                changed[0] = 200 // One pixel changed: within the close's noise tolerance.
+                let now = AppTransition.Glance(width: 20, height: 20, pixels: changed)
+                let picture = AppTransition.Picture(image: try #require(bitmap.makeImage()), frame: .zero, scale: 1,
+                                                    destination: .router, glance: before, marks: controller.marks)
+                @MainActor func freshness() -> AppTransition.Freshness {
+                    AppTransition.freshness(of: picture, glance: now, marks: controller.marks, destination: .router,
+                                            tolerance: AppTransition.Glance.closeTolerance)
+                }
+                #expect(freshness() == .cosmetic)
+                controller.store.claudeTasks["session"]?[0].title = "Fix the failure"
+                #expect(freshness() == .stale)
+            }
+        }
+
+        /// The keeper runs only for a window shown, with the keyboard and in front, and stops as it resigns the keyboard,
+        /// whatever the morph's phase.
+        @Test func theKeeperRunsOnlyForAWindowInFrontWithTheKeyboard() throws {
+            try morphing { controller, _ in
+                _ = try #require(openForTheKeeper(controller))
+                AppTransition.isFront = { _ in false }
+                controller.keepPictureFresh()
+                #expect(controller.keeperTimer == nil)
+                AppTransition.isFront = { _ in true }
+                controller.keepPictureFresh()
+                #expect(controller.keeperTimer != nil)
+                controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+                #expect(controller.keeperTimer == nil)
+            }
+        }
+
+        /// The idle keeper's timer goes with its controller: it does not wake every second for nothing once the window is gone.
+        @Test func theKeeperStopsWithItsController() {
+            morphing { _, _ in
+                var other: AppWindowController? = AppWindowController(store: Store(), remembers: false, checksClaudeCode: false)
+                AppTransition.enabled = false
+                other?.show(.done)
+                AppTransition.enabled = true
+                AppTransition.isKey = { _ in true }
+                AppTransition.isFront = { _ in true }
+                other?.keepPictureFresh()
+                let window = other?.window
+                defer { window?.close() }
+                guard let timer = other?.keeperTimer else { return #expect(Bool(false), "no keeper") }
+                #expect(timer.isValid)
+                other = nil
+                timer.fire()
+                #expect(!timer.isValid)
+            }
+        }
+
+        /// Every close lets go of the kept picture in a while, a morph's or not (closed out of sight, it does not morph), and
+        /// an opening calls that off.
+        @Test func everyCloseLetsGoOfThePictureInAWhile() {
+            morphing { controller, ticks in
+                openAndStartClosing(controller, ticks, on: .done)
+                controller.run?.complete()
+                #expect(controller.keepsPicture && controller.keptPictureExpires)
+                controller.show(.done)
+                #expect(!controller.keptPictureExpires)
+                controller.close()
+                controller.run?.complete()
+                #expect(controller.phase == .idle && controller.keptPictureExpires)
+                // Opened and closed with no morph: the close still lets go of it in a while.
+                AppTransition.enabled = false
+                controller.show(.done)
+                #expect(controller.window?.isVisible == true && !controller.keptPictureExpires)
+                controller.close()
+                #expect(controller.window?.isVisible != true && controller.keptPictureExpires)
+            }
+        }
+
+        /// A close starts on the kept picture when nothing happened to the window since; something asked of it (a card, a
+        /// message) marks it, so a small difference is no longer forgiven (`aPicturesFreshness…`).
+        @Test func aCloseTakesAPictureAgainOnlyWhenSomethingHappened() {
+            morphing { controller, ticks in
+                openAndStartClosing(controller, ticks, on: .done)
+                // Turned round, and handed over: the close's picture is kept.
+                controller.show(.done)
+                ticks.runTurns()
+                controller.run?.complete()
+                ticks.blocks.forEach { $0() }
+                ticks.blocks = []
+                #expect(controller.keepsPicture)
+                let taken = AppTransition.captures
+                controller.close()
+                #expect(controller.phase == .closing && AppTransition.captures == taken)
+                controller.show(.done)
+                ticks.runTurns()
+                controller.run?.complete()
+                ticks.blocks.forEach { $0() }
+                ticks.blocks = []
+                // Something asked of it marks the window: no small difference is forgiven any more.
+                let before = controller.marks
+                controller.pick(message: UUID())
+                #expect(controller.marks != before)
+                controller.close()
+                #expect(controller.phase == .closing)
+            }
+        }
+
         /// Short of memory while open, a morphing close keeps no picture for the next open.
         @Test func memoryPressureWhileOpenKeepsNoPictureOnAMorphingClose() {
             morphing { controller, ticks in
@@ -848,29 +1262,37 @@ extension WindowSeams {
             }
         }
 
-        /// A close turned round by a banner's click on another card of the same place shows that card, not the picture of the
-        /// one it closed on.
-        @Test func aCloseTurnedRoundOnAnotherCardRefreshesThePicture() throws {
+        /// Opened, its picture kept, closed and the close over: the window closed with a sharp picture kept, as after a while
+        /// open and still.
+        private func closeWithKeptPicture(_ controller: AppWindowController, _ ticks: Ticks, on place: AppDestination) {
+            openAndStartClosing(controller, ticks, on: place)
+            controller.run?.complete()
+            ticks.runTurns()
+        }
+
+        /// A close turned round by a banner's click on another card of the same place captures nothing: the overlay, whose
+        /// picture shows the card it closed on, fades into the real window at the handoff.
+        @Test func aCloseTurnedRoundOnAnotherCardFadesIntoIt() throws {
             try morphing { controller, ticks in
                 let cards = controller.store.openRouterCards
                 try #require(cards.count >= 2)
                 controller.routerModel.select(cards[0].id, store: controller.store)
                 openAndStartClosing(controller, ticks, on: .router)
                 guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
+                let taken = AppTransition.captures
                 controller.show(card: cards[1].id)
                 #expect(controller.phase == .opening && controller.run === run && controller.navigator.selection == .router)
-                ticks.turns.forEach { $0() }
-                #expect(run.image != nil && run.image !== shown)
+                ticks.runTurns()
+                run.complete()
+                #expect(run.image === shown && run.fadesOut && AppTransition.captures == taken)
             }
         }
 
-        /// Closed before its fresh picture came, an opening to another place keeps the picture it started on as that of the
-        /// place it shows: turned round, it still owes the fresh one.
-        @Test func aCloseCutShortBeforeItsFreshPictureStillOwesItWhenTurnedRound() {
+        /// Closed before its handoff, an opening to another place keeps the picture it started on as that of the place it
+        /// shows: turned round, the overlay fades into the real window rather than handing over on the other place's picture.
+        @Test func aCloseCutShortOnAnotherPlaceFadesWhenTurnedRound() {
             morphing { controller, ticks in
-                openAndStartClosing(controller, ticks, on: .router)
-                controller.run?.complete()
-                ticks.turns.forEach { $0() }
+                closeWithKeptPicture(controller, ticks, on: .router)
                 ticks.turns = []
                 #expect(controller.phase == .idle && controller.window?.isVisible == false)
                 // Settings starts on the Router's picture; the window does not get the keyboard before the toggle.
@@ -882,22 +1304,34 @@ extension WindowSeams {
                 controller.show(.settings)
                 #expect(controller.phase == .opening && controller.run === run && run.image === started)
                 run.complete()
-                #expect(run.image != nil && run.image !== started)
+                #expect(run.image === started && run.fadesOut)
             }
         }
 
-        /// The place changed by the Go menu (the navigator itself, not `show`) while the window is on its way in, its fresh
-        /// picture taken already: the overlay takes another, of where it now goes.
-        @Test func goingElsewhereOnTheWayInRefreshesThePicture() {
-            morphing { controller, ticks in
-                AppTransition.isKey = { _ in true }
-                controller.show(.settings)
-                ticks.turns.forEach { $0() }
-                ticks.turns = []
-                guard let run = controller.run, let taken = run.image else { return #expect(Bool(false), "no picture") }
+        /// Nothing is captured on the way in, whatever is asked meanwhile (another place by the Go menu, a card, a message):
+        /// the overlay keeps what it started on and fades into the real window at the handoff.
+        @Test func anOpeningNeverCaptures() throws {
+            try morphing { controller, ticks in
+                closeWithKeptPicture(controller, ticks, on: .router)
+                let taken = AppTransition.captures
+                controller.show(.router)
+                ticks.runTurns()
+                guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no kept picture") }
+                if let card = controller.store.openRouterCards.last { controller.pick(card: card.id) }
+                controller.pick(message: UUID())
                 controller.navigator.go(.done)
-                ticks.turns.forEach { $0() }
-                #expect(run.image != nil && run.image !== taken && run.shows == .done)
+                ticks.runTurns()
+                run.complete()
+                #expect(AppTransition.captures == taken && run.image === shown && run.fadesOut)
+                // A first opening, on the bare surface, likewise.
+                let other = AppWindowController(store: controller.store, remembers: false, checksClaudeCode: false)
+                other.bar = controller.bar
+                other.show(.settings)
+                ticks.runTurns()
+                other.run?.complete()
+                #expect(AppTransition.captures == taken && other.run?.image == nil && other.run?.fadesOut == true)
+                other.run?.end()
+                other.close()
             }
         }
 
@@ -907,7 +1341,7 @@ extension WindowSeams {
             try morphing { controller, ticks in
                 AppTransition.isKey = { _ in true }
                 controller.show(.settings)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let run = controller.run else { return #expect(Bool(false), "no morph") }
                 run.complete()
@@ -918,82 +1352,79 @@ extension WindowSeams {
                 controller.navigator.go(.done)
                 controller.showUpdates()
                 if let card = controller.store.openRouterCards.first { controller.pick(card: card.id) }
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 #expect(AppTransition.captures == taken)
             }
         }
 
-        /// A card or a message of the Router asked for from the bar while the window is on its way in to the Router: the place
-        /// is the same, what it shows is not.
-        @Test func aRouterPickOnTheWayInRefreshesThePicture() throws {
-            try morphing { controller, ticks in
-                let cards = controller.store.openRouterCards
-                try #require(cards.count >= 2)
-                AppTransition.isKey = { _ in true }
-                controller.routerModel.select(cards[0].id, store: controller.store)
-                controller.show(.router)
-                ticks.turns.forEach { $0() }
-                ticks.turns = []
-                guard let run = controller.run, let taken = run.image else { return #expect(Bool(false), "no picture") }
-                controller.pick(card: cards[1].id)
-                controller.show(.router)
-                ticks.turns.forEach { $0() }
-                ticks.turns = []
-                guard let card = run.image else { return #expect(Bool(false), "no picture") }
-                #expect(card !== taken && controller.routerModel.selection == cards[1].id)
-                controller.pick(message: UUID())
-                ticks.turns.forEach { $0() }
-                #expect(run.image != nil && run.image !== card)
-            }
-        }
-
-        /// Any close turned round takes a fresh picture: what the window shows may have changed meanwhile (the store, a message
-        /// asked for) with nothing to say so.
-        @Test func everyCloseTurnedRoundRefreshesThePicture() {
+        /// Opened again with nothing changed since its close, the window takes no picture: the one kept is still the window
+        /// as drawn, and the overlay hands over on it.
+        @Test func reopeningUnchangedTakesNoPicture() {
             morphing { controller, ticks in
-                openAndStartClosing(controller, ticks, on: .settings)
-                guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
-                controller.show(.settings)
-                #expect(controller.phase == .opening && controller.run === run)
-                ticks.turns.forEach { $0() }
-                #expect(run.image != nil && run.image !== shown)
-            }
-        }
-
-        /// Another place asked for as the opening hands over: its fresh picture fades in over the last before the overlay lets
-        /// go of it, rather than snapping to the end of its fade.
-        @Test func theHandoffWaitsForAPictureStillFadingIn() {
-            morphing { controller, ticks in
-                controller.show(.settings)
-                ticks.turns.forEach { $0() }
-                ticks.turns = []
-                guard let run = controller.run else { return #expect(Bool(false), "no morph") }
-                run.complete()
-                #expect(ticks.blocks.count == 1)
-                AppTransition.isKey = { _ in true }
+                // The archive: no field takes the keyboard (and draws its focus ring) as the window comes back.
+                closeWithKeptPicture(controller, ticks, on: .done)
+                #expect(controller.phase == .idle && controller.keepsPicture)
+                let taken = AppTransition.captures
                 controller.show(.done)
-                ticks.turns.forEach { $0() }
-                #expect(run.isFadingPicture)
-                ticks.blocks.removeFirst()()
-                ticks.blocks.removeFirst()()
-                #expect(!run.handedOver && run.isFadingPicture && !run.ended)
+                ticks.runTurns()
+                ticks.turns = []
+                guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no kept picture") }
+                run.complete()
+                #expect(AppTransition.captures == taken && run.image === shown && run.picture?.exact == true)
             }
         }
 
-        /// Closed while its fresh picture fades in, the window's overlay carries the fade on as it shrinks, rather than snapping
-        /// to the new picture.
-        @Test func aCloseCarriesOnAPictureStillFadingIn() {
+        /// Something asked of the window between the handoff's check and the overlay letting go (two refreshes) has the
+        /// overlay fade into the real window rather than cut away from a picture that no longer stands for it.
+        @Test func somethingAskedAsTheOverlayLetsGoHasItFade() throws {
+            try morphing { controller, ticks in
+                AppTransition.enabled = false
+                controller.show(.done)
+                AppTransition.enabled = true
+                let window = try #require(controller.window)
+                for asked in [false, true] {
+                    let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: controller.bar()))
+                    defer { run.end() }
+                    run.open(reduced: false) {
+                        run.handoff(fading: false, stillExact: { !asked }, reveal: {}, finished: {})
+                    }
+                    run.complete()
+                    ticks.blocks.removeFirst()()
+                    ticks.blocks.removeFirst()()
+                    #expect(run.handedOver && run.fadesOut == asked)
+                }
+            }
+        }
+
+        /// A close turned round takes no picture either: it hands over on the one it shows, or fades from it.
+        @Test func aCloseTurnedRoundTakesNoPicture() {
             morphing { controller, ticks in
-                AppTransition.isKey = { _ in true }
-                controller.show(.settings)
-                ticks.turns.forEach { $0() }
-                ticks.turns = []
-                guard let run = controller.run else { return #expect(Bool(false), "no morph") }
-                #expect(run.isFadingPicture)
-                controller.close()
-                #expect(controller.phase == .closing && controller.run === run && run.isFadingPicture)
-                controller.show(.settings)
-                #expect(controller.phase == .opening && run.isFadingPicture)
+                openAndStartClosing(controller, ticks, on: .done)
+                guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
+                let taken = AppTransition.captures
+                controller.show(.done)
+                #expect(controller.phase == .opening && controller.run === run)
+                ticks.runTurns()
+                run.complete()
+                #expect(run.image === shown && AppTransition.captures == taken)
+            }
+        }
+
+        /// The handoff looks at the window again before it cuts: a change since the picture (its appearing's, a turn on) has
+        /// it fade into the real window rather than cut to it.
+        @Test func theHandoffLooksAgainBeforeItCuts() {
+            morphing { controller, ticks in
+                closeWithKeptPicture(controller, ticks, on: .done)
+                controller.show(.done)
+                ticks.runTurns()
+                guard let run = controller.run, let view = controller.window?.contentView else {
+                    return #expect(Bool(false), "no morph")
+                }
+                #expect(run.picture?.exact == true)
+                view.layer?.backgroundColor = NSColor.systemRed.cgColor
+                view.layer?.opacity = 0.5
+                run.complete()
+                #expect(run.fadesOut)
             }
         }
 
@@ -1002,7 +1433,7 @@ extension WindowSeams {
         @Test func aCloseOfAWindowMinimizedOnItsWayInTurnsRound() {
             morphing { controller, ticks in
                 controller.show(.settings)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let window = controller.window else { return #expect(Bool(false), "no window") }
                 // ⌘M: a window under test does not minimize at once.
@@ -1013,7 +1444,7 @@ extension WindowSeams {
                 controller.show(.settings)
                 #expect(controller.phase == .opening && controller.isOpen)
                 closing.complete()
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 #expect(controller.phase != .closing && controller.isOpen)
             }
         }

@@ -361,6 +361,44 @@ enum InboxSync {
         return "query { rateLimit { cost remaining resetAt } \(body.joined(separator: "\n")) }"
     }
 
+    /// A search page's node made into a thing: its index on the page (what GitHub's errors name), and where its review
+    /// threads go on past those that came with it.
+    struct PageThing {
+        var index: Int
+        var thing: Thing
+        var more: (node: String, cursor: String, total: Int)?
+    }
+
+    /// The things of each search's page in a GraphQL answer's `data`, by alias, made off the main thread (this is
+    /// nonisolated and async: a sync's dozens of PRs, their comments, reviews and threads, each date parsed, never hold the
+    /// main thread). A node GitHub couldn't give (null), or that isn't a thing, is left out.
+    static func pageThings(_ data: [String: Any], aliases: [String]) async -> [String: [PageThing]] {
+        var pages: [String: [PageThing]] = [:]
+        for alias in aliases {
+            guard let result = data[alias] as? [String: Any] else { continue }
+            pages[alias] = ((result["nodes"] as? [Any]) ?? []).enumerated().compactMap { n, value in
+                guard let node = value as? [String: Any], let thing = thing(node) else { return nil }
+                return PageThing(index: n, thing: thing, more: moreThreads(node))
+            }
+        }
+        return pages
+    }
+
+    /// A branch's CI as workflow things, keeping what was read of them (`keepingUnread`), each told its repo's default branch
+    /// when it is that one; off the main thread (nonisolated and async).
+    static func mapWorkflows(repo: String, branch: String, status: CIStatus, known: [String: Thing], isDefault: Bool) async -> [Thing] {
+        var things = keepingUnread(workflowThings(repo: repo, branch: branch, status: status), status: status, known: known,
+                                   repo: repo, branch: branch)
+        if isDefault { for i in things.indices { things[i].defaultBranch = branch } }
+        return things
+    }
+
+    /// `Store.readCI`, off the main thread (nonisolated and async): what a branch's CI says, folded from its runs and checks.
+    static func foldCI(runs: [GHWorkflowRuns.Run], sha: String?, checks: [GHCheckRuns.Run], combined: GHCombinedStatus,
+                       complete: Bool) async -> Store.CIReading {
+        Store.readCI(runs: runs, sha: sha, checks: checks, combined: combined, complete: complete)
+    }
+
     /// Where a PR's review threads go on past the page read, if they do: its node id, the cursor, and how many it has.
     static func moreThreads(_ node: [String: Any]) -> (node: String, cursor: String, total: Int)? {
         guard node["__typename"] as? String == "PullRequest", let id = node["id"] as? String else { return nil }
@@ -1188,7 +1226,8 @@ extension Store {
         // Signed in as someone else, or with other credentials, while it waits (suggestions sign in too): what it was
         // answered is about the last sign-in, and nothing of it is taken, said or acted on.
         let fence = inboxFence
-        func current() -> Bool { inboxFence == fence }
+        // (A poll's task cancelled meanwhile, the loop started again: what it was answered isn't taken either.)
+        func current() -> Bool { inboxFence == fence && !Task.isCancelled }
         // In the background: the refresh never waits on it.
         if !repoNamesChecked, !repoNamesChecking {
             repoNamesChecking = true
@@ -1243,6 +1282,9 @@ extension Store {
         let window = InboxSync.workflowWindow(allTargets, cursor: inboxSyncState.workflowCursor)
         let targets = window.targets
         guard !searches.isEmpty || !targets.isEmpty || !unknownOwners.isEmpty else {
+            // Taken in once the window's morph has played (`MotionGate`), as any refresh's results are.
+            await motionGate.still()
+            guard current() else { return }
             // Nothing asked for: every thing is gone, and its marks start their month.
             applyThings([:])
             inboxError = nil
@@ -1286,7 +1328,9 @@ extension Store {
         await withTaskGroup(of: RepoRead.self) { group in
             var queue = targets.makeIterator()
             func add(_ target: (repo: String, branch: String?)) {
-                group.addTask { @MainActor in
+                // Not on the main actor itself: only what the store keeps is read there (`workflowThings`); the answers are
+                // decoded and folded off it.
+                group.addTask {
                     do {
                         return RepoRead(repo: target.repo, things: try await self.workflowThings(target.repo, target.branch))
                     } catch {
@@ -1311,15 +1355,15 @@ extension Store {
         for (id, thing) in workflows where thing.defaultBranch == nil {
             workflows[id]?.defaultBranch = defaults[thing.repo.lowercased()] ?? defaultBranches[thing.repo]
         }
-        inboxError = searchFailure ?? fetched.error ?? workflowFailure ?? scopeFailure
+        // Said once the results are taken in, after the gate below, as the search cursor moves then: a refresh dropped
+        // before (signed out meanwhile) says nothing and moves nothing.
+        var error = searchFailure ?? fetched.error ?? workflowFailure ?? scopeFailure
         // A search that failed can't say what is gone: the PRs and issues stay as they were, as when the points are spent,
         // and the workflows read are still taken.
         let searchesKept = searchesWait || searchFailure != nil
         var next = found
         if searchesKept {
             for (id, old) in things where old.kind != .workflow { next[id] = old }
-        } else {
-            inboxSyncState.searchCursor = plan.next
         }
         // Nor can an answer GitHub gave in part: what it left out stays, and so does a thing it gave without some of its
         // parts (its comments, its threads), which would otherwise lose facts and announce them again when they come back.
@@ -1341,9 +1385,15 @@ extension Store {
                                               keepsClosed: plan.all.contains { $0.contains("is:closed") })
                 guard current() else { return }
                 for (id, thing) in rechecked.things { next[id] = thing }
-                if inboxError == nil, let failure = rechecked.error { inboxError = failure }
+                if error == nil, let failure = rechecked.error { error = failure }
             }
         }
+        // Taken in once the window's morph has played (`MotionGate`): the things, the inbox worked out again and the
+        // banners are main-thread work that can wait. What is kept from before is read after it.
+        await motionGate.still()
+        guard current() else { return }
+        inboxError = error
+        if !searchesKept { inboxSyncState.searchCursor = plan.next }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }
@@ -1438,15 +1488,18 @@ extension Store {
                     guard path.count > 3, let index = path[2] as? Int else { missing.insert(alias); continue }
                     broken.insert([alias, String(index)])
                 }
+                // Made into things off the main thread; what is kept of them from before is looked up here, as it is now.
+                let pages = await InboxSync.pageThings(data, aliases: batch.map { "s\($0)" })
                 for i in batch {
                     if missing.contains("s\(i)") { failed.insert(searches[i]) }
                     guard let result = data["s\(i)"] as? [String: Any] else { failed.insert(searches[i]); continue }
                     // A node GitHub couldn't give is null: the others are still things.
-                    for (n, value) in ((result["nodes"] as? [Any]) ?? []).enumerated() {
-                        guard let node = value as? [String: Any], var thing = InboxSync.thing(node) else { continue }
+                    for page in pages["s\(i)"] ?? [] {
+                        let n = page.index
+                        var thing = page.thing
                         foundBy[thing.id, default: []].insert(searches[i])
                         moreThreads[thing.id] = nil
-                        if let more = InboxSync.moreThreads(node) {
+                        if let more = page.more {
                             if let old = things[thing.id], InboxSync.keepsTail(old, total: more.total, updatedAt: thing.updatedAt,
                                                                               now: now, remaining: gh.graphqlRemaining) {
                                 InboxSync.takeTail(of: old, into: &thing)
@@ -1640,10 +1693,9 @@ extension Store {
             status = try await fetchCI(repo)
             branch = status.branch
         }
-        var things = InboxSync.keepingUnread(InboxSync.workflowThings(repo: repo, branch: branch, status: status),
-                                             status: status, known: self.things, repo: repo, branch: branch)
-        if requested == nil { for i in things.indices { things[i].defaultBranch = branch } }
-        return things
+        // Mapped off the main thread, from the things as they are now.
+        return await InboxSync.mapWorkflows(repo: repo, branch: branch, status: status, known: self.things,
+                                            isDefault: requested == nil)
     }
 
     /// Replaces the things in one assignment, keeping what Jev said of them, and forgets marks of things gone for a month.
@@ -1728,8 +1780,14 @@ extension Store {
     /// The repos you own and those you merged a PR in. Kept for a day.
     func resolveRepos(me: String) async throws {
         let fence = inboxFence
-        let json = try await gh.graphql(InboxSync.reposRequest(me: me))
-        guard inboxFence == fence else { return }
+        let json: [String: Any]
+        do { json = try await gh.graphql(InboxSync.reposRequest(me: me)) } catch {
+            // Said (by the refresh) once the window's morph has played, as what it found is taken in.
+            await motionGate.still()
+            throw error
+        }
+        await motionGate.still()
+        guard inboxFence == fence, !Task.isCancelled else { return }
         guard let data = json["data"] as? [String: Any] else {
             throw GitHubError(message: ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer")
         }
@@ -1805,12 +1863,15 @@ extension Store {
         let fence = inboxFence
         let json: [String: Any]
         do { json = try await gh.graphql(InboxSync.teamsRequest(me: me)) } catch {
+            // Said (by the refresh) once the window's morph has played, as what it found is taken in.
+            await motionGate.still()
             // Asked for an account signed out since: its failure isn't the new one's to wait on.
-            guard inboxFence == fence else { return nil }
+            guard inboxFence == fence, !Task.isCancelled else { return nil }
             inboxSyncState.teamsFailedAt = Date()
             return error.localizedDescription
         }
-        guard inboxFence == fence else { return nil }
+        await motionGate.still()
+        guard inboxFence == fence, !Task.isCancelled else { return nil }
         guard let data = json["data"] as? [String: Any] else {
             inboxSyncState.teamsFailedAt = Date()
             return ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"

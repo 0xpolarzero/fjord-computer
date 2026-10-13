@@ -278,11 +278,15 @@ enum CDS {
     /// Anthropic Sans (read from the Claude app, `ClaudeFonts`) at a size and Claude's dark weight; the system font
     /// without it. Cached: one NSFont per size and weight.
     static func sans(_ size: CGFloat, _ weight: Weight = .regular) -> Font {
-        Font(nsSans(size, weight))
+        let key = FaceKey(size: size, weight: weight)
+        if let cached = fonts[key] { return cached }
+        let font = Font(nsSans(size, weight))
+        fonts[key] = font
+        return font
     }
 
     static func nsSans(_ size: CGFloat, _ weight: Weight = .regular) -> NSFont {
-        let key = "\(size)-\(weight.rawValue)"
+        let key = FaceKey(size: size, weight: weight)
         if let cached = cache[key] { return cached }
         let font: NSFont
         if let fjord = Brand.sans(size, weight) {
@@ -304,7 +308,14 @@ enum CDS {
         return .system(size: size, weight: weight == .regular ? .regular : .medium, design: .monospaced)
     }
 
-    nonisolated(unsafe) private static var cache: [String: NSFont] = [:]
+    /// A size and weight, as the caches key them: hashed as two numbers, not a string built on every text drawn.
+    private struct FaceKey: Hashable {
+        let size: CGFloat
+        let weight: Weight
+    }
+    nonisolated(unsafe) private static var cache: [FaceKey: NSFont] = [:]
+    /// The SwiftUI fonts made from them, so each text drawn doesn't wrap its NSFont again.
+    nonisolated(unsafe) private static var fonts: [FaceKey: Font] = [:]
 }
 
 extension View {

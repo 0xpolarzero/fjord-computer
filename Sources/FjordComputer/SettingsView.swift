@@ -10,10 +10,10 @@ struct SettingsView: View {
     @Bindable var store: Store
     let hub: HubState
     @Environment(\.accessibilityReduceMotion) private var reduce
-    @State private var launchAtLogin = LaunchAtLogin.isEnabled
+    @State private var launchAtLogin = SystemState.known.launchAtLogin
     @State private var launchError: String?
     @State private var restoreError: String?
-    @State private var accessibilityTrusted = AXIsProcessTrusted()
+    @State private var accessibilityTrusted = SystemState.known.accessibility
     @State private var notificationsBlocked = false
 
     static let updatesID = "updates"
@@ -29,8 +29,10 @@ struct SettingsView: View {
                     tools
                     if store.triageOn { account }
                     notifications.id(Self.notificationsID)
-                    if store.router.enabled { claude }
-                    if store.triageOn || store.router.enabled { CodeFoldersSettings(store: store) }
+                    // The Router's own sections read the Router's state in views of their own: what changes with every read of
+                    // Claude's sessions redraws them, not the whole page.
+                    if store.routerOn { RouterSettings(store: store, part: .claude) }
+                    if store.triageOn || store.routerOn { CodeFoldersSettings(store: store) }
                     shortcuts
                     updates.id(Self.updatesID)
                     general.id(Self.generalID)
@@ -48,10 +50,61 @@ struct SettingsView: View {
         // The page is kept while the window is closed: what the system holds is read again when it is back, and a pasted
         // secret that wasn't saved doesn't wait behind a closed window. A login item that failed to change says so only
         // until then: what the system now holds is what the switch shows (it may have been fixed in System Settings).
-        .onAppear {
-            launchAtLogin = LaunchAtLogin.isEnabled
-            launchError = nil
-            accessibilityTrusted = AXIsProcessTrusted()
+        .onAppear { launchError = nil }
+        // Asked of the system off the main thread (the login item is an XPC call), after the page shows: it opens on what
+        // was last read, and changes only if the system changed since.
+        .task {
+            let now = await SystemState.read()
+            // A switch of yours made while the system was asked stands: the answer is from before it.
+            if let launch = now.launchAtLogin, launchAtLogin != launch { launchAtLogin = launch }
+            if accessibilityTrusted != now.accessibility { accessibilityTrusted = now.accessibility }
+        }
+    }
+
+    /// What Settings shows of the system: the login item and Accessibility access, as last read. Read once when first
+    /// asked for, then again each time Settings shows (`read`), never as the page's view is made (which is on every redraw
+    /// of what holds it).
+    @MainActor enum SystemState {
+        struct Known: Sendable { var launchAtLogin: Bool; var accessibility: Bool }
+        private static var last: Known?
+
+        /// What was last read, never asked on the main thread: before the first answer is in, off and not granted (and the
+        /// system is asked, off it), which the page's own read on showing then corrects.
+        static var known: Known {
+            if let last { return last }
+            if !asking {
+                asking = true
+                Task { _ = await read() }
+            }
+            return Known(launchAtLogin: false, accessibility: false)
+        }
+        private static var asking = false
+
+        /// The system asked, off the main thread.
+        nonisolated static func ask() async -> Known {
+            await Task.detached(priority: .userInitiated) {
+                Known(launchAtLogin: LaunchAtLogin.isEnabled, accessibility: AXIsProcessTrusted())
+            }.value
+        }
+
+        /// Bumped by each switch of the login item: an answer asked for before one is older than it.
+        private static var revision = 0
+
+        static func remember(launchAtLogin on: Bool) {
+            revision &+= 1
+            // Before the system's first answer too: yours is what is known of it (an answer asked for before is older).
+            last = Known(launchAtLogin: on, accessibility: last?.accessibility ?? false)
+        }
+
+        /// What the system says now; the login item nil when you switched it while it was being asked (the answer is
+        /// from before your switch, which stands).
+        static func read(ask: @Sendable () async -> Known = SystemState.ask) async -> (launchAtLogin: Bool?, accessibility: Bool) {
+            let asked = revision
+            let now = await ask()
+            let current = asked == revision
+            last = Known(launchAtLogin: current ? now.launchAtLogin : last?.launchAtLogin ?? now.launchAtLogin,
+                         accessibility: now.accessibility)
+            return (current ? now.launchAtLogin : nil, now.accessibility)
         }
     }
 
@@ -74,7 +127,7 @@ struct SettingsView: View {
                 SettingsSwitch("Triage", isOn: Binding(get: { store.triageOn }, set: { store.setTool(.triage, on: $0) }))
             }
             SettingsDivider()
-            router
+            RouterSettings(store: store, part: .tool)
         }
     }
 
@@ -181,164 +234,6 @@ struct SettingsView: View {
         }
     }
 
-    private var claude: some View {
-        SettingsSection("Claude") {
-            routerStyle
-            SettingsDivider()
-            mutedFolders
-            SettingsDivider()
-            draftsJev
-            if store.triageOn {
-                SettingsDivider()
-                inboxJev
-            }
-            SettingsDivider()
-            sessionIcons
-        }
-    }
-
-    /// The Router, which reads your Claude Code sessions (never writing to the desktop app's files): its switch, then what it
-    /// needs and how each part is doing (the hook, Claude Code, routing).
-    @ViewBuilder private var router: some View {
-        let needsClaude = !store.router.enabled && !Claude.isInstalled
-        SettingsRow("Router",
-                    description: needsClaude ? "Needs the Claude desktop app" : nil,
-                    adornment: Self.toolMark(.router),
-                    info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Fjord Computer or answers a question. Messages reach your sessions through Fjord Computer's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
-            SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setTool(.router, on: $0) }))
-                .disabled(needsClaude)
-        }
-        .id(Self.routerID)
-        // Off, but taking the hook or the plugin out failed: that stays in sight, with a way to try again.
-        if !store.router.enabled, let error = store.routerRemovalError {
-            SettingsRow(nil, description: "Couldn't take the Router out of Claude Code: \(error)", descriptionColor: CDS.Text.danger) {
-                ActionButton("Try again") { store.retryRouterRemoval() }
-            }
-            .onAppear { Announce.say("Couldn't take the Router out of Claude Code") }
-        }
-        if store.router.enabled {
-            SettingsRail {
-                VStack(alignment: .leading, spacing: 6) {
-                    SettingsStatusLine(text: hookStatus.0, color: hookStatus.1)
-                    let plugin = Self.pluginLine(store.routerPluginStatus, error: store.routerPluginError)
-                    SettingsStatusLine(text: plugin.0, color: plugin.1)
-                    SettingsStatusLine(text: claudeCodeStatus.0, color: claudeCodeStatus.1)
-                }
-            }
-        }
-    }
-
-    /// Fjord Computer's Claude Code plugin, which makes your words arrive in a session as yours.
-    private static func pluginLine(_ status: ClaudePluginInstaller.Status?, error: String?) -> (String, Color) {
-        if let error { return ("Fjord Computer's Claude Code plugin: \(error)", Theme.red) }
-        return switch status {
-        case .installed: ("Fjord Computer's Claude Code plugin: installed: your messages reach sessions as yours. Sessions already "
-                          + "open pick it up when restarted (or /reload-plugins).", Theme.green)
-        case .outdated: ("Fjord Computer's Claude Code plugin: update needed (Claude Code has an older copy): updating. Sessions already "
-                         + "open pick it up when restarted (or /reload-plugins).", Theme.amber)
-        case .notInstalled: ("Fjord Computer's Claude Code plugin isn't installed: messages can't reach sessions", Theme.amber)
-        case .noClaudeCode: ("Fjord Computer's Claude Code plugin needs Claude Code, which comes with the Claude desktop app", Theme.amber)
-        case nil: ("Fjord Computer's Claude Code plugin will be installed", Theme.tertiary)
-        }
-    }
-
-    private var hookStatus: (String, Color) {
-        if let error = store.routerHookError { return ("Form hook: \(error)", Theme.red) }
-        return switch store.routerHookStatus {
-        case .installed: ("Form hook installed", Theme.green)
-        case .outdated: ("Form hook points at another copy of Fjord Computer: installing it again", Theme.amber)
-        case .notInstalled: ("Form hook not installed", Theme.amber)
-        case nil: ("Form hook will be installed", Theme.tertiary)
-        }
-    }
-
-    private var claudeCodeStatus: (String, Color) {
-        if let found = store.routerStatus.claudeCode { return ("Claude Code \(found.version), from the Claude app", Theme.tertiary) }
-        return ("Claude Code not found: it comes with the Claude desktop app", Theme.amber)
-    }
-
-    /// Whether the Router's draft goes to TypeSafe while you type, for Jev's pick over the composer (RouterLiveTarget).
-    private var draftsJev: some View {
-        SettingsRow("Let Jev read what you type",
-                    info: ("Let Jev read what you type", "With a TypeSafe API key, once you pause typing in the Router, your draft goes to TypeSafe (api.typesafe.ai) so Jev can show where it would go before you send it. What goes: the draft's words and its @projects, the Router's last decisions, how you routed messages before, and what it could go to: your Claude sessions' titles, projects and what each is doing, the open cards' titles and what they ask, and your projects' names. The same goes when you send a message, to route it. Off, nothing goes while you type: a message is routed when you send it.")) {
-            SettingsSwitch("Let Jev read what you type",
-                           isOn: Binding(get: { store.jevReadsDrafts }, set: { store.settings.jevReadsDrafts = $0 }))
-        }
-    }
-
-    /// Whether Jev labels the inbox's new comments and rates its review requests (InboxJev.swift), which sends them to TypeSafe.
-    private var inboxJev: some View {
-        SettingsRow("Let Jev label new comments",
-                    info: ("Let Jev label new comments", "With a TypeSafe API key, each refresh sends the inbox's new comments, reviews and thread replies (not yours, from the last two weeks), and the review requests and assignments waiting on you, to TypeSafe (api.typesafe.ai). What goes: the comment's text and its author, the one just before it, the PR or issue's title, number and repo, its author, labels, size and checks, and your part in it; and, when a session's turn ends waiting, the titles, numbers and checks of the PRs and workflows of its repo, for what it waits on; and, when an action starts a session for an item, the item's title and number and the action's task (with what GitHub wrote), for which clone it works in. Jev labels each comment (asks you, to do, FYI or noise) and rates how important a request is: a row stands out or is dimmed by them, and a rule of yours can ask for them (a comment labeled, noise or a person, rated at least). They never hide a row or hold back a banner: your rules decide that. Off, nothing of the inbox is sent and nothing is labeled: noise is bots only, and an action's session starts in the clone last used, on your defaults.")) {
-            SettingsSwitch("Let Jev label new comments",
-                           isOn: Binding(get: { store.jevReadsInbox }, set: { store.settings.jevReadsInbox = $0 }))
-        }
-    }
-
-    /// How the cards' briefs and the sessions' summaries are written to you, in your words.
-    private var routerStyle: some View {
-        SettingsRow("How the Router writes to you",
-                    description: "Each card, and each summary of a session, is explained in these words' style.",
-                    info: ("How the Router writes to you", "Claude Haiku explains each card in plain words (what it needs from you and why, what it waits on, what is worth knowing, what was done), and writes the Working sessions' summaries. Both follow what you write here, within the Router's own rules: short, no markdown, and what the sessions wrote is only ever data. Haiku runs through Claude Code and reads the card, its turn's final message and the form it stopped on; nothing of it goes to TypeSafe."),
-                    below: AnyView(RouterStyleField(store: store))) {
-            if store.router.style != nil { ActionButton("Reset") { store.setRouterStyle("") } }
-        }
-    }
-
-    @ViewBuilder private var sessionIcons: some View {
-        SettingsRow("Icons picked for you",
-                    info: ("Icons picked for you", "Each session in the Router gets an icon instead of letters. Its title, project name and first message go to TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, about $0.0002 a session. Keys come from console.typesafe.ai.")) {
-            SettingsSwitch("Icons picked for you", isOn: Binding(get: { store.agents.iconsEnabled }, set: { store.setIconsEnabled($0) }))
-        }
-        if store.agents.iconsEnabled {
-            SettingsRail {
-                TypeSafeKeyField(store: store)
-                if let error = store.iconError {
-                    SettingsNote(error, color: CDS.Text.warning)
-                        .onChange(of: error, initial: true) { _, now in Announce.say(now) }
-                }
-            }
-        }
-    }
-
-    /// A list (settings.md §4): the header row with its add control, the folders in a nest card, or a line when none are.
-    @ViewBuilder private var mutedFolders: some View {
-        let muted = store.agents.mutedFolders
-        let unmuted = store.knownFolders.filter { !muted.contains($0) }
-        let name = { (folder: String) in folder.isEmpty ? "Scratch chats" : store.folderName(folder) }
-        SettingsRow("Muted folders", info: ("Muted folders", "The Router ignores their sessions: no cards, nothing listed"),
-                    below: AnyView(Group {
-                        if muted.isEmpty {
-                            Text("None").cdsText(footnote, .regular, CDS.Text.secondary)
-                        } else {
-                            SettingsNest {
-                                ForEach(muted, id: \.self) { folder in
-                                    SettingsRow(name(folder), description: folder.isEmpty ? nil : folder) {
-                                        Button("Unmute") { store.setFolderMuted(folder, false) }
-                                            .buttonStyle(SettingsButtonStyle(size: .sm))
-                                            .accessibilityLabel("Unmute \(name(folder))")
-                                    }
-                                }
-                            }
-                        }
-                    })) {
-            Menu {
-                ForEach(unmuted, id: \.self) { folder in
-                    Button(name(folder)) { store.setFolderMuted(folder, true) }
-                }
-            } label: {
-                Text("Mute a folder")
-            }
-            .menuStyle(.button)
-            .buttonStyle(SettingsButtonStyle(size: .sm))
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel("Muted folders")
-            .accessibilityValue(muted.isEmpty ? "None" : plural(muted.count, "folder"))
-            .disabled(unmuted.isEmpty)
-        }
-    }
-
     private var updates: some View {
         let updater = store.updater
         return SettingsSection("Updates") {
@@ -418,6 +313,7 @@ struct SettingsView: View {
                 SettingsSwitch("Launch at login", isOn: Binding(get: { launchAtLogin }, set: { on in
                     launchAtLogin = on
                     launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
+                    SystemState.remember(launchAtLogin: on)
                 }))
             }
             SettingsDivider()
@@ -436,6 +332,183 @@ struct SettingsView: View {
         }
     }
 
+}
+
+/// Settings' Router parts: its switch with how it is doing (in Tools), and the Claude section. What they read of the store
+/// (the Router's state, the sessions' folders, the agents' settings) changes with every read of Claude's sessions, so they are
+/// views of their own and only they redraw for it.
+private struct RouterSettings: View {
+    enum Part { case tool, claude }
+
+    @Bindable var store: Store
+    let part: Part
+
+    private var footnote: (CGFloat, CGFloat) { CDS.Density.comfortable.footnote }
+
+    var body: some View {
+        switch part {
+        case .tool: router
+        case .claude: claude
+        }
+    }
+
+    private var claude: some View {
+        SettingsSection("Claude") {
+            routerStyle
+            SettingsDivider()
+            mutedFolders
+            SettingsDivider()
+            draftsJev
+            if store.triageOn {
+                SettingsDivider()
+                inboxJev
+            }
+            SettingsDivider()
+            sessionIcons
+        }
+    }
+
+    /// The Router, which reads your Claude Code sessions (never writing to the desktop app's files): its switch, then what it
+    /// needs and how each part is doing (the hook, Claude Code, routing).
+    @ViewBuilder private var router: some View {
+        let needsClaude = !store.router.enabled && !Claude.isInstalled
+        SettingsRow("Router",
+                    description: needsClaude ? "Needs the Claude desktop app" : nil,
+                    adornment: SettingsView.toolMark(.router),
+                    info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Fjord Computer or answers a question. Messages reach your sessions through Fjord Computer's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
+            SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setTool(.router, on: $0) }))
+                .disabled(needsClaude)
+        }
+        .id(SettingsView.routerID)
+        // Off, but taking the hook or the plugin out failed: that stays in sight, with a way to try again.
+        if !store.router.enabled, let error = store.routerRemovalError {
+            SettingsRow(nil, description: "Couldn't take the Router out of Claude Code: \(error)", descriptionColor: CDS.Text.danger) {
+                ActionButton("Try again") { store.retryRouterRemoval() }
+            }
+            .onAppear { Announce.say("Couldn't take the Router out of Claude Code") }
+        }
+        if store.router.enabled {
+            SettingsRail {
+                VStack(alignment: .leading, spacing: 6) {
+                    SettingsStatusLine(text: hookStatus.0, color: hookStatus.1)
+                    let plugin = Self.pluginLine(store.routerPluginStatus, error: store.routerPluginError)
+                    SettingsStatusLine(text: plugin.0, color: plugin.1)
+                    SettingsStatusLine(text: claudeCodeStatus.0, color: claudeCodeStatus.1)
+                }
+            }
+        }
+    }
+
+    /// Fjord Computer's Claude Code plugin, which makes your words arrive in a session as yours.
+    private static func pluginLine(_ status: ClaudePluginInstaller.Status?, error: String?) -> (String, Color) {
+        if let error { return ("Fjord Computer's Claude Code plugin: \(error)", Theme.red) }
+        return switch status {
+        case .installed: ("Fjord Computer's Claude Code plugin: installed: your messages reach sessions as yours. Sessions already "
+                          + "open pick it up when restarted (or /reload-plugins).", Theme.green)
+        case .outdated: ("Fjord Computer's Claude Code plugin: update needed (Claude Code has an older copy): updating. Sessions already "
+                         + "open pick it up when restarted (or /reload-plugins).", Theme.amber)
+        case .notInstalled: ("Fjord Computer's Claude Code plugin isn't installed: messages can't reach sessions", Theme.amber)
+        case .noClaudeCode: ("Fjord Computer's Claude Code plugin needs Claude Code, which comes with the Claude desktop app", Theme.amber)
+        case nil: ("Fjord Computer's Claude Code plugin will be installed", Theme.tertiary)
+        }
+    }
+
+    private var hookStatus: (String, Color) {
+        if let error = store.routerHookError { return ("Form hook: \(error)", Theme.red) }
+        return switch store.routerHookStatus {
+        case .installed: ("Form hook installed", Theme.green)
+        case .outdated: ("Form hook points at another copy of Fjord Computer: installing it again", Theme.amber)
+        case .notInstalled: ("Form hook not installed", Theme.amber)
+        case nil: ("Form hook will be installed", Theme.tertiary)
+        }
+    }
+
+    private var claudeCodeStatus: (String, Color) {
+        if let found = store.routerStatus.claudeCode { return ("Claude Code \(found.version), from the Claude app", Theme.tertiary) }
+        return ("Claude Code not found: it comes with the Claude desktop app", Theme.amber)
+    }
+
+    /// Whether the Router's draft goes to TypeSafe while you type, for Jev's pick over the composer (RouterLiveTarget).
+    private var draftsJev: some View {
+        SettingsRow("Let Jev read what you type",
+                    info: ("Let Jev read what you type", "With a TypeSafe API key, once you pause typing in the Router, your draft goes to TypeSafe (api.typesafe.ai) so Jev can show where it would go before you send it. What goes: the draft's words and its @projects, the Router's last decisions, how you routed messages before, and what it could go to: your Claude sessions' titles, projects and what each is doing, the open cards' titles and what they ask, and your projects' names. The same goes when you send a message, to route it. Off, nothing goes while you type: a message is routed when you send it.")) {
+            SettingsSwitch("Let Jev read what you type",
+                           isOn: Binding(get: { store.jevReadsDrafts }, set: { store.settings.jevReadsDrafts = $0 }))
+        }
+    }
+
+    /// Whether Jev labels the inbox's new comments and rates its review requests (InboxJev.swift), which sends them to TypeSafe.
+    private var inboxJev: some View {
+        SettingsRow("Let Jev label new comments",
+                    info: ("Let Jev label new comments", "With a TypeSafe API key, each refresh sends the inbox's new comments, reviews and thread replies (not yours, from the last two weeks), and the review requests and assignments waiting on you, to TypeSafe (api.typesafe.ai). What goes: the comment's text and its author, the one just before it, the PR or issue's title, number and repo, its author, labels, size and checks, and your part in it; and, when a session's turn ends waiting, the titles, numbers and checks of the PRs and workflows of its repo, for what it waits on; and, when an action starts a session for an item, the item's title and number and the action's task (with what GitHub wrote), for which clone it works in. Jev labels each comment (asks you, to do, FYI or noise) and rates how important a request is: a row stands out or is dimmed by them, and a rule of yours can ask for them (a comment labeled, noise or a person, rated at least). They never hide a row or hold back a banner: your rules decide that. Off, nothing of the inbox is sent and nothing is labeled: noise is bots only, and an action's session starts in the clone last used, on your defaults.")) {
+            SettingsSwitch("Let Jev label new comments",
+                           isOn: Binding(get: { store.jevReadsInbox }, set: { store.settings.jevReadsInbox = $0 }))
+        }
+    }
+
+    /// How the cards' briefs and the sessions' summaries are written to you, in your words.
+    private var routerStyle: some View {
+        SettingsRow("How the Router writes to you",
+                    description: "Each card, and each summary of a session, is explained in these words' style.",
+                    info: ("How the Router writes to you", "Claude Haiku explains each card in plain words (what it needs from you and why, what it waits on, what is worth knowing, what was done), and writes the Working sessions' summaries. Both follow what you write here, within the Router's own rules: short, no markdown, and what the sessions wrote is only ever data. Haiku runs through Claude Code and reads the card, its turn's final message and the form it stopped on; nothing of it goes to TypeSafe."),
+                    below: AnyView(RouterStyleField(store: store))) {
+            if store.router.style != nil { ActionButton("Reset") { store.setRouterStyle("") } }
+        }
+    }
+
+    @ViewBuilder private var sessionIcons: some View {
+        SettingsRow("Icons picked for you",
+                    info: ("Icons picked for you", "Each session in the Router gets an icon instead of letters. Its title, project name and first message go to TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), then one of that kind not already on screen, from \(SessionIcons.drawableCount ?? SessionIcons.iconCount) in all. Two small requests, about $0.0002 a session. Keys come from console.typesafe.ai.")) {
+            SettingsSwitch("Icons picked for you", isOn: Binding(get: { store.agents.iconsEnabled }, set: { store.setIconsEnabled($0) }))
+        }
+        if store.agents.iconsEnabled {
+            SettingsRail {
+                TypeSafeKeyField(store: store)
+                if let error = store.iconError {
+                    SettingsNote(error, color: CDS.Text.warning)
+                        .onChange(of: error, initial: true) { _, now in Announce.say(now) }
+                }
+            }
+        }
+    }
+
+    /// A list (settings.md §4): the header row with its add control, the folders in a nest card, or a line when none are.
+    @ViewBuilder private var mutedFolders: some View {
+        let muted = store.agents.mutedFolders
+        let unmuted = store.knownFolders.filter { !muted.contains($0) }
+        let name = { (folder: String) in folder.isEmpty ? "Scratch chats" : store.folderName(folder) }
+        SettingsRow("Muted folders", info: ("Muted folders", "The Router ignores their sessions: no cards, nothing listed"),
+                    below: AnyView(Group {
+                        if muted.isEmpty {
+                            Text("None").cdsText(footnote, .regular, CDS.Text.secondary)
+                        } else {
+                            SettingsNest {
+                                ForEach(muted, id: \.self) { folder in
+                                    SettingsRow(name(folder), description: folder.isEmpty ? nil : folder) {
+                                        Button("Unmute") { store.setFolderMuted(folder, false) }
+                                            .buttonStyle(SettingsButtonStyle(size: .sm))
+                                            .accessibilityLabel("Unmute \(name(folder))")
+                                    }
+                                }
+                            }
+                        }
+                    })) {
+            Menu {
+                ForEach(unmuted, id: \.self) { folder in
+                    Button(name(folder)) { store.setFolderMuted(folder, true) }
+                }
+            } label: {
+                Text("Mute a folder")
+            }
+            .menuStyle(.button)
+            .buttonStyle(SettingsButtonStyle(size: .sm))
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Muted folders")
+            .accessibilityValue(muted.isEmpty ? "None" : plural(muted.count, "folder"))
+            .disabled(unmuted.isEmpty)
+        }
+    }
 }
 
 /// GitHub's sign-in, as Settings and the onboarding show it: who is signed in and with what, then a token to paste.

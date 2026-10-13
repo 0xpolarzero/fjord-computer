@@ -42,7 +42,42 @@ final class HubState {
     /// The bar is away while the app window is open (the playground draws it, the app orders its panel out).
     var barHidden = false
     /// "i:<item id>": the row the pointer is on (or the one an opened notification names); its actions show.
-    var selection: String?
+    var selection: String? {
+        didSet {
+            guard selection != oldValue else { return }
+            if let oldValue { marks[oldValue]?.on = false }
+            if let selection { marks[selection]?.on = true }
+            if marks.count > Mark.kept { marks = Mark.pruned(marks) }
+        }
+    }
+    /// Whether a row is the selection, read by the row itself (`isSelected`): each row observes its own mark, so the pointer
+    /// moving from row to row redraws the two rows it left and entered, not every row that compares itself with
+    /// `selection`.
+    @ObservationIgnored private var marks: [String: Mark] = [:]
+    @Observable final class Mark {
+        var on: Bool
+        init(on: Bool) { self.on = on }
+
+        /// More marks than rows are ever drawn: those of rows gone (archived, filtered out, another tab's) are let go.
+        static let kept = 400
+
+        /// None kept: each is touched on the way out, so a row still drawn reads its mark again (making a new one) and
+        /// one gone is forgotten. Called on a change of the pick, never while a row is drawn.
+        static func pruned(_ marks: [String: Mark]) -> [String: Mark] {
+            // Flipped there and back: setting the same value tells nobody.
+            for mark in marks.values { mark.on.toggle(); mark.on.toggle() }
+            return [:]
+        }
+    }
+
+    /// Whether `id` is the selection, observing only that row's mark.
+    func isSelected(_ id: String) -> Bool {
+        if let mark = marks[id] { return mark.on }
+        // The stored value, read without observing it (the row observes its mark alone).
+        let mark = Mark(on: _selection == id)
+        marks[id] = mark
+        return mark.on
+    }
     /// The last row asked for (a notification's): the lists scroll to it. Never set by hovering, so the pointer moving over a
     /// row doesn't move the list.
     var keyboardSelection: ScrollRequest?
@@ -80,6 +115,10 @@ final class HubState {
     /// opens already placed and its glass grows out of the bar's.
     private(set) var arriving: HubSection?
 
+    /// How long the pointer rests on a section before its first panel opens: long enough that sweeping along the edge opens
+    /// nothing, short enough that a hover reads as instant.
+    static let dwell: Duration = .milliseconds(70)
+
     /// The pointer entered a section. The first panel waits for the pointer to settle (so sweeping along the edge
     /// opens nothing); once one is open, moving to another section switches at once, with no transition.
     func enter(_ next: HubSection) {
@@ -95,7 +134,7 @@ final class HubState {
         }
         arrive(next)
         dwell = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: HubState.dwell)
             guard let self, !Task.isCancelled else { return }
             arrive(nil)
             guard !barHidden, !quiet, !dragging else { return }

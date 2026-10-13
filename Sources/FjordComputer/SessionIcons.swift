@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// The SF Symbols a session can get as its icon: built into macOS (nothing bundled). Jev picks in two steps, first a
 /// category (from what the session is about), then an icon in it, because it takes at most 255 options per question.
@@ -496,10 +497,25 @@ enum SessionIcons {
     /// Jev's limit on options per question.
     static let maxOptions = 255
 
-    /// The icons this Mac can draw.
-    static let drawable: Set<String> = Set(categories.flatMap(\.icons).filter {
-        NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil
-    })
+    /// The icons this Mac can draw. Some thousand symbol lookups the first time it is read (50 to 150 ms): `warm` works it
+    /// out off the main thread ahead of that.
+    static let drawable: Set<String> = {
+        let set = Set(categories.flatMap(\.icons).filter { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil })
+        known.withLock { $0 = set.count }
+        return set
+    }()
+
+    /// How many there are, once `drawable` has been worked out (nil before): what can be said of it without working it out.
+    static var drawableCount: Int? { known.withLock { $0 } }
+    private static let known = OSAllocatedUnfairLock<Int?>(initialState: nil)
+
+    /// Every icon, drawable here or not.
+    static var iconCount: Int { categories.reduce(0) { $0 + $1.icons.count } }
+
+    /// Works out `drawable` on a utility thread, so its first read (an icon picked, Settings saying how many) finds it made.
+    static func warm() {
+        Task.detached(priority: .utility) { _ = drawable }
+    }
 
     /// The categories that still have icons to offer, with those icons: drawable here and not in `excluded` (icons
     /// already on screen, or rejected for this session).
@@ -508,6 +524,12 @@ enum SessionIcons {
             let icons = category.icons.filter { drawable.contains($0) && !excluded.contains($0) }
             return icons.isEmpty ? nil : (category, icons)
         }
+    }
+
+    /// `open(excluding:)` off the main thread (nonisolated and async): the first to ask may be the one that works out
+    /// `drawable`, or wait on `warm` working it out, which must not be the main thread.
+    static func openOffMain(excluding excluded: Set<String>) async -> [(category: Category, icons: [String])] {
+        open(excluding: excluded)
     }
 
     /// The icons to offer once Jev has scored the open categories: the best one's, plus the runner-up's when Jev was

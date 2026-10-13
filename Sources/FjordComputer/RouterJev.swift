@@ -110,9 +110,14 @@ final class RouterLiveTarget {
         guard found.assisted, found.sure, let top = found.top, top.target != dismissed,
               store.routerDispatcher.eligible(top.target, store: store),
               let option = store.routerDispatcher.option(top.target, store: store) else { return nil }
-        let title = top.target.hasPrefix("new:") ? "\(option.title) · \(option.detail)" : option.title
-        return Prediction(target: top.target, title: title, detail: store.routerDispatcher.describe(top.target, store: store),
+        return Prediction(target: top.target, title: Self.title(top.target, option),
+                          detail: store.routerDispatcher.describe(top.target, store: store),
                           text: text, mark: Self.mark(top.target, store: store), found: found)
+    }
+
+    /// The chip's words for a target's option: a new session's with its folder.
+    static func title(_ target: String, _ option: RouterAskBack.Option) -> String {
+        target.hasPrefix("new:") ? "\(option.title) · \(option.detail)" : option.title
     }
 
     /// The page's item for a target: the card, or the session's working row, else its open card.
@@ -136,12 +141,12 @@ final class RouterLiveTarget {
         predicted = RouterDispatcher.liveKey(prediction.text, [])
     }
 
-    /// The composer is gone (its window closed, the page left): nothing more is asked, and no pick is shown, until it is
-    /// back. What you pinned or waved off stays with the draft.
+    /// The composer is gone (its window closed, the page left): nothing more is asked until it is back, and a question on
+    /// its way is dropped. What you pinned or waved off stays with the draft, and so does a pick already in for it: back
+    /// with the same words, it shows again (once `revalidate` has checked its target) without asking Jev again; with
+    /// other words, it goes and they are asked about.
     func suspend() {
         cancel()
-        clear()
-        current = nil
     }
 
     /// Sent or cleared: everything starts over.
@@ -170,13 +175,16 @@ final class RouterLiveTarget {
 
 extension RouterModel {
     /// What the draft goes with: the reply, the @projects, the target you pinned and the one you waved off.
-    func context(_ store: Store) -> RouterContext {
+    func context(_ store: Store) -> RouterContext { context(store, sent: sentDraft(store)) }
+
+    /// The same, for the draft as it will be sent, worked out once by the caller (`sentDraft` writes every pill's name).
+    func context(_ store: Store, sent: (text: String, mentions: [RouterMention])) -> RouterContext {
         let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
         var context = RouterContext(replyTo: reply, target: live.pinned, notTo: live.dismissed)
-        context.tag(sentDraft(store).mentions)
+        context.tag(sent.mentions)
         // Jev's pick shown over the composer for the draft as it is now: sending it goes with it, as it was shown (the
         // dispatcher's copy of it may have expired, and asking again could go elsewhere).
-        let shown = live.valid(text: plainDraft(store), context: context, store: store)
+        let shown = live.valid(text: sent.text, context: context, store: store)
         context.shown = shown?.target
         context.jev = shown?.found
         // Jev's pick you clicked, while the draft still goes there (as the pinned target or the reply to its card).
@@ -210,7 +218,9 @@ extension RouterModel {
 
     /// The draft changed: Jev's pick follows it.
     func predictTarget(store: Store) {
-        live.update(text: plainDraft(store), context: context(store), store: store)
+        // Once per keystroke: the draft as it will be sent, made once for both.
+        let sent = sentDraft(store)
+        live.update(text: sent.text, context: context(store, sent: sent), store: store)
     }
 
     /// The prediction's item changed (`from` → `to`): the page marks the new one; a mark of another (a reveal) isn't touched.
@@ -269,11 +279,14 @@ extension RouterLiveTarget {
             clear()
             return true
         }
-        let mark = Self.mark(p.target, store: store)
-        if mark != p.mark {
-            p.mark = mark
-            prediction = p
+        let before = p
+        p.mark = Self.mark(p.target, store: store)
+        // Its words from the target as it is now (a session renamed while the pick was kept), without asking Jev again.
+        if let option = dispatcher.option(p.target, store: store) {
+            p.title = Self.title(p.target, option)
+            p.detail = dispatcher.describe(p.target, store: store)
         }
+        if p != before { prediction = p }
         return false
     }
 }

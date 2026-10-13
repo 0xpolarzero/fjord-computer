@@ -119,32 +119,12 @@ struct AppSidebar: View {
                         .padding(.bottom, rowGap)
                     }
                     if store.routerOn {
-                        let routerCounts = store.routerCounts
                         // The Router stands apart from the inbox: a rule and a gap, no header over a single row.
                         if store.triageOn {
                             rule.padding(.top, 4)
                             Color.clear.frame(height: M.groupTop - 4)
                         }
-                        AppSidebarRow(title: "Router", on: navigator.selection == .router,
-                                      badge: routerCounts.needsYou + routerCounts.notes > 0
-                                          ? RailBadge(count: routerCounts.needsYou + routerCounts.notes,
-                                                      fill: CDS.solid(routerCounts.needsYou > 0 ? 0xFAB219 : 0x2A78D6),
-                                                      ink: routerCounts.needsYou > 0 ? CDS.solid(0x0B0B0B) : .white)
-                                          : nil,
-                                      tip: Self.routerTip(routerCounts),
-                                      action: { navigator.go(.router) }) { on in
-                            Image(systemName: "arrow.triangle.branch")
-                                .font(.system(size: M.symbol, weight: .medium))
-                                .chromeInk(on ? .primary : .secondary, glass: onGlass)
-                        } trailing: {
-                            HStack(spacing: 6) {
-                                if routerCounts.needsYou > 0 { CountText(routerCounts.needsYou, color: CDS.Fill.warning) }
-                                if routerCounts.notes > 0 { CountText(routerCounts.notes, color: CDS.Text.accent) }
-                            }
-                        }
-                        .accessibilityValue([routerCounts.needsYou > 0 ? "\(routerCounts.needsYou) need you" : nil,
-                                             routerCounts.notes > 0 ? "\(routerCounts.notes) worth a look" : nil]
-                            .compactMap { $0 }.joined(separator: ", ").nonEmpty ?? "Nothing open")
+                        RouterSidebarRow(store: store, navigator: navigator)
                     }
                 }
                 .padding(.bottom, 12)
@@ -275,9 +255,42 @@ struct AppSidebar: View {
             .accessibilityHidden(true)
     }
 
-    private static func routerTip(_ c: (needsYou: Int, notes: Int)) -> String {
+    static func routerTip(_ c: (needsYou: Int, notes: Int)) -> String {
         let parts = [c.needsYou > 0 ? "\(c.needsYou) need you" : nil, c.notes > 0 ? "\(c.notes) worth a look" : nil].compactMap { $0 }
         return parts.isEmpty ? "Router" : "Router · " + parts.joined(separator: ", ")
+    }
+}
+
+/// The Router's row, with what needs you and what is worth a look: its counts read here, so the cards and the sessions
+/// changing redraw this row and not the whole sidebar.
+private struct RouterSidebarRow: View {
+    let store: Store
+    let navigator: AppNavigator
+    @Environment(\.onGlass) private var onGlass
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        let routerCounts = store.routerCounts
+        AppSidebarRow(title: "Router", on: navigator.selection == .router,
+                      badge: routerCounts.needsYou + routerCounts.notes > 0
+                          ? RailBadge(count: routerCounts.needsYou + routerCounts.notes,
+                                      fill: CDS.solid(routerCounts.needsYou > 0 ? 0xFAB219 : 0x2A78D6),
+                                      ink: routerCounts.needsYou > 0 ? CDS.solid(0x0B0B0B) : .white)
+                          : nil,
+                      tip: AppSidebar.routerTip(routerCounts),
+                      action: { navigator.go(.router) }) { on in
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: M.symbol, weight: .medium))
+                .chromeInk(on ? .primary : .secondary, glass: onGlass)
+        } trailing: {
+            HStack(spacing: 6) {
+                if routerCounts.needsYou > 0 { CountText(routerCounts.needsYou, color: CDS.Fill.warning) }
+                if routerCounts.notes > 0 { CountText(routerCounts.notes, color: CDS.Text.accent) }
+            }
+        }
+        .accessibilityValue([routerCounts.needsYou > 0 ? "\(routerCounts.needsYou) need you" : nil,
+                             routerCounts.notes > 0 ? "\(routerCounts.notes) worth a look" : nil]
+            .compactMap { $0 }.joined(separator: ", ").nonEmpty ?? "Nothing open")
     }
 }
 
@@ -347,10 +360,10 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
                 leading(on)
                     .frame(width: M.leadingSlot, height: M.leadingSlot)
                     // The bar's corner count, small and within the row (the rows' gap leaves no room above it), on the rail
-                    // only; it comes in after the labels have gone.
+                    // only; it comes in once the labels have gone (their fade out takes 0.12 s), then takes 0.12 s itself.
                     .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear, small: true,
                                  opacity: collapsed ? 1 : 0)
-                    .animation(collapsed ? .easeIn(duration: 0.18).delay(0.12) : .easeOut(duration: 0.08), value: collapsed)
+                    .animation(collapsed ? .easeIn(duration: 0.12).delay(0.12) : .easeOut(duration: 0.08), value: collapsed)
                     // The indent eases out with the sidebar's width, so a nested icon reaches its tile as the rail closes.
                     .padding(.leading, M.railShift + (collapsed ? 0 : indent))
                 Group {
@@ -404,14 +417,14 @@ private struct SidebarTextModifier: ViewModifier {
     let collapsed: Bool
     @Environment(\.accessibilityReduceMotion) private var reduce
 
-    /// Out early on collapse (before the width has gone far), in late on expand (once there is room), sliding a few points
-    /// toward the icons while it goes; Reduce Motion only fades, briefly.
+    /// Out at once on collapse (0.12 s, before the width has gone far), in soon on expand (after 0.06 s, as the width opens,
+    /// over 0.16 s), sliding a few points toward the icons while it goes; Reduce Motion only fades, briefly.
     func body(content: Content) -> some View {
         content
             .opacity(collapsed ? 0 : 1)
             .offset(x: collapsed && !reduce ? -8 : 0)
             .animation(reduce ? .easeOut(duration: 0.1)
-                       : collapsed ? .easeOut(duration: 0.12) : .easeOut(duration: 0.22).delay(0.14), value: collapsed)
+                       : collapsed ? .easeOut(duration: 0.12) : .easeOut(duration: 0.16).delay(0.06), value: collapsed)
             .allowsHitTesting(!collapsed)
     }
 }

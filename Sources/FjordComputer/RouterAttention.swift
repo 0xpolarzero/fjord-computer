@@ -188,6 +188,8 @@ struct AwayStrip: Equatable {
         on(workspace, NSWorkspace.didWakeNotification) { $0.asleep = false }
         on(workspace, NSWorkspace.screensDidWakeNotification) { $0.asleep = false }
         let timer = Timer(timeInterval: 20, repeats: true) { [weak self] _ in MainActor.assumeIsolated { _ = self?.refresh() } }
+        // A few seconds either way changes nothing it decides; the system can fold the wake into others.
+        timer.tolerance = 5
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }

@@ -119,10 +119,12 @@ import Testing
         await waitUntil { f.finished.contains(id!) }
         flights.sync(store: s)
         #expect(flights.pills.first?.phase == .failed("the session's inbox is closed", retry: true))
+        #expect(!flights.tracking, "a failed pill goes nowhere: nothing is measured while it waits for its Retry")
         f.failSend = nil
         flights.retry(id!, store: s)
         flights.sync(store: s)
         #expect(flights.pills.count == 1 && flights.pills.first?.id != id, "sent again as a new message")
+        #expect(flights.tracking, "the new message is on its way")
         #expect(!s.routerDispatcher.flying.contains(id!))
         await waitUntil { f.finished.count == 2 }
     }

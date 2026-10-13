@@ -17,11 +17,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private var available: Bool { Self.canReachSystem }
     private nonisolated static var canReachSystem: Bool { Bundle.main.bundleIdentifier != nil && !UnderTest.isRunning }
 
-    func setup() {
+    /// The notification center's delegate: set as launch finishes, so the click on a banner that launched the app is
+    /// heard.
+    func attach() {
         guard available else { return }
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    /// Asks for banners (the system prompts once); can wait until the app has shown its bar.
+    func requestAuthorization() {
+        guard available else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     /// Whether macOS refuses this app's banners: said no at the first prompt, or turned off since in System Settings.
@@ -130,15 +136,16 @@ final class HotKeys {
         didSet {
             guard isSuspended != oldValue else { return }
             for id in combos.keys { register(id) }
+            // Told only: a tap that couldn't be made (no Accessibility access) is not tried, and access not asked for,
+            // again at each start and end of a shortcut's recording.
+            tellButtonTap()
         }
     }
     var registeredIDs: Set<UInt32> { Set(refs.keys) }
     private var taps: [UInt32: (key: UInt16, handler: () -> Void)] = [:]
     /// Mouse button shortcuts, caught (and kept from the app under the pointer) by an event tap.
     private var buttons: [UInt32: (button: Int, flags: NSEvent.ModifierFlags, handler: () -> Void)] = [:]
-    private var buttonTap: CFMachPort?
-    /// Buttons whose press was a shortcut: their release is kept from the app under the pointer too.
-    private var swallowedUps: Set<Int> = []
+    private var buttonTap: ButtonTap?
     private var tap = ModifierTap()
     private var monitors: [Any] = []
     /// Waits for Fjord Computer to come back to the front while taps or mouse buttons are set and Accessibility is not
@@ -148,10 +155,15 @@ final class HotKeys {
     private var heldSince: TimeInterval?
     /// Taps are ignored while this is true (e.g. while a shortcut is being recorded).
     var paused: () -> Bool = { false }
+    /// Whether Accessibility access was granted when last asked: see `isTrusted`.
+    private let trust = TrustCache()
 
     init(backend: HotKeyBackend = CarbonHotKeys()) {
         self.backend = backend
     }
+
+    /// The mouse-button tap's thread holds the tap until it is stopped: it goes with this.
+    deinit { buttonTap?.stop() }
 
     /// `nil` unregisters. A system-wide key that another app holds is refused (`false`), and what the action had stays
     /// registered until a replacement is.
@@ -220,6 +232,7 @@ final class HotKeys {
     }
 
     private func accessMayBeGranted() {
+        trust.forget()
         guard AXIsProcessTrusted() else { return }
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
@@ -258,48 +271,44 @@ final class HotKeys {
     }
 
     /// A session event tap for the mouse buttons in use: it sees them in every app and can keep a shortcut's click
-    /// from also going back in a browser. It needs Accessibility access, like modifier taps.
+    /// from also going back in a browser. It needs Accessibility access, like modifier taps. It runs on a thread of its
+    /// own (`ButtonTap`) and is told the buttons and whether shortcuts are suspended (a shortcut being recorded).
     private func updateButtonTap() {
         if buttons.isEmpty {
-            if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: false) }
+            buttonTap?.stop()
             buttonTap = nil
             return
         }
-        guard buttonTap == nil else { return }
-        if !AXIsProcessTrusted() {
-            AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+        if buttonTap == nil {
+            if !AXIsProcessTrusted() {
+                AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+            }
+            let tap = ButtonTap { [weak self] id in self?.buttonPressed(id) }
+            guard tap.start() else {
+                NSLog("Fjord Computer: can't watch mouse buttons (Accessibility access?)")
+                return
+            }
+            buttonTap = tap
         }
-        let mask = CGEventMask(1 << CGEventType.otherMouseDown.rawValue | 1 << CGEventType.otherMouseUp.rawValue)
-        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-                                          eventsOfInterest: mask, callback: { _, type, event, info in
-            guard let info else { return Unmanaged.passUnretained(event) }
-            return Unmanaged<HotKeys>.fromOpaque(info).takeUnretainedValue().button(type, event)
-        }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            NSLog("Fjord Computer: can't watch mouse buttons (Accessibility access?)")
-            return
-        }
-        CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        buttonTap = tap
+        tellButtonTap()
     }
 
-    /// Runs on the main run loop. Returns nil to keep the click from the app under the pointer.
-    private func button(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return Unmanaged.passUnretained(event)
-        }
-        let number = Int(event.getIntegerValueField(.mouseEventButtonNumber))
-        if type == .otherMouseUp { return swallowedUps.remove(number) == nil ? Unmanaged.passUnretained(event) : nil }
-        guard !paused() else { return Unmanaged.passUnretained(event) }
-        let flags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)).intersection(Shortcut.relevant)
-        guard let match = buttons.values.first(where: { $0.button == number && $0.flags == flags }) else {
-            return Unmanaged.passUnretained(event)
-        }
-        swallowedUps.insert(number)
-        DispatchQueue.main.async { match.handler() }
-        return nil
+    /// The running tap told the buttons and whether shortcuts are suspended.
+    private func tellButtonTap() {
+        buttonTap?.update(buttons: buttons.map { ButtonTap.Button(id: $0.key, button: $0.value.button, flags: $0.value.flags) },
+                          paused: isSuspended)
     }
+
+    /// A shortcut's mouse button was pressed (the tap kept the click from the app under the pointer).
+    private func buttonPressed(_ id: UInt32) {
+        guard !paused() else { return }
+        buttons[id]?.handler()
+    }
+
+    /// Whether Accessibility access is granted, for a modifier tap that just completed: what the system said when last
+    /// asked (only the very first time, or after `accessMayBeGranted`, is it asked here and then), asked again off the
+    /// main thread as a modifier goes down once that answer is two seconds old, so a tap never waits on another process.
+    private func isTrusted() -> Bool { trust.value() }
 
     private func handle(_ event: NSEvent) {
         if Self.debug {
@@ -307,12 +316,182 @@ final class HotKeys {
         }
         let held = UInt(event.modifierFlags.rawValue) & Shortcut.sideBits != 0
         let since = heldSince
-        if held { if heldSince == nil { heldSince = event.timestamp } } else { heldSince = nil }
+        if held {
+            if heldSince == nil {
+                heldSince = event.timestamp
+                trust.refresh()
+            }
+        } else {
+            heldSince = nil
+        }
         // Without Accessibility the keys typed elsewhere are invisible, so right ⌘ + C would look like a tap.
         guard let key = tap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags.rawValue),
-              !paused(), AXIsProcessTrusted() else { return }
+              !paused(), isTrusted() else { return }
         if let since, interrupted(since: since) { return }
         for entry in taps.values where entry.key == key { entry.handler() }
+    }
+}
+
+/// Whether Accessibility access is granted (`AXIsProcessTrusted`, a call to another process), as last asked: asked at the
+/// first read, then again off the main thread when `refresh`ed once two seconds old.
+final class TrustCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var trusted = false
+    private var at: TimeInterval?
+    private var refreshing = false
+    /// Bumped by `forget` and by a read that asks itself: an answer asked for before it is dropped, so a background refresh
+    /// that heard "no" before access was granted can't land over a fresher "yes".
+    private var generation = 0
+    /// The system's answer, and where a refresh asks for it: replaceable, so a test can step them.
+    private let ask: @Sendable () -> Bool
+    private let inBackground: (@escaping @Sendable () -> Void) -> Void
+
+    init(ask: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
+         inBackground: @escaping (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }) {
+        self.ask = ask
+        self.inBackground = inBackground
+    }
+
+    func value() -> Bool {
+        let mine: Int? = lock.withLock {
+            guard at == nil else { return nil }
+            generation += 1
+            return generation
+        }
+        guard let mine else { return lock.withLock { trusted } }
+        let now = ask()
+        lock.withLock {
+            guard generation == mine else { return }
+            trusted = now
+            at = ProcessInfo.processInfo.systemUptime
+            refreshing = false
+        }
+        return now
+    }
+
+    func refresh() {
+        let mine: Int? = lock.withLock {
+            guard let at, !refreshing, ProcessInfo.processInfo.systemUptime - at >= 2 else { return nil }
+            refreshing = true
+            return generation
+        }
+        guard let mine else { return }
+        inBackground { [self] in
+            let now = ask()
+            lock.withLock {
+                guard generation == mine else { return }
+                trusted = now
+                at = ProcessInfo.processInfo.systemUptime
+                refreshing = false
+            }
+        }
+    }
+
+    /// Asked again at the next read; an answer still on its way is dropped.
+    func forget() {
+        lock.withLock {
+            generation += 1
+            at = nil
+            refreshing = false
+        }
+    }
+
+    /// Tests: as if the answer were `seconds` old.
+    func age(by seconds: TimeInterval) { lock.withLock { at = at.map { $0 - seconds } } }
+}
+
+/// The mouse-button shortcuts' event tap, on a thread and run loop of its own: the window server holds every side and
+/// middle click, in every app, until a tap has answered, so the answer must not wait on Fjord Computer's main thread (and
+/// a long wait there would get the tap disabled). It decides from what it was last told (the buttons, whether shortcuts
+/// are suspended) and goes to the main queue only to run a shortcut's action.
+private final class ButtonTap: @unchecked Sendable {
+    struct Button {
+        let id: UInt32
+        let button: Int
+        let flags: NSEvent.ModifierFlags
+    }
+
+    private let lock = NSLock()
+    private var buttons: [Button] = []
+    private var paused = false
+    /// Buttons whose press was a shortcut: their release is kept from the app under the pointer too.
+    private var swallowedUps: Set<Int> = []
+    private var port: CFMachPort?
+    private var loop: CFRunLoop?
+    private var stopped = false
+    /// On the main queue: the shortcut whose button was pressed.
+    private let pressed: (UInt32) -> Void
+
+    init(pressed: @escaping (UInt32) -> Void) { self.pressed = pressed }
+
+    /// The tap made and running on its thread; false when the system refuses it (no Accessibility access).
+    func start() -> Bool {
+        let mask = CGEventMask(1 << CGEventType.otherMouseDown.rawValue | 1 << CGEventType.otherMouseUp.rawValue)
+        guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                           eventsOfInterest: mask, callback: { _, type, event, info in
+            guard let info else { return Unmanaged.passUnretained(event) }
+            return Unmanaged<ButtonTap>.fromOpaque(info).takeUnretainedValue().handle(type, event)
+        }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
+        self.port = port
+        let source = CFMachPortCreateRunLoopSource(nil, port, 0)
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [self] in
+            let loop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(loop, source, .commonModes)
+            lock.withLock { self.loop = loop }
+            CGEvent.tapEnable(tap: port, enable: true)
+            ready.signal()
+            CFRunLoopRun()
+        }
+        thread.name = "Fjord Computer mouse buttons"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
+        return true
+    }
+
+    func update(buttons: [Button], paused: Bool) {
+        lock.withLock {
+            self.buttons = buttons
+            self.paused = paused
+        }
+    }
+
+    /// The tap off for good and its thread ended (which lets go of it): once, by its owner, `HotKeys`, as the buttons go
+    /// or as it goes itself. Until then the thread holds it, so a tap nobody stops would go on keeping clicks.
+    func stop() {
+        guard let port else { return }
+        let loop: CFRunLoop? = lock.withLock {
+            guard !stopped else { return nil }
+            stopped = true
+            return self.loop
+        }
+        guard let loop else { return }
+        CGEvent.tapEnable(tap: port, enable: false)
+        CFMachPortInvalidate(port)
+        CFRunLoopStop(loop)
+    }
+
+    /// On the tap's thread. Returns nil to keep the click from the app under the pointer.
+    private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let port, !lock.withLock({ stopped }) { CGEvent.tapEnable(tap: port, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        let number = Int(event.getIntegerValueField(.mouseEventButtonNumber))
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)).intersection(Shortcut.relevant)
+        let match: UInt32? = lock.withLock {
+            if type == .otherMouseUp { return swallowedUps.remove(number) == nil ? nil : 0 }
+            guard !paused, let button = buttons.first(where: { $0.button == number && $0.flags == flags }) else { return nil }
+            swallowedUps.insert(number)
+            return button.id
+        }
+        guard let match else { return Unmanaged.passUnretained(event) }
+        // A release kept from the app: nothing to run.
+        guard type == .otherMouseDown else { return nil }
+        let pressed = pressed
+        DispatchQueue.main.async { pressed(match) }
+        return nil
     }
 }
 
@@ -381,7 +560,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let name = CommandLine.arguments.dropFirst(i + 1).first ?? ""
             Demo.populate(store, Demo.Scenario(rawValue: name) ?? .busy)
         } else {
-            store.start()
+            // The state now, and the banners' delegate and routing (before the Router's chains onto it, below); what runs on
+            // the state (updates, polling, Claude's sessions, the Router, the code folders) once the bar has been drawn: see
+            // the end of this function.
+            store.load()
+            store.wireNotifications()
         }
         let demo = CommandLine.arguments.contains("--demo")
         let window = AppWindowController(store: store)
@@ -392,7 +575,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.onClose = { [weak hub] in hub?.setWindowOpen(false) }
         window.barScreen = { [weak hub] in hub?.dockedScreen }
         window.bar = { [weak hub] in hub?.morph }
-        window.onClosing = { [weak hub] in hub?.setWindowOpen(false) }
+        // As the close's motion starts: the bar fades back in, then the keyboard goes back to the app that had it (the Dock
+        // icon goes once the motion is over).
+        window.onClosing = { [weak hub] in
+            hub?.setWindowOpen(false)
+            AppPolicy.yieldFocus()
+        }
+        // Made active by the user (⌘-Tab, the Dock) while the window closes: it opens again.
+        AppPolicy.reopen = { [weak self] in self?.showWindow(nil) }
         // The bar is back on its edge while the window is out of sight (another app in front, minimized), away when it returns.
         window.onFront = { [weak hub] front in hub?.setWindowFront(front) }
         hub.openApp = { [weak self] in self?.showWindow($0) }
@@ -441,39 +631,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The first launch opens on the onboarding, where the tools are picked.
         if CommandLine.arguments.contains("--open") || store.settings.toolsPicked != true { toggleWindow() }
         playMotionScript(demo: demo)
+        // The bar on screen first (its first frame shown, or a tenth of a second at most), the store's services after it,
+        // and after the window's morph when the launch opens the window (the onboarding, `--open`).
+        if !demo {
+            AppTransition.nextFrame(hub.dockedScreen) {
+                MotionGate.whenStill { [weak self] in self?.store.startServices() }
+            }
+        }
         if CommandLine.arguments.contains(Lifecycle.flag) {
             Lifecycle.start(store)
         } else {
-            // The window's content built once at idle, out of sight, so the first open only brings it in. Not under
-            // `--lifecycle`, whose idle measurement wants nothing done after launch.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window, weak hub, weak self] in
-                guard let window, let hub else { return }
-                Self.prepareWhenIdle(interacting: { [weak hub] in
-                    Self.preparationIsBlocked(mouseButtons: NSEvent.pressedMouseButtons, modifiers: NSEvent.modifierFlags,
-                                              barInteracting: hub?.isInteracting == true)
-                }, prepare: { [weak window, weak hub, weak self] in
-                    // Short of memory: none of it (the overlay, once made, is kept for good).
+            // What the first open needs, made out of sight once launch is past, so the open only brings it in: the
+            // morph's overlay and glass pieces (and the Router's icons) first, the window's content next, each in its own
+            // slice at a moment the main run loop has nothing else to do and nobody is using the mouse, the modifiers or
+            // the bar. Not under `--lifecycle`, whose idle measurement wants nothing done after launch.
+            let blocked = { [weak hub] in
+                Self.preparationIsBlocked(mouseButtons: NSEvent.pressedMouseButtons, modifiers: NSEvent.modifierFlags,
+                                          barInteracting: hub?.isInteracting == true)
+            }
+            // Short of memory: none of it (the overlay, once made, is kept for good).
+            let steps: [@MainActor () -> Void] = [
+                { [weak window, weak hub, weak self] in
                     guard let window, let hub, !window.memoryShort else { return }
-                    if self?.store.router.enabled == true { _ = SessionIcons.drawable }
-                    window.prepare()
                     AppTransition.prepareOverlay(on: hub.dockedScreen)
-                })
+                    if self?.store.router.enabled == true { SessionIcons.warm() }
+                },
+                { [weak window] in window?.prepare() },
+            ]
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) {
+                MainActor.assumeIsolated { Self.prepare(steps, interacting: blocked) }
             }
         }
     }
 
-    /// How long after launch the window's content is built (`AppWindowController.prepare`): past the store's first load
-    /// and the bar's first draw.
-    static let prepareDelay: TimeInterval = 2
+    /// How long after launch the first open's preparing starts (`prepare(_:interacting:)`): past the launch's own turns,
+    /// the store's load and the bar's first draw; each step then waits for the main run loop to be idle as well.
+    static let prepareDelay: TimeInterval = 0.5
+
+    /// `steps` one at a time, each once the main run loop is idle and nobody is interacting (see `prepareWhenIdle`).
+    static func prepare(_ steps: [@MainActor () -> Void], interacting: @escaping () -> Bool) {
+        guard let step = steps.first else { return }
+        atIdle {
+            prepareWhenIdle(interacting: interacting, prepare: {
+                step()
+                prepare(Array(steps.dropFirst()), interacting: interacting)
+            })
+        }
+    }
+
+    /// Runs `block` once the main run loop has nothing left to do (`NotificationQueue`'s idle posting): after whatever a
+    /// launch, a sync's results or the user had asked of it.
+    static func atIdle(_ block: @escaping @MainActor () -> Void) {
+        final class Token: @unchecked Sendable { var observer: NSObjectProtocol? }
+        let name = Notification.Name("FjordComputer.idle." + UUID().uuidString)
+        let token = Token()
+        token.observer = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
+            if let observer = token.observer { NotificationCenter.default.removeObserver(observer) }
+            token.observer = nil
+            MainActor.assumeIsolated { block() }
+        }
+        NotificationQueue.default.enqueue(Notification(name: name), postingStyle: .whenIdle, coalesceMask: [], forModes: nil)
+    }
 
     static func preparationIsBlocked(mouseButtons: Int, modifiers: NSEvent.ModifierFlags, barInteracting: Bool) -> Bool {
         mouseButtons != 0 || !modifiers.intersection(Shortcut.relevant).isEmpty || barInteracting
     }
 
-    /// A busy user gets another chance at idle in 250 ms; the scheduler is replaceable so tests can step retries.
+    /// A busy user gets another chance in 250 ms, once the main run loop is idle again (`atIdle`); the scheduler is
+    /// replaceable so tests can step retries.
     static func prepareWhenIdle(interacting: @escaping () -> Bool, prepare: @escaping () -> Void,
                                 schedule: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, block in
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, qos: .utility) { MainActor.assumeIsolated { block() } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, qos: .utility) { MainActor.assumeIsolated { atIdle(block) } }
     }) {
         if interacting() {
             schedule(0.25) { prepareWhenIdle(interacting: interacting, prepare: prepare, schedule: schedule) }
@@ -549,6 +777,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // The Router's runs go with the app, the actions' too (a send's `claude` process is ended, not left behind).
         store?.routerDispatcher.stopAll(actions: true)
+        // What was typed into a category's fields and still waits for its pause goes into the store before its last save.
+        PendingEdits.flushAll()
         store?.flushSave()
     }
 

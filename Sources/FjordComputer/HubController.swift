@@ -134,6 +134,17 @@ struct HubRoot: View {
     }
 }
 
+/// What the bar's views do (see `HubController.rootActions`).
+private struct HubActions {
+    let openApp: (AppDestination) -> Void
+    let reopenApp: () -> Void
+    let openUpdates: () -> Void
+    let openRouter: (String?) -> Void
+    let openRouterMessage: (UUID) -> Void
+    let pickRouterCard: (String) -> Void
+    let openInRouter: (String) -> Void
+}
+
 /// The bar on its screen edge. The window spans the edge (so a peek can open without the window being resized mid-animation)
 /// and lets the mouse through everywhere but the bar and its peek. While the app window is open the bar is away.
 @MainActor
@@ -153,6 +164,8 @@ final class HubController {
     private var pendingHover: Bool?
     /// Whether the hub was last reported to the store as visible beyond the bare bar.
     private var reportedOpen = false
+    /// Whether that was as the app window, rather than a peek.
+    private var reportedWindow = false
     /// The app window is open. The bar is off the edge only while the window is also in front.
     private(set) var windowOpen = false
     /// The open window is in front of the user (else the bar is back on its edge, the window behind it).
@@ -182,21 +195,13 @@ final class HubController {
     /// The bar's frame on screen.
     var barScreenFrame: NSRect { barOnScreen ?? hubScreenFrame }
     /// Opens the app window on a place (the app's delegate owns it).
-    var openApp: (AppDestination) -> Void = { _ in } {
-        didSet { host.rootView.openApp = { [weak self] in self?.opened($0) } }
-    }
+    var openApp: (AppDestination) -> Void = { _ in }
     /// Opens the app window where it was left.
-    var reopenApp: () -> Void = {} {
-        didSet { host.rootView.reopenApp = { [weak self] in self?.reopened() } }
-    }
+    var reopenApp: () -> Void = {}
     /// Opens the app window on Settings, scrolled to Updates: the window's own Settings is the one that scrolls.
-    var openUpdates: () -> Void = {} {
-        didSet { host.rootView.openUpdates = { [weak self] in self?.openedUpdates() } }
-    }
+    var openUpdates: () -> Void = {}
     /// Picks a card in the Router, before the window opens on it.
-    var pickRouterCard: (String) -> Void = { _ in } {
-        didSet { host.rootView.pickRouterCard = pickRouterCard }
-    }
+    var pickRouterCard: (String) -> Void = { _ in }
     /// Scrolls the Router's conversation to a message, before the window opens on it.
     var pickRouterMessage: (UUID) -> Void = { _ in }
     /// Tags a thing (its id) in the Router's composer, before the window opens on it: a row's "Open in Router".
@@ -270,17 +275,26 @@ final class HubController {
             withTransaction(instant) { layout.stretch = BarStretch.rest }
         }
         stretched = false
-        host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout,
-                                openApp: { [weak self] in self?.opened($0) },
-                                reopenApp: { [weak self] in self?.reopened() },
-                                openUpdates: { [weak self] in self?.openedUpdates() },
-                                openRouter: { [weak self] in self?.opened(.router, card: $0) },
-                                openRouterMessage: { [weak self] in self?.pickRouterMessage($0); self?.opened(.router) },
-                                pickRouterCard: pickRouterCard,
-                                openInRouter: { [weak self] in self?.prefillRouter($0); self?.opened(.router) })
+        let actions = rootActions
+        host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout, openApp: actions.openApp,
+                                reopenApp: actions.reopenApp, openUpdates: actions.openUpdates,
+                                openRouter: actions.openRouter, openRouterMessage: actions.openRouterMessage,
+                                pickRouterCard: actions.pickRouterCard, openInRouter: actions.openInRouter)
         window.setFrame(dockFrame(), display: true)
         syncTrigger()
     }
+
+    /// What the bar's views do, made once: the root is given the same closures each time it is made again (docking on
+    /// another edge or screen), so the environment that carries them never tells their readers they changed. Each asks
+    /// for what this controller is told to do (`openApp`, `pickRouterCard`, ...) when it is called.
+    private lazy var rootActions = HubActions(
+        openApp: { [weak self] in self?.opened($0) },
+        reopenApp: { [weak self] in self?.reopened() },
+        openUpdates: { [weak self] in self?.openedUpdates() },
+        openRouter: { [weak self] in self?.opened(.router, card: $0) },
+        openRouterMessage: { [weak self] in self?.pickRouterMessage($0); self?.opened(.router) },
+        pickRouterCard: { [weak self] in self?.pickRouterCard($0) },
+        openInRouter: { [weak self] in self?.prefillRouter($0); self?.opened(.router) })
 
     /// The hub's frame on screen (AppKit coordinates).
     private var hubScreenFrame: NSRect { screenFrame(layout.frame) }
@@ -501,7 +515,8 @@ final class HubController {
                 syncTrigger()
             }
         }
-        // Leaving for the window: the store's refresh waits for the turn after the morph started.
+        // Leaving for the window: what the store is told waits at least for the turn after the morph started (and then for
+        // the morph to have played, as every report does).
         if leaving {
             AppTransition.nextTurn { [weak self] in self?.reportOpen() }
         } else {
@@ -511,6 +526,9 @@ final class HubController {
 
     /// Clear the peek only out of sight, so opening can capture the bar before its layout changes.
     private func clearPeek() {
+        // Already clear (the bar's fade-out cleared it out of sight): nothing written, so nothing in the bar redraws as the
+        // window's close starts.
+        guard hub.section != nil || hub.hovering || hub.selection != nil else { return }
         var instant = Transaction(animation: nil)
         instant.disablesAnimations = true
         withTransaction(instant) {
@@ -570,17 +588,36 @@ final class HubController {
 
     /// Tells the store when the hub is more than the bare bar (a peek or the app window), so it refreshes stale
     /// data and polls faster meanwhile; warms the avatars the inbox is about to show, those of the page opened first (the
-    /// window's place, or the peek's tab).
+    /// window's place, or the peek's tab). Every report, from the bar's own changes (`observe`) as from the window's, waits
+    /// for the window's morph to have played (`MotionGate`): the refresh the store may start, and the avatars, put work on
+    /// the main thread. A peek, with nothing moving, is told at once.
     private func reportOpen() {
+        // One report waiting for the motion at most: it reads the hub as it is when it runs.
+        guard !reportQueued else { return }
+        reportQueued = true
+        MotionGate.whenStill { [weak self] in
+            self?.reportQueued = false
+            self?.reportOpenNow()
+        }
+    }
+    private var reportQueued = false
+
+    private func reportOpenNow() {
         let open = windowOpen || (hub.section != nil && !hub.quiet)
-        guard open != reportedOpen else { return }
+        // A peek turned into the window (or back) is told too: only the window syncs at once (`Store.setHubOpen`).
+        let window = open && windowOpen
+        guard open != reportedOpen || window != reportedWindow else { return }
         reportedOpen = open
-        store.setHubOpen(open)
+        reportedWindow = window
+        store.setHubOpen(open, window: window)
         if open {
             // A frame later: the opening's own work comes first.
-            AppTransition.nextFrame(screen) { [weak self] in
-                guard let self, self.reportedOpen else { return }
-                self.prefetchAvatars(self.store.avatarsToWarm(first: self.windowOpen ? self.windowPlace()?.tab : self.hub.tab))
+            AppTransition.nextFrame(screen) {
+                // A motion started meanwhile (the window closing at once, say): after it.
+                MotionGate.whenStill { [weak self] in
+                    guard let self, self.reportedOpen else { return }
+                    self.prefetchAvatars(self.store.avatarsToWarm(first: self.windowOpen ? self.windowPlace()?.tab : self.hub.tab))
+                }
             }
         }
     }

@@ -16,6 +16,14 @@ import Testing
         #expect(steps == ["on", "settle", "draw", "off", "settle"])
     }
 
+    /// A close's capture turns the flag off without drawing the root again: the window goes out of sight in that turn.
+    @Test func aCloseRestoresTheFlagWithoutDrawingTheRootAgain() {
+        var steps: [String] = []
+        _ = GlassCapture.sequence(glass: true, set: { steps.append($0 ? "on" : "off") }, settle: { steps.append("settle") },
+                                  draw: { steps.append("draw") }, restoreLater: true)
+        #expect(steps == ["on", "settle", "draw", "off"])
+    }
+
     @Test func withNoGlassOnlyTheCaptureRuns() {
         var steps: [String] = []
         let picture = GlassCapture.sequence(glass: false, set: { steps.append($0 ? "on" : "off") },
@@ -228,10 +236,12 @@ import Testing
     }
 
     @Test func theGlassMorphLastsTheSpringsSettlingTime() {
-        #expect(abs(GlassMorph.duration(.opening) - 9.23 / 600.0.squareRoot()) < 0.0001)
-        #expect(abs(GlassMorph.duration(.closing) - 9.23 / 20) < 0.0001)
-        #expect(GlassMorph.duration(.opening) < GlassMorph.duration(.closing))
-        #expect(GlassMorph.duration(.opening) < 0.4)
+        #expect(abs(GlassMorph.duration(.opening) - 9.23 / 946.0.squareRoot()) < 0.0001)
+        #expect(abs(GlassMorph.duration(.closing) - 9.23 / 946.0.squareRoot()) < 0.0001)
+        // The bar's own fade on a close lasts as long as the close, glass or not.
+        #expect(abs(AppTransition.duration - GlassMorph.duration(.closing)) < 0.005)
+        // About 0.30 s each way.
+        #expect(abs(GlassMorph.duration(.opening) - 0.30) < 0.005 && abs(GlassMorph.duration(.closing) - 0.30) < 0.005)
     }
 
     /// Opening: G1 in at once, the container (and G2 with it) over the second half, in before the handoff; closing: the
@@ -264,7 +274,7 @@ extension WindowSeams {
                                     styleMask: [.borderless], backing: .buffered, defer: true)
             window.isReleasedWhenClosed = false
             let bar = BarMorph(frame: NSRect(x: screen.frame.minX + 100, y: screen.frame.minY + 100, width: 46, height: 200))
-            let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: bar,
+            let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: bar,
                                                          glassWindow: .init(sidebar: sidebar), glass: true))
             return (run, window)
         }
@@ -334,6 +344,53 @@ extension WindowSeams {
             second.run.show()
             first.run.end()
             #expect(second.run.overlay.isVisible && second.run.overlay.contentView?.subviews.count == 5)
+        }
+
+        @Test(arguments: [false, true]) func aCloseResumesTheRetainedGlassPicturesHandoffOpacity(reduced: Bool) throws {
+            guard #available(macOS 26, *), let made = try makeRun(sidebar: Self.sidebar) else { return }
+            let run = made.run, nextFrames = AppTransition.nextFrames
+            AppTransition.nextFrames = { _, _, done in done() }
+            defer { run.end(); made.window.close(); AppTransition.nextFrames = nextFrames }
+            let bitmap = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
+                                                space: CGColorSpaceCreateDeviceRGB(),
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            let picture = AppTransition.Picture(image: try #require(bitmap.makeImage()), frame: made.window.frame,
+                                                scale: made.window.backingScaleFactor, destination: .settings,
+                                                glass: true, sidebar: Self.sidebar)
+            run.install(picture)
+            run.open(reduced: false) {}
+            run.complete()
+            run.handoff(fading: true, reveal: {}, finished: {})
+            #expect(run.isGlass && run.image === picture.image && run.fadingContent)
+            let views = try #require(run.overlay.contentView?.subviews)
+            let container = try #require(views[2].layer?.sublayers?.first)
+            let clip = try #require(views[4].layer?.sublayers?.first)
+            let image = try #require(clip.sublayers?.first)
+            let fading = [container, clip, try #require(views[1].layer), try #require(views[3].layer)]
+            defer { for layer in fading { layer.speed = 1; layer.timeOffset = 0 } }
+            // Freeze the actual handoff animations at half time, with model opacity zero and presentation opacity half.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for layer in fading {
+                let animation = try #require(layer.animation(forKey: "handoff")?.copy() as? CAAnimation)
+                animation.beginTime = 1
+                layer.speed = 0
+                layer.timeOffset = 1 + animation.duration / 2
+                layer.add(animation, forKey: "handoff")
+            }
+            CATransaction.commit()
+            CATransaction.flush()
+            let drawn = try #require(clip.presentation()?.opacity)
+            #expect(clip.opacity == 0 && abs(drawn - 0.5) < 0.001)
+            run.resume()
+            run.close(reduced: reduced) {}
+            #expect(run.image === picture.image && abs((run.startPose?.window ?? 1) - drawn) < 0.001)
+            // The resumed picture starts at the same visible opacity, whether the fade lives on its clip or image.
+            let clipStart = (clip.animation(forKey: "opacity") as? CABasicAnimation)?.fromValue as? Float ?? clip.opacity
+            let imageStart = (image.animation(forKey: "opacity") as? CABasicAnimation)?.fromValue as? Float ?? image.opacity
+            #expect(abs(clipStart * imageStart - drawn) < 0.001)
+            #expect(abs((run.startPose?.container ?? 1) - 0.5) < 0.001)
+            #expect(abs((run.startPose?.glass ?? 1) - (reduced ? 0 : 0.5)) < 0.001)
         }
 
         @Test func anOpeningStartsAsGlassAtTheBarsCell() throws {

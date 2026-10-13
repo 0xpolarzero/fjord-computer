@@ -79,6 +79,115 @@ extension Animation {
     func resolved(reduce: Bool) -> Animation? { reduce ? nil : self }
 }
 
+/// A window's content coming into view: its first update after the window shows (ordered in, or its content attached
+/// again) is drawn as it is, with no animation. While the window was away its views may have held changes (cards in and
+/// out of Needs you, sessions moving to Working, the inbox's rows) that SwiftUI would otherwise play on that update, so the
+/// window would open on things sliding into place.
+///
+/// One per window, set on its root with `.windowArrival(_:)` (an environment value that never changes, so it invalidates
+/// nothing): `.motion` curves under that root resolve to none while it is on, the root drops any animation still in a
+/// transaction, and the scrolls asked for meanwhile jump (their call sites read `active`); other windows (the bar, its
+/// panels) are untouched. `begin()` gives a token that `end(_:)` takes back (it is on while any token is out, so one
+/// arrival ending doesn't end another); `arrive(laying:)` holds one from before the window takes its content until that
+/// content has been laid out and drawn, and one more turn of the main run loop after it (what its first update scheduled
+/// for later, a reveal's scroll, a follow-up's change, lands then, unanimated too). A token never given back ends after
+/// `longest`. Off in test runs but for one made `inTests`. A flag rather than view state: turning it on and off redraws
+/// nothing, it is read as views update.
+@MainActor
+final class WindowArrival {
+    /// The app window's (`.windowArrival()` without one names it).
+    static let appWindow = WindowArrival()
+
+    /// A safety net: longer than a first frame takes, short enough that a missed `end` costs nothing anyone sees.
+    static let longest: TimeInterval = 0.5
+
+    /// Whether its arrivals take effect in a test run (parallel tests' windows would otherwise share the app window's).
+    private let inTests: Bool
+
+    struct Token: Hashable { fileprivate let id: UInt64 }
+
+    /// Read by views as they update (on the main thread), written only here.
+    nonisolated(unsafe) private(set) var active = false
+    private var tokens: Set<UInt64> = []
+    private var next: UInt64 = 0
+
+    init(inTests: Bool = false) { self.inTests = inTests }
+
+    /// The window's content is about to show: what it draws next is drawn without animation, until `end(token)`.
+    @discardableResult func begin() -> Token {
+        next &+= 1
+        let token = Token(id: next)
+        guard !UnderTest.isRunning || inTests else { return token }
+        tokens.insert(token.id)
+        active = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.longest) { [weak self] in
+            MainActor.assumeIsolated { self?.end(token) }
+        }
+        return token
+    }
+
+    /// That arrival's first frame is drawn: animations are back once no other arrival is under way.
+    func end(_ token: Token) {
+        guard tokens.remove(token.id) != nil else { return }
+        if tokens.isEmpty { active = false }
+    }
+
+    /// Call right before the window takes `view` (its content): on until `view` has been laid out at the end of a run loop
+    /// turn (after Core Animation's commit, which lays it out and draws it), then for one more turn, whose updates (what
+    /// the first one scheduled for later) are drawn as they are too.
+    func arrive(laying view: NSView) {
+        let token = begin()
+        guard active else { return }
+        let progress = ArrivalProgress()
+        // After everything else about to wait (Core Animation's commit included).
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) {
+            [weak self, weak view] _, _ in
+            MainActor.assumeIsolated {
+                guard let self, let view, self.tokens.contains(token.id) else { return progress.stop() }
+                if !progress.laidOut {
+                    if !view.needsLayout, view.window != nil { progress.laidOut = true }
+                    return
+                }
+                progress.stop()
+                self.end(token)
+            }
+        }
+        progress.observer = observer
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+}
+
+/// How far an arrival's content is: laid out yet, and the run loop observer watching for it.
+@MainActor
+private final class ArrivalProgress {
+    var laidOut = false
+    var observer: CFRunLoopObserver?
+
+    func stop() {
+        if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        observer = nil
+    }
+}
+
+extension EnvironmentValues {
+    /// The arrival of the window this view is in (`.windowArrival(_:)` on its root); none outside one.
+    @Entry var windowArrival: WindowArrival? = nil
+}
+
+private struct WindowArrivalModifier: ViewModifier {
+    let arrival: WindowArrival
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.windowArrival, arrival)
+            .transaction { transaction in
+                guard arrival.active else { return }
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+    }
+}
+
 extension AnyTransition {
     /// Slides in from an edge; a plain fade with Reduce Motion.
     static func slide(from edge: Edge, reduce: Bool) -> AnyTransition { reduce ? .opacity : .move(edge: edge) }
@@ -92,9 +201,11 @@ private struct MotionModifier<V: Equatable>: ViewModifier {
     let motion: Motion
     let value: V
     @Environment(\.accessibilityReduceMotion) private var reduce
+    /// None while the window's content arrives (`WindowArrival`).
+    @Environment(\.windowArrival) private var arrival
 
     func body(content: Content) -> some View {
-        content.animation(motion.resolved(reduce: reduce), value: value)
+        content.animation(arrival?.active == true ? nil : motion.resolved(reduce: reduce), value: value)
     }
 }
 
@@ -102,9 +213,10 @@ private struct CurveModifier<V: Equatable>: ViewModifier {
     let animation: Animation
     let value: V
     @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.windowArrival) private var arrival
 
     func body(content: Content) -> some View {
-        content.animation(animation.resolved(reduce: reduce), value: value)
+        content.animation(arrival?.active == true ? nil : animation.resolved(reduce: reduce), value: value)
     }
 }
 
@@ -133,4 +245,8 @@ extension View {
     func hoverMotion(_ hovering: Bool) -> some View {
         modifier(HoverMotionModifier(hovering: hovering))
     }
+
+    /// At a window's root: while its content arrives (`arrival`), no animation reaches anything in it, a `withAnimation`
+    /// made while the window was away included. Without one, the app window's.
+    func windowArrival(_ arrival: WindowArrival = .appWindow) -> some View { modifier(WindowArrivalModifier(arrival: arrival)) }
 }

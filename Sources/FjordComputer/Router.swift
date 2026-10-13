@@ -517,6 +517,14 @@ enum RouterFeed {
                        tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, listed: [String: Date]? = nil,
                        now: Date) {
         let live = Dictionary(sessions.filter { !$0.isArchived }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // Written only where it differs: a part left as it was keeps its storage, so the store's check of what changed
+        // (`state != router`, every read while sessions work) is a glance at each part rather than a walk of it.
+        func set<Value: Equatable>(_ map: inout [String: Value], _ key: String, _ value: Value?) {
+            if map[key] != value { map[key] = value }
+        }
+        func keep<Value>(_ map: inout [String: Value], where kept: (String, Value) -> Bool) {
+            if map.contains(where: { !kept($0.key, $0.value) }) { map = map.filter { kept($0.key, $0.value) } }
+        }
 
         for i in state.cards.indices where state.cards[i].isOpen && live[state.cards[i].sessionID] == nil {
             state.cards[i].addressedAt = now
@@ -604,8 +612,10 @@ enum RouterFeed {
                         state.pendingTurns[id] = nil
                     } else if watching {
                         // Being looked at: no card now. If you leave without having read it, it comes then.
-                        state.pendingTurns[id]?.held = true
-                        state.pendingTurns[id]?.leftMs = nil
+                        if !pending.held || pending.leftMs != nil {
+                            state.pendingTurns[id]?.held = true
+                            state.pendingTurns[id]?.leftMs = nil
+                        }
                     } else if !pending.held {
                         state.pendingTurns[id] = nil
                         addTurn(&state, session, turns: pending.turns, message: pending.message, now: now)
@@ -615,29 +625,30 @@ enum RouterFeed {
                     } else {
                         // Left, and the app shows it read, or hasn't shown the dot yet: wait out its lag, then let it go.
                         let left = pending.leftMs ?? Stamp.ms(now)
-                        state.pendingTurns[id]?.leftMs = left
+                        if pending.leftMs != left { state.pendingTurns[id]?.leftMs = left }
                         if Stamp.ms(now) - left >= unreadGraceMs { state.pendingTurns[id] = nil }
                     }
                 }
             }
 
-            state.waits[id] = ongoing
+            set(&state.waits, id, ongoing)
             if ongoing == nil {
-                state.waitTools[id] = nil
+                set(&state.waitTools, id, nil)
             } else if ongoing != previous {
-                state.waitTools[id] = current?.toolUseID
+                set(&state.waitTools, id, current?.toolUseID)
             } else if let tool = current?.toolUseID {
-                state.waitTools[id] = tool
+                set(&state.waitTools, id, tool)
             }
             if let ongoing, let tool = state.waitTools[id], forms?[id]?.contains(tool) == true {
-                state.formSeen[id] = ongoing
+                set(&state.formSeen, id, ongoing)
             } else if state.formSeen[id] != nil, state.formSeen[id] != ongoing {
                 state.formSeen[id] = nil
             }
 
             // The summary is written after the turn ends: the open card of that turn takes it when it comes.
-            if let summary = session.summary,
-               let i = state.cards.firstIndex(where: { $0.id == "\(id)#t\(session.completedTurns)" && $0.isOpen }) {
+            // (The turn's card id is made once, not once per card it is compared with: every session against every card.)
+            if let summary = session.summary, case let turnID = "\(id)#t\(session.completedTurns)",
+               let i = state.cards.firstIndex(where: { $0.isOpen && $0.id == turnID }) {
                 let kind = RouterTriage.kind(blocked: summary.blocked, triage: state.cards[i].triage)
                 let text = summary.detail.isEmpty ? placeholder : summary.detail
                 if state.cards[i].kind != kind { state.cards[i].kind = kind }
@@ -648,31 +659,32 @@ enum RouterFeed {
                 && state.cards[i].title != session.title {
                 state.cards[i].title = session.title
             }
-            state.seen[id] = stamp.text
+            set(&state.seen, id, stamp.text)
         }
 
         // Sessions that are gone are forgotten: one that comes back is seen for the first time again.
-        state.seen = state.seen.filter { live[$0.key] != nil }
-        state.waits = state.waits.filter { live[$0.key] != nil }
-        state.waitTools = state.waitTools.filter { live[$0.key] != nil }
-        state.formSeen = state.formSeen.filter { live[$0.key] != nil }
-        state.pendingTurns = state.pendingTurns.filter { live[$0.key] != nil }
-        state.heldWaits = state.heldWaits.filter { live[$0.key] != nil }
-        state.replies = state.replies.filter { live[$0.key] != nil }
+        keep(&state.seen) { key, _ in live[key] != nil }
+        keep(&state.waits) { key, _ in live[key] != nil }
+        keep(&state.waitTools) { key, _ in live[key] != nil }
+        keep(&state.formSeen) { key, _ in live[key] != nil }
+        keep(&state.pendingTurns) { key, _ in live[key] != nil }
+        keep(&state.heldWaits) { key, _ in live[key] != nil }
+        keep(&state.replies) { key, _ in live[key] != nil }
         // A handled turn outlasts its session's archiving (unarchived, it is no new card): forgotten once the session is gone
         // for good, and past the `maxHandled` sessions active last. `listed`: every session the read listed, archived ones too
         // (the store's sessions leave the archived out); nil: `sessions`.
         let known = listed ?? Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
-        state.handledTurns = state.handledTurns.filter { known[$0.key] != nil }
+        keep(&state.handledTurns) { key, _ in known[key] != nil }
         if state.handledTurns.count > maxHandled {
             let kept = Set(state.handledTurns.keys.sorted { (known[$0] ?? .distantPast, $0) > (known[$1] ?? .distantPast, $1) }.prefix(maxHandled))
             state.handledTurns = state.handledTurns.filter { kept.contains($0.key) }
         }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
-        state.fjordStarted = state.fjordStarted.filter { live[$0.key] != nil || now.timeIntervalSince($0.value) < 3600 }
+        keep(&state.fjordStarted) { key, at in live[key] != nil || now.timeIntervalSince(at) < 3600 }
         // What started a session goes with it, past the same hour (a session is noted as Fjord Computer's before its
         // origin is): its cards keep their own copy.
-        state.origins = state.origins.filter { live[$0.key] != nil || state.fjordStarted[$0.key] != nil }
+        let started = state.fjordStarted
+        keep(&state.origins) { key, _ in live[key] != nil || started[key] != nil }
         prune(&state)
     }
 
@@ -879,7 +891,11 @@ extension Store {
     /// to the history unread (RouterTiers.swift).
     var routerCounts: (needsYou: Int, notes: Int) {
         // As on the page: a turn whose session still has subagents or commands running isn't counted yet.
+        // Read by the sidebar, the bar and the page's switch on every redraw: counted again only when the cards or what
+        // runs changed (`RouterMemo`).
         let tasks = routerTasks
+        let inputs = RouterMemo.CountInputs(cards: router.cards, tasks: tasks)
+        if let memo = RouterMemo.counts, memo.inputs == inputs { return memo.counts }
         var needsYou = 0, notes = 0
         for card in router.cards where card.isOpen && RouterPage.shows(card, tasks: tasks) {
             switch routerTier(card) {
@@ -888,6 +904,7 @@ extension Store {
             case .waiting: break
             }
         }
+        RouterMemo.counts = (inputs, (needsYou, notes))
         return (needsYou, notes)
     }
 

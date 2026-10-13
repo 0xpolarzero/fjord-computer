@@ -19,8 +19,9 @@ enum InboxStore {
         var unread: [UUID: Int] = [:]
         /// Done entries, most recently done first.
         var done: [InboxEntry] = []
-        /// Each entry's search text, lowercased (see `Store.inboxRows`): made on the first search after a change.
-        var searchKeys: [String: String]?
+        /// Each entry's search text, lowercased (see `Store.inboxRows`): made on the first search after a change, as of
+        /// `Store.inboxDisplayRevision` (it holds the categories' names).
+        var searchKeys: (display: Int, keys: [String: String])?
         /// Waits for `expires`, then makes the change seen (`inboxTimePassed`) and announces what came in.
         var timer: Task<Void, Never>?
 
@@ -47,6 +48,12 @@ enum InboxStore {
             }
             done = doneAt.sorted { $0.0 > $1.0 }.map(\.1)
         }
+    }
+
+    /// Whether two lists of categories make the same inbox: the same categories in the same order, with the same rules,
+    /// CI or not. What they are called and how they look, notify and act don't change what is in them.
+    static func evaluatesAlike(_ a: [InboxCategory], _ b: [InboxCategory]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { $0.id == $1.id && $0.isCI == $1.isCI && $0.rules == $1.rules }
     }
 
     /// Done is always there and isn't a category. A new inbox starts with My repos: the PRs and issues in the repos you own.
@@ -114,7 +121,8 @@ extension Store {
     /// Each entry's search text, lowercased, by entry id: made once per `inboxRevision`, on the first search.
     var inboxSearchKeys: [String: String] {
         let memo = inbox
-        if let keys = memo.searchKeys { return keys }
+        let display = inboxDisplayRevision
+        if let kept = memo.searchKeys, kept.display == display { return kept.keys }
         let names = Dictionary(categories.map { ($0.id, $0.name.lowercased()) }, uniquingKeysWith: { first, _ in first })
         var keys: [String: String] = [:]
         keys.reserveCapacity(memo.entries.count)
@@ -124,7 +132,7 @@ extension Store {
                 + entry.facts.map(\.label).joined(separator: " ")
             keys[entry.id] = key.lowercased()
         }
-        inboxMemo.searchKeys = keys
+        inboxMemo.searchKeys = (display, keys)
         return keys
     }
 
@@ -161,9 +169,17 @@ extension Store {
     }
 
     /// How many of a category's rules are off (a chip that can never match, a group gone), as the engine keeps them.
+    /// Worked out for every category at once, once per `inboxRevision` (which rules and groups changing move), not per
+    /// call: rows and tabs ask in every body. The inbox itself isn't worked out for it.
     func rulesOff(_ id: UUID) -> Int {
-        guard let category = categories.first(where: { $0.id == id }) else { return 0 }
-        return category.rules.filter { !InboxEngine.problems($0, in: category, groups: groups).isEmpty }.count
+        let revision = inboxRevision
+        if let memo = rulesOffMemo, memo.revision == revision { return memo.counts[id] ?? 0 }
+        var counts: [UUID: Int] = [:]
+        for category in categories {
+            counts[category.id] = category.rules.filter { !InboxEngine.problems($0, in: category, groups: groups).isEmpty }.count
+        }
+        rulesOffMemo = (revision, counts)
+        return counts[id] ?? 0
     }
 
     /// Opens the category's editor: the categories page takes the request when it shows (`go` takes the window there).

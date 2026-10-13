@@ -88,6 +88,7 @@ struct CappedScroll<Content: View>: View {
     @State private var lazyShort: CGFloat?
     @State private var edges: [CGFloat] = []
     @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.windowArrival) private var arrival
 
     var body: some View {
         // Whole rows only; with no rows marked (or none ending within the cap) the plain cap.
@@ -135,7 +136,10 @@ struct CappedScroll<Content: View>: View {
                 }
             }
             .onChange(of: hub?.keyboardSelection) { _, request in
-                if let id = request?.id { withAnimation(Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(id) } }
+                // While the window's content arrives, a jump (`WindowArrival`).
+                if let id = request?.id {
+                    withAnimation(arrival?.active == true ? nil : Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(id) }
+                }
             }
         }
     }
@@ -183,8 +187,8 @@ struct EntryRow: View {
     @Environment(\.openInRouter) private var openInRouter
 
     private var thing: Thing { entry.thing }
-    /// Compared here, in this row's own body: hovering another row doesn't rebuild the whole hub.
-    private var selected: Bool { hub.selection == "i:" + entry.id }
+    /// Read here, in this row's own body, through its own mark: hovering another row redraws neither the hub nor this row.
+    private var selected: Bool { hub.isSelected("i:" + entry.id) }
     private var open: Bool { hover || selected }
     private var unread: Bool { entry.isUnread && !entry.isDone }
     private var tint: Color { store.categories.first { $0.id == entry.categoryID }?.color.swatch ?? Theme.tertiary }
@@ -1053,6 +1057,17 @@ struct UpdateAnnouncer: View {
 
 /// The Router in the bar: its symbol, and on its corner how many cards are open, amber while one needs you (a question, a
 /// plan, a stuck turn, a last step), blue when they are only worth a look, nothing at zero. A click opens the Router in the app window.
+/// The bar's Router cell with the Router's counts, read here (`Store.routerCounts`): only it redraws as they change.
+struct CountedRouterCell: View {
+    let store: Store
+    let action: () -> Void
+
+    var body: some View {
+        let counts = store.routerCounts
+        RouterCell(needsYou: counts.needsYou, notes: counts.notes, action: action)
+    }
+}
+
 struct RouterCell: View {
     let needsYou: Int
     let notes: Int

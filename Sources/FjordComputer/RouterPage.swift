@@ -153,7 +153,19 @@ extension Store {
     }
 
     /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
-    var routerTasks: [String: [ClaudeTask]] { claudeTasks.filter { claudeSessions[$0.key]?.running != true } }
+    /// Worked out as the tasks or the sessions change, not on each read: a read allocates nothing and observes only its
+    /// revision, which moves when it changed.
+    var routerTasks: [String: [ClaudeTask]] {
+        _ = routerTasksRevision
+        return routerTasksKept
+    }
+
+    /// Called by the tasks' and the sessions' didSets: the tasks of sessions not running, kept when they changed.
+    func updateRouterTasks() {
+        let tasks = claudeTasks
+        let now = tasks.isEmpty ? tasks : tasks.filter { claudeSessions[$0.key]?.running != true }
+        if now != routerTasksKept { bumpRouterTasks(now) }
+    }
 
     /// The Router's cards less those the page doesn't show (`RouterPage.shows`): what the keys and the away strip go by.
     var routerShownCards: [RouterCard] {
@@ -176,16 +188,55 @@ extension Store {
         return page.needs + page.ready + page.notes + page.waiting
     }
 
-    /// The page's zones alone: what the live part of the page redraws on, without the history.
+    /// The page's zones alone: what the live part of the page redraws on, without the history. Read by Now's column, the
+    /// keys, the bar's panel and the pick on every redraw and press: worked out again only when what it is made of changed
+    /// (`RouterMemo`). Its reads are those of the work, so a view reading it still redraws on any of them.
     var routerZones: RouterPage {
-        .make(cards: router.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: [],
-              summaries: router.summaries, tasks: routerTasks)
+        let inputs = RouterMemo.ZoneInputs(cards: router.cards, rows: allAgentRows, asks: routerDispatcher.askBacks,
+                                           summaries: router.summaries, tasks: routerTasks)
+        if let memo = RouterMemo.zones, memo.inputs == inputs { return memo.page }
+        let page = RouterPage.make(cards: inputs.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: [],
+                                   summaries: inputs.summaries, tasks: inputs.tasks)
+        RouterMemo.zones = (inputs, page)
+        return page
     }
+}
+
+/// The Router's derived lists, kept with what they were worked out from: a read that finds the same inputs (most often the
+/// very same arrays, compared by their storage at once) gets the last answer. One slot each, whatever store asks (the
+/// answer is a function of the inputs alone), so a test's stores only miss.
+@MainActor
+enum RouterMemo {
+    struct ZoneInputs: Equatable {
+        var cards: [RouterCard]
+        var rows: [AgentRow]
+        var asks: [RouterAskBack]
+        var summaries: [RouterSummary]
+        /// `Store.routerTasks`: kept by the store, the same dictionary until it changes, so compared by its storage.
+        var tasks: [String: [ClaudeTask]]
+    }
+    static var zones: (inputs: ZoneInputs, page: RouterPage)?
+
+    struct CountInputs: Equatable {
+        var cards: [RouterCard]
+        var tasks: [String: [ClaudeTask]]
+    }
+    static var counts: (inputs: CountInputs, counts: (needsYou: Int, notes: Int))?
 }
 
 // MARK: - Page
 
 private struct GutterKey: EnvironmentKey { static let defaultValue = CDS.Transcript.gutter }
+
+private extension EnvironmentValues {
+    /// The history's lines are out of sight (hidden under Now): they draw what they last read, reading nothing live.
+    @Entry var historyOutOfSight = false
+}
+
+/// A value a view last read live, kept for when it is out of sight. Not view state: written as it is drawn.
+private final class LastRead<Value> {
+    var value: Value?
+}
 private extension EnvironmentValues {
     /// The page's side margin: 32, 16 in a narrow column.
     var routerGutter: CGFloat {
@@ -201,6 +252,12 @@ struct RouterPageView: View {
     let store: Store
     @Bindable var model: RouterModel
 
+    /// Whether the history has been shown on this page: in a narrow window it isn't built until it is, then kept, hidden
+    /// under Now, so going back to it finds it as it was (its scroll, the lines drawn). Not view state: it turns on as the
+    /// history shows, which redraws the page already.
+    @State private var historyShown = Flag()
+    private final class Flag { var on = false }
+
     /// Now's share of a wide page.
     static let nowShare: CGFloat = 0.55
 
@@ -214,17 +271,22 @@ struct RouterPageView: View {
             let historyWidth = wide ? width - nowWidth - CDS.hairline : width
             let showsNow = wide || model.pane == .now
             let historyHidden = !wide && showsNow
-            // The history is always the same view in the same place, shown or not, at any width: switching sides or
-            // crossing into a wide window keeps where you were in it (its scroll, the lines drawn).
+            let buildsHistory = historyShown.on || !historyHidden
+            let _ = historyHidden ? () : (historyShown.on = true)
+            // Once shown, the history is always the same view in the same place, shown or not, at any width: switching sides
+            // or crossing into a wide window keeps where you were in it (its scroll, the lines drawn). A narrow page that
+            // opens on Now doesn't build it (its list, its clock, its anchoring) until it is asked for.
             ZStack(alignment: .topLeading) {
-                HistoryColumn(store: store, model: model, bar: !wide)
-                    .flightTarget(historyHidden ? nil : "history", flashes: false)
-                    .column(historyWidth)
-                    .frame(width: historyWidth, height: height)
-                    .offset(x: wide ? nowWidth + CDS.hairline : 0)
-                    .opacity(historyHidden ? 0 : 1)
-                    .allowsHitTesting(!historyHidden)
-                    .accessibilityHidden(historyHidden)
+                if buildsHistory {
+                    HistoryColumn(store: store, model: model, bar: !wide, hidden: historyHidden)
+                        .flightTarget(historyHidden ? nil : "history", flashes: false)
+                        .column(historyWidth)
+                        .frame(width: historyWidth, height: height)
+                        .offset(x: wide ? nowWidth + CDS.hairline : 0)
+                        .opacity(historyHidden ? 0 : 1)
+                        .allowsHitTesting(!historyHidden)
+                        .accessibilityHidden(historyHidden)
+                }
                 if showsNow {
                     NowColumn(store: store, model: model, height: height, bar: !wide)
                         .column(nowWidth)
@@ -256,6 +318,8 @@ private struct HistoryColumn: View {
     let store: Store
     let model: RouterModel
     let bar: Bool
+    /// Under Now in a narrow window: its clock stops until it shows again.
+    let hidden: Bool
 
     var body: some View {
         if #available(macOS 26, *) {
@@ -282,7 +346,7 @@ private struct HistoryColumn: View {
 
     /// A history of its own for each side of the filter: turned on or off, it opens at its bottom, as at first.
     private var history: some View {
-        RouterHistory(store: store, model: model).id(model.unreadOnly)
+        RouterHistory(store: store, model: model, hidden: hidden).id(model.unreadOnly)
     }
 
     private var header: some View {
@@ -628,8 +692,11 @@ private struct TopInsetWatch: ViewModifier {
 private struct RouterHistory: View {
     let store: Store
     let model: RouterModel
+    /// Out of sight: the ages stop on their minute.
+    let hidden: Bool
     @Environment(\.routerGutter) private var gutter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowArrival) private var arrival
     /// The oldest line drawn, once you scroll up or ask for earlier ones (so nothing drops off the top while you read); at the
     /// bottom, the newest `page` lines.
     @State private var oldest: HistoryWindow.Boundary?
@@ -644,12 +711,37 @@ private struct RouterHistory: View {
     /// Lines drawn at first, and more each time Show earlier is clicked.
     static let page = 100
 
+    /// What the history was last drawn from while it showed: hidden under Now, it is drawn from this and reads nothing
+    /// of the store or the model, so a new line, a pick or a card read doesn't redraw it out of sight; shown again, it reads
+    /// them afresh. Not view state: written as it is drawn.
+    @State private var shown = Shown()
+    private final class Shown {
+        var taken = false
+        var all: [RouterPage.Entry] = []
+        var expanded: Set<String> = []
+        var picked: String?
+        var highlighted: String?
+        var cancels: [UUID: HistoryDecisionLine.Cancel] = [:]
+    }
+
+    /// The model's history and marks, read only while the history shows (or before it was ever drawn).
+    private func read() -> Shown {
+        guard !hidden || !shown.taken else { return shown }
+        shown.taken = true
+        shown.all = model.history(store)
+        shown.expanded = model.expanded
+        shown.picked = model.selection
+        shown.highlighted = model.highlighted
+        return shown
+    }
+
     var body: some View {
-        let all = model.history(store)
+        let state = read()
+        let all = state.all
         let entries = HistoryWindow.drawn(all, from: oldest, page: Self.page)
-        let expanded = model.expanded, picked = model.selection, highlighted = model.highlighted
-        // One clock for every age in the history, on the minute.
-        MinuteTicking { now in
+        let expanded = state.expanded, picked = state.picked, highlighted = state.highlighted
+        // One clock for every age in the history, on the minute (stopped while the history is out of sight).
+        MinuteTicking(paused: hidden) { now in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
@@ -696,9 +788,16 @@ private struct RouterHistory: View {
                     .padding(.top, RouterPageView.historyTop)
                 }
                 .cdsTopFade()
+                .environment(\.historyOutOfSight, hidden)
                 .modifier(HistoryAnchoring(pinned: $pinned, laidOut: laidOut, ready: { if pending != nil { released = true } }) {
-                    // Once: geometry changing again while it waits asks for nothing more.
-                    if pending?.id != RouterModel.endID {
+                    // With no scroll waiting (the history opening, its lazy lines' heights settling under it; a line arriving),
+                    // a jump there and then: nothing of the page is redrawn for it, nor waits a turn.
+                    if pending == nil {
+                        var jump = Transaction(animation: nil)
+                        jump.disablesAnimations = true
+                        withTransaction(jump) { proxy.scrollTo(RouterModel.endID, anchor: .bottom) }
+                    } else if pending?.id != RouterModel.endID {
+                        // Once: geometry changing again while it waits asks for nothing more.
                         pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
                     }
                 })
@@ -750,7 +849,8 @@ private struct RouterHistory: View {
         DispatchQueue.main.async { perform(proxy) }
         // Going to a line leaves the bottom (until the scroll, once done, finds it there after all); going to the bottom pins.
         pinned = scroll.id == RouterModel.endID
-        if scroll.animated, let motion = Motion.scroll.resolved(reduce: reduceMotion) {
+        // While the window's content arrives, a jump (`WindowArrival`).
+        if scroll.animated, arrival?.active != true, let motion = Motion.scroll.resolved(reduce: reduceMotion) {
             withAnimation(motion) { proxy.scrollTo(scroll.id, anchor: scroll.anchor) }
         } else {
             // A jump, even when what asked for it was animated (a line opening): it doesn't ride that animation.
@@ -762,8 +862,19 @@ private struct RouterHistory: View {
 
     /// Whether a run's message can be cancelled now, and whether it is being.
     private func cancelState(_ decision: RouterDecision, now: Date) -> HistoryDecisionLine.Cancel {
-        guard decision.delivered != nil else { return .none }
+        // Hidden: as last drawn (the dispatcher and the sessions aren't read out of sight).
+        if hidden, shown.taken { return shown.cancels[decision.id] ?? .none }
+        let state = liveCancelState(decision, now: now)
+        if state == .none { shown.cancels[decision.id] = nil } else { shown.cancels[decision.id] = state }
+        return state
+    }
+
+    private func liveCancelState(_ decision: RouterDecision, now: Date) -> HistoryDecisionLine.Cancel {
+        guard let sent = decision.delivered else { return .none }
         if store.routerDispatcher.cancelling.contains(decision.id) { return .cancelling }
+        // Only a message still within its window looks at its session: the history reads Claude's sessions (which change
+        // with every read of them) only while there is one, not for every message it ever sent.
+        guard sent.cancellable(session: nil, now: now) else { return .none }
         return store.canCancel(decision, now: now) ? .offered : .none
     }
 
@@ -967,7 +1078,9 @@ private struct HistorySummaryLine: View, Equatable {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.summary == b.summary && a.now == b.now && a.open == b.open }
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.summary == b.summary && a.now == b.now && a.open == b.open
+    }
 
     var body: some View {
         let lit = hovered || open
@@ -1027,12 +1140,16 @@ private struct HistoryDecisionLine: View, Equatable {
     let cancel: Cancel
     let store: Store
     let model: RouterModel
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var lastStatus = LastRead<(text: String, held: Bool)>()
+    @State private var lastTrigger = LastRead<Text>()
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.decision == b.decision && a.now == b.now && a.open == b.open && a.cancel == b.cancel
+        a.store === b.store && a.model === b.model && a.decision == b.decision && a.now == b.now && a.open == b.open
+            && a.cancel == b.cancel
     }
 
     /// What Cancel does and doesn't, as its tooltip and beside it when the line is open.
@@ -1045,16 +1162,26 @@ private struct HistoryDecisionLine: View, Equatable {
     private var key: String { decision.id.uuidString }
     /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
     /// the dispatcher (a held start too: what its first message waits for).
-    private var status: String {
-        guard decision.outcome == .pending else { return decision.summary }
-        if let progress = store.routerDispatcher.progress[decision.id] { return progress + "…" }
-        // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
-        if let held = store.routerDispatcher.held[decision.id] { return decision.summary + " · " + held }
-        return decision.summary
+    private var status: (text: String, held: Bool) {
+        guard decision.outcome == .pending else { return (decision.summary, false) }
+        // Out of sight, as last read: the dispatcher isn't read for a history hidden under Now.
+        if outOfSight, let kept = lastStatus.value { return kept }
+        let held = store.routerDispatcher.held[decision.id]
+        let read: (String, Bool)
+        if let progress = store.routerDispatcher.progress[decision.id] {
+            read = (progress + "…", held != nil)
+        } else if let held {
+            // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
+            read = (decision.summary + " · " + held, true)
+        } else {
+            read = (decision.summary, false)
+        }
+        lastStatus.value = read
+        return read
     }
 
     var body: some View {
-        let status = status
+        let (status, held) = status
         VStack(alignment: .leading, spacing: 0) {
             Button { toggle() } label: {
                 HStack(spacing: 8) {
@@ -1065,7 +1192,7 @@ private struct HistoryDecisionLine: View, Equatable {
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
                     Text("· \(status)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
                     // A held start's first message: yours to drop (Stop leaves it be).
-                    if decision.outcome == .pending, store.routerDispatcher.held[decision.id] != nil {
+                    if held {
                         Button("Don't send") { store.routerDispatcher.dropHeld(decision.id) }
                             .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
                             .help("Its first message isn't sent; the session stays in the Claude app")
@@ -1119,6 +1246,14 @@ private struct HistoryDecisionLine: View, Equatable {
         guard case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty else {
             return Text(RouterDecision.clip(decision.triggerText, 90))
         }
+        // Its pills name sessions and projects as they are now (all of Claude's sessions read): out of sight, as last read.
+        if outOfSight, let kept = lastTrigger.value { return kept }
+        let made = styledTrigger(text, mentions)
+        lastTrigger.value = made
+        return made
+    }
+
+    private func styledTrigger(_ text: String, _ mentions: [RouterMention]) -> Text {
         let message = MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
         guard let from = decision.fromAction else { return message }
         return Text("\(Text(verbatim: "\(from.category) · ").fontWeight(.medium))\(message)")
@@ -1132,15 +1267,46 @@ private struct DecisionDetails: View {
     let cancel: HistoryDecisionLine.Cancel
     let store: Store
     let model: RouterModel
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var last = LastRead<Live>()
+
+    /// What it shows of the store (the pills' names, its changes, the sessions and their titles, whether Triage, the Router
+    /// and the run are on): read live while the history shows, as last read while it is out of sight.
+    private struct Live {
+        var styled: Text?
+        var changes: [FjordChange]
+        var toolsLinked: Bool
+        var running: Bool
+        var sessions: [(id: String, title: String)]
+        var canEdit: Bool
+    }
+
+    private var live: Live {
+        if outOfSight, let kept = last.value { return kept }
+        var styled: Text?
+        if case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty {
+            styled = MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+        }
+        let changes = decision.links.changes.compactMap { id in store.router.changes.first { $0.id == id } }
+        let sessions = decision.links.sessions.compactMap { id in store.claudeSessions[id].map { (id, $0.title) } }
+        let canEdit = decision.sentMessage.map { sent in
+            store.routerOn && store.claudeSessions[sent.session].map { !$0.isArchived } == true
+        } ?? false
+        let read = Live(styled: styled, changes: changes, toolsLinked: store.toolsLinked,
+                        running: store.routerDispatcher.progress[decision.id] != nil, sessions: sessions, canEdit: canEdit)
+        last.value = read
+        return read
+    }
 
     var body: some View {
+        let live = live
         VStack(alignment: .leading, spacing: 10) {
             if let from = decision.fromAction {
                 Text("⚡ Sent by \(from.category)'s Then for \(from.thing)").cdsText((12, 16), .regular, CDS.Text.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty {
-                MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+            if let styled = live.styled {
+                styled
                     .cdsText(CDS.Transcript.text, .regular, CDS.Text.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -1151,11 +1317,7 @@ private struct DecisionDetails: View {
             ForEach(Array(decision.doneLines.enumerated()), id: \.offset) { _, line in
                 Text(line).cdsText((12, 16), .regular, CDS.Text.muted).fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(decision.links.changes, id: \.self) { id in
-                if let change = store.router.changes.first(where: { $0.id == id }) {
-                    ChangeCard(change: change, store: store)
-                }
-            }
+            ForEach(live.changes) { change in ChangeCard(change: change, store: store) }
             if cancel != .none {
                 Text(HistoryDecisionLine.cancelHelp).cdsText((12, 16), .regular, CDS.Text.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1169,24 +1331,22 @@ private struct DecisionDetails: View {
                             store.routerDispatcher.sendElsewhere(decision.id)
                         }
                         // An action's message goes anywhere only while Triage and the Router are both on.
-                        .help(decision.fromAction != nil && !store.toolsLinked
+                        .help(decision.fromAction != nil && !live.toolsLinked
                               ? "Triage is off: an action's message can't be sent elsewhere until it is on again"
                               : "Cancels it here, then asks where it should go instead, this session left out. Your pick teaches the Router.")
-                        .disabled(cancel == .cancelling || store.routerDispatcher.progress[decision.id] != nil
-                                  || (decision.fromAction != nil && !store.toolsLinked))
+                        .disabled(cancel == .cancelling || live.running || (decision.fromAction != nil && !live.toolsLinked))
                     }
                 }
             }
-            let sessions = decision.links.sessions.filter { store.claudeSessions[$0] != nil }
-            if !sessions.isEmpty {
+            if !live.sessions.isEmpty {
                 HStack(spacing: 6) {
-                    ForEach(sessions, id: \.self) { id in
-                        ClaudeButton("Open \(store.claudeSessions[id]?.title ?? "session")", variant: .ghost, size: .sm,
-                                     icon: ClaudeMark.openSymbol) { store.openAgent(id) }
+                    ForEach(live.sessions, id: \.id) { session in
+                        ClaudeButton("Open \(session.title)", variant: .ghost, size: .sm,
+                                     icon: ClaudeMark.openSymbol) { store.openAgent(session.id) }
                     }
                     // The message it sent, taken back in a fork: the session as it was before it (this one stays as it is),
                     // and that again with the message edited.
-                    if let sent = decision.sentMessage, store.routerOn, store.claudeSessions[sent.session].map({ !$0.isArchived }) == true {
+                    if let sent = decision.sentMessage, live.canEdit {
                         ClaudeButton("Edit and resend", variant: .ghost, size: .sm, icon: "pencil") {
                             model.edit(session: sent.session, message: sent.text, sentAt: sent.at)
                         }
@@ -1218,7 +1378,8 @@ private struct HistoryCardLine: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.card == b.card && a.now == b.now && a.open == b.open && a.marked == b.marked
+        a.store === b.store && a.model === b.model && a.card == b.card && a.now == b.now && a.open == b.open
+            && a.marked == b.marked
     }
 
     private var when: Date { card.addressedAt ?? card.createdAt }
@@ -1300,9 +1461,20 @@ private struct CardDetails: View {
     let card: RouterCard
     let store: Store
     let model: RouterModel
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var last = LastRead<(project: RouterProject, reopens: Bool)>()
+
+    /// Its project and whether it can be reopened (its session's state): live while the history shows, as last read while
+    /// it is out of sight.
+    private var live: (project: RouterProject, reopens: Bool) {
+        if outOfSight, let kept = last.value { return kept }
+        let read = (store.routerProject(card), store.routerCanReopen(card))
+        last.value = read
+        return read
+    }
 
     var body: some View {
-        let project = store.routerProject(card)
+        let (project, reopens) = live
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 KindTag(kind: card.kind)
@@ -1312,7 +1484,7 @@ private struct CardDetails: View {
                 if let origin = card.origin { OriginTag(origin: origin) }
             }
             CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
-            if store.routerCanReopen(card) {
+            if reopens {
                 ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
                     model.reopen(card.id, store: store)
                 }
@@ -1328,9 +1500,19 @@ private struct CardGlyph: View {
     let store: Store
     let sessionID: String
     let symbol: String
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var last = LastRead<AgentRow?>()
+
+    /// The session's row: read live while the history shows, as last read while it is out of sight.
+    private var session: AgentRow? {
+        if outOfSight, let kept = last.value { return kept }
+        let row = store.sessionRow(sessionID)
+        last.value = .some(row)
+        return row
+    }
 
     var body: some View {
-        if let session = store.sessionRow(sessionID) {
+        if let session {
             SessionGlyph(row: session, size: 16, dot: false).opacity(0.7)
         } else {
             Image(systemName: symbol).font(.system(size: 10, weight: .medium))
@@ -1419,6 +1601,7 @@ private struct RouterNow: View {
     let travelling: Set<String>
     let travellingWorking: Set<String>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowArrival) private var arrival
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
     /// Every card of Worth a look shown, not the first few.
@@ -1522,7 +1705,10 @@ private struct RouterNow: View {
         DispatchQueue.main.async {
             guard pending == request else { return }
             pending = nil
-            withAnimation(Motion.scroll.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: request.anchor) }
+            // While the window's content arrives (a card asked for as it opens), a jump (`WindowArrival`).
+            withAnimation(arrival?.active == true ? nil : Motion.scroll.resolved(reduce: reduceMotion)) {
+                proxy.scrollTo(request.id, anchor: request.anchor)
+            }
         }
     }
 
@@ -1619,6 +1805,7 @@ private struct RouterNow: View {
             ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
                 if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
                 WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id], unanswered: page.unanswered[row.id] ?? [])
+                    .equatable()
                     .flightTarget("session:\(row.id)")
                     .id(RouterModel.workingID(row.id))
                     .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
@@ -1635,6 +1822,7 @@ private struct RouterNow: View {
             ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
                 if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
                 WaitingCard(store: store, card: card)
+                    .equatable()
                     .flightTarget("session:\(card.sessionID)")
                     .id(RouterModel.workingID(card.sessionID))
                     .transition(.asymmetric(insertion: .opacity, removal: .opacity))
@@ -1646,8 +1834,12 @@ private struct RouterNow: View {
     /// One picked past the first few of Worth a look shows them all, so the keys never land on a card that isn't drawn; a
     /// search shows every match.
     private var showsAllNotes: Bool {
+        if showAllNotes || model.searching { return true }
+        // The pick read only when there are cards past the first few for it to be on: Now's column doesn't redraw for each
+        // arrow key otherwise.
+        guard page.notes.count > Self.notesShown else { return false }
         let picked = [model.selection, model.highlighted, model.expandedNeed].compactMap { $0 }
-        return showAllNotes || model.searching || page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
+        return page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
     }
 
     /// Finished turns with nothing to do but something to tell: quieter than Needs you, a line each, the first few shown.
@@ -1658,6 +1850,7 @@ private struct RouterNow: View {
             ForEach(shown) { card in
                 CardView(store: store, model: model, card: card, expanded: card.id == open, form: nil,
                          project: store.routerProject(card), quiet: true)
+                    .equatable()
                     .flightTarget("card:\(card.id)", radius: 12)
                     .id(card.id)
                     .transition(.asymmetric(insertion: .opacity, removal: .scaleFade(0.97, reduce: reduceMotion)))
@@ -1675,6 +1868,7 @@ private struct RouterNow: View {
         return VStack(spacing: 6) {
             ForEach(page.asks) { ask in
                 AskBackCard(store: store, ask: ask)
+                    .equatable()
                     .id(ask.id.uuidString)
                     .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
                                             removal: .scaleFade(0.97, reduce: reduceMotion)))
@@ -1684,6 +1878,7 @@ private struct RouterNow: View {
                 CardView(store: store, model: model, card: card, expanded: card.id == open,
                          form: store.pendingForm(for: card), project: store.routerProject(card),
                          formCap: card.id == open ? formCap : CardView.closedFormCap)
+                    .equatable()
                     .flightTarget("card:\(card.id)", radius: 12)
                     .id(card.id)
                     .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
@@ -1693,6 +1888,7 @@ private struct RouterNow: View {
             // A wait that is over, not told yet: yours to continue.
             ForEach(page.ready) { card in
                 WaitingCard(store: store, card: card)
+                    .equatable()
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .id(card.id)
                     .transition(.opacity)
@@ -1824,8 +2020,8 @@ private struct WorkingSummary: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             MinuteTicking { now in
                 Text(shortAgo(at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                    .help(exactTime(at))
             }
-            .help(time)
         }
         // The age under the row's duration, past its two buttons.
         .padding(.trailing, 60)
@@ -1833,6 +2029,12 @@ private struct WorkingSummary: View {
         .accessibilityLabel("Summary \(agoPhrase(at)), at \(time)")
         .accessibilityValue(summary.text)
     }
+}
+
+/// The working rows' durations tick on the second, every one on the same whole second: one wake-up a second for all of
+/// them, rather than one per row at the moment it appeared.
+private enum Seconds {
+    static let epoch = Date(timeIntervalSinceReferenceDate: 0)
 }
 
 private extension View {
@@ -1847,7 +2049,7 @@ private extension View {
 /// folder, what it left running, and for how long, then Open in Claude (in its menu too). A click expands it in place: every
 /// summary of it, newest first, and its subagents and commands with what each is on. Its sparkles button summarizes it,
 /// expanding it to show the summary come in; folded, its newest summary sits under it.
-private struct WorkingCard: View {
+private struct WorkingCard: View, Equatable {
     let store: Store
     @Bindable var model: RouterModel
     let row: AgentRow
@@ -1858,6 +2060,12 @@ private struct WorkingCard: View {
     @Environment(\.cdsColumnWidth) private var columnWidth
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Drawn from its own values: another session's row changing doesn't redraw it (what it reads of the store and the
+    /// model, it observes itself).
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.store === b.store && a.model === b.model && a.row == b.row && a.summary == b.summary && a.unanswered == b.unanswered
+    }
+
     var body: some View {
         let summarizer = model.summarizer
         let busy = summarizer.busy.contains(row.id)
@@ -1866,7 +2074,7 @@ private struct WorkingCard: View {
         // The line composed from its task list and narration, when there is one; the raw step otherwise.
         let explained = store.liveExplanation(row)
         let doing = explained ?? current
-        let marked = model.highlighted == RouterModel.workingID(row.id)
+        let marked = model.isMarked(RouterModel.workingID(row.id))
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Button { withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { expanded.toggle() } } label: {
@@ -1883,7 +2091,7 @@ private struct WorkingCard: View {
                         }
                         if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
                         if let start {
-                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                            TimelineView(.periodic(from: Seconds.epoch, by: 1)) { context in
                                 Text(AgentRow.duration(context.date.timeIntervalSince(start)))
                                     .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
                             }
@@ -1945,7 +2153,7 @@ private struct WorkingCard: View {
                                 Text(activity.text).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
                             }
                             Spacer(minLength: 4)
-                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                            TimelineView(.periodic(from: Seconds.epoch, by: 1)) { context in
                                 Text(AgentRow.duration(context.date.timeIntervalSince(task.since)))
                                     .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
                             }
@@ -1981,10 +2189,12 @@ private struct WorkingCard: View {
 /// A session whose turn ended waiting on something (CI, a deploy, another session): with the working ones, in a cool
 /// tint and an hourglass, saying what for. Once Fjord Computer sees that done it says the session is ready to continue,
 /// and Tell it sends the session so. Opening it, or the Claude button beside it, opens the session in Claude.
-private struct WaitingCard: View {
+private struct WaitingCard: View, Equatable {
     let store: Store
     let card: RouterCard
     @State private var hovered = false
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store && a.card == b.card }
 
     private var triage: RouterTriage { card.triage ?? RouterTriage() }
 
@@ -2009,8 +2219,8 @@ private struct WaitingCard: View {
                         Spacer(minLength: 4)
                         MinuteTicking { now in
                             Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                                .help(exactTime(card.createdAt))
                         }
-                        .help(exactTime(card.createdAt))
                     }
                     .contentShape(Rectangle())
                 }
@@ -2116,7 +2326,7 @@ typealias RouterProject = (name: String, color: Color?)
 /// An open card in Needs you, warm and solid: a summary row (icon, title, kind, a line of what it asks, project, time) and,
 /// for the one shown in full, its form or plan to answer in place, or its text and Archive. Clicking its header shows it
 /// in full with the composer ready to reply to it; hovering it shows Open in Claude. (Addressed, it is a `HistoryCardLine`.)
-struct CardView: View {
+struct CardView: View, Equatable {
     let store: Store
     @Bindable var model: RouterModel
     let card: RouterCard
@@ -2135,9 +2345,18 @@ struct CardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.cdsColumnWidth) private var columnWidth
 
+    /// Drawn from its own values: the zones redrawing for another card (or a session's activity) skip it; what it reads of
+    /// the model (the pick, the mark) it observes itself.
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.store === b.store && a.model === b.model && a.card == b.card && a.expanded == b.expanded && a.form == b.form
+            && a.project.name == b.project.name
+            && a.project.color == b.project.color && a.formCap == b.formCap && a.quiet == b.quiet
+    }
+
     /// Wide enough for an open card's summary on one line.
     private var wide: Bool { columnWidth >= 620 }
-    private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
+    /// Through the card's own mark: the pick moving elsewhere doesn't redraw it.
+    private var marked: Bool { model.isMarked(card.id) }
     private var when: Date { card.createdAt }
 
     /// What the card asks, on one line: its brief, else the first question still open, else its text (parsed once per text).
@@ -2245,8 +2464,7 @@ struct CardView: View {
     /// Who, what kind, what it asks and when: one line when there is room, else two.
     private func summary(project: RouterProject) -> some View {
         let title = Text(card.title).cdsText(quiet ? (13, 18) : (14, 20), quiet ? .medium : .semibold, CDS.Text.primary).lineLimit(1)
-        let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
-            .help(exactTime(when))
+        let age = CardAge(date: when).fixedSize()
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
         // A form has its own buttons: Archive sits in the header beside it.
         return VStack(alignment: .leading, spacing: 1) {
@@ -2348,15 +2566,31 @@ struct CardView: View {
     }
 }
 
+/// A card's age, on the minute's clock: the card is drawn from its own values only (Equatable), so its age keeps time here,
+/// and its time on hover.
+private struct CardAge: View {
+    let date: Date
+
+    var body: some View {
+        // The time on hover with it: a day old, it says its date rather than only its time.
+        MinuteTicking { now in
+            Text(shortAgo(date, now: now)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
+                .help(exactTime(date))
+        }
+    }
+}
+
 // MARK: - Ask-back card
 
 /// "Where should this go?": a message the Router couldn't place with confidence. The top targets are buttons, "Something else…"
 /// lists every session and project. Only a click answers it: whatever is typed in the composer meanwhile is a message of its
 /// own, even one that reads like a target's name, so a session titled after what you'd say ("Don't deploy") is never picked
 /// for saying it. Nothing is sent until you pick.
-struct AskBackCard: View {
+struct AskBackCard: View, Equatable {
     let store: Store
     let ask: RouterAskBack
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store && a.ask == b.ask }
 
     var body: some View {
         let warm = CDS.Fill.warning
@@ -2366,8 +2600,7 @@ struct AskBackCard: View {
                 Image(systemName: "questionmark.bubble").font(.system(size: 13, weight: .medium)).foregroundStyle(warm)
                 Text("Where should this go?").cdsText((14, 20), .semibold, CDS.Text.primary)
                 Spacer(minLength: 4)
-                Text(shortAgo(ask.at)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
-                    .help(exactTime(ask.at))
+                CardAge(date: ask.at)
             }
             Text((ask.context.action.map { "\($0.origin.category) · " } ?? "") + "“\(RouterDecision.clip(ask.message, 160))”")
                 .cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)

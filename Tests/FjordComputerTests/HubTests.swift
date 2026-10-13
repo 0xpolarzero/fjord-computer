@@ -49,7 +49,7 @@ import Testing
         let hub = HubState()
         hub.enter(.inbox)
         #expect(hub.arriving == .inbox && hub.section == nil)
-        // The dwell's 100 ms, however long a loaded machine takes to run it.
+        // The dwell (70 ms), however long a loaded machine takes to run it.
         await waitUntil { hub.section != nil }
         #expect(hub.arriving == nil && hub.section == .inbox)
         // Switching while open is at once: no dwell to wait on.
@@ -79,7 +79,7 @@ import Testing
         let hub = HubState()
         hub.enter(.inbox)
         block.set(true, on: hub)
-        // The dwell wakes after 100 ms (later on a loaded machine) and finds the bar blocked.
+        // The dwell wakes after 70 ms (later on a loaded machine) and finds the bar blocked.
         await waitUntil { hub.arriving == nil }
         #expect(hub.arriving == nil && hub.section == nil)
     }

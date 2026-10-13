@@ -245,6 +245,31 @@ import Testing
         #expect(counter.calls == 1)
     }
 
+    @Test func aTriageHeldByTheMorphIsDroppedIfTheRouterWasSwitchedOffAndOnMeanwhile() async {
+        let a = session("a")
+        final class Asked { var n = 0 }
+        let asked = Asked()
+        // Before the switch it asks; after, it is done.
+        let (s, counter) = store(sessions: [a]) { _, _ in
+            asked.n += 1
+            return self.answers(state: asked.n == 1 ? "asks" : "done", work: "committed")
+        }
+        let gate = MotionGate.Gate(longest: 600)
+        s.motionGate = gate
+        s.routerTriager.rescanned = true
+        s.router.cards = [turnCard(a)]
+        gate.began()
+        s.triageTurns()
+        for _ in 0..<3000 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(counter.calls == 1)
+        // Off and on again while the window moves: what Jev said then isn't put on the card; it is asked again.
+        s.routerTriager.turnedOff()
+        gate.ended()
+        for _ in 0..<3000 where counter.calls < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        await s.routerTriager.idle()
+        #expect(counter.calls == 2 && s.router.cards[0].kind != .asks)
+    }
+
     @Test func turningTheRouterOffDropsATriageUnderWayAndItsBanner() async {
         final class Gate { var release: CheckedContinuation<Void, Never>?; var asked = 0 }
         let a = session("a")

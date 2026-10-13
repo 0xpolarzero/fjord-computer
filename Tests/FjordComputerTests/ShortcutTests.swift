@@ -409,3 +409,46 @@ private final class SystemKeys: HotKeyBackend {
         held.removeAll { $0 === registration }
     }
 }
+
+/// Whether Accessibility access is granted, as the modifier taps read it.
+@Suite struct AccessibilityTrustCache {
+    final class Box: @unchecked Sendable {
+        var answer = false
+        var answers: [Bool] = []
+        var pending: [@Sendable () -> Void] = []
+    }
+
+    /// A refresh that heard "no" before access was granted, landing after the grant was asked again and heard "yes", is
+    /// dropped: taps work at once rather than two seconds later.
+    @Test func aRefreshFromBeforeTheGrantDoesNotLandOverIt() {
+        let box = Box()
+        // What the system says at each ask, in turn: no at the first read; yes once granted; no for the refresh asked
+        // before the grant, whose answer lands only after it.
+        box.answers = [false, true, false]
+        let cache = TrustCache(ask: { box.answers.removeFirst() }, inBackground: { box.pending.append($0) })
+        #expect(!cache.value())
+        cache.age(by: 3)
+        cache.refresh()
+        #expect(box.pending.count == 1)
+        let stale = box.pending.removeFirst()
+        cache.forget()
+        #expect(cache.value())
+        stale()
+        #expect(box.answers.isEmpty)
+        #expect(cache.value())
+    }
+
+    /// A refresh that lands with nothing newer since is taken.
+    @Test func aRefreshIsTaken() {
+        let box = Box()
+        let cache = TrustCache(ask: { box.answer }, inBackground: { box.pending.append($0) })
+        #expect(!cache.value())
+        box.answer = true
+        cache.refresh()
+        #expect(box.pending.isEmpty)
+        cache.age(by: 3)
+        cache.refresh()
+        box.pending.removeFirst()()
+        #expect(cache.value())
+    }
+}

@@ -203,10 +203,11 @@ extension FjordHub {
 
     // MARK: Router
 
-    /// The Router's cell in the bar; a click opens its window.
+    /// The Router's cell in the bar; a click opens its window. Its counts are read in a view of their own, so the cards and
+    /// the sessions changing redraw the cell and not the whole bar.
     var routerCell: some View {
-        let counts = store.routerCounts
-        return RouterCell(needsYou: counts.needsYou, notes: counts.notes) { openApp(.router) }
+        let openApp = openApp
+        return CountedRouterCell(store: store) { openApp(.router) }
     }
 
     /// "Router", then what's open (amber for what needs you, blue for finished turns). The whole line opens its window.

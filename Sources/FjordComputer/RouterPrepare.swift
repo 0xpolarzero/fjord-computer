@@ -3,12 +3,14 @@ import Foundation
 // MARK: - Off the main thread
 
 /// Blocking work (reading files, a hook a test holds) on a dispatch queue, never on Swift's small shared pool of threads:
-/// a held or slow read there would hold up every other task in the app.
+/// a held or slow read there would hold up every other task in the app. `qos`: what you are waiting on (a send, a fork) is
+/// `.userInitiated`; what keeps things fresh in the background (a scan of your code folders) is `.utility`, so it never
+/// competes with the main thread for a core while the window moves.
 enum OffMain {
-    static func run<T>(_ work: @escaping @Sendable () -> T) async -> T {
+    static func run<T>(qos: DispatchQoS.QoSClass = .userInitiated, _ work: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { (done: CheckedContinuation<T, Never>) in
             let box = UncheckedBox(work)
-            DispatchQueue.global(qos: .userInitiated).async { done.resume(returning: box.value()) }
+            DispatchQueue.global(qos: qos).async { done.resume(returning: box.value()) }
         }
     }
 

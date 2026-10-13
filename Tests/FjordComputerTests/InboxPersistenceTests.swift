@@ -41,6 +41,37 @@ import Testing
         #expect(second.inboxContext.contributedRepos == ["o/c"])
     }
 
+    @Test func theStateReadEarlyOffTheMainThreadLoadsAsTheStateReadThen() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("state.json")
+        let category = InboxFixture.category()
+        let first = Store()
+        first.stateFile = file
+        first.categories = [category]
+        first.things = ["pr:a/one#1": InboxFixture.pr(1)]
+        first.marks = ["pr:a/one#1": EntryMarks(seen: ["greptile:3"])]
+        first.flushSave()
+
+        Store.readSavedStateEarly(at: file)
+        let second = Store()
+        second.stateFile = file
+        second.load()
+        #expect(second.categories.map(\.id) == [category.id])
+        #expect(second.things.keys.sorted() == ["pr:a/one#1"] && second.marks.keys.sorted() == ["pr:a/one#1"])
+
+        // Taken once: a file that doesn't decode, read early, is kept aside as one read then would be.
+        try Data("not json".utf8).write(to: file)
+        Store.readSavedStateEarly(at: file)
+        let third = Store()
+        third.stateFile = file
+        var keptAside: Data?
+        third.keepAsideStandIn = { data, _ in keptAside = data; return "state.json.bak" }
+        third.load()
+        #expect(keptAside == Data("not json".utf8))
+        #expect(third.categories == InboxStore.defaultCategories)
+    }
+
     @Test func aDoneOrACategoryEditIsKeptByQuittingBeforeAnyPoll() throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
