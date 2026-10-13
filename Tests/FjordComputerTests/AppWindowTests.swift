@@ -629,10 +629,12 @@ extension WindowSeams {
         /// 24, with half a refresh more so a late tick still wins.
         @Test func aWaitGivesUpAfterTheScreensOwnRefreshes() {
             #expect(abs(FrameTick.fallback(2, on: nil) - 2.5 / 60) < 1e-9)
+            // At the screen's slowest refresh (an adaptive display runs below its maximum rate), at least a 60 Hz one.
             for screen in NSScreen.screens {
-                let rate = Double(max(screen.maximumFramesPerSecond, 1))
-                #expect(abs(FrameTick.fallback(1, on: screen) - 1.5 * max(1.0 / 60, 1 / rate)) < 1e-9)
+                let slowest = max(1.0 / 60, screen.maximumRefreshInterval)
+                #expect(abs(FrameTick.fallback(1, on: screen) - 1.5 * slowest) < 1e-9)
             }
+            #expect(abs(FrameTick.fallback(3, frame: 1.0 / 24) - 3.5 / 24) < 1e-9)
         }
 
         @Test func aWaitForSeveralRefreshesRunsOnce() async {

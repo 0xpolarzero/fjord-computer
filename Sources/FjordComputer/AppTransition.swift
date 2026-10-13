@@ -1666,34 +1666,58 @@ final class FrameTick: NSObject {
     private var block: (@MainActor () -> Void)?
     private var left = 1
     private var fallback: DispatchWorkItem?
-    /// How long `count` refreshes of `screen` are waited for at most: one of its refreshes each (at least a 60 Hz one), and
-    /// half of one more, so a link that ticks late but ticks is never beaten (a 24, 30 or 50 Hz screen's included).
+    private var screen: NSScreen?
+    /// The link's last tick (its timestamp), for the cadence it actually runs at.
+    private var lastTick: CFTimeInterval?
+
+    /// The longest a refresh of `screen` may take: its slowest refresh (`maximumRefreshInterval`: an adaptive display
+    /// slows down when little moves, below its maximum rate), at least a 60 Hz one.
+    static func slowestFrame(on screen: NSScreen?) -> TimeInterval {
+        max(1.0 / 60, screen?.maximumRefreshInterval ?? 0)
+    }
+
+    /// How long `count` refreshes are waited for at most, a refresh lasting `frame`: one each and half of one more, so a
+    /// link that ticks late but ticks is never beaten.
+    static func fallback(_ count: Int, frame: TimeInterval) -> TimeInterval {
+        frame * (Double(max(count, 1)) + 0.5)
+    }
+
     static func fallback(_ count: Int, on screen: NSScreen?) -> TimeInterval {
-        let rate = screen.map { $0.maximumFramesPerSecond } ?? 60
-        let frame = max(1.0 / 60, 1 / Double(max(rate, 1)))
-        return frame * (Double(max(count, 1)) + 0.5)
+        fallback(count, frame: slowestFrame(on: screen))
     }
 
     static func wait(_ count: Int, on screen: NSScreen?, _ block: @escaping @MainActor () -> Void) {
         let tick = FrameTick()
         tick.block = block
         tick.left = max(count, 1)
+        tick.screen = screen
         live.insert(tick)
         if let screen {
-            let link = screen.displayLink(target: tick, selector: #selector(fire))
+            let link = screen.displayLink(target: tick, selector: #selector(fire(_:)))
             link.add(to: .main, forMode: .common)
             tick.link = link
         }
         // A display that is asleep (or a link that stalls) gives no refresh: do not wait for them for ever, only about as long
-        // as they would take. Called off once they came.
-        let fallback = DispatchWorkItem { MainActor.assumeIsolated { tick.finish() } }
-        tick.fallback = fallback
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.fallback(tick.left, on: screen), execute: fallback)
+        // as they would take at the screen's slowest. Called off once they came.
+        tick.arm(Self.fallback(tick.left, on: screen))
     }
 
-    @objc private func fire() {
+    private func arm(_ after: TimeInterval) {
+        fallback?.cancel()
+        let fallback = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.finish() } }
+        self.fallback = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: fallback)
+    }
+
+    @objc private func fire(_ link: CADisplayLink) {
         left -= 1
-        if left <= 0 { finish() }
+        if left <= 0 { return finish() }
+        // The cadence the link runs at, seen: the refreshes still to come are waited for at that (or the screen's slowest,
+        // whichever is longer).
+        let now = link.timestamp
+        let seen = lastTick.map { now - $0 } ?? 0
+        lastTick = now
+        arm(Self.fallback(left, frame: max(seen, Self.slowestFrame(on: screen))))
     }
 
     private func finish() {
