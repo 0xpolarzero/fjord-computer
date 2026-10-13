@@ -243,3 +243,14 @@ import Testing
         #expect(s.inboxError?.hasPrefix("Your teams couldn't be looked up") == true)
     }
 }
+
+/// The icons a session can get are worked out off the main thread.
+@Suite struct SessionIconsOffMain {
+    @Test func theIconsOfferedOffTheMainThreadAreThoseOfferedOnIt() async {
+        let excluded: Set<String> = ["hammer", "ladybug"]
+        let off = await Task.detached { await SessionIcons.openOffMain(excluding: excluded) }.value
+        let on = SessionIcons.open(excluding: excluded)
+        #expect(off.map(\.category) == on.map(\.category) && off.map(\.icons) == on.map(\.icons))
+        #expect(SessionIcons.drawableCount != nil)
+    }
+}

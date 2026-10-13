@@ -526,6 +526,12 @@ enum SessionIcons {
         }
     }
 
+    /// `open(excluding:)` off the main thread (nonisolated and async): the first to ask may be the one that works out
+    /// `drawable`, or wait on `warm` working it out, which must not be the main thread.
+    static func openOffMain(excluding excluded: Set<String>) async -> [(category: Category, icons: [String])] {
+        open(excluding: excluded)
+    }
+
     /// The icons to offer once Jev has scored the open categories: the best one's, plus the runner-up's when Jev was
     /// torn between them (at least half as likely) and both fit in one question.
     static func shortlist(_ open: [(category: Category, icons: [String])], probabilities: [String: Double]) -> [String] {

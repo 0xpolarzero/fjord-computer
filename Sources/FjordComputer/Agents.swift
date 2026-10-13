@@ -614,7 +614,7 @@ extension Store {
                 return
             }
             let used = Set(rows.compactMap(\.entry.icon)).union(current.entry.rejectedIcons ?? [])
-            let open = SessionIcons.open(excluding: used)
+            let open = await SessionIcons.openOffMain(excluding: used)
             guard !open.isEmpty else { self.iconTask = nil; return }
             var state = ["session title": session.title, "project": session.folderName]
             if let first { state["first message"] = first }

@@ -546,7 +546,11 @@ final class Store {
     /// banners, updates, the sleep observer, GitHub's polling, Claude's sessions, the Router, the code folders and the
     /// Keychain's read.
     func startServices() {
-        if !UnderTest.isRunning { ClaudeMark.warm() }
+        if !UnderTest.isRunning {
+            ClaudeMark.warm()
+            // The icons this Mac can draw (some thousand symbol lookups), worked out before an icon is first picked.
+            SessionIcons.warm()
+        }
         notifier.requestAuthorization()
         updater.automatic = { [weak self] in self?.settings.checkUpdates ?? true }
         updater.skipped = { [weak self] in self?.settings.skippedVersion }
