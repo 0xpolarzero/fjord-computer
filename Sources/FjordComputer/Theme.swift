@@ -53,21 +53,24 @@ func exactTime(_ date: Date) -> String {
 }
 
 /// The dates the lists write out (a line's time on hover and in what VoiceOver says, an old age's day), each formatted once:
-/// a history line asks for its time twice each time it is drawn, and every line is drawn again on the minute. Kept until
-/// midnight (what "today" leaves out changes then), at most a few thousand; the main thread's alone (elsewhere, formatted).
+/// a history line asks for its time twice each time it is drawn, and every line is drawn again on the minute. Kept until the
+/// day ends (what "today" leaves out changes then), or the time zone, the locale, the clock, the day or the 12/24-hour
+/// preference changes; at most a few thousand; the main thread's alone (elsewhere, formatted).
 enum TimeTexts {
     enum Kind { case exact, day }
     nonisolated(unsafe) private static var exact: [Date: String] = [:]
     nonisolated(unsafe) private static var days: [Date: String] = [:]
     nonisolated(unsafe) private static var until = Date.distantPast
+    nonisolated(unsafe) private static var watching = false
 
     static func cached(_ date: Date, _ kind: Kind, _ make: (Date) -> String) -> String {
         guard Thread.isMainThread else { return make(date) }
+        if !watching { watch() }
         let now = Date()
         if now >= until {
             exact = [:]
             days = [:]
-            until = Calendar.current.startOfDay(for: now).addingTimeInterval(86400)
+            until = dayEnd(after: now, calendar: .current)
         }
         if let hit = kind == .exact ? exact[date] : days[date] { return hit }
         let text = make(date)
@@ -80,6 +83,33 @@ enum TimeTexts {
             days[date] = text
         }
         return text
+    }
+
+    /// The next midnight after `now` in `calendar`: a day isn't always 24 hours (daylight saving time).
+    static func dayEnd(after now: Date, calendar: Calendar) -> Date {
+        let start = calendar.startOfDay(for: now)
+        return calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86400)
+    }
+
+    /// Everything formatted is formatted again on its next ask.
+    static func invalidate() {
+        guard Thread.isMainThread else { return DispatchQueue.main.async { invalidate() } }
+        until = .distantPast
+    }
+
+    private static func watch() {
+        watching = true
+        let center = NotificationCenter.default
+        for name: Notification.Name in [.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification,
+                                        .NSSystemClockDidChange, .NSCalendarDayChanged] {
+            center.addObserver(forName: name, object: nil, queue: .main) { _ in invalidate() }
+        }
+        // The 12/24-hour and date formats chosen in System Settings.
+        for name in ["AppleTimePreferencesChangedNotification", "AppleDatePreferencesChangedNotification"] {
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name(name), object: nil, queue: .main) { _ in
+                invalidate()
+            }
+        }
     }
 }
 
