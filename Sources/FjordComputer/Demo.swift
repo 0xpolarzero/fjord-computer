@@ -18,7 +18,7 @@ enum Demo {
         // The update tile.
         case updateAvailable, updateDownloading, updateReady
         // The Router: cards of each kind (a question with its form) and a chat with receipts; and the Router switched off.
-        case router, routerOff
+        case router, routerCanvas, routerOff
     }
 
     static func populate(_ store: Store, _ scenario: Scenario = .busy) {
@@ -153,7 +153,7 @@ enum Demo {
         case .updateReady:
             agents(store, now)
             store.updater.preview(.ready, version: "0.5.0")
-        case .router:
+        case .router, .routerCanvas:
             agents(store, now)
             router(store, now)
         case .routerOff:

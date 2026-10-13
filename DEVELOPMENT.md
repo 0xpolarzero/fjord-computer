@@ -61,7 +61,10 @@ Mock data with Triage on (and the Router, in its scenarios). Nothing is saved. `
 | Inbox | `inboxMany` `hiddenCategory` `jev` `sections` |
 | CI | `noCI` `allPassing` `manyCI` `ciRunning` |
 | Updates | `updateAvailable` `updateDownloading` `updateReady` |
-| Router | `router` `routerOff` |
+| Router | `router` `routerCanvas` `routerOff` |
+
+`--demo routerCanvas --open` opens the Router directly on its canvas, using the same data as `router`.
+For release window timings, run `scripts/morph-timings.sh --scenario routerCanvas --steps "open,close x6"`.
 
 ### Window, bar and screenshots
 

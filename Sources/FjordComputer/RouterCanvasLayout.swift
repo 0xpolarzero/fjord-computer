@@ -249,18 +249,32 @@ enum CanvasMetrics {
     static let aspect: CGFloat = 16.0 / 10.0
 
     /// How many columns the frames take (their heights with every card folded, in their order): the count whose packing is
-    /// nearest 16:10. The frames alone decide it, never the window, so a resize moves none of them.
+    /// near 16:10. The frames alone decide it, never the window, so a resize moves none of them.
     static func columnCount(closed: [CGFloat]) -> Int {
         guard closed.count > 1 else { return 1 }
-        var best = (count: 1, miss: CGFloat.infinity)
-        for count in 1...closed.count {
+        var measured: [Int: (ratio: CGFloat, miss: CGFloat)] = [:]
+        func shape(_ count: Int) -> (ratio: CGFloat, miss: CGFloat) {
+            if let kept = measured[count] { return kept }
             let columns = Self.columns(closed: closed, count: count)
             var heights = Array(repeating: CGFloat(0), count: count)
             for (h, c) in zip(closed, columns) { heights[c] += h + rowGap }
-            let used = Set(columns).count
-            let width = CGFloat(used) * (frameWidth + colGap) - colGap
+            let width = CGFloat(count) * (frameWidth + colGap) - colGap
             let height = max(1, (heights.max() ?? 0) - rowGap)
-            let miss = abs(log(width / height / aspect))
+            let ratio = width / height / aspect
+            let result = (ratio, abs(log(ratio)))
+            measured[count] = result
+            return result
+        }
+        // Find the screen-shaped packing, then compare its neighbours. Trying every count made the first layout
+        // quadratic even before collision placement; the bounded search keeps a large canvas cheap to open.
+        var lo = 1, hi = closed.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if shape(mid).ratio < 1 { lo = mid + 1 } else { hi = mid }
+        }
+        var best = (count: 1, miss: shape(1).miss)
+        for count in max(1, lo - 2)...min(closed.count, lo + 2) {
+            let miss = shape(count).miss
             if miss < best.miss - 0.0001 { best = (count, miss) }
         }
         return best.count
@@ -298,24 +312,17 @@ enum CanvasMetrics {
     /// down only the packed frames under it.
     static func resolve(_ frames: [(origin: CGPoint, size: CGSize, placed: Bool)]) -> [CGPoint] {
         var out = frames.map(\.origin)
-        var done = frames.filter(\.placed).map { CGRect(origin: $0.origin, size: $0.size) }
+        let obstacles = CanvasObstacles(frames.map { CGRect(origin: $0.origin, size: $0.size) })
+        for frame in frames where frame.placed { obstacles.insert(CGRect(origin: frame.origin, size: frame.size)) }
         let order = frames.indices.filter { !frames[$0].placed }.sorted { a, b in
             let p = frames[a].origin, q = frames[b].origin
             return p.y != q.y ? p.y < q.y : p.x != q.x ? p.x < q.x : a < b
         }
         for i in order {
             var rect = CGRect(origin: frames[i].origin, size: frames[i].size)
-            var moved = true
-            while moved {
-                moved = false
-                for other in done where rect.minX < other.maxX + pad && other.minX < rect.maxX + pad
-                    && rect.minY < other.maxY + rowGap && other.minY < rect.maxY + rowGap {
-                    rect.origin.y = other.maxY + rowGap
-                    moved = true
-                }
-            }
+            while let bottom = obstacles.bottom(overlapping: rect) { rect.origin.y = bottom }
             out[i] = rect.origin
-            done.append(rect)
+            obstacles.insert(rect)
         }
         return out
     }
@@ -342,11 +349,22 @@ enum CanvasMetrics {
     /// Each frame's column: under the shortest so far (the first of equals), by the heights with every card folded, so
     /// opening one only pushes its own column down and no frame moves sideways.
     static func columns(closed: [CGFloat], count: Int) -> [Int] {
-        var heights = Array(repeating: CGFloat(0), count: max(1, count))
-        return closed.map { h in
-            let c = heights.indices.min { heights[$0] < heights[$1] } ?? 0
-            heights[c] += h + rowGap
-            return c
+        var heap = (0..<max(1, count)).map { (height: CGFloat(0), column: $0) }
+        func earlier(_ a: Int, _ b: Int) -> Bool {
+            heap[a].height != heap[b].height ? heap[a].height < heap[b].height : heap[a].column < heap[b].column
+        }
+        return closed.map { height in
+            let column = heap[0].column
+            heap[0].height += height + rowGap
+            var i = 0
+            while 2 * i + 1 < heap.count {
+                var child = 2 * i + 1
+                if child + 1 < heap.count, earlier(child + 1, child) { child += 1 }
+                guard earlier(child, i) else { break }
+                heap.swapAt(i, child)
+                i = child
+            }
+            return column
         }
     }
 
@@ -425,65 +443,122 @@ struct CanvasTransform: Equatable {
 
 // MARK: - Layouts
 
-private struct CanvasPlaceKey: LayoutValueKey { static let defaultValue = CGPoint.zero }
-private struct CanvasPlacedKey: LayoutValueKey { static let defaultValue = false }
-private struct CanvasGroupKey: LayoutValueKey { static let defaultValue: CanvasGroup = .needs }
-
-extension View {
-    /// A frame's place on the canvas (`CanvasMetrics.preferred`), and whether you put it there (then it never moves).
-    func canvasPlace(_ point: CGPoint, placed: Bool) -> some View {
-        layoutValue(key: CanvasPlaceKey.self, value: point).layoutValue(key: CanvasPlacedKey.self, value: placed)
-    }
-    /// A node's group in its frame.
-    func canvasGroup(_ group: CanvasGroup) -> some View { layoutValue(key: CanvasGroupKey.self, value: group) }
-}
-
 /// The frames on the ground (`CanvasMetrics.resolve`): one you placed exactly where you put it, a packed one pushed down
 /// under one it would overlap. A place may be left of or above the content's origin (a frame dragged there): it is drawn
 /// there, the content's size counted from the origin.
 struct CanvasBoard: Layout {
-    private func place(_ subviews: Subviews) -> (points: [CGPoint], size: CGSize) {
-        // Each frame as wide and tall as it makes itself (its width yours or the default, its height its content's or
-        // yours if taller).
-        // Whole points, so a measure that wavers by a fraction (text laid out again) moves nothing.
-        let sizes = subviews.map { CanvasMetrics.whole($0.sizeThatFits(.unspecified)) }
-        let points = CanvasMetrics.resolve(zip(subviews, sizes).map { ($0[CanvasPlaceKey.self], $1, $0[CanvasPlacedKey.self]) })
-        let maxX = zip(points, sizes).map { $0.x + $1.width }.max() ?? 0
-        let maxY = zip(points, sizes).map { $0.y + $1.height }.max() ?? 0
-        return (points, CGSize(width: max(0, maxX), height: max(0, maxY)))
+    struct Place: Equatable {
+        var origin: CGPoint
+        var placed: Bool
+    }
+    var places: [Place]
+    struct Frame: Equatable {
+        var origin: CGPoint
+        var size: CGSize
+        var placed: Bool
+    }
+    struct Cache {
+        var frames: [Frame]
+        var points: [CGPoint]
+        var size: CGSize
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize { place(subviews).size }
+    func makeCache(subviews: Subviews) -> Cache {
+        plan(zip(subviews, places).map { Frame(origin: $1.origin, size: CanvasMetrics.whole($0.sizeThatFits(.unspecified)),
+                                             placed: $1.placed) })
+    }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let points = place(subviews).points
-        for (view, point) in zip(subviews, points) {
-            view.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), anchor: .topLeading, proposal: .unspecified)
+    private func plan(_ frames: [Frame]) -> Cache {
+        let points = CanvasMetrics.resolve(frames.map { ($0.origin, $0.size, $0.placed) })
+        var size = CGSize.zero
+        for (point, frame) in zip(points, frames) {
+            size.width = max(size.width, point.x + frame.size.width)
+            size.height = max(size.height, point.y + frame.size.height)
+        }
+        return Cache(frames: frames, points: points, size: size)
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        let frames = zip(subviews, places).map { Frame(origin: $1.origin, size: CanvasMetrics.whole($0.sizeThatFits(.unspecified)),
+                                                     placed: $1.placed) }
+        if frames != cache.frames { cache = plan(frames) }
+    }
+
+    /// Reuse measurements when only a place changes; the places are explicit layout inputs, not subview metadata.
+    private func refreshPlaces(_ cache: inout Cache, _ subviews: Subviews) {
+        var changed = false
+        for i in subviews.indices {
+            let origin = places[i].origin, placed = places[i].placed
+            if cache.frames[i].origin != origin || cache.frames[i].placed != placed {
+                cache.frames[i].origin = origin; cache.frames[i].placed = placed; changed = true
+            }
+        }
+        if changed { cache = plan(cache.frames) }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        refreshPlaces(&cache, subviews)
+        return cache.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        refreshPlaces(&cache, subviews)
+        for i in subviews.indices {
+            let point = cache.points[i]
+            subviews[i].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), anchor: .topLeading,
+                              proposal: ProposedViewSize(cache.frames[i].size))
         }
     }
 }
 
 /// A frame's nodes, one flat list, `gap` apart inside a group and `groupGap` between groups: a node that changes group in
-/// the frame stays the same view and moves.
+/// the frame stays the same view and moves. Measure only when the subviews or width change; regroup from those heights.
 struct CanvasFolderStack: Layout {
-    /// The cards' width: the frame's less the labels' gutter (`CanvasMetrics.cardWidth`).
     var width = CanvasMetrics.cardW
+    var groups: [CanvasGroup]
 
-    private func rows(_ subviews: Subviews) -> [(group: CanvasGroup, height: CGFloat, head: CGFloat)] {
-        subviews.map { ($0[CanvasGroupKey.self], CanvasMetrics.whole($0.sizeThatFits(.init(width: width, height: nil))).height, 0) }
+    struct Cache {
+        var groups: [CanvasGroup]
+        var tops: [CGFloat]
+        var heights: [CGFloat]
+        var size: CGSize
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = rows(subviews)
-        let tops = CanvasMetrics.folderPlacement(rows: rows).tops
-        return CGSize(width: width, height: zip(tops, rows).map { $0 + $1.height }.max() ?? 0)
+    func makeCache(subviews: Subviews) -> Cache {
+        plan(groups: groups,
+             heights: subviews.map { CanvasMetrics.whole($0.sizeThatFits(.init(width: width, height: nil))).height })
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let tops = CanvasMetrics.folderPlacement(rows: rows(subviews)).tops
-        for (view, top) in zip(subviews, tops) {
-            view.place(at: CGPoint(x: bounds.minX, y: bounds.minY + top), anchor: .topLeading,
-                       proposal: .init(width: width, height: nil))
+    private func plan(groups: [CanvasGroup], heights: [CGFloat]) -> Cache {
+        var tops: [CGFloat] = []
+        var y: CGFloat = 0
+        var last: CanvasGroup?
+        for (group, height) in zip(groups, heights) {
+            if let last { y += last == group ? CanvasMetrics.gap : CanvasMetrics.groupGap }
+            tops.append(y)
+            y += height
+            last = group
+        }
+        return Cache(groups: groups, tops: tops, heights: heights, size: CGSize(width: width, height: y))
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = makeCache(subviews: subviews) }
+
+    private func refreshGroups(_ cache: inout Cache, _ subviews: Subviews) {
+        if cache.size.width != width { cache = makeCache(subviews: subviews) }
+        else if groups != cache.groups { cache = plan(groups: groups, heights: cache.heights) }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        refreshGroups(&cache, subviews)
+        return cache.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        refreshGroups(&cache, subviews)
+        for i in subviews.indices {
+            subviews[i].place(at: CGPoint(x: bounds.minX, y: bounds.minY + cache.tops[i]), anchor: .topLeading,
+                              proposal: .init(width: width, height: cache.heights[i]))
         }
     }
 }

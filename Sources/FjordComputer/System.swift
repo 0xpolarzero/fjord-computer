@@ -569,6 +569,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let demo = CommandLine.arguments.contains("--demo")
         let window = AppWindowController(store: store)
         appWindow = window
+        if CommandLine.arguments.contains("routerCanvas") {
+            window.routerModel.pickCanvas()
+            window.navigator.go(.router)
+        }
         let hub = HubController(store: store, demo: demo)
         self.hub = hub
         // The window is the bar's other mode: while it is in front the bar is away, and closing it (or leaving it behind) puts the bar back.

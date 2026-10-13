@@ -122,7 +122,7 @@ struct CanvasFolderFrame: View {
                 .frame(height: 20).padding(.leading, CanvasMetrics.pad).padding(.bottom, CanvasMetrics.pad)
                 .frame(width: width, alignment: .leading)
         } else {
-            CanvasFolderStack(width: cardWidth) {
+            CanvasFolderStack(width: cardWidth, groups: nodes.map(\.group)) {
                 ForEach(nodes) { node in
                     Group {
                         if let item = node.item {
@@ -142,7 +142,6 @@ struct CanvasFolderFrame: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
                         model.canvas.nodeRects[node.id] = rect
                     }
-                    .canvasGroup(node.group)
                     // Left out by the chips: gone in place, its room kept, so nothing else moves.
                     .opacity(node.hidden ? 0 : 1)
                     .allowsHitTesting(!node.hidden)

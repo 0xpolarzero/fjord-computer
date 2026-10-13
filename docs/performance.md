@@ -122,6 +122,65 @@ first Open **304 ms** and first Handoff **23 ms** (`open,close x10`).
   inode/ctime, stat only the live sessions), `ClaudeMark`, `SessionIcons`, Settings' login-item and Accessibility reads, the
   Accessibility trust check behind modifier taps, the mouse-button event tap (its own thread and run loop).
 
+## Router canvas idle (October 13, 2026)
+
+Measured inside the `router-canvas` worktree, after merging main's 203 commits. Release binaries, macOS 26.5, the saved
+1480×940 pt window open on Router canvas, five seconds to settle, then `sample <pid> 3`. CPU is the process's cumulative
+CPU-time delta divided by wall time around `sample`; main-thread busy is the fraction of samples outside its run-loop
+Mach-port wait. These are demo measurements, not the original live data's reported 30–90% CPU / ~38% main-thread busy.
+
+| Build / change | CPU, one core | Main-thread busy | Hosting-layout samples |
+| --- | ---: | ---: | ---: |
+| Isolated `d2943a9`, Router demo on canvas | 6.73% | 183/2456 (7.45%) | 138 |
+| Merged canvas with layout caches, before the working-dot fix | 10.01% | 266/2566 (10.37%) | 168 |
+| Working dots on Core Animation | 3.05% | 71/2459 (2.89%) | 8 |
+| Picture keeper also backs off when capture is over budget | **0.53%** | **17/2606 (0.65%)** | **3** |
+
+The reproduced invalidation source was **`WorkingMark`'s 350 ms SwiftUI `TimelineView`**, used by the canvas's “The Router
+is working” notice. Its animation caused hosting layout and CA flush work even with no input. Working's Fjord loader and
+the activity-text sheen were already Core Animation layers. Temporary counters found only initial geometry writes
+(`topRoom`, content size, viewport/free room and first fit), not a sustained geometry-to-state feedback loop. The exact
+original live load was not reproduced with the smaller demo.
+
+The three dots now step on `CAShapeLayer` opacity keyframes, with their wall-clock phase preserved, stopping when detached,
+hidden or under Reduce Motion. Apple's [discrete keyframe mode](https://developer.apple.com/documentation/quartzcore/caanimationcalculationmode/discrete)
+uses one value per interval and one additional end key time; no SwiftUI clock runs for the dots. The remaining sampled
+work was mostly the idle picture keeper: it retried an over-budget capture every half second, redrawing expensive glances
+although it could never capture. That refusal now increases its interval to four seconds, just as a kept picture does.
+A failing regression first measured the stuck 0.5 s interval; the fix reaches 4 s without taking a picture.
+
+The canvas also carries main's memoized zones, counts, equatable cards and hidden-history policy:
+
+- Router-card copies compare a shared contents token first; all 22 stored fields replace it when changed, including nested
+  edits. Independently created or decoded cards retain value equality; no token enters the saved file.
+- Folder derivation and preferred packing are memoized on their full inputs, including names, colors, muted folders,
+  picks, search, filters, folds, frame sizes and hand positions. Stack order is indexed once per body, not searched per frame.
+- `CanvasBoard` and `CanvasFolderStack` share measured sizes between size requests and placement, proposing the same whole
+  sizes they measured. Group and hand-placement inputs are explicit Layout properties: the interaction regression caught
+  stale metadata-only cache updates before these were passed directly. Apple's [Layout cache lifecycle](https://developer.apple.com/documentation/swiftui/layout/updatecache(_:subviews:))
+  invalidates on layout/subview changes; cached row heights and frame places must still address the actual inputs.
+- Collision placement uses horizontal segment indexing and merged vertical intervals instead of pairwise rectangle scans.
+  Forty generated scenes match an exhaustive oracle; 1000 stacked frames resolve in about 3 ms in the debug regression.
+  A heap assigns shortest columns; a bounded search around the 16:10 crossing replaces trying every possible column count.
+  This keeps a deterministic near-screen shape, rather than promising the exhaustive global minimum for arbitrary heights.
+
+Final release `scripts/morph-timings.sh --scenario routerCanvas --steps "open,close x6"`:
+
+| Interval | p50 | p95 |
+| --- | ---: | ---: |
+| Open | **312 ms** | **316 ms** |
+| Close | **314 ms** | **318 ms** |
+| Open to first flush | 9 ms | 11 ms |
+| Close to first flush | 2 ms | 4 ms |
+| Bring in | 28 ms | 37 ms |
+| Handoff | 15 ms | 16 ms |
+
+No capture intervals appeared in that run. `--demo routerCanvas --open` selects the canvas directly using the Router demo's
+same data, so measurement does not depend on the last saved page or layout. The targeted run passed **64 tests in 14
+suites**; the final `scripts/test.sh` passed **1567 tests in 155 suites** in 45.733 s. Offscreen renders verified a narrow
+frame, a resized scrolling frame and an expanded working card. Temporary counters, samples, binaries and shots were
+removed and the bare binary's `FjordComputer` preferences restored.
+
 ## Rules for new code
 
 1. Nothing synchronous and expensive between a user's action and the first frame that answers it. If it must happen, do it
@@ -140,8 +199,6 @@ first Open **304 ms** and first Handoff **23 ms** (`open,close x10`).
 
 ## Known open items
 
-- The `router-canvas` branch (not on `main`) re-lays out the canvas continuously while the window is open and idle (30–90% of
-  a core in a live sample: `CanvasBoard.place`, `CanvasFolderStack.rows`). Fix it there before it merges.
 - The keeper's 30 ms budget means Retina machines keep half-scale pictures, so most openings fade (0.12 s) into the live
   window instead of cutting. A cheaper exact capture path would allow cuts.
 - Whether `NSGlassEffectView`'s `cornerRadius` through `animator()` is driven on the main thread is unverified; if it is, the

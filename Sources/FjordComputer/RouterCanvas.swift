@@ -157,6 +157,37 @@ final class RouterCanvasState {
     @ObservationIgnored var doneMemo: (query: String, revision: Int, cards: [RouterCard])?
     @ObservationIgnored private let defaults: UserDefaults?
 
+    struct FolderInputs: Equatable {
+        var store: ObjectIdentifier
+        var page: RouterPage
+        var done: [RouterCard]
+        var muted: [String]
+        var colors: [String: Int]
+        var names: [String: String]
+        var named: Set<String>?
+        var filter: Set<CanvasGroup>
+        var picked: Set<String>
+        var expanded: Set<String>
+        var searching: Bool
+    }
+    @ObservationIgnored var folderMemo: (inputs: FolderInputs, folders: [CanvasFolder])?
+
+    struct PackingFrame: Equatable {
+        var key: String
+        var closed: CGFloat
+    }
+    @ObservationIgnored private var packingMemo: (frames: [PackingFrame], positions: [String: CGPoint], places: [String: CGPoint])?
+
+    func packedPlaces(_ folders: [CanvasFolder]) -> [String: CGPoint] {
+        let frames = folders.map {
+            PackingFrame(key: $0.key, closed: max(CanvasMetrics.closedHeight($0, folded: folded($0)), sizes[$0.key]?.height ?? 0))
+        }
+        if let memo = packingMemo, memo.frames == frames, memo.positions == positions { return memo.places }
+        let places = CanvasMetrics.preferred(frames.map { ($0.key, $0.closed) }, placed: positions)
+        packingMemo = (frames, positions, places)
+        return places
+    }
+
     // Your messages on their way (RouterCanvasPending.swift).
     /// Your messages seen settled, or settled when the canvas came: those that flew, or never will. Nil while it is away.
     @ObservationIgnored var settled: Set<UUID>?
@@ -436,10 +467,16 @@ extension RouterModel {
     /// The canvas's frames on Now's zones as the search leaves them (`page`).
     func canvasFolders(_ store: Store, page: RouterPage) -> [CanvasFolder] {
         // Not Jev's highlight: it moves as you type, and the group would widen and narrow under you.
-        let picked = Set([selection, expandedNeed].compactMap { $0 })
-        return RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
-                                      name: store.folderName, color: store.projectColor, filter: canvas.filter,
-                                      picked: picked, expanded: canvas.expandedMore, showsAll: searching)
+        let inputs = RouterCanvasState.FolderInputs(store: ObjectIdentifier(store), page: page, done: canvasDone(store),
+            muted: store.agents.mutedFolders, colors: store.agents.folderColors, names: store.folderNames,
+            named: store.namedFoldersSeen, filter: canvas.filter, picked: Set([selection, expandedNeed].compactMap { $0 }),
+            expanded: canvas.expandedMore, searching: searching)
+        if let memo = canvas.folderMemo, memo.inputs == inputs { return memo.folders }
+        let folders = RouterCanvasModel.make(page: page, done: inputs.done, muted: Set(inputs.muted),
+            name: store.folderName, color: store.projectColor, filter: inputs.filter,
+            picked: inputs.picked, expanded: inputs.expanded, showsAll: inputs.searching)
+        canvas.folderMemo = (inputs, folders)
+        return folders
     }
 
     /// The card of Needs you shown in full: on the canvas only the one you opened (nothing opens by itself there), in the
@@ -628,15 +665,13 @@ struct CanvasContent: View {
     var body: some View {
         let canvas = model.canvas
         let folders = model.canvasFolders(store, page: page)
-        let places = CanvasMetrics.preferred(folders.map {
-            ($0.key, max(CanvasMetrics.closedHeight($0, folded: canvas.folded($0)), canvas.sizes[$0.key]?.height ?? 0))
-        }, placed: canvas.positions)
-        CanvasBoard {
+        let places = canvas.packedPlaces(folders)
+        let order = Dictionary(canvas.stack.enumerated().map { ($0.element, Double($0.offset + 1)) }, uniquingKeysWith: max)
+        CanvasBoard(places: folders.map { .init(origin: places[$0.key] ?? .zero, placed: canvas.positions[$0.key] != nil) }) {
             ForEach(folders) { folder in
                 CanvasFolderFrame(folder: folder, store: store, model: model, page: page)
                     .modifier(CanvasLift(drag: canvas.drag, key: folder.key,
-                                         order: Double((canvas.stack.firstIndex(of: folder.key) ?? -1) + 1)))
-                    .canvasPlace(places[folder.key] ?? .zero, placed: canvas.positions[folder.key] != nil)
+                                         order: order[folder.key] ?? 0))
             }
         }
         // Inside the camera's transform: a pan or a zoom moves nothing measured in it.
