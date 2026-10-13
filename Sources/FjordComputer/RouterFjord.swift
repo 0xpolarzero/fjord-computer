@@ -574,7 +574,7 @@ extension RouterTools {
         let now = Date()
         let changes = wanted.map { e in EntryChange(thing: e.id, before: store.marks[e.id], after: Self.marked(store.marks[e.id], e, state, now)) }
         let n = changes.count
-        let title = state == "restore" ? "Restored \(n)" : state == "done" ? "Archived \(n)" : "Marked \(n) \(state)"
+        let title = state == "restore" ? "Restored \(n)" : state == "done" ? "Archived \(n)" : "Marked \(n) \(state == "seen" ? "read" : state)"
         let change = FjordChange(title: title, patch: .marks(state: state, changes))
         // Bound to what your message named as the turn began, and counted over the turn: split into small calls, many still wait.
         let named = Set(wanted.filter { e in

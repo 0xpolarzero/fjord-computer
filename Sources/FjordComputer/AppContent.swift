@@ -2,8 +2,8 @@ import SwiftUI
 
 // What the app window shows for a destination, and the inbox list at full width.
 
-/// A tab of the inbox at the window's width: the same rows as the hub's (`EntryRow`: open, mark seen, archive, restore, the
-/// context menu), newest first, with the undo line after an archive and "Mark all as seen" in the toolbar.
+/// A tab of the inbox at the window's width: the same rows as the hub's (`EntryRow`: open, mark read, archive, restore, the
+/// context menu), newest first, with the undo line after an archive and "Mark all as read" in the toolbar.
 struct InboxListView: View {
     let store: Store
     let tab: InboxTab
@@ -12,6 +12,7 @@ struct InboxListView: View {
     @State private var search: InboxSearch
     @Environment(\.accessibilityReduceMotion) private var reduce
     @Environment(\.openApp) private var openApp
+    @Environment(\.windowArrival) private var arrival
 
     static let column: CGFloat = 880
     /// Room the header leaves at its start (the window's buttons, when the sidebar is away).
@@ -39,7 +40,7 @@ struct InboxListView: View {
             }
             InboxSearchField(search: search)
             if unread > 0 {
-                IconButton(symbol: "checkmark.circle", help: "Mark all as seen", detail: store.shortcut(.markAllRead).display,
+                IconButton(symbol: "envelope.open", help: "Mark all as read", detail: store.shortcut(.markAllRead).display,
                            size: IconButton.Size.header) {
                     withAnimation(Motion.fade.resolved(reduce: reduce)) { entries.filter(\.isUnread).forEach(store.markSeen) }
                 }
@@ -82,7 +83,12 @@ struct InboxListView: View {
 
     private func scroll(_ proxy: ScrollViewProxy, to request: ScrollRequest?) {
         guard let id = request?.id.dropFirst(2) else { return }
-        DispatchQueue.main.async { withAnimation(Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(String(id), anchor: .center) } }
+        DispatchQueue.main.async {
+            // While the window's content arrives, a jump (`WindowArrival`).
+            withAnimation(arrival?.active == true ? nil : Motion.follow.resolved(reduce: reduce)) {
+                proxy.scrollTo(String(id), anchor: .center)
+            }
+        }
     }
 
     private var title: String {
@@ -98,7 +104,7 @@ struct InboxListView: View {
         if all.isEmpty { return "" }
         if tab == .done { return "\(all.count) archived" }
         if store.category(tab)?.isCI == true { return "\(all.count) failing" }
-        return unread > 0 ? "\(unread) unread of \(all.count)" : "\(all.count) seen"
+        return unread > 0 ? "\(unread) unread of \(all.count)" : "\(all.count), all read"
     }
 
     private var empty: some View {
@@ -156,7 +162,6 @@ struct AppPage<Trailing: View, Content: View>: View {
     var column: (width: CGFloat, padding: CGFloat)
     @ViewBuilder let trailing: Trailing
     @ViewBuilder let content: Content
-    @State private var pageWidth: CGFloat = 0
 
     init(title: String, subtitle: String = "", leadingInset: CGFloat = 0,
          column: (width: CGFloat, padding: CGFloat) = AppPage.settingsColumn,
@@ -187,34 +192,65 @@ struct AppPage<Trailing: View, Content: View>: View {
     static var inboxColumn: (width: CGFloat, padding: CGFloat) { (InboxListView.column, 20) }
     static var settingsColumn: (width: CGFloat, padding: CGFloat) { (680 - 2 * CDS.Settings.pagePadX, CDS.Settings.pagePadX) }
 
-    /// From the page's edges to its content column's.
-    private var columnInset: CGFloat {
+    /// From the page's edges to its content column's, on a page `pageWidth` wide.
+    static func columnInset(_ column: (width: CGFloat, padding: CGFloat), pageWidth: CGFloat) -> CGFloat {
         guard pageWidth > 0 else { return column.padding }
         return max(column.padding, (pageWidth - min(column.width, pageWidth - 2 * column.padding)) / 2)
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(CDS.sans(CDS.Density.compact.body.0, .medium))
-                .foregroundStyle(CDS.Text.primary)
-                .lineLimit(1)
-                .accessibilityAddTraits(.isHeader)
-            if !subtitle.isEmpty {
-                Text(subtitle).font(CDS.sans(CDS.Density.compact.footnote.0)).foregroundStyle(CDS.Text.muted).lineLimit(1)
-            }
-            Spacer(minLength: 24)
-            trailing
-        }
         // On the content column's edges, so the title starts where the content does and the buttons end where it ends;
-        // the title 14 past the window's buttons at least when they are in the header.
-        .padding(.leading, max(columnInset, leadingInset + 14))
-        .padding(.trailing, columnInset)
+        // the title 14 past the window's buttons at least when they are in the header. Worked out from the width the
+        // header is given as it is laid out, so the first layout has them right (no measuring, no second pass).
+        HeaderInsets(column: column, leadingInset: leadingInset) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(CDS.sans(CDS.Density.compact.body.0, .medium))
+                    .foregroundStyle(CDS.Text.primary)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(CDS.sans(CDS.Density.compact.footnote.0)).foregroundStyle(CDS.Text.muted).lineLimit(1)
+                }
+                Spacer(minLength: 24)
+                trailing
+            }
+        }
         .frame(height: CDS.TitleBar.header)
         .frame(maxWidth: .infinity)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
         // The page's own ground behind its title line, so nothing scrolled under it shows through the title.
         .background(CDS.Surface.s1)
+    }
+}
+
+/// A page header's line, inset from the width it is given to the page's content column (`AppPage.columnInset`), its
+/// leading inset at least `leadingInset + 14`: as wide as it is offered.
+private struct HeaderInsets: Layout {
+    let column: (width: CGFloat, padding: CGFloat)
+    let leadingInset: CGFloat
+
+    private func insets(_ width: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
+        let inset = AppPage<EmptyView, EmptyView>.columnInset(column, pageWidth: width)
+        return (max(inset, leadingInset + 14), inset)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let line = subviews.first else { return .zero }
+        guard let width = proposal.width else {
+            let natural = line.sizeThatFits(.unspecified)
+            let pad = insets(0)
+            return CGSize(width: natural.width + pad.leading + pad.trailing, height: natural.height)
+        }
+        let pad = insets(width)
+        let size = line.sizeThatFits(ProposedViewSize(width: max(0, width - pad.leading - pad.trailing), height: proposal.height))
+        return CGSize(width: width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let line = subviews.first else { return }
+        let pad = insets(bounds.width)
+        line.place(at: CGPoint(x: bounds.minX + pad.leading, y: bounds.midY), anchor: .leading,
+                   proposal: ProposedViewSize(width: max(0, bounds.width - pad.leading - pad.trailing), height: bounds.height))
     }
 }
 

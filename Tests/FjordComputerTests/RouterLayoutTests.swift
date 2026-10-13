@@ -51,17 +51,21 @@ import Testing
             await waitUntil { !pages().isEmpty }
             await waitUntilSteady(turns: 8) { pages().map { [Int($0.minX), Int($0.width), Int($0.height)] } }
             let shown = pages().sorted { $0.minX < $1.minX }
-            // Now and History, nothing else scrolling down the page.
-            #expect(shown.count == 2, "Now and History: \(shown)")
-            guard shown.count == 2 else { continue }
             if width == 1100 {
+                // Now and History, nothing else scrolling down the page.
+                #expect(shown.count == 2, "Now and History: \(shown)")
+                guard shown.count == 2 else { continue }
                 #expect(shown[0].maxX <= shown[1].minX + 1, "side by side: \(shown)")
             } else {
-                // One over the other, each the page's width: the history kept under Now, hidden, where it was.
-                #expect(shown.allSatisfy { $0.width > width - 80 }, "each the page's width: \(shown)")
+                // Now alone, the page's width: the history isn't built until it is asked for.
+                #expect(shown.count == 1 && shown.allSatisfy { $0.width > width - 80 }, "Now alone: \(shown)")
                 model.show(.history)
                 await waitUntilSteady(turns: 8) { pages().map { [Int($0.minX), Int($0.width), Int($0.height)] } }
                 #expect(pages().count == 1, "History alone: \(pages())")
+                // Back to Now: one over the other, each the page's width, the history kept under Now, hidden, where it was.
+                model.show(.now)
+                await waitUntilSteady(turns: 8) { pages().map { [Int($0.minX), Int($0.width), Int($0.height)] } }
+                #expect(pages().count == 2 && pages().allSatisfy { $0.width > width - 80 }, "each the page's width: \(pages())")
             }
         }
     }

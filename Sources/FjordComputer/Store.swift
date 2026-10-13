@@ -11,7 +11,13 @@ final class Store {
 
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).
     var categories: [InboxCategory] = InboxStore.defaultCategories {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1; logCategories(from: oldValue) }
+        didSet {
+            // A name, a symbol or a colour (each keystroke in the editor) changes what the inbox is called, not what is
+            // in it: it isn't worked out again for that.
+            if InboxStore.evaluatesAlike(categories, oldValue) { inboxDisplayRevision &+= 1 } else { inboxRevision &+= 1 }
+            persistedRevision &+= 1
+            logCategories(from: oldValue)
+        }
     }
     var groups: [InboxGroup] = [] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1; logGroups(from: oldValue) }
@@ -186,40 +192,69 @@ final class Store {
     @ObservationIgnored var defaultBranchesCheckedAt: [String: Date] = [:]
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
+    /// Bumped when only what the categories are called changed (names, symbols, colours, sections, switches): what is
+    /// searched by their names is made again, the entries aren't.
+    private(set) var inboxDisplayRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()
+    /// How many rules of each category are off, as of an `inboxRevision` (`rulesOff`).
+    @ObservationIgnored var rulesOffMemo: (revision: Int, counts: [UUID: Int])?
     /// Time alone changed what matches (InboxStore.swift): what reads the inbox reads it again.
     func inboxTimePassed() { inboxRevision &+= 1 }
     /// Done, taken back with ⌘Z or the inbox's undo line.
     let undoStack = UndoStack()
     var settings = AppSettings() {
         didSet {
+            if (settings.triage == true) != triageOn { triageOn = settings.triage == true }
             persistedRevision &+= 1
             armSnoozeExpiry()
         }
     }
 
+    /// Triage's switch (`settings.triage`; the Router's is `routerOn`), kept in step by `settings` and written only when it
+    /// changes: what reads it (the bar, the window's root) doesn't redraw with every other setting.
+    private(set) var triageOn = false
+    /// The Router's switch: on only while Fjord Computer reads Claude's sessions too (`router.enabled && agents.enabled`,
+    /// which follow each other). Kept in step by `router` and `agents` and written only when it changes, so what reads it
+    /// doesn't redraw with every read of Claude's sessions, as reading those two whole would.
+    private(set) var routerOn = false
+    private func updateRouterOn() {
+        if (router.enabled && agents.enabled) != routerOn { routerOn = router.enabled && agents.enabled }
+    }
+
     /// Claude sessions extension (see Agents.swift).
     var agents = AgentsState() {
         didSet {
+            updateRouterOn()
             agentCache = nil
+            agentEntryIndex = nil
             persistedRevision &+= 1
+            shownRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
+            refreshSessionRows(sessionRowsChanged(from: oldValue))
         }
     }
     /// The Router (see Router.swift): its cards, its decision log and the changes it made.
     var router = RouterState() {
         didSet {
+            updateRouterOn()
             routerRevision &+= 1
             persistedRevision &+= 1
             if oldValue.cards != router.cards { countCardChanges(from: oldValue.cards) }
             // Worked out again only if what it is made of changed: a session's stamps or an open card changing leave it (and
             // what draws it) alone.
             if oldValue.decisions != router.decisions || oldValue.summaries != router.summaries || oldValue.cards != router.cards {
-                let next = RouterPage.history(cards: router.cards, decisions: router.decisions, summaries: router.summaries)
-                if next != routerHistory { routerHistory = next }
+                // Held Claude reads taken in together (`batchingClaudeReads`): worked out once, at their end.
+                if routerHistoryDeferred { routerHistoryStale = true } else { rebuildRouterHistory() }
             }
         }
+    }
+    @ObservationIgnored var routerHistoryDeferred = false
+    @ObservationIgnored var routerHistoryStale = false
+
+    func rebuildRouterHistory() {
+        let next = RouterPage.history(cards: router.cards, decisions: router.decisions, summaries: router.summaries)
+        if next != routerHistory { routerHistory = next }
     }
     /// The Router page's history (see `RouterPage.history`), worked out when the router changes and only then: the page
     /// reads it on every redraw.
@@ -237,7 +272,9 @@ final class Store {
     /// How many times each card has changed (see `countCardChanges`).
     @ObservationIgnored var cardRevisions: [String: Int] = [:]
     /// The question forms Fjord Computer's hook holds, by Claude Code session id (`ClaudeSession.cliID`).
-    var pendingForms: [String: PendingForm] = [:]
+    var pendingForms: [String: PendingForm] = [:] {
+        didSet { shownRevision &+= 1 }
+    }
     /// Why installing or removing the form hook failed, if it did.
     var routerHookError: String?
     /// The form hook as last checked (nil until the Router has been switched on in this run).
@@ -250,26 +287,53 @@ final class Store {
     /// out when the folders change, not by each view that names a project. Only a change in it redraws what reads it.
     var folderNames: [String: String] = [:] {
         // The history is searched by its cards' project names too.
-        didSet { routerSearchRevision &+= 1 }
+        didSet {
+            routerSearchRevision &+= 1
+            // The rows name each session's project.
+            agentCache = nil
+            refreshSessionRows(sessionRowsChanged(names: oldValue))
+        }
     }
+    /// Names of folders no session is in, worked out among `namedFoldersSeen` (`folderName`); cleared when that changes.
+    @ObservationIgnored var folderNameMisses: [String: String] = [:]
+    /// Each session's row as `sessionRow` gives it, in a box of its own (see `refreshSessionRows`).
+    @ObservationIgnored var sessionRowBoxes: [String: SessionRowBox] = [:]
+    /// The rows to make again once a read of Claude is taken in (`batchingSessionRows`); nil outside one.
+    @ObservationIgnored var sessionRowsPending: Set<String>?
+    /// The agents' entries by session, made when a row is and dropped with every change to `agents`.
+    @ObservationIgnored var agentEntryIndex: [String: AgentEntry]?
     /// The folders `folderNames` was worked out for: the work is skipped while they are the same.
     @ObservationIgnored var namedFoldersSeen: Set<String>?
     /// The git repos in your code folders, kept fresh (CodeFolders.swift).
     @ObservationIgnored lazy var codeFolders = CodeFolderScanner(store: self)
     var claudeSessions: [String: ClaudeSession] = [:] {
         didSet {
+            claudeSessionsRevision &+= 1
+            shownRevision &+= 1
             agentCache = nil
             refreshFolderNames()
+            refreshSessionRows(sessionRowsChanged(oldValue, claudeSessions))
+            pruneSessionRows()
+            updateRouterTasks()
         }
     }
+    /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
+    @ObservationIgnored private(set) var claudeSessionsRevision = 0
+    /// Bumped on every change to what the window shows of Claude besides the inbox and the Router (the sessions, their
+    /// activity, task titles, the agents, the forms pending, a recent session ageing out): the window's kept picture is not forgiven
+    /// a small difference across one (`AppTransition.Marks`). Unobserved.
+    @ObservationIgnored private(set) var shownRevision = 0
     var claudeActivity: [String: ClaudeActivity] = [:] {
         didSet {
+            shownRevision &+= 1
             agentCache = nil
+            refreshSessionRows(sessionRowsChanged(oldValue, claudeActivity))
         }
     }
     /// Bumped when a recent session ages out of the list (see `Store.recentWindow`).
     var recentTick = 0 {
         didSet {
+            shownRevision &+= 1
             agentCache = nil
         }
     }
@@ -277,8 +341,19 @@ final class Store {
     /// Subagents and commands still running in sessions whose turn is over.
     var claudeTasks: [String: [ClaudeTask]] = [:] {
         didSet {
+            shownRevision &+= 1
             agentCache = nil
+            refreshSessionRows(sessionRowsChanged(oldValue, claudeTasks))
+            updateRouterTasks()
         }
+    }
+    /// `routerTasks` as last worked out (`updateRouterTasks`, as the tasks or the sessions change), and a revision bumped
+    /// only when it changed: what reads it observes that rather than every session.
+    @ObservationIgnored var routerTasksKept: [String: [ClaudeTask]] = [:]
+    private(set) var routerTasksRevision = 0
+    func bumpRouterTasks(_ tasks: [String: [ClaudeTask]]) {
+        routerTasksKept = tasks
+        routerTasksRevision &+= 1
     }
     /// Filled in right after launch (see `start`): the Keychain read stays off the main thread.
     var hasTypesafeKey = false
@@ -316,11 +391,19 @@ final class Store {
     var suggestions: [String] = []
 
     @ObservationIgnored let gh = GitHubClient()
+    /// What the window's morph holds the store's results back with (`MotionGate`). Under test, a gate of the store's own,
+    /// which only a test that holds it holds: the app's, which window tests hold, would hold every store's work in the suites
+    /// running beside them.
+    @ObservationIgnored var motionGate = UnderTest.isRunning ? MotionGate.Gate() : MotionGate.shared {
+        didSet { claudeFeed.gate = motionGate }
+    }
     @ObservationIgnored let notifier = Notifier()
     @ObservationIgnored let updater = Updater()
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var hubOpen = false
+    /// The hub is open as the app window, not only a peek (`setHubOpen`).
+    @ObservationIgnored private var hubWindowOpen = false
     @ObservationIgnored private var systemAsleep = false
     @ObservationIgnored private var pollNow = false
     /// Where the token comes from; replaced in tests (the real one can spawn `gh`).
@@ -331,13 +414,13 @@ final class Store {
     /// A token was just saved or taken away: the sign-in that fails next is its result and is said aloud (a poll's isn't).
     @ObservationIgnored private(set) var awaitingSignIn = false
     @ObservationIgnored private var lastAuthAttempt: Date?
-    @ObservationIgnored private var authRetry = false
+    @ObservationIgnored var authRetry = false
     @ObservationIgnored private var refreshQueued = false
     /// Signed out, polls look for a new token this rarely: each look can spawn `gh auth token`.
     private static let authBackoff: TimeInterval = 300
     @ObservationIgnored private var sleeper: Task<Void, Never>?
     /// When the sleeper is due to wake.
-    @ObservationIgnored private var sleeperWakes: Date?
+    @ObservationIgnored private(set) var sleeperWakes: Date?
     /// The reset an immediate check was already made for (see `pollAll`): never twice for the same one, so a check that
     /// fails (offline, keeping the spent budget and that reset) can't start another at once, and another.
     @ObservationIgnored private var retriedReset: Date?
@@ -411,7 +494,12 @@ final class Store {
     /// The app's version, which the plugin's is stamped with.
     @ObservationIgnored var routerAppVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0-dev"
     @ObservationIgnored let activityReader = Claude.ActivityReader()
-    @ObservationIgnored lazy var claudeFeed = ClaudeFeed(activityReader: activityReader)
+    @ObservationIgnored lazy var claudeFeed: ClaudeFeed = {
+        let feed = ClaudeFeed(activityReader: activityReader)
+        feed.batched = { [weak self] body in if let self { self.batchingClaudeReads(body) } else { body() } }
+        feed.gate = motionGate
+        return feed
+    }()
     /// Derived rows, rebuilt after any change to the agents or what was read (see Agents.swift).
     @ObservationIgnored var agentCache: AgentCache?
     /// Tells a read of the app that was asked for before you changed something from one asked for after.
@@ -458,7 +546,7 @@ final class Store {
         return UnderTest.refuses("the saved state (Application Support/Fjord Computer/state.json)") ? nil : Self.fileURL
     }
 
-    private static let fileURL: URL = {
+    nonisolated private static let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Fjord Computer", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -467,10 +555,31 @@ final class Store {
 
     // MARK: Lifecycle
 
+    /// `load()`, then `startServices()`: launch can run them a turn apart (the bar shown between them).
     func start() {
         load()
+        wireNotifications()
+        startServices()
+    }
+
+    /// The banners' clicks routed to the store and the notification center's delegate set: at launch, before it finishes
+    /// (a click that launched the app is delivered then) and before anything chains its own routing onto `notifier.onOpen`
+    /// (`RouterBanners.attach`), which `startServices` leaves alone.
+    func wireNotifications() {
         notifier.onOpen = { [weak self] id, url in self?.openNotification(id: id, url: url) }
-        notifier.setup()
+        notifier.attach()
+    }
+
+    /// Everything that runs once the state is loaded (`load()`) and the banners wired (`wireNotifications()`): asking for
+    /// banners, updates, the sleep observer, GitHub's polling, Claude's sessions, the Router, the code folders and the
+    /// Keychain's read.
+    func startServices() {
+        if !UnderTest.isRunning {
+            ClaudeMark.warm()
+            // The icons this Mac can draw (some thousand symbol lookups), worked out before an icon is first picked.
+            SessionIcons.warm()
+        }
+        notifier.requestAuthorization()
         updater.automatic = { [weak self] in self?.settings.checkUpdates ?? true }
         updater.skipped = { [weak self] in self?.settings.skippedVersion }
         updater.onSkip = { [weak self] in self?.settings.skippedVersion = $0 }
@@ -642,12 +751,25 @@ final class Store {
         if isSyncing { refreshQueued = true } else { Task { await pollAll() } }
     }
 
-    /// The hub being open means someone is looking: sync now if stale, and poll faster meanwhile.
-    func setHubOpen(_ open: Bool) {
-        guard open != hubOpen else { return }
+    /// The hub being open means someone is looking: poll faster meanwhile, and, once the window is open (`window`), sync now
+    /// if stale. A peek (the bar hovered, `window` false) syncs nothing at once: its rows would shuffle under the pointer
+    /// when the answer came. The sleeper set for the longer interval is set again for the shorter once the window's morph
+    /// has played (`MotionGate`), so no poll's work starts under it unless the inbox is stale.
+    func setHubOpen(_ open: Bool, window: Bool = true) {
+        let windowWas = hubWindowOpen
+        hubWindowOpen = open && window
+        guard open != hubOpen || hubWindowOpen != windowWas else { return }
         hubOpen = open
-        sleeper?.cancel()
-        guard open, !isSyncing else { return }
+        // The window opened (not a peek, which polls nothing at once): once its morph has played, a sleeper due later than
+        // the open hub's interval from the last poll is woken, and sleeps again for the shorter one.
+        if hubWindowOpen, !windowWas {
+            motionGate.whenStill { [weak self] in
+                guard let self, self.hubWindowOpen, let wakes = self.sleeperWakes,
+                      wakes > (self.lastSync ?? .distantPast).addingTimeInterval(self.effectivePollInterval) else { return }
+                self.sleeper?.cancel()
+            }
+        }
+        guard hubWindowOpen, !windowWas, !isSyncing else { return }
         // Signed out for want of a token, `gh auth login` may have been run since: look again, however recent the last poll.
         if awaitsToken || Date().timeIntervalSince(lastSync ?? .distantPast) > 60 { refreshNow() }
     }
@@ -729,9 +851,12 @@ final class Store {
         guard let file else { return }
         // Nothing read: nothing was fetched for any category.
         fetchedFor = .categories([], [])
+        // Read and decoded off the main thread at launch, when it was (`readSavedStateEarly`).
+        let early = Self.early.take(file)
         let data: Data
         do {
-            guard let read = try Self.readExisting(file) else { loadActions(); return }
+            let bytes = try early.map { try $0.data.get() } ?? Self.readExisting(file)
+            guard let read = bytes else { loadActions(); return }
             data = read
         } catch {
             // There but unreadable (its mode, say): not fresh state. Nothing is written over it until it can be read and
@@ -743,9 +868,7 @@ final class Store {
             loadActions(keepingAside: true)
             return
         }
-        let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
-        guard let state = try? dec.decode(PersistedState.self, from: data) else {
+        guard let state = early.map({ $0.state }) ?? Self.decodeState(data) else {
             keepAside(file, data, dropped: ["everything"])
             loadActions(keepingAside: true)
             return
@@ -782,6 +905,59 @@ final class Store {
         // Once the login, marks and actions' records are in: carried during the load, a cached rating or Done was lost.
         loading = false
         carryAssignmentStamps(seenBefore: things)
+    }
+
+    /// The saved state as decoded from what the file held; nil when it doesn't decode.
+    nonisolated static func decodeState(_ data: Data) -> PersistedState? {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return try? dec.decode(PersistedState.self, from: data)
+    }
+
+    /// The saved state as read (what `readExisting` gave, or its error) and decoded off the main thread.
+    struct SavedRead: @unchecked Sendable {
+        let file: URL
+        let data: Result<Data?, Error>
+        let state: PersistedState?
+    }
+
+    /// Starts reading and decoding the user's saved state on a background queue, at launch's first line (beside the fonts):
+    /// the first `load()` of that file takes it, waiting for it if it isn't done, rather than decoding half a megabyte of
+    /// JSON on the main thread. Nothing writes the file before that load.
+    nonisolated static func readSavedStateEarly(at file: URL? = nil) { early.start(file ?? fileURL) }
+    nonisolated private static let early = EarlyRead()
+
+    private final class EarlyRead: @unchecked Sendable {
+        private let lock = NSLock()
+        /// The read under way, as a work item: the main thread waiting on it (`take`) lends it its priority, which a
+        /// semaphore wouldn't.
+        private var pending: (file: URL, work: DispatchWorkItem)?
+        private var result: SavedRead?
+
+        func start(_ file: URL) {
+            let work = DispatchWorkItem(qos: .userInteractive, flags: .enforceQoS) { [self] in
+                let data = Result { try Store.readExisting(file) }
+                let state = (try? data.get()).flatMap { $0 }.flatMap(Store.decodeState)
+                lock.withLock { result = SavedRead(file: file, data: data, state: state) }
+            }
+            guard lock.withLock({ () -> Bool in
+                guard pending == nil else { return false }
+                pending = (file, work)
+                return true
+            }) else { return }
+            DispatchQueue.global(qos: .userInteractive).async(execute: work)
+        }
+
+        /// Once: the early read of `file`, waited for; nil when none was begun for it.
+        func take(_ file: URL) -> SavedRead? {
+            guard let begun = lock.withLock({ () -> (file: URL, work: DispatchWorkItem)? in
+                guard let begun = pending, begun.file == file else { return nil }
+                pending = nil
+                return begun
+            }) else { return nil }
+            begun.work.wait()
+            return lock.withLock { defer { result = nil }; return result }
+        }
     }
 
     /// A file read only in part is copied aside (`state.json.bak-<date>`) before anything is written over it: what this
@@ -1077,10 +1253,15 @@ final class Store {
         // What Settings changes while this waits (on the token found, or on /user) is about another token: nothing of it is kept.
         let asked = credentialsChanged
         if gh.token == nil || foundAt != credentialsChanged {
+            let attemptBefore = lastAuthAttempt
             lastAuthAttempt = Date()
             let find = resolveToken
             let resolved = await Task.detached(operation: find).value
-            guard asked == credentialsChanged else { return }
+            // What it found is said once the window's morph has played (`MotionGate`).
+            await motionGate.still()
+            // Its poll cancelled meanwhile: nothing was found as far as the backoff goes, so the next poll looks again.
+            if Task.isCancelled { lastAuthAttempt = attemptBefore }
+            guard asked == credentialsChanged, !Task.isCancelled else { return }
             guard let (token, source) = resolved else {
                 gh.token = nil
                 me = nil
@@ -1093,15 +1274,12 @@ final class Store {
             tokenSource = source
             foundAt = asked
         }
+        let user: GHUser
         do {
-            let user = try await gh.get("/user", as: GHUser.self)
-            guard asked == credentialsChanged else { return }
-            me = user
-            authError = nil
-            awaitingSignIn = false
-            unreachable = false
+            user = try await gh.get("/user", as: GHUser.self)
         } catch {
-            guard asked == credentialsChanged else { return }
+            await motionGate.still()
+            guard asked == credentialsChanged, !Task.isCancelled else { return }
             if error is URLError {
                 // Only a missing or refused token is a sign-in problem: an earlier one is not this attempt's.
                 authError = nil
@@ -1111,7 +1289,14 @@ final class Store {
             me = nil
             unreachable = false
             signInFailed(error.localizedDescription)
+            return
         }
+        await motionGate.still()
+        guard asked == credentialsChanged, !Task.isCancelled else { return }
+        me = user
+        authError = nil
+        awaitingSignIn = false
+        unreachable = false
     }
 
     /// Sets the sign-in problem. The editor in Settings closes once the Keychain has a token, before GitHub answers, so the
@@ -1168,10 +1353,29 @@ final class Store {
     // MARK: Polling
 
     /// Nothing with Triage off, a refresh asked for meanwhile included.
+    /// Started, and its end said (`isSyncing`, `lastSync`, a token GitHub refused), once the window's morph has played
+    /// (`MotionGate`): all of it is observed.
+    /// A poll whose task was cancelled meanwhile (the loop started again) commits nothing, and lets go of `isSyncing`.
     func pollAll() async {
-        guard triageOn, !isSyncing else { return }
+        await motionGate.still()
+        guard !Task.isCancelled, triageOn, !isSyncing else { return }
         isSyncing = true
-        defer {
+        let synced = await pollOnce()
+        await motionGate.still()
+        guard !Task.isCancelled else {
+            isSyncing = false
+            if refreshQueued {
+                refreshQueued = false
+                Task { await pollAll() }
+            }
+            return
+        }
+        if synced, gh.tokenRejected { dropRejectedToken() }
+        finishPoll()
+    }
+
+    private func finishPoll() {
+        do {
             isSyncing = false
             lastSync = Date()
             if rateRemaining != gh.rateRemaining { rateRemaining = gh.rateRemaining }
@@ -1193,19 +1397,25 @@ final class Store {
                 Task { await pollAll() }
             }
         }
+    }
+
+    /// One poll: the sign-in, then the inbox's refresh; whether it got that far.
+    private func pollOnce() async -> Bool {
         // Signed out: look for a token when asked (Retry, a refresh) or once the backoff has passed. One already held is
         // asked about at every poll: that is a request, not a look in the Keychain and `gh`.
         let asked = authRetry
         authRetry = false
+        // Cancelled (the loop started again): a Retry asked for is still to be made by the next poll.
+        defer { if asked, Task.isCancelled { authRetry = true } }
         // A 401 from outside a poll (adding a repo, suggestions) left the token and who it was cached.
         if gh.tokenRejected { dropRejectedToken() }
         if me == nil, asked || gh.token != nil || Date().timeIntervalSince(lastAuthAttempt ?? .distantPast) >= Self.authBackoff {
             await authenticate()
         }
         // Switched off while it signed in: nothing is fetched.
-        guard me != nil, triageOn else { return }
-        defer { if gh.tokenRejected { dropRejectedToken() } }
+        guard me != nil, triageOn else { return false }
         await syncInbox(manual: asked)
+        return true
     }
 
     /// How long a repo's default branch is taken as known before it is looked up again (an unchanged answer is a 304).
@@ -1266,8 +1476,9 @@ final class Store {
         async let statusReq = branchStatuses(name, target: sha, branch: branch)
         let ((checks, checksRead), (combined, statusesRead)) = try await (checksReq, statusReq)
         // Runs not all read are like checks not all read: what isn't read may still run.
-        let reading = Self.readCI(runs: runs, sha: sha, checks: checks, combined: combined,
-                                  complete: checksRead && statusesRead && runsRead)
+        // Folded off the main thread.
+        let reading = await InboxSync.foldCI(runs: runs, sha: sha, checks: checks, combined: combined,
+                                             complete: checksRead && statusesRead && runsRead)
         let title = runs.first { $0.headSha == sha }?.displayTitle ?? head.headline
         return CIStatus(branch: current, sha: sha, url: URL(string: "https://github.com/\(name)/commit/\(sha)"),
                         checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows,

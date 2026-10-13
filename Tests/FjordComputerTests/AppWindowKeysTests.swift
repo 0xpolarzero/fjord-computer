@@ -306,7 +306,7 @@ import Testing
         // A row the search hides is left alone.
         r.hub.selection = r.store.entries.first { $0.thing.title == "Gamma" }.map { "i:" + $0.id }
         #expect(!r.keys.key(key(kVK_Return), responder: field))
-        // Mark all seen in a search is for the results.
+        // Mark all as read in a search is for the results.
         r.hub.selection = nil
         #expect(r.keys.key(key(kVK_Space, " ", .option), responder: field))
         #expect(r.store.unreadCount(r.category) == 2)

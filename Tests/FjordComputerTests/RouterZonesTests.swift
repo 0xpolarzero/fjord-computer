@@ -24,7 +24,7 @@ import Testing
         #expect(RouterModel().folded == RouterZone.foldedAtFirst)
     }
 
-    @Test func thePaneFollowsWhatYouPickAndTheRouterAnswersInTheHistory() throws {
+    @Test func thePaneFollowsWhatYouPickAndStaysWhereYouSendFrom() throws {
         let store = demo()
         let model = RouterModel()
         let open = try #require(store.routerZones.needs.first)
@@ -36,14 +36,15 @@ import Testing
         #expect(model.pane == .history)
         model.jump(to: .working)
         #expect(model.pane == .now && model.zoneRequest?.id == "working")
-        // A reply to a card stays in Now; a message to the Router goes to its conversation.
+        // A message stays in Now, where its pill flies to where it went (`RouterFlights`): a reply to a card, and one to the
+        // Router, whose answer lands in the history once it is there.
         model.reply(to: open.id, store: store)
         model.draft = "go on"
         model.send(store: store)
         #expect(model.pane == .now)
         model.draft = "what needs me?"
         model.send(store: store)
-        #expect(model.pane == .history)
+        #expect(model.pane == .now)
     }
 
     @Test func aSectionsChipOpensItAndGoesThereThenFoldsIt() {

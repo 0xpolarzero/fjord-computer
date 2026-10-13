@@ -42,12 +42,75 @@ func shortAgo(_ date: Date, now: Date = Date()) -> String {
     if s < 3600 { return "\(s / 60)m" }
     if s < 86400 { return "\(s / 3600)h" }
     if s < 7 * 86400 { return "\(s / 86400)d" }
-    return date.formatted(.dateTime.month(.abbreviated).day())
+    return TimeTexts.cached(date, .day) { $0.formatted(.dateTime.month(.abbreviated).day()) }
 }
 
 /// The time an age stands for, shown on hovering it: the clock time today, with the date before.
 func exactTime(_ date: Date) -> String {
-    date.formatted(date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated, time: .shortened)
+    TimeTexts.cached(date, .exact) {
+        $0.formatted(date: Calendar.current.isDateInToday($0) ? .omitted : .abbreviated, time: .shortened)
+    }
+}
+
+/// The dates the lists write out (a line's time on hover and in what VoiceOver says, an old age's day), each formatted once:
+/// a history line asks for its time twice each time it is drawn, and every line is drawn again on the minute. Kept until the
+/// day ends (what "today" leaves out changes then), or the time zone, the locale, the clock, the day or the 12/24-hour
+/// preference changes; at most a few thousand; the main thread's alone (elsewhere, formatted).
+enum TimeTexts {
+    enum Kind { case exact, day }
+    nonisolated(unsafe) private static var exact: [Date: String] = [:]
+    nonisolated(unsafe) private static var days: [Date: String] = [:]
+    nonisolated(unsafe) private static var until = Date.distantPast
+    nonisolated(unsafe) private static var watching = false
+
+    static func cached(_ date: Date, _ kind: Kind, _ make: (Date) -> String) -> String {
+        guard Thread.isMainThread else { return make(date) }
+        if !watching { watch() }
+        let now = Date()
+        if now >= until {
+            exact = [:]
+            days = [:]
+            until = dayEnd(after: now, calendar: .current)
+        }
+        if let hit = kind == .exact ? exact[date] : days[date] { return hit }
+        let text = make(date)
+        switch kind {
+        case .exact:
+            if exact.count > 4000 { exact = [:] }
+            exact[date] = text
+        case .day:
+            if days.count > 4000 { days = [:] }
+            days[date] = text
+        }
+        return text
+    }
+
+    /// The next midnight after `now` in `calendar`: a day isn't always 24 hours (daylight saving time).
+    static func dayEnd(after now: Date, calendar: Calendar) -> Date {
+        let start = calendar.startOfDay(for: now)
+        return calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86400)
+    }
+
+    /// Everything formatted is formatted again on its next ask.
+    static func invalidate() {
+        guard Thread.isMainThread else { return DispatchQueue.main.async { invalidate() } }
+        until = .distantPast
+    }
+
+    private static func watch() {
+        watching = true
+        let center = NotificationCenter.default
+        for name: Notification.Name in [.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification,
+                                        .NSSystemClockDidChange, .NSCalendarDayChanged] {
+            center.addObserver(forName: name, object: nil, queue: .main) { _ in invalidate() }
+        }
+        // The 12/24-hour and date formats chosen in System Settings.
+        for name in ["AppleTimePreferencesChangedNotification", "AppleDatePreferencesChangedNotification"] {
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name(name), object: nil, queue: .main) { _ in
+                invalidate()
+            }
+        }
+    }
 }
 
 /// `shortAgo` for a sentence: "just now", "3m ago", "on Sep 28" (never "now ago" or "Sep 28 ago").
@@ -95,11 +158,19 @@ private struct IconButtonLabel: View {
     @Environment(\.hoverFillHovering) private var hover
 
     var body: some View {
-        // Claude's 16pt glyph (wght 533) as an SF Symbol; secondary ink, white on hover (`.df-chrome-btn`).
-        Image(systemName: symbol)
-            .font(.system(size: CDS.GhostIcon.glyph(size), weight: .medium))
-            .foregroundStyle(active || hover ? (tint == Theme.secondary ? Brand.ink : tint) : tint)
-            .frame(width: size, height: size)
+        // Claude's 16pt glyph (wght 533) as an SF Symbol; secondary ink, white on hover (`.df-chrome-btn`). The GitHub mark
+        // isn't one: drawn from its path, a point over, optically the weight of the symbols beside it.
+        let ink = active || hover ? (tint == Theme.secondary ? Brand.ink : tint) : tint
+        Group {
+            if symbol == CategorySection.githubMark {
+                GitHubMark().fill(ink).frame(width: CDS.GhostIcon.glyph(size) + 1, height: CDS.GhostIcon.glyph(size) + 1)
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: CDS.GhostIcon.glyph(size), weight: .medium))
+                    .foregroundStyle(ink)
+            }
+        }
+        .frame(width: size, height: size)
     }
 }
 
@@ -364,8 +435,16 @@ private struct Tip: ViewModifier {
     /// The control's own keyboard focus: its tip shows after a second, and goes when the focus does.
     let focused: Bool
     @State private var id = UUID()
-    @State private var anchor = CGRect.zero
+    /// Where the control is, as last laid out: written on every layout and scroll frame, read only when the tip shows, so
+    /// kept out of view state (writing it redraws nothing).
+    @State private var anchor = Anchor()
     @State private var pending: Task<Void, Never>?
+
+    private final class Anchor { var frame = CGRect.zero }
+    /// Measured only while the pointer is on it, it has the keyboard, or it is the tip asked for: not on every layout and
+    /// scroll frame of every control carrying a tip.
+    @State private var measuring = false
+    @State private var hovering = false
     @Environment(\.tipCenter) private var center
     @Environment(\.previewTip) private var previewTip
     @Environment(\.systemHelp) private var systemHelp
@@ -382,16 +461,24 @@ private struct Tip: ViewModifier {
 
     private func styled(_ content: Content) -> some View {
         content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TipSpace.name)) } action: { frame in
-                anchor = frame
-                center?.move(id, to: frame)
+            .background {
+                if measuring {
+                    Color.clear.onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TipSpace.name)) } action: { frame in
+                        anchor.frame = frame
+                        center?.move(id, to: frame)
+                    }
+                }
             }
             .onAppear {
                 if previewTip == title {
+                    measuring = true
                     DispatchQueue.main.async { show() }
                 }
             }
             .onHover { inside in
+                hovering = inside
+                let measure = inside || focused
+                if measuring != measure { measuring = measure }
                 pending?.cancel()
                 if inside {
                     pending = Task {
@@ -404,6 +491,8 @@ private struct Tip: ViewModifier {
                 }
             }
             .onChange(of: focused) { _, focused in
+                let measure = hovering || focused
+                if measuring != measure { measuring = measure }
                 pending?.cancel()
                 if focused {
                     let delay = focusDelay
@@ -420,7 +509,7 @@ private struct Tip: ViewModifier {
     }
 
     private func show() {
-        center?.show(TipCenter.Request(id: id, title: title, detail: detail, anchor: anchor))
+        center?.show(TipCenter.Request(id: id, title: title, detail: detail, anchor: anchor.frame))
     }
 }
 

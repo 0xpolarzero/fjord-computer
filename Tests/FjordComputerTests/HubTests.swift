@@ -49,8 +49,8 @@ import Testing
         let hub = HubState()
         hub.enter(.inbox)
         #expect(hub.arriving == .inbox && hub.section == nil)
-        // The dwell's 100 ms, however long a loaded machine takes to run it.
-        await waitUntil(within: 10) { hub.section != nil }
+        // The dwell (70 ms), however long a loaded machine takes to run it.
+        await waitUntil { hub.section != nil }
         #expect(hub.arriving == nil && hub.section == .inbox)
         // Switching while open is at once: no dwell to wait on.
         hub.enter(.router)
@@ -79,8 +79,8 @@ import Testing
         let hub = HubState()
         hub.enter(.inbox)
         block.set(true, on: hub)
-        // The dwell wakes after 100 ms (later on a loaded machine) and finds the bar blocked.
-        await waitUntil(within: 10) { hub.arriving == nil }
+        // The dwell wakes after 70 ms (later on a loaded machine) and finds the bar blocked.
+        await waitUntil { hub.arriving == nil }
         #expect(hub.arriving == nil && hub.section == nil)
     }
 
@@ -350,11 +350,14 @@ import Testing
 
 /// A hosted view's height once its layout has settled: the run loop turned (a measured list takes a few passes) until the
 /// height reads the same over several turns, at least as many turns as before. Counted in turns, not time, so a slow
-/// machine only takes longer; a watchdog of a minute ends a layout that never settles.
-@MainActor func steadyHeight(_ hosting: NSView, turns: Int = 6) -> CGFloat {
-    let deadline = Date().addingTimeInterval(60)
-    var last = -1.0, same = 0, passes = 0
-    while (same < turns || passes < 8), Date() < deadline {
+/// machine only takes longer; the shared watchdog ends a layout that never settles, and fails the test.
+@MainActor func steadyHeight(_ hosting: NSView, turns: Int = 6, sourceLocation: SourceLocation = #_sourceLocation) -> CGFloat {
+    var watchdog = Watchdog(), last = -1.0, same = 0, passes = 0
+    while same < turns || passes < 8 {
+        guard !watchdog.expired() else {
+            Issue.record("Waited \(Int(watchdog.elapsed)) s for a height that never settled (last \(last))", sourceLocation: sourceLocation)
+            break
+        }
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         hosting.layoutSubtreeIfNeeded()
         let h = hosting.fittingSize.height

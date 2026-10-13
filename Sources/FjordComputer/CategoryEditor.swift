@@ -1,5 +1,28 @@
 import SwiftUI
 
+/// How long typing in a category's fields (its name, an action's prompt) pauses before what was typed is written to the
+/// store.
+enum TypingPause {
+    static let pause: Duration = .milliseconds(250)
+}
+
+/// What was typed and is waiting for its pause before it reaches the store, by field: written at once when the app quits
+/// (`applicationWillTerminate`, before the store's last save) or the page's undo acts, since neither waits for the pause.
+/// A field holds its write for as long as it is on screen, a write of what it holds now (nothing when that is what the
+/// store has), so a keystroke is covered from the moment it is in the field, before any change of the field's is seen.
+@MainActor
+enum PendingEdits {
+    private static var writes: [UUID: () -> Void] = [:]
+
+    static func hold(_ field: UUID, write: @escaping () -> Void) { writes[field] = write }
+    static func release(_ field: UUID) { writes[field] = nil }
+
+    /// Every field's write, now.
+    static func flushAll() {
+        for write in Array(writes.values) { write() }
+    }
+}
+
 private let body14 = CDS.Density.comfortable.body
 private let foot12: (CGFloat, CGFloat) = (12, 16)
 
@@ -23,6 +46,15 @@ struct CategoryEditor: View {
     @State private var pickingIcon = false
     @State private var confirmingDelete = false
     @FocusState private var nameFocused: Bool
+    /// A category's name as typed, until it is written to the store (`commitName`): once typing pauses, on Return, or when
+    /// the field is left. Each write is a change of the categories (saved, logged, a step of the page's history, the bar
+    /// and the list redrawn), so not one per keystroke. A new category's draft takes each keystroke: it isn't in the store.
+    @State private var typedName: String?
+    /// The stored name when the typing began: changed since by something else, what was typed is dropped.
+    @State private var typedOver: String?
+    @State private var nameWrite: Task<Void, Never>?
+    /// The name field's place in `PendingEdits`.
+    @State private var nameField = UUID()
 
     init(store: Store, editing: CategoryEditing, history: CategoryHistory, draft: Binding<InboxCategory>? = nil,
          create: @escaping () -> Void = {}, firstRuleNotice: String? = nil, close: @escaping () -> Void) {
@@ -77,7 +109,55 @@ struct CategoryEditor: View {
             .scrollIndicators(.never)
         }
         .task(id: c.name) { await pickIcon() }
-        .onAppear { if isNew { nameFocused = true } }
+        // The name changed in the store by something else while a typed one waited (the Router renaming it): that one
+        // stands, and what was typed is dropped. (Undo and redo write what waits first, `CategoryHistory.flush`.)
+        .onChange(of: c.name) { _, _ in
+            guard typedName != nil else { return }
+            nameWrite?.cancel()
+            nameWrite = nil
+            typedName = nil
+            typedOver = nil
+        }
+        .onAppear {
+            if isNew { nameFocused = true }
+            PendingEdits.hold(nameField) { commitName() }
+        }
+        .onDisappear {
+            commitName()
+            PendingEdits.release(nameField)
+        }
+    }
+
+    private func nameField(_ c: InboxCategory) -> Binding<String> {
+        guard !isNew else { return draft.name }
+        return Binding(get: { typedName ?? c.name }, set: { name in
+            if typedName == nil { typedOver = c.name }
+            typedName = name
+            nameWrite?.cancel()
+            nameWrite = Task {
+                try? await Task.sleep(for: TypingPause.pause)
+                guard !Task.isCancelled else { return }
+                commitName()
+            }
+        })
+    }
+
+    /// The name typed, written to the store (if it is still there and the name changed).
+    private func commitName() {
+        nameWrite?.cancel()
+        nameWrite = nil
+        guard let name = typedName else { return }
+        let over = typedOver
+        typedName = nil
+        typedOver = nil
+        if let name = Self.nameToWrite(typed: name, over: over, stored: draft.wrappedValue.name) { draft.wrappedValue.name = name }
+    }
+
+    /// What a typed name writes: nothing when it is the stored one, or when the stored one changed since the typing began
+    /// (renamed by something else: that stands).
+    static func nameToWrite(typed: String, over: String?, stored: String) -> String? {
+        guard typed != stored, over == nil || over == stored else { return nil }
+        return typed
     }
 
     // MARK: Header
@@ -139,10 +219,15 @@ struct CategoryEditor: View {
                             pickingIcon = false
                         }
                     }
-                TextField("", text: draft.name)
-                    .cdsPlaceholder("Name, like Reviews or Mine", shown: c.name.isEmpty)
+                TextField("", text: nameField(c))
+                    .cdsPlaceholder("Name, like Reviews or Mine", shown: (typedName ?? c.name).isEmpty)
                     .focused($nameFocused)
-                    .onSubmit { if isNew, canCreate { create() } }
+                    .onSubmit {
+                        commitName()
+                        if isNew, canCreate { create() }
+                    }
+                    .onChange(of: nameFocused) { _, now in if !now { commitName() } }
+                    .onDisappear { commitName() }
                     .cdsField(focused: nameFocused)
                     .accessibilityLabel("Category name")
             }

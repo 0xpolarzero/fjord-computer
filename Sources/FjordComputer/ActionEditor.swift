@@ -22,9 +22,9 @@ struct ActionsEditor: View {
                 .padding(.bottom, 12)
             VStack(alignment: .leading, spacing: 6) {
                 // One that sends to the Router shows only while Triage and the Router are both on (it is kept meanwhile).
-                ForEach($actions.items) { $action in
+                ForEach(actions.items) { action in
                     if store.toolsLinked || !action.kind.sendsToRouter {
-                        ActionRow(action: $action, store: store, rules: rules, categoryName: categoryName, kinds: kinds) {
+                        ActionRow(action: binding(action), store: store, rules: rules, categoryName: categoryName, kinds: kinds) {
                             actions.items.removeAll { $0.id == action.id }
                         }
                     }
@@ -32,6 +32,30 @@ struct ActionsEditor: View {
                 addMenu.padding(.top, actions.isEmpty ? 0 : 6)
             }
         }
+    }
+
+    /// An action's binding by its id, not its place in the list: a write that comes after it was removed (its prompt's
+    /// typing written as the field goes) is dropped, rather than landing on the action that took its place, or past the end.
+    private func binding(_ action: CategoryAction) -> Binding<CategoryAction> {
+        let id = action.id
+        return Binding(get: { actions.items.first { $0.id == id } ?? action },
+                       set: { new in Self.replace(new, in: &actions.items) })
+    }
+
+    /// An action's prompt, read from the action as it is when asked (not as it was when the row was drawn: the field holds
+    /// its write for as long as it is on screen, `PendingEdits`, and compares what it holds with this), `fallback` once the
+    /// action sends no prompt.
+    static func prompt(of action: Binding<CategoryAction>, else fallback: ActionPrompt) -> Binding<ActionPrompt> {
+        Binding(get: {
+            if case .askRouter(let prompt) = action.wrappedValue.kind { return prompt }
+            return fallback
+        }, set: { action.wrappedValue.kind = .askRouter(prompt: $0) })
+    }
+
+    /// `action` in place of the one with its id; nothing when that one is gone.
+    static func replace(_ action: CategoryAction, in items: inout [CategoryAction]) {
+        guard let i = items.firstIndex(where: { $0.id == action.id }) else { return }
+        items[i] = action
     }
 
     private var addMenu: some View {
@@ -82,7 +106,7 @@ private struct ActionRow: View {
             }
             switch action.kind {
             case .askRouter(let prompt):
-                ActionPromptField(prompt: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }), store: store)
+                ActionPromptField(prompt: ActionsEditor.prompt(of: $action, else: prompt), store: store)
                     .tip("Prompt", "Sent to the Router as yours, from this category, with the thing tagged: @this notification says where it goes in your words (else it is added at the end). The Router sends it to a session working in a local clone of the repo, or starts one there; if it isn't sure where, it asks you and waits. Its title, link, why it is here and the last comment go with it in a block marked as written by others, so nothing others wrote reads as your words. @ also inserts a snippet, or tags a project, a session or a category.")
                 HStack(spacing: 8) {
                     MenuChip(title: "Model: " + (action.model?.capitalized ?? "Default"), label: "Model") {
@@ -213,6 +237,9 @@ struct ActionPromptField: View {
     @State private var editor = EditorBox()
     @State private var focused = false
     @State private var focusTick = 0
+    @State private var pendingWrite: Task<Void, Never>?
+    /// The field's place in `PendingEdits`.
+    @State private var field = UUID()
 
     /// The text view, once it has told where its caret is (a pick puts the caret after it).
     final class EditorBox {
@@ -250,10 +277,21 @@ struct ActionPromptField: View {
                 .fixedSize()
             }
         }
-        .onAppear { Self.load(prompt, into: model) }
+        .onAppear {
+            Self.load(prompt, into: model)
+            // Its write, held for as long as it is here: a quit or an undo writes what it holds now.
+            PendingEdits.hold(field) { write() }
+        }
         .onChange(of: prompt) { _, now in Self.load(now, into: model) }
-        .onChange(of: model.draft) { write() }
+        // Typing is written to the category once it pauses (each write is a change of the categories: saved, logged, a step
+        // of the page's history, the bar redrawn); a pill picked, the field left or gone, at once.
+        .onChange(of: model.draft) { writeSoon() }
         .onChange(of: model.pointers) { write() }
+        .onChange(of: focused) { _, now in if !now { write() } }
+        .onDisappear {
+            write()
+            PendingEdits.release(field)
+        }
         .onChange(of: model.caretRequest) { _, request in
             guard let request else { return }
             model.caretRequest = nil
@@ -267,8 +305,20 @@ struct ActionPromptField: View {
     }
 
     private func write() {
+        pendingWrite?.cancel()
+        pendingWrite = nil
         let now = Self.prompt(of: model)
         if now != prompt { prompt = now }
+    }
+
+    /// `write`, once typing has paused for `pause`.
+    private func writeSoon() {
+        pendingWrite?.cancel()
+        pendingWrite = Task {
+            try? await Task.sleep(for: TypingPause.pause)
+            guard !Task.isCancelled else { return }
+            write()
+        }
     }
 
     /// The keys while @ suggestions show: ↑↓ walk them, Return or Tab picks, Esc dismisses. Otherwise the text view's own.

@@ -173,6 +173,7 @@ private struct PanelMaterial<S: Shape>: ViewModifier {
     let fill: Color
     let standsIn: Bool
     @Environment(\.glassCapture) private var capture
+    @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
         let look = GlassLook.of(glass: glass, capturing: standsIn && capture?.on == true, hairline: true)
@@ -182,6 +183,10 @@ private struct PanelMaterial<S: Shape>: ViewModifier {
             .overlay(shape.stroke(CDS.border, lineWidth: 2 * CDS.Sidebar.edge).clipShape(shape).opacity(look.hairline ? 1 : 0)
                 .allowsHitTesting(false))
             .glassEffect(look.glass ? .regular : .identity, in: shape)
+            // Made again for each appearance: glass whose appearance changes while the window is closed (its content out of
+            // the window) keeps the old one's material until something reshapes it, and one that never stands in for a
+            // capture is never redrawn on the way in.
+            .id(scheme)
     }
 }
 

@@ -270,6 +270,10 @@ extension Store {
         let (questions, state) = InboxJev.request(work, things: things, context: context)
         do {
             let answers = try await throughJevGate(.inbox, generation: generation) { try await ask(questions, state) }
+            // Taken in once the window's morph has played (`MotionGate`): new labels mean the inbox is worked out again.
+            await motionGate.still()
+            // Stopped while it waited (its poll cancelled, the key changed, Jev's reading switched off): not taken.
+            guard !Task.isCancelled, jevGate.generation == generation, jevReadsInbox else { return }
             inboxReadError = nil
             // Onto the things as they are now: the refresh may have moved on while Jev answered. Signed in as someone else
             // meanwhile, the answers were about another's inbox.

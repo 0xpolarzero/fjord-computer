@@ -180,7 +180,7 @@ import Testing
         #expect(!CanvasEventView.scrolls(root, inside: area))
     }
 
-    /// A message sent on the canvas keeps Now in view (it flies to its card there); in the list the history shows at once.
+    /// A message keeps Now in view in either layout; each flight opens history only once an answer lands there.
     @Test func aMessageSentOnTheCanvasStaysOnNowAndFliesOnceToItsCard() throws {
         let store = demo()
         let model = canvas(store)
@@ -210,6 +210,6 @@ import Testing
         list.replyTo = nil
         list.draft = "what's running?"
         list.send(store: store)
-        #expect(list.pane == .history)
+        #expect(list.pane == .now)
     }
 }

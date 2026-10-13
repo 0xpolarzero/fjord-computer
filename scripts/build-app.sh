@@ -43,6 +43,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# Keep AppKit's text-input policy the same in the bundle and the bare SwiftPM executable.
+/usr/libexec/PlistBuddy -c "Merge Resources/AppInfo.plist" "$APP/Contents/Info.plist"
 # Ad-hoc signatures change with every build, so macOS forgets Accessibility access each time and the in-app
 # updater can't tell a release is really ours. A stable code-signing certificate (default name "Fjord Computer Dev",
 # or SIGN_IDENTITY, which is then required) keeps both working across builds.

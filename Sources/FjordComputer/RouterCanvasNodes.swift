@@ -512,21 +512,21 @@ struct CanvasNode: View {
         switch item {
         case .need(let card):
             CardView(store: store, model: model, card: card, expanded: model.expandedNeed == card.id,
-                     form: store.pendingForm(for: card), project: store.routerProject(card), formCap: Self.formCap, showsProject: false)
+                     form: store.pendingForm(for: card), project: store.routerProject(card), formCap: Self.formCap, showsProject: false).equatable()
         case .ready(let card), .waiting(let card):
             WaitingCard(store: store, card: card, standalone: true, open: openRow(item.id),
-                        marked: model.selection == card.id || [card.id, item.id].contains(model.highlighted))
+                        marked: model.selection == card.id || [card.id, item.id].contains(model.highlighted)).equatable()
         case .note(let card):
             CardView(store: store, model: model, card: card, expanded: model.expandedNeed == card.id, form: nil,
-                     project: store.routerProject(card), quiet: true, showsProject: false)
+                     project: store.routerProject(card), quiet: true, showsProject: false).equatable()
         case .working(let row):
             WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id],
-                        unanswered: page.unanswered[row.id] ?? [], standalone: true, open: openRow(item.id))
+                        unanswered: page.unanswered[row.id] ?? [], standalone: true, open: openRow(item.id)).equatable()
         case .done(let card):
             // Open only as the canvas opened it: the history's line for the same card opens on its own.
             MinuteTicking { now in
                 HistoryCardLine(card: card, now: now, open: model.canvas.openDone == card.id && model.expanded.contains(card.id),
-                                marked: model.selection == card.id || model.highlighted == card.id, store: store, model: model)
+                                marked: model.selection == card.id || model.highlighted == card.id, store: store, model: model).equatable()
             }
             // A box as the Working cards have, so its group's line meets an edge.
             .background {

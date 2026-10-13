@@ -8,9 +8,6 @@ import SwiftUI
 // MARK: - Store
 
 extension Store {
-    /// The Router works on the sessions: it is on only while Fjord Computer reads them too (they follow its switch).
-    var routerOn: Bool { router.enabled && agents.enabled }
-
     /// A card's project, as the lists name and colour it.
     func routerProject(_ card: RouterCard) -> (name: String, color: Color?) {
         let folder = card.folder ?? ""
@@ -45,7 +42,7 @@ extension Store {
     func sendToRouter(_ text: String, context: RouterContext = RouterContext(), now: Date = Date()) -> Bool {
         let text = RouterModel.sendable(text)
         guard !text.isEmpty else { return false }
-        if routerIsPretend {
+        if routerIsPretend && !RouterFlightDemo.on {
             var entry = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: .done,
                                        links: .init(cards: context.replyTo.map { [$0] } ?? []))
             let mentions = RouterDispatcher.mentions(context.mentions, in: text)
@@ -95,10 +92,42 @@ extension Store {
 
 /// Content redrawn on the minute and only then (ages, the status line): nothing else ticks for it.
 struct MinuteTicking<Content: View>: View {
+    /// Out of sight: it stops on the minute it was at, and catches up once shown.
+    var paused = false
     @ViewBuilder let content: (Date) -> Content
 
+    init(paused: Bool = false, @ViewBuilder content: @escaping (Date) -> Content) {
+        self.paused = paused
+        self.content = content
+    }
+
     var body: some View {
-        TimelineView(.everyMinute) { context in content(context.date) }
+        TimelineView(Minutes(paused: paused)) { context in content(context.date) }
+    }
+}
+
+/// Every minute on the minute, as `.everyMinute`; paused, only the moment it started.
+private struct Minutes: TimelineSchedule {
+    let paused: Bool
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> Entries {
+        Entries(upcoming: startDate, paused: paused)
+    }
+
+    struct Entries: Sequence, IteratorProtocol {
+        var upcoming: Date?
+        let paused: Bool
+
+        mutating func next() -> Date? {
+            guard let date = upcoming else { return nil }
+            if paused {
+                upcoming = nil
+            } else {
+                let minute = (date.timeIntervalSinceReferenceDate / 60).rounded(.down) * 60
+                upcoming = Date(timeIntervalSinceReferenceDate: minute + 60)
+            }
+            return date
+        }
     }
 }
 
@@ -300,8 +329,42 @@ struct RouterCardLine: View {
 final class RouterModel {
     /// The Working sessions' summaries being made.
     @ObservationIgnored let summarizer = RouterSummarizer()
+    /// Your messages on their way: pills over the composer, flying to where each went.
+    @ObservationIgnored let flights = RouterFlights()
     /// The card the keys act on.
-    var selection: String?
+    var selection: String? {
+        didSet { if selection != oldValue { remark(oldValue); remark(selection); pruneMarks() } }
+    }
+    /// Whether an item is picked or marked, by item, read by the item itself (`isMarked`): each card or row observes its
+    /// own, so the keys moving the pick redraw the two cards it left and reached, not every card of the page.
+    @ObservationIgnored private var marks: [String: Mark] = [:]
+    @Observable final class Mark {
+        var on: Bool
+        init(on: Bool) { self.on = on }
+    }
+
+    /// Whether `id` is the pick or the item marked for now (`highlighted`), observing only that item's mark.
+    func isMarked(_ id: String) -> Bool {
+        if let mark = marks[id] { return mark.on }
+        // The stored values, read without observing them.
+        let mark = Mark(on: _selection == id || _highlighted == id)
+        marks[id] = mark
+        return mark.on
+    }
+
+    /// The marks of items gone (cards archived to the history, sessions done) let go once there are more than the page
+    /// draws (`HubState.Mark.pruned`: an item still drawn makes its own again).
+    private func pruneMarks() {
+        guard marks.count > HubState.Mark.kept else { return }
+        for mark in marks.values { mark.on.toggle(); mark.on.toggle() }
+        marks = [:]
+    }
+
+    private func remark(_ id: String?) {
+        guard let id, let mark = marks[id] else { return }
+        let on = _selection == id || _highlighted == id
+        if mark.on != on { mark.on = on }
+    }
     var draft = "" {
         didSet { if draft != oldValue { sendRefused = nil; mentionChanged() } }
     }
@@ -513,11 +576,18 @@ final class RouterModel {
     }
 
     /// Looks for Claude Code once the window shows (the app updates its copy now and then): until the search has finished
-    /// nothing is said, and Send waits. In a demo it is never missing.
+    /// nothing is said, and Send waits. In a demo it is never missing. The binary known (`RouterStatus`, which every run
+    /// takes its path from) is only checked to be still there, one stat; gone, or none known, it is looked for again.
     func checkClaudeCode(_ store: Store) async {
-        if store.routerIsPretend || store.routerStatus.claudeCode != nil { claudeCodeMissing = false; return }
-        guard let root = store.routerStatus.codeRoot else { claudeCodeMissing = false; return }
-        let found = await Task.detached(priority: .utility) { RouterStatus.find(in: root) != nil }.value
+        if store.routerIsPretend {
+            if claudeCodeMissing != false { claudeCodeMissing = false }
+            return
+        }
+        guard store.routerStatus.codeRoot != nil || store.routerStatus.claudeCode != nil else {
+            if claudeCodeMissing != false { claudeCodeMissing = false }
+            return
+        }
+        let found = await store.routerStatus.current() != nil
         if claudeCodeMissing != !found { claudeCodeMissing = !found }
     }
 
@@ -602,7 +672,9 @@ final class RouterModel {
     /// Asks the page to scroll to an item (a card, a message, a working session's card) and, for a moment, to mark it.
     var revealRequest: ScrollRequest?
     /// The item marked for a moment after it was scrolled to.
-    var highlighted: String?
+    var highlighted: String? {
+        didSet { if highlighted != oldValue { remark(oldValue); remark(highlighted); pruneMarks() } }
+    }
     /// The card of Needs you shown in full (see `RouterPage.openNeed`); the others are summary rows.
     var expandedNeed: String?
     /// Addressed cards and runs opened out in the history.
@@ -689,8 +761,10 @@ final class RouterModel {
             show(.history)
             return
         }
-        let toRouter = replyTo == nil
-        guard store.sendToRouter(text, context: context(store)) else {
+        // A pill over the composer from here until it lands where it went (`RouterFlights`): the page stays where it is.
+        var context = context(store)
+        context.flies = layout != .canvas
+        guard store.sendToRouter(text, context: context) else {
             sendRefused = Self.goneTarget
             Announce.say(Self.goneTarget)
             return
@@ -700,9 +774,6 @@ final class RouterModel {
         draft = ""
         replyTo = nil
         live.reset()
-        // The Router answers in its conversation, in the history. On the canvas the message waits over the composer and
-        // flies to its card; the history shows only if it went to none (`RouterCanvasState.depart`).
-        if toRouter, layout != .canvas { show(.history) }
     }
 
     /// A card clicked: its session opens in Claude, and the card is picked (it stays open).
@@ -813,7 +884,10 @@ final class RouterModel {
     /// few of each for a bare @); what the draft tags already left out.
     func suggestions(_ store: Store) -> [MentionSuggestion] {
         guard let query = mention else { return [] }
-        return RouterMentions.suggest(RouterMentions.candidates(store, except: Set(pointers), query: query), query: query)
+        // A bare @ shows the first few of each section, in order: only those are made.
+        let first = query.isEmpty ? RouterMentions.perSection.bare : nil
+        return RouterMentions.suggest(RouterMentions.candidates(store, except: Set(pointers), query: query, first: first),
+                                      query: query)
     }
 
     /// The composer's text view (`MentionField`): text a pick inserts goes in through it while it shows the draft, so ⌘Z

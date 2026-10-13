@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Testing
 @testable import FjordComputer
@@ -43,5 +44,45 @@ import Testing
         #expect(Motion.hover(on: true).resolved(reduce: false) == nil)
         #expect(Motion.hover(on: false).resolved(reduce: false) != nil)
         #expect(Motion.hover(on: false).resolved(reduce: true) == nil)
+    }
+}
+
+@MainActor
+struct WindowArrivalTests {
+    @Test func anArrivalLastsUntilEveryOneBegunHasEnded() {
+        let arrival = WindowArrival(inTests: true)
+        let a = arrival.begin(), b = arrival.begin()
+        #expect(arrival.active)
+        arrival.end(a)
+        #expect(arrival.active, "b's arrival is still under way")
+        arrival.end(a)
+        #expect(arrival.active, "a token ends once")
+        arrival.end(b)
+        #expect(!arrival.active)
+    }
+
+    @Test func theAppWindowsArrivalsDoNothingInATestRun() {
+        let token = WindowArrival.appWindow.begin()
+        #expect(!WindowArrival.appWindow.active)
+        WindowArrival.appWindow.end(token)
+    }
+
+    @Test func anArrivalLastsUntilItsContentIsLaidOutAndATurnMore() async {
+        let arrival = WindowArrival(inTests: true)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.setFrameOrigin(UnderTest.away)
+        let content = NSHostingView(rootView: Text("Arrived"))
+        arrival.arrive(laying: content)
+        window.contentView = content
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        #expect(arrival.active, "on while the window takes its content")
+        // The turn it is laid out in: still on (what that update scheduled for later lands in the next).
+        await Task.yield()
+        #expect(arrival.active || !content.needsLayout)
+        await waitUntil { !arrival.active }
+        #expect(!arrival.active && !content.needsLayout)
     }
 }

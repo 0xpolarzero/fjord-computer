@@ -211,7 +211,8 @@ extension Store {
     /// properties, so SwiftUI keeps tracking them; `agentCache` is dropped whenever one of them changes.
     private var cache: AgentCache {
         let state = agents, sessions = claudeSessions, activity = claudeActivity, tasks = claudeTasks
-        _ = recentTick
+        // Read for what observes the rows: each names its session's project.
+        _ = (recentTick, folderNames)
         if let agentCache { return agentCache }
         let built = buildAgentCache(state, sessions, activity, tasks)
         agentCache = built
@@ -260,6 +261,90 @@ extension Store {
         makeRow(session, entry ?? cache.entries[session.id], label: label)
     }
 
+    /// A session's row as `sessionRow` gives it: `row(session)`, its entry looked up without the listed rows being made.
+    func makeSessionRow(_ id: String) -> AgentRow? {
+        guard let session = claudeSessions[id] else { return nil }
+        if agentEntryIndex == nil {
+            agentEntryIndex = Dictionary(agents.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        }
+        return makeRow(session, agentEntryIndex?[id], label: nil)
+    }
+
+    /// Makes again the rows `sessionRow` keeps of `ids`, writing a box only when its row changed. While a read of Claude
+    /// is taken in (`batchingSessionRows`), the ids are gathered and the rows made once, at its end.
+    func refreshSessionRows<Ids: Sequence<String>>(_ ids: Ids) {
+        guard !sessionRowBoxes.isEmpty else { return }
+        if sessionRowsPending != nil {
+            sessionRowsPending?.formUnion(ids.filter { sessionRowBoxes[$0] != nil })
+            return
+        }
+        for id in ids {
+            guard let box = sessionRowBoxes[id] else { continue }
+            let row = makeSessionRow(id)
+            if row != box.row { box.row = row }
+        }
+    }
+
+    /// Runs `body` with the rows' refreshes gathered, then makes each row it touched once.
+    func batchingSessionRows(_ body: () -> Void) {
+        guard sessionRowsPending == nil else { return body() }
+        sessionRowsPending = []
+        body()
+        let ids = sessionRowsPending ?? []
+        sessionRowsPending = nil
+        refreshSessionRows(ids)
+    }
+
+    /// Runs `body` (held Claude reads taken in one after the other) with what follows from them made once, at its end: the
+    /// kept session rows and the Router's history.
+    func batchingClaudeReads(_ body: () -> Void) {
+        batchingSessionRows {
+            guard !routerHistoryDeferred else { return body() }
+            routerHistoryDeferred = true
+            body()
+            routerHistoryDeferred = false
+            if routerHistoryStale {
+                routerHistoryStale = false
+                rebuildRouterHistory()
+            }
+        }
+    }
+
+    /// The ids, among the kept rows', whose value differs between two maps.
+    func sessionRowsChanged<Value: Equatable>(_ old: [String: Value], _ new: [String: Value]) -> [String] {
+        sessionRowBoxes.keys.filter { old[$0] != new[$0] }
+    }
+
+    /// The kept rows an agents change touches: those whose entry changed, or whose project's colour did.
+    func sessionRowsChanged(from old: AgentsState) -> [String] {
+        let colors = Set(Set(old.folderColors.keys).union(agents.folderColors.keys).filter { old.folderColors[$0] != agents.folderColors[$0] })
+        var entries = Set<String>()
+        if old.entries != agents.entries {
+            let before = Dictionary(old.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            let after = Dictionary(agents.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            entries = Set(sessionRowBoxes.keys.filter { before[$0] != after[$0] })
+        }
+        guard !colors.isEmpty else { return Array(entries) }
+        return sessionRowBoxes.keys.filter { id in
+            entries.contains(id) || claudeSessions[id].map { colors.contains($0.folderKey) } == true
+        }
+    }
+
+    /// The kept rows a change of the folders' names touches.
+    func sessionRowsChanged(names old: [String: String]) -> [String] {
+        sessionRowBoxes.keys.filter { id in
+            claudeSessions[id].map { old[$0.folderKey] != folderNames[$0.folderKey] } ?? false
+        }
+    }
+
+    /// Lets go of the rows of sessions that are gone and that no card names: nothing draws them any more.
+    func pruneSessionRows() {
+        let gone = sessionRowBoxes.keys.filter { claudeSessions[$0] == nil }
+        guard !gone.isEmpty else { return }
+        let carded = Set(router.cards.map(\.sessionID))
+        for id in gone where !carded.contains(id) { sessionRowBoxes[id] = nil }
+    }
+
     private func makeRow(_ session: ClaudeSession, _ entry: AgentEntry?, label: String?) -> AgentRow {
         AgentRow(session: session, entry: entry ?? AgentEntry(id: session.id),
                  // Sessions outside the cache (hidden ones found through search) still show their saved label.
@@ -290,7 +375,13 @@ extension Store {
     /// A project's name wherever it is named: its own, with as much of the path above it as it takes to tell it from another
     /// project of the same name (`customer-a/app`), the same in every menu, tag and spoken value.
     func folderName(_ folder: String) -> String {
-        folder.isEmpty ? "Scratch" : folderNames[folder] ?? FolderNames.name(folder, among: Array(namedFolders))
+        if folder.isEmpty { return "Scratch" }
+        if let name = folderNames[folder] { return name }
+        // One no session is in (an old card's): named among the folders `folderNames` was worked out for, once per set.
+        if let name = folderNameMisses[folder] { return name }
+        let name = FolderNames.name(folder, among: Array(namedFoldersSeen ?? namedFolders))
+        if namedFoldersSeen != nil { folderNameMisses[folder] = name }
+        return name
     }
 
     /// Called when the sessions or the muted folders change : the
@@ -302,6 +393,7 @@ extension Store {
         let folders = namedFolders(sessions: sessions)
         guard folders != namedFoldersSeen else { return }
         namedFoldersSeen = folders
+        folderNameMisses = [:]
         let names = FolderNames.names(for: folders)
         if names != folderNames { folderNames = names }
     }
@@ -340,13 +432,18 @@ extension Store {
     }
 
     /// Takes a read of the app back onto the main thread; properties are only set when they changed.
-    private func applyClaude(_ snapshot: ClaudeSnapshot) {
+    func applyClaude(_ snapshot: ClaudeSnapshot) {
         guard agents.enabled, snapshot.stamp.generation == claudeStamp.generation else { return }
         // You changed something since this read was asked for: it could undo that, so read again instead.
         if snapshot.sessions != nil, snapshot.stamp.revision != claudeStamp.revision {
             refreshClaude()
             return
         }
+        // The kept session rows are made again once for the read, not at each part of it.
+        batchingSessionRows { applyClaudeRead(snapshot) }
+    }
+
+    private func applyClaudeRead(_ snapshot: ClaudeSnapshot) {
         if let link = snapshot.link, claudeLink != link { claudeLink = link }
         if let sessions = snapshot.sessions {
             ingesting = true
@@ -476,6 +573,13 @@ extension Store {
             ?? allAgentRows.first { $0.needsIcon && ready($0) }
     }
 
+    /// Whether a pick begun for `session` (as it was then) may still be taken: the session still wants an icon (none set
+    /// meanwhile, by hand or otherwise), and what it was picked from (its title, its project, its transcript) is the same.
+    func iconStillWanted(_ session: ClaudeSession) -> Bool {
+        guard let now = claudeSessions[session.id], iconRow(session.id)?.needsIcon == true else { return false }
+        return now.title == session.title && now.folderName == session.folderName && now.cliID == session.cliID
+    }
+
     /// What a session looked like when it had nothing to go on: new activity, a title or a transcript changes it.
     private func iconStamp(_ session: ClaudeSession) -> String {
         "\(session.title)|\(session.activity)|\(session.cliID ?? "")"
@@ -518,7 +622,9 @@ extension Store {
                 return
             }
             let used = Set(rows.compactMap(\.entry.icon)).union(current.entry.rejectedIcons ?? [])
-            let open = SessionIcons.open(excluding: used)
+            let open = await SessionIcons.openOffMain(excluding: used)
+            // Renamed meanwhile (or given an icon by hand): picked again from what it is now.
+            guard self.iconStillWanted(session) else { self.iconTask = nil; return self.pickIcons() }
             guard !open.isEmpty else { self.iconTask = nil; return }
             var state = ["session title": session.title, "project": session.folderName]
             if let first { state["first message"] = first }
@@ -530,9 +636,13 @@ extension Store {
                 let options = SessionIcons.shortlist(open, probabilities: kinds.probabilities)
                 let pick = try await choose(options, SessionIcons.hints, state,
                     "Pick the icon that best shows what this coding session is about, so its owner can tell it apart from their other sessions at a glance.")
-                self.mutateAgent(session.id) { $0.icon = pick.choice }
                 self.iconError = nil
                 self.iconTask = nil
+                // What it was picked for changed while Jev answered, an icon was set meanwhile, or another session took
+                // this one: not taken, and picked again (or left as you set it).
+                if self.iconStillWanted(session), !self.allAgentRows.contains(where: { $0.id != session.id && $0.entry.icon == pick.choice }) {
+                    self.mutateAgent(session.id) { $0.icon = pick.choice }
+                }
                 self.pickIcons()
             } catch {
                 self.iconPickFailed(error)

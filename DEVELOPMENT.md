@@ -1,0 +1,149 @@
+# Developing Fjord
+
+Everything for building, testing and releasing the app. For what the app does, see the [README](README.md).
+
+- [Build and run](#build-and-run)
+- [Tests](#tests)
+- [Debug flags](#debug-flags)
+- [Tooling scripts](#tooling-scripts)
+- [Releasing](#releasing)
+- [Signing certificate](#signing-certificate)
+- [Implementation notes](#implementation-notes)
+
+## Build and run
+
+A Swift package (Swift tools 5.10, macOS 14+). The app is built into a bundle, which notifications and launch at login need:
+
+```sh
+./scripts/build-app.sh && open "build/Fjord Computer.app"
+```
+
+`build-app.sh` needs Xcode's command-line tools (`xcrun actool` compiles the layered icon, `Resources/AppIcon.icon`). It takes:
+
+| Variable | Effect |
+| --- | --- |
+| `VERSION=1.2.3` | Sets the bundle version (default `0.0.0-dev`). |
+| `UNIVERSAL=1` | Builds for arm64 and x86_64, as releases do. |
+| `SIGN_IDENTITY="…"` | Signs with that identity, and fails if it isn't in your keychain. |
+
+Without `SIGN_IDENTITY`, local builds are signed with the release certificate (default name `Fjord Computer Dev`) when it's in your keychain, and ad hoc otherwise. macOS treats every ad-hoc build as a new app, so Accessibility access has to be granted again each time. See [Signing certificate](#signing-certificate).
+
+The debug flags below run the debug binary: `swift build`, then `.build/debug/FjordComputer …`.
+
+**Credentials.** GitHub access comes from `gh auth token`, `GH_TOKEN` / `GITHUB_TOKEN`, or a token pasted in Settings, which is stored in the Keychain. The optional TypeSafe key (for Jev, TypeSafe's classifier) is kept in the Keychain too. Demo, snapshot and playground runs never touch the Keychain, so a new build doesn't stop on an access prompt.
+
+**State** lives in `~/Library/Application Support/Fjord Computer/state.json`.
+
+## Tests
+
+```sh
+scripts/test.sh
+```
+
+Runs `swift test` as CI does and writes the output to `test.log`. The run counts as passed only when the summary line is present: a test process that stops partway can still exit 0.
+
+The `Test` workflow runs the same script on every push to `main`, on the same runner as releases (`macos-15`, 20-minute limit), so a test that fails only there shows up before a release.
+
+## Debug flags
+
+### Demo data
+
+```sh
+.build/debug/FjordComputer --demo [scenario] [--open] [--edge left|right|top|bottom]
+```
+
+Mock data with Triage on (and the Router, in its scenarios). Nothing is saved. `--open` opens the window; `--edge` puts the bar on that edge.
+
+| Group | Scenarios |
+| --- | --- |
+| Plain sets | `busy` `botsOnly` `allClear` `snoozed` `error` `empty` `agents` |
+| Empty lists and sync failures | `signedOut` `inboxFailed` `rateLimited` `contributionsEmpty` `botChatterEmpty` `doneEmpty` `firstSync` `syncFault` |
+| Inbox | `inboxMany` `hiddenCategory` `jev` `sections` |
+| CI | `noCI` `allPassing` `manyCI` `ciRunning` |
+| Updates | `updateAvailable` `updateDownloading` `updateReady` |
+| Router | `router` `routerOff` |
+
+### Window, bar and screenshots
+
+| Command | What it does |
+| --- | --- |
+| `--window` | The window alone, on demo data. |
+| `--window --flight-demo` | The Router's page types and sends four messages through the real dispatcher (Jev and the send stood in for, at their usual pace): one to a working session, one to a finished one, one that starts a session, one the Router asks about. Shows each fly to where it went. |
+| `--window-shots <dir> [name…]` | Renders the window's pages as PNGs, offscreen (`window-<name>.png`); given names, only shots containing one of them. |
+| `--playground` | The bar on a fake desktop, demo data, every edge. |
+| `--playground-shots <dir> [name…]` | Renders the bar's states as PNGs, offscreen: every edge, every demo scenario, Reduce Motion / Increase Contrast / Differentiate Without Color variants, and a 1280×720 screen. Shots are named `<edge>-<state>` (`right-open`, `top-rest-signed-out`…); given names, only shots containing one of them are rendered. |
+
+`FJORD_THEME=dark|light|claude` pins the look: Fjord light, Fjord dark, or Claude's own. The default is Fjord, following the Mac's appearance live.
+
+```sh
+FJORD_THEME=dark .build/debug/FjordComputer --window
+```
+
+### Live data
+
+| Command | What it does |
+| --- | --- |
+| `--claude [--watch]` | Prints what the Router reads of Claude; `--watch` prints live changes. |
+| `--check owner/repo` | Headless live sync of one repo; prints the inbox. |
+| `--check-inbox` | Headless live sync with sample categories; prints every entry. |
+
+### Updater
+
+```sh
+"build/Fjord Computer.app/Contents/MacOS/FjordComputer" --update 0.1.0
+```
+
+Pretends to be version 0.1.0: checks for, downloads and verifies the latest release. Run it from the built bundle, not the debug binary.
+
+### Tooling-only flags
+
+- `--lifecycle` prints the app's idle state (sessions, how many are working, whether a window shows, Reduce Motion) for `scripts/idle-cpu.sh`.
+- `--motion-script <steps> --quit-after` plays a scripted sequence of motions and quits, for `scripts/motion-trace.sh`.
+- `--form-hook` is what Claude Code runs through `~/.claude/hooks/fjord-form.sh` when a session asks a question or wants a plan approved. Not for direct use.
+
+## Tooling scripts
+
+| Script | What it does |
+| --- | --- |
+| `scripts/build-app.sh` | Builds `build/Fjord Computer.app` (see [Build and run](#build-and-run)). |
+| `scripts/test.sh` | The test suite as CI runs it, output in `test.log`. |
+| `scripts/idle-cpu.sh` | Checks the release build's CPU stays under its limit at rest and with the window kept open, on the right edge and along the top, on demo data. Puts the bar on screen for minutes. |
+| `scripts/motion-trace.sh` | Records the release build with `xctrace` while it plays a motion script, then reports hitches and signpost latencies; `--baseline FILE` stores or compares against a baseline. Takes the screen while it runs. Options are documented at the top of the script. |
+| `swift scripts/make-icon.swift [--preview DIR]` | Draws `Resources/AppIcon.icns` and the layers of `Resources/AppIcon.icon`. |
+| `scripts/migrate-to-fjord.sh` | A one-off for the owner's machine: moves Lookout's data, preferences, Keychain items and Claude Code setup over to Fjord. Not for users. |
+
+## Releasing
+
+Push a version tag:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The `Release` workflow runs the tests, builds a universal app and publishes `FjordComputer-<version>.zip` and its `.sha256` to GitHub Releases.
+
+Installed apps pick the release up on their own. The updater installs it only if the checksum matches and the app is signed by the same certificate as the running copy.
+
+## Signing certificate
+
+Releases are signed with one self-signed certificate. That keeps the app's Accessibility access across updates, and lets the updater check a release is genuine. Set it up once:
+
+1. In Keychain Access, choose Certificate Assistant → Create a Certificate. Identity type: *Self-Signed Root*. Certificate type: *Code Signing*. Name it as `build-app.sh` expects: `Fjord Computer Dev`, or whatever you set in `SIGN_IDENTITY`.
+2. Export it with its private key as a `.p12`, with a password. Add two repository secrets:
+   - `SIGNING_CERT_P12`: the file in base64 (`base64 -i cert.p12 | pbcopy`)
+   - `SIGNING_CERT_PASSWORD`: its password
+3. Keep the `.p12` safe. Existing apps refuse a release signed with another certificate, and everyone would have to update by hand once.
+
+With the certificate in your keychain, `build-app.sh` signs local builds with it too.
+
+## Implementation notes
+
+### Global shortcuts run synchronously on the main thread
+
+Global shortcut actions run before their callback returns. Carbon hot keys target `GetApplicationEventTarget()`, which this app dispatches through the [main-thread application event loop](https://developer.apple.com/library/archive/documentation/General/Conceptual/Devpedia-CocoaApp/MainEventLoop.html); AppKit [guarantees that local and global event monitors run on the main thread](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/MonitoringEvents/MonitoringEvents.html). [`MainActor.assumeIsolated`](https://developer.apple.com/documentation/swift/mainactor/assumeisolated(_:file:line:)) verifies the executor before performing the action synchronously. Mouse-button shortcuts still defer their handler, to leave the CGEvent tap callback before any window work.
+
+### What the Router reads and writes
+
+The Router reads the Claude desktop app's sessions, `~/.claude/projects` for what a working session is doing, and Claude Code's task list in `/private/tmp/claude-<uid>` for what a session left running. None of these is a public API; when a Claude update changes them, the Router says so and Triage keeps working.
+
+Switching the Router on writes `~/.claude/hooks/fjord-form.sh` and registers it in `~/.claude/settings.json` (backed up first), so forms can be answered from the app. It also installs the signed Claude Code plugin `fjord@fjord`, so a message arrives in a session as the user's own rather than as a note from another session. Sessions already open pick the plugin up once restarted, or after `/reload-plugins`. Switching the Router off removes both.

@@ -17,6 +17,7 @@ struct PlaygroundView: View {
     var minSize = CGSize(width: 1280, height: 820)
     /// Opens the app window on a place; a toast says so when there is none (in shots).
     var openApp: ((AppDestination) -> Void)? = nil
+    var reopenApp: (() -> Void)? = nil
     var pickRouterCard: ((String) -> Void)? = nil
     /// How the bar and its panels draw: the app's, or a fixed one in shots.
     var chrome: Chrome = .shared
@@ -51,6 +52,9 @@ struct PlaygroundView: View {
         .environment(\.pickRouterCard) { card in pickRouterCard?(card) }
         .environment(\.openApp) { [hub] destination in
             if let openApp { openApp(destination) } else { hub.toast = "Open the window on \(destination.token)" }
+        }
+        .environment(\.reopenApp) { [hub] in
+            if let reopenApp { reopenApp() } else { hub.toast = "Open the window where it was" }
         }
         // As in the app: tooltips over the whole window, outside the hub's clipped shape.
         .tipSpace()
@@ -172,6 +176,10 @@ final class Playground: NSObject, NSWindowDelegate {
             NSApp.setActivationPolicy(.regular)
         }
         let view = PlaygroundView(store: store, ui: ui, hub: hub, openApp: { [weak self] in self?.openApp($0) },
+                                  reopenApp: { [weak self] in
+                                      guard let self else { return }
+                                      self.openApp(self.app.navigator.selection)
+                                  },
                                   pickRouterCard: { [weak self] card in
                                       guard let self else { return }
                                       self.app.routerModel.select(card, store: self.store)

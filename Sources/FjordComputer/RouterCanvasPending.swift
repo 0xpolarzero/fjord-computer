@@ -9,17 +9,17 @@ import SwiftUI
 
 /// Where a message flies: a node of the canvas (a card, or a session's row), or the frame of a project whose session isn't
 /// drawn yet (one just started).
-enum FlightTarget: Equatable {
+enum CanvasFlightTarget: Equatable {
     case node(String)
     case folder(String)
 }
 
-enum RouterFlights {
+enum CanvasDepartures {
     /// A message leaving the pending area: its entry, its words, where it goes (nil: it fades).
     struct Departure: Equatable {
         let id: UUID
         let text: String
-        let target: FlightTarget?
+        let target: CanvasFlightTarget?
     }
 
     /// How much of your message the pending line and the flight show.
@@ -58,7 +58,7 @@ enum RouterFlights {
 
     /// Where a settled message goes: the session it was sent to (its card, else its row), or the card it answered; that
     /// session's project when it isn't drawn yet; nothing when it failed or reached no session.
-    static func target(_ decision: RouterDecision, folders: [CanvasFolder], folder: (String) -> String?) -> FlightTarget? {
+    static func target(_ decision: RouterDecision, folders: [CanvasFolder], folder: (String) -> String?) -> CanvasFlightTarget? {
         if decision.done.contains(where: { if case .failed = $0 { true } else { false } }) { return nil }
         let items = folders.flatMap { $0.shown.flatMap(\.items) }
         let session = decision.sentMessage?.session ?? decision.delivered?.session ?? decision.links.sessions.first
@@ -107,13 +107,13 @@ extension RouterCanvasState {
         // The last entries: a message is settled in seconds, long before a hundred more runs are logged.
         let recent = Array(store.router.decisions.suffix(100))
         guard let settled else {
-            self.settled = RouterFlights.settled(recent)
+            self.settled = CanvasDepartures.settled(recent)
             return
         }
         // Most changes settle nothing of yours: the frames are worked out only for one that did.
-        guard !RouterFlights.settled(recent).subtracting(settled).isEmpty else { return }
+        guard !CanvasDepartures.settled(recent).subtracting(settled).isEmpty else { return }
         let folders = model.canvasFolders(store, page: page)
-        let next = RouterFlights.departures(settled: settled, now: recent, folders: folders) { store.claudeSessions[$0]?.folderKey }
+        let next = CanvasDepartures.departures(settled: settled, now: recent, folders: folders) { store.claudeSessions[$0]?.folderKey }
         self.settled = next.settled
         for departure in next.departures {
             guard let target = departure.target else {
@@ -133,7 +133,7 @@ extension RouterCanvasState {
         }
     }
 
-    private func fly(_ departure: RouterFlights.Departure, to target: FlightTarget, reduce: Bool) {
+    private func fly(_ departure: CanvasDepartures.Departure, to target: CanvasFlightTarget, reduce: Bool) {
         let key = switch target {
         case .node(let id): id
         case .folder(let key): CanvasFolder.frameID(key)
@@ -196,10 +196,10 @@ struct RouterPendingStack: View {
 
     var body: some View {
         let asks = store.routerDispatcher.askBacks
-        let pending = RouterFlights.pending(Array(store.router.decisions.suffix(100)), asking: Set(asks.map(\.id)))
+        let pending = CanvasDepartures.pending(Array(store.router.decisions.suffix(100)), asking: Set(asks.map(\.id)))
         VStack(alignment: .leading, spacing: 6) {
             ForEach(pending) { decision in
-                CanvasPendingLine(text: RouterDecision.clip(decision.triggerText, RouterFlights.clip), status: decision.status(store))
+                CanvasPendingLine(text: RouterDecision.clip(decision.triggerText, CanvasDepartures.clip), status: decision.status(store))
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(RouterMain.space)) } action: { rect in
                         model.canvas.pendingFrames[decision.id] = rect
                     }

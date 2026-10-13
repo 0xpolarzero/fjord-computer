@@ -71,7 +71,7 @@ extension FjordHub {
             // The header's own buttons, apart from the tabs.
             IslandRule(axis: .vertical).frame(height: 14).padding(.horizontal, 3)
             if unread > 0 {
-                IconButton(symbol: "checkmark.circle", help: "Mark all as seen",
+                IconButton(symbol: "envelope.open", help: "Mark all as read",
                            detail: "Everything in \(store.category(tab)?.name ?? "Archive") · \(store.shortcut(.markAllRead).display)",
                            size: IconButton.Size.header) {
                     withAnimation(Motion.fade.resolved(reduce: reduce)) { store.markAllSeen(tab) }
@@ -203,10 +203,11 @@ extension FjordHub {
 
     // MARK: Router
 
-    /// The Router's cell in the bar; a click opens its window.
+    /// The Router's cell in the bar; a click opens its window. Its counts are read in a view of their own, so the cards and
+    /// the sessions changing redraw the cell and not the whole bar.
     var routerCell: some View {
-        let counts = store.routerCounts
-        return RouterCell(needsYou: counts.needsYou, notes: counts.notes) { openApp(.router) }
+        let openApp = openApp
+        return CountedRouterCell(store: store) { openApp(.router) }
     }
 
     /// "Router", then what's open (amber for what needs you, blue for finished turns). The whole line opens its window.

@@ -22,7 +22,131 @@ enum AppPolicy {
     /// Fjord Computer to the front, unless this is a test run (which must not take the focus from whoever is at the Mac).
     static func activate() {
         guard !UnderTest.isRunning else { return }
+        watchActivations()
+        request.asked(active: NSApp.isActive, at: ProcessInfo.processInfo.systemUptime)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The app with windows that was in front before Fjord Computer last was: where the keyboard goes back to as the
+    /// window closes. Held (a weak one would let go of it as the workspace does) and dropped once it has quit.
+    private static var previous: NSRunningApplication?
+    private static var activations: NSObjectProtocol?
+
+    /// Whether the keyboard can go back to an app: a regular one (a menu-bar or launcher app, such as Raycast or a password
+    /// manager, has no window to type in) other than Fjord Computer, still running.
+    static func canTakeFocusBack(policy: NSApplication.ActivationPolicy, isSelf: Bool, terminated: Bool) -> Bool {
+        policy == .regular && !isSelf && !terminated
+    }
+
+    private static func remember(_ app: NSRunningApplication?) {
+        if let app = takingFocusBack(app) { previous = app }
+    }
+
+    /// `app`, if the keyboard can go back to it as it is now (`canTakeFocusBack`).
+    static func takingFocusBack(_ app: NSRunningApplication?) -> NSRunningApplication? {
+        guard let app, canTakeFocusBack(policy: app.activationPolicy, isSelf: app == NSRunningApplication.current,
+                                        terminated: app.isTerminated) else { return nil }
+        return app
+    }
+
+    private static func watchActivations() {
+        guard activations == nil else { return }
+        activations = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated {
+                remember(app)
+                // Another app came to the front after the request: it was refused, or has been overtaken.
+                if let app, app != NSRunningApplication.current { request.overtaken() }
+            }
+        }
+        remember(NSWorkspace.shared.frontmostApplication)
+        becameActive = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
+                                                              queue: .main) { _ in
+            MainActor.assumeIsolated { becameActiveNow() }
+        }
+        resignedActive = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                                                object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { request.resigned() }
+        }
+    }
+
+    private static var becameActive: NSObjectProtocol?
+    private static var resignedActive: NSObjectProtocol?
+    /// An activation `activate` asked for, until it lands or the app resigns.
+    private static var request = ActivationRequest()
+
+    /// Whether an activation Fjord Computer asked for has yet to land.
+    static var activationPending: Bool { request.isPending(at: ProcessInfo.processInfo.systemUptime) }
+
+    /// An activation asked for, from the asking until it lands (`didBecomeActive`), the app resigns or another app comes to
+    /// the front (refused, or overtaken), and at most `life` seconds of uptime: long enough for a main thread busy bringing
+    /// the window in, short enough that a refusal no one reported can't pass a later activation of the user's for ours.
+    struct ActivationRequest: Equatable {
+        static let life: TimeInterval = 5
+        private(set) var askedAt: TimeInterval?
+
+        /// Asked (`now`: system uptime); none comes when the app is active already.
+        mutating func asked(active: Bool, at now: TimeInterval) { if !active { askedAt = now } }
+
+        func isPending(at now: TimeInterval) -> Bool { askedAt.map { now - $0 < Self.life } ?? false }
+
+        /// The app became active: whether that was the activation asked for.
+        mutating func landed(at now: TimeInterval) -> Bool {
+            defer { askedAt = nil }
+            return isPending(at: now)
+        }
+
+        mutating func resigned() { askedAt = nil }
+        mutating func overtaken() { askedAt = nil }
+    }
+
+    /// The close's tidying, as a safety net: still active with no window, while an activation asked for is pending (its
+    /// notice still to come), the keyboard goes back.
+    static func yieldsAtTidy(active: Bool, windowShown: Bool, pending: Bool) -> Bool { active && !windowShown && pending }
+    /// The user made Fjord Computer active (⌘-Tab, the Dock) while its window was closing: the app delegate opens it again.
+    static var reopen: (() -> Void)?
+
+    private static func becameActiveNow() {
+        let ours = request.landed(at: ProcessInfo.processInfo.systemUptime)
+        switch onActivation(ours: ours, windowShown: AppWindowController.anyShown, closing: AppWindowController.anyClosing) {
+        case .yield: yieldFocus()
+        case .reopen: reopen?()
+        case .stay: break
+        }
+    }
+
+    enum Activation: Equatable { case stay, yield, reopen }
+
+    /// What Fjord Computer does as it becomes active. An activation it asked for (`ours`, an opening's) that lands with no
+    /// window open or on its way in (the close was quick: under Reduce Motion, or with no morph) gives the keyboard back
+    /// again. One it didn't ask for (⌘-Tab, the Dock) while the window closes is the user asking for it: the window opens
+    /// again. Anything else stays (the user's, or a banner's click, which opens what it opens).
+    static func onActivation(ours: Bool, windowShown: Bool, closing: Bool) -> Activation {
+        if ours { return windowShown ? .stay : .yield }
+        return closing ? .reopen : .stay
+    }
+
+    /// The keyboard back to the app that had it before, as the window starts closing: what you type next goes there at
+    /// once rather than after the close's motion (the Dock icon still goes at its end, `update`). Fjord Computer yields its
+    /// activation to that app, which is then asked to the front; with no such app, or one that won't come, Fjord Computer
+    /// just stops being active. Nothing when it is not active, or under a test.
+    static func yieldFocus() {
+        guard !UnderTest.isRunning, NSApp.isActive else { return }
+        // Asked again now: it may have quit, or turned into an app without windows, since it was remembered.
+        previous = takingFocusBack(previous)
+        guard let previous else {
+            NSApp.deactivate()
+            return
+        }
+        let asked: Bool
+        if #available(macOS 14, *) {
+            NSApp.yieldActivation(to: previous)
+            asked = previous.activate(from: .current, options: [])
+        } else {
+            asked = previous.activate(options: [])
+        }
+        if !asked { NSApp.deactivate() }
     }
 }
 
@@ -32,6 +156,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     static weak var active: AppWindowController?
     /// The controllers whose window has been brought in: whether another is still open when one's close is tidied.
     private static let broughtIn = NSHashTable<AppWindowController>.weakObjects()
+    /// Whether a window is open or on its way in (`isOpen`), of those brought in or the last one made.
+    static var anyShown: Bool { active?.isOpen == true || broughtIn.allObjects.contains { $0.isOpen } }
+    /// Whether a window is on its way out (its close's motion playing).
+    static var anyClosing: Bool { active?.phase == .closing || broughtIn.allObjects.contains { $0.phase == .closing } }
     static let autosave = "FjordApp"
     static let minSize = NSSize(width: 1000, height: 600)
 
@@ -145,14 +273,28 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// timeline or animation ticks, its tasks are cancelled), and back in it picks up where it was, its scroll positions and
     /// the rest of its state kept, its appearing (`onAppear`, `.task`, `onChange(initial:)`) run again as on a first open.
     private(set) var content: NSViewController?
-    /// The window's picture at its last close: the next opening starts on it (see `startOpening`).
+    /// The window's picture as it was last seen: kept the window as drawn while it is open and still (`keepPicture`), so a
+    /// close starts on it with nothing captured, then kept from the close for the next opening to start on (see
+    /// `startOpening`), until the window has stayed closed `keptPictureLife`.
     private var closedPicture: AppTransition.Picture?
+    /// Input to the window and what was asked of it, counted (see `AppTransition.Marks`).
+    private var changes = 0
+    private var inputWatch: Any?
+    /// Keeps `closedPicture` fresh while the window is open (see `keepPicture`): its next look, and whether it keeps.
+    private var pictureKeeper: Timer?
+    private var keeping = false
+    /// The keeper's last look at a window that had moved on from its picture, and the marks then: a picture is taken only
+    /// once the next look finds it alike (the window at rest).
+    private var restGlance: (glance: AppTransition.Glance, marks: AppTransition.Marks)?
+    /// Lets go of `closedPicture` once the window has stayed closed `keptPictureLife`.
+    private var pictureExpiry: DispatchWorkItem?
+    /// How long a closed window keeps its picture (some 15 to 30 MB): by then what it shows has likely moved on (its times,
+    /// its counts), so an opening would not hand over on it anyway.
+    static let keptPictureLife: TimeInterval = 300
     /// An opening whose window is still to be brought in: its generation.
     private var pending: Int?
-    /// A fresh picture the overlay of an opening still needs, and whether it fades in over the one shown. Taken once the
-    /// window has the keyboard (its buttons as they will be when it takes over), else just before it does.
-    private var owed: (generation: Int, crossFade: Bool)?
-    private var keyWatch: NSObjectProtocol?
+    /// The morph under way, from its request to its overlay gone: its signpost interval, and the motion gate it holds.
+    private var span = MorphSpan()
     /// Whether the window has the keyboard, or is about to (no banner for the Router then: you are looking at the cards).
     var isKey: Bool { window?.isKeyWindow == true || pending != nil }
 
@@ -167,11 +309,17 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         settle()
         var destination = destination
         if card != nil { destination = .router }
-        if let card { routerModel.select(card, store: store) }
+        if let card {
+            routerModel.select(card, store: store)
+            changes &+= 1
+        }
         // Another place, while on its way in: the navigator says so (see `init`).
         if let destination { navigator.go(destination.resolved(shown: shownIDs, tools: store.tools)) }
         let window = self.window ?? makeWindow()
         self.window = window
+        // Opened again: the kept picture is wanted after all.
+        pictureExpiry?.cancel()
+        pictureExpiry = nil
         // A window on its way out comes back from where it is (minimized on its way in included: its close's end would close
         // it otherwise); one on its way in just goes on.
         let reversing = phase == .closing && run != nil
@@ -184,16 +332,23 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // The bar as it is now, before whoever called us hides it.
         let morph = opening && !reversing && !AppTransition.reduceMotion ? bar() : nil
         if opening {
-            window.alphaValue = 0
+            // A live close fade reverses from what is on screen, without a transparent frame in between.
+            if !reversing || !window.isVisible { window.alphaValue = 0 }
             window.ignoresMouseEvents = true
             startOpening(window, bar: morph, reversing: reversing)
         } else {
             // One on its way in with its window still to come gets it then.
             if pending == nil { bringIn(window) }
         }
+        // The app regular and asked to the front in this turn, after the opening's first frame is submitted: the activation
+        // (the window's keyboard, and so the opening's fresh picture, wait for it) goes on while the window is brought in,
+        // rather than being asked only once it is.
+        AppPolicy.update(windowOpen: true)
+        AppPolicy.activate()
         // A card picked on the way in: the place may be the same, what it shows is not.
         if card != nil, arriving { contentChanged() }
         watchKeys()
+        watchInput()
         watchFront()
         reportFront()
     }
@@ -211,13 +366,15 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         self.window = window
         let content = makeContent(size: window.contentRect(forFrameRect: window.frame).size)
         self.content = content
+        seedCorner(window)
         window.contentViewController = content
         content.view.layoutSubtreeIfNeeded()
         window.contentViewController = nil
     }
 
-    /// What shows the window: its content (built once, kept across closes), the app regular and active, the window in front
-    /// with the keyboard. The heavy part of an opening, which waits until its morph's first frame has been submitted.
+    /// What shows the window: its content (built once, kept across closes), the window in front with the keyboard (once the
+    /// app is active: `show` asks for that). The heavy part of an opening, which waits until its morph's first frame has
+    /// been submitted.
     private func bringIn(_ window: NSWindow) {
         let signpost = MorphSignposts.signposter.beginInterval("Bring in")
         defer { MorphSignposts.signposter.endInterval("Bring in", signpost) }
@@ -228,11 +385,13 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             let content = self.content ?? makeContent(size: size)
             if content.view.frame.size != size { content.view.setFrameSize(size) }
             self.content = content
+            seedCorner(window)
+            // What changed while it was out is drawn as it is now, not played as it goes back in: from before the window takes
+            // it until it has been laid out and drawn, and a turn after.
+            WindowArrival.appWindow.arrive(laying: content.view)
             window.contentViewController = content
         }
         Self.broughtIn.add(self)
-        AppPolicy.update(windowOpen: true)
-        AppPolicy.activate()
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -243,17 +402,26 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
+        // A live close fade turned round stays above the bare overlay until that overlay is gone.
+        let reversingLive = reversing && window.isVisible
+        if !reversingLive { restoreLevel() }
+        // Work that can wait holds until the window has handed over (`handedOver`), or a close that takes over ends.
+        span.begin("Open")
         generation += 1
         let mine = generation
+        if reversingLive { AppTransition.fadeWindow(window, 1, {}) }
+        stopKeepingPicture()
         let current: AppTransition.Run?
-        let kept = closedPicture.flatMap { $0.fits(window) ? $0 : nil }
+        let chrome = glassWindow(window)
+        let glass = AppTransition.usesGlass
+        // Taken in another appearance, at another size or scale, with the sidebar folded otherwise: not even for a moment.
+        let kept = closedPicture.flatMap { $0.fits(window, glass: glass, sidebar: chrome.sidebar) ? $0 : nil }
         if reversing, let run {
             // Keep the overlay's bounds and coordinate origin for the whole trip, including this reversal.
             current = run
         } else {
             run?.end()
-            current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar, glassWindow: glassWindow(window))
-            current?.shows = kept?.destination
+            current = AppTransition.makeRun(for: window, picture: kept, bar: bar, glassWindow: chrome, glass: glass)
         }
         run = current
         guard let current else {
@@ -262,23 +430,26 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             finishOpening(mine)
             return
         }
-        // No picture yet, or another place's: the fresh one fades in over it. A close turned round takes a fresh one too,
-        // faded in over the one it shows: what the window shows may have changed while it was on its way out (the store,
-        // a message or a card asked for, another place) with nothing else to say so.
-        let other = current.shows != navigator.selection
+        // Whatever the overlay starts on is checked against the window at the handoff, and nothing is captured on the way:
+        // a picture still the window's is cut to the real window on, any other (none, another place's, one the window has
+        // moved on from since) fades into it.
         pending = mine
-        owed = (generation: mine, crossFade: reversing || other || kept == nil)
+        // The real window takes clicks only once it shows, at the handoff (`reveal`): before, the overlay may show another
+        // page than the one a click would land on, or the glass still be some 15 to 23 pt off its frame.
         current.open(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak window] in
             guard let self, let window, self.generation == mine else { return }
-            // The real window must be in, and the overlay show it as it is now, before it takes over: whatever has not
-            // happened yet happens now (the picture as the window is, key or not, since that is what will be seen).
+            // The real window must be in before it takes over. No picture is taken now: it would hold the handoff up. The
+            // overlay cuts to the real window when its picture is the window as drawn now, and fades into it otherwise.
             self.bringInPending(mine)
-            if self.owed != nil {
-                self.owed = nil
-                self.stopKeyWatch()
-                self.refresh(current, window)
-            }
-            current.handoff(reveal: { self.reveal(window) }, finished: { self.finishOpening(mine) })
+            // Looked at again whatever was checked before (a few ms, within the handoff's two-refresh lead): what the
+            // window's appearing changed a turn after the last look must not pop as the overlay cuts away.
+            let exact = current.picture?.exact == true && current.glance != nil
+                && AppTransition.glance(of: window)?.same(as: current.glance) == true
+            // Work that can wait goes once the real window shows (the overlay's shadow fades on the render server).
+            let checked = self.marks
+            current.handoff(fading: !exact, stillExact: { [weak self] in self?.marks == checked },
+                            reveal: { self.reveal(window) }, handedOver: { self.handedOver(mine) },
+                            finished: { self.finishOpening(mine) })
         }
         // The motion submitted to the render server, nothing captured or built yet: the rest waits a turn.
         AppTransition.flushInitial()
@@ -290,54 +461,192 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         guard pending == mine, generation == mine, phase == .opening, let window else { return }
         pending = nil
         bringIn(window)
-        payPicture(mine)
+        // Laid out and drawn now, while the overlay moves on the render server (still invisible, its layers committed with
+        // this turn): the window's first drawing after a close (some 20 to 30 ms, far more on a first opening) is then
+        // done by the handoff, which otherwise waited on it before the real window could show.
+        let warming = MorphSignposts.signposter.beginInterval("Warm window")
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        MorphSignposts.signposter.endInterval("Warm window", warming)
     }
 
-    /// The fresh picture the opening `mine` needs, once its window is in and has the keyboard (the app becomes active a
-    /// little after it is asked to: the picture waits for it, rather than being taken twice).
-    private func payPicture(_ mine: Int) {
-        guard let owed, owed.generation == mine, generation == mine, pending == nil, let window, let run else { return }
-        // The overlay has let go of its picture: the real window shows itself, nothing is owed.
-        guard !run.handedOver else {
-            self.owed = nil
-            stopKeyWatch()
-            return
-        }
-        guard AppTransition.isKey(window) else {
-            guard keyWatch == nil else { return }
-            keyWatch = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window,
-                                                              queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.stopKeyWatch()
-                    self?.payPicture(mine)
-                }
+    /// What may have changed the window since a picture was taken, besides its pixels (see `AppTransition.Marks`).
+    var marks: AppTransition.Marks {
+        AppTransition.Marks(changes: changes, inbox: store.inboxRevision, inboxDisplay: store.inboxDisplayRevision,
+                            router: store.routerRevision, shown: store.shownRevision)
+    }
+
+    /// Counts the user's input to the window (a key, a click, a scroll; not the pointer's moves, whose hovers are noise),
+    /// for `marks`.
+    private func watchInput() {
+        guard inputWatch == nil else { return }
+        inputWatch = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                                                                 .scrollWheel]) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, event.window === self.window else { return }
+                self.changes &+= 1
+                self.nudgeKeeper()
             }
+            return event
+        }
+    }
+
+    /// While the window is open, in front and has the keyboard (started as it opens or becomes key, stopped as it resigns
+    /// it or closes), its picture is kept the window as drawn, so a close starts on it at once with nothing captured:
+    /// half a second after it starts then about every second, once nothing was pressed or moved for three times what a
+    /// picture would cost (half a second at least), and no text is being composed, a glance says whether the window still
+    /// is what `closedPicture` shows, and when it isn't a picture is taken there and then, soft when a sharp one would
+    /// cost over `idleCaptureBudget`, at most a twentieth of the main thread's time (`mayCaptureAtIdle`). Not short of
+    /// memory.
+    func keepPictureFresh() {
+        // Only for a window there to close: shown, with the keyboard, in front.
+        guard AppTransition.enabled, let window, window.isVisible, AppTransition.isKey(window), AppTransition.isFront(window)
+        else { return }
+        keeping = true
+        keeperPace = Self.keeperPaces.shortest
+        scheduleKeeper(after: keeperPace)
+    }
+
+    /// The keeper's looks: every half second while the window changes, twice as far apart (up to 4 s) each look that
+    /// finds nothing to do; back to half a second on the user's input.
+    static let keeperPaces = (shortest: 0.5, longest: 4.0)
+
+    private func scheduleKeeper(after delay: TimeInterval) {
+        pictureKeeper?.invalidate()
+        // One look at a time: a controller gone takes its keeper with it, as no further look is asked.
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            MainActor.assumeIsolated {
+                self.pictureKeeper = nil
+                self.keepPicture()
+            }
+        }
+        timer.tolerance = delay / 4
+        // The default mode only: not while a scroll, a drag or a menu tracks.
+        RunLoop.main.add(timer, forMode: .default)
+        pictureKeeper = timer
+    }
+
+    private func stopKeepingPicture() {
+        keeping = false
+        restGlance = nil
+        pictureKeeper?.invalidate()
+        pictureKeeper = nil
+    }
+
+    /// The user did something to the window: the keeper looks again soon.
+    private func nudgeKeeper() {
+        guard keeping else { return }
+        keeperPace = Self.keeperPaces.shortest
+        if let fire = pictureKeeper?.fireDate, fire.timeIntervalSinceNow <= keeperPace { return }
+        scheduleKeeper(after: keeperPace)
+    }
+
+    /// How far apart the keeper's looks are now (see `keeperPaces`).
+    private(set) var keeperPace = keeperPaces.shortest
+
+    /// The kept picture let go once the window has stayed closed `after` (an opening calls it off).
+    private func expireKeptPicture(after: TimeInterval) {
+        pictureExpiry?.cancel()
+        let expiry = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.phase == .idle, self.window?.isVisible != true else { return }
+                self.closedPicture = nil
+                self.pictureExpiry = nil
+            }
+        }
+        pictureExpiry = expiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: expiry)
+    }
+
+    /// Whether the kept picture is a soft one (see `AppTransition.reducedScale`).
+    var keptPictureIsSoft: Bool { closedPicture?.exact == false }
+
+    /// Whether the kept picture is to be let go (the window closed, and not opened since).
+    var keptPictureExpires: Bool { pictureExpiry != nil }
+
+    /// The idle keeper's timer, while it runs (the tests look).
+    var keeperTimer: Timer? { pictureKeeper }
+
+    /// The picture the keeper would keep, taken at once at the window's own scale whatever its pace, phase or budget: for
+    /// the tests, which have no idle to wait for.
+    func keepPictureNow() {
+        guard let window, !memoryShort else { return }
+        closedPicture = AppTransition.picture(of: window, glassWindow: glassWindow(window), glass: AppTransition.usesGlass,
+                                              destination: navigator.selection, marks: marks)
+    }
+
+    /// One look of the idle keeper (see `keepPictureFresh`).
+    func keepPicture() {
+        defer { if keeping, pictureKeeper == nil { scheduleKeeper(after: keeperPace) } }
+        func slower() { keeperPace = min(keeperPace * 2, Self.keeperPaces.longest) }
+        guard let window, window.isVisible else { return stopKeepingPicture() }
+        guard phase == .idle, !memoryShort, AppTransition.isFront(window), AppTransition.isKey(window), !MotionGate.moving,
+              !AppTransition.composing(in: window) else { return }
+        let full = window.backingScaleFactor, soft = AppTransition.reducedScale(of: window)
+        let page = AppTransition.page(navigator.selection)
+        // The sharpest picture sure to be within the budget on this page, if any (`costs`).
+        func choice() -> (scale: CGFloat, cost: CFTimeInterval)? {
+            for scale in [full, soft] {
+                let cost = AppTransition.estimate(window, pixelScale: scale, page: page)
+                if cost <= AppTransition.idleCaptureBudget { return (scale, cost) }
+            }
+            return nil
+        }
+        // Idle long enough that a key typed after a pause like this one is not likely to wait on what the look draws.
+        let planned = choice()
+        guard AppTransition.inputIdle(max(0.5, 3 * (planned?.cost ?? AppTransition.idleCaptureBudget))) else {
+            keeperPace = Self.keeperPaces.shortest
             return
         }
-        self.owed = nil
-        stopKeyWatch()
-        refresh(run, window, crossFade: owed.crossFade)
+        let chrome = glassWindow(window)
+        let glass = AppTransition.usesGlass
+        let marks = self.marks
+        let kept = closedPicture.flatMap {
+            $0.fits(window, glass: glass, sidebar: chrome.sidebar) && $0.destination == navigator.selection ? $0 : nil
+        }
+        // As good as the keeper would make it (sharp, or soft when sharp costs too much).
+        let good = kept.map { $0.exact || (planned?.scale ?? soft) < full } ?? false
+        // Nothing typed, clicked, asked or synced since the kept picture: it still stands, with no glance (what moved
+        // since is the window's own noise, a ticking duration or the thinking dots, which a close forgives), but at the
+        // slowest pace, when a glance checks it moved no further than noise (what changes on its own, unmarked).
+        let now: AppTransition.Glance?
+        if let kept, good, kept.marks == marks {
+            guard keeperPace >= Self.keeperPaces.longest else { return slower() }
+            now = AppTransition.glance(of: window, page: page)
+            if now?.within(AppTransition.Glance.closeTolerance, of: kept.glance) == true { return }
+            // Moved on unmarked: no longer forgiven, and taken again once at rest.
+            closedPicture?.marks = nil
+        } else {
+            now = AppTransition.glance(of: window, page: page)
+        }
+        if let kept, good, now?.same(as: kept.glance) == true {
+            closedPicture?.marks = marks
+            return slower()
+        }
+        // A picture only of a window at rest: two looks in a row alike (but for noise), nothing happening between.
+        guard let rest = restGlance, rest.marks == marks,
+              now?.within(AppTransition.Glance.closeTolerance, of: rest.glance) == true else {
+            restGlance = now.map { ($0, marks) }
+            keeperPace = Self.keeperPaces.shortest
+            return
+        }
+        // Never one that may cost more than the budget, by what this page has cost lately (the glance just drawn included):
+        // a close without a fresh picture fades the live window instead.
+        guard let (scale, cost) = choice(), AppTransition.mayCaptureAtIdle(cost: cost) else { return }
+        if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
+                                               destination: navigator.selection, glance: now, pixelScale: scale,
+                                               marks: marks) {
+            closedPicture = picture
+            restGlance = nil
+            slower()
+        }
     }
 
-    /// The overlay's picture taken again, of the place the window shows now.
-    private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false) {
-        run.refresh(window, crossFade: crossFade)
-        run.shows = navigator.selection
-    }
-
-    /// What an opening's window shows changed after its overlay's picture was taken (another place, a card, a row or a
-    /// section asked for): a fresh one fades in over it, a turn later (once the change has been drawn), at the latest as
-    /// the real window takes over. Not once it has (its live pixels show).
+    /// Something else asked of the window (another place, a card, a row or a section), open or on its way in: no picture
+    /// taken before stands for it, whatever its pixels (an opening's handoff then fades).
     private func contentChanged() {
-        guard phase == .opening, let run, !run.handedOver else { return }
-        let mine = generation
-        owed = (mine, crossFade: true)
-        AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
-    }
-
-    private func stopKeyWatch() {
-        if let keyWatch { NotificationCenter.default.removeObserver(keyWatch) }
-        keyWatch = nil
+        changes &+= 1
     }
 
     /// What the glass morph needs of `window`: its capture flag, and its inset sidebar's frame (none during the onboarding,
@@ -357,19 +666,37 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// The opening `mine` has handed over: its interval ends and the motion gate opens.
+    private func handedOver(_ mine: Int) {
+        guard generation == mine else { return }
+        span.end()
+    }
+
     private func finishOpening(_ mine: Int) {
         guard generation == mine else { return }
-        stopKeyWatch()
+        // A reopened live close stays above the opaque bare overlay through the refresh wait and its fade.
+        // The run has ordered that overlay out before calling us, so lowering the window cannot hide its content.
+        restoreLevel()
+        // The picture the overlay handed over on is kept as it was taken (with the glance of what it shows), so a close at
+        // once starts on it when the window is still that (near enough); the idle keeper takes another once it has moved on.
+        if let run, let picture = run.picture, picture.key, picture.glance != nil, !memoryShort {
+            closedPicture = picture.handedOver(fading: run.fadesOut)
+        } else {
+            closedPicture = nil
+        }
         run = nil
         phase = .idle
-        // Used: the next close takes another.
-        closedPicture = nil
+        span.end()
+        keepPictureFresh()
         reportFront()
     }
 
     func close() {
-        // An opening whose window is not in yet: in now, so there is a window to close.
-        if let pending { bringInPending(pending) }
+        // The overlay can reverse before its window is brought in: cancel that turn without building or warming content.
+        if pending != nil, phase == .opening, let window {
+            if windowShouldClose(window) { window.close() }
+            return
+        }
         window?.performClose(nil)
     }
 
@@ -377,65 +704,142 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// overlay shrinks into the bar's cell, then it really closes.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard AppTransition.enabled, phase != .closing, phase == .opening || isFront else { return phase != .closing }
+        // Until the close's first frame is flushed: the time to the first moving frame.
+        let asked = MorphSignposts.signposter.beginInterval("Close to first flush")
         // An opening whose overlay has let go of its picture shows the real window already: it closes as an open one does.
         let interrupting = phase == .opening && run?.handedOver != true
+        let unshown = phase == .opening && pending != nil && !sender.isVisible
+        // One that has let go but whose overlay is still fading out over the real window (its picture, or its shadow):
+        // the close takes that overlay over, rather than dropping it half faded.
+        let fading = phase == .opening && !interrupting && run?.ended == false ? run : nil
         phase = .closing
+        // Held until the overlay is gone (`finishClosing`), or an opening that turns it round has handed over.
+        span.begin("Close")
         generation += 1
         let mine = generation
         pending = nil
-        owed = nil
-        stopKeyWatch()
         sender.ignoresMouseEvents = true
+        stopKeepingPicture()
         let existing = interrupting ? run : nil
         let current: AppTransition.Run?
+        var liveFade = false
+        var blended = false
+        let chrome = glassWindow(sender)
         if let existing {
             current = existing
         } else {
-            run?.end()
-            current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar(),
-                                            glassWindow: glassWindow(sender))
-            current?.shows = navigator.selection
+            if fading == nil { run?.end() }
+            let glass = AppTransition.usesGlass
+            let barMorph = AppTransition.reduceMotion ? nil : bar()
+            // The picture kept at idle, when the window is still (near enough, `Glance.closeTolerance`, nothing having
+            // happened to it since) as it was drawn then: the close starts on it at once. Nothing is ever captured here
+            // (what a capture costs depends on what the window shows: up to 520 ms); without such a picture the live
+            // window fades out in place over the overlay shrinking beneath it.
+            // The picture an opening still fading out just handed over on is newer than the kept one: looked at first.
+            let eligible = [fading?.picture, closedPicture].compactMap { $0 }.filter {
+                $0.fits(sender, glass: glass, sidebar: chrome.sidebar) && AppTransition.isKey(sender)
+                    && $0.destination == navigator.selection && $0.glance != nil
+            }
+            // A glance is work only a candidate can justify: a bare close starts moving without drawing the window.
+            let now = eligible.isEmpty ? nil : AppTransition.glance(of: sender)
+            let picture = eligible.first {
+                AppTransition.freshness(of: $0, glance: now, marks: marks, destination: navigator.selection,
+                                        tolerance: AppTransition.Glance.closeTolerance) != .stale
+            }
+            // The overlay still fading out is taken over only when it stands where this close would put one.
+            let compatible = fading.map {
+                $0.isGlass == glass && $0.windowFrame == sender.frame && $0.sidebar == chrome.sidebar
+                    && $0.windowRadius == AppTransition.cornerRadius(of: sender)
+            } ?? false
+            if let fading, compatible, fading.fadingContent {
+                // Its picture half faded into the real window: the close goes on from that blend, the live window fading
+                // out under it, rather than jumping back to a picture whole.
+                fading.resume()
+                current = fading
+                blended = true
+            } else if let fading, compatible {
+                // Only its shadow still fading: back on the window's picture whole (or its bare surface).
+                fading.takeBack(picture)
+                current = fading
+                liveFade = picture == nil
+            } else {
+                fading?.end()
+                current = AppTransition.makeRun(for: sender, picture: picture, bar: barMorph, glassWindow: chrome,
+                                                glass: glass)
+                liveFade = picture == nil
+            }
         }
         guard let current else {
-            finishClosing(sender, mine)
+            MorphSignposts.signposter.endInterval("Close to first flush", asked)
+            finishClosing(sender, mine, unshown: unshown)
             return false
         }
         run = current
-        // Kept for the next opening to start on, when it was taken with the window key, of the place it shows (an opening
-        // cut short may still show the place it started on), unless memory is short.
-        if !memoryShort, let image = current.image, current.imageIsKey, let place = current.shows {
-            closedPicture = AppTransition.Picture(image: image, frame: sender.frame, scale: sender.backingScaleFactor,
-                                                  destination: place, glass: current.isGlass)
+        // Kept for the next opening to start on, when it was taken with the window key, as it was taken (an opening cut
+        // short may still show the place, the sidebar or the size it started on), unless memory is short.
+        if !memoryShort, let picture = current.picture, picture.key {
+            // One half faded into the real window was not the window: no small difference is forgiven it.
+            closedPicture = picture.handedOver(fading: blended)
         }
-        let start = { [weak self, weak sender] in
-            guard let self, let sender, self.generation == mine else { return }
-            sender.orderOut(nil)
-            current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
-                guard let self, let sender, self.generation == mine else { return }
-                self.finishClosing(sender, mine)
-            }
-            guard self.generation == mine else { return }
-            self.onClosing?()
+        if liveFade {
+            // Above the overlay for its fade: the overlay's bare surface and glass shrink beneath the window going.
+            liftedLevel = liftedLevel ?? sender.level
+            sender.level = NSWindow.Level(rawValue: current.overlay.level.rawValue + 1)
         }
-        if interrupting {
-            start()
-        } else {
-            // The overlay shows the window before the real one goes: no frame without either.
+        if !interrupting, !blended {
+            // The overlay shows the window before the real one goes, in this turn: its frame is submitted to the render
+            // server ahead of the window going, which reaches the server after it, so no frame shows neither.
             current.present()
-            AppTransition.nextFrame(sender.screen, start)
+            CATransaction.flush()
         }
+        // Out of sight at once (a window's alpha is cheap); ordered out only once the motion is submitted, as ordering a
+        // key window out takes some 11 ms (its key and main status handed on). After the overlay's flush, not inside its
+        // transaction: if AppKit sends the alpha with the next commit, it lands with or after the overlay either way; if it
+        // sends it at once, only this order has the overlay's frame reach the server first.
+        if liveFade || blended {
+            AppTransition.fadeWindow(sender, 0) { [weak self, weak sender] in
+                guard let self, let sender, self.generation == mine else { return }
+                sender.orderOut(nil)
+                self.restoreLevel()
+            }
+        } else {
+            sender.alphaValue = 0
+        }
+        current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
+            guard let self, let sender, self.generation == mine else { return }
+            self.finishClosing(sender, mine, unshown: unshown)
+        }
+        MorphSignposts.signposter.endInterval("Close to first flush", asked)
+        if generation == mine, !liveFade, !blended { sender.orderOut(nil) }
+        if generation == mine { onClosing?() }
         return false
     }
 
-    private func finishClosing(_ window: NSWindow, _ mine: Int) {
+    /// The window's own level, while a close's live fade has it above the overlay.
+    private var liftedLevel: NSWindow.Level?
+
+    private func restoreLevel() {
+        guard let liftedLevel else { return }
+        window?.level = liftedLevel
+        self.liftedLevel = nil
+    }
+
+    private func finishClosing(_ window: NSWindow, _ mine: Int, unshown: Bool) {
         guard generation == mine else { return }
         run?.end()
         run = nil
         phase = .idle
+        span.end()
+        restoreLevel()
         window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false
-        window.close()
+        if unshown {
+            // A cancelled bring-in can reuse an already closed NSWindow, which sends no second willClose notification.
+            windowWillClose(Notification(name: NSWindow.willCloseNotification, object: window))
+        } else {
+            window.close()
+        }
     }
 
     /// Whether the window is in front of the user: the app is active and the window is on screen and not covered.
@@ -617,6 +1021,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) {
         window.map(TrafficLights.place)
         readCorner()
+        // Back in front with the keyboard (after a minimize, a hide, another app): the keeper looks again.
+        if phase == .idle { keepPictureFresh() }
+    }
+    /// Out of the keyboard: nothing to close from, so no picture to keep fresh, and no wakeups.
+    func windowDidResignKey(_ notification: Notification) {
+        stopKeepingPicture()
     }
     func windowDidEnterFullScreen(_ notification: Notification) { readCorner() }
     func windowDidExitFullScreen(_ notification: Notification) {
@@ -628,12 +1038,28 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private func readCorner() {
         guard let window else { return }
         let radius = AppTransition.cornerRadius(of: window)
+        if window.isVisible, !window.styleMask.contains(.fullScreen) { Self.knownRadius = radius }
+        if corner.radius != radius { corner.radius = radius }
+    }
+
+    /// The radius a window shown last reported, out of full screen: the next content starts with it.
+    private static var knownRadius: CGFloat?
+
+    /// The radius the content will have, given before it goes in (or is made), so that reading it again as the window
+    /// becomes key changes nothing: a change then would redraw the root's shapes in the middle of the opening.
+    private func seedCorner(_ window: NSWindow) {
+        let radius = window.styleMask.contains(.fullScreen) ? 0 : Self.knownRadius ?? AppTransition.cornerRadius(of: window)
         if corner.radius != radius { corner.radius = radius }
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Every close, a morph's or not (a window closed out of sight): the keeper stops, the picture is let go in a while.
+        stopKeepingPicture()
+        expireKeptPicture(after: Self.keptPictureLife)
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if let inputWatch { NSEvent.removeMonitor(inputWatch) }
+        inputWatch = nil
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         lastFront = nil
@@ -658,6 +1084,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 // must not take the policy from another that has opened since. Asked of the windows themselves, so a close
                 // whose tidying never came (or a controller gone) leaves nothing behind that reads as open.
                 Self.broughtIn.remove(self)
+                // An opening's activation landing after the close gave the keyboard back gives it back again as it lands
+                // (`AppPolicy.onActivation`); active already with that notice still to come, it goes back here.
+                if AppPolicy.yieldsAtTidy(active: NSApp.isActive, windowShown: Self.anyShown,
+                                          pending: AppPolicy.activationPending) { AppPolicy.yieldFocus() }
                 AppPolicy.update(windowOpen: Self.broughtIn.allObjects.contains { $0.isOpen })
             }
         }
@@ -742,68 +1172,91 @@ struct AppRootView: View {
     let navigator: AppNavigator
     let routerModel: RouterModel
     let hub: HubState
-    var search = InboxSearch()
-    var checksClaudeCode = true
-    var sidebar: SidebarState = .shared
+    let search: InboxSearch
+    let checksClaudeCode: Bool
+    let sidebar: SidebarState
     /// How the sidebar and the floating controls draw: the app's, or a fixed one in tests and shots.
-    var chrome: Chrome = .shared
+    let chrome: Chrome
     /// The window's corner radius, which the shapes inside it are concentric with.
-    var corner = WindowCorner()
+    let corner: WindowCorner
     /// The window's capture flag (`GlassCapture`): none in shots and tests, which draw no glass to capture.
-    var capture: GlassCapture? = nil
+    let capture: GlassCapture?
 
     static let sidebarWidth: CGFloat = 240
 
+    /// What the window's lists do to it, made once with the root: the same closures on every update, so the environment
+    /// that carries them never tells the views that read them (each row) that they changed.
+    private let actions: AppRootActions
+
+    @MainActor
+    init(store: Store, navigator: AppNavigator, routerModel: RouterModel, hub: HubState, search: InboxSearch? = nil,
+         checksClaudeCode: Bool = true, sidebar: SidebarState = .shared, chrome: Chrome = .shared,
+         corner: WindowCorner? = nil, capture: GlassCapture? = nil) {
+        self.store = store
+        self.navigator = navigator
+        self.routerModel = routerModel
+        self.hub = hub
+        self.search = search ?? InboxSearch()
+        self.checksClaudeCode = checksClaudeCode
+        self.sidebar = sidebar
+        self.chrome = chrome
+        self.corner = corner ?? WindowCorner()
+        self.capture = capture
+        actions = AppRootActions(store: store, navigator: navigator, routerModel: routerModel, hub: hub)
+    }
+
+    // Reads nothing that changes: what does is read by the small pieces below (the page, the corner, the follow-ups and the
+    // Router's offer), so a settings write, a corner read when the window becomes key or a category's change redraws them
+    // alone, not the root and every reader of its environment.
     var body: some View {
-        Group {
-            if store.settings.toolsPicked == true {
-                if #available(macOS 26, *) {
-                    InsetWindowLayout(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                                      checksClaudeCode: checksClaudeCode, sidebar: sidebar, chrome: chrome)
-                } else {
-                    flat(collapsed: sidebar.collapsed)
-                }
-            } else {
-                OnboardingView(store: store) {
-                    store.settings.toolsPicked = true
-                    navigator.go(store.firstPlace.resolved(shown: store.shownCategories.map(\.id), tools: store.tools))
-                }
-            }
-        }
-        .frame(minWidth: 640, minHeight: 600)
-        .environment(chrome)
-        .environment(\.glassCapture, capture)
-        // A shape inside the window can be concentric with its corners (`ConcentricRectangle`, `Theme.Radius.concentric`).
-        .containerShape(.rect(cornerRadius: corner.radius))
-        .foregroundStyle(Theme.text)
-        .modifier(Brand.Scheme())
-        .tipSpace()
-        .ignoresSafeArea(.container, edges: .top)
-        .background(CDS.Surface.s1)
-        .onChange(of: store.shownCategories.map(\.id)) { _, shown in navigator.settle(shown: shown, tools: store.tools) }
-        // Another place has its own pick and search; a row asked for there (a banner's click) stays.
-        .onChange(of: navigator.selection) { _, place in
-            search.end()
-            routerModel.endSearch()
-            if let pick = hub.selection, let tab = place.tab, store.entries(in: tab).contains(where: { "i:" + $0.id == pick }) { return }
-            hub.selection = nil
-            hub.keyboardSelection = nil
-        }
-        .onChange(of: store.tools) { _, tools in navigator.settle(shown: store.shownCategories.map(\.id), tools: tools) }
-        .environment(\.openRouter) { card in
+        AppRootPage(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                    checksClaudeCode: checksClaudeCode, sidebar: sidebar, chrome: chrome)
+            .frame(minWidth: 640, minHeight: 600)
+            .environment(chrome)
+            .environment(\.glassCapture, capture)
+            // A shape inside the window can be concentric with its corners (`ConcentricRectangle`, `Theme.Radius.concentric`).
+            .modifier(WindowCornerShape(corner: corner))
+            .foregroundStyle(Theme.text)
+            .modifier(Brand.Scheme())
+            .tipSpace()
+            .ignoresSafeArea(.container, edges: .top)
+            .background(CDS.Surface.s1)
+            .modifier(AppRootFollow(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search))
+            .environment(\.openRouter, actions.openRouter)
+            .environment(\.pickRouterCard, actions.pickRouterCard)
+            // Chips in the window's own lists: a place, or the Router on the message an action left in its conversation.
+            .environment(\.openApp, actions.openApp)
+            .environment(\.openRouterMessage, actions.openRouterMessage)
+            .environment(\.openChange, actions.openChange)
+            .modifier(AppRootRouterOffer(store: store, openInRouter: actions.openInRouter))
+            // Its content put back in after a close draws what changed meanwhile as it is (`WindowArrival`).
+            .windowArrival()
+    }
+}
+
+/// The window's actions on itself, for its lists' chips, cards and changes (see `AppRootView.actions`).
+@MainActor
+final class AppRootActions {
+    let openRouter: (String?) -> Void
+    let pickRouterCard: (String) -> Void
+    let openInRouter: (String) -> Void
+    let openApp: (AppDestination) -> Void
+    let openRouterMessage: (UUID) -> Void
+    let openChange: (FjordChange) -> Void
+
+    init(store: Store, navigator: AppNavigator, routerModel: RouterModel, hub: HubState) {
+        openRouter = { card in
             if let card { routerModel.select(card, store: store) }
             navigator.go(.router)
         }
-        .environment(\.pickRouterCard) { card in routerModel.select(card, store: store) }
-        // A row's "Open in Router", while the Router is on.
-        .environment(\.openInRouter, store.offers(.openInRouter) ? { routerModel.open(thing: $0, in: navigator) } : nil)
-        // Chips in the window's own lists: a place, or the Router on the message an action left in its conversation.
-        .environment(\.openApp) { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), tools: store.tools)) }
-        .environment(\.openRouterMessage) { message in
+        pickRouterCard = { card in routerModel.select(card, store: store) }
+        openInRouter = { routerModel.open(thing: $0, in: navigator) }
+        openApp = { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), tools: store.tools)) }
+        openRouterMessage = { message in
             routerModel.show(message: message)
             navigator.go(.router)
         }
-        .environment(\.openChange) { change in
+        openChange = { change in
             switch change.target(in: store) {
             case .category(let id): navigator.go(.categories); hub.openCategory(id)
             case .group(let id): navigator.go(.categories); hub.openGroup(id)
@@ -818,6 +1271,75 @@ struct AppRootView: View {
             }
         }
     }
+}
+
+/// The window's corners for the shapes inside it, read here alone: a new radius redraws what is concentric with them.
+private struct WindowCornerShape: ViewModifier {
+    let corner: WindowCorner
+
+    func body(content: Content) -> some View { content.containerShape(.rect(cornerRadius: corner.radius)) }
+}
+
+/// A row's "Open in Router", while the Router is on: the one value of the root's environment that follows the store.
+private struct AppRootRouterOffer: ViewModifier {
+    let store: Store
+    let openInRouter: (String) -> Void
+
+    func body(content: Content) -> some View {
+        content.environment(\.openInRouter, store.offers(.openInRouter) ? openInRouter : nil)
+    }
+}
+
+/// What the window keeps in step as the store and the place change: the place settled on one that exists, and another
+/// place's own pick and search.
+private struct AppRootFollow: ViewModifier {
+    let store: Store
+    let navigator: AppNavigator
+    let routerModel: RouterModel
+    let hub: HubState
+    let search: InboxSearch
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: store.shownCategories.map(\.id)) { _, shown in navigator.settle(shown: shown, tools: store.tools) }
+            // Another place has its own pick and search; a row asked for there (a banner's click) stays.
+            .onChange(of: navigator.selection) { _, place in
+                search.end()
+                routerModel.endSearch()
+                if let pick = hub.selection, let tab = place.tab, store.entries(in: tab).contains(where: { "i:" + $0.id == pick }) { return }
+                hub.selection = nil
+                hub.keyboardSelection = nil
+            }
+            .onChange(of: store.tools) { _, tools in navigator.settle(shown: store.shownCategories.map(\.id), tools: tools) }
+    }
+}
+
+/// The window's page: the onboarding until the tools are picked, then the sidebar and the destination.
+private struct AppRootPage: View {
+    let store: Store
+    let navigator: AppNavigator
+    let routerModel: RouterModel
+    let hub: HubState
+    let search: InboxSearch
+    let checksClaudeCode: Bool
+    let sidebar: SidebarState
+    let chrome: Chrome
+
+    var body: some View {
+        if store.settings.toolsPicked == true {
+            if #available(macOS 26, *) {
+                InsetWindowLayout(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                                  checksClaudeCode: checksClaudeCode, sidebar: sidebar, chrome: chrome)
+            } else {
+                flat(collapsed: sidebar.collapsed)
+            }
+        } else {
+            OnboardingView(store: store) {
+                store.settings.toolsPicked = true
+                navigator.go(store.firstPlace.resolved(shown: store.shownCategories.map(\.id), tools: store.tools))
+            }
+        }
+    }
 
     /// macOS 14 and 15: the flat sidebar beside the page, the top bar the sidebar's ground the whole width. The sidebar
     /// toggle, back and forward stay put after the window's three buttons: over the sidebar when it is out, at the
@@ -828,7 +1350,7 @@ struct AppRootView: View {
         return HStack(spacing: 0) {
             AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
                 .padding(.top, CDS.TitleBar.header)
-                .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
+                .frame(width: collapsed ? AppSidebar.railWidth : AppRootView.sidebarWidth, alignment: .leading)
                 .frame(maxHeight: .infinity)
                 .clipped()
                 .background(CDS.Surface.sidebar)

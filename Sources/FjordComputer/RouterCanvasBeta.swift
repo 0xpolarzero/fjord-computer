@@ -47,7 +47,7 @@ struct CanvasPage: View {
                     .padding(.trailing, CanvasMetrics.pad)
                     .padding(.top, Self.inset)
                     .frame(width: size.width, alignment: .trailing)
-                HistoryColumn(store: store, model: model, bar: false)
+                HistoryColumn(store: store, model: model, bar: false, hidden: !open)
                     .column(width)
                     .frame(width: width, height: max(0, size.height - Self.panelTop - Self.inset))
                     .background(CDS.Surface.s1)

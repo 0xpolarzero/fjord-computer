@@ -127,6 +127,6 @@ private final class Gate {
 }
 
 /// Waits for `condition`, which something the test started brings about (see `waitUntil`).
-@MainActor private func eventually(_ condition: () -> Bool) async throws {
-    await waitUntil(condition)
+@MainActor private func eventually(sourceLocation: SourceLocation = #_sourceLocation, _ condition: () -> Bool) async throws {
+    await waitUntil(sourceLocation: sourceLocation, condition)
 }

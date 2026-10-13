@@ -31,8 +31,8 @@ import Testing
         return d
     }
 
-    private func departures(_ settled: Set<UUID>, _ decisions: [RouterDecision]) -> (departures: [RouterFlights.Departure], settled: Set<UUID>) {
-        RouterFlights.departures(settled: settled, now: decisions, folders: folders) { ["n": "/code/web"][$0] }
+    private func departures(_ settled: Set<UUID>, _ decisions: [RouterDecision]) -> (departures: [CanvasDepartures.Departure], settled: Set<UUID>) {
+        CanvasDepartures.departures(settled: settled, now: decisions, folders: folders) { ["n": "/code/web"][$0] }
     }
 
     @Test func onlyYourMessagesUnderWayWaitAndAQuestionAskedBackStandsForItsOwn() {
@@ -42,13 +42,13 @@ import Testing
         action.fromAction = SessionOrigin(category: "CI", thing: "build", actionID: "a", runID: "r")
         let cardAction = RouterDecision(at: now, trigger: .you("Answered the form"), decision: .init(intent: "answer"))
         let done = message("earlier", outcome: .done)
-        let pending = RouterFlights.pending([typed, asked, action, cardAction, done], asking: [asked.id])
+        let pending = CanvasDepartures.pending([typed, asked, action, cardAction, done], asking: [asked.id])
         #expect(pending.map(\.id) == [typed.id])
     }
 
     @Test func aMessageSentToASessionFliesToItsCardBeforeItsRow() {
         var sent = message("use sqlite", sentTo: "a")
-        let settled = RouterFlights.settled([sent])
+        let settled = CanvasDepartures.settled([sent])
         #expect(settled.isEmpty)
         sent.outcome = .done
         let out = departures(settled, [sent])

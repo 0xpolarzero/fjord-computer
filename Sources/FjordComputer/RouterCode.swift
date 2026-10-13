@@ -41,12 +41,18 @@ struct RouterMain: View {
     static let space = "routerMain"
 
     var body: some View {
+        let flights = model.flights
         page
-            .coordinateSpace(.named(Self.space))
-            // Your messages flying to their cards on the canvas (RouterCanvasPending.swift), over everything.
+            // Your messages in flight, from over the composer to where each went (`RouterFlights`).
             .overlay {
                 if model.layout == .canvas { CanvasFlights(canvas: model.canvas) }
+                else { FlightLayer(store: store, flights: flights) }
             }
+            .coordinateSpace(.named(Self.space))
+            .coordinateSpace(.named(FlightSpace.name))
+            .onPreferenceChange(FlightFramesKey.self) { flights.frames = $0 }
+            .environment(flights)
+            .onAppear { flights.landedInHistory = { [weak model] in model?.show(.history) } }
     }
 
     @ViewBuilder private var page: some View {

@@ -34,6 +34,34 @@ import Testing
         #expect(s.doneEntries == done, sourceLocation: sourceLocation)
     }
 
+    @Test func namingACategoryLeavesTheInboxAsItWasButItsSearchFindsTheNewName() {
+        let s = store([pr(1, minutesAgo: 30)])
+        _ = s.entries
+        let revision = s.inboxRevision
+        #expect(s.inboxSearchKeys.values.allSatisfy { !$0.contains("renamed") })
+        // Each keystroke of a name, a symbol, a colour: what is in the inbox is the same.
+        s.categories[0].name = "Renamed"
+        s.categories[0].symbol = "star"
+        #expect(s.inboxRevision == revision && s.inboxMemo.revision == revision)
+        #expect(s.inboxSearchKeys.values.allSatisfy { $0.contains("renamed") })
+        expectFresh(s)
+        // A rule is another inbox, and so is the order.
+        s.categories[0].rules = []
+        #expect(s.inboxRevision != revision)
+        expectFresh(s)
+    }
+
+    @Test func rulesOffAreCountedOncePerChangeOfTheRules() {
+        let s = store([pr(1, minutesAgo: 30)])
+        let id = mine(s)
+        #expect(s.rulesOff(id) == 0)
+        #expect(s.rulesOffMemo?.revision == s.inboxRevision)
+        s.categories[0].name = "Renamed"
+        #expect(s.rulesOff(id) == 0)
+        s.categories[0].rules[0].scope.in = Pick(include: [.group(UUID())])
+        #expect(s.rulesOff(id) == 1)
+    }
+
     @Test func aCategorysEntriesAreSortedOnceAndKeptUntilSomethingChanges() {
         let s = store([pr(1, minutesAgo: 30), pr(2, minutesAgo: 10), pr(3, minutesAgo: 20)])
         #expect(numbers(s.entries(in: mine(s))) == [2, 3, 1])
@@ -178,7 +206,7 @@ import Testing
         let thing = InboxFixture.pr(1, updated: Date().addingTimeInterval(-86_400 + 0.5))
         let store = InboxFixture.store([thing], category: stale(days: 1))
         #expect(store.entries.isEmpty)
-        await waitUntil(within: 30) { !store.entries.isEmpty }
+        await waitUntil { !store.entries.isEmpty }
         #expect(store.entries.map(\.id) == [thing.id])
     }
 
@@ -189,7 +217,7 @@ import Testing
         store.notifier.onPost = { posted.append($0.identifier) }
         store.announceInbox()
         let revision = store.inboxRevision
-        await waitUntil(within: 30) { store.inboxRevision != revision && !posted.isEmpty }
+        await waitUntil { store.inboxRevision != revision && !posted.isEmpty }
         #expect(store.inboxRevision != revision)
         #expect(posted == ["inbox:\(thing.id)"])
     }

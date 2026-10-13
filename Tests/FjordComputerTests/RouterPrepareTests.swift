@@ -269,7 +269,7 @@ import Testing
         let path = script(dir, "stubborn", #"exec /usr/bin/perl -e '$SIG{TERM} = "IGNORE"; sleep 1 while 1'"#)
         let handle = OneShot.Handle()
         let running = Task { try await OneShot.run(path, [], cwd: dir.url, timeout: 60, handle: handle) }
-        while !handle.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
+        await waitUntilAnywhere { handle.isRunning }
         try await Task.sleep(nanoseconds: 300_000_000)
         let pid = handle.pid
         let start = Date()
@@ -299,17 +299,14 @@ import Testing
         }
         reader.start()
         try pipe.fileHandleForWriting.write(contentsOf: Data("hello".utf8))
-        #expect(entered.wait(timeout: .now() + 120) == .success)
+        #expect(entered.wait(timeout: .now() + waitWatchdog) == .success)
         reader.stop()
-        let done = FormWriter.Flag()
-        DispatchQueue.global().async { reader.waitDone(); done.set() }
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { reader.waitDone(); done.signal() }
         // While its read is under way, stopping doesn't count as done: the pipe can't be closed under it.
-        Thread.sleep(forTimeInterval: 0.2)
-        #expect(!done.isSet)
+        #expect(done.wait(timeout: .now() + 0.2) == .timedOut)
         release.signal()
-        let until = Date().addingTimeInterval(120)
-        while !done.isSet, Date() < until { Thread.sleep(forTimeInterval: 0.01) }
-        #expect(done.isSet)
+        #expect(done.wait(timeout: .now() + waitWatchdog) == .success)
         // Now it's safe to close; what was read is kept.
         try pipe.fileHandleForReading.close()
         #expect(reader.data == Data("hello".utf8))

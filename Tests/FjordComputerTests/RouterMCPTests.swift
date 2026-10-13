@@ -163,7 +163,7 @@ import Testing
         ] as [String: Any])
         try? pending.write(to: dir.path("support/forms/cli-local_a-1-1.json"))
         s.formBridge.refresh()
-        await waitUntil(within: 120) { !s.pendingForms.isEmpty }
+        await waitUntil { !s.pendingForms.isEmpty }
         #expect(!s.pendingForms.isEmpty, "the bridge never read the form")
         // A live process for one of them.
         let sessions = dir.path("claude/sessions")
@@ -808,7 +808,7 @@ import Testing
         let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError ? out.text.contains("couldn't sign") : t.prepared["Fix the login bug"] != nil)
         // Its reload did start (it may start after the deadline already passed): waited for, then let go.
-        await waitUntil(within: 120) { held.waiting }
+        await waitUntil { held.waiting }
         #expect(held.waiting)
         held.open()
         // Odd spans are made safe to compute with.

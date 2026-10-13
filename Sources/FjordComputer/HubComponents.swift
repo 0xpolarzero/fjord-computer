@@ -88,6 +88,7 @@ struct CappedScroll<Content: View>: View {
     @State private var lazyShort: CGFloat?
     @State private var edges: [CGFloat] = []
     @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.windowArrival) private var arrival
 
     var body: some View {
         // Whole rows only; with no rows marked (or none ending within the cap) the plain cap.
@@ -135,7 +136,10 @@ struct CappedScroll<Content: View>: View {
                 }
             }
             .onChange(of: hub?.keyboardSelection) { _, request in
-                if let id = request?.id { withAnimation(Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(id) } }
+                // While the window's content arrives, a jump (`WindowArrival`).
+                if let id = request?.id {
+                    withAnimation(arrival?.active == true ? nil : Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(id) }
+                }
             }
         }
     }
@@ -183,8 +187,8 @@ struct EntryRow: View {
     @Environment(\.openInRouter) private var openInRouter
 
     private var thing: Thing { entry.thing }
-    /// Compared here, in this row's own body: hovering another row doesn't rebuild the whole hub.
-    private var selected: Bool { hub.selection == "i:" + entry.id }
+    /// Read here, in this row's own body, through its own mark: hovering another row redraws neither the hub nor this row.
+    private var selected: Bool { hub.isSelected("i:" + entry.id) }
     private var open: Bool { hover || selected }
     private var unread: Bool { entry.isUnread && !entry.isDone }
     private var tint: Color { store.categories.first { $0.id == entry.categoryID }?.color.swatch ?? Theme.tertiary }
@@ -321,9 +325,10 @@ struct EntryRow: View {
             .frame(width: size, height: size)
     }
 
-    /// Room the controls take over the title line: 24pt buttons 2 apart, 3 from the end, and 4 before them.
+    /// Room the controls take over the title line: 24pt buttons 2 apart, 3 from the end, and 4 before them. As many as
+    /// `actions` draws: read or unread, its toggle, archive and GitHub; archived, back to inbox and GitHub; the Router's.
     private var actionsWidth: CGFloat {
-        let n = CGFloat((unread || entry.isDone ? 3 : 2) + (openInRouter == nil ? 0 : 1))
+        let n = CGFloat((entry.isDone ? 2 : 3) + (openInRouter == nil ? 0 : 1))
         return n * IconButton.Size.row + (n - 1) * CDS.RowControl.gap + CDS.RowControl.inset + 4
     }
 
@@ -335,11 +340,11 @@ struct EntryRow: View {
                            size: size) { store.restore(entry) }
             } else {
                 if unread {
-                    IconButton(symbol: "checkmark", help: "Mark as seen", detail: store.shortcut(.toggleRead).display, size: size) {
+                    IconButton(symbol: "envelope.open", help: "Mark as read", detail: store.shortcut(.toggleRead).display, size: size) {
                         store.markSeen(entry)
                     }
                 } else {
-                    IconButton(symbol: "circlebadge", help: "Mark as unread", detail: store.shortcut(.toggleRead).display, size: size) {
+                    IconButton(symbol: "envelope.badge", help: "Mark as unread", detail: store.shortcut(.toggleRead).display, size: size) {
                         store.markUnread(entry)
                     }
                 }
@@ -352,14 +357,14 @@ struct EntryRow: View {
                     openInRouter(entry.id)
                 }
             }
-            IconButton(symbol: "arrow.up.right", help: "Open on GitHub", detail: store.shortcut(.openItem).display, size: size) {
+            IconButton(symbol: CategorySection.githubMark, help: "Open on GitHub", detail: store.shortcut(.openItem).display, size: size) {
                 store.open(entry)
             }
         }
     }
 }
 
-/// An entry's context menu: open (on GitHub, in the Router), copy link, seen, archive.
+/// An entry's context menu: open (on GitHub, in the Router), copy link, read, archive.
 struct EntryMenu: View {
     let entry: InboxEntry
     let store: Store
@@ -379,7 +384,7 @@ struct EntryMenu: View {
         if entry.isDone {
             Button("Back to inbox") { store.restore(entry) }
         } else {
-            if entry.isUnread { Button("Mark as seen") { store.markSeen(entry) } }
+            if entry.isUnread { Button("Mark as read") { store.markSeen(entry) } }
             else { Button("Mark as unread") { store.markUnread(entry) } }
             Button("Archive") { store.finish(entry) }
         }
@@ -1052,6 +1057,17 @@ struct UpdateAnnouncer: View {
 
 /// The Router in the bar: its symbol, and on its corner how many cards are open, amber while one needs you (a question, a
 /// plan, a stuck turn, a last step), blue when they are only worth a look, nothing at zero. A click opens the Router in the app window.
+/// The bar's Router cell with the Router's counts, read here (`Store.routerCounts`): only it redraws as they change.
+struct CountedRouterCell: View {
+    let store: Store
+    let action: () -> Void
+
+    var body: some View {
+        let counts = store.routerCounts
+        RouterCell(needsYou: counts.needsYou, notes: counts.notes, action: action)
+    }
+}
+
 struct RouterCell: View {
     let needsYou: Int
     let notes: Int

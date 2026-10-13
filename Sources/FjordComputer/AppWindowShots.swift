@@ -11,7 +11,13 @@ enum AppWindowDev {
         Demo.populate(store, .router)
         let controller = AppWindowController(store: store, remembers: false)
         controller.onClose = { NSApp.terminate(nil) }
-        controller.show()
+        if CommandLine.arguments.contains(RouterFlightDemo.flag) {
+            RouterFlightDemo.install(store)
+            controller.show(.router)
+            RouterFlightDemo.play(store: store, model: controller.routerModel)
+        } else {
+            controller.show()
+        }
         return controller
     }
 }
@@ -367,7 +373,7 @@ enum AppWindowShots {
             if let card = store.router.cards.first(where: { $0.kind == .plan && $0.isOpen }) {
                 model.canvas.land("run it on the lab box first", on: card.id)
             }
-            guard let i = store.router.decisions.lastIndex(where: { RouterFlights.isMessage($0) && $0.outcome == .pending
+            guard let i = store.router.decisions.lastIndex(where: { CanvasDepartures.isMessage($0) && $0.outcome == .pending
                                                                     && !store.routerDispatcher.askBacks.map(\.id).contains($0.id) }) else { return }
             var decisions = store.router.decisions
             let text = decisions[i].triggerText

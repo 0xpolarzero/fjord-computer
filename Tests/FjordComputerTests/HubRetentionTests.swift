@@ -15,6 +15,14 @@ extension WindowSeams {
     @Suite(.hostsWindows) struct HubPointerRetention {
         static let edges: [DockEdge] = [.right, .left, .top, .bottom]
 
+        /// Runs `body` for each at once, each on a bar and window of its own: their waits (a dwell, a reveal, a grace) overlap
+        /// rather than add up. Each rig's pointer is its own, so no bar hears another's.
+        static func concurrently<T: Sendable>(_ each: [T], _ body: @escaping @Sendable @MainActor (T) async -> Void) async {
+            await withTaskGroup(of: Void.self) { group in
+                for one in each { group.addTask { await body(one) } }
+            }
+        }
+
         /// An element of the hub as drawn: its label and where it is on screen.
         struct Drawn: Equatable {
             let role: String
@@ -34,6 +42,8 @@ extension WindowSeams {
             /// Where the pointer was heard but the hub didn't count it as on the hub, though it was drawn there.
             var dropped: [String] = []
             var hoveredSection: HubSection?
+            /// What `drawn` last read: the edges a walk steps either side of.
+            var lastDrawn: [Drawn] = []
 
             init(edge: DockEdge, scenario: Demo.Scenario, origin: NSPoint? = nil) async {
                 _ = NSApplication.shared
@@ -82,21 +92,50 @@ extension WindowSeams {
                 }
             }
 
-            /// Moves the pointer there in 2pt steps, staying on what is drawn (each point is on the bar or the panel).
+            /// Moves the pointer there, staying on what is drawn (each point is on the bar or the panel): every 8pt, and half a
+            /// point either side of each of the hub's edges it crosses (`edges`), so any strip left out of the hub's area
+            /// wider than half a point is stepped on.
             func walk(to target: NSPoint, onHub: Bool = true, _ what: String) async {
                 let start = pointer
-                let d = hypot(target.x - start.x, target.y - start.y)
-                let steps = max(1, Int((d / 2).rounded(.up)))
-                for i in 1...steps {
-                    let t = CGFloat(i) / CGFloat(steps)
-                    await move(to: NSPoint(x: start.x + (target.x - start.x) * t, y: start.y + (target.y - start.y) * t),
-                               expectOnHub: onHub, what)
+                let dx = target.x - start.x, dy = target.y - start.y
+                let d = hypot(dx, dy)
+                var ts: Set<CGFloat> = [1]
+                for along in stride(from: 8, to: d, by: 8) { ts.insert(along / d) }
+                let (xs, ys) = edges()
+                for (from, delta, lines) in [(start.x, dx, xs), (start.y, dy, ys)] where abs(delta) > 0.01 {
+                    for line in lines {
+                        for side: CGFloat in [-0.5, 0.5] {
+                            let t = (line + side - from) / delta
+                            if t > 0, t < 1 { ts.insert(t) }
+                        }
+                    }
                 }
+                for t in ts.sorted() { await move(to: NSPoint(x: start.x + dx * t, y: start.y + dy * t), expectOnHub: onHub, what) }
             }
 
-            /// Lets SwiftUI lay out and draw what it has pending.
+            /// Where the hub's area could end: the bar's and the panels' edges, as is and widened by the controller's slack
+            /// (1pt reaching the hub, 4 once it has the pointer), and those of everything drawn when last read (a row's top
+            /// and bottom, so the gap between two rows). That area is those rectangles together, so a strip it leaves out
+            /// starts and ends on one of these lines.
+            func edges() -> (x: Set<CGFloat>, y: Set<CGFloat>) {
+                var xs = Set<CGFloat>(), ys = Set<CGFloat>()
+                for piece in [bar] + hub.panelsOnScreen {
+                    for slack: CGFloat in [0, 1, 4] {
+                        let r = piece.insetBy(dx: -slack, dy: -slack)
+                        xs.formUnion([r.minX, r.maxX]); ys.formUnion([r.minY, r.maxY])
+                    }
+                }
+                for item in lastDrawn { xs.formUnion([item.frame.minX, item.frame.maxX]); ys.formUnion([item.frame.minY, item.frame.maxY]) }
+                return (xs, ys)
+            }
+
+            /// Lets SwiftUI lay out and draw what it has pending, to the half point: a spring's tail creeps on for another
+            /// half second in hundredths of a point, which no walk here needs.
             func settle() async {
-                await waitUntilSteady(turns: 6) { drawn().map(\.frame) }
+                await waitUntilSteady(turns: 3) {
+                    drawn().map { NSRect(x: ($0.frame.minX * 2).rounded() / 2, y: ($0.frame.minY * 2).rounded() / 2,
+                                         width: ($0.frame.width * 2).rounded() / 2, height: ($0.frame.height * 2).rounded() / 2) }
+                }
             }
 
             /// Everything drawn in the hub's window, with where it is on screen. Elements in a scroll view are kept only
@@ -117,7 +156,8 @@ extension WindowSeams {
                 }
                 visit(host, clip: nil)
                 // Not the window-sized root.
-                return out.filter { $0.frame.width < 600 && $0.frame.height < 900 }
+                lastDrawn = out.filter { $0.frame.width < 600 && $0.frame.height < 900 }
+                return lastDrawn
             }
 
             var bar: NSRect { controller.barScreenFrame }
@@ -145,7 +185,7 @@ extension WindowSeams {
                 await move(to: cell.centre, expectOnHub: true, "on the \(label) cell")
                 hover(section, tab: tab)
                 // The dwell.
-                try? await Task.sleep(for: .milliseconds(160))
+                await waitUntil { hub.section == section }
                 await settle()
                 return hub.section == section
             }
@@ -174,8 +214,9 @@ extension WindowSeams {
                 await walk(to: p, what)
             }
 
-            /// Out of the panel on its far side, away from the bar, and on out of the window.
-            func leave(settling: Bool = true) async {
+            /// Out of the panel on its far side, away from the bar, and on out of the window, until it has closed; `settling`,
+            /// until it has faded out too, so the next opens afresh.
+            func leave(settling: Bool = false) async {
                 let far: NSPoint = switch edge {
                 case .right: NSPoint(x: window.frame.minX - 40, y: pointer.y)
                 case .left: NSPoint(x: window.frame.maxX + 40, y: pointer.y)
@@ -186,13 +227,14 @@ extension WindowSeams {
                 // Off the hub, the window lets clicks through to what's under it at once, even before the panel closes.
                 #expect(window.ignoresMouseEvents, "\(edge): off the hub, the window still takes the mouse")
                 await move(to: away)
-                // Past the leave grace; settling, past the closing panel's fade too.
-                try? await Task.sleep(for: .milliseconds(settling ? 400 : 140))
+                await waitUntil { hub.section == nil }
+                if settling { await waitUntil { !hub.pieces.allObjects.contains { $0.section != nil && $0.screenFrame != nil } } }
                 await move(to: away)
             }
 
             /// Every item of the open panel, top to bottom, each in turn: crossing from the bar to the first, then from one
-            /// to the next; the row under the pointer is picked (its actions show) as SwiftUI's hover would.
+            /// to the next; the row under the pointer is picked (its actions show) as SwiftUI's hover would. Picking a row
+            /// moves nothing the controller reads, so only the last is waited out before a last move on it.
             func hoverEachItem(_ what: String) async {
                 let items = panelItems()
                 #expect(!items.isEmpty, "\(edge) \(what): nothing drawn in the panel")
@@ -203,10 +245,13 @@ extension WindowSeams {
                     if first { await cross(to: now.centre, "\(what): \(now.label)") } else { await walk(to: now.centre, "\(what): \(now.label)") }
                     first = false
                     if let id = rowID(now.label) { hub.selection = "i:" + id }
-                    await settle()
-                    // A small move on it, after anything the hover changed.
+                    // A turn for SwiftUI to show the pick, then a small move on it.
+                    try? await Task.sleep(for: .milliseconds(1))
                     await move(to: NSPoint(x: pointer.x + 1, y: pointer.y + 1), expectOnHub: true, "\(what): on \(now.label)")
                 }
+                // Once what the hover changed has settled.
+                await settle()
+                await move(to: NSPoint(x: pointer.x - 1, y: pointer.y - 1), expectOnHub: true, "\(what): settled")
             }
 
             /// The inbox row a label names.
@@ -220,135 +265,123 @@ extension WindowSeams {
             }
         }
 
-        // MARK: The inbox, each tab from its own cell
+        // MARK: The inbox, each tab from its own cell, afresh and as the last panel fades
 
-        @Test(arguments: edges) func theInboxPanelStaysOpenOverEveryRowOfEveryTabOpenedFromItsCell(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            for category in rig.store.shownCategories {
-                let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
-                #expect(opened, "\(edge) \(category.name): no panel")
-                await rig.hoverEachItem(category.name)
+        @Test func theInboxPanelStaysOpenOverEveryRowOfEveryTabOpenedFromItsCell() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .agents)
+                defer { rig.close() }
+                let categories = rig.store.shownCategories
+                // The first opens afresh, and again at the end as the last one fades. Between, every other one opens afresh
+                // and the rest as the last one is still fading out, the other way round on the edge across: each tab opens
+                // both ways on a side and on a top or bottom bar.
+                let across = edge == .left || edge == .bottom ? 1 : 0
+                for (k, category) in (categories + categories.prefix(1)).enumerated() {
+                    let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
+                    #expect(opened, "\(edge) \(category.name): no panel")
+                    await rig.hoverEachItem(category.name)
+                    await rig.graceElapsed()
+                    #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
+                    // Off it, and back once it has faded out, or straight back while it still is.
+                    await rig.leave(settling: k + 1 < categories.count && (k + 1 + across) % 2 == 0)
+                    #expect(rig.hub.section == nil, "\(edge) \(category.name): still open after the pointer left")
+                    #expect(rig.window.ignoresMouseEvents && !rig.controller.watchesGlobally,
+                            "\(edge) \(category.name): the bar still takes the mouse or watches it system-wide at rest")
+                }
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
+            }
+        }
+
+        // MARK: Switching tabs from the bar with the panel open, and slipping off it and back
+
+        @Test func theInboxPanelStaysOpenOverTheRowsOfATabPickedFromTheBarWhileOpen() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .agents)
+                defer { rig.close() }
+                let categories = rig.store.shownCategories
+                guard let first = categories.first else { Issue.record("no categories"); return }
+                #expect(await rig.open(.inbox, cell: first.title, tab: .category(first.id)))
+                for category in categories.reversed() {
+                    // Back onto the bar, to another category's cell: its list replaces the panel's.
+                    guard let cell = rig.cell(category.title) else { Issue.record("\(edge): no cell \(category.title)"); continue }
+                    await rig.back(to: cell.centre, "back to the \(category.title) cell")
+                    rig.hover(.inbox, tab: .category(category.id))
+                    await rig.settle()
+                    await rig.hoverEachItem("\(category.name), switched")
+                    #expect(rig.hub.section == .inbox)
+                }
                 await rig.graceElapsed()
-                #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
+                #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
+                // Off the panel's far side from its last row, briefly, and back onto the same row.
+                guard let row = rig.panelItems().last else { Issue.record("\(edge): nothing in the panel"); return }
+                await rig.walk(to: row.centre, "the last row")
+                let back = rig.pointer
+                let off: NSPoint = switch edge {
+                case .right: NSPoint(x: row.frame.minX - 30, y: back.y)
+                case .left: NSPoint(x: row.frame.maxX + 30, y: back.y)
+                case .top: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.minY).min()! - 30)
+                case .bottom: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.maxY).max()! + 30)
+                }
+                await rig.move(to: off)
+                try? await Task.sleep(for: .milliseconds(40))
+                await rig.move(to: back)
+                await rig.graceElapsed()
+                #expect(rig.hub.section == .inbox, "\(edge): a moment off the panel closed it though the pointer came back")
+                #expect(!rig.window.ignoresMouseEvents, "\(edge): back on the panel, the window lets the pointer through")
                 await rig.leave()
-                #expect(rig.hub.section == nil, "\(edge) \(category.name): still open after the pointer left")
-                #expect(rig.window.ignoresMouseEvents && !rig.controller.watchesGlobally,
-                        "\(edge) \(category.name): the bar still takes the mouse or watches it system-wide at rest")
-            }
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
-        }
-
-        // MARK: Back on the bar as the last panel fades
-
-        @Test(arguments: edges) func aPanelReopenedWhileTheLastOneFadesStaysOpenOverItsRows(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            for category in rig.store.shownCategories + rig.store.shownCategories.prefix(1) {
-                let opened = await rig.open(.inbox, cell: category.title, tab: .category(category.id))
-                #expect(opened, "\(edge) \(category.name): no panel")
-                await rig.hoverEachItem(category.name)
-                await rig.graceElapsed()
-                #expect(rig.hub.section == .inbox, "\(edge) \(category.name): the panel closed under the pointer")
-                // Off it, and straight back: the closing panel is still fading out as the next opens.
-                await rig.leave(settling: false)
                 #expect(rig.hub.section == nil)
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
-        }
-
-        // MARK: Switching tabs from the bar with the panel open
-
-        @Test(arguments: edges) func theInboxPanelStaysOpenOverTheRowsOfATabPickedFromTheBarWhileOpen(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            let categories = rig.store.shownCategories
-            guard let first = categories.first else { Issue.record("no categories"); return }
-            #expect(await rig.open(.inbox, cell: first.title, tab: .category(first.id)))
-            for category in categories.reversed() {
-                // Back onto the bar, to another category's cell: its list replaces the panel's.
-                guard let cell = rig.cell(category.title) else { Issue.record("\(edge): no cell \(category.title)"); continue }
-                await rig.back(to: cell.centre, "back to the \(category.title) cell")
-                rig.hover(.inbox, tab: .category(category.id))
-                await rig.settle()
-                await rig.hoverEachItem("\(category.name), switched")
-                #expect(rig.hub.section == .inbox)
-            }
-            await rig.graceElapsed()
-            #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
-            await rig.leave()
-            #expect(rig.hub.section == nil)
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
         }
 
         // MARK: A list longer than the panel, scrolled
 
-        @Test(arguments: edges) func aScrolledInboxListKeepsThePanelOpenOverItsRows(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .inboxMany)
-            defer { rig.close() }
-            guard let category = rig.store.shownCategories.max(by: { rig.store.entries(in: $0.id).count < rig.store.entries(in: $1.id).count })
-            else { Issue.record("no categories"); return }
-            #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
-            await rig.hoverEachItem("\(category.name), top")
-            if let last = rig.store.entries(in: category.id).last { rig.hub.requestScroll("i:" + last.id) }
-            try? await Task.sleep(for: .milliseconds(400))
-            await rig.settle()
-            await rig.hoverEachItem("\(category.name), scrolled to the end")
-            await rig.graceElapsed()
-            #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
-            await rig.leave()
-            #expect(rig.hub.section == nil)
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
+        @Test func aScrolledInboxListKeepsThePanelOpenOverItsRows() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .inboxMany)
+                defer { rig.close() }
+                guard let category = rig.store.shownCategories.max(by: { rig.store.entries(in: $0.id).count < rig.store.entries(in: $1.id).count })
+                else { Issue.record("no categories"); return }
+                #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
+                await rig.hoverEachItem("\(category.name), top")
+                if let last = rig.store.entries(in: category.id).last {
+                    rig.hub.requestScroll("i:" + last.id)
+                    await waitUntil { rig.panelItems().contains { rig.rowID($0.label) == last.id } }
+                }
+                await rig.settle()
+                await rig.hoverEachItem("\(category.name), scrolled to the end")
+                await rig.graceElapsed()
+                #expect(rig.hub.section == .inbox, "\(edge): the panel closed under the pointer")
+                await rig.leave()
+                #expect(rig.hub.section == nil)
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
+            }
         }
 
         // MARK: The Router and the controls
 
-        @Test(arguments: edges) func theRouterAndControlsPanelsStayOpenOverTheirItems(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .router)
-            defer { rig.close() }
-            for (section, cell) in [(HubSection.router, "Router"), (.controls, "Controls")] {
-                #expect(await rig.open(section, cell: cell), "\(edge) \(cell): no panel")
-                await rig.hoverEachItem(cell)
-                await rig.graceElapsed()
-                #expect(rig.hub.section == section, "\(edge) \(cell): the panel closed under the pointer")
-                await rig.leave()
-                #expect(rig.hub.section == nil, "\(edge) \(cell): still open after the pointer left")
+        @Test func theRouterAndControlsPanelsStayOpenOverTheirItems() async {
+            await Self.concurrently(Self.edges) { edge in
+                let rig = await Rig(edge: edge, scenario: .router)
+                defer { rig.close() }
+                for (section, cell) in [(HubSection.router, "Router"), (.controls, "Fjord")] {
+                    #expect(await rig.open(section, cell: cell), "\(edge) \(cell): no panel")
+                    await rig.hoverEachItem(cell)
+                    await rig.graceElapsed()
+                    #expect(rig.hub.section == section, "\(edge) \(cell): the panel closed under the pointer")
+                    await rig.leave()
+                    #expect(rig.hub.section == nil, "\(edge) \(cell): still open after the pointer left")
+                }
+                #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
             }
-            #expect(rig.dropped.isEmpty, "\(rig.dropped.prefix(5))")
-        }
-
-        // MARK: Slipping off and back
-
-        @Test(arguments: edges) func slippingOffThePanelForAMomentAndBackOntoItKeepsItOpen(_ edge: DockEdge) async {
-            let rig = await Rig(edge: edge, scenario: .agents)
-            defer { rig.close() }
-            guard let category = rig.store.shownCategories.first else { return }
-            #expect(await rig.open(.inbox, cell: category.title, tab: .category(category.id)))
-            guard let row = rig.panelItems().last else { Issue.record("\(edge): nothing in the panel"); return }
-            await rig.cross(to: row.centre, "the last row")
-            // Off the panel's far side, briefly, and back onto the same row.
-            let back = rig.pointer
-            let off: NSPoint = switch edge {
-            case .right: NSPoint(x: row.frame.minX - 30, y: back.y)
-            case .left: NSPoint(x: row.frame.maxX + 30, y: back.y)
-            case .top: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.minY).min()! - 30)
-            case .bottom: NSPoint(x: back.x, y: rig.panelItems().map(\.frame.maxY).max()! + 30)
-            }
-            await rig.move(to: off)
-            try? await Task.sleep(for: .milliseconds(40))
-            await rig.move(to: back)
-            await rig.graceElapsed()
-            #expect(rig.hub.section == .inbox, "\(edge): a moment off the panel closed it though the pointer came back")
-            #expect(!rig.window.ignoresMouseEvents, "\(edge): back on the panel, the window lets the pointer through")
-            await rig.leave()
-            #expect(rig.hub.section == nil)
         }
 
         // MARK: Anywhere on screen
 
         @Test func theWindowsPlaceOnScreenDoesNotMatter() async {
             // A screen far from the origin, at a fractional place (a second display left of and below the main one).
-            for (edge, origin) in [(DockEdge.right, NSPoint(x: -12_345.5, y: -6_789.25)), (.bottom, NSPoint(x: -20_011.5, y: -9_001.5))] {
+            await Self.concurrently([(DockEdge.right, NSPoint(x: -12_345.5, y: -6_789.25)), (.bottom, NSPoint(x: -20_011.5, y: -9_001.5))]) {
+                let (edge, origin) = $0
                 let rig = await Rig(edge: edge, scenario: .agents, origin: origin)
                 defer { rig.close() }
                 for category in rig.store.shownCategories.prefix(2) {

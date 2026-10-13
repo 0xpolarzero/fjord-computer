@@ -34,9 +34,6 @@ enum Tool: String, CaseIterable, Identifiable {
 }
 
 extension Store {
-    /// Triage's switch (the Router's is `routerOn`): off until it is switched on.
-    var triageOn: Bool { settings.triage == true }
-
     /// Both tools are on: the inbox's actions may start sessions, and the Router may read and change Triage.
     var toolsLinked: Bool { triageOn && routerOn }
 

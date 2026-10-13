@@ -76,6 +76,38 @@ import Testing
         while let task = s.iconTask { await task.value }
     }
 
+    @Test func anIconPickedForWhatASessionWasIsPickedAgainAndOneSetMeanwhileWins() async {
+        final class Latch: @unchecked Sendable { var open = false }
+        let latch = Latch()
+        let s = iconStore([session("a")])
+        var titles: [String] = []
+        s.iconChooser = { options, _, state, _ in
+            titles.append(state["session title"] ?? "")
+            while !latch.open { try? await Task.sleep(for: .milliseconds(2)) }
+            return .init(choice: options[0], confidence: 1, probabilities: [options[0]: 1])
+        }
+        s.pickIcons()
+        for _ in 0..<2000 where titles.isEmpty { try? await Task.sleep(for: .milliseconds(2)) }
+        // Renamed while Jev answers: the pick for the old name isn't taken; one is made for the new.
+        var renamed = session("a")
+        renamed.title = "Fix the login form"
+        s.ingest([renamed], appUnread: [], claudeFrontmost: false, now: now)
+        latch.open = true
+        await finishIcons(s)
+        #expect(titles.first == "Session a" && titles.last == "Fix the login form" && entry(s, "a")?.icon != nil)
+
+        // An icon set by hand while one is picked: yours stays.
+        latch.open = false
+        titles = []
+        s.repickIcon("a")
+        for _ in 0..<2000 where titles.isEmpty { try? await Task.sleep(for: .milliseconds(2)) }
+        let i = s.agents.entries.firstIndex { $0.id == "a" }!
+        s.agents.entries[i].label = "ZZ"
+        latch.open = true
+        await finishIcons(s)
+        #expect(entry(s, "a")?.icon == nil && entry(s, "a")?.label == "ZZ")
+    }
+
     @Test func theIconPickedForAHiddenSessionIsKept() async {
         var hidden = session("a")
         hidden.cliID = "cli-a"
@@ -706,5 +738,56 @@ import Testing
         #expect(Claude.readTaskFolders(root: dir.path("root")) == nil)
         chmod(session.path, 0o755)
         #expect(Claude.readTaskFolders(root: dir.path("root"))?.keys.sorted() == ["cli-a"])
+    }
+
+    @Test func aReaderThatKeepsItsListingsSeesWhatChangesAsAFreshReadDoes() throws {
+        let dir = TempDir(), fm = FileManager.default, reader = Claude.TaskFolderReader()
+        let root = dir.path("root")
+        #expect(reader.read(root: root) == [:])
+        try fm.createDirectory(at: root.appendingPathComponent("project/cli-a/tasks"), withIntermediateDirectories: true)
+        // Claude Code's own files beside the projects aren't folders of sessions.
+        try Data().write(to: root.appendingPathComponent("cache-break-state-1.json"))
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-a"])
+        // A session's tasks folder made in a project already listed, and a project made since.
+        try fm.createDirectory(at: root.appendingPathComponent("project/cli-b/tasks"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("other/cli-c/tasks"), withIntermediateDirectories: true)
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-a", "cli-b", "cli-c"])
+        try fm.removeItem(at: root.appendingPathComponent("project/cli-a/tasks"))
+        try fm.removeItem(at: root.appendingPathComponent("other"))
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-b"])
+        let project = root.appendingPathComponent("project")
+        chmod(project.path, 0)
+        defer { chmod(project.path, 0o755) }
+        #expect(reader.read(root: root) == nil)
+        chmod(project.path, 0o755)
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-b"])
+        // Only the sessions asked about are looked for: one that can't be looked into, not asked about, says nothing.
+        try fm.createDirectory(at: root.appendingPathComponent("project/cli-d/tasks"), withIntermediateDirectories: true)
+        #expect(reader.read(root: root, only: ["cli-d", "cli-x"])?.keys.sorted() == ["cli-d"])
+        let other = root.appendingPathComponent("project/cli-b")
+        chmod(other.path, 0o600)
+        defer { chmod(other.path, 0o755) }
+        #expect(reader.read(root: root, only: ["cli-d"])?.keys.sorted() == ["cli-d"])
+        #expect(reader.read(root: root, only: ["cli-b", "cli-d"]) == nil)
+    }
+
+    @Test func aTaskReaderListsAgainOnlyAFolderThatChangedAndSeesWhatChanged() throws {
+        let dir = TempDir()
+        let folder = dir.path("tasks")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let reader = Claude.TaskReader()
+        let now = Date()
+        #expect(!reader.needsOpenOutputs(in: folder))
+        #expect(reader.newestCommand(in: folder) == nil)
+        let output = folder.appendingPathComponent("b1.output")
+        try Data().write(to: output)
+        #expect(reader.needsOpenOutputs(in: folder))
+        #expect(reader.newestCommand(in: folder) != nil)
+        // As the listing names it (the system may give /private/var for /var).
+        let open = Set(try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).map(\.path))
+        #expect(reader.read(folder, transcript: nil, openOutputs: open, now: now).tasks.map(\.id) == ["b1"])
+        try FileManager.default.removeItem(at: output)
+        #expect(reader.read(folder, transcript: nil, openOutputs: open, now: now).tasks.isEmpty)
+        #expect(!reader.needsOpenOutputs(in: folder))
     }
 }
