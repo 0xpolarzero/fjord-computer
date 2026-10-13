@@ -794,10 +794,12 @@ extension WindowSeams {
                 opened.complete()
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
-                #expect(opened.handedOver && controller.phase == .opening && window.isVisible)
+                #expect(opened.handedOver && opened.fadesOut && controller.phase == .opening && window.isVisible)
                 controller.close()
                 guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
-                #expect(controller.phase == .closing && closing !== opened && closing.image != nil)
+                // The overlay, still fading out over the real window, is taken over whole rather than dropped half faded.
+                #expect(controller.phase == .closing && closing === opened && !closing.handedOver && !closing.fadesOut)
+                #expect(closing.image != nil)
                 // Never one at the window's own scale: a softer one.
                 #expect(closing.picture?.pixelScale == AppTransition.reducedScale(of: window))
                 // The overlay shows the window and the real one goes in the same turn: the motion starts at once.

@@ -751,6 +751,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let asked = MorphSignposts.signposter.beginInterval("Close to first flush")
         // An opening whose overlay has let go of its picture shows the real window already: it closes as an open one does.
         let interrupting = phase == .opening && run?.handedOver != true
+        // One that has let go but whose overlay is still fading out over the real window (its picture, or its shadow):
+        // the close takes that overlay over, rather than dropping it half faded.
+        let fading = phase == .opening && !interrupting && run?.ended == false ? run : nil
         phase = .closing
         // Held until the overlay is gone (`finishClosing`), or an opening that turns it round has handed over.
         span.begin("Close")
@@ -767,26 +770,33 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         if let existing {
             current = existing
         } else {
-            run?.end()
+            if fading == nil { run?.end() }
             let glass = AppTransition.usesGlass
             let barMorph = AppTransition.reduceMotion ? nil : bar()
             // The picture kept at idle, when the window is still (near enough, `Glance.closeTolerance`) as it was drawn
             // then: the close starts on it at once. Otherwise a soft one is taken now, before anything moves.
             let now = AppTransition.glance(of: sender)
+            let picture: AppTransition.Picture?
             if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar), AppTransition.isKey(sender),
                AppTransition.freshness(of: kept, glance: now, marks: marks, destination: navigator.selection,
                                        tolerance: AppTransition.Glance.closeTolerance) != .stale {
-                current = AppTransition.makeRun(for: sender, picture: kept, bar: barMorph, glassWindow: chrome, glass: glass)
-            } else if let taken = AppTransition.takePicture(of: sender, glassWindow: chrome, glass: glass,
-                                                           destination: navigator.selection, glance: now,
-                                                           restoreLater: true,
-                                                           pixelScale: AppTransition.reducedScale(of: sender),
-                                                           marks: marks) {
+                picture = kept
+            } else {
                 // Never one at the window's own scale (520 ms on heavy content): a softer one, a quarter of its pixels,
                 // which the shrink and its fade (gone by half of it) hide.
-                current = AppTransition.makeRun(for: sender, picture: taken, bar: barMorph, glassWindow: chrome, glass: glass)
+                picture = AppTransition.takePicture(of: sender, glassWindow: chrome, glass: glass,
+                                                    destination: navigator.selection, glance: now, restoreLater: true,
+                                                    pixelScale: AppTransition.reducedScale(of: sender), marks: marks)
+            }
+            if let fading, let picture, fading.isGlass == glass {
+                // On the overlay still fading out: back to the window's picture whole, from where it is.
+                fading.takeBack(picture)
+                current = fading
             } else {
-                current = nil
+                fading?.end()
+                current = picture.flatMap {
+                    AppTransition.makeRun(for: sender, picture: $0, bar: barMorph, glassWindow: chrome, glass: glass)
+                }
             }
         }
         guard let current else {

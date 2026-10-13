@@ -947,6 +947,22 @@ enum AppTransition {
             install(picture, crossFade: crossFade)
         }
 
+        /// Back on `picture`, whole, after the handoff had begun to let go (a close taking over the overlay as it fades out
+        /// over the real window): the handoff's fades are called off, and `present` shows it at the window's frame.
+        func takeBack(_ picture: Picture) {
+            token += 1
+            endHandoffSignpost()
+            handedOver = false
+            fadesOut = false
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            removeMotion()
+            windowLayer.removeAnimation(forKey: kCATransition)
+            fadeEnds = 0
+            CATransaction.commit()
+            install(picture)
+        }
+
         /// `picture` shown from now on (see `refresh`).
         func install(_ picture: Picture, crossFade: Bool = false) {
             self.picture = picture
