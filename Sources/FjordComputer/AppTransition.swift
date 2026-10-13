@@ -1235,6 +1235,8 @@ final class FrameTick: NSObject {
     private var block: (@MainActor () -> Void)?
     private var left = 1
     private var fallback: DispatchWorkItem?
+    /// How long a refresh is waited for at most: one at 60 Hz.
+    static let fallbackFrame: TimeInterval = 1.0 / 60
 
     static func wait(_ count: Int, on screen: NSScreen?, _ block: @escaping @MainActor () -> Void) {
         let tick = FrameTick()
@@ -1246,10 +1248,11 @@ final class FrameTick: NSObject {
             link.add(to: .main, forMode: .common)
             tick.link = link
         }
-        // A display that is asleep gives no refresh: do not wait for them for ever. Called off once they came.
+        // A display that is asleep (or a link that stalls) gives no refresh: do not wait for them for ever, nor longer than
+        // the refreshes would take at 60 Hz (the slowest a moving screen runs). Called off once they came.
         let fallback = DispatchWorkItem { MainActor.assumeIsolated { tick.finish() } }
         tick.fallback = fallback
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1 * Double(tick.left), execute: fallback)
+        DispatchQueue.main.asyncAfter(deadline: .now() + fallbackFrame * Double(tick.left), execute: fallback)
     }
 
     @objc private func fire() {
