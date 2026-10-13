@@ -249,6 +249,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         self.window = window
         let content = makeContent(size: window.contentRect(forFrameRect: window.frame).size)
         self.content = content
+        seedCorner(window)
         window.contentViewController = content
         content.view.layoutSubtreeIfNeeded()
         window.contentViewController = nil
@@ -267,6 +268,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             let content = self.content ?? makeContent(size: size)
             if content.view.frame.size != size { content.view.setFrameSize(size) }
             self.content = content
+            seedCorner(window)
+            // What changed while it was out is drawn as it is now, not played as it goes back in.
+            WindowArrival.arrive()
             window.contentViewController = content
         }
         Self.broughtIn.add(self)
@@ -665,6 +669,17 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private func readCorner() {
         guard let window else { return }
         let radius = AppTransition.cornerRadius(of: window)
+        if window.isVisible, !window.styleMask.contains(.fullScreen) { Self.knownRadius = radius }
+        if corner.radius != radius { corner.radius = radius }
+    }
+
+    /// The radius a window shown last reported, out of full screen: the next content starts with it.
+    private static var knownRadius: CGFloat?
+
+    /// The radius the content will have, given before it goes in (or is made), so that reading it again as the window
+    /// becomes key changes nothing: a change then would redraw the root's shapes in the middle of the opening.
+    private func seedCorner(_ window: NSWindow) {
+        let radius = window.styleMask.contains(.fullScreen) ? 0 : Self.knownRadius ?? AppTransition.cornerRadius(of: window)
         if corner.radius != radius { corner.radius = radius }
     }
 
