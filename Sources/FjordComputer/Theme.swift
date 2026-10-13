@@ -372,8 +372,12 @@ private struct Tip: ViewModifier {
     /// The control's own keyboard focus: its tip shows after a second, and goes when the focus does.
     let focused: Bool
     @State private var id = UUID()
-    @State private var anchor = CGRect.zero
+    /// Where the control is, as last laid out: written on every layout and scroll frame, read only when the tip shows, so
+    /// kept out of view state (writing it redraws nothing).
+    @State private var anchor = Anchor()
     @State private var pending: Task<Void, Never>?
+
+    private final class Anchor { var frame = CGRect.zero }
     @Environment(\.tipCenter) private var center
     @Environment(\.previewTip) private var previewTip
     @Environment(\.systemHelp) private var systemHelp
@@ -391,7 +395,7 @@ private struct Tip: ViewModifier {
     private func styled(_ content: Content) -> some View {
         content
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TipSpace.name)) } action: { frame in
-                anchor = frame
+                anchor.frame = frame
                 center?.move(id, to: frame)
             }
             .onAppear {
@@ -428,7 +432,7 @@ private struct Tip: ViewModifier {
     }
 
     private func show() {
-        center?.show(TipCenter.Request(id: id, title: title, detail: detail, anchor: anchor))
+        center?.show(TipCenter.Request(id: id, title: title, detail: detail, anchor: anchor.frame))
     }
 }
 
