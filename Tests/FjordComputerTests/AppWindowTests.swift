@@ -795,6 +795,8 @@ extension WindowSeams {
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
                 #expect(opened.handedOver && controller.phase == .opening && window.isVisible)
+                // Its overlay gone already.
+                opened.end()
                 let taken = AppTransition.captures
                 let level = window.level
                 controller.close()
@@ -805,6 +807,43 @@ extension WindowSeams {
                 #expect(window.isVisible && window.level.rawValue > closing.overlay.level.rawValue)
                 closing.complete()
                 #expect(window.level == level)
+            }
+        }
+
+        /// A close while the opening's picture is still fading into the real window goes on from that blend: the same
+        /// overlay, not shown whole again, the live window fading out under it, nothing captured.
+        @Test func aCloseDuringTheHandoffsFadeGoesOnFromTheBlend() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                ticks.turns.removeFirst()()
+                opened.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                #expect(opened.fadingContent)
+                let taken = AppTransition.captures
+                let level = window.level
+                controller.close()
+                #expect(controller.run === opened && controller.phase == .closing && !opened.handedOver)
+                #expect(AppTransition.captures == taken && window.isVisible && window.level == level)
+                // From where the fade had got to, not the picture whole.
+                #expect((opened.startPose?.container ?? 1) <= 1)
+            }
+        }
+
+        /// The overlay still fading out is taken over only when it stands where the close would put one: the window resized
+        /// meanwhile, the close starts an overlay of its own.
+        @Test func aCloseTakesOverTheFadingOverlayOnlyWhereItStands() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                ticks.turns.removeFirst()()
+                opened.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                window.setFrame(window.frame.insetBy(dx: 20, dy: 20), display: false)
+                controller.close()
+                #expect(controller.phase == .closing && controller.run !== opened && opened.ended)
             }
         }
 
@@ -819,6 +858,7 @@ extension WindowSeams {
                 opened.complete()
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
+                opened.end()
                 controller.keepPictureNow()
                 let taken = AppTransition.captures
                 controller.close()
@@ -837,6 +877,7 @@ extension WindowSeams {
                 opened.complete()
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
+                opened.end()
                 AppTransition.isKey = { _ in true }
                 controller.keepPictureNow()
                 var restored = false
@@ -864,7 +905,8 @@ extension WindowSeams {
             controller.run?.complete()
             ticks.blocks.removeFirst()()
             ticks.blocks.removeFirst()()
-            // As the idle keeper would, with the window open and still.
+            // A while later: the opening's overlay gone, the picture kept as the idle keeper would.
+            controller.run?.end()
             controller.keepPictureNow()
             controller.close()
         }

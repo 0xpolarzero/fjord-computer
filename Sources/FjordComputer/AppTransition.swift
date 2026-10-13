@@ -875,7 +875,7 @@ enum AppTransition {
         /// The window's capture flag, for the pictures taken of it.
         private let capture: GlassCapture?
         /// The window's inset sidebar (window coordinates), cleared out of its pictures on glass.
-        private let sidebar: NSRect?
+        let sidebar: NSRect?
         /// The real window's frame and the bar's, on screen.
         let windowFrame: NSRect
         let windowRadius: CGFloat
@@ -990,18 +990,39 @@ enum AppTransition {
 
         /// Back on `picture`, whole, after the handoff had begun to let go (a close taking over the overlay as it fades out
         /// over the real window): the handoff's fades are called off, and `present` shows it at the window's frame.
-        func takeBack(_ picture: Picture) {
-            token += 1
-            endHandoffSignpost()
-            handedOver = false
-            fadesOut = false
+        /// `picture` nil: the bare surface (a close that fades the live window above it).
+        func takeBack(_ picture: Picture?) {
+            resume()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             removeMotion()
             windowLayer.removeAnimation(forKey: kCATransition)
             fadeEnds = 0
             CATransaction.commit()
-            install(picture)
+            if let picture {
+                install(picture)
+            } else {
+                self.picture = nil
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                windowLayer.contents = nil
+                CATransaction.commit()
+            }
+        }
+
+        /// The handoff called off with the layers left as they are, mid-fade included: the next motion (a close) starts
+        /// from what shows, the picture's fade into the real window carried into it rather than jumped.
+        func resume() {
+            token += 1
+            endHandoffSignpost()
+            handedOver = false
+            fadesOut = false
+            stillExact = nil
+        }
+
+        /// The handoff is fading the overlay's picture into the real window right now (`pictureFade`).
+        var fadingContent: Bool {
+            handedOver && fadesOut && !ended && container.animation(forKey: "handoff") != nil
         }
 
         /// `picture` shown from now on (see `refresh`).
