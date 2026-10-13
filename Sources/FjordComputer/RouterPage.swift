@@ -202,6 +202,15 @@ struct RouterPageView: View {
     static let nowShare: CGFloat = 0.55
 
     var body: some View {
+        // The canvas (a beta, RouterCanvas.swift) takes the whole page when it is picked, the history a panel over it.
+        if model.layout == .canvas {
+            CanvasPage(store: store, model: model)
+        } else {
+            columns
+        }
+    }
+
+    private var columns: some View {
         // The page's size as it is laid out, not measured after: the columns' widths are right on the first layout. The
         // frame reads nothing of the store: what each side shows is worked out in its own column.
         GeometryReader { geometry in
@@ -222,16 +231,9 @@ struct RouterPageView: View {
                     .allowsHitTesting(!historyHidden)
                     .accessibilityHidden(historyHidden)
                 if showsNow {
-                    // The canvas (a beta, RouterCanvas.swift) in Now's place when it is picked; the list otherwise.
-                    if model.layout == .canvas {
-                        CanvasNowColumn(store: store, model: model, bar: !wide)
-                            .column(nowWidth)
-                            .frame(width: nowWidth, height: height)
-                    } else {
-                        NowColumn(store: store, model: model, height: height, bar: !wide)
-                            .column(nowWidth)
-                            .frame(width: nowWidth, height: height)
-                    }
+                    NowColumn(store: store, model: model, height: height, bar: !wide)
+                        .column(nowWidth)
+                        .frame(width: nowWidth, height: height)
                 }
                 if wide {
                     Rectangle().fill(CDS.border).frame(width: CDS.hairline, height: height).offset(x: nowWidth)
@@ -255,7 +257,7 @@ struct RouterPageView: View {
 /// The history's side: its bar over it, the switch (in a narrow window, else its name) and on the right the Unread filter
 /// and Mark all read. On macOS 26 the bar is the column's and the history runs under it, its lines dissolving under the
 /// soft scroll edge effect rather than cut off at the bar; the history stays the same view at any width.
-private struct HistoryColumn: View {
+struct HistoryColumn: View {
     let store: Store
     let model: RouterModel
     let bar: Bool
@@ -353,7 +355,7 @@ private struct NowColumn: View {
     }
 }
 
-private extension View {
+extension View {
     /// A column of the page `width` wide: its margin and its text's measure.
     func column(_ width: CGFloat) -> some View {
         let gutter = RouterPageView.gutter(width)

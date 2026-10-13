@@ -178,8 +178,8 @@ enum RouterCanvasModel {
 
 // MARK: - Geometry
 
-/// The canvas's measures (the prototype's, canvas2-spec.md §2): frames 560 wide in as many columns as the room holds at
-/// 0.85 or more (up to 3), the groups' labels at the frame's left and the cards at 124, 420 wide.
+/// The canvas's measures (the prototype's, canvas2-spec.md §2): frames 560 wide spread over the ground in columns, as many
+/// as give the whole a 16:10 shape, 48 apart; the groups' labels at the frame's left and the cards at 124, 420 wide.
 enum CanvasMetrics {
     static let frameWidth: CGFloat = 560
     static let pad: CGFloat = 16
@@ -196,12 +196,87 @@ enum CanvasMetrics {
     static let moreH: CGFloat = 24
     static let gap: CGFloat = 6
     static let groupGap: CGFloat = 16
-    static let colGap: CGFloat = 40
-    static let rowGap: CGFloat = 40
+    static let colGap: CGFloat = 48
+    static let rowGap: CGFloat = 48
+    /// The shape the frames are spread to, wide over tall: a screen's.
+    static let aspect: CGFloat = 16.0 / 10.0
+    /// Where a frame dropped settles: on this grid, as the ground's dots are.
+    static let snap: CGFloat = 8
 
-    /// How many columns of frames `width` (the viewport's room) holds at 0.85 or more: 1 to 3.
-    static func columns(width: CGFloat) -> Int {
-        max(1, min(3, Int((width / 0.85 + colGap) / (frameWidth + colGap))))
+    /// How many columns the frames take (their heights with every card folded, in their order): the count whose packing is
+    /// nearest 16:10. The frames alone decide it, never the window, so a resize moves none of them.
+    static func columnCount(closed: [CGFloat]) -> Int {
+        guard closed.count > 1 else { return 1 }
+        var best = (count: 1, miss: CGFloat.infinity)
+        for count in 1...closed.count {
+            let columns = Self.columns(closed: closed, count: count)
+            var heights = Array(repeating: CGFloat(0), count: count)
+            for (h, c) in zip(closed, columns) { heights[c] += h + rowGap }
+            let used = Set(columns).count
+            let width = CGFloat(used) * (frameWidth + colGap) - colGap
+            let height = max(1, (heights.max() ?? 0) - rowGap)
+            let miss = abs(log(width / height / aspect))
+            if miss < best.miss - 0.0001 { best = (count, miss) }
+        }
+        return best.count
+    }
+
+    /// Where each frame would be (its top left in the content), by its key, in the frames' order, with the heights they take
+    /// with every card folded. A frame you placed is where you put it; the others are packed as masonry, each under the
+    /// shortest column (`columns(closed:count:)`), in as many columns as `columnCount` gives them, under every frame you
+    /// placed, so none of them lands on one.
+    static func preferred(_ frames: [(key: String, closed: CGFloat)], placed: [String: CGPoint]) -> [String: CGPoint] {
+        var out: [String: CGPoint] = [:]
+        var bottom: CGFloat?
+        var left: CGFloat?
+        for frame in frames {
+            guard let at = placed[frame.key] else { continue }
+            out[frame.key] = at
+            bottom = max(bottom ?? -.infinity, at.y + frame.closed)
+            left = min(left ?? .infinity, at.x)
+        }
+        let rest = frames.filter { placed[$0.key] == nil }
+        let count = columnCount(closed: rest.map(\.closed))
+        let columns = Self.columns(closed: rest.map(\.closed), count: count)
+        let top = bottom.map { $0 + rowGap } ?? 0
+        var heights = Array(repeating: top, count: max(1, count))
+        for (frame, c) in zip(rest, columns) {
+            out[frame.key] = CGPoint(x: (left ?? 0) + CGFloat(c) * (frameWidth + colGap), y: heights[c])
+            heights[c] += frame.closed + rowGap
+        }
+        return out
+    }
+
+    /// The frames where they are drawn: each at its place unless that overlaps one above it (with the gaps), then pushed
+    /// down under it. Taken top to bottom, so a card opening in a frame pushes down only what is under it, and a frame
+    /// dropped on another goes under it, or pushes it under itself.
+    static func resolve(_ frames: [(origin: CGPoint, size: CGSize)]) -> [CGPoint] {
+        let order = frames.indices.sorted { a, b in
+            let p = frames[a].origin, q = frames[b].origin
+            return p.y != q.y ? p.y < q.y : p.x != q.x ? p.x < q.x : a < b
+        }
+        var out = frames.map(\.origin)
+        var done: [CGRect] = []
+        for i in order {
+            var rect = CGRect(origin: frames[i].origin, size: frames[i].size)
+            var moved = true
+            while moved {
+                moved = false
+                for other in done where rect.minX < other.maxX + pad && other.minX < rect.maxX + pad
+                    && rect.minY < other.maxY + rowGap && other.minY < rect.maxY + rowGap {
+                    rect.origin.y = other.maxY + rowGap
+                    moved = true
+                }
+            }
+            out[i] = rect.origin
+            done.append(rect)
+        }
+        return out
+    }
+
+    /// A dropped frame's place: on the snap grid.
+    static func snapped(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: (point.x / snap).rounded() * snap, y: (point.y / snap).rounded() * snap)
     }
 
     /// What a frame takes with every card folded (Done's lines and the "+n more" lines shorter than the cards), whatever
@@ -269,8 +344,9 @@ struct CanvasTransform: Equatable {
     var origin: CGPoint = .zero
     var scale: CGFloat = 1
 
-    /// Above 1 the drawn layers blur (text, forms); below 0.4 nothing reads.
-    static let range: ClosedRange<CGFloat> = 0.4...1.0
+    /// Out far enough to see every frame at once; in no further than 1, as above it `scaleEffect` scales the drawn layers
+    /// and text and forms blur.
+    static let range: ClosedRange<CGFloat> = 0.25...1.0
 
     static func clamp(_ scale: CGFloat) -> CGFloat { min(range.upperBound, max(range.lowerBound, scale)) }
 
@@ -308,33 +384,26 @@ struct CanvasTransform: Equatable {
 
 // MARK: - Layouts
 
-private struct CanvasColumnKey: LayoutValueKey { static let defaultValue = 0 }
+private struct CanvasPlaceKey: LayoutValueKey { static let defaultValue = CGPoint.zero }
 private struct CanvasGroupKey: LayoutValueKey { static let defaultValue: CanvasGroup = .needs }
 
 extension View {
-    /// A frame's column on the canvas (`CanvasMetrics.columns`).
-    func canvasColumn(_ column: Int) -> some View { layoutValue(key: CanvasColumnKey.self, value: column) }
+    /// A frame's place on the canvas (`CanvasMetrics.preferred`).
+    func canvasPlace(_ point: CGPoint) -> some View { layoutValue(key: CanvasPlaceKey.self, value: point) }
     /// A node's group in its frame.
     func canvasGroup(_ group: CanvasGroup) -> some View { layoutValue(key: CanvasGroupKey.self, value: group) }
 }
 
-/// The frames in columns, each at its column's bottom as measured: a frame that grows pushes its column down only.
-struct CanvasMasonry: Layout {
-    var columns = 1
-
+/// The frames on the ground, each at its place as measured, pushed down under one above it it would overlap
+/// (`CanvasMetrics.resolve`): a frame that grows pushes down only what is under it. A place may be left of or above the
+/// content's origin (a frame dragged there): it is drawn there, the content's size counted from the origin.
+struct CanvasBoard: Layout {
     private func place(_ subviews: Subviews) -> (points: [CGPoint], size: CGSize) {
-        let columns = max(1, columns)
-        var heights = Array(repeating: CGFloat(0), count: columns)
-        var points: [CGPoint] = []
-        for view in subviews {
-            let c = min(columns - 1, max(0, view[CanvasColumnKey.self]))
-            let size = view.sizeThatFits(.init(width: CanvasMetrics.frameWidth, height: nil))
-            points.append(CGPoint(x: CGFloat(c) * (CanvasMetrics.frameWidth + CanvasMetrics.colGap), y: heights[c]))
-            heights[c] += size.height + CanvasMetrics.rowGap
-        }
-        let used = heights.indices.filter { heights[$0] > 0 }
-        let width = CGFloat(max(1, (used.max() ?? 0) + 1)) * (CanvasMetrics.frameWidth + CanvasMetrics.colGap) - CanvasMetrics.colGap
-        return (points, CGSize(width: width, height: max(0, (heights.max() ?? 0) - CanvasMetrics.rowGap)))
+        let sizes = subviews.map { $0.sizeThatFits(.init(width: CanvasMetrics.frameWidth, height: nil)) }
+        let points = CanvasMetrics.resolve(zip(subviews, sizes).map { ($0[CanvasPlaceKey.self], $1) })
+        let maxX = zip(points, sizes).map { $0.x + $1.width }.max() ?? 0
+        let maxY = zip(points, sizes).map { $0.y + $1.height }.max() ?? 0
+        return (points, CGSize(width: max(0, maxX), height: max(0, maxY)))
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize { place(subviews).size }

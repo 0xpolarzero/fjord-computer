@@ -50,7 +50,6 @@ struct CanvasFolderFrame: View {
     let store: Store
     let model: RouterModel
     let page: RouterPage
-    let pan: CanvasPan
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -104,15 +103,24 @@ struct CanvasFolderFrame: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
             model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = CGRect(origin: rect.origin,
                                                                                size: CGSize(width: rect.width, height: CanvasMetrics.header))
+            model.canvas.frameRects[folder.key] = rect
+            model.canvas.fitFirst()
         }
-        .onDisappear { model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = nil }
+        .onDisappear {
+            model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = nil
+            model.canvas.frameRects[folder.key] = nil
+        }
         // The lines under the cards, on the frame's ground; the labels over it.
         .backgroundPreferenceValue(CanvasHeaders.self) { heads in
             ZStack(alignment: .topLeading) {
+                let lifted = model.canvas.drag.key == folder.key
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(scheme == .dark ? CDS.alpha(0.03) : CDS.Surface.s0)
+                    // On the ground's dots, the frame's own ground: opaque, so the dots stop at its edge.
+                    .fill(scheme == .dark ? CDS.Surface.s1 : CDS.Surface.s0)
+                    .overlay { if scheme == .dark { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(CDS.alpha(0.03)) } }
                     .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
-                    .canvasPannable(pan)
+                    .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 18 : 0, y: lifted ? 10 : 0)
+                    .gesture(moveGesture)
                 if !folded {
                     GeometryReader { proxy in lines(heads, proxy) }
                 }
@@ -149,15 +157,39 @@ struct CanvasFolderFrame: View {
                 withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { model.canvas.toggleFold(folder) }
             } label: { line }
                 .buttonStyle(.plain)
+                .simultaneousGesture(moveGesture)
                 .help(folder.key.isEmpty ? (folded ? "Show what was done" : "Fold") : folder.key)
                 .accessibilityLabel(folder.name)
                 .accessibilityValue(folded ? "Folded, \(folder.sessions) done" : "Open")
                 .accessibilityHint(folded ? "Shows what was done" : "Folds it")
         } else {
-            line.help(folder.key.isEmpty ? "Chats with no project" : folder.key)
+            line.gesture(moveGesture)
+                .help(folder.key.isEmpty ? "Chats with no project" : folder.key)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
         }
+    }
+
+    // MARK: Moving
+
+    /// A drag from the frame's header or its own ground (never a card's): the frame follows the pointer in the content's
+    /// points, whatever the zoom, lifted over the others, and stays where it is dropped (`RouterCanvasState.drop`).
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .global)
+            .onChanged { drag in
+                let canvas = model.canvas
+                if canvas.drag.start?.at != drag.startLocation {
+                    canvas.drag.start = (drag.startLocation, canvas.frameRects[folder.key]?.origin ?? .zero)
+                }
+                let scale = canvas.camera.transform.scale
+                if canvas.drag.key != folder.key { canvas.drag.key = folder.key }
+                canvas.drag.offset = CGSize(width: drag.translation.width / scale, height: drag.translation.height / scale)
+            }
+            .onEnded { drag in
+                let scale = model.canvas.camera.transform.scale
+                model.canvas.drop(folder.key, offset: CGSize(width: drag.translation.width / scale, height: drag.translation.height / scale),
+                                  reduce: reduceMotion)
+            }
     }
 
     // MARK: Nodes

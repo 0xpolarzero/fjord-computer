@@ -118,11 +118,64 @@ import Testing
         #expect(columns(make(page, picked: ["n5"])) == base)
     }
 
-    @Test func asManyColumnsAsTheRoomHoldsAtPointEightyFiveUpToThree() {
-        #expect(CanvasMetrics.columns(width: 400) == 1)
-        #expect(CanvasMetrics.columns(width: 658) == 1)
-        #expect(CanvasMetrics.columns(width: 1000) == 2)
-        #expect(CanvasMetrics.columns(width: 4000) == 3)
+    @Test func theColumnsComeFromTheFramesForASixteenByTenShapeNeverFromTheWindow() {
+        #expect(CanvasMetrics.columnCount(closed: []) == 1)
+        #expect(CanvasMetrics.columnCount(closed: [200]) == 1)
+        // Four frames of a screen's height each: side by side would be too wide, stacked too tall.
+        #expect(CanvasMetrics.columnCount(closed: [300, 300, 300, 300]) == 2)
+        // Many short frames spread over more columns.
+        let many = CanvasMetrics.columnCount(closed: Array(repeating: 120, count: 20))
+        #expect(many == 3)
+        // Two tall frames side by side, two short ones one under the other.
+        #expect(CanvasMetrics.columnCount(closed: [1200, 1200]) == 2)
+        #expect(CanvasMetrics.columnCount(closed: [200, 200]) == 1)
+    }
+
+    @Test func framesArePackedAsMasonryAndOneYouPlacedStaysWhereYouPutItTheNewOnesUnderIt() {
+        let frames: [(key: String, closed: CGFloat)] = [("a", 600), ("b", 300), ("c", 300)]
+        let packed = CanvasMetrics.preferred(frames, placed: [:])
+        let step = CanvasMetrics.frameWidth + CanvasMetrics.colGap
+        #expect(packed["a"] == CGPoint(x: 0, y: 0))
+        #expect(packed["b"] == CGPoint(x: step, y: 0))
+        #expect(packed["c"] == CGPoint(x: step, y: 300 + CanvasMetrics.rowGap))
+        // A frame you placed, and the others kept where they were: a new one lands under all of them.
+        var placed = packed
+        placed["a"] = CGPoint(x: -400, y: 800)
+        let next = CanvasMetrics.preferred(frames + [("d", 50)], placed: placed)
+        #expect(next["a"] == CGPoint(x: -400, y: 800) && next["b"] == packed["b"] && next["c"] == packed["c"])
+        #expect(next["d"] == CGPoint(x: -400, y: 800 + 600 + CanvasMetrics.rowGap))
+    }
+
+    @Test func aFrameOverlappingOneAboveItIsPushedDownUnderItAndFramesSideBySideStay() {
+        let size = CGSize(width: CanvasMetrics.frameWidth, height: 200)
+        let step = CanvasMetrics.frameWidth + CanvasMetrics.colGap
+        // Side by side and well apart: nothing moves.
+        let apart = [CGPoint(x: 0, y: 0), CGPoint(x: step, y: 0), CGPoint(x: 0, y: 400)]
+        #expect(CanvasMetrics.resolve(apart.map { ($0, size) }) == apart)
+        // A card opened in the first makes it taller: what is under it goes down, the gap kept; the next column stays.
+        let tall = CanvasMetrics.resolve([(CGPoint(x: 0, y: 0), CGSize(width: size.width, height: 500)),
+                                          (CGPoint(x: step, y: 0), size), (CGPoint(x: 0, y: 400), size)])
+        #expect(tall == [CGPoint(x: 0, y: 0), CGPoint(x: step, y: 0), CGPoint(x: 0, y: 500 + CanvasMetrics.rowGap)])
+        // A frame dropped half over another goes under it, and pushes down what it then lands on.
+        let dropped = CanvasMetrics.resolve([(CGPoint(x: 0, y: 0), size), (CGPoint(x: 100, y: 50), size),
+                                             (CGPoint(x: 0, y: 300), size)])
+        #expect(dropped[1] == CGPoint(x: 100, y: 200 + CanvasMetrics.rowGap))
+        #expect(dropped[2] == CGPoint(x: 0, y: 2 * (200 + CanvasMetrics.rowGap)))
+        #expect(CanvasMetrics.snapped(CGPoint(x: 13, y: -3)) == CGPoint(x: 16, y: 0))
+    }
+
+    @Test func whereYouPutTheFramesIsKeptAcrossLaunchesAndResetClearsIt() throws {
+        let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
+        let canvas = RouterCanvasState(defaults: defaults)
+        #expect(canvas.positions.isEmpty)
+        canvas.preferred = ["/code/a": CGPoint(x: 0, y: 0), "/code/b": CGPoint(x: 608, y: 0)]
+        canvas.drop("/code/a", offset: CGSize(width: 101, height: -50), reduce: true)
+        // The frame dropped on the grid, the other kept where it was drawn.
+        #expect(canvas.positions == ["/code/a": CGPoint(x: 104, y: -48), "/code/b": CGPoint(x: 608, y: 0)])
+        #expect(canvas.drag.key == nil)
+        #expect(RouterCanvasState(defaults: defaults).positions == canvas.positions)
+        canvas.resetLayout(reduce: true)
+        #expect(canvas.positions.isEmpty && RouterCanvasState(defaults: defaults).positions.isEmpty)
     }
 
     @Test func filteredGroupsAreHiddenInPlaceAndTheOrderSkipsThem() throws {

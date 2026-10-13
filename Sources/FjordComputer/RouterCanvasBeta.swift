@@ -11,41 +11,60 @@ extension RouterModel {
     }
 }
 
-/// Now's side on the canvas: the same bar as the list's (the pane switch in a narrow window, then the canvas's chips and
-/// buttons, the Router's status line on 26) over the canvas, which places what Now's scroll holds over itself.
-struct CanvasNowColumn: View {
+/// The Router's page as a canvas: the canvas over all of it under the top bar, its chips (and what Now's list says over
+/// its sections) floating at its top left, its buttons at its top right, and the history a panel that slides in over its
+/// right side from the History button, Esc or the button closing it. The history is kept while hidden (off the page), so
+/// it opens where you left it.
+struct CanvasPage: View {
     let store: Store
     let model: RouterModel
-    let bar: Bool
-    @Environment(\.routerGutter) private var gutter
+
+    /// The panel's width at most, and the room over it for the buttons.
+    static let panelWidth: CGFloat = 480
+    static let panelTop: CGFloat = 52
+    static let inset: CGFloat = 12
 
     var body: some View {
         let page = model.zones(store)
-        if #available(macOS 26, *) {
-            RouterCanvas(store: store, model: model, page: page, narrow: bar)
-                .safeAreaBar(edge: .top, spacing: 0) {
-                    VStack(spacing: 0) {
-                        chips(page)
-                        RouterBusyLine(store: store)
-                    }
-                    .background(CDS.Surface.s1)
+        GeometryReader { geometry in
+            let size = geometry.size
+            let open = model.pane == .history
+            let width = min(Self.panelWidth, max(320, size.width * 0.45))
+            let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+            ZStack(alignment: .topLeading) {
+                RouterCanvas(store: store, model: model, page: page)
+                VStack(alignment: .leading, spacing: 8) {
+                    CanvasChips(store: store, model: model, page: page)
+                    CanvasNotices(store: store, model: model, page: page)
                 }
-        } else {
-            VStack(spacing: 0) {
-                chips(page)
-                RouterCanvas(store: store, model: model, page: page, narrow: bar)
+                .padding(.leading, CanvasMetrics.pad)
+                .padding(.top, Self.inset)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    if model.canvas.topRoom != height { model.canvas.topRoom = height }
+                }
+                .frame(width: max(0, size.width - 300), alignment: .leading)
+                CanvasControls(store: store, model: model, page: page)
+                    .padding(.trailing, CanvasMetrics.pad)
+                    .padding(.top, Self.inset)
+                    .frame(width: size.width, alignment: .trailing)
+                HistoryColumn(store: store, model: model, bar: false)
+                    .column(width)
+                    .frame(width: width, height: max(0, size.height - Self.panelTop - Self.inset))
+                    .background(CDS.Surface.s1)
+                    .clipShape(shape)
+                    .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
+                    .shadow(color: CDS.PanelShadow.near.color.opacity(0.6), radius: CDS.PanelShadow.near.radius, y: CDS.PanelShadow.near.y)
+                    .shadow(color: CDS.PanelShadow.far.color.opacity(0.6), radius: CDS.PanelShadow.far.radius, y: CDS.PanelShadow.far.y)
+                    .offset(x: open ? size.width - width - CanvasMetrics.pad : size.width + 32, y: Self.panelTop)
+                    .opacity(open ? 1 : 0)
+                    .motion(.spatial, value: open)
+                    .allowsHitTesting(open)
+                    .accessibilityHidden(!open)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("History")
             }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
         }
-    }
-
-    /// The canvas's chips filter it, with its own buttons at the column's end (RouterCanvas.swift).
-    private func chips(_ page: RouterPage) -> some View {
-        HStack(spacing: 12) {
-            if bar { PaneSwitch(store: store, model: model) }
-            CanvasBar(store: store, model: model, page: page, compact: bar, gutter: gutter)
-        }
-        .padding(.top, 6)
-        .padding(.bottom, 2)
     }
 }
 
@@ -60,7 +79,7 @@ struct RouterLayoutSwitch: View {
             HStack(spacing: 0) {
                 segment(.list, "List", icon: "list.bullet", help: "Now as sections, one under the other")
                 segment(.canvas, "Canvas", icon: "square.on.square.dashed",
-                        help: "Beta: each project a frame, its sessions grouped; pan, pinch, double-click to fit")
+                        help: "Beta: each project a frame on an infinite canvas; pan, pinch, drag a frame to move it, double-click to fit")
             }
             .padding(1)
             .frame(height: ZoneChip.height)
