@@ -282,8 +282,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// Input to the window and what was asked of it, counted (see `AppTransition.Marks`).
     private var changes = 0
     private var inputWatch: Any?
-    /// Keeps `closedPicture` fresh while the window is open (see `keepPicture`).
+    /// Keeps `closedPicture` fresh while the window is open (see `keepPicture`): its next look, and whether it keeps.
     private var pictureKeeper: Timer?
+    private var keeping = false
+    /// The keeper's last look at a window that had moved on from its picture, and the marks then: a picture is taken only
+    /// once the next look finds it alike (the window at rest).
+    private var restGlance: (glance: AppTransition.Glance, marks: AppTransition.Marks)?
     /// Lets go of `closedPicture` once the window has stayed closed `keptPictureLife`.
     private var pictureExpiry: DispatchWorkItem?
     /// How long a closed window keeps its picture (some 15 to 30 MB): by then what it shows has likely moved on (its times,
@@ -538,6 +542,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             MainActor.assumeIsolated {
                 guard let self, event.window === self.window else { return }
                 self.changes &+= 1
+                self.nudgeKeeper()
             }
             return event
         }
@@ -559,22 +564,49 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// cost over `idleCaptureBudget`, at most a twentieth of the main thread's time (`mayCaptureAtIdle`). Not short of
     /// memory.
     func keepPictureFresh() {
-        guard pictureKeeper == nil, AppTransition.enabled else { return }
-        let timer = Timer(fire: Date(timeIntervalSinceNow: 0.5), interval: 1, repeats: true) { [weak self] timer in
-            // A controller gone takes its keeper with it.
+        guard AppTransition.enabled else { return }
+        keeping = true
+        keeperPace = Self.keeperPaces.shortest
+        scheduleKeeper(after: keeperPace)
+    }
+
+    /// The keeper's looks: every half second while the window changes, twice as far apart (up to 4 s) each look that
+    /// finds nothing to do; back to half a second on the user's input.
+    static let keeperPaces = (shortest: 0.5, longest: 4.0)
+
+    private func scheduleKeeper(after delay: TimeInterval) {
+        pictureKeeper?.invalidate()
+        // One look at a time: a controller gone takes its keeper with it, as no further look is asked.
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
             guard let self else { return timer.invalidate() }
-            MainActor.assumeIsolated { self.keepPicture() }
+            MainActor.assumeIsolated {
+                self.pictureKeeper = nil
+                self.keepPicture()
+            }
         }
-        timer.tolerance = 0.25
+        timer.tolerance = delay / 4
         // The default mode only: not while a scroll, a drag or a menu tracks.
         RunLoop.main.add(timer, forMode: .default)
         pictureKeeper = timer
     }
 
     private func stopKeepingPicture() {
+        keeping = false
+        restGlance = nil
         pictureKeeper?.invalidate()
         pictureKeeper = nil
     }
+
+    /// The user did something to the window: the keeper looks again soon.
+    private func nudgeKeeper() {
+        guard keeping else { return }
+        keeperPace = Self.keeperPaces.shortest
+        if let fire = pictureKeeper?.fireDate, fire.timeIntervalSinceNow <= keeperPace { return }
+        scheduleKeeper(after: keeperPace)
+    }
+
+    /// How far apart the keeper's looks are now (see `keeperPaces`).
+    private(set) var keeperPace = keeperPaces.shortest
 
     /// The kept picture let go once the window has stayed closed `after` (an opening calls it off).
     private func expireKeptPicture(after: TimeInterval) {
@@ -601,6 +633,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     /// One look of the idle keeper (see `keepPictureFresh`).
     func keepPicture() {
+        defer { if keeping, pictureKeeper == nil { scheduleKeeper(after: keeperPace) } }
+        func slower() { keeperPace = min(keeperPace * 2, Self.keeperPaces.longest) }
         guard let window, window.isVisible else { return stopKeepingPicture() }
         guard phase == .idle, !memoryShort, AppTransition.isFront(window), AppTransition.isKey(window), !MotionGate.moving,
               !AppTransition.composing(in: window) else { return }
@@ -609,17 +643,40 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             ? AppTransition.reducedScale(of: window) : full
         let cost = AppTransition.estimate(window, pixelScale: scale)
         // Idle long enough that a key typed after a pause like this one is not likely to wait on the picture.
-        guard AppTransition.inputIdle(max(0.5, 3 * cost)) else { return }
+        guard AppTransition.inputIdle(max(0.5, 3 * cost)) else {
+            keeperPace = Self.keeperPaces.shortest
+            return
+        }
         let chrome = glassWindow(window)
         let glass = AppTransition.usesGlass
+        let marks = self.marks
+        let kept = closedPicture.flatMap {
+            $0.fits(window, glass: glass, sidebar: chrome.sidebar) && $0.destination == navigator.selection ? $0 : nil
+        }
+        // As good as the keeper would make it (sharp, or soft when sharp costs too much).
+        let good = kept.map { $0.exact || scale < full } ?? false
+        // Nothing typed, clicked, asked or synced since the kept picture: it still stands, with no glance (what moved
+        // since is the window's own noise, a ticking duration or the thinking dots, which a close forgives).
+        if let kept, good, kept.marks == marks { return slower() }
         let now = AppTransition.glance(of: window)
-        if let kept = closedPicture, kept.fits(window, glass: glass, sidebar: chrome.sidebar),
-           kept.destination == navigator.selection, now?.same(as: kept.glance) == true { return }
+        if let kept, good, now?.same(as: kept.glance) == true {
+            closedPicture?.marks = marks
+            return slower()
+        }
+        // A picture only of a window at rest: two looks in a row alike (but for noise), nothing happening between.
+        guard let rest = restGlance, rest.marks == marks,
+              now?.within(AppTransition.Glance.closeTolerance, of: rest.glance) == true else {
+            restGlance = now.map { ($0, marks) }
+            keeperPace = Self.keeperPaces.shortest
+            return
+        }
         guard AppTransition.mayCaptureAtIdle(cost: cost) else { return }
         if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
                                                destination: navigator.selection, glance: now, pixelScale: scale,
                                                marks: marks) {
             closedPicture = picture
+            restGlance = nil
+            slower()
         }
     }
 

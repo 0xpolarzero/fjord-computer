@@ -897,9 +897,35 @@ extension WindowSeams {
                 AppTransition.costs.record(0.5, size: view.bounds.size, pixelScale: window.backingScaleFactor)
                 let soft = AppTransition.reducedScale(of: window)
                 let expected = max(0.5, 3 * AppTransition.estimate(window, pixelScale: soft))
+                // Two looks: a picture only of a window at rest.
+                controller.keepPicture()
                 controller.keepPicture()
                 #expect(controller.keepsPicture && asked == expected)
                 #expect(controller.keptPictureIsSoft == (soft < window.backingScaleFactor))
+            }
+        }
+
+        /// The idle keeper settles: a picture only once two looks agree, then no glance at all while nothing is typed, clicked,
+        /// asked or synced (what ticks on its own is noise a close forgives), its looks further and further apart; something
+        /// asked of the window has it look again, and a window drawn alike keeps its picture.
+        @Test func theIdleKeeperSettles() throws {
+            try morphing { controller, _ in
+                _ = try #require(openForTheKeeper(controller))
+                let taken = AppTransition.captures
+                controller.keepPicture()
+                #expect(!controller.keepsPicture && controller.keeperPace == 0.5)
+                controller.keepPicture()
+                #expect(controller.keepsPicture && AppTransition.captures == taken + 1 && controller.keeperPace == 1)
+                let glances = AppTransition.glances
+                controller.keepPicture()
+                controller.keepPicture()
+                #expect(AppTransition.glances == glances && AppTransition.captures == taken + 1)
+                #expect(controller.keeperPace == 4)
+                controller.pick(message: UUID())
+                controller.keepPicture()
+                #expect(AppTransition.glances == glances + 1 && AppTransition.captures == taken + 1)
+                controller.keepPicture()
+                #expect(AppTransition.glances == glances + 1)
             }
         }
 

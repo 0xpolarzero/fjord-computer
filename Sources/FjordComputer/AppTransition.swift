@@ -295,6 +295,8 @@ enum AppTransition {
     }
 
     static let glanceScale: CGFloat = 0.25
+    /// How many glances were drawn (the tests count them).
+    private(set) static var glances = 0
 
     /// The window's glance as it is drawn now (laid out and displayed first, as a picture would be); nil when it has no
     /// layers to draw.
@@ -302,6 +304,7 @@ enum AppTransition {
         guard let view = window.contentView, let layer = view.layer, view.bounds.width > 0, view.bounds.height > 0 else {
             return nil
         }
+        glances += 1
         let signpost = MorphSignposts.signposter.beginInterval("Glance drawn")
         defer { MorphSignposts.signposter.endInterval("Glance drawn", signpost) }
         (view.superview ?? view).layoutSubtreeIfNeeded()
