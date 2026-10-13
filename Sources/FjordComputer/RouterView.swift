@@ -92,10 +92,42 @@ extension Store {
 
 /// Content redrawn on the minute and only then (ages, the status line): nothing else ticks for it.
 struct MinuteTicking<Content: View>: View {
+    /// Out of sight: it stops on the minute it was at, and catches up once shown.
+    var paused = false
     @ViewBuilder let content: (Date) -> Content
 
+    init(paused: Bool = false, @ViewBuilder content: @escaping (Date) -> Content) {
+        self.paused = paused
+        self.content = content
+    }
+
     var body: some View {
-        TimelineView(.everyMinute) { context in content(context.date) }
+        TimelineView(Minutes(paused: paused)) { context in content(context.date) }
+    }
+}
+
+/// Every minute on the minute, as `.everyMinute`; paused, only the moment it started.
+private struct Minutes: TimelineSchedule {
+    let paused: Bool
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> Entries {
+        Entries(upcoming: startDate, paused: paused)
+    }
+
+    struct Entries: Sequence, IteratorProtocol {
+        var upcoming: Date?
+        let paused: Bool
+
+        mutating func next() -> Date? {
+            guard let date = upcoming else { return nil }
+            if paused {
+                upcoming = nil
+            } else {
+                let minute = (date.timeIntervalSinceReferenceDate / 60).rounded(.down) * 60
+                upcoming = Date(timeIntervalSinceReferenceDate: minute + 60)
+            }
+            return date
+        }
     }
 }
 

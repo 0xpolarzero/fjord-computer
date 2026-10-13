@@ -201,6 +201,12 @@ struct RouterPageView: View {
     let store: Store
     @Bindable var model: RouterModel
 
+    /// Whether the history has been shown on this page: in a narrow window it isn't built until it is, then kept, hidden
+    /// under Now, so going back to it finds it as it was (its scroll, the lines drawn). Not view state: it turns on as the
+    /// history shows, which redraws the page already.
+    @State private var historyShown = Flag()
+    private final class Flag { var on = false }
+
     /// Now's share of a wide page.
     static let nowShare: CGFloat = 0.55
 
@@ -214,17 +220,22 @@ struct RouterPageView: View {
             let historyWidth = wide ? width - nowWidth - CDS.hairline : width
             let showsNow = wide || model.pane == .now
             let historyHidden = !wide && showsNow
-            // The history is always the same view in the same place, shown or not, at any width: switching sides or
-            // crossing into a wide window keeps where you were in it (its scroll, the lines drawn).
+            let buildsHistory = historyShown.on || !historyHidden
+            let _ = historyHidden ? () : (historyShown.on = true)
+            // Once shown, the history is always the same view in the same place, shown or not, at any width: switching sides
+            // or crossing into a wide window keeps where you were in it (its scroll, the lines drawn). A narrow page that
+            // opens on Now doesn't build it (its list, its clock, its anchoring) until it is asked for.
             ZStack(alignment: .topLeading) {
-                HistoryColumn(store: store, model: model, bar: !wide)
-                    .flightTarget(historyHidden ? nil : "history", flashes: false)
-                    .column(historyWidth)
-                    .frame(width: historyWidth, height: height)
-                    .offset(x: wide ? nowWidth + CDS.hairline : 0)
-                    .opacity(historyHidden ? 0 : 1)
-                    .allowsHitTesting(!historyHidden)
-                    .accessibilityHidden(historyHidden)
+                if buildsHistory {
+                    HistoryColumn(store: store, model: model, bar: !wide, hidden: historyHidden)
+                        .flightTarget(historyHidden ? nil : "history", flashes: false)
+                        .column(historyWidth)
+                        .frame(width: historyWidth, height: height)
+                        .offset(x: wide ? nowWidth + CDS.hairline : 0)
+                        .opacity(historyHidden ? 0 : 1)
+                        .allowsHitTesting(!historyHidden)
+                        .accessibilityHidden(historyHidden)
+                }
                 if showsNow {
                     NowColumn(store: store, model: model, height: height, bar: !wide)
                         .column(nowWidth)
@@ -256,6 +267,8 @@ private struct HistoryColumn: View {
     let store: Store
     let model: RouterModel
     let bar: Bool
+    /// Under Now in a narrow window: its clock stops until it shows again.
+    let hidden: Bool
 
     var body: some View {
         if #available(macOS 26, *) {
@@ -282,7 +295,7 @@ private struct HistoryColumn: View {
 
     /// A history of its own for each side of the filter: turned on or off, it opens at its bottom, as at first.
     private var history: some View {
-        RouterHistory(store: store, model: model).id(model.unreadOnly)
+        RouterHistory(store: store, model: model, hidden: hidden).id(model.unreadOnly)
     }
 
     private var header: some View {
@@ -628,6 +641,8 @@ private struct TopInsetWatch: ViewModifier {
 private struct RouterHistory: View {
     let store: Store
     let model: RouterModel
+    /// Out of sight: the ages stop on their minute.
+    let hidden: Bool
     @Environment(\.routerGutter) private var gutter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The oldest line drawn, once you scroll up or ask for earlier ones (so nothing drops off the top while you read); at the
@@ -648,8 +663,8 @@ private struct RouterHistory: View {
         let all = model.history(store)
         let entries = HistoryWindow.drawn(all, from: oldest, page: Self.page)
         let expanded = model.expanded, picked = model.selection, highlighted = model.highlighted
-        // One clock for every age in the history, on the minute.
-        MinuteTicking { now in
+        // One clock for every age in the history, on the minute (stopped while the history is out of sight).
+        MinuteTicking(paused: hidden) { now in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
