@@ -675,6 +675,7 @@ extension WindowSeams {
             AppTransition.nextTurn = { block in ticks.turns.append(block) }
             // A fresh picture is in before the handoff whatever a debug build's take: a test that has none fit says so.
             AppTransition.picturesFit = { _ in true }
+            let keeper = (AppTransition.inputIdle, AppTransition.isFront, AppTransition.costs, AppTransition.lastCapture)
             _ = NSApplication.shared
             let store = Store()
             store.persists = false
@@ -693,6 +694,7 @@ extension WindowSeams {
                 AppTransition.isMiniaturized = saved.4
                 AppTransition.flushInitial = saved.5
                 AppTransition.picturesFit = saved.6
+                (AppTransition.inputIdle, AppTransition.isFront, AppTransition.costs, AppTransition.lastCapture) = keeper
                 AppPolicy.update(windowOpen: policy == .regular)
                 // A morph the test left under way holds no other test's waiting work.
                 MotionGate.ended()
@@ -866,6 +868,38 @@ extension WindowSeams {
                 #expect(controller.phase == .closing && MotionGate.moving)
                 controller.run?.complete()
                 #expect(controller.phase == .idle && !MotionGate.moving)
+            }
+        }
+
+        /// The window open with no morph, in front and with the keyboard, the user idle, no picture taken lately.
+        private func openForTheKeeper(_ controller: AppWindowController) -> NSWindow? {
+            AppTransition.enabled = false
+            controller.show(.done)
+            AppTransition.enabled = true
+            AppTransition.isKey = { _ in true }
+            AppTransition.isFront = { _ in true }
+            AppTransition.inputIdle = { _ in true }
+            AppTransition.lastCapture = -.infinity
+            return controller.window
+        }
+
+        /// The idle keeper keeps off the user's input, waiting three times what its picture would cost, and keeps a soft
+        /// picture when a sharp one would cost over its budget, so no look holds a key typed meanwhile for long.
+        @Test func theIdleKeeperBoundsWhatItCosts() throws {
+            try morphing { controller, _ in
+                let window = try #require(openForTheKeeper(controller))
+                AppTransition.inputIdle = { _ in false }
+                controller.keepPicture()
+                #expect(!controller.keepsPicture)
+                var asked: TimeInterval = 0
+                AppTransition.inputIdle = { asked = $0; return true }
+                let view = try #require(window.contentView?.superview)
+                AppTransition.costs.record(0.5, size: view.bounds.size, pixelScale: window.backingScaleFactor)
+                let soft = AppTransition.reducedScale(of: window)
+                let expected = max(0.5, 3 * AppTransition.estimate(window, pixelScale: soft))
+                controller.keepPicture()
+                #expect(controller.keepsPicture && asked == expected)
+                #expect(controller.keptPictureIsSoft == (soft < window.backingScaleFactor))
             }
         }
 

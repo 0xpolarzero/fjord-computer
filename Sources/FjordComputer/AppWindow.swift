@@ -551,11 +551,13 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                     marks: marks)
     }
 
-    /// While the window is open and still, its picture is kept the window as drawn, so a close starts on it at once with
-    /// nothing captured: half a second after it opened then about every second, once nothing was pressed or moved for half
-    /// a second, a glance says whether the
-    /// window still is what `closedPicture` shows, and when it isn't a picture is taken there and then, at most a
-    /// twentieth of the main thread's time (`mayCaptureAtIdle`). Not short of memory, nor out of sight.
+    /// While the window is open, in front and has the keyboard (started as it opens or becomes key, stopped as it resigns
+    /// it or closes), its picture is kept the window as drawn, so a close starts on it at once with nothing captured:
+    /// half a second after it starts then about every second, once nothing was pressed or moved for three times what a
+    /// picture would cost (half a second at least), and no text is being composed, a glance says whether the window still
+    /// is what `closedPicture` shows, and when it isn't a picture is taken there and then, soft when a sharp one would
+    /// cost over `idleCaptureBudget`, at most a twentieth of the main thread's time (`mayCaptureAtIdle`). Not short of
+    /// memory.
     func keepPictureFresh() {
         guard pictureKeeper == nil, AppTransition.enabled else { return }
         let timer = Timer(fire: Date(timeIntervalSinceNow: 0.5), interval: 1, repeats: true) { [weak self] timer in
@@ -598,19 +600,25 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     var keeperTimer: Timer? { pictureKeeper }
 
     /// One look of the idle keeper (see `keepPictureFresh`).
-    private func keepPicture() {
+    func keepPicture() {
         guard let window, window.isVisible else { return stopKeepingPicture() }
-        guard phase == .idle, !memoryShort, isFront, AppTransition.isKey(window), !MotionGate.moving,
-              AppTransition.inputIdle(for: 0.5) else { return }
+        guard phase == .idle, !memoryShort, AppTransition.isFront(window), AppTransition.isKey(window), !MotionGate.moving,
+              !AppTransition.composing(in: window) else { return }
+        let full = window.backingScaleFactor
+        let scale = AppTransition.estimate(window, pixelScale: full) > AppTransition.idleCaptureBudget
+            ? AppTransition.reducedScale(of: window) : full
+        let cost = AppTransition.estimate(window, pixelScale: scale)
+        // Idle long enough that a key typed after a pause like this one is not likely to wait on the picture.
+        guard AppTransition.inputIdle(max(0.5, 3 * cost)) else { return }
         let chrome = glassWindow(window)
         let glass = AppTransition.usesGlass
         let now = AppTransition.glance(of: window)
         if let kept = closedPicture, kept.fits(window, glass: glass, sidebar: chrome.sidebar),
            kept.destination == navigator.selection, now?.same(as: kept.glance) == true { return }
-        guard AppTransition.mayCaptureAtIdle(cost: AppTransition.estimate(window, pixelScale: window.backingScaleFactor))
-        else { return }
+        guard AppTransition.mayCaptureAtIdle(cost: cost) else { return }
         if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
-                                               destination: navigator.selection, glance: now, marks: marks) {
+                                               destination: navigator.selection, glance: now, pixelScale: scale,
+                                               marks: marks) {
             closedPicture = picture
         }
     }
@@ -943,6 +951,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) {
         window.map(TrafficLights.place)
         readCorner()
+        // Back in front with the keyboard (after a minimize, a hide, another app): the keeper looks again.
+        if phase == .idle { keepPictureFresh() }
+    }
+    /// Out of the keyboard: nothing to close from, so no picture to keep fresh, and no wakeups.
+    func windowDidResignKey(_ notification: Notification) {
+        if phase == .idle { stopKeepingPicture() }
     }
     func windowDidEnterFullScreen(_ notification: Notification) { readCorner() }
     func windowDidExitFullScreen(_ notification: Notification) {

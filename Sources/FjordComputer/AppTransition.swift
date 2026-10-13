@@ -151,7 +151,7 @@ enum AppTransition {
     /// taken (media time): an opening takes one only when it is sure to be in before the handoff, and the idle keeper
     /// spaces them out.
     static var costs = CaptureCosts()
-    private(set) static var lastCapture: CFTimeInterval = -.infinity
+    static var lastCapture: CFTimeInterval = -.infinity
 
     /// What a picture costs, from the last few taken at that size and scale: their longest, not their mean (one that took
     /// 520 ms among a few of 65 must keep a handoff from waiting on the next). A size or scale never taken is worked out
@@ -339,11 +339,27 @@ enum AppTransition {
     }
 
     /// No key, click or pointer move for `seconds`: the user is not in the middle of something a picture would hold up.
-    static func inputIdle(for seconds: TimeInterval) -> Bool {
+    /// Replaceable, so a test can say.
+    static var inputIdle: (_ seconds: TimeInterval) -> Bool = { seconds in
         guard NSEvent.pressedMouseButtons == 0 else { return false }
         // kCGAnyInputEventType.
         guard let any = CGEventType(rawValue: ~0) else { return true }
         return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any) >= seconds
+    }
+
+    /// Whether `window` is in front of the user (the app active, the window on screen and not covered). Replaceable, as
+    /// `isKey` (a test's app is never active).
+    static var isFront: (NSWindow) -> Bool = { window in
+        NSApp.isActive && window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+    }
+
+    /// The most an idle picture may cost the main thread (by `costs`): a sharper one would be taken soft instead, so no
+    /// look of the idle keeper holds a key typed meanwhile for long.
+    static let idleCaptureBudget: CFTimeInterval = 0.03
+
+    /// Whether text is being composed in `window` (an input method's marked text): the keeper keeps off it.
+    static func composing(in window: NSWindow) -> Bool {
+        (window.firstResponder as? NSTextInputClient)?.hasMarkedText() == true
     }
 
     /// A place in a window's picture whose ground is taken out: the inset sidebar's rounded rect (window coordinates),
