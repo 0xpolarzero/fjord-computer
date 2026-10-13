@@ -228,6 +228,16 @@ enum RouterMemo {
 // MARK: - Page
 
 private struct GutterKey: EnvironmentKey { static let defaultValue = CDS.Transcript.gutter }
+
+private extension EnvironmentValues {
+    /// The history's lines are out of sight (hidden under Now): they draw what they last read, reading nothing live.
+    @Entry var historyOutOfSight = false
+}
+
+/// A value a view last read live, kept for when it is out of sight. Not view state: written as it is drawn.
+private final class LastRead<Value> {
+    var value: Value?
+}
 private extension EnvironmentValues {
     /// The page's side margin: 32, 16 in a narrow column.
     var routerGutter: CGFloat {
@@ -779,6 +789,7 @@ private struct RouterHistory: View {
                     .padding(.top, RouterPageView.historyTop)
                 }
                 .cdsTopFade()
+                .environment(\.historyOutOfSight, hidden)
                 .modifier(HistoryAnchoring(pinned: $pinned, laidOut: laidOut, ready: { if pending != nil { released = true } }) {
                     // With no scroll waiting (the history opening, its lazy lines' heights settling under it; a line arriving),
                     // a jump there and then: nothing of the page is redrawn for it, nor waits a turn.
@@ -1130,6 +1141,8 @@ private struct HistoryDecisionLine: View, Equatable {
     let cancel: Cancel
     let store: Store
     let model: RouterModel
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var lastStatus = LastRead<(text: String, held: Bool)>()
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1149,16 +1162,26 @@ private struct HistoryDecisionLine: View, Equatable {
     private var key: String { decision.id.uuidString }
     /// While a typed run is under way, how far it is (classifying, sending…); else how it ended. Only a run under way reads
     /// the dispatcher (a held start too: what its first message waits for).
-    private var status: String {
-        guard decision.outcome == .pending else { return decision.summary }
-        if let progress = store.routerDispatcher.progress[decision.id] { return progress + "…" }
-        // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
-        if let held = store.routerDispatcher.held[decision.id] { return decision.summary + " · " + held }
-        return decision.summary
+    private var status: (text: String, held: Bool) {
+        guard decision.outcome == .pending else { return (decision.summary, false) }
+        // Out of sight, as last read: the dispatcher isn't read for a history hidden under Now.
+        if outOfSight, let kept = lastStatus.value { return kept }
+        let held = store.routerDispatcher.held[decision.id]
+        let read: (String, Bool)
+        if let progress = store.routerDispatcher.progress[decision.id] {
+            read = (progress + "…", held != nil)
+        } else if let held {
+            // A start whose first message waits for the Claude app to run the session: started, and what it waits for.
+            read = (decision.summary + " · " + held, true)
+        } else {
+            read = (decision.summary, false)
+        }
+        lastStatus.value = read
+        return read
     }
 
     var body: some View {
-        let status = status
+        let (status, held) = status
         VStack(alignment: .leading, spacing: 0) {
             Button { toggle() } label: {
                 HStack(spacing: 8) {
@@ -1169,7 +1192,7 @@ private struct HistoryDecisionLine: View, Equatable {
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
                     Text("· \(status)").cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
                     // A held start's first message: yours to drop (Stop leaves it be).
-                    if decision.outcome == .pending, store.routerDispatcher.held[decision.id] != nil {
+                    if held {
                         Button("Don't send") { store.routerDispatcher.dropHeld(decision.id) }
                             .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
                             .help("Its first message isn't sent; the session stays in the Claude app")
@@ -1433,9 +1456,19 @@ private struct CardGlyph: View {
     let store: Store
     let sessionID: String
     let symbol: String
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var last = LastRead<AgentRow?>()
+
+    /// The session's row: read live while the history shows, as last read while it is out of sight.
+    private var session: AgentRow? {
+        if outOfSight, let kept = last.value { return kept }
+        let row = store.sessionRow(sessionID)
+        last.value = .some(row)
+        return row
+    }
 
     var body: some View {
-        if let session = store.sessionRow(sessionID) {
+        if let session {
             SessionGlyph(row: session, size: 16, dot: false).opacity(0.7)
         } else {
             Image(systemName: symbol).font(.system(size: 10, weight: .medium))
