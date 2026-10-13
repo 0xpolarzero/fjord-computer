@@ -763,12 +763,6 @@ struct ClaudeSnapshot {
     var stamp = ClaudeStamp()
 }
 
-extension ClaudeSnapshot {
-    /// A read of what working sessions are doing and what runs in the background, nothing else (`ClaudeFeed.read(full: false)`
-    /// once the sessions are known).
-    var isActivityOnly: Bool { sessions == nil && link == nil && appUnread == nil && activity != nil }
-}
-
 /// `generation` changes when the extension is switched; `revision` when you change something about an agent.
 struct ClaudeStamp: Equatable {
     var generation = 0
@@ -832,8 +826,8 @@ final class ClaudeFeed: @unchecked Sendable {
     /// over, in the order read (what they make of the sessions, the dots and the Router's cards goes by each step), a slice
     /// of them per turn of the main run loop (`sliceBudget`), each slice inside `batched` (the store makes the work that
     /// follows from them once, at its end), so a backlog never holds the main thread just as the window wants its frames.
-    /// Reads that come while some still wait queue behind them. Activity-only reads in a row are one: they say no session's
-    /// turns, messages or dots, only what is happening now, which the later one says.
+    /// Reads that come while some still wait queue behind them. None is folded into another: even an activity-only read
+    /// can say a session stopped on a question, which the next may already have moved past.
     private var held: [(read: ClaudeSnapshot, apply: @MainActor (ClaudeSnapshot) -> Void)] = []
     /// A slice is asked for (after the motion) or under way.
     private var draining = false
@@ -845,11 +839,7 @@ final class ClaudeFeed: @unchecked Sendable {
     @MainActor func deliver(_ snapshot: ClaudeSnapshot, _ apply: @escaping @MainActor (ClaudeSnapshot) -> Void,
                             gate: MotionGate.Gate = MotionGate.shared) {
         guard gate.holding || draining || !held.isEmpty else { return apply(snapshot) }
-        if let last = held.last, last.read.isActivityOnly, snapshot.isActivityOnly, last.read.stamp == snapshot.stamp {
-            held[held.count - 1] = (snapshot, apply)
-        } else {
-            held.append((snapshot, apply))
-        }
+        held.append((snapshot, apply))
         guard !draining else { return }
         draining = true
         gate.whenStill { [self] in drain(gate) }
