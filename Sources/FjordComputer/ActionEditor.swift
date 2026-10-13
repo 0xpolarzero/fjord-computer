@@ -228,6 +228,8 @@ struct ActionPromptField: View {
     @State private var focused = false
     @State private var focusTick = 0
     @State private var pendingWrite: Task<Void, Never>?
+    /// The field's place in `PendingEdits`.
+    @State private var field = UUID()
 
     /// The text view, once it has told where its caret is (a pick puts the caret after it).
     final class EditorBox {
@@ -288,12 +290,14 @@ struct ActionPromptField: View {
     private func write() {
         pendingWrite?.cancel()
         pendingWrite = nil
+        PendingEdits.release(field)
         let now = Self.prompt(of: model)
         if now != prompt { prompt = now }
     }
 
     /// `write`, once typing has paused for `pause`.
     private func writeSoon() {
+        PendingEdits.hold(field) { write() }
         pendingWrite?.cancel()
         pendingWrite = Task {
             try? await Task.sleep(for: TypingPause.pause)

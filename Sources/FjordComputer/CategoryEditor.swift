@@ -6,6 +6,24 @@ enum TypingPause {
     static let pause: Duration = .milliseconds(250)
 }
 
+/// What was typed and is waiting for its pause before it reaches the store, by field: written at once when the app quits
+/// (`applicationWillTerminate`, before the store's last save), since a quit doesn't wait for the pause nor tell the fields
+/// they are going. A field holds its write while it waits and lets go once it has written (or has nothing to write).
+@MainActor
+enum PendingEdits {
+    private static var writes: [UUID: () -> Void] = [:]
+
+    static func hold(_ field: UUID, write: @escaping () -> Void) { writes[field] = write }
+    static func release(_ field: UUID) { writes[field] = nil }
+
+    /// Every write still waiting, now.
+    static func flushAll() {
+        let all = writes
+        writes = [:]
+        for write in all.values { write() }
+    }
+}
+
 private let body14 = CDS.Density.comfortable.body
 private let foot12: (CGFloat, CGFloat) = (12, 16)
 
@@ -34,6 +52,8 @@ struct CategoryEditor: View {
     /// and the list redrawn), so not one per keystroke. A new category's draft takes each keystroke: it isn't in the store.
     @State private var typedName: String?
     @State private var nameWrite: Task<Void, Never>?
+    /// The name field's place in `PendingEdits`.
+    @State private var nameField = UUID()
 
     init(store: Store, editing: CategoryEditing, history: CategoryHistory, draft: Binding<InboxCategory>? = nil,
          create: @escaping () -> Void = {}, firstRuleNotice: String? = nil, close: @escaping () -> Void) {
@@ -95,6 +115,7 @@ struct CategoryEditor: View {
         guard !isNew else { return draft.name }
         return Binding(get: { typedName ?? c.name }, set: { name in
             typedName = name
+            PendingEdits.hold(nameField) { commitName() }
             nameWrite?.cancel()
             nameWrite = Task {
                 try? await Task.sleep(for: TypingPause.pause)
@@ -108,6 +129,7 @@ struct CategoryEditor: View {
     private func commitName() {
         nameWrite?.cancel()
         nameWrite = nil
+        PendingEdits.release(nameField)
         guard let name = typedName else { return }
         typedName = nil
         if draft.wrappedValue.name != name { draft.wrappedValue.name = name }

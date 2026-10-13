@@ -745,6 +745,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // The Router's runs go with the app, the actions' too (a send's `claude` process is ended, not left behind).
         store?.routerDispatcher.stopAll(actions: true)
+        // What was typed into a category's fields and still waits for its pause goes into the store before its last save.
+        PendingEdits.flushAll()
         store?.flushSave()
     }
 

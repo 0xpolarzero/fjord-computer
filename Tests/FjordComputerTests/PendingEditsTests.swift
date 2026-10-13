@@ -25,3 +25,19 @@ struct PendingEditsTests {
         #expect(items.first?.kind == .comment("typed into a") && items.last == b)
     }
 }
+
+@MainActor
+struct PendingEditsFlushTests {
+    @Test func aQuitWritesWhatWaitsForItsPauseOnceAndForgetsWhatWasWritten() {
+        var written: [String] = []
+        let a = UUID(), b = UUID()
+        PendingEdits.hold(a) { written.append("a") }
+        PendingEdits.hold(b) { written.append("b") }
+        // Written already, by its pause: nothing left to write for it.
+        PendingEdits.release(b)
+        PendingEdits.flushAll()
+        #expect(written == ["a"])
+        PendingEdits.flushAll()
+        #expect(written == ["a"], "each write once")
+    }
+}
