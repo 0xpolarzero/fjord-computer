@@ -441,6 +441,10 @@ private struct Tip: ViewModifier {
     @State private var pending: Task<Void, Never>?
 
     private final class Anchor { var frame = CGRect.zero }
+    /// Measured only while the pointer is on it, it has the keyboard, or it is the tip asked for: not on every layout and
+    /// scroll frame of every control carrying a tip.
+    @State private var measuring = false
+    @State private var hovering = false
     @Environment(\.tipCenter) private var center
     @Environment(\.previewTip) private var previewTip
     @Environment(\.systemHelp) private var systemHelp
@@ -457,16 +461,24 @@ private struct Tip: ViewModifier {
 
     private func styled(_ content: Content) -> some View {
         content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TipSpace.name)) } action: { frame in
-                anchor.frame = frame
-                center?.move(id, to: frame)
+            .background {
+                if measuring {
+                    Color.clear.onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TipSpace.name)) } action: { frame in
+                        anchor.frame = frame
+                        center?.move(id, to: frame)
+                    }
+                }
             }
             .onAppear {
                 if previewTip == title {
+                    measuring = true
                     DispatchQueue.main.async { show() }
                 }
             }
             .onHover { inside in
+                hovering = inside
+                let measure = inside || focused
+                if measuring != measure { measuring = measure }
                 pending?.cancel()
                 if inside {
                     pending = Task {
@@ -479,6 +491,8 @@ private struct Tip: ViewModifier {
                 }
             }
             .onChange(of: focused) { _, focused in
+                let measure = hovering || focused
+                if measuring != measure { measuring = measure }
                 pending?.cancel()
                 if focused {
                     let delay = focusDelay
