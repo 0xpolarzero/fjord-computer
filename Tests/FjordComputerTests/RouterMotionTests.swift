@@ -22,7 +22,7 @@ import Testing
 
     /// The deliberate exceptions, by file and a piece of the line: each says why it is not a token.
     static let allowed: [(file: String, line: String, reason: String)] = [
-        ("AppSidebar.swift", ".animation(collapsed ? .easeIn(duration: 0.18).delay(0.12)",
+        ("AppSidebar.swift", ".animation(collapsed ? .easeIn(duration: 0.16).delay(0.06)",
          "the rail badge's timing: an opacity only, in after the labels have gone"),
         ("Playground.swift", ".animation(.easeOut(duration: 0.2), value: hub.toast)",
          "the playground's own toast, a development tool"),
