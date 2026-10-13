@@ -580,6 +580,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// overlay shrinks into the bar's cell, then it really closes.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard AppTransition.enabled, phase != .closing, phase == .opening || isFront else { return phase != .closing }
+        // Until the close's first frame is flushed: the time to the first moving frame.
+        let asked = MorphSignposts.signposter.beginInterval("Close to first flush")
         // An opening whose overlay has let go of its picture shows the real window already: it closes as an open one does.
         let interrupting = phase == .opening && run?.handedOver != true
         phase = .closing
@@ -616,6 +618,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             current?.shows = navigator.selection
         }
         guard let current else {
+            MorphSignposts.signposter.endInterval("Close to first flush", asked)
             finishClosing(sender, mine)
             return false
         }
@@ -629,15 +632,19 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         if !interrupting {
             // The overlay shows the window before the real one goes, in this turn: its frame is submitted to the render
-            // server ahead of the window's ordering out, which reaches the server after it, so no frame shows neither.
+            // server ahead of the window going, which reaches the server after it, so no frame shows neither.
             current.present()
             CATransaction.flush()
         }
-        sender.orderOut(nil)
+        // Out of sight at once (a window's alpha is cheap); ordered out only once the motion is submitted, as ordering a
+        // key window out takes some 11 ms (its key and main status handed on).
+        sender.alphaValue = 0
         current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }
             self.finishClosing(sender, mine)
         }
+        MorphSignposts.signposter.endInterval("Close to first flush", asked)
+        if generation == mine { sender.orderOut(nil) }
         if generation == mine { onClosing?() }
         return false
     }
