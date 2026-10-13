@@ -703,11 +703,14 @@ extension WindowSeams {
             morphing { controller, ticks in
                 controller.show(.settings)
                 guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
-                // Waiting at its frame, invisible, while the overlay grows out of the bar.
+                // Waiting at its frame, invisible and taking no clicks, while the overlay grows out of the bar.
                 #expect(controller.phase == .opening && window.alphaValue == 0 && run.overlay.isVisible)
+                ticks.runTurns()
+                #expect(window.ignoresMouseEvents && window.alphaValue == 0)
                 run.complete()
-                // At the end: the real window is in under the overlay at once, and the overlay stays until two refreshes later.
-                #expect(window.alphaValue == 1 && run.overlay.isVisible && !run.ended)
+                // At the end: the real window is in under the overlay at once, taking clicks, and the overlay stays until two
+                // refreshes later.
+                #expect(window.alphaValue == 1 && !window.ignoresMouseEvents && run.overlay.isVisible && !run.ended)
                 #expect(ticks.blocks.count == 1)
                 ticks.blocks.removeFirst()()
                 #expect(window.alphaValue == 1 && run.overlay.isVisible && ticks.blocks.count == 1)

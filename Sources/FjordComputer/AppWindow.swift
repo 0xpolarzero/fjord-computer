@@ -431,13 +431,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // a picture still the window's is cut to the real window on, any other (none, another place's, one the window has
         // moved on from since) fades into it.
         pending = mine
-        current.open(reduced: AppTransition.reduceMotion || current.bar == nil, arriving: { [weak self, weak window] in
-            // Within 1% of its frame: the real window takes clicks already (a window wholly transparent takes none, one
-            // at 1% shows nothing past the overlay that all but covers it), rather than two refreshes before the end.
-            guard let self, let window, self.generation == mine, self.pending == nil, self.phase == .opening else { return }
-            window.ignoresMouseEvents = false
-            if window.alphaValue < AppTransition.clickableAlpha { window.alphaValue = AppTransition.clickableAlpha }
-        }) { [weak self, weak window] in
+        // The real window takes clicks only once it shows, at the handoff (`reveal`): before, the overlay may show another
+        // page than the one a click would land on, or the glass still be some 15 to 23 pt off its frame.
+        current.open(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak window] in
             guard let self, let window, self.generation == mine else { return }
             // The real window must be in before it takes over. No picture is taken now: it would hold the handoff up. The
             // overlay cuts to the real window when its picture is the window as drawn now, and fades into it otherwise.
