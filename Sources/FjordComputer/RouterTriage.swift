@@ -657,6 +657,8 @@ extension Store {
                 if !stopped, !refused { self.routerTriager.failed(id, session: rescue ? session.id : nil, generation: generation) }
                 return
             }
+            // Taken in once the window's morph has played (`MotionGate`): the card changes, and the Router's history with it.
+            await MotionGate.still()
             if !self.jevReadsInbox { options.removeAll(where: \.fromInbox) }
             var triage = RouterTriage.parse(answers, options: options, source: source)
             for extra in extras { extra.apply(answers, &triage) }
