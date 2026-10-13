@@ -1943,8 +1943,8 @@ private struct WorkingSummary: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             MinuteTicking { now in
                 Text(shortAgo(at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                    .help(exactTime(at))
             }
-            .help(time)
         }
         // The age under the row's duration, past its two buttons.
         .padding(.trailing, 60)
@@ -2142,8 +2142,8 @@ private struct WaitingCard: View, Equatable {
                         Spacer(minLength: 4)
                         MinuteTicking { now in
                             Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                                .help(exactTime(card.createdAt))
                         }
-                        .help(exactTime(card.createdAt))
                     }
                     .contentShape(Rectangle())
                 }
@@ -2495,10 +2495,11 @@ private struct CardAge: View {
     let date: Date
 
     var body: some View {
+        // The time on hover with it: a day old, it says its date rather than only its time.
         MinuteTicking { now in
             Text(shortAgo(date, now: now)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
+                .help(exactTime(date))
         }
-        .help(exactTime(date))
     }
 }
 
