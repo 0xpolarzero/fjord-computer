@@ -235,7 +235,7 @@ enum AppWindowShots {
         Shot(name: "router-canvas-done-lines", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             let closed = store.router.cards.filter { !$0.isOpen }
             let folder = store.router.cards.first { $0.isOpen && $0.folder != nil }?.folder
-            store.router.cards += closed.enumerated().map { i, card in
+            store.router.cards += (closed + closed).enumerated().map { i, card in
                 var card = card
                 card.id += "#line\(i)"
                 card.sessionID += "#line\(i)"
@@ -244,8 +244,17 @@ enum AppWindowShots {
                 return card
             }
             model.pickCanvas()
+            // Opened past its first few: "Show less" under them.
             if let folder { model.canvas.expandedMore.insert("\(folder)#done") }
         }, appearance: .aqua),
+        // Frames sized by hand: one made shorter than what it holds (its body scrolled, faded where it is cut), one at the
+        // narrowest (its cards' chips and kinds' names gone, the groups named by their glyphs).
+        Shot(name: "router-canvas-sizes", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            sized(model, store)
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-sizes-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            sized(model, store)
+        }, appearance: .darkAqua),
         // A message to a card off the view: flown to the edge, its marker there pointing the way.
         Shot(name: "router-canvas-edge", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             edge(model, store)
@@ -316,6 +325,19 @@ enum AppWindowShots {
             model.canvas.sizes[folders[1].key] = CGSize(width: CanvasMetrics.minFrameWidth, height: 0)
         }
         if folders.count > 2 { model.canvas.stack = [folders[2].key] }
+    }
+
+    /// Frames sized by hand: the busiest made short and scrolled a little, the next at the narrowest, the rest packed.
+    private static func sized(_ model: RouterModel, _ store: Store) {
+        Demo.routerTriage(store)
+        model.pickCanvas()
+        let folders = model.canvasFolders(store, page: model.zones(store))
+        guard folders.count > 2 else { return }
+        model.canvas.positions = [folders[0].key: .zero, folders[1].key: CGPoint(x: 620, y: 0),
+                                  folders[2].key: CGPoint(x: 1000, y: 0)]
+        model.canvas.sizes = [folders[0].key: CGSize(width: 560, height: 260),
+                              folders[1].key: CGSize(width: CanvasMetrics.minFrameWidth, height: 0)]
+        model.canvas.scroll(folders[0].key).offset = 70
     }
 
     /// The demo's message going to a card off the view: it flies to the viewport's edge, towards it, where its marker is.
