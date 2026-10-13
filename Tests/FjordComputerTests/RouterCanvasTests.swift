@@ -193,9 +193,13 @@ import Testing
         model.send(store: store)
         #expect(model.pane == .now)
         // The demo's Router settles it at once: it lands on the card it answered (Reduce Motion: no arc, no pan).
-        canvas.nodeRects[card.id] = CGRect(x: 0, y: 0, width: 420, height: 52)
+        // Its card off the view: the camera stays, a marker points to it.
+        canvas.free = CGRect(x: 16, y: 56, width: 800, height: 500)
+        canvas.nodeRects[card.id] = CGRect(x: 4000, y: 0, width: 420, height: 52)
+        let camera = canvas.camera.transform
         canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
         #expect(canvas.landed[card.id]?.text == "use sqlite" && canvas.flights.isEmpty)
+        #expect(canvas.camera.transform == camera && canvas.marker?.node == card.id)
         canvas.landed = [:]
         canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
         #expect(canvas.landed.isEmpty)

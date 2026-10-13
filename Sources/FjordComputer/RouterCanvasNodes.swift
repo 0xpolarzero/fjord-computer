@@ -57,6 +57,9 @@ struct CanvasFolderFrame: View {
 
     var body: some View {
         let folded = self.folded
+        let canvas = model.canvas
+        let width = canvas.width(folder.key)
+        let cardWidth = CanvasMetrics.cardWidth(frame: width)
         VStack(alignment: .leading, spacing: 0) {
             header(folded: folded)
             if !folded {
@@ -64,7 +67,7 @@ struct CanvasFolderFrame: View {
                     Text("Nothing here").cdsText((12, 16), .regular, CDS.Text.muted)
                         .frame(height: 20).padding(.leading, CanvasMetrics.pad).padding(.bottom, CanvasMetrics.pad)
                 } else {
-                    CanvasFolderStack {
+                    CanvasFolderStack(width: cardWidth) {
                         ForEach(nodes) { node in
                             Group {
                                 if let item = node.item {
@@ -76,8 +79,8 @@ struct CanvasFolderFrame: View {
                                 }
                             }
                             .environment(\.canvasNodeID, node.id)
-                            .environment(\.cdsColumnWidth, CanvasMetrics.cardW)
-                            .frame(width: CanvasMetrics.cardW, alignment: .leading)
+                            .environment(\.cdsColumnWidth, cardWidth)
+                            .frame(width: cardWidth, alignment: .leading)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
                                 model.canvas.nodeRects[node.id] = rect
                             }
@@ -96,7 +99,9 @@ struct CanvasFolderFrame: View {
                 }
             }
         }
-        .frame(width: CanvasMetrics.frameWidth, alignment: .leading)
+        .frame(width: width, alignment: .leading)
+        // As tall as you made it, or taller when what it holds is.
+        .frame(minHeight: max(0, canvas.minHeight(folder.key)), alignment: .top)
         .motion(.spatial, value: nodes.map(\.id))
         .motion(.spatial, value: nodes.map(\.hidden))
         // Where a message for a session not drawn yet lands (RouterCanvasPending.swift).
@@ -120,9 +125,10 @@ struct CanvasFolderFrame: View {
                     .overlay { if scheme == .dark { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(CDS.alpha(0.03)) } }
                     .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
                     .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 18 : 0, y: lifted ? 10 : 0)
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .gesture(moveGesture)
                 if !folded {
-                    GeometryReader { proxy in lines(heads, proxy) }
+                    GeometryReader { proxy in lines(heads, proxy) }.allowsHitTesting(false)
                 }
             }
         }
@@ -131,51 +137,56 @@ struct CanvasFolderFrame: View {
                 GeometryReader { proxy in labels(heads, proxy) }
             }
         }
+        // The edges you resize it by: the right, the bottom, and their corner.
+        .overlay { resizeHandles }
         // The frame's anchors stay in it.
         .transformPreference(CanvasHeaders.self) { $0 = [:] }
+        .onChange(of: dragging) { _, now in
+            // A drag the system cancelled (no end): the frame goes back, nothing stays lifted.
+            guard !now else { return }
+            DispatchQueue.main.async { model.canvas.cancelDrag(folder.key) }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(folder.name), \(folder.sessions == 1 ? "1 session" : "\(folder.sessions) sessions")\(folded ? ", folded" : "")")
     }
 
     // MARK: Header
 
-    @ViewBuilder private func header(folded: Bool) -> some View {
-        let line = HStack(spacing: 6) {
+    /// The project's name, and at the end the fold's own button, the only way to fold or open the frame: a drag on the
+    /// header moves the frame and never folds it.
+    private func header(folded: Bool) -> some View {
+        HStack(spacing: 6) {
             ProjectLabel(name: folder.name, color: folder.color)
                 .cdsText((13, 18), .medium, folder.shown.isEmpty ? CDS.Text.muted : CDS.Text.primary).lineLimit(1)
+                .help(folder.key.isEmpty ? "Chats with no project" : folder.key)
             if folded {
-                let done = folder.sessions
-                Text("· \(done) done").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                Text("· \(folder.sessions) done").cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
             }
             Spacer(minLength: 0)
+            IconButton(symbol: folded ? "chevron.right" : "chevron.down", help: folded ? "Unfold" : "Fold",
+                       label: folded ? "Unfold \(folder.name)" : "Fold \(folder.name)", size: 22) {
+                withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { model.canvas.toggleFold(folder) }
+            }
         }
-        .padding(.horizontal, CanvasMetrics.pad)
+        .padding(.leading, CanvasMetrics.pad)
+        .padding(.trailing, 10)
         .frame(height: CanvasMetrics.header)
         .contentShape(Rectangle())
-        if folder.doneOnly {
-            Button {
-                withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { model.canvas.toggleFold(folder) }
-            } label: { line }
-                .buttonStyle(.plain)
-                .simultaneousGesture(moveGesture)
-                .help(folder.key.isEmpty ? (folded ? "Show what was done" : "Fold") : folder.key)
-                .accessibilityLabel(folder.name)
-                .accessibilityValue(folded ? "Folded, \(folder.sessions) done" : "Open")
-                .accessibilityHint(folded ? "Shows what was done" : "Folds it")
-        } else {
-            line.gesture(moveGesture)
-                .help(folder.key.isEmpty ? "Chats with no project" : folder.key)
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isHeader)
-        }
+        .gesture(moveGesture)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isHeader)
     }
 
-    // MARK: Moving
+    // MARK: Moving and resizing
 
-    /// A drag from the frame's header or its own ground (never a card's): the frame follows the pointer in the content's
-    /// points, whatever the zoom, lifted over the others, and stays where it is dropped (`RouterCanvasState.drop`).
+    /// Whether a move or resize of this frame is under way (reset when the system ends it, dropped or cancelled).
+    @GestureState private var dragging = false
+
+    /// A drag from the frame's header or its own ground (never a card's): the frame follows the pointer 1:1 in the
+    /// content's points, whatever the zoom, over the others, and stays exactly where it is dropped.
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 3, coordinateSpace: .global)
+        DragGesture(minimumDistance: 2, coordinateSpace: .global)
+            .updating($dragging) { _, state, _ in state = true }
             .onChanged { drag in
                 let canvas = model.canvas
                 if canvas.drag.start?.at != drag.startLocation {
@@ -187,9 +198,56 @@ struct CanvasFolderFrame: View {
             }
             .onEnded { drag in
                 let scale = model.canvas.camera.transform.scale
-                model.canvas.drop(folder.key, offset: CGSize(width: drag.translation.width / scale, height: drag.translation.height / scale),
-                                  reduce: reduceMotion)
+                model.canvas.drop(folder.key, offset: CGSize(width: drag.translation.width / scale, height: drag.translation.height / scale))
             }
+    }
+
+    /// A drag on an edge: the frame's width (`width`), height (`height`) or both follow the pointer 1:1.
+    private func resizeGesture(width: Bool, height: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .updating($dragging) { _, state, _ in state = true }
+            .onChanged { drag in
+                let canvas = model.canvas
+                if canvas.drag.resizeStart?.at != drag.startLocation {
+                    let drawn = canvas.frameRects[folder.key]?.size ?? CGSize(width: canvas.width(folder.key), height: 0)
+                    canvas.drag.resizeStart = (drag.startLocation, CGSize(width: drawn.width,
+                                                                          height: height ? drawn.height : canvas.minHeight(folder.key)))
+                }
+                guard let start = canvas.drag.resizeStart?.size else { return }
+                let scale = canvas.camera.transform.scale
+                canvas.resize(folder.key, to: CanvasMetrics.resized(start, by: CGSize(width: drag.translation.width / scale,
+                                                                                    height: drag.translation.height / scale),
+                                                                    width: width, height: height))
+            }
+            .onEnded { _ in model.canvas.endResize(folder.key) }
+    }
+
+    private var resizeHandles: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Color.clear
+            // The right edge.
+            CanvasResizeEdge(cursor: .resizeLeftRight)
+                .frame(width: 8)
+                .frame(maxHeight: .infinity)
+                .padding(.vertical, 14)
+                .offset(x: 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .gesture(resizeGesture(width: true, height: false))
+            // The bottom edge.
+            CanvasResizeEdge(cursor: .resizeUpDown)
+                .frame(height: 8)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 14)
+                .offset(y: 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .gesture(resizeGesture(width: false, height: true))
+            // The corner.
+            CanvasResizeEdge(cursor: CanvasResizeEdge.corner)
+                .frame(width: 16, height: 16)
+                .offset(x: 4, y: 4)
+                .gesture(resizeGesture(width: true, height: true))
+        }
+        .accessibilityHidden(true)
     }
 
     // MARK: Nodes
@@ -304,7 +362,7 @@ struct CanvasGroupLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: group.symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(group.tint).frame(width: 10)
+            CanvasGroupGlyph(group: group).frame(width: 11)
             Text(group.title)
                 .cdsText((12, 16), group == .needs ? .semibold : .medium, group == .needs ? CDS.Text.warning : CDS.Text.secondary)
                 .lineLimit(1).minimumScaleFactor(0.8)
@@ -313,6 +371,43 @@ struct CanvasGroupLabel: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(group.title)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// An edge of a frame you resize it by: nothing drawn, the resize cursor while the pointer is on it.
+struct CanvasResizeEdge: View {
+    let cursor: NSCursor
+    @State private var pushed = false
+
+    /// The corner's: the system's diagonal one where there is one.
+    static var corner: NSCursor {
+        if #available(macOS 15, *) { return NSCursor.frameResize(position: .bottomRight, directions: .all) }
+        return .crosshair
+    }
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside, !pushed { cursor.push(); pushed = true }
+                if !inside, pushed { NSCursor.pop(); pushed = false }
+            }
+            .onDisappear { if pushed { NSCursor.pop(); pushed = false } }
+    }
+}
+
+/// A group's glyph on the canvas: Working's is the app's animated logo (still with Reduce Motion), the others their
+/// symbol.
+struct CanvasGroupGlyph: View {
+    let group: CanvasGroup
+    var size: CGFloat = 10
+
+    var body: some View {
+        if group == .working {
+            FjordLoader(color: group.tint, label: "Working").frame(width: size + 1, height: size + 1)
+        } else {
+            Image(systemName: group.symbol).font(.system(size: size, weight: .semibold)).foregroundStyle(group.tint)
+        }
     }
 }
 

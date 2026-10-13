@@ -198,10 +198,41 @@ enum CanvasMetrics {
     static let groupGap: CGFloat = 16
     static let colGap: CGFloat = 48
     static let rowGap: CGFloat = 48
+    /// The narrowest and shortest a frame is resized to: its labels and a card still read.
+    static let minFrameWidth: CGFloat = 500
+    static let minFrameHeight: CGFloat = 96
+
+    /// A measured size in whole points, up: a measure that wavers by a fraction of a point gives the same size, so nothing
+    /// placed by it moves.
+    static func whole(_ size: CGSize) -> CGSize {
+        CGSize(width: (size.width - 0.01).rounded(.up), height: (size.height - 0.01).rounded(.up))
+    }
+
+    /// The cards' width in a frame `frame` wide: all of it but the labels' gutter and the margin, so a wider frame shows
+    /// more of every card.
+    static func cardWidth(frame: CGFloat) -> CGFloat { max(0, max(frame, minFrameWidth) - cardX - pad) }
+
+    /// A frame resized from `start` by `delta` (content points) on the edges dragged: never under the minimum.
+    static func resized(_ start: CGSize, by delta: CGSize, width: Bool, height: Bool) -> CGSize {
+        CGSize(width: width ? max(minFrameWidth, start.width + delta.width) : start.width,
+               height: height ? max(minFrameHeight, start.height + delta.height) : start.height)
+    }
+
+    /// Where a line from `centre` towards `target` leaves `rect` (both in the same space), for a marker on the viewport's
+    /// edge; `centre` itself when the target is at it.
+    static func edgePoint(from centre: CGPoint, to target: CGPoint, in rect: CGRect) -> CGPoint {
+        let dx = target.x - centre.x, dy = target.y - centre.y
+        guard dx != 0 || dy != 0 else { return centre }
+        var t = CGFloat.infinity
+        if dx > 0 { t = min(t, (rect.maxX - centre.x) / dx) }
+        if dx < 0 { t = min(t, (rect.minX - centre.x) / dx) }
+        if dy > 0 { t = min(t, (rect.maxY - centre.y) / dy) }
+        if dy < 0 { t = min(t, (rect.minY - centre.y) / dy) }
+        t = min(1, max(0, t))
+        return CGPoint(x: centre.x + dx * t, y: centre.y + dy * t)
+    }
     /// The shape the frames are spread to, wide over tall: a screen's.
     static let aspect: CGFloat = 16.0 / 10.0
-    /// Where a frame dropped settles: on this grid, as the ground's dots are.
-    static let snap: CGFloat = 8
 
     /// How many columns the frames take (their heights with every card folded, in their order): the count whose packing is
     /// nearest 16:10. The frames alone decide it, never the window, so a resize moves none of them.
@@ -247,16 +278,17 @@ enum CanvasMetrics {
         return out
     }
 
-    /// The frames where they are drawn: each at its place unless that overlaps one above it (with the gaps), then pushed
-    /// down under it. Taken top to bottom, so a card opening in a frame pushes down only what is under it, and a frame
-    /// dropped on another goes under it, or pushes it under itself.
-    static func resolve(_ frames: [(origin: CGPoint, size: CGSize)]) -> [CGPoint] {
-        let order = frames.indices.sorted { a, b in
+    /// The frames where they are drawn. A frame you placed (`placed`) is exactly where you put it, always, whatever it
+    /// overlaps and however tall it grows. One packed is at its place unless that overlaps a frame above it or one you
+    /// placed (with the gaps), then pushed down under it; taken top to bottom, so a card opening in a packed frame pushes
+    /// down only the packed frames under it.
+    static func resolve(_ frames: [(origin: CGPoint, size: CGSize, placed: Bool)]) -> [CGPoint] {
+        var out = frames.map(\.origin)
+        var done = frames.filter(\.placed).map { CGRect(origin: $0.origin, size: $0.size) }
+        let order = frames.indices.filter { !frames[$0].placed }.sorted { a, b in
             let p = frames[a].origin, q = frames[b].origin
             return p.y != q.y ? p.y < q.y : p.x != q.x ? p.x < q.x : a < b
         }
-        var out = frames.map(\.origin)
-        var done: [CGRect] = []
         for i in order {
             var rect = CGRect(origin: frames[i].origin, size: frames[i].size)
             var moved = true
@@ -272,11 +304,6 @@ enum CanvasMetrics {
             done.append(rect)
         }
         return out
-    }
-
-    /// A dropped frame's place: on the snap grid.
-    static func snapped(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: (point.x / snap).rounded() * snap, y: (point.y / snap).rounded() * snap)
     }
 
     /// What a frame takes with every card folded (Done's lines and the "+n more" lines shorter than the cards), whatever
@@ -385,22 +412,28 @@ struct CanvasTransform: Equatable {
 // MARK: - Layouts
 
 private struct CanvasPlaceKey: LayoutValueKey { static let defaultValue = CGPoint.zero }
+private struct CanvasPlacedKey: LayoutValueKey { static let defaultValue = false }
 private struct CanvasGroupKey: LayoutValueKey { static let defaultValue: CanvasGroup = .needs }
 
 extension View {
-    /// A frame's place on the canvas (`CanvasMetrics.preferred`).
-    func canvasPlace(_ point: CGPoint) -> some View { layoutValue(key: CanvasPlaceKey.self, value: point) }
+    /// A frame's place on the canvas (`CanvasMetrics.preferred`), and whether you put it there (then it never moves).
+    func canvasPlace(_ point: CGPoint, placed: Bool) -> some View {
+        layoutValue(key: CanvasPlaceKey.self, value: point).layoutValue(key: CanvasPlacedKey.self, value: placed)
+    }
     /// A node's group in its frame.
     func canvasGroup(_ group: CanvasGroup) -> some View { layoutValue(key: CanvasGroupKey.self, value: group) }
 }
 
-/// The frames on the ground, each at its place as measured, pushed down under one above it it would overlap
-/// (`CanvasMetrics.resolve`): a frame that grows pushes down only what is under it. A place may be left of or above the
-/// content's origin (a frame dragged there): it is drawn there, the content's size counted from the origin.
+/// The frames on the ground (`CanvasMetrics.resolve`): one you placed exactly where you put it, a packed one pushed down
+/// under one it would overlap. A place may be left of or above the content's origin (a frame dragged there): it is drawn
+/// there, the content's size counted from the origin.
 struct CanvasBoard: Layout {
     private func place(_ subviews: Subviews) -> (points: [CGPoint], size: CGSize) {
-        let sizes = subviews.map { $0.sizeThatFits(.init(width: CanvasMetrics.frameWidth, height: nil)) }
-        let points = CanvasMetrics.resolve(zip(subviews, sizes).map { ($0[CanvasPlaceKey.self], $1) })
+        // Each frame as wide and tall as it makes itself (its width yours or the default, its height its content's or
+        // yours if taller).
+        // Whole points, so a measure that wavers by a fraction (text laid out again) moves nothing.
+        let sizes = subviews.map { CanvasMetrics.whole($0.sizeThatFits(.unspecified)) }
+        let points = CanvasMetrics.resolve(zip(subviews, sizes).map { ($0[CanvasPlaceKey.self], $1, $0[CanvasPlacedKey.self]) })
         let maxX = zip(points, sizes).map { $0.x + $1.width }.max() ?? 0
         let maxY = zip(points, sizes).map { $0.y + $1.height }.max() ?? 0
         return (points, CGSize(width: max(0, maxX), height: max(0, maxY)))
@@ -411,8 +444,7 @@ struct CanvasBoard: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let points = place(subviews).points
         for (view, point) in zip(subviews, points) {
-            view.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), anchor: .topLeading,
-                       proposal: .init(width: CanvasMetrics.frameWidth, height: nil))
+            view.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), anchor: .topLeading, proposal: .unspecified)
         }
     }
 }
@@ -420,21 +452,24 @@ struct CanvasBoard: Layout {
 /// A frame's nodes, one flat list, `gap` apart inside a group and `groupGap` between groups: a node that changes group in
 /// the frame stays the same view and moves.
 struct CanvasFolderStack: Layout {
+    /// The cards' width: the frame's less the labels' gutter (`CanvasMetrics.cardWidth`).
+    var width = CanvasMetrics.cardW
+
     private func rows(_ subviews: Subviews) -> [(group: CanvasGroup, height: CGFloat, head: CGFloat)] {
-        subviews.map { ($0[CanvasGroupKey.self], $0.sizeThatFits(.init(width: CanvasMetrics.cardW, height: nil)).height, 0) }
+        subviews.map { ($0[CanvasGroupKey.self], CanvasMetrics.whole($0.sizeThatFits(.init(width: width, height: nil))).height, 0) }
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let rows = rows(subviews)
         let tops = CanvasMetrics.folderPlacement(rows: rows).tops
-        return CGSize(width: CanvasMetrics.cardW, height: zip(tops, rows).map { $0 + $1.height }.max() ?? 0)
+        return CGSize(width: width, height: zip(tops, rows).map { $0 + $1.height }.max() ?? 0)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let tops = CanvasMetrics.folderPlacement(rows: rows(subviews)).tops
         for (view, top) in zip(subviews, tops) {
             view.place(at: CGPoint(x: bounds.minX, y: bounds.minY + top), anchor: .topLeading,
-                       proposal: .init(width: CanvasMetrics.cardW, height: nil))
+                       proposal: .init(width: width, height: nil))
         }
     }
 }

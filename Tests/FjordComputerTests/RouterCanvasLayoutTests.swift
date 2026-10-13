@@ -146,37 +146,113 @@ import Testing
         #expect(next["d"] == CGPoint(x: -400, y: 800 + 600 + CanvasMetrics.rowGap))
     }
 
-    @Test func aFrameOverlappingOneAboveItIsPushedDownUnderItAndFramesSideBySideStay() {
+    @Test func aFrameYouPlacedIsNeverMovedOverlapsAllowedAndOnlyPackedFramesArePushedDown() {
         let size = CGSize(width: CanvasMetrics.frameWidth, height: 200)
         let step = CanvasMetrics.frameWidth + CanvasMetrics.colGap
-        // Side by side and well apart: nothing moves.
+        // Packed, side by side and well apart: nothing moves.
         let apart = [CGPoint(x: 0, y: 0), CGPoint(x: step, y: 0), CGPoint(x: 0, y: 400)]
-        #expect(CanvasMetrics.resolve(apart.map { ($0, size) }) == apart)
-        // A card opened in the first makes it taller: what is under it goes down, the gap kept; the next column stays.
-        let tall = CanvasMetrics.resolve([(CGPoint(x: 0, y: 0), CGSize(width: size.width, height: 500)),
-                                          (CGPoint(x: step, y: 0), size), (CGPoint(x: 0, y: 400), size)])
+        #expect(CanvasMetrics.resolve(apart.map { ($0, size, false) }) == apart)
+        // A card opened in a packed frame makes it taller: the packed frame under it goes down, the gap kept.
+        let tall = CanvasMetrics.resolve([(CGPoint(x: 0, y: 0), CGSize(width: size.width, height: 500), false),
+                                          (CGPoint(x: step, y: 0), size, false), (CGPoint(x: 0, y: 400), size, false)])
         #expect(tall == [CGPoint(x: 0, y: 0), CGPoint(x: step, y: 0), CGPoint(x: 0, y: 500 + CanvasMetrics.rowGap)])
-        // A frame dropped half over another goes under it, and pushes down what it then lands on.
-        let dropped = CanvasMetrics.resolve([(CGPoint(x: 0, y: 0), size), (CGPoint(x: 100, y: 50), size),
-                                             (CGPoint(x: 0, y: 300), size)])
-        #expect(dropped[1] == CGPoint(x: 100, y: 200 + CanvasMetrics.rowGap))
-        #expect(dropped[2] == CGPoint(x: 0, y: 2 * (200 + CanvasMetrics.rowGap)))
-        #expect(CanvasMetrics.snapped(CGPoint(x: 13, y: -3)) == CGPoint(x: 16, y: 0))
+        // Placed frames stay exactly where they are, overlapping or not, however tall they grow, wherever they are.
+        let placed = [CGPoint(x: 0, y: 0), CGPoint(x: 100.5, y: 50.25), CGPoint(x: -3000, y: -2000)]
+        let grown = CanvasMetrics.resolve([(placed[0], CGSize(width: size.width, height: 900), true),
+                                           (placed[1], size, true), (placed[2], size, true)])
+        #expect(grown == placed)
+        // A packed frame never lands on a placed one: it goes under it.
+        let mixed = CanvasMetrics.resolve([(CGPoint(x: 0, y: 0), size, true), (CGPoint(x: 0, y: 100), size, false)])
+        #expect(mixed == [CGPoint(x: 0, y: 0), CGPoint(x: 0, y: 200 + CanvasMetrics.rowGap)])
     }
 
-    @Test func whereYouPutTheFramesIsKeptAcrossLaunchesAndResetClearsIt() throws {
+    @Test func aMeasureThatWaversByAFractionGivesTheSameSizeSoNothingMoves() {
+        let a = CanvasMetrics.whole(CGSize(width: 560, height: 212.3))
+        let b = CanvasMetrics.whole(CGSize(width: 560.004, height: 212.9))
+        #expect(a == b && a == CGSize(width: 560, height: 213))
+        let size = CGSize(width: CanvasMetrics.frameWidth, height: 200)
+        let one = CanvasMetrics.resolve([(.zero, CanvasMetrics.whole(CGSize(width: 560, height: 200.2)), false), (CGPoint(x: 0, y: 260), size, false)])
+        let two = CanvasMetrics.resolve([(.zero, CanvasMetrics.whole(CGSize(width: 560, height: 200.7)), false), (CGPoint(x: 0, y: 260), size, false)])
+        #expect(one == two)
+    }
+
+    @Test func aFrameDroppedStaysExactlyWhereItWasLetGoOnTopAndIsKeptAcrossLaunchesUntilReset() throws {
         let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
         let canvas = RouterCanvasState(defaults: defaults)
         #expect(canvas.positions.isEmpty)
         canvas.preferred = ["/code/a": CGPoint(x: 0, y: 0), "/code/b": CGPoint(x: 608, y: 0)]
-        canvas.drop("/code/a", offset: CGSize(width: 101, height: -50), reduce: true)
-        // The frame dropped on the grid, the other kept where it was drawn.
-        #expect(canvas.positions == ["/code/a": CGPoint(x: 104, y: -48), "/code/b": CGPoint(x: 608, y: 0)])
-        #expect(canvas.drag.key == nil)
+        canvas.frameRects = ["/code/a": CGRect(x: 0, y: 0, width: 560, height: 300),
+                             "/code/b": CGRect(x: 608, y: 120, width: 560, height: 300)]
+        canvas.drag.key = "/code/a"
+        canvas.drop("/code/a", offset: CGSize(width: 650.5, height: 101.25))
+        // No grid, no nudge: right over b, which keeps where it was drawn.
+        #expect(canvas.positions == ["/code/a": CGPoint(x: 650.5, y: 101.25), "/code/b": CGPoint(x: 608, y: 120)])
+        #expect(canvas.stack == ["/code/a"] && canvas.drag.key == nil)
+        // Far off, up and left.
+        canvas.drop("/code/b", offset: CGSize(width: -5000, height: -4000))
+        #expect(canvas.positions["/code/b"] == CGPoint(x: -4392, y: -3880) && canvas.stack == ["/code/a", "/code/b"])
         #expect(RouterCanvasState(defaults: defaults).positions == canvas.positions)
         canvas.resetLayout(reduce: true)
         #expect(canvas.positions.isEmpty && RouterCanvasState(defaults: defaults).positions.isEmpty)
     }
+
+    @Test func aFrameResizedKeepsItsSizeAcrossLaunchesItsCardsTakeItsWidthAndResetClearsIt() throws {
+        let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
+        let canvas = RouterCanvasState(defaults: defaults)
+        #expect(canvas.width("/code/a") == CanvasMetrics.frameWidth)
+        // The cards: the frame less the labels' gutter, so a wider frame shows more of them.
+        #expect(CanvasMetrics.cardWidth(frame: CanvasMetrics.frameWidth) == CanvasMetrics.cardW)
+        #expect(CanvasMetrics.cardWidth(frame: 900) == 900 - CanvasMetrics.cardX - CanvasMetrics.pad)
+        // Never under the minimum.
+        let small = CanvasMetrics.resized(CGSize(width: 560, height: 300), by: CGSize(width: -900, height: -900), width: true, height: true)
+        #expect(small == CGSize(width: CanvasMetrics.minFrameWidth, height: CanvasMetrics.minFrameHeight))
+        #expect(CanvasMetrics.resized(CGSize(width: 560, height: 0), by: CGSize(width: 40, height: 99), width: true, height: false)
+                == CGSize(width: 600, height: 0))
+        canvas.preferred = ["/code/a": CGPoint(x: 0, y: 0), "/code/b": CGPoint(x: 608, y: 0)]
+        canvas.resize("/code/a", to: CGSize(width: 900, height: 0))
+        #expect(canvas.width("/code/a") == 900)
+        canvas.endResize("/code/a")
+        // Its size kept, nothing moved: the frames keep the places they had.
+        #expect(canvas.sizes["/code/a"] == CGSize(width: 900, height: 0) && canvas.drag.resizing == nil)
+        #expect(canvas.positions == ["/code/a": .zero, "/code/b": CGPoint(x: 608, y: 0)])
+        #expect(RouterCanvasState(defaults: defaults).sizes == canvas.sizes)
+        canvas.resetLayout(reduce: true)
+        #expect(canvas.sizes.isEmpty && RouterCanvasState(defaults: defaults).sizes.isEmpty)
+    }
+
+    @Test func theCameraMovesOnlyWhenYouMoveItAndIsKeptAcrossLaunches() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
+        let canvas = RouterCanvasState(defaults: defaults)
+        canvas.free = CGRect(x: 16, y: 56, width: 1000, height: 600)
+        canvas.camera.transform = CanvasTransform(origin: CGPoint(x: 40, y: 30), scale: 0.5)
+        canvas.camera.moved = true
+        let before = canvas.camera.transform
+        // A node picked or written to far off the view: a marker points to it, the camera stays.
+        let far = CGRect(x: 5000, y: 100, width: 420, height: 52)
+        canvas.nodeRects["far"] = far
+        canvas.point(to: "far", label: "Far card")
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(canvas.camera.transform == before && canvas.marker?.node == "far")
+        // One on the view: no marker.
+        canvas.nodeRects["near"] = CGRect(x: 100, y: 100, width: 420, height: 52)
+        canvas.point(to: "near", label: "Near")
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(canvas.marker?.node == "far")
+        // The first look isn't taken again, whatever settles.
+        canvas.frameRects = ["/code/a": CGRect(x: 0, y: 0, width: 560, height: 300)]
+        canvas.fitFirst()
+        #expect(canvas.camera.transform == before)
+        // Kept across launches; the marker clicked moves it, as you asked.
+        #expect(RouterCanvasState(defaults: defaults).camera.transform == before)
+        #expect(RouterCanvasState(defaults: defaults).camera.moved)
+        canvas.goToMarker(reduce: true)
+        #expect(canvas.camera.transform != before && canvas.marker == nil)
+        // The edge's point towards a node: on the room's edge, on the line from its centre.
+        let room = CGRect(x: 0, y: 0, width: 200, height: 100)
+        #expect(CanvasMetrics.edgePoint(from: CGPoint(x: 100, y: 50), to: CGPoint(x: 1000, y: 50), in: room) == CGPoint(x: 200, y: 50))
+        #expect(CanvasMetrics.edgePoint(from: CGPoint(x: 100, y: 50), to: CGPoint(x: 100, y: -500), in: room) == CGPoint(x: 100, y: 0))
+    }
+
 
     @Test func filteredGroupsAreHiddenInPlaceAndTheOrderSkipsThem() throws {
         var page = RouterPage()

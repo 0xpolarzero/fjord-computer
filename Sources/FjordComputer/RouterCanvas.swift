@@ -8,17 +8,36 @@ import SwiftUI
 
 // MARK: - State
 
-/// What the canvas shows of its content: read only by the transform, so a pan or a zoom redraws nothing else.
+/// What the canvas shows of its content: read only by the transform, so a pan or a zoom redraws nothing else. Kept across
+/// launches: it moves only when you move it.
 @Observable
 @MainActor
 final class CanvasCamera {
-    var transform = CanvasTransform()
-    /// Moved by you (a pan, a zoom, Fit): the first look no longer follows the content as it settles.
+    var transform: CanvasTransform {
+        didSet {
+            guard transform != oldValue, let defaults else { return }
+            defaults.set([Double(transform.origin.x), Double(transform.origin.y), Double(transform.scale)], forKey: Self.key)
+        }
+    }
+    /// Set by you (a pan, a zoom, Fit) or kept from before: no first look is taken.
     @ObservationIgnored var moved = false
+    @ObservationIgnored private let defaults: UserDefaults?
+
+    static let key = "routerCanvasCamera"
+
+    init(defaults: UserDefaults? = nil) {
+        self.defaults = defaults
+        if let kept = defaults?.array(forKey: Self.key) as? [Double], kept.count == 3 {
+            transform = CanvasTransform(origin: CGPoint(x: kept[0], y: kept[1]), scale: CanvasTransform.clamp(kept[2]))
+            moved = true
+        } else {
+            transform = CanvasTransform()
+        }
+    }
 }
 
-/// A frame being dragged: which, and how far from its place (in the content's points, whatever the zoom). Read only by
-/// the frames' lift, so a drag redraws nothing else.
+/// A frame being dragged or resized: which, and how far (in the content's points, whatever the zoom). Read only by the
+/// frames' lift and the frame resized, so a drag redraws nothing else.
 @Observable
 @MainActor
 final class CanvasFrameDrag {
@@ -26,16 +45,28 @@ final class CanvasFrameDrag {
     var offset: CGSize = .zero
     /// The frame's top left in the content as the drag started, and the drag's own start (a new drag, a new start).
     @ObservationIgnored var start: (at: CGPoint, origin: CGPoint)?
+    /// The frame being resized, its size as the pointer has it, and its size and the drag's start as it began.
+    var resizing: String?
+    var size: CGSize = .zero
+    @ObservationIgnored var resizeStart: (at: CGPoint, size: CGSize)?
 }
 
-/// What the canvas keeps while the window lives (its folds and the frames' places across launches).
+/// Where the canvas points you to a node it doesn't show (a message landed there, a card picked by the keys): a marker on
+/// the viewport's edge, towards it, that goes there when you click it.
+struct CanvasMarker: Equatable {
+    let node: String
+    let label: String
+    var id = UUID()
+}
+
+/// What the canvas keeps while the window lives (its folds, the frames' places and sizes, and its camera across launches).
 @Observable
 @MainActor
 final class RouterCanvasState {
-    let camera = CanvasCamera()
+    let camera: CanvasCamera
     /// The drag that pans it: one for the canvas's life, so a redraw in the middle of a drag doesn't start it again.
     let pan: CanvasPan
-    /// The frame being dragged.
+    /// The frame being dragged or resized.
     let drag = CanvasFrameDrag()
     /// The groups shown, none for all.
     var filter: Set<CanvasGroup> = []
@@ -53,9 +84,20 @@ final class RouterCanvasState {
             defaults?.set(positions.mapValues { [Double($0.x), Double($0.y)] }, forKey: Self.positionsKey)
         }
     }
+    /// The sizes you gave the frames, by folder: a width, and a height (0: as tall as what it holds).
+    var sizes: [String: CGSize] {
+        didSet {
+            guard sizes != oldValue else { return }
+            defaults?.set(sizes.mapValues { [Double($0.width), Double($0.height)] }, forKey: Self.sizesKey)
+        }
+    }
+    /// The frames moved, the last on top: what draws over what where they overlap.
+    var stack: [String] = []
+    /// The marker pointing to a node off the view, if any.
+    var marker: CanvasMarker?
     /// Each frame's place as last worked out (yours or packed), before the push-down: what a drop keeps of the others.
     @ObservationIgnored var preferred: [String: CGPoint] = [:]
-    /// Where the chips and notices floating at the canvas's top end: what Fit and a reveal keep the content under.
+    /// Where the chips and notices floating at the canvas's top end: what Fit keeps the content under.
     var topRoom: CGFloat = 0
     /// Each frame's box in the content as drawn: what Fit takes in.
     @ObservationIgnored var frameRects: [String: CGRect] = [:]
@@ -65,14 +107,15 @@ final class RouterCanvasState {
     /// `RouterModel.expandedNeed`, a Done line `openDone` (in `RouterModel.expanded`, as the history's lines): one at a time.
     var openRow: String?
     var openDone: String?
-    /// Each node's box in the content, as last laid out (its frame's columns, its open height): what a reveal goes to.
+    /// Each node's box in the content, as last laid out (its frame's place, its open height): what a marker points to.
     @ObservationIgnored var nodeRects: [String: CGRect] = [:]
-    /// The reveal under way, so a newer one replaces it.
-    @ObservationIgnored private var revealTask: Task<Void, Never>?
-    /// When the first look was taken: it follows the content as it settles (the cards measured, the column sized) for a
-    /// moment, unless you move it.
+    /// The marker being worked out (its node measured first), so a newer one replaces it.
+    @ObservationIgnored private var pointTask: Task<Void, Never>?
+    @ObservationIgnored private var markerTask: Task<Void, Never>?
+    /// When the first look was taken: it follows the content as it settles (the cards measured) for a moment, unless you
+    /// move it. Only when there is no camera kept from before.
     @ObservationIgnored var firstFit: Date?
-    /// The viewport's room for content, and the content's size, as last laid out: what Fit and a reveal go by.
+    /// The viewport's room for content, and the content's size, as last laid out: what Fit and a marker go by.
     @ObservationIgnored var free: CGRect = .zero
     @ObservationIgnored var contentSize: CGSize = .zero
     /// Each session's newest addressed card, for the search's words and the history's revision (`Done`).
@@ -86,10 +129,10 @@ final class RouterCanvasState {
     @ObservationIgnored var pendingFrames: [UUID: CGRect] = [:]
     /// The composer's box, and the canvas's viewport, in the same space: where a message with no line leaves from, and how
     /// a node's box in the content is found in the window.
-    /// Read by the pending area too, which keeps over the canvas (the composer is the page's, as wide as both columns).
+    /// Read by the pending area too, which keeps over the canvas.
     var composerFrame: CGRect = .zero
     var viewportFrame: CGRect = .zero
-    /// A narrow window's switch to the history for an answer of the Router's, under way.
+    /// The switch to the history for an answer of the Router's, under way.
     @ObservationIgnored var historyTask: Task<Void, Never>?
     /// The plan Esc went Back out of on the canvas: the next Esc folds it rather than going into revise again.
     @ObservationIgnored var backedOutOf: String?
@@ -103,37 +146,106 @@ final class RouterCanvasState {
 
     static let foldsKey = "routerCanvasFolds"
     static let positionsKey = "routerCanvasPositions"
+    static let sizesKey = "routerCanvasSizes"
 
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
+        camera = CanvasCamera(defaults: defaults)
         pan = CanvasPan(camera: camera)
         folderFolds = defaults?.dictionary(forKey: Self.foldsKey) as? [String: Bool] ?? [:]
         let kept = defaults?.dictionary(forKey: Self.positionsKey) as? [String: [Double]] ?? [:]
         positions = kept.compactMapValues { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
+        let sized = defaults?.dictionary(forKey: Self.sizesKey) as? [String: [Double]] ?? [:]
+        sizes = sized.compactMapValues { $0.count == 2 ? CGSize(width: $0[0], height: $0[1]) : nil }
     }
 
-    /// A frame dropped `offset` (content points) from where it was drawn: it stays there, on the snap grid, and every
-    /// other frame drawn keeps the place it had, so nothing else re-flows; one it lands on is pushed out of its way.
-    func drop(_ key: String, offset: CGSize, reduce: Bool) {
-        let from = drag.start?.origin ?? frameRects[key]?.origin ?? preferred[key] ?? .zero
-        drag.start = nil
-        let to = CanvasMetrics.snapped(CGPoint(x: from.x + offset.width, y: from.y + offset.height))
+    // MARK: Moving and resizing frames
+
+    /// A frame's width: as it is being resized, else yours, else the default.
+    func width(_ key: String) -> CGFloat {
+        if drag.resizing == key { return drag.size.width }
+        return sizes[key].map { max(CanvasMetrics.minFrameWidth, $0.width) } ?? CanvasMetrics.frameWidth
+    }
+
+    /// The height you gave a frame (it is at least that tall, taller when what it holds is), 0 for none.
+    func minHeight(_ key: String) -> CGFloat {
+        if drag.resizing == key { return drag.size.height }
+        return sizes[key]?.height ?? 0
+    }
+
+    /// Every frame drawn kept where it is drawn, so none re-flows once one leaves the packing; `key` at `at`.
+    private func placeAll(_ key: String, at: CGPoint) -> [String: CGPoint] {
         var next = positions
-        for (other, at) in preferred where next[other] == nil { next[other] = at }
-        next[key] = to
-        withAnimation(Motion.spatial.resolved(reduce: reduce)) {
+        for (other, at) in preferred where next[other] == nil && other != key { next[other] = frameRects[other]?.origin ?? at }
+        next[key] = at
+        return next
+    }
+
+    /// Changed at once, with nothing to animate: a frame stays exactly where the pointer left it.
+    private func still(_ change: () -> Void) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction, change)
+    }
+
+    /// A frame dropped `offset` (content points) from where it was drawn: it stays exactly there, over the others, and
+    /// every other frame keeps the place it had. Nothing is nudged: frames may overlap, the last moved on top.
+    func drop(_ key: String, offset: CGSize) {
+        let from = drag.start?.origin ?? frameRects[key]?.origin ?? preferred[key] ?? .zero
+        let next = placeAll(key, at: CGPoint(x: from.x + offset.width, y: from.y + offset.height))
+        still {
             positions = next
+            raise(key)
+            drag.start = nil
             drag.key = nil
             drag.offset = .zero
         }
     }
 
-    /// The frames packed again, as on a first look, and all of them shown.
+    /// A drag that ended without a drop (cancelled): the frame goes back to its place.
+    func cancelDrag(_ key: String) {
+        if drag.key == key {
+            drag.start = nil
+            drag.key = nil
+            drag.offset = .zero
+        }
+        if drag.resizing == key {
+            drag.resizeStart = nil
+            drag.resizing = nil
+        }
+    }
+
+    /// A frame being resized to `size`.
+    func resize(_ key: String, to size: CGSize) {
+        if drag.resizing != key { drag.resizing = key }
+        drag.size = size
+    }
+
+    /// A resize let go: the frame keeps its size, where it is, and every other frame where it was.
+    func endResize(_ key: String) {
+        guard drag.resizing == key else { return }
+        let size = drag.size
+        let next = placeAll(key, at: positions[key] ?? frameRects[key]?.origin ?? preferred[key] ?? .zero)
+        still {
+            sizes[key] = size
+            positions = next
+            raise(key)
+            drag.resizeStart = nil
+            drag.resizing = nil
+        }
+    }
+
+    private func raise(_ key: String) {
+        stack.removeAll { $0 == key }
+        stack.append(key)
+    }
+
+    /// The frames packed again, at their sizes, as on a first look.
     func resetLayout(reduce: Bool) {
-        withAnimation(Motion.spatial.resolved(reduce: reduce)) { positions = [:] }
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(reduce ? 50 : 400))
-            self?.fit(reduce: reduce)
+        withAnimation(Motion.spatial.resolved(reduce: reduce)) {
+            positions = [:]
+            sizes = [:]
+            stack = []
         }
     }
 
@@ -153,7 +265,9 @@ final class RouterCanvasState {
 
     func showAll(_ group: CanvasGroup, in folder: CanvasFolder) { expandedMore.insert("\(folder.key)#\(group.rawValue)") }
 
-    /// Everything shown, centred.
+    // MARK: Camera: only you move it
+
+    /// Everything shown, centred (Fit, a double-click).
     func fit(reduce: Bool) {
         let bounds = contentBounds
         guard bounds.width > 0, free.width > 0 else { return }
@@ -162,12 +276,16 @@ final class RouterCanvasState {
         withAnimation(Motion.spatial.resolved(reduce: reduce)) { camera.transform = next }
     }
 
-    /// The first look: everything, following the content as it settles (the cards measured) for a moment.
+    /// The very first look, when no camera is kept from before: everything, following the content as it settles (the
+    /// cards measured) for a moment. Never again after that.
     func fitFirst() {
         let bounds = contentBounds
         guard !camera.moved, bounds.width > 0, free.width > 0 else { return }
         let now = Date()
-        if let firstFit, now.timeIntervalSince(firstFit) > 1.5 { return }
+        if let firstFit, now.timeIntervalSince(firstFit) > 1.5 {
+            camera.moved = true
+            return
+        }
         if firstFit == nil { firstFit = now }
         camera.transform = CanvasTransform.fit(bounds, in: free)
     }
@@ -179,47 +297,59 @@ final class RouterCanvasState {
         camera.transform = CanvasTransform(origin: CGPoint(x: free.minX - rect.minX, y: free.minY - rect.minY), scale: 1)
     }
 
-    /// What it shows changed (a search): the first look is taken again, as the content settles.
-    func refit() {
-        camera.moved = false
-        firstFit = nil
-        fitFirst()
-    }
-
     /// A chip: only its group shown (with the others lit), or, lit, not.
     func toggleFilter(_ group: CanvasGroup) {
         if filter.contains(group) { filter.remove(group) } else { filter.insert(group) }
     }
 
-    /// The camera moved the least that shows the node, once it is laid out (opened, its frame grown): its top at the
-    /// room's top when it is taller than the room.
-    func bringIntoView(_ id: String, reduce: Bool) {
-        revealTask?.cancel()
-        revealTask = Task { [weak self] in
+    /// Whether `rect` (content space) shows in the viewport's room, at least in part.
+    func shows(_ rect: CGRect) -> Bool {
+        let t = camera.transform
+        let shown = CGRect(x: t.origin.x + rect.minX * t.scale, y: t.origin.y + rect.minY * t.scale,
+                           width: rect.width * t.scale, height: rect.height * t.scale)
+        return free.width > 0 && shown.intersects(free)
+    }
+
+    /// A node picked (the keys, a banner, a search) or written to: the camera stays; if the node is off the view, a marker on
+    /// the viewport's edge points to it, once it is laid out.
+    func point(to id: String, label: String) {
+        pointTask?.cancel()
+        pointTask = Task { [weak self] in
             // A few layout passes: what opened for it is measured first.
-            for _ in 0..<20 {
-                try? await Task.sleep(for: .milliseconds(40))
+            for attempt in 0..<20 {
+                if attempt > 0 { try? await Task.sleep(for: .milliseconds(40)) }
                 guard let self, !Task.isCancelled else { return }
                 guard let rect = self.nodeRects[id], self.free.width > 0 else { continue }
-                self.camera.moved = true
-                guard let next = self.camera.transform.origin(toShow: rect.insetBy(dx: -8, dy: -8), in: self.free) else { return }
-                withAnimation(Motion.spatial.resolved(reduce: reduce)) { self.camera.transform.origin = next }
+                self.mark(rect, id: id, label: label)
                 return
             }
         }
     }
 
-    /// The camera moved the least that shows `rect` (content space), at once: where it goes, so a flight lands where the
-    /// node will be.
-    @discardableResult
-    func show(_ rect: CGRect, reduce: Bool) -> CanvasTransform {
-        revealTask?.cancel()
-        guard free.width > 0, let next = camera.transform.origin(toShow: rect.insetBy(dx: -8, dy: -8), in: free) else {
-            return camera.transform
+    /// The marker for the node at `rect`, or none when it shows.
+    func mark(_ rect: CGRect, id: String, label: String) {
+        guard !shows(rect) else {
+            if marker?.node == id { marker = nil }
+            return
         }
+        marker = CanvasMarker(node: id, label: label)
+        markerTask?.cancel()
+        guard freezeFlight == nil else { return }
+        markerTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard let self, !Task.isCancelled, self.marker?.node == id else { return }
+            self.marker = nil
+        }
+    }
+
+    /// The marker clicked: the camera goes to its node (you asked), the least that shows it.
+    func goToMarker(reduce: Bool) {
+        guard let marker else { return }
+        self.marker = nil
+        guard let rect = nodeRects[marker.node] ?? frameRects[marker.node], free.width > 0,
+              let next = camera.transform.origin(toShow: rect.insetBy(dx: -8, dy: -8), in: free) else { return }
         camera.moved = true
         withAnimation(Motion.spatial.resolved(reduce: reduce)) { camera.transform.origin = next }
-        return camera.transform
     }
 
     /// Lands a message on a node: its ripple and "You: …" for `CanvasLanding.shown`, then gone (kept in shots).
@@ -256,6 +386,14 @@ final class RouterCanvasState {
 }
 
 extension RouterModel {
+    /// What a node of the canvas is called: its card's title, or its session's.
+    func canvasTitle(_ id: String, store: Store, page: RouterPage) -> String {
+        if let card = store.router.cards.first(where: { $0.id == id }) { return card.title }
+        if let row = page.working.first(where: { Self.workingID($0.id) == id }) { return row.session.title }
+        if let card = page.waiting.first(where: { Self.workingID($0.sessionID) == id }) { return card.title }
+        return "Card"
+    }
+
     /// The canvas's frames on Now's zones as the search leaves them (`page`).
     func canvasFolders(_ store: Store, page: RouterPage) -> [CanvasFolder] {
         // Not Jev's highlight: it moves as you type, and the group would widen and narrow under you.
@@ -382,29 +520,19 @@ struct RouterCanvas: View {
                 viewport(canvas, bottom: 0)
             }
         }
-        // A card picked (the keys, a banner, the away strip), a section asked for, Jev's pick for the draft, a node opened:
-        // the canvas goes there, the least that shows it.
+        // A card picked (the keys, a banner, the away strip), a section asked for: the camera stays where you left it; a
+        // marker on the viewport's edge points to the card if it is off the view. Opening a card, Jev's pick and a search
+        // move nothing either.
         .onChange(of: model.revealRequest, initial: true) { _, request in
             guard let request, let taken = model.takeReveal(request, by: "canvas"),
                   let target = RouterCanvasModel.target(forReveal: taken.id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
-            canvas.bringIntoView(target, reduce: reduceMotion)
+            canvas.point(to: target, label: model.canvasTitle(target, store: store, page: page))
         }
         .onChange(of: model.zoneRequest, initial: true) { _, request in
             guard let request, let taken = model.takeReveal(request, by: "canvasZone"),
                   let target = RouterCanvasModel.target(forReveal: taken.id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
-            canvas.bringIntoView(target, reduce: reduceMotion)
+            canvas.point(to: target, label: model.canvasTitle(target, store: store, page: page))
         }
-        .onChange(of: model.highlighted) { _, id in
-            // A reveal marks what it goes to too: it pans once.
-            guard let id, id != model.revealRequest?.id, let target = RouterCanvasModel.target(forReveal: id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
-            canvas.bringIntoView(target, reduce: reduceMotion)
-        }
-        .onChange(of: [model.expandedNeed, canvas.openRow, canvas.openDone]) { _, open in
-            guard let id = open.compactMap({ $0 }).first else { return }
-            canvas.bringIntoView(id, reduce: reduceMotion)
-        }
-        // A search changes what the frames hold: the first look is taken again, so what it found shows.
-        .onChange(of: model.search.query) { canvas.refit() }
         // A message of yours settled: it flies to its card (RouterCanvasPending.swift); one the Router answered opens the
         // history's panel, where its answer is.
         .onChange(of: store.routerRevision, initial: true) {
@@ -432,6 +560,7 @@ struct RouterCanvas: View {
                             }
                             .modifier(CameraTransform(camera: canvas.camera))
                     }
+                CanvasEdgeMarker(canvas: canvas)
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
             .clipped()
@@ -460,13 +589,15 @@ struct CanvasContent: View {
     var body: some View {
         let canvas = model.canvas
         let folders = model.canvasFolders(store, page: page)
-        let places = CanvasMetrics.preferred(folders.map { ($0.key, CanvasMetrics.closedHeight($0, folded: canvas.folded($0))) },
-                                             placed: canvas.positions)
+        let places = CanvasMetrics.preferred(folders.map {
+            ($0.key, max(CanvasMetrics.closedHeight($0, folded: canvas.folded($0)), canvas.sizes[$0.key]?.height ?? 0))
+        }, placed: canvas.positions)
         CanvasBoard {
             ForEach(folders) { folder in
                 CanvasFolderFrame(folder: folder, store: store, model: model, page: page)
-                    .modifier(CanvasLift(drag: canvas.drag, key: folder.key))
-                    .canvasPlace(places[folder.key] ?? .zero)
+                    .modifier(CanvasLift(drag: canvas.drag, key: folder.key,
+                                         order: Double((canvas.stack.firstIndex(of: folder.key) ?? -1) + 1)))
+                    .canvasPlace(places[folder.key] ?? .zero, placed: canvas.positions[folder.key] != nil)
             }
         }
         // Inside the camera's transform: a pan or a zoom moves nothing measured in it.
@@ -482,13 +613,14 @@ struct CanvasContent: View {
 private struct CanvasLift: ViewModifier {
     let drag: CanvasFrameDrag
     let key: String
+    /// Its place among the frames moved (0: never moved), the last moved on top.
+    let order: Double
 
     func body(content: Content) -> some View {
         let lifted = drag.key == key
         content
-            .scaleEffect(lifted ? 1.01 : 1)
             .offset(lifted ? drag.offset : .zero)
-            .zIndex(lifted ? 1 : 0)
+            .zIndex(lifted ? 100_000 : order)
     }
 }
 
@@ -501,6 +633,45 @@ private struct CameraTransform: ViewModifier {
         content
             .scaleEffect(t.scale, anchor: .topLeading)
             .offset(x: t.origin.x, y: t.origin.y)
+    }
+}
+
+/// On the viewport's edge, towards a node off the view: an arrow and its name; a click takes the camera there. Gone once the
+/// node shows.
+private struct CanvasEdgeMarker: View {
+    let canvas: RouterCanvasState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if let marker = canvas.marker, let rect = canvas.nodeRects[marker.node] ?? canvas.frameRects[marker.node] {
+            let t = canvas.camera.transform
+            let free = canvas.free
+            let target = CGPoint(x: t.origin.x + rect.midX * t.scale, y: t.origin.y + rect.midY * t.scale)
+            if !canvas.shows(rect), free.width > 80, free.height > 60 {
+                let room = free.insetBy(dx: 110, dy: 18)
+                let centre = CGPoint(x: free.midX, y: free.midY)
+                let at = CanvasMetrics.edgePoint(from: centre, to: target, in: room)
+                let angle = Angle(radians: atan2(target.y - centre.y, target.x - centre.x))
+                Button { canvas.goToMarker(reduce: reduceMotion) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(CDS.Fill.accent)
+                            .rotationEffect(angle)
+                        Text(marker.label).cdsText((12, 16), .regular, CDS.Text.primary).lineLimit(1).truncationMode(.tail)
+                            .frame(maxWidth: 180, alignment: .leading)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 26)
+                    .canvasFloat(radius: 13)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .tip("Go to it", marker.label)
+                .accessibilityLabel("Go to \(marker.label)")
+                .position(at)
+                .transition(.opacity)
+            }
+        }
     }
 }
 
@@ -685,7 +856,7 @@ struct CanvasChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: group.symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(group.tint)
+                CanvasGroupGlyph(group: group)
                 if named { Text(group.title).cdsText((12, 16), .regular, hovered || lit ? CDS.Text.primary : CDS.Text.secondary) }
                 Text("\(count)").cdsText((12, 16), .medium, group == .needs ? CDS.Fill.warning : CDS.Text.muted).monospacedDigit()
             }

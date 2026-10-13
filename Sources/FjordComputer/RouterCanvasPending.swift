@@ -83,6 +83,12 @@ struct CanvasFlight: Identifiable, Equatable {
     let to: CGRect
     /// The node it lands on (none for a frame).
     let node: String?
+    /// Off the view: the node or frame its edge marker points to once it arrives, and where it was.
+    var marker: (key: String, label: String, rect: CGRect)? = nil
+
+    static func == (a: CanvasFlight, b: CanvasFlight) -> Bool {
+        a.id == b.id && a.text == b.text && a.from == b.from && a.to == b.to && a.node == b.node && a.marker?.key == b.marker?.key
+    }
 }
 
 /// What landed on a node.
@@ -133,31 +139,44 @@ extension RouterCanvasState {
         case .folder(let key): CanvasFolder.frameID(key)
         }
         let node: String? = if case .node(let id) = target { id } else { nil }
+        let label = "You: " + RouterDecision.clip(departure.text, CanvasLanded.clip)
         guard let rect = nodeRects[key] else {
             if let node { land(departure.text, on: node) }
             return
         }
-        // The canvas goes there first; the flight lands where the node will be once it has.
-        let camera = show(rect, reduce: reduce)
+        // The camera stays where you left it: a node off the view gets the flight to the viewport's edge, towards it, and a
+        // marker there that takes you to it.
+        let offView = !shows(rect)
         guard !reduce else {
             if let node { land(departure.text, on: node) }
+            if offView { mark(rect, id: key, label: label) }
             return
         }
+        let camera = self.camera.transform
         // Onto the node's header, as the lines meet it.
         let head = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(rect.height, CanvasMetrics.closedH))
-        let to = CGRect(x: viewportFrame.minX + camera.origin.x + head.minX * camera.scale,
+        var to = CGRect(x: viewportFrame.minX + camera.origin.x + head.minX * camera.scale,
                         y: viewportFrame.minY + camera.origin.y + head.minY * camera.scale,
                         width: head.width * camera.scale, height: head.height * camera.scale)
+        if offView {
+            let room = free.insetBy(dx: 110, dy: 18)
+            let target = CGPoint(x: camera.origin.x + rect.midX * camera.scale, y: camera.origin.y + rect.midY * camera.scale)
+            let at = CanvasMetrics.edgePoint(from: CGPoint(x: free.midX, y: free.midY), to: target, in: room)
+            to = CGRect(x: viewportFrame.minX + at.x, y: viewportFrame.minY + at.y - CanvasPendingLine.height / 2, width: 0,
+                        height: CanvasPendingLine.height)
+        }
         let from = pendingFrames[departure.id]
             ?? CGRect(x: composerFrame.midX - 120, y: composerFrame.minY - 28, width: 240, height: CanvasPendingLine.height)
-        flights.append(CanvasFlight(id: departure.id, text: departure.text, from: from, to: to, node: node))
+        flights.append(CanvasFlight(id: departure.id, text: departure.text, from: from, to: to, node: node,
+                                    marker: offView ? (key, label, rect) : nil))
         pendingFrames[departure.id] = nil
     }
 
-    /// A flight arrived.
+    /// A flight arrived: on its node, or at the edge, where its marker takes over.
     func arrived(_ flight: CanvasFlight) {
         flights.removeAll { $0.id == flight.id }
         if let node = flight.node { land(flight.text, on: node) }
+        if let marker = flight.marker { mark(nodeRects[marker.key] ?? marker.rect, id: marker.key, label: marker.label) }
     }
 }
 
