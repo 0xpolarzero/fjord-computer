@@ -419,9 +419,17 @@ extension RouterMentions {
     /// folders); the sessions, working first then the latest; the open notifications, unread first then the latest; the
     /// categories in the bar's order; then the snippets `query` finds, best first (all of them, in order, for a bare @).
     /// `except`: what the draft tags already.
+    ///
+    /// Each keystroke after an @ asks for them: the sessions and notifications are sorted once per change of theirs
+    /// (`MentionBase`), and with a word typed only what it can find is made a row (its look, its cleaned title). `first`: at
+    /// most that many sessions, notifications and categories, for a bare @ whose list shows only the first few of each.
     @MainActor
-    static func candidates(_ store: Store, except: Set<RouterPointer> = [], query: String = "") -> [MentionSuggestion] {
+    static func candidates(_ store: Store, except: Set<RouterPointer> = [], query: String = "", first: Int? = nil) -> [MentionSuggestion] {
         var out: [MentionSuggestion] = []
+        let typed = !query.isEmpty
+        let limit = first ?? .max
+        /// Whether any of a row's keys finds the typed word (always, with none typed).
+        func found(_ keys: [String]) -> Bool { !typed || keys.contains { score($0, query: query) != nil } }
         for folder in store.projectFolders where !folder.isEmpty && !except.contains(.project(folder)) {
             let name = store.folderName(folder)
             // One a typed word can't find isn't made a row (there may be hundreds, from your code folders).
@@ -430,30 +438,37 @@ extension RouterMentions {
                                          detail: MentionList.shortPath(folder),
                                          look: MentionLook(label: name, symbol: "folder", tint: CDS.Text.secondary), keys: [name]))
         }
-        let sessions = store.claudeSessions.values.filter { !$0.isArchived && !except.contains(.session($0.id)) }
-            .sorted { ($0.running ? 0 : 1, $1.lastActivity) < ($1.running ? 0 : 1, $0.lastActivity) }.prefix(40)
-        for s in sessions {
+        let sessions = MentionBase.sessions(store).lazy.filter { !except.contains(.session($0.id)) }.prefix(40)
+        var made = 0
+        for s in sessions where made < limit {
             let project = store.folderName(s.folderKey)
+            guard found([s.title, project]) else { continue }
             let look = store.pointerLook(.session(s.id))
             out.append(MentionSuggestion(section: .sessions, pick: .pointer(.session(s.id)), name: look.label,
                                          detail: project + (s.running ? " · working" : ""), look: look, keys: [s.title, project]))
+            made += 1
         }
-        let open = store.entries.filter { !$0.isDone && !except.contains(.notification($0.id)) }
-            .sorted { ($0.isUnread ? 0 : 1, $1.thing.updatedAt) < ($1.isUnread ? 0 : 1, $0.thing.updatedAt) }.prefix(300)
+        let open = MentionBase.open(store).lazy.filter { !except.contains(.notification($0.id)) }.prefix(300)
         let tints = Dictionary(store.categories.map { ($0.id, $0.color.swatch) }, uniquingKeysWith: { a, _ in a })
-        for e in open {
-            // As `pointerLook` has it, without looking each entry up again.
-            let look = MentionLook(label: RouterPointers.label(e.thing), symbol: RouterPointers.symbol(e.thing.kind),
-                                   tint: tints[e.categoryID] ?? CDS.Text.secondary)
+        made = 0
+        for e in open where made < limit {
+            let label = RouterPointers.label(e.thing)
             let reference = e.thing.number.map { "\(e.thing.repo)#\($0)" } ?? e.thing.repo
+            guard found([label, reference, e.thing.title]) else { continue }
+            // As `pointerLook` has it, without looking each entry up again.
+            let look = MentionLook(label: label, symbol: RouterPointers.symbol(e.thing.kind),
+                                   tint: tints[e.categoryID] ?? CDS.Text.secondary)
             out.append(MentionSuggestion(section: .notifications, pick: .pointer(.notification(e.id)), name: look.label,
                                          detail: UntrustedText.clean(e.thing.title, limit: 80), look: look,
                                          keys: [look.label, reference, e.thing.title]))
+            made += 1
         }
-        for c in store.categories where !except.contains(.category(c.id)) {
+        made = 0
+        for c in store.categories where !except.contains(.category(c.id)) && made < limit && found([c.title]) {
             let count = store.entries(in: c.id).count
             out.append(MentionSuggestion(section: .categories, pick: .pointer(.category(c.id)), name: c.title,
                                          detail: "\(count) open", look: store.pointerLook(.category(c.id)), keys: [c.title]))
+            made += 1
         }
         // Found by the snippets' own search (their name or their text), so no keys: the word isn't matched again. Words
         // typed across spaces find a snippet by its name only, as they do the rest, so prose after an @ stops finding any.
@@ -465,6 +480,35 @@ extension RouterMentions {
                                          keys: [], snippet: s.id))
         }
         return out
+    }
+
+    /// What @ lists of the sessions and the notifications, in its order (sessions working first then the latest, not the
+    /// archived; notifications open, unread first then the latest), sorted once per change of them rather than on every
+    /// keystroke. One slot each: what they were sorted from is compared (the sessions with the store they are of).
+    @MainActor
+    enum MentionBase {
+        private static var sessionsMemo: (store: Weak, sessions: [String: ClaudeSession], sorted: [ClaudeSession])?
+        private static var openMemo: (entries: [InboxEntry], sorted: [InboxEntry])?
+        private struct Weak { weak var store: Store? }
+
+        static func sessions(_ store: Store) -> [ClaudeSession] {
+            let all = store.claudeSessions
+            if let memo = sessionsMemo, memo.store.store === store, memo.sessions == all { return memo.sorted }
+            let sorted = all.values.filter { !$0.isArchived }
+                .sorted { ($0.running ? 0 : 1, $1.lastActivity) < ($1.running ? 0 : 1, $0.lastActivity) }
+            sessionsMemo = (Weak(store: store), all, sorted)
+            return sorted
+        }
+
+        static func open(_ store: Store) -> [InboxEntry] {
+            // The inbox's memo hands out the same array until it changes: compared by its storage first.
+            let entries = store.entries
+            if let memo = openMemo, memo.entries == entries { return memo.sorted }
+            let sorted = entries.filter { !$0.isDone }
+                .sorted { ($0.isUnread ? 0 : 1, $1.thing.updatedAt) < ($1.isUnread ? 0 : 1, $0.thing.updatedAt) }
+            openMemo = (entries, sorted)
+            return sorted
+        }
     }
 
     /// The rows the @ word matches, in their sections' order and best first in each (`score`), a few per section.

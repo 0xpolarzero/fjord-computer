@@ -812,7 +812,10 @@ final class RouterModel {
     /// few of each for a bare @); what the draft tags already left out.
     func suggestions(_ store: Store) -> [MentionSuggestion] {
         guard let query = mention else { return [] }
-        return RouterMentions.suggest(RouterMentions.candidates(store, except: Set(pointers), query: query), query: query)
+        // A bare @ shows the first few of each section, in order: only those are made.
+        let first = query.isEmpty ? RouterMentions.perSection.bare : nil
+        return RouterMentions.suggest(RouterMentions.candidates(store, except: Set(pointers), query: query, first: first),
+                                      query: query)
     }
 
     /// The composer's text view (`MentionField`): text a pick inserts goes in through it while it shows the draft, so ⌘Z
