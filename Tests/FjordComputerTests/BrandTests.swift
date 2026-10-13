@@ -27,3 +27,27 @@ import Testing
         #expect(abs(dark.alphaComponent - 0.15) < 0.01)
     }
 }
+
+/// Claude's fonts are registered from the cache while the archive they were taken from is the same one.
+@Suite struct ClaudeFontCache {
+    @Test func theCacheStandsOnlyForTheArchiveItWasTakenFromAndWithAllItsFonts() throws {
+        let dir = TempDir()
+        let archive = dir.path("app.asar"), cache = dir.path("fonts")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try Data("one".utf8).write(to: archive)
+        let stamp = try #require(ClaudeFonts.archiveStamp(archive.path))
+        #expect(ClaudeFonts.archiveStamp(dir.path("missing").path) == nil)
+        #expect(ClaudeFonts.cached(in: cache, stamp: stamp) == nil)
+        try Data().write(to: cache.appendingPathComponent("A.woff2"))
+        try ([stamp, "A.woff2", "B.woff2"]).joined(separator: "\n")
+            .write(to: cache.appendingPathComponent(ClaudeFonts.stampName), atomically: true, encoding: .utf8)
+        // One of its fonts gone: taken out of the archive again.
+        #expect(ClaudeFonts.cached(in: cache, stamp: stamp) == nil)
+        try Data().write(to: cache.appendingPathComponent("B.woff2"))
+        #expect(ClaudeFonts.cached(in: cache, stamp: stamp) == ["A.woff2", "B.woff2"])
+        // Another build of the app: another archive.
+        try Data("another".utf8).write(to: archive)
+        #expect(ClaudeFonts.archiveStamp(archive.path) != stamp)
+        #expect(ClaudeFonts.cached(in: cache, stamp: try #require(ClaudeFonts.archiveStamp(archive.path))) == nil)
+    }
+}

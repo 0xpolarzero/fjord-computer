@@ -12,19 +12,55 @@ enum ClaudeFonts {
 
     static let asar = "/Applications/Claude.app/Contents/Resources/app.asar"
 
-    /// Once, at launch, before any view is drawn.
+    /// Once, at launch, before any view is drawn. The fonts taken out of the archive are kept in the caches folder, with the
+    /// archive's stamp (`stampName`): while the archive is the one they came from, they are registered from there, without
+    /// reading the archive's header (a few MB of JSON, tens of milliseconds before the first frame).
     static func load() {
-        guard !available, let data = try? Data(contentsOf: URL(fileURLWithPath: asar), options: .alwaysMapped),
-              let files = AsarIndex(data) else { return }
+        guard !available, let stamp = archiveStamp(asar) else { return }
         let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("com.amontlabs.fjord/fonts", isDirectory: true)
+        if let names = cached(in: cache, stamp: stamp) {
+            for name in names where CTFontManagerRegisterFontsForURL(cache.appendingPathComponent(name) as CFURL, .process, nil) {
+                available = true
+            }
+            return
+        }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: asar), options: .alwaysMapped),
+              let files = AsarIndex(data) else { return }
         try? FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        var names: [String] = []
         for (path, range) in files.entries
         where path.hasPrefix(".vite/renderer/main_window/assets/AnthropicSans-") && path.hasSuffix(".woff2") {
-            let file = cache.appendingPathComponent((path as NSString).lastPathComponent)
+            let name = (path as NSString).lastPathComponent
+            let file = cache.appendingPathComponent(name)
             if !FileManager.default.fileExists(atPath: file.path) { try? data.subdata(in: range).write(to: file) }
             if CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil) { available = true }
+            names.append(name)
         }
+        // Only an archive whose fonts are all there is noted: one written in part is taken out again next launch.
+        if !names.isEmpty, names.allSatisfy({ FileManager.default.fileExists(atPath: cache.appendingPathComponent($0).path) }) {
+            try? ([stamp] + names).joined(separator: "\n").write(to: cache.appendingPathComponent(stampName), atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// Beside the cached fonts: the archive's stamp they were taken from, then their names, a line each.
+    static let stampName = "archive.stamp"
+
+    /// The archive's size, inode and modification time (to the nanosecond): another for any other build of the app.
+    static func archiveStamp(_ path: String) -> String? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return "\(info.st_size) \(info.st_ino) \(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
+    }
+
+    /// The names of the fonts cached from the archive with `stamp`, when every one of them is there; nil otherwise.
+    static func cached(in cache: URL, stamp: String) -> [String]? {
+        guard let text = try? String(contentsOf: cache.appendingPathComponent(stampName), encoding: .utf8) else { return nil }
+        let lines = text.split(separator: "\n").map(String.init)
+        guard lines.first == stamp, lines.count > 1 else { return nil }
+        let names = Array(lines.dropFirst())
+        let fm = FileManager.default
+        return names.allSatisfy { !$0.contains("/") && fm.fileExists(atPath: cache.appendingPathComponent($0).path) } ? names : nil
     }
 }
 
