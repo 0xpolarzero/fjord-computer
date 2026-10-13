@@ -1,8 +1,9 @@
-# Brief: Lookout becomes Fjord Computer
+# Brief: Lookout becomes Fjord
 
 ## What we're doing
 
-Lookout becomes **Fjord Computer**, by Amont Labs (amontlabs.com). It stays **one Mac app**: one download, one updater, one window, one bar. Inside it, the two halves of today's app become **tools** that each user switches on or off:
+Lookout becomes **Fjord**, by Amont Labs (amontlabs.com). It stays **one Mac app**: one download, one updater, one window,
+one bar. Inside it, the two halves of today's app become **tools** that each user switches on or off:
 
 - **Triage**: the GitHub inbox and CI, which is today's Lookout part: notifications, categories, rules, inbox actions, Done.
 - **Router**: one chat above all your Claude Code sessions.
@@ -24,7 +25,7 @@ Headline: **"The power without the storm."**
 1. **Turn each half into a tool the app can switch on or off.** Define a small module interface: a tool contributes bar items, sidebar pages, a Settings page, shortcuts and its background work. Register Triage and Router through it. The hard part is untangling the files that mix both domains: `Store.swift`, `HubView.swift`, `HubSections.swift`, `HubController.swift` and `SettingsView.swift`.
 2. **Put the Triage–Router link behind a check that both are on.** This covers the files listed above.
 3. **Add the first-launch onboarding:** one screen with the tools, each tool's sign-ins and keys (GitHub, the Jev/TypeSafe API key) unfolding right below it when it's switched on. Stop requiring GitHub sign-in when only Router is on.
-4. **Rename everything to Fjord Computer:**
+4. **Rename everything to Fjord:**
    - the app name, `Package.swift` targets and executable;
    - the bundle ID (today `dev.polarzero.lookout` in `scripts/build-app.sh`);
    - the release workflow, tags and update feed (`.github/workflows/release.yml`);
@@ -48,7 +49,7 @@ Codex reviews catch all of the above, so put every piece through one before comm
 
 ## Identity (settled; see `docs/design/fjord/mark.html`)
 
-- **Look in the app:** already done and committed (`Sources/Lookout/Brand.swift`, the default). It keeps the current app design, with Geist and Geist Mono bundled, neutrals mapped to the studio's ink ramp, and light and dark following the Mac live. `FJORD_THEME=dark|light|claude` pins a look. **Claude's blue stays the app's accent; fonte is not used in the app UI.**
+- **Look in the app:** already done and committed (`Sources/Fjord/Brand.swift`, the default). It keeps the current app design, with Geist and Geist Mono bundled, neutrals mapped to the studio's ink ramp, and light and dark following the Mac live. `FJORD_THEME=dark|light|claude` pins a look. **Claude's blue stays the app's accent; fonte is not used in the app UI.**
 - **The mark is "sun over water, two bands":**
   - a circle cut by a level horizon at 0.55 of its diameter;
   - the sun above, in paper on dark or ink on light;

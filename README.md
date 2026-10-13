@@ -8,7 +8,7 @@
 
 Coding agents multiply what you ship, and what you have to keep up with. Fjord sits between them and everything they work with, and brings you only what you need to know or decide.
 
-[Download](https://github.com/0xpolarzero/fjord-computer/releases/latest) · [Install](#install) · [Privacy](#privacy) · [Development](DEVELOPMENT.md)
+[Download](https://github.com/0xpolarzero/fjord/releases/latest) · [Install](#install) · [Privacy](#privacy) · [Development](DEVELOPMENT.md)
 
 </div>
 
@@ -51,10 +51,10 @@ With both tools on, you can also set up Triage by talking to the Router (*"make 
 
 ## Install
 
-1. Download `Fjord-<version>.zip` from [Releases](https://github.com/0xpolarzero/fjord-computer/releases/latest), unzip it, and move **Fjord Computer.app** to `/Applications`.
+1. Download `Fjord-<version>.zip` from [Releases](https://github.com/0xpolarzero/fjord/releases/latest), unzip it, and move **Fjord.app** to `/Applications`.
 2. It isn't notarized yet, so clear the quarantine flag once, in Terminal:
    ```sh
-   xattr -dr com.apple.quarantine "/Applications/Fjord Computer.app"
+   xattr -dr com.apple.quarantine "/Applications/Fjord.app"
    ```
 3. Open it and pick your tools.
 
@@ -77,7 +77,7 @@ Fjord has no server and no account. What leaves your Mac:
 - **Anthropic**: the Router's briefs, summaries and replies are written by Claude Haiku through your own Claude Code, on your account.
 - **TypeSafe** *(optional)*: with a [TypeSafe](https://typesafe.ai) API key, its classifier (Jev) helps route your messages, read how each session's turn ended, label new comments (*asks you*, *to do*, *FYI*, *noise*) and pick icons. It receives your messages and drafts, sessions' titles, activity and final messages, project names and, for labels, the comment and its pull request or issue details. Without a key, nothing is sent there.
 
-Everything else stays on your Mac, in `~/Library/Application Support/Fjord Computer/`. Code folders you add in Settings are scanned locally for git clones.
+Everything else stays on your Mac, in `~/Library/Application Support/Fjord/`. Code folders you add in Settings are scanned locally for git clones.
 
 ## Keyboard
 

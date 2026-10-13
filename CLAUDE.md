@@ -1,6 +1,6 @@
 # Fjord: notes for agents
 
-Building, tests and every debug flag: [DEVELOPMENT.md](DEVELOPMENT.md). The code still uses the old name, Fjord Computer.
+Building, tests and every debug flag: [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Checking the UI
 

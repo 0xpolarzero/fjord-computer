@@ -15,7 +15,7 @@ Everything for building, testing and releasing the app. For what the app does, s
 A Swift package (Swift tools 5.10, macOS 14+). The app is built into a bundle, which notifications and launch at login need:
 
 ```sh
-./scripts/build-app.sh && open "build/Fjord Computer.app"
+./scripts/build-app.sh && open "build/Fjord.app"
 ```
 
 `build-app.sh` needs Xcode's command-line tools (`xcrun actool` compiles the layered icon, `Resources/AppIcon.icon`). It takes:
@@ -26,13 +26,13 @@ A Swift package (Swift tools 5.10, macOS 14+). The app is built into a bundle, w
 | `UNIVERSAL=1` | Builds for arm64 and x86_64, as releases do. |
 | `SIGN_IDENTITY="…"` | Signs with that identity, and fails if it isn't in your keychain. |
 
-Without `SIGN_IDENTITY`, local builds are signed with the release certificate (default name `Fjord Computer Dev`) when it's in your keychain, and ad hoc otherwise. macOS treats every ad-hoc build as a new app, so Accessibility access has to be granted again each time. See [Signing certificate](#signing-certificate).
+Without `SIGN_IDENTITY`, local builds are signed with the release certificate (default name `Fjord Dev`) when it's in your keychain, and ad hoc otherwise. macOS treats every ad-hoc build as a new app, so Accessibility access has to be granted again each time. See [Signing certificate](#signing-certificate).
 
 The debug flags below run the debug binary: `swift build`, then `.build/debug/Fjord …`.
 
 **Credentials.** GitHub access comes from `gh auth token`, `GH_TOKEN` / `GITHUB_TOKEN`, or a token pasted in Settings, which is stored in the Keychain. The optional TypeSafe key (for Jev, TypeSafe's classifier) is kept in the Keychain too. Demo, snapshot and playground runs never touch the Keychain, so a new build doesn't stop on an access prompt.
 
-**State** lives in `~/Library/Application Support/Fjord Computer/state.json`.
+**State** lives in `~/Library/Application Support/Fjord/state.json`.
 
 ## Tests
 
@@ -93,7 +93,7 @@ FJORD_THEME=dark .build/debug/Fjord --window
 ### Updater
 
 ```sh
-"build/Fjord Computer.app/Contents/MacOS/Fjord" --update 0.1.0
+"build/Fjord.app/Contents/MacOS/Fjord" --update 0.1.0
 ```
 
 Pretends to be version 0.1.0: checks for, downloads and verifies the latest release. Run it from the built bundle, not the debug binary.
@@ -108,7 +108,7 @@ Pretends to be version 0.1.0: checks for, downloads and verifies the latest rele
 
 | Script | What it does |
 | --- | --- |
-| `scripts/build-app.sh` | Builds `build/Fjord Computer.app` (see [Build and run](#build-and-run)). |
+| `scripts/build-app.sh` | Builds `build/Fjord.app` (see [Build and run](#build-and-run)). |
 | `scripts/test.sh` | The test suite as CI runs it, output in `test.log`. |
 | `scripts/idle-cpu.sh` | Checks the release build's CPU stays under its limit at rest and with the window kept open, on the right edge and along the top, on demo data. Puts the bar on screen for minutes. |
 | `scripts/motion-trace.sh` | Records the release build with `xctrace` while it plays a motion script, then reports hitches and signpost latencies; `--baseline FILE` stores or compares against a baseline. Takes the screen while it runs. Options are documented at the top of the script. |
@@ -131,7 +131,7 @@ Installed apps pick the release up on their own. The updater installs it only if
 
 Releases are signed with one self-signed certificate. That keeps the app's Accessibility access across updates, and lets the updater check a release is genuine. Set it up once:
 
-1. In Keychain Access, choose Certificate Assistant → Create a Certificate. Identity type: *Self-Signed Root*. Certificate type: *Code Signing*. Name it as `build-app.sh` expects: `Fjord Computer Dev`, or whatever you set in `SIGN_IDENTITY`.
+1. In Keychain Access, choose Certificate Assistant → Create a Certificate. Identity type: *Self-Signed Root*. Certificate type: *Code Signing*. Name it as `build-app.sh` expects: `Fjord Dev`, or whatever you set in `SIGN_IDENTITY`.
 2. Export it with its private key as a `.p12`, with a password. Add two repository secrets:
    - `SIGNING_CERT_P12`: the file in base64 (`base64 -i cert.p12 | pbcopy`)
    - `SIGNING_CERT_PASSWORD`: its password

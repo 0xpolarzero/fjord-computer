@@ -1,4 +1,4 @@
-# Fjord Computer on macOS 26: Liquid Glass, motion and latency
+# Fjord on macOS 26: Liquid Glass, motion and latency
 
 A plan, not a record: nothing here is built yet. Written against `main` at `1a30029`, macOS 26.5 and the Xcode 26.5 SDK
 (26.5, 25F70). Every API named was checked in that SDK (§11). Anything not verified is marked **unverified** and has a
@@ -6,7 +6,7 @@ spike that settles it before anything depends on it. Revision 5, after four Fabl
 
 ## 1. Goal and the bar it has to clear
 
-Make Fjord Computer look like a first-class macOS 26 app (Liquid Glass where Apple puts it, the new shapes, motion that
+Make Fjord look like a first-class macOS 26 app (Liquid Glass where Apple puts it, the new shapes, motion that
 feels physical) while it stays what it is today: **zero CPU at rest, motion that starts on the next frame, nothing that
 pops**. A glass look that costs idle CPU, drops frames or adds latency doesn't ship.
 

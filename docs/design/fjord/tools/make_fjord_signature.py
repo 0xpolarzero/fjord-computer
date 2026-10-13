@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fjord Computer signature: the real Naeroyfjord (Sogn, Norway) baked for the Amont Labs real-time renderer.
+"""Fjord signature: the real Naeroyfjord (Sogn, Norway) baked for the Amont Labs real-time renderer.
 
     python3 docs/design/fjord/tools/make_fjord_signature.py            # bake -> docs/design/fjord/signature/
     python3 docs/design/fjord/tools/make_fjord_signature.py --check    # bake, then render tools/check.png
