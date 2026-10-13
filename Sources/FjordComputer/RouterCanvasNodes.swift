@@ -59,49 +59,23 @@ struct CanvasFolderFrame: View {
         let folded = self.folded
         let canvas = model.canvas
         let width = canvas.width(folder.key)
-        let cardWidth = CanvasMetrics.cardWidth(frame: width)
+        let height = canvas.height(folder.key)
         VStack(alignment: .leading, spacing: 0) {
+            // The header stays at the top, its fold button with it, whatever the body scrolls.
             header(folded: folded)
             if !folded {
-                if folder.groups.isEmpty {
-                    Text("Nothing here").cdsText((12, 16), .regular, CDS.Text.muted)
-                        .frame(height: 20).padding(.leading, CanvasMetrics.pad).padding(.bottom, CanvasMetrics.pad)
+                if height > 0 {
+                    // Your height wins: the body scrolls inside what is left of it, faded where it is cut.
+                    frameBody(width: width)
+                        .modifier(CanvasBodyScrolling(scroll: canvas.scroll(folder.key),
+                                                      visible: max(0, height - CanvasMetrics.header)))
                 } else {
-                    CanvasFolderStack(width: cardWidth) {
-                        ForEach(nodes) { node in
-                            Group {
-                                if let item = node.item {
-                                    landed(node.id) {
-                                        CanvasNode(item: item, store: store, model: model, page: page)
-                                    }
-                                } else {
-                                    more(node)
-                                }
-                            }
-                            .environment(\.canvasNodeID, node.id)
-                            .environment(\.cdsColumnWidth, cardWidth)
-                            .frame(width: cardWidth, alignment: .leading)
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
-                                model.canvas.nodeRects[node.id] = rect
-                            }
-                            .canvasGroup(node.group)
-                            // Left out by the chips: gone in place, its room kept, so nothing else moves.
-                            .opacity(node.hidden ? 0 : 1)
-                            .allowsHitTesting(!node.hidden)
-                            .accessibilityHidden(node.hidden)
-                            // Gone from the canvas: a reveal or a flight no longer goes where it was.
-                            .onDisappear { model.canvas.nodeRects[node.id] = nil }
-                            .transition(.scaleFade(0.97, reduce: reduceMotion))
-                        }
-                    }
-                    .padding(.leading, CanvasMetrics.cardX)
-                    .padding(.bottom, CanvasMetrics.pad)
+                    frameBody(width: width)
                 }
             }
         }
         .frame(width: width, alignment: .leading)
-        // As tall as you made it, or taller when what it holds is.
-        .frame(minHeight: max(0, canvas.minHeight(folder.key)), alignment: .top)
+        .frame(height: height > 0 && !folded ? height : nil, alignment: .top)
         .motion(.spatial, value: nodes.map(\.id))
         .motion(.spatial, value: nodes.map(\.hidden))
         // Where a message for a session not drawn yet lands (RouterCanvasPending.swift).
@@ -115,32 +89,20 @@ struct CanvasFolderFrame: View {
             model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = nil
             model.canvas.frameRects[folder.key] = nil
         }
-        // The lines under the cards, on the frame's ground; the labels over it.
-        .backgroundPreferenceValue(CanvasHeaders.self) { heads in
-            ZStack(alignment: .topLeading) {
-                let lifted = model.canvas.drag.key == folder.key
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    // On the ground's dots, the frame's own ground: opaque, so the dots stop at its edge.
-                    .fill(scheme == .dark ? CDS.Surface.s1 : CDS.Surface.s0)
-                    .overlay { if scheme == .dark { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(CDS.alpha(0.03)) } }
-                    .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
-                    .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 18 : 0, y: lifted ? 10 : 0)
-                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .gesture(moveGesture)
-                if !folded {
-                    GeometryReader { proxy in lines(heads, proxy) }.allowsHitTesting(false)
-                }
-            }
-        }
-        .overlayPreferenceValue(CanvasHeaders.self) { heads in
-            if !folded {
-                GeometryReader { proxy in labels(heads, proxy) }
-            }
+        // The frame's ground: a drag on it moves the frame.
+        .background {
+            let lifted = model.canvas.drag.key == folder.key
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                // On the ground's dots, the frame's own ground: opaque, so the dots stop at its edge.
+                .fill(scheme == .dark ? CDS.Surface.s1 : CDS.Surface.s0)
+                .overlay { if scheme == .dark { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(CDS.alpha(0.03)) } }
+                .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
+                .shadow(color: .black.opacity(lifted ? 0.22 : 0), radius: lifted ? 18 : 0, y: lifted ? 10 : 0)
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .gesture(moveGesture)
         }
         // The edges you resize it by: the right, the bottom, and their corner.
         .overlay { resizeHandles }
-        // The frame's anchors stay in it.
-        .transformPreference(CanvasHeaders.self) { $0 = [:] }
         .onChange(of: dragging) { _, now in
             // A drag the system cancelled (no end): the frame goes back, nothing stays lifted.
             guard !now else { return }
@@ -148,6 +110,61 @@ struct CanvasFolderFrame: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(folder.name), \(folder.sessions == 1 ? "1 session" : "\(folder.sessions) sessions")\(folded ? ", folded" : "")")
+    }
+
+    /// The frame's groups: each label at the left joined by its lines to its cards, which take the frame's width less the
+    /// labels' gutter. The lines and labels are the body's own, so they scroll and are cut with it.
+    @ViewBuilder private func frameBody(width: CGFloat) -> some View {
+        let cardWidth = CanvasMetrics.cardWidth(frame: width)
+        let gutter = CanvasMetrics.gutter(frame: width)
+        if folder.groups.isEmpty {
+            Text("Nothing here").cdsText((12, 16), .regular, CDS.Text.muted)
+                .frame(height: 20).padding(.leading, CanvasMetrics.pad).padding(.bottom, CanvasMetrics.pad)
+                .frame(width: width, alignment: .leading)
+        } else {
+            CanvasFolderStack(width: cardWidth) {
+                ForEach(nodes) { node in
+                    Group {
+                        if let item = node.item {
+                            landed(node.id) {
+                                // Nothing of a card draws past it, however narrow the frame.
+                                CanvasNode(item: item, store: store, model: model, page: page)
+                                    .frame(width: cardWidth, alignment: .leading)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                        } else {
+                            more(node)
+                        }
+                    }
+                    .environment(\.canvasNodeID, node.id)
+                    .environment(\.cdsColumnWidth, cardWidth)
+                    .frame(width: cardWidth, alignment: .leading)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
+                        model.canvas.nodeRects[node.id] = rect
+                    }
+                    .canvasGroup(node.group)
+                    // Left out by the chips: gone in place, its room kept, so nothing else moves.
+                    .opacity(node.hidden ? 0 : 1)
+                    .allowsHitTesting(!node.hidden)
+                    .accessibilityHidden(node.hidden)
+                    // Gone from the canvas: a reveal or a flight no longer goes where it was.
+                    .onDisappear { model.canvas.nodeRects[node.id] = nil }
+                    .transition(.scaleFade(0.97, reduce: reduceMotion))
+                }
+            }
+            .padding(.leading, gutter)
+            .padding(.bottom, CanvasMetrics.pad)
+            .frame(width: width, alignment: .leading)
+            // The lines under the cards; the labels over them.
+            .backgroundPreferenceValue(CanvasHeaders.self) { heads in
+                GeometryReader { proxy in lines(heads, proxy, gutter: gutter) }.allowsHitTesting(false)
+            }
+            .overlayPreferenceValue(CanvasHeaders.self) { heads in
+                GeometryReader { proxy in labels(heads, proxy, compact: gutter < CanvasMetrics.cardX) }
+            }
+            // The body's anchors stay in it.
+            .transformPreference(CanvasHeaders.self) { $0 = [:] }
+        }
     }
 
     // MARK: Header
@@ -211,7 +228,7 @@ struct CanvasFolderFrame: View {
                 if canvas.drag.resizeStart?.at != drag.startLocation {
                     let drawn = canvas.frameRects[folder.key]?.size ?? CGSize(width: canvas.width(folder.key), height: 0)
                     canvas.drag.resizeStart = (drag.startLocation, CGSize(width: drawn.width,
-                                                                          height: height ? drawn.height : canvas.minHeight(folder.key)))
+                                                                          height: height ? drawn.height : canvas.height(folder.key)))
                 }
                 guard let start = canvas.drag.resizeStart?.size else { return }
                 let scale = canvas.camera.transform.scale
@@ -259,12 +276,16 @@ struct CanvasFolderFrame: View {
         var item: CanvasItem?
         var more = 0
         var hidden = false
+        /// "Show less" rather than "+n more": the group was opened past its first few.
+        var less = false
     }
 
     private var nodes: [Node] {
         folder.groups.flatMap { g in
             g.items.map { Node(id: $0.id, group: g.group, item: $0, hidden: g.hidden) }
-                + (g.more > 0 ? [Node(id: folder.moreID(g.group), group: g.group, more: g.more, hidden: g.hidden)] : [])
+                // "+n more", or once opened "Show less", in the same place (the same node).
+                + (g.more > 0 ? [Node(id: folder.moreID(g.group), group: g.group, more: g.more, hidden: g.hidden)]
+                   : g.less ? [Node(id: folder.moreID(g.group), group: g.group, hidden: g.hidden, less: true)] : [])
         }
     }
 
@@ -286,30 +307,33 @@ struct CanvasFolderFrame: View {
     }
 
     private func more(_ node: Node) -> some View {
-        CanvasMoreLine(count: node.more) {
-            withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { model.canvas.showAll(node.group, in: folder) }
+        CanvasMoreLine(count: node.more, less: node.less) {
+            withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) {
+                if node.less { model.canvas.showLess(node.group, in: folder) } else { model.canvas.showAll(node.group, in: folder) }
+            }
         }
         .canvasHeader()
     }
 
-    /// Each group's label's box, centred on its nodes' header lines (in the frame's space).
-    private func labelBoxes(_ heads: [String: Anchor<CGRect>], _ proxy: GeometryProxy) -> [(group: CanvasGroup, box: CGRect, heads: [CGRect])] {
+    /// Each group's label's box, centred on its nodes' header lines (in the body's space); its glyph alone when `compact`.
+    private func labelBoxes(_ heads: [String: Anchor<CGRect>], _ proxy: GeometryProxy,
+                            compact: Bool = false) -> [(group: CanvasGroup, box: CGRect, heads: [CGRect])] {
         let byGroup = Dictionary(grouping: nodes, by: \.group)
         return folder.shown.compactMap { g in
             let rects = (byGroup[g.group] ?? []).compactMap { heads[$0.id].map { proxy[$0] } }
             guard !rects.isEmpty else { return nil }
             let mids = rects.map(\.midY)
             let centre = ((mids.min() ?? 0) + (mids.max() ?? 0)) / 2
-            let width = CanvasGroupLabel.width(g.group)
+            let width = compact ? CanvasGroupLabel.compactWidth : CanvasGroupLabel.width(g.group)
             return (g.group, CGRect(x: CanvasMetrics.labelX, y: centre - CanvasMetrics.labelH / 2, width: width, height: CanvasMetrics.labelH),
                     rects)
         }
     }
 
-    private func labels(_ heads: [String: Anchor<CGRect>], _ proxy: GeometryProxy) -> some View {
+    private func labels(_ heads: [String: Anchor<CGRect>], _ proxy: GeometryProxy, compact: Bool) -> some View {
         ZStack(alignment: .topLeading) {
-            ForEach(labelBoxes(heads, proxy), id: \.group) { label in
-                CanvasGroupLabel(group: label.group, overview: label.group == .working ? overview : nil)
+            ForEach(labelBoxes(heads, proxy, compact: compact), id: \.group) { label in
+                CanvasGroupLabel(group: label.group, overview: label.group == .working ? overview : nil, compact: compact)
                     .frame(width: label.box.width, height: label.box.height, alignment: .leading)
                     .offset(x: label.box.minX, y: label.box.minY)
             }
@@ -317,13 +341,13 @@ struct CanvasFolderFrame: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func lines(_ heads: [String: Anchor<CGRect>], _ proxy: GeometryProxy) -> some View {
-        let boxes = labelBoxes(heads, proxy)
+    private func lines(_ heads: [String: Anchor<CGRect>], _ proxy: GeometryProxy, gutter: CGFloat) -> some View {
+        let boxes = labelBoxes(heads, proxy, compact: gutter < CanvasMetrics.cardX)
         return ZStack(alignment: .topLeading) {
             ForEach(boxes, id: \.group) { label in
                 Path { path in
                     for head in label.heads {
-                        let line = CanvasMetrics.connector(label: label.box, header: CGRect(x: CanvasMetrics.cardX, y: head.minY,
+                        let line = CanvasMetrics.connector(label: label.box, header: CGRect(x: gutter, y: head.minY,
                                                                                             width: head.width, height: head.height))
                         path.move(to: line.from)
                         path.addCurve(to: line.to, control1: line.c1, control2: line.c2)
@@ -352,6 +376,10 @@ struct CanvasFolderFrame: View {
 struct CanvasGroupLabel: View {
     let group: CanvasGroup
     var overview: String? = nil
+    /// In a narrow frame: its glyph alone, named in its tip.
+    var compact = false
+
+    static let compactWidth: CGFloat = 12
 
     /// Its width, shrunk to its name (at most `labelMax`): where its lines leave from.
     static func width(_ group: CanvasGroup) -> CGFloat {
@@ -363,14 +391,50 @@ struct CanvasGroupLabel: View {
     var body: some View {
         HStack(spacing: 6) {
             CanvasGroupGlyph(group: group).frame(width: 11)
-            Text(group.title)
-                .cdsText((12, 16), group == .needs ? .semibold : .medium, group == .needs ? CDS.Text.warning : CDS.Text.secondary)
-                .lineLimit(1).minimumScaleFactor(0.8)
+            if !compact {
+                Text(group.title)
+                    .cdsText((12, 16), group == .needs ? .semibold : .medium, group == .needs ? CDS.Text.warning : CDS.Text.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+            }
         }
-        .help(overview ?? "")
+        .help(overview ?? (compact ? group.title : ""))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(group.title)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// A frame's body in less room than it takes (a height you gave the frame): cut to that room and moved by its scroll (a
+/// two-finger scroll over it, `CanvasEventView`), faded at an edge where more is hidden. Only this modifier reads the
+/// scroll, so scrolling redraws nothing in the cards.
+struct CanvasBodyScrolling: ViewModifier {
+    let scroll: CanvasBodyScroll
+    let visible: CGFloat
+
+    static let fade: CGFloat = 18
+
+    func body(content: Content) -> some View {
+        let total = scroll.body
+        let offset = min(scroll.offset, CanvasMetrics.maxScroll(body: total, visible: visible))
+        content
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { scroll.body = $0 }
+            .offset(y: -offset)
+            .frame(height: visible, alignment: .top)
+            .clipped()
+            // What is cut away takes no clicks either.
+            .contentShape(Rectangle())
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(offset > 0.5 ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: Self.fade)
+                    Color.black
+                    LinearGradient(colors: [.black, .black.opacity(offset < total - visible - 0.5 ? 0 : 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: Self.fade)
+                }
+            }
+            .onChange(of: visible, initial: true) { _, visible in scroll.visible = visible }
     }
 }
 
@@ -414,12 +478,14 @@ struct CanvasGroupGlyph: View {
 /// "+n more" under a group: a click draws them all.
 struct CanvasMoreLine: View {
     let count: Int
+    /// "Show less": the group opened, folded back by it.
+    var less = false
     let action: () -> Void
     @State private var hovered = false
 
     var body: some View {
         Button(action: action) {
-            Text("+\(count) more").cdsText((12, 16), .regular, hovered ? CDS.Text.secondary : CDS.Text.muted).monospacedDigit()
+            Text(less ? "Show less" : "+\(count) more").cdsText((12, 16), .regular, hovered ? CDS.Text.secondary : CDS.Text.muted).monospacedDigit()
                 .padding(.leading, 8)
                 .frame(height: CanvasMetrics.moreH)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -428,8 +494,8 @@ struct CanvasMoreLine: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .hoverMotion(hovered)
-        .accessibilityLabel("\(count) more")
-        .accessibilityHint("Shows them all")
+        .accessibilityLabel(less ? "Show less" : "\(count) more")
+        .accessibilityHint(less ? "Shows the first few" : "Shows them all")
     }
 }
 

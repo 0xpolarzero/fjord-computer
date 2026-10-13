@@ -66,6 +66,8 @@ struct CanvasFolder: Identifiable, Equatable {
         var more: Int = 0
         /// Left out by the filter.
         var hidden = false
+        /// Opened past its first few by you: "Show less" under the items folds it back.
+        var less = false
 
         var id: CanvasGroup { group }
     }
@@ -131,8 +133,10 @@ enum RouterCanvasModel {
                    all.count > shown + 1, !all.dropFirst(shown).contains(where: { picked.contains($0.id) }) {
                     drawn = Array(all.prefix(shown))
                 }
+                let opened = (group == .notes || group == .done) && !showsAll && expanded.contains("\(key)#\(group.rawValue)")
+                    && all.count > shown + 1
                 return .init(group: group, items: drawn, more: all.count - drawn.count,
-                             hidden: !filter.isEmpty && !filter.contains(group))
+                             hidden: !filter.isEmpty && !filter.contains(group), less: opened)
             }
             return CanvasFolder(key: key, name: name(key), color: key.isEmpty ? nil : color(key), groups: groups)
         }
@@ -199,7 +203,7 @@ enum CanvasMetrics {
     static let colGap: CGFloat = 48
     static let rowGap: CGFloat = 48
     /// The narrowest and shortest a frame is resized to: its labels and a card still read.
-    static let minFrameWidth: CGFloat = 500
+    static let minFrameWidth: CGFloat = 320
     static let minFrameHeight: CGFloat = 96
 
     /// A measured size in whole points, up: a measure that wavers by a fraction of a point gives the same size, so nothing
@@ -210,7 +214,17 @@ enum CanvasMetrics {
 
     /// The cards' width in a frame `frame` wide: all of it but the labels' gutter and the margin, so a wider frame shows
     /// more of every card.
-    static func cardWidth(frame: CGFloat) -> CGFloat { max(0, max(frame, minFrameWidth) - cardX - pad) }
+    static func cardWidth(frame: CGFloat) -> CGFloat { max(0, max(frame, minFrameWidth) - gutter(frame: frame) - pad) }
+
+    /// Under this width a frame's groups are named by their glyph alone, the cards closer to the edge.
+    static let narrowFrame: CGFloat = 460
+    static let compactCardX: CGFloat = 44
+
+    /// Where the cards start in a frame `frame` wide: past the groups' names, or only their glyphs in a narrow frame.
+    static func gutter(frame: CGFloat) -> CGFloat { frame < narrowFrame ? compactCardX : cardX }
+
+    /// How far a frame's body scrolls: none when it shows whole.
+    static func maxScroll(body: CGFloat, visible: CGFloat) -> CGFloat { max(0, body - visible) }
 
     /// A frame resized from `start` by `delta` (content points) on the edges dragged: never under the minimum.
     static func resized(_ start: CGSize, by delta: CGSize, width: Bool, height: Bool) -> CGSize {

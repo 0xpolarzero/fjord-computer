@@ -51,6 +51,23 @@ final class CanvasFrameDrag {
     @ObservationIgnored var resizeStart: (at: CGPoint, size: CGSize)?
 }
 
+/// How far a frame's body is scrolled, and how far it can be: read only by the body's own offset.
+@Observable
+@MainActor
+final class CanvasBodyScroll {
+    var offset: CGFloat = 0
+    /// What the body holds and what the frame shows of it.
+    var body: CGFloat = 0
+    var visible: CGFloat = 0
+
+    var maxScroll: CGFloat { CanvasMetrics.maxScroll(body: body, visible: visible) }
+
+    /// Scrolled by `delta` content points (down positive), never past either end.
+    func scroll(by delta: CGFloat) {
+        offset = min(maxScroll, max(0, offset + delta))
+    }
+}
+
 /// Where the canvas points you to a node it doesn't show (a message landed there, a card picked by the keys): a marker on
 /// the viewport's edge, towards it, that goes there when you click it.
 struct CanvasMarker: Equatable {
@@ -93,6 +110,24 @@ final class RouterCanvasState {
     }
     /// The frames moved, the last on top: what draws over what where they overlap.
     var stack: [String] = []
+    /// Each frame's body's scroll, when you made it shorter than what it holds: one small object each, so a scroll redraws
+    /// only its frame's offset.
+    @ObservationIgnored private var scrolls: [String: CanvasBodyScroll] = [:]
+
+    func scroll(_ key: String) -> CanvasBodyScroll {
+        if let scroll = scrolls[key] { return scroll }
+        let scroll = CanvasBodyScroll()
+        scrolls[key] = scroll
+        return scroll
+    }
+
+    /// The frame under `point` (content space) whose body scrolls there, the topmost: what a two-finger scroll over it moves.
+    func scrollingFrame(at point: CGPoint) -> String? {
+        let hits = frameRects.filter { key, rect in
+            rect.contains(point) && point.y > rect.minY + CanvasMetrics.header && (scrolls[key]?.maxScroll ?? 0) > 0
+        }.map(\.key)
+        return hits.max { (stack.firstIndex(of: $0) ?? -1) < (stack.firstIndex(of: $1) ?? -1) }
+    }
     /// The marker pointing to a node off the view, if any.
     var marker: CanvasMarker?
     /// Each frame's place as last worked out (yours or packed), before the push-down: what a drop keeps of the others.
@@ -167,8 +202,8 @@ final class RouterCanvasState {
         return sizes[key].map { max(CanvasMetrics.minFrameWidth, $0.width) } ?? CanvasMetrics.frameWidth
     }
 
-    /// The height you gave a frame (it is at least that tall, taller when what it holds is), 0 for none.
-    func minHeight(_ key: String) -> CGFloat {
+    /// The height you gave a frame, 0 for none (it fits what it holds). Yours wins: what it holds scrolls inside it.
+    func height(_ key: String) -> CGFloat {
         if drag.resizing == key { return drag.size.height }
         return sizes[key]?.height ?? 0
     }
@@ -247,6 +282,7 @@ final class RouterCanvasState {
             sizes = [:]
             stack = []
         }
+        for scroll in scrolls.values { scroll.offset = 0 }
     }
 
     /// What there is to show: every frame drawn, or the content as laid out before any is.
@@ -264,6 +300,9 @@ final class RouterCanvasState {
     }
 
     func showAll(_ group: CanvasGroup, in folder: CanvasFolder) { expandedMore.insert("\(folder.key)#\(group.rawValue)") }
+
+    /// "Show less": the group back to its first few.
+    func showLess(_ group: CanvasGroup, in folder: CanvasFolder) { expandedMore.remove("\(folder.key)#\(group.rawValue)") }
 
     // MARK: Camera: only you move it
 
@@ -564,7 +603,7 @@ struct RouterCanvas: View {
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
             .clipped()
-            .background(CanvasEvents(camera: canvas.camera, bottomInset: bottom))
+            .background(CanvasEvents(canvas: canvas, bottomInset: bottom))
             .onChange(of: free, initial: true) { _, free in
                 canvas.free = free
                 canvas.fitFirst()
@@ -1009,25 +1048,30 @@ struct CanvasNotices: View {
 /// the canvas's or not from its start to the end of its momentum, so a pan sliding a card under the pointer never turns
 /// into a scroll of what is in the card.
 private struct CanvasEvents: NSViewRepresentable {
-    let camera: CanvasCamera
+    let canvas: RouterCanvasState
     /// The composer's room at the bottom: scrolls over it are its own.
     let bottomInset: CGFloat
 
     func makeNSView(context: Context) -> CanvasEventView {
         let view = CanvasEventView()
-        view.camera = camera
+        view.canvas = canvas
+        view.camera = canvas.camera
         view.bottomInset = bottomInset
         return view
     }
 
     func updateNSView(_ view: CanvasEventView, context: Context) {
-        view.camera = camera
+        view.canvas = canvas
+        view.camera = canvas.camera
         view.bottomInset = bottomInset
     }
 }
 
 final class CanvasEventView: NSView {
+    var canvas: RouterCanvasState?
     var camera: CanvasCamera?
+    /// The frame whose body the scroll under way moves, if it is one's.
+    private var scrollingFrame: String?
     var bottomInset: CGFloat = 0
     private var monitor: Any?
     /// Whether the scroll under way is the canvas's.
@@ -1092,13 +1136,25 @@ final class CanvasEventView: NSView {
             return true
         case .scrollWheel:
             // Over something that scrolls itself (an open form or plan taller than its cap), the scroll is its own.
+            // Over a frame you made shorter than what it holds, the scroll is its body's. Decided once per gesture.
             if event.phase == .began || (event.phase == [] && event.momentumPhase == []) {
-                claimed = point(event) != nil && !scrollsItself(event)
+                let at = point(event)
+                claimed = at != nil && !scrollsItself(event)
+                scrollingFrame = nil
+                if claimed, let at, let canvas, !event.modifierFlags.contains(.command) {
+                    let t = camera.transform
+                    scrollingFrame = canvas.scrollingFrame(at: CGPoint(x: (at.x - t.origin.x) / t.scale, y: (at.y - t.origin.y) / t.scale))
+                }
             }
             guard claimed else { return false }
-            camera.moved = true
             let k: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
             let dx = event.scrollingDeltaX * k, dy = event.scrollingDeltaY * k
+            if let frame = scrollingFrame, let canvas {
+                canvas.scroll(frame).scroll(by: -dy / camera.transform.scale)
+                if event.momentumPhase == .ended || event.momentumPhase == .cancelled { claimed = false }
+                return true
+            }
+            camera.moved = true
             if event.modifierFlags.contains(.command) {
                 camera.transform = camera.transform.zoomed(by: exp(-dy * 0.01), at: convert(event.locationInWindow, from: nil))
             } else {

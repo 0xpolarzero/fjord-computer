@@ -220,6 +220,55 @@ import Testing
         #expect(canvas.sizes.isEmpty && RouterCanvasState(defaults: defaults).sizes.isEmpty)
     }
 
+    @Test func yourHeightWinsOverWhatTheFrameHoldsWhichScrollsInsideItAndWidthsGoWellUnderFiveHundred() throws {
+        let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
+        let canvas = RouterCanvasState(defaults: defaults)
+        canvas.preferred = ["/code/a": .zero]
+        canvas.frameRects = ["/code/a": CGRect(x: 0, y: 0, width: 560, height: 600)]
+        // Made 200 tall, whatever it holds: kept as you made it.
+        canvas.resize("/code/a", to: CGSize(width: 340, height: 200))
+        canvas.endResize("/code/a")
+        #expect(canvas.height("/code/a") == 200 && canvas.width("/code/a") == 340)
+        #expect(RouterCanvasState(defaults: defaults).height("/code/a") == 200)
+        // Widths well under 500 down to the minimum; the cards take what is left past the glyphs' gutter.
+        #expect(CanvasMetrics.minFrameWidth <= 340)
+        #expect(CanvasMetrics.resized(CGSize(width: 560, height: 0), by: CGSize(width: -1000, height: 0), width: true, height: false).width
+                == CanvasMetrics.minFrameWidth)
+        #expect(CanvasMetrics.cardWidth(frame: 340) == 340 - CanvasMetrics.compactCardX - CanvasMetrics.pad)
+        // Its body, taller than the 156 it shows under the header, scrolls, never past either end.
+        let scroll = canvas.scroll("/code/a")
+        scroll.body = 556
+        scroll.visible = 200 - CanvasMetrics.header
+        #expect(scroll.maxScroll == 400)
+        scroll.scroll(by: 150)
+        #expect(scroll.offset == 150)
+        scroll.scroll(by: 1000)
+        #expect(scroll.offset == 400)
+        scroll.scroll(by: -2000)
+        #expect(scroll.offset == 0)
+        // A two-finger scroll over its body is the frame's, over its header or elsewhere the canvas's.
+        #expect(canvas.scrollingFrame(at: CGPoint(x: 100, y: 120)) == "/code/a")
+        #expect(canvas.scrollingFrame(at: CGPoint(x: 100, y: 20)) == nil)
+        #expect(canvas.scrollingFrame(at: CGPoint(x: 900, y: 120)) == nil)
+        // A frame that shows all it holds doesn't take the scroll.
+        scroll.body = 100
+        #expect(canvas.scrollingFrame(at: CGPoint(x: 100, y: 120)) == nil)
+    }
+
+    @Test func showMoreThenShowLessFoldsAGroupBackToItsFirstFew() throws {
+        var page = RouterPage()
+        page.notes = (1...6).map { card("n\($0)", "s\($0)", "/code/app", kind: .done) }
+        let canvas = RouterCanvasState()
+        let folder = try #require(make(page).first)
+        #expect(folder.groups.first?.less == false && folder.groups.first?.more == 3)
+        canvas.showAll(.notes, in: folder)
+        let opened = try #require(make(page, expanded: canvas.expandedMore).first?.groups.first)
+        #expect(opened.items.count == 6 && opened.more == 0 && opened.less)
+        canvas.showLess(.notes, in: folder)
+        let folded = try #require(make(page, expanded: canvas.expandedMore).first?.groups.first)
+        #expect(folded.items.count == 3 && folded.more == 3 && !folded.less)
+    }
+
     @Test func theCameraMovesOnlyWhenYouMoveItAndIsKeptAcrossLaunches() async throws {
         let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
         let canvas = RouterCanvasState(defaults: defaults)
