@@ -362,20 +362,32 @@ extension FjordHub {
 }
 
 /// Fjord's mark at the end of the bar, without a tooltip: hovering it opens the controls, clicking it the app window where
-/// it was left. Claude's ghost icon button, compact: a 24 square, radius 6, the mark in its colours on a white-7.5% hover.
+/// it was left. Claude's ghost icon button, compact: a 24 square, radius 6, the mark in one secondary ink going white on a
+/// white-7.5% hover.
 struct ControlsMark: View {
     let action: () -> Void
     @Environment(\.onBarGlass) private var glass
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        Button(action: action) { FjordLogo().frame(width: 15, height: 15).frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control) }
+        Button(action: action) { ControlsMarkLabel() }
             .buttonStyle(HoverFillButtonStyle(shape: RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous),
                                               rest: .clear,
                                               hover: BarGlass.fill(.hover, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostHover),
                                               pressed: BarGlass.fill(.selected, glass: glass, scheme: scheme, opaque: CDS.Fill.ghostSelected)))
             .accessibilityLabel("Fjord")
             .accessibilityHint("Opens the window where you left it; hover for Settings and the last update")
+    }
+}
+
+private struct ControlsMarkLabel: View {
+    @Environment(\.hoverFillHovering) private var hover
+
+    var body: some View {
+        ZStack { ForEach(0..<3, id: \.self) { FjordMarkPart(part: $0) } }
+            .frame(width: 15, height: 15)
+            .chromeInk(hover ? .primary : .secondary, hover ? Brand.ink : CDS.Text.secondary)
+            .frame(width: CDS.Density.compact.control, height: CDS.Density.compact.control)
     }
 }
 

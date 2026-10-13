@@ -86,7 +86,7 @@ struct FjordLogo: View {
 }
 
 /// One of the mark's parts (0 the sun, then the bands), in the circle that fits its frame.
-private struct FjordMarkPart: Shape {
+struct FjordMarkPart: Shape {
     let part: Int
 
     func path(in rect: CGRect) -> Path { Path(FjordMark.parts(in: rect, yDown: true)[part]) }
