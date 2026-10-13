@@ -144,21 +144,38 @@ enum CanvasMetrics { /* the constants below */
 - **What `RouterNow` held,** placed by the canvas as a top overlay in its free area: `AwayStripView`; the pre-26 `RouterBusyLine`; "Nothing needs you" when Needs you is empty; `RouterNothingFound` when a search empties everything, or "Nothing matches · Esc to clear" when the filter does.
 - **Folder folds.** `model.canvas.folderFolds: [String: Bool]` overrides the default (`doneOnly`), kept in defaults under `routerCanvasFolds`, as `routerFoldedZones` is.
 
-## 6. Composer, pending area, flights (`RouterCanvasPending.swift`)
+## 6. Composer, pending area, flights (`RouterFlight.swift`, `RouterCanvasPending.swift`)
 
-- **Composer** unchanged: mentions, reply chip, Jev's prediction (its `highlighted` lights and pans to the node), editing, Stop.
-- **Pending stack.** `RouterPendingStack(store:model:)` above the composer, in canvas mode only (inside the bottom `safeAreaBar` on 26, explicitly above the composer pre-26).
-  - One line per decision with `trigger == .you` and `outcome == .pending`, in `RouterDecisions` order: 24 tall, `alpha(.05)`, radius 10, the text cut at 60, " · " + `RouterDecision.status(store)` in `ShimmerText`. No ×: Cancel exists only after delivery (`Delivered.cancellable`), by which time the line has flown; it stays in History.
-  - Under the lines, `routerDispatcher.askBacks` as `AskBackCard`s (⌘1–4 unchanged).
-  - Each line reports its frame in `.named("routerMain")` into `model.canvas.pendingFrames[id]`; the last frame is kept after the line goes, as the flight's start.
-- **Departure.** `RouterFlights.departures(previous: Set<UUID>, now: [RouterDecision]) -> [(id, text, target: FlightTarget?)]`, pure and tested, run in `RouterCanvas.onChange(of: store.routerRevision)` against `model.canvas.pendingIDs`, which it then updates.
-  - Target: `decision.sentMessage?.session`, else `decision.delivered?.session`, else `links.sessions.first` → that session's node (its card, else its `workingID`). A session just started gives `.folder(key)` until its node exists. None → nil: the line fades out.
-- **Flight.**
-  1. `bringIntoView(target rect)` over `Motion.spatial`.
-  2. A `CanvasFlight` chip (styled like the pending line, on `CDS.Surface.s3`) in a `RouterMain` overlay, moved by an `Animatable` `ArcFlight(progress:)` along a quadratic Bézier from the pending frame to the target (anchor rect × camera + canvas origin, converted once). Control point 120 above the midpoint; 700 ms ease-in-out.
-  3. Landing sets `model.canvas.landed[id] = text`: a 1.5 accent ring, scale 1→1.04, opacity .6→0 over 450 ms; a "You: <text>" chip sits astride the node's bottom edge for 6 s (nothing below moves), cleared by a one-shot `Task.sleep` cancelled in `onDisappear`.
-- **History switch.** `send` keeps `show(.history)` for edits. For `toRouter` sends (every routed message) in canvas mode it no longer switches at once; when the departure's target is nil and the window is narrow, it switches after the fade, so the Router's answer is still seen.
-- **Reduce Motion.** No pan animation, no arc: the line fades, the node shows "You:" with no ripple. `RouterMotionTests` still passes (no `repeatForever`).
+Both layouts use `RouterFlights`, `FlightStack`, `FlightPillFace`, `FlightLayer` and `FlightTarget`. The canvas's former
+24-point arrow-and-shimmer line, settled-decision watcher and separate arc have been removed: they bypassed composer
+tracking, frame waiters, the Fjord loader, failure and Retry.
+
+- **Send and pending.** `RouterModel.send` sets `context.flies = true` for either layout. The dispatcher records the run in
+  `flying`; `FlightStack` syncs its signature into `RouterFlights`. A 34-point pill rises above the composer with `FjordLoader`,
+  the user's words and “finding where it goes”, then the chosen destination. An ask unfolds into the same `AskBackCard` in
+  place. Canvas also keeps asks from sends outside the composer here. Failure leaves the shared error pill with Retry and
+  dismissal; Retry submits a new tracked run. Stopping uses the same brief stopped state as the list.
+- **Destination and frames.** `RouterFlights.landing` resolves an answered card, started or existing session, or history.
+  A session that was finished becomes Working before launching. `CanvasFlightPlaces` maps the canonical key to its card
+  first, then its Working row. Nodes and frame headers register `canvas:<id>` using the same `flightTarget` modifier;
+  resized bodies register clipping bounds. Measurement runs only while `RouterFlights.tracking` is true.
+  [`GeometryProxy.frame(in:)`](https://developer.apple.com/documentation/swiftui/geometryproxy/frame(in:)) converts a view's
+  bounds to the named coordinate space. Here that is `FlightSpace` outside the camera: measurements already include pan,
+  zoom and viewport origin, so flight destinations must not apply that transform again. The hosted regression checks this
+  against independent content-space node rects at two camera transforms.
+- **Frame wait.** The shared preference-driven waiter holds the pending pill for up to 450 ms while a new Working node is
+  laid out. A missing, folded, filtered or internally scrolled-out node falls back to its project's header. No camera,
+  filter or folder state changes to make a flight happen. A project excluded by search or muting uses its section chip,
+  then History, so the send still has a visible landing.
+- **Flight and landing.** The shared flying copy replaces the pending pill and uses the list's quadratic path, resizing and
+  fading into its target over 450 ms. An off-view target ends at the existing edge-marker position; arriving leaves the
+  matching clickable marker, without moving the camera. A partially visible card receives the flight in its visible part,
+  matching the existing marker policy that treats any visible part as in view. `FlightTarget` supplies the same landing glow as the list, while
+  canvas keeps “You: …” on the node's bottom edge for six seconds. Clicking the marker alone moves the camera.
+- **History.** The History button registers `pane:history`; a Router-only answer flies there and opens its panel on landing.
+  Edits retain their existing immediate History behavior.
+- **Reduce Motion.** The shared flying copy stays at its departure and fades over 220 ms, then lands and glows. There is
+  no canvas pan or arc; the marker and landed words remain available.
 
 ## 7. Keyboard and accessibility
 
@@ -187,7 +204,11 @@ enum CanvasMetrics { /* the constants below */
 | `router-canvas-search` | `model.search.query = "lcu"` |
 | `router-canvas-narrow` | 1000×760 |
 | `router-canvas-pending` | a pending decision plus the demo's ask-back |
-| `router-canvas-flight` | `model.canvas.freezeFlight = 0.5`: one chip mid-arc, ripple timers stopped |
+| `router-canvas-pending-pill` / `-dark` / `-narrow` | one tracked pending pill, Fjord loader directly above the composer |
+| `router-list-pending-pill` | the same pending state in the list |
+| `router-canvas-failed-pill` | shared failure, Retry and dismissal |
+| `router-canvas-flight` | `model.flights.freezeFlight = 0.5`: shared pill mid-flight, landed words kept |
+| `router-canvas-edge` | shared flight completed off view, its matching clickable marker |
 
 **Commands**, from the worktree, then read each PNG:
 
@@ -203,9 +224,38 @@ ls /tmp/router-canvas   # then Read /tmp/router-canvas/window-router-canvas*.png
 
 **Tests**, one suite per run (`swift test --filter <Suite>`):
 - `RouterCanvasLayoutTests` (new, pure): grouping by folder and Scratch; muted dropped; a session in Needs you and Working has both nodes, ids `card.id` and `working#…`; Done newest per session from searched history (Unread filter ignored), 3 then +n, picked kept; Worth a look 3 then +n, widened for a pick; busiest first; column choice by closed heights; an open height pushes only its column; connector endpoints; filtered groups hidden in place, search-emptied frames hide; folded folders header-tall; `order`; `target(forReveal:)`; camera `zoom(by:at:)`, `fit` clamps to 1.0, `origin(toShow:)`.
-- `RouterFlightsTests` (new, pure): a sent session, a new session (folder target), a Router-only reply (nil), a non-`.you` trigger (none), a cancel (none).
+- `RouterFlightTests`: dispatcher-to-pill lifecycle in both layouts, failures and retry, asks, new Working row frame waiting,
+  canonical destinations and one landing.
+- `RouterFlightsTests`: card-before-row targeting, hidden and missing node fallbacks, clipping, transformed headers, edge
+  destinations, landed words, and a camera that stays until the marker is clicked.
+- `RouterCanvasFlightViewTests` (`.hostsWindows`): one 34-point pill above the composer, actual preference registration at
+  two pan/zoom transforms, and pending sends retained when switching back to the list.
 - `RouterCanvasTests` (new, `.hostsWindows`): mounts `RouterCodeView` with `.canvas`; the list by default; the switch writes `routerLayout` and a new model reads it; ↑↓ follow `earlier` then canvas order; the Esc chain folds, then clears the filter; Esc with nothing open never enters revise.
 - Rerun: `RouterMotionTests`, `AccessibilityTreeTests`, `RouterUITests`, `RouterZonesTests`, `RouterLayoutTests`, `RouterCardRedrawTests`.
+
+### Shared-flight verification (October 13, 2026)
+
+The regression first reproduced a canvas composer send with no shared pill and `tracking == false`. After the fix,
+`swift test --filter 'RouterFlightTests|RouterFlightsTests|RouterCanvasTests|RouterCanvasFlightViewTests|RouterCanvasLayoutTests|RouterMotionTests|RouterLayoutTests'`
+passed **57 tests in 8 suites**. The required single `scripts/test.sh` run passed **1572 tests in 156 suites in 47.678 s**.
+
+Checked offscreen PNGs, retained under `.build/shots/router-flight/`:
+
+- `window-router-canvas-pending.png` and `window-router-canvas-pending-dark.png` (pending plus ask-back).
+- `window-router-canvas-pending-pill.png`, `window-router-canvas-pending-pill-dark.png` and
+  `window-router-canvas-pending-pill-narrow.png` (logo pill and composer spacing).
+- `window-router-canvas-failed-pill.png` (error, Retry and dismissal).
+- `window-router-canvas-flight.png` and `window-router-canvas-flight-dark.png` (shared pill held halfway).
+- `window-router-canvas-edge.png` and `window-router-canvas-edge-dark.png` (completed shared flight's matching marker).
+- `window-router-list-pending-pill.png` and `window-router-composing.png` (regular composer comparison).
+
+The list's content area renders black in these offscreen captures, while its composer and pending pill render normally.
+Building the original HEAD sources in this same worktree reproduced the black content area in
+`.build/shots/router-flight-baseline/window-router-composing.png`; no other checkout was used. Canvas renders were complete.
+
+Motion was checked through the shared path: no canvas animation remains; the same 450 ms flying pill completion calls
+`RouterFlights.land`, supplying the glow, landed words and edge marker. Reduce Motion uses the same 220 ms stationary fade
+before landing. No live run, Instruments, installation or persistent-default changes were needed. Temporary logs were removed.
 
 ## 9. Build order (three stages, each one commit, gated on build, its tests and its shots)
 
