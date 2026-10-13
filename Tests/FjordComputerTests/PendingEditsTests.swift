@@ -28,17 +28,21 @@ struct PendingEditsTests {
 
 @MainActor
 struct PendingEditsFlushTests {
-    @Test func aQuitWritesWhatWaitsForItsPauseOnceAndForgetsWhatWasWritten() {
-        var written: [String] = []
-        let a = UUID(), b = UUID()
-        PendingEdits.hold(a) { written.append("a") }
-        PendingEdits.hold(b) { written.append("b") }
-        // Written already, by its pause: nothing left to write for it.
-        PendingEdits.release(b)
+    @Test func aQuitWritesWhatEachFieldOnScreenHoldsNowAndNothingOfAFieldGone() {
+        var typed = "", stored = ""
+        let field = UUID(), gone = UUID()
+        // Held from the field's appearing: its write is of what it holds when called.
+        PendingEdits.hold(field) { if stored != typed { stored = typed } }
+        PendingEdits.hold(gone) { Issue.record("a field gone writes nothing") }
+        PendingEdits.release(gone)
+        // A keystroke, in the field before any change of it is seen: a quit right then still writes it.
+        typed = "ship"
         PendingEdits.flushAll()
-        #expect(written == ["a"])
+        #expect(stored == "ship")
+        typed = "ship it"
         PendingEdits.flushAll()
-        #expect(written == ["a"], "each write once")
+        #expect(stored == "ship it", "held for the field's lifetime, not once")
+        PendingEdits.release(field)
     }
 }
 
@@ -49,10 +53,11 @@ struct PendingEditsUndoTests {
         let history = CategoryHistory(store: store)
         let before = store.categories[0].name
         let field = UUID()
+        var typed: String? = "Typed"
         PendingEdits.hold(field) {
-            PendingEdits.release(field)
-            store.categories[0].name = "Typed"
+            if let name = typed { typed = nil; store.categories[0].name = name }
         }
+        defer { PendingEdits.release(field) }
         history.undo(store)
         #expect(store.categories[0].name == before, "undo took the typed name back, nothing landed over it")
         #expect(history.canRedo)

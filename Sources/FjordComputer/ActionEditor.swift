@@ -267,14 +267,21 @@ struct ActionPromptField: View {
                 .fixedSize()
             }
         }
-        .onAppear { Self.load(prompt, into: model) }
+        .onAppear {
+            Self.load(prompt, into: model)
+            // Its write, held for as long as it is here: a quit or an undo writes what it holds now.
+            PendingEdits.hold(field) { write() }
+        }
         .onChange(of: prompt) { _, now in Self.load(now, into: model) }
         // Typing is written to the category once it pauses (each write is a change of the categories: saved, logged, a step
         // of the page's history, the bar redrawn); a pill picked, the field left or gone, at once.
         .onChange(of: model.draft) { writeSoon() }
         .onChange(of: model.pointers) { write() }
         .onChange(of: focused) { _, now in if !now { write() } }
-        .onDisappear { write() }
+        .onDisappear {
+            write()
+            PendingEdits.release(field)
+        }
         .onChange(of: model.caretRequest) { _, request in
             guard let request else { return }
             model.caretRequest = nil
@@ -290,14 +297,12 @@ struct ActionPromptField: View {
     private func write() {
         pendingWrite?.cancel()
         pendingWrite = nil
-        PendingEdits.release(field)
         let now = Self.prompt(of: model)
         if now != prompt { prompt = now }
     }
 
     /// `write`, once typing has paused for `pause`.
     private func writeSoon() {
-        PendingEdits.hold(field) { write() }
         pendingWrite?.cancel()
         pendingWrite = Task {
             try? await Task.sleep(for: TypingPause.pause)

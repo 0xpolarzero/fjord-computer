@@ -7,8 +7,9 @@ enum TypingPause {
 }
 
 /// What was typed and is waiting for its pause before it reaches the store, by field: written at once when the app quits
-/// (`applicationWillTerminate`, before the store's last save), since a quit doesn't wait for the pause nor tell the fields
-/// they are going. A field holds its write while it waits and lets go once it has written (or has nothing to write).
+/// (`applicationWillTerminate`, before the store's last save) or the page's undo acts, since neither waits for the pause.
+/// A field holds its write for as long as it is on screen, a write of what it holds now (nothing when that is what the
+/// store has), so a keystroke is covered from the moment it is in the field, before any change of the field's is seen.
 @MainActor
 enum PendingEdits {
     private static var writes: [UUID: () -> Void] = [:]
@@ -16,11 +17,9 @@ enum PendingEdits {
     static func hold(_ field: UUID, write: @escaping () -> Void) { writes[field] = write }
     static func release(_ field: UUID) { writes[field] = nil }
 
-    /// Every write still waiting, now.
+    /// Every field's write, now.
     static func flushAll() {
-        let all = writes
-        writes = [:]
-        for write in all.values { write() }
+        for write in Array(writes.values) { write() }
     }
 }
 
@@ -114,17 +113,22 @@ struct CategoryEditor: View {
             guard typedName != nil else { return }
             nameWrite?.cancel()
             nameWrite = nil
-            PendingEdits.release(nameField)
             typedName = nil
         }
-        .onAppear { if isNew { nameFocused = true } }
+        .onAppear {
+            if isNew { nameFocused = true }
+            PendingEdits.hold(nameField) { commitName() }
+        }
+        .onDisappear {
+            commitName()
+            PendingEdits.release(nameField)
+        }
     }
 
     private func nameField(_ c: InboxCategory) -> Binding<String> {
         guard !isNew else { return draft.name }
         return Binding(get: { typedName ?? c.name }, set: { name in
             typedName = name
-            PendingEdits.hold(nameField) { commitName() }
             nameWrite?.cancel()
             nameWrite = Task {
                 try? await Task.sleep(for: TypingPause.pause)
@@ -138,7 +142,6 @@ struct CategoryEditor: View {
     private func commitName() {
         nameWrite?.cancel()
         nameWrite = nil
-        PendingEdits.release(nameField)
         guard let name = typedName else { return }
         typedName = nil
         if draft.wrappedValue.name != name { draft.wrappedValue.name = name }
