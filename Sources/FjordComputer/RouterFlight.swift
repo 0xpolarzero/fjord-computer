@@ -64,8 +64,12 @@ struct FlightFramesKey: PreferenceKey {
     }
     /// When each place was last landed on: its flash.
     private(set) var landed: [String: Date] = [:]
-    /// The places as last laid out, in `FlightSpace`. Read when a flight starts, never drawn from.
-    @ObservationIgnored var frames: [String: CGRect] = [:]
+    /// The places as last laid out, in `FlightSpace`. Read when a flight starts, never drawn from; a flight waiting for its
+    /// place hears of each new layout (`placeWaiters`).
+    @ObservationIgnored var frames: [String: CGRect] = [:] {
+        didSet { for waiter in Array(placeWaiters.values) { waiter() } }
+    }
+    @ObservationIgnored private var placeWaiters: [UUID: () -> Void] = [:]
     /// Runs seen, so one dropped from the stack never comes back.
     @ObservationIgnored private var seen: Set<UUID> = []
     /// Flights waiting for their place to be laid out.
@@ -135,14 +139,8 @@ struct FlightFramesKey: PreferenceKey {
         let status = self.status(pill.id, store: store)
         wake(target, pill: pill, store: store)
         Task {
-            // The row it goes to may be coming into Working now: its place, once laid out.
-            let clock = ContinuousClock()
-            let until = clock.now.advanced(by: Self.waitForPlace)
-            var to = place(target)
-            while to == nil, clock.now < until {
-                try? await Task.sleep(for: .milliseconds(30))
-                to = place(target)
-            }
+            // The row it goes to may be coming into Working now: its place, as soon as a layout has it.
+            let to = await self.place(target, within: Self.waitForPlace)
             let landing = to.map { (target, $0) } ?? fallback(for: target)
             let from = frames["pill:\(pill.id)"] ?? frames["composer"] ?? .zero
             launching.remove(pill.id)
@@ -203,6 +201,27 @@ struct FlightFramesKey: PreferenceKey {
         let view = CGRect(x: now.minX, y: top, width: now.width, height: max(0, min(now.maxY, bottom) - top))
         let line = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(rect.height, 44))
         return line.intersection(view).height >= line.height * 0.7 ? line : nil
+    }
+
+    /// `place(key)`, now or from the first layout that has it (each new layout of the places is looked at as it comes,
+    /// nothing polls), else nil after `wait`.
+    private func place(_ key: String, within wait: Duration) async -> CGRect? {
+        if let rect = place(key) { return rect }
+        final class Once { var done = false }
+        let once = Once(), id = UUID()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<CGRect?, Never>) in
+            let finish: (CGRect?) -> Void = { [weak self] rect in
+                guard !once.done else { return }
+                once.done = true
+                self?.placeWaiters[id] = nil
+                continuation.resume(returning: rect)
+            }
+            placeWaiters[id] = { [weak self] in if let rect = self?.place(key) { finish(rect) } }
+            Task { @MainActor in
+                try? await Task.sleep(for: wait)
+                finish(nil)
+            }
+        }
     }
 
     /// Where a message lands whose place is out of sight: its section's chip, else the side it is on.
@@ -338,7 +357,7 @@ private struct FlightTarget: ViewModifier {
                 .onChange(of: flights?.landed[key]) { _, at in
                     guard at != nil, flashes else { return }
                     withAnimation(reduce ? .easeOut(duration: 0.14) : .easeOut(duration: 0.12)) { glow = 1 } completion: {
-                        withAnimation(reduce ? .easeOut(duration: 0.6) : .easeOut(duration: 1.1)) { glow = 0 }
+                        withAnimation(reduce ? .easeOut(duration: 0.4) : .easeOut(duration: 0.6)) { glow = 0 }
                     }
                 }
         } else {
@@ -482,7 +501,7 @@ private struct FlyingPill: View {
             .modifier(FlightPath(progress: progress, from: flight.from, to: flight.to, still: reduce))
             .onAppear {
                 // Off slowly enough for the eye to catch it, landing soft: no spring's start at full speed.
-                withAnimation(reduce ? .easeOut(duration: 0.22) : .timingCurve(0.4, 0, 0.2, 1, duration: 0.72)) { progress = 1 } completion: {
+                withAnimation(reduce ? .easeOut(duration: 0.22) : .timingCurve(0.4, 0, 0.2, 1, duration: 0.45)) { progress = 1 } completion: {
                     landed()
                 }
             }
