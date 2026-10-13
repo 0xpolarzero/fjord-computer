@@ -26,7 +26,7 @@ enum ClaudeFonts {
             if register(names, in: folder) {
                 // Made by an earlier launch: what older archives left goes now, unless another Fjord Computer runs (it may
                 // have registered them).
-                sweep(root, keeping: folder, othersRunning: otherFjordRunning)
+                sweep(root, keeping: folder, othersRunning: { otherFjordRunning })
                 return
             }
         }
@@ -44,6 +44,7 @@ enum ClaudeFonts {
             noteFailure(stamp: stamp)
             return
         }
+        clearFailures()
     }
 
     /// Registers the fonts for this process; whether every one of them took.
@@ -119,14 +120,17 @@ enum ClaudeFonts {
 
     /// Takes away the other generations (and what the cache held before generations, and folders left half made or put
     /// aside), only while no other Fjord Computer runs: one that does may have registered them, and keeps reading them.
-    static func sweep(_ root: URL, keeping current: URL, othersRunning: Bool) {
-        guard !othersRunning else { return }
+    /// `othersRunning` is asked only when there is something to take away (the running apps' list, before the first frame,
+    /// isn't asked for on every launch).
+    static func sweep(_ root: URL, keeping current: URL, othersRunning: () -> Bool) {
         let fm = FileManager.default
-        for name in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] where name != current.lastPathComponent {
-            guard name.hasPrefix("g-") || name.hasPrefix(".making-") || name.hasPrefix(".bad-") || name.hasSuffix(".woff2")
-                    || name == "archive.stamp" || name.hasPrefix("failed-") else { continue }
-            try? fm.removeItem(at: root.appendingPathComponent(name))
+        let stale = ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).filter { name in
+            name != current.lastPathComponent
+                && (name.hasPrefix("g-") || name.hasPrefix(".making-") || name.hasPrefix(".bad-") || name.hasSuffix(".woff2")
+                    || name == "archive.stamp" || name.hasPrefix("failed-"))
         }
+        guard !stale.isEmpty, !othersRunning() else { return }
+        for name in stale { try? fm.removeItem(at: root.appendingPathComponent(name)) }
     }
 
     /// How many launches failed to take the fonts out of the archive with `stamp`, at most.
@@ -136,6 +140,11 @@ enum ClaudeFonts {
 
     static func failures(stamp: String, defaults: UserDefaults = .standard) -> Int {
         (defaults.dictionary(forKey: failuresKey)?[stamp] as? Int) ?? 0
+    }
+
+    /// The fonts were taken out and registered: no failure is counted any more.
+    static func clearFailures(defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: failuresKey) != nil { defaults.removeObject(forKey: failuresKey) }
     }
 
     /// Counts a failure for `stamp`; those of other archives are forgotten.

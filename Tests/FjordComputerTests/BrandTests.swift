@@ -61,9 +61,9 @@ import Testing
         let root = dir.path("fonts")
         let old = try #require(ClaudeFonts.store([font("A.woff2", "a")], root: root, stamp: "1 1 1.0"))
         let current = try #require(ClaudeFonts.store([font("A.woff2", "b")], root: root, stamp: "2 2 2.0"))
-        ClaudeFonts.sweep(root, keeping: current, othersRunning: true)
+        ClaudeFonts.sweep(root, keeping: current, othersRunning: { true })
         #expect(FileManager.default.fileExists(atPath: old.path))
-        ClaudeFonts.sweep(root, keeping: current, othersRunning: false)
+        ClaudeFonts.sweep(root, keeping: current, othersRunning: { false })
         #expect(!FileManager.default.fileExists(atPath: old.path) && ClaudeFonts.fonts(in: current) != nil)
     }
 
@@ -78,7 +78,7 @@ import Testing
         let again = try #require(ClaudeFonts.store([font("A.woff2", "a"), font("B.woff2", "b")], root: root, stamp: "1 1 1.0"))
         #expect(again == made && ClaudeFonts.fonts(in: again) == ["A.woff2", "B.woff2"])
         // What was put aside goes with the next sweep.
-        ClaudeFonts.sweep(root, keeping: again, othersRunning: false)
+        ClaudeFonts.sweep(root, keeping: again, othersRunning: { false })
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == [again.lastPathComponent])
     }
 
@@ -91,6 +91,22 @@ import Testing
         ClaudeFonts.noteFailure(stamp: "2 2 2.0", defaults: defaults)
         #expect(ClaudeFonts.failures(stamp: "2 2 2.0", defaults: defaults) == 1)
         #expect(ClaudeFonts.failures(stamp: "1 1 1.0", defaults: defaults) == 0)
+        // Taken out at last: the count starts again.
+        ClaudeFonts.clearFailures(defaults: defaults)
+        #expect(ClaudeFonts.failures(stamp: "2 2 2.0", defaults: defaults) == 0)
+    }
+
+    @Test func theRunningAppsAreAskedOnlyWhenThereIsSomethingToSweep() throws {
+        let dir = TempDir()
+        let root = dir.path("fonts")
+        let current = try #require(ClaudeFonts.store([font("A.woff2", "a")], root: root, stamp: "2 2 2.0"))
+        var asked = 0
+        ClaudeFonts.sweep(root, keeping: current, othersRunning: { asked += 1; return false })
+        #expect(asked == 0)
+        _ = ClaudeFonts.store([font("A.woff2", "b")], root: root, stamp: "1 1 1.0")
+        ClaudeFonts.sweep(root, keeping: current, othersRunning: { asked += 1; return false })
+        let left = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(asked == 1 && left == [current.lastPathComponent])
     }
 }
 
