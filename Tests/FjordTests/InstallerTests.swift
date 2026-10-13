@@ -4,7 +4,7 @@ import Testing
 
 /// The form hook in Claude Code's settings, in a `~/.claude` of the test's own.
 @Suite struct HookInstaller {
-    private let exe = "/Applications/Fjord Computer.app/Contents/MacOS/Fjord"
+    private let exe = "/Applications/Fjord.app/Contents/MacOS/Fjord"
 
     private func settings(_ dir: TempDir) throws -> [String: Any] {
         try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: dir.path("settings.json"))) as? [String: Any])
@@ -18,7 +18,7 @@ import Testing
         let dir = TempDir()
         let installer = FormHookInstaller(claudeDir: dir.url)
         try installer.install(executable: exe)
-        // What a Fjord Computer before plans wrote: the same command, for questions only, in an entry shared with a
+        // What Fjord before plans wrote: the same command, for questions only, in an entry shared with a
         // hook of yours.
         let old: [String: Any] = ["hooks": ["PermissionRequest": [
             ["matcher": "AskUserQuestion", "hooks": [["type": "command", "command": "/x/log.sh"],
@@ -42,7 +42,7 @@ import Testing
         let entries = (root["hooks"] as? [String: Any])?["PermissionRequest"] as? [Any]
         #expect(entries.map { NSArray(array: $0).isEqual(to: [ours(installer)]) } == true)
         let script = try String(contentsOf: installer.script, encoding: .utf8)
-        #expect(script.hasPrefix("#!/bin/sh\n# Fjord Computer"))
+        #expect(script.hasPrefix("#!/bin/sh\n# Fjord's form hook"))
         #expect(script.contains("[ -x '\(exe)' ] || exit 0\nexec '\(exe)' --form-hook\n"))
         #expect(mode(installer.script) == 0o755)
         #expect(installer.status(executable: exe) == .installed)
@@ -172,7 +172,7 @@ import Testing
         var installer = FormHookInstaller(claudeDir: dir.url)
         var writes = 0
         installer.beforeReplace = {
-            // Claude Code saves the file between Fjord Computer's read and its write, once.
+            // Claude Code saves the file between Fjord's read and its write, once.
             guard writes == 0 else { return }
             writes += 1
             try! Data("{\"model\":\"sonnet\",\"theme\":\"dark\"}".utf8).write(to: file)
@@ -184,7 +184,7 @@ import Testing
         // The losing attempt's temporary file is gone.
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.url.path).allSatisfy { !$0.hasSuffix(".tmp") })
 
-        // A file that never stops changing: Fjord Computer gives up and leaves the last write alone.
+        // A file that never stops changing: Fjord gives up and leaves the last write alone.
         var busy = FormHookInstaller(claudeDir: dir.url)
         var n = 0
         busy.beforeReplace = {

@@ -30,7 +30,7 @@ final class Updater {
         let page: URL
     }
 
-    static let repo = "0xpolarzero/fjord-computer"
+    static let repo = "0xpolarzero/fjord"
     static let interval: TimeInterval = 3600
 
     private(set) var phase: Phase = .idle {
@@ -286,9 +286,9 @@ final class Updater {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Fjord-update-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try run("/usr/bin/ditto", ["-x", "-k", zip.path, dir.path])
-        let app = dir.appendingPathComponent("Fjord Computer.app")
+        let app = dir.appendingPathComponent("Fjord.app")
         guard let bundle = Bundle(url: app), bundle.bundleIdentifier == Bundle.main.bundleIdentifier else {
-            throw UpdateError("The download isn't Fjord Computer")
+            throw UpdateError("The download isn't Fjord")
         }
         guard bundle.infoDictionary?["CFBundleShortVersionString"] as? String == version else {
             throw UpdateError("The download isn't version \(version)")
@@ -317,7 +317,7 @@ final class Updater {
         }
         let status = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: UInt32(kSecCSCheckAllArchitectures) | UInt32(kSecCSCheckNestedCode)), requirement)
         guard status == errSecSuccess else {
-            throw UpdateError(requirement == nil ? "The download's signature is invalid" : "The download isn't signed by Fjord Computer's certificate")
+            throw UpdateError(requirement == nil ? "The download's signature is invalid" : "The download isn't signed by Fjord's certificate")
         }
     }
 
@@ -339,7 +339,7 @@ final class Updater {
         let target = Bundle.main.bundleURL
         let parent = target.deletingLastPathComponent()
         if target.path.contains("/AppTranslocation/") {
-            throw UpdateError("Move Fjord Computer to Applications (and clear its quarantine) to update it")
+            throw UpdateError("Move Fjord to Applications (and clear its quarantine) to update it")
         }
         guard FileManager.default.isWritableFile(atPath: parent.path) else { throw UpdateError("Can't write to \(parent.path)") }
         let script = """

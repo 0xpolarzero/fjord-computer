@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.2.0 to build a universal Fjord Computer.app and publish it as a GitHub release.
+# Push a tag like v0.2.0 to build a universal Fjord.app and publish it as a GitHub release.
 on:
   push:
     tags: ["v*"]
@@ -50,21 +50,21 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN" > /dev/null
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          echo "SIGN_IDENTITY=${{ vars.SIGN_IDENTITY || 'Fjord Computer Dev' }}" >> "$GITHUB_ENV"
+          echo "SIGN_IDENTITY=${{ vars.SIGN_IDENTITY || 'Fjord Dev' }}" >> "$GITHUB_ENV"
 
       - name: Build universal app
         run: |
           UNIVERSAL=1 ./scripts/build-app.sh
-          codesign -dr - "build/Fjord Computer.app"
+          codesign -dr - "build/Fjord.app"
           # With a certificate, the updater pins it: a release that slipped back to ad hoc wouldn't install.
-          if [ -n "${SIGN_IDENTITY:-}" ] && ! codesign -dr - "build/Fjord Computer.app" 2>&1 | grep -q "certificate leaf"; then
+          if [ -n "${SIGN_IDENTITY:-}" ] && ! codesign -dr - "build/Fjord.app" 2>&1 | grep -q "certificate leaf"; then
             echo "::error::Release isn't signed with $SIGN_IDENTITY"
             exit 1
           fi
 
       - name: Package
         run: |
-          ditto -c -k --keepParent "build/Fjord Computer.app" "Fjord-$VERSION.zip"
+          ditto -c -k --keepParent "build/Fjord.app" "Fjord-$VERSION.zip"
           shasum -a 256 "Fjord-$VERSION.zip" | tee "Fjord-$VERSION.zip.sha256"
 
       - name: Publish release
@@ -73,16 +73,16 @@ jobs:
         run: |
           cat > notes.md <<'NOTES'
           ### Install
-          1. Download `Fjord-*.zip`, unzip, and move **Fjord Computer.app** to `/Applications`.
+          1. Download `Fjord-*.zip`, unzip, and move **Fjord.app** to `/Applications`.
           2. The app is not notarized yet, so clear the download quarantine once:
              ```
-             xattr -dr com.apple.quarantine "/Applications/Fjord Computer.app"
+             xattr -dr com.apple.quarantine "/Applications/Fjord.app"
              ```
           3. Open it and pick your tools. Triage uses your `gh` login (`gh auth login`), or a token you paste.
 
-          Already installed? Fjord Computer offers the update itself: click the arrow on the bar, then restart.
+          Already installed? Fjord offers the update itself: click the arrow on the bar, then restart.
 
           Requires macOS 14 or later. Universal (Apple Silicon + Intel).
           NOTES
           gh release create "$TAG" "Fjord-$VERSION.zip" "Fjord-$VERSION.zip.sha256" \
-            --title "Fjord Computer $VERSION" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"
+            --title "Fjord $VERSION" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"

@@ -165,7 +165,7 @@ import Testing
         private(set) var transfers: [FakeTransfer] = []
         private(set) var prepared = 0
         private(set) var installed: [URL] = []
-        let app = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-fake-\(UUID().uuidString)/Fjord Computer.app")
+        let app = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-fake-\(UUID().uuidString)/Fjord.app")
         var installFailures: [String] = []
 
         init(delivers: Bool, reportsCancel: Bool = true) {

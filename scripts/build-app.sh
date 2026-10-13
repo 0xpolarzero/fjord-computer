@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds "build/Fjord Computer.app" (a bundle is required for notifications and launch at login).
+# Builds "build/Fjord.app" (a bundle is required for notifications and launch at login).
 # VERSION=1.2.3 sets the bundle version; UNIVERSAL=1 builds for arm64 + x86_64 (used for releases).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -11,7 +11,7 @@ else
   swift build -c release
   BIN=.build/release/Fjord
 fi
-APP="build/Fjord Computer.app"
+APP="build/Fjord.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Fjord"
@@ -29,8 +29,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>com.amontlabs.fjord</string>
-  <key>CFBundleName</key><string>Fjord Computer</string>
-  <key>CFBundleDisplayName</key><string>Fjord Computer</string>
+  <key>CFBundleName</key><string>Fjord</string>
+  <key>CFBundleDisplayName</key><string>Fjord</string>
   <key>CFBundleExecutable</key><string>Fjord</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIconName</key><string>AppIcon</string>
@@ -46,9 +46,9 @@ PLIST
 # Keep AppKit's text-input policy the same in the bundle and the bare SwiftPM executable.
 /usr/libexec/PlistBuddy -c "Merge Resources/AppInfo.plist" "$APP/Contents/Info.plist"
 # Ad-hoc signatures change with every build, so macOS forgets Accessibility access each time and the in-app
-# updater can't tell a release is really ours. A stable code-signing certificate (default name "Fjord Computer Dev",
+# updater can't tell a release is really ours. A stable code-signing certificate (default name "Fjord Dev",
 # or SIGN_IDENTITY, which is then required) keeps both working across builds.
-IDENTITY="${SIGN_IDENTITY:-Fjord Computer Dev}"
+IDENTITY="${SIGN_IDENTITY:-Fjord Dev}"
 if security find-identity -p codesigning | grep -q "\"$IDENTITY\""; then
   codesign --force --timestamp=none --sign "$IDENTITY" "$APP"
 elif [ -n "${SIGN_IDENTITY:-}" ]; then

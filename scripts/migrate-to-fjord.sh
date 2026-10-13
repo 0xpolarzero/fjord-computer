@@ -1,6 +1,6 @@
 #!/bin/bash
-# Moves Lookout's data, preferences, Keychain items and Claude Code setup over to Fjord Computer, once, on the owner's
-# machine (there are no other users, so the app itself migrates nothing). Run it after installing Fjord Computer and
+# Moves Lookout's or Fjord's data, preferences, Keychain items and Claude Code setup over to Fjord, once, on the
+# owner's machine (there are no other users, so the app itself migrates nothing). Run it after installing Fjord and
 # before launching it. Safe to re-run: what is already done is skipped, and nothing at the new place is overwritten.
 # --dry-run says what it would do and changes nothing.
 set -euo pipefail
@@ -14,10 +14,14 @@ esac
 
 OLD_ID=dev.polarzero.lookout
 NEW_ID=com.amontlabs.fjord
-NEW_APP="/Applications/Fjord Computer.app"
+OLD_LOOKOUT_APP="/Applications/Lookout.app"
+OLD_COMPUTER_APP="/Applications/Fjord Computer.app"
+NEW_APP="/Applications/Fjord.app"
 SUPPORT="$HOME/Library/Application Support"
-OLD_DATA="$SUPPORT/Lookout"
-NEW_DATA="$SUPPORT/Fjord Computer"
+LOOKOUT_DATA="$SUPPORT/Lookout"
+COMPUTER_DATA="$SUPPORT/Fjord Computer"
+NEW_DATA="$SUPPORT/Fjord"
+SOURCE_DATA=""
 CLAUDE_DIR="$HOME/.claude"
 PY=/usr/bin/python3
 
@@ -34,9 +38,10 @@ $DRY && say "Dry run: nothing is changed."
 step "1. Apps running"
 running=""
 pgrep -x Lookout >/dev/null && running="Lookout"
-pgrep -x Fjord >/dev/null && running="${running:+$running and }Fjord Computer"
+pgrep -x FjordComputer >/dev/null && running="${running:+$running and }Fjord"
+pgrep -x Fjord >/dev/null && running="${running:+$running and }Fjord"
 if [ -z "$running" ]; then
-  say "Neither Lookout nor Fjord Computer is running."
+  say "Neither Lookout nor Fjord is running."
 elif $DRY; then
   say "$running is running: a real run would stop here until you quit it."
 else
@@ -47,26 +52,34 @@ step "2. Data folder"
 # The Router's plugin files are made again by the new app when the Router is on at launch (Router.swift startRouter →
 # applyRouterSwitch(install: false) → switchPluginNow → ClaudePlugin.write, which creates plugin-sessions and relay,
 # and ClaudePlugin.ensureKey, which makes relay.key). They go before the move so a re-run never touches the new app's
-# own. claude-plugin is removed in step 5, after Claude Code has dropped the marketplace that points at it.
-if [ -d "$OLD_DATA" ] && [ -e "$NEW_DATA" ]; then
-  die "both \"$OLD_DATA\" and \"$NEW_DATA\" exist. Merge them by hand (or remove one), then run this again."
-elif [ -d "$OLD_DATA" ]; then
+# own. The plugin folder is removed in step 5 after Claude Code has dropped any marketplace that points at the old path.
+for source in "$LOOKOUT_DATA" "$COMPUTER_DATA"; do
+  if [ -e "$source" ] || [ -L "$source" ]; then
+    [ -d "$source" ] || die "\"$source\" exists but isn't a data folder."
+    [ -z "$SOURCE_DATA" ] || die "both \"$SOURCE_DATA\" and \"$source\" exist. Choose one to keep; the script won't merge them."
+    SOURCE_DATA="$source"
+  fi
+done
+if [ -n "$SOURCE_DATA" ] && { [ -e "$NEW_DATA" ] || [ -L "$NEW_DATA" ]; }; then
+  die "both \"$SOURCE_DATA\" and \"$NEW_DATA\" exist. Move or remove one by hand; the script won't merge or overwrite them."
+elif [ -n "$SOURCE_DATA" ]; then
   for name in plugin-sessions relay relay.key; do
-    if [ -e "$OLD_DATA/$name" ]; then say "Removing the old $name (the new app makes its own)."; run rm -rf "$OLD_DATA/$name"; fi
+    if [ -e "$SOURCE_DATA/$name" ]; then say "Removing the old $name (Fjord makes its own)."; run rm -rf "$SOURCE_DATA/$name"; fi
   done
-  say "Moving \"$OLD_DATA\" to \"$NEW_DATA\"."
-  run mv "$OLD_DATA" "$NEW_DATA"
-elif [ -d "$NEW_DATA" ]; then
-  say "Already moved."
+  say "Moving \"$SOURCE_DATA\" to \"$NEW_DATA\"."
+  run mv "$SOURCE_DATA" "$NEW_DATA"
+elif [ -e "$NEW_DATA" ] || [ -L "$NEW_DATA" ]; then
+  [ -d "$NEW_DATA" ] || die "\"$NEW_DATA\" exists but isn't a data folder."
+  say "Fjord's data folder is already there."
 else
-  say "No Lookout data folder; nothing to move."
+  say "No Lookout or Fjord data folder; nothing to move."
 fi
 
 step "2b. Saved state"
 # Names the app saves that said Lookout: the Router's sessions it started (`lookoutStarted`, now `fjordStarted`) and the
 # GitHub folder's mark (`lookout.github`, now `fjord.github`). The file as it was is kept beside it, once.
 STATE="$NEW_DATA/state.json"
-$DRY && [ ! -d "$NEW_DATA" ] && STATE="$OLD_DATA/state.json"  # not moved in a dry run
+if $DRY && [ ! -d "$NEW_DATA" ] && [ -n "$SOURCE_DATA" ]; then STATE="$SOURCE_DATA/state.json"; fi
 if [ ! -f "$STATE" ]; then
   say "No state.json; nothing to rename."
 else
@@ -137,7 +150,7 @@ step "4. Keychain"
 # its stdin, so it doesn't show in `ps`. That needs it quoted for security's own parser, so only plain token characters
 # are accepted; anything else falls back to `-w <secret>` on the command line, briefly visible to `ps` on this machine.
 # The copy is read back and compared before the old item goes. macOS asks once to let `security` read the old item,
-# and Fjord Computer may still ask once when it first reads the new one.
+# and Fjord may still ask once when it first reads the new one.
 has_item() { security find-generic-password -s "$1" -a "$2" >/dev/null 2>&1; }
 for account in github-token typesafe-key; do
   if ! has_item "$OLD_ID" "$account"; then
@@ -177,19 +190,32 @@ for account in github-token typesafe-key; do
 done
 
 step "5. Claude Code"
-# Lookout's form hook entry, exactly as FormHookInstaller.uninstall takes it out (Forms.swift): from
-# hooks.PermissionRequest, every hook whose command is the script's path (or that path shell-quoted); an entry left
-# with no hook goes, then an empty PermissionRequest, then an empty hooks. The file is written in the format the app
-# and Claude Code use (2 spaces, " : "), keys in their order, so only that entry changes; through a symlink to its target.
+# Remove Lookout's hook and the Fjord hook only when its script still points into an old app bundle. The new app will
+# write the hook again when the Router is switched off and on. The settings edit follows FormHookInstaller.uninstall:
+# it removes only our command from hooks.PermissionRequest and keeps any other hooks in the entry. It writes in the
+# format the app and Claude Code use (2 spaces, " : "), through a symlink to its target.
 SETTINGS="$CLAUDE_DIR/settings.json"
-HOOK_SCRIPT="$CLAUDE_DIR/hooks/lookout-form.sh"
+LOOKOUT_HOOK="$CLAUDE_DIR/hooks/lookout-form.sh"
+FJORD_HOOK="$CLAUDE_DIR/hooks/fjord-form.sh"
+FJORD_HOOK_STALE=false
+if [ -f "$FJORD_HOOK" ] && {
+  grep -Fq '/Applications/Lookout.app/' "$FJORD_HOOK" \
+    || grep -Fq '/Applications/Fjord Computer.app/' "$FJORD_HOOK"
+}; then
+  FJORD_HOOK_STALE=true
+fi
 if [ -e "$SETTINGS" ]; then
   [ -x "$PY" ] || die "$PY isn't there (install the Xcode Command Line Tools: xcode-select --install)."
   dry=0; $DRY && dry=1
-  "$PY" -I - "$SETTINGS" "$HOOK_SCRIPT" "$dry" <<'PY'
+  remove_fjord=0; $FJORD_HOOK_STALE && remove_fjord=1
+  "$PY" -I - "$SETTINGS" "$LOOKOUT_HOOK" "$FJORD_HOOK" "$remove_fjord" "$dry" <<'PY'
 import json, os, sys, tempfile
-path, script, dry = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3] == "1"
-quoted = "'" + script.replace("'", "'\\''") + "'"
+path, lookout_hook, fjord_hook = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3]
+remove_fjord, dry = sys.argv[4] == "1", sys.argv[5] == "1"
+scripts = {lookout_hook}
+if remove_fjord:
+    scripts.add(fjord_hook)
+commands = scripts | {"'" + script.replace("'", "'\\''") + "'" for script in scripts}
 raw = open(path, "rb").read()
 try:
     root = json.loads(raw)
@@ -198,12 +224,12 @@ except ValueError:
 if not isinstance(root, dict):
     sys.exit("Stopped: %s doesn't hold a JSON object." % sys.argv[1])
 def is_us(h):
-    return isinstance(h, dict) and h.get("command") in (script, quoted)
+    return isinstance(h, dict) and h.get("command") in commands
 hooks = root.get("hooks")
 entries = hooks.get("PermissionRequest") if isinstance(hooks, dict) else None
 if not isinstance(entries, list) or not any(
         isinstance(e, dict) and isinstance(e.get("hooks"), list) and any(map(is_us, e["hooks"])) for e in entries):
-    print("No Lookout form hook in %s." % sys.argv[1])
+    print("No old Fjord or Lookout form hook in %s." % sys.argv[1])
     sys.exit(0)
 kept = []
 for e in entries:
@@ -221,7 +247,7 @@ def dump(obj): return (json.dumps(obj, indent=2, separators=(",", " : "), ensure
 if dump(json.loads(raw)) != raw:
     print("(%s wasn't in the app's format: it is rewritten in it, same content.)" % sys.argv[1])
 if dry:
-    print("Would remove Lookout's form hook from %s." % sys.argv[1])
+    print("Would remove the old form hook from %s." % sys.argv[1])
     sys.exit(0)
 mode = os.stat(path).st_mode & 0o7777
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings.json.")
@@ -235,14 +261,18 @@ try:
 except BaseException:
     if os.path.exists(tmp): os.unlink(tmp)
     raise
-print("Removed Lookout's form hook from %s." % sys.argv[1])
+print("Removed the old form hook from %s." % sys.argv[1])
 PY
 else
   say "No $SETTINGS."
 fi
-for f in "$HOOK_SCRIPT" "$SETTINGS.lookout-backup"; do
+for f in "$LOOKOUT_HOOK" "$SETTINGS.lookout-backup"; do
   if [ -e "$f" ]; then say "Removing $f."; run rm -f "$f"; fi
 done
+if $FJORD_HOOK_STALE && [ -e "$FJORD_HOOK" ]; then
+  say "Removing the Fjord hook script that points into an old app bundle."
+  run rm -f "$FJORD_HOOK"
+fi
 
 # The plugin, as ClaudePluginInstaller.uninstall does it (ClaudePlugin.swift): with Claude Code's binary the Claude app
 # bundles (RouterStatus.findDefault: the highest <version>/<hash>/claude.app under its claude-code folder), run in a clean
@@ -275,37 +305,95 @@ except Exception:
     sys.exit(2)
 sys.exit(0 if found else 1)' "$1" "$2"
 }
+marketplace_path() {
+  "$PY" -I -c '
+import json, sys
+try:
+    items = json.load(sys.stdin)
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        sys.exit(2)
+    for item in items:
+        if item.get("name") == sys.argv[1]:
+            path = item.get("path")
+            print(path if isinstance(path, str) else "")
+            sys.exit(0)
+    print("")
+except Exception:
+    sys.exit(2)' "$1"
+}
+PLUGIN_DATA="$NEW_DATA"
+if $DRY && [ ! -d "$NEW_DATA" ] && [ -n "$SOURCE_DATA" ]; then PLUGIN_DATA="$SOURCE_DATA"; fi
+FJORD_PLUGIN="$PLUGIN_DATA/claude-plugin"
+legacy_fjord_path=false
+if [ -n "$SOURCE_DATA" ]; then legacy_fjord_path=true; fi
+if [ -f "$FJORD_PLUGIN/config.json" ] && {
+  grep -Fq "$LOOKOUT_DATA/" "$FJORD_PLUGIN/config.json" \
+    || grep -Fq "$COMPUTER_DATA/" "$FJORD_PLUGIN/config.json"
+}; then
+  legacy_fjord_path=true
+fi
 plugin_gone=false
 if CLAUDE=$(find_claude); then
   say "Claude Code: $CLAUDE"
-  out=$(claude plugin list --json) || die "\`claude plugin list --json\` failed."
-  if printf '%s' "$out" | lists id lookout@lookout; then
-    say "Uninstalling the lookout@lookout plugin."
+  plugins=$(claude plugin list --json) || die "\`claude plugin list --json\` failed."
+  marketplaces=$(claude plugin marketplace list --json) || die "\`claude plugin marketplace list --json\` failed."
+  fjord_marketplace_path=$(printf '%s' "$marketplaces" | marketplace_path fjord) \
+    || die "couldn't read \`claude plugin marketplace list --json\`'s answer."
+  if [ -n "$fjord_marketplace_path" ] && [ "$fjord_marketplace_path" != "$NEW_DATA/claude-plugin" ]; then
+    legacy_fjord_path=true
+  fi
+
+  if printf '%s' "$plugins" | lists id lookout@lookout; then
+    say "Uninstalling the old lookout@lookout plugin."
     run claude plugin uninstall lookout@lookout --scope user
   else
     [ $? -eq 1 ] || die "couldn't read \`claude plugin list --json\`'s answer."
-    say "The lookout@lookout plugin isn't installed."
+    say "The old lookout@lookout plugin isn't installed."
   fi
-  out=$(claude plugin marketplace list --json) || die "\`claude plugin marketplace list --json\` failed."
-  if printf '%s' "$out" | lists name lookout; then
-    say "Removing the lookout marketplace."
+  if $legacy_fjord_path; then
+    if printf '%s' "$plugins" | lists id fjord@fjord; then
+      say "Uninstalling the plugin that points at an old Fjord data folder."
+      run claude plugin uninstall fjord@fjord --scope user
+    else
+      [ $? -eq 1 ] || die "couldn't read \`claude plugin list --json\`'s answer."
+      say "No plugin from an old Fjord data folder is installed."
+    fi
+  fi
+
+  if printf '%s' "$marketplaces" | lists name lookout; then
+    say "Removing the old lookout marketplace."
     run claude plugin marketplace remove lookout
   else
     [ $? -eq 1 ] || die "couldn't read \`claude plugin marketplace list --json\`'s answer."
-    say "The lookout marketplace isn't there."
+    say "The old lookout marketplace isn't there."
+  fi
+  if $legacy_fjord_path; then
+    if printf '%s' "$marketplaces" | lists name fjord; then
+      say "Removing the marketplace that points at an old Fjord data folder."
+      run claude plugin marketplace remove fjord
+    else
+      [ $? -eq 1 ] || die "couldn't read \`claude plugin marketplace list --json\`'s answer."
+      say "No marketplace points at an old Fjord data folder."
+    fi
   fi
   plugin_gone=true
 else
-  say "Claude Code (the copy the Claude app bundles) wasn't found: the lookout@lookout plugin and the lookout"
-  say "marketplace, if still there, have to go by hand (/plugin in Claude Code)."
+  say "Claude Code (the copy the Claude app bundles) wasn't found: any old Fjord or Lookout plugin and marketplace"
+  say "have to go by hand (/plugin in Claude Code)."
 fi
-# The old plugin's folder, moved with the data: only Lookout's (its manifest names it "lookout"), never the new app's.
-OLD_PLUGIN="$NEW_DATA/claude-plugin"
-$DRY && [ ! -d "$NEW_DATA" ] && OLD_PLUGIN="$OLD_DATA/claude-plugin"  # not moved in a dry run
+# A moved plugin folder can still name the old absolute paths in config.json. Remove only the known old plugin manifests;
+# a current Fjord plugin at the new data path is left alone on re-runs.
+OLD_PLUGIN="$FJORD_PLUGIN"
+legacy_flag=0
+if $legacy_fjord_path; then legacy_flag=1; fi
 if $plugin_gone && [ -f "$OLD_PLUGIN/.claude-plugin/plugin.json" ] \
-    && "$PY" -I -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get("name") == "lookout" else 1)' \
-         "$OLD_PLUGIN/.claude-plugin/plugin.json"; then
-  say "Removing the old plugin's folder (the new app writes its own)."
+    && "$PY" -I - "$OLD_PLUGIN/.claude-plugin/plugin.json" "$legacy_flag" <<'PY'
+import json, sys
+name = json.load(open(sys.argv[1])).get("name")
+sys.exit(0 if name == "lookout" or (name == "fjord" and sys.argv[2] == "1") else 1)
+PY
+then
+  say "Removing the old plugin folder (Fjord writes a fresh one)."
   run rm -rf "$OLD_PLUGIN"
 fi
 
@@ -313,9 +401,24 @@ step "6. Caches"
 CACHE="$HOME/Library/Caches/$OLD_ID"
 if [ -e "$CACHE" ]; then say "Removing $CACHE."; run rm -rf "$CACHE"; else say "No old cache."; fi
 
+step "7. Old app bundles"
+if [ -d "$NEW_APP" ]; then
+  for old_app in "$OLD_LOOKOUT_APP" "$OLD_COMPUTER_APP"; do
+    if [ -e "$old_app" ] || [ -L "$old_app" ]; then
+      say "Removing the old app bundle \"$old_app\"."
+      run rm -rf "$old_app"
+    else
+      say "No old app bundle at \"$old_app\"."
+    fi
+  done
+else
+  say "Leaving old app bundles in place: install \"$NEW_APP\" before removing them."
+fi
+
 step "Left to you"
-say "- Remove /Applications/Lookout.app, and Lookout from System Settings › General › Login Items."
-say "- Open Fjord Computer. With the Router on, it installs its fjord@fjord plugin at launch, but not its form hook"
+say "- Remove any previous app entries from System Settings › General › Login Items."
+say "  Open Fjord and enable Launch at Login again if you want it."
+say "- Open Fjord. With the Router on, it installs the fjord@fjord plugin at launch, but not a missing form hook"
 say "  (at launch it only re-installs a hook that is outdated, not one that is missing): switch the Router off and"
 say "  on once in Settings to install it."
 say "- Claude Code sessions already open keep the old plugin until they restart (or /reload-plugins)."

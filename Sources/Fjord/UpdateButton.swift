@@ -25,10 +25,10 @@ struct UpdateButton: View {
     /// The tooltip: what it is, and what a click does.
     private func tooltip(_ version: String) -> (String, String?) {
         switch updater.phase {
-        case .available: ("Fjord Computer \(version) is available", "Click to download it · right-click for more")
-        case .downloading: ("Downloading Fjord Computer \(version)… \(Int(updater.fraction * 100))%", nil)
-        case .ready: ("Fjord Computer \(version) is ready", "Click to restart into it")
-        case .installing: ("Installing Fjord Computer \(version)…", nil)
+        case .available: ("Fjord \(version) is available", "Click to download it · right-click for more")
+        case .downloading: ("Downloading Fjord \(version)… \(Int(updater.fraction * 100))%", nil)
+        case .ready: ("Fjord \(version) is ready", "Click to restart into it")
+        case .installing: ("Installing Fjord \(version)…", nil)
         case .failed(let message): ("Update failed: \(message)", "Click to try again")
         case .idle: ("", nil)
         }
