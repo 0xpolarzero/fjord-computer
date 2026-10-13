@@ -50,6 +50,8 @@ struct CategoryEditor: View {
     /// the field is left. Each write is a change of the categories (saved, logged, a step of the page's history, the bar
     /// and the list redrawn), so not one per keystroke. A new category's draft takes each keystroke: it isn't in the store.
     @State private var typedName: String?
+    /// The stored name when the typing began: changed since by something else, what was typed is dropped.
+    @State private var typedOver: String?
     @State private var nameWrite: Task<Void, Never>?
     /// The name field's place in `PendingEdits`.
     @State private var nameField = UUID()
@@ -114,6 +116,7 @@ struct CategoryEditor: View {
             nameWrite?.cancel()
             nameWrite = nil
             typedName = nil
+            typedOver = nil
         }
         .onAppear {
             if isNew { nameFocused = true }
@@ -128,6 +131,7 @@ struct CategoryEditor: View {
     private func nameField(_ c: InboxCategory) -> Binding<String> {
         guard !isNew else { return draft.name }
         return Binding(get: { typedName ?? c.name }, set: { name in
+            if typedName == nil { typedOver = c.name }
             typedName = name
             nameWrite?.cancel()
             nameWrite = Task {
@@ -143,8 +147,17 @@ struct CategoryEditor: View {
         nameWrite?.cancel()
         nameWrite = nil
         guard let name = typedName else { return }
+        let over = typedOver
         typedName = nil
-        if draft.wrappedValue.name != name { draft.wrappedValue.name = name }
+        typedOver = nil
+        if let name = Self.nameToWrite(typed: name, over: over, stored: draft.wrappedValue.name) { draft.wrappedValue.name = name }
+    }
+
+    /// What a typed name writes: nothing when it is the stored one, or when the stored one changed since the typing began
+    /// (renamed by something else: that stands).
+    static func nameToWrite(typed: String, over: String?, stored: String) -> String? {
+        guard typed != stored, over == nil || over == stored else { return nil }
+        return typed
     }
 
     // MARK: Header

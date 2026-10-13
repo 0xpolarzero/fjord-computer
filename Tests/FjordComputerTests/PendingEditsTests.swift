@@ -65,3 +65,12 @@ struct PendingEditsUndoTests {
         #expect(store.categories[0].name == "Typed")
     }
 }
+
+struct TypedNameTests {
+    @Test func aTypedNameStandsOnlyOverTheNameItWasTypedOver() {
+        #expect(CategoryEditor.nameToWrite(typed: "Reviews!", over: "Reviews", stored: "Reviews") == "Reviews!")
+        // Renamed by the Router while it was typed: the rename stands.
+        #expect(CategoryEditor.nameToWrite(typed: "Reviews!", over: "Reviews", stored: "Code reviews") == nil)
+        #expect(CategoryEditor.nameToWrite(typed: "Same", over: "Same", stored: "Same") == nil)
+    }
+}
