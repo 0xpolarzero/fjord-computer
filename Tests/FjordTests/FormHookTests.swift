@@ -40,7 +40,7 @@ import Testing
         return try #require(specific["decision"] as? [String: Any])
     }
 
-    /// A plan hook's run, decided by Fjord Computer at the third wait; what it held then.
+    /// This helper records the form held during a plan hook's run when Fjord decides it at the third wait.
     private func decidePlan(_ dir: TempDir, _ decision: PendingForm.PlanDecision) -> (FormHook.Outcome, Box, PendingForm?) {
         var held: PendingForm?
         let (outcome, box) = run(dir, input: planRequest(), step: { n, forms in

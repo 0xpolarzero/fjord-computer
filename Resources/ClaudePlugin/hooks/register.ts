@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-// Fjord Computer's Router relays what the person writes to this session. The message arrives on the peer channel,
-// signed by the Fjord Computer app with a key only it holds (a file of Fjord Computer's own, readable by the person
+// Fjord's Router relays what the person writes to this session. The message arrives on the peer channel,
+// signed by the Fjord app with a key only it holds (a file of Fjord's own, readable by the person
 // alone, never in this folder: Claude Code copies an installed plugin's folder into its cache). A valid one, addressed
 // to this session, fresh and never seen before, is taken off the peer channel and submitted as the person's own words.
 // Anything else passes on untouched, as the peer message it is.
@@ -12,22 +12,22 @@ import type { EngineInterface, Register } from 'claude-code'
 // The MAC covers the UTF-8 bytes of "v1\n<target>\n<nonce>\n<ms>\n" followed by the body's own UTF-8 bytes.
 //
 // Two ways in, one check. The peer channel (`session.receive`) is the original way and stays as the fallback for a
-// Fjord Computer that can't reach this plugin directly. The inbox is the direct way, with no model in between:
-// Fjord Computer writes the very same signed text to `<inboxDir>/<session id>/<nonce>.msg` (atomically: a dot-file
+// Fjord that can't reach this plugin directly. The inbox is the direct way, with no model in between:
+// Fjord writes the very same signed text to `<inboxDir>/<session id>/<nonce>.msg` (atomically: a dot-file
 // renamed into place), the plugin polls that folder every half second, runs the same check, and answers with
-// `<nonce>.ack` beside it ("ok", or "refused: why"). Fjord Computer reads the ack and deletes both files; the plugin
-// has no way to delete, and needs none. Presence files list `capabilities`, so a Fjord Computer knows which way a
+// `<nonce>.ack` beside it ("ok", or "refused: why"). Fjord reads the ack and deletes both files; the plugin
+// has no way to delete, and needs none. Presence files list `capabilities`, so Fjord knows how a
 // session can be reached.
 //
 // `settings-v1`: a v2 message carries the model and effort the session should use, inside the signed bytes:
 //   ⟦fjord v2 <target> <nonce> <ms> <model|-> <effort|-> <hex HMAC-SHA256>⟧\n<base64 body>
 // with the MAC over "v2\n<target>\n<nonce>\n<ms>\n<model|->\n<effort|->\n" and the body. A plugin without the capability
-// sees an unknown header (unsigned) and ignores it; Fjord Computer only sends v2 to a plugin that advertises `settings-v1`.
+// sees an unknown header (unsigned) and ignores it; Fjord only sends v2 to a plugin that advertises `settings-v1`.
 // From the inbox (never the peer channel, whose hook the turn waits on), the plugin sets the model, then the effort (a
 // model switch resets the effort), with `/model` and `/effort` run for this session only, and only then submits the
 // text, so the turn it starts uses them. The ack says what happened: "ok model=opus effort=high", or "model=error:why".
 //
-// `abort-v1`: Fjord Computer can take back a delivery it made, with a control file in the same inbox, signed the same way:
+// `abort-v1`: Fjord can take back a delivery it made, with a control file in the same inbox, signed the same way:
 //   ⟦fjord abort v1 <target> <nonce> <ms> <nonce of the delivery> <hex HMAC-SHA256>⟧
 // with the MAC over "abort-v1\n<target>\n<nonce>\n<ms>\n<nonce of the delivery>\n" (no body). Its own nonce is claimed as a
 // delivery's is (no replay). This copy remembers each delivery it submitted and the turn it started (the next main turn
@@ -45,7 +45,7 @@ import type { EngineInterface, Register } from 'claude-code'
 // Nothing an aborted turn already did is undone, and the words stay in the session's history: Claude Code has no way to
 // take a submitted prompt back out.
 //
-// Fjord Computer writes this file; edits are overwritten.
+// Fjord writes this file; edits are overwritten.
 
 const HEADER = /(?:^|\n)⟦fjord (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)) ([0-9a-f]{64})⟧\n/
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
@@ -170,7 +170,7 @@ const exclusive = <T>(work: () => Promise<T>): Promise<T> => {
   return run
 }
 
-/** Where Fjord Computer keeps the key and the presence files, and Claude Code its registry of processes, as absolute paths (a
+/** Where Fjord keeps the key and the presence files, and Claude Code its registry of processes, as absolute paths (a
  * hooks module can't read the environment). */
 type Config = { keyPath?: string; presenceDir?: string; sessionsDir?: string; inboxDir?: string }
 
@@ -185,7 +185,7 @@ export const keyId = async (key: string) => hex(await sha256(enc.encode(key))).s
 let marked: { sessionId: string; presenceDir: string; keyId: string; pid: number; startedAt: number } | undefined
 
 /** Says which session this plugin runs in, bound to its process (Claude Code's registry entry for the session: its pid
- * and start time) and to the key Fjord Computer holds now, so Fjord Computer can tell a live session from one that crashed, was resumed
+ * and start time) and to the key Fjord holds now, so Fjord can tell a live session from one that crashed, was resumed
  * without the plugin, or unloaded it while the Router was off. It is a lease: renewed at every turn and every 10 s
  * (`renewedAt`), so a plugin disabled and reloaded away, which says nothing as it goes, stops counting within 30 s.
  * The registry is read again when the session id changes (a /clear starts a new one with no session.start) or the key
@@ -371,7 +371,7 @@ export async function control($: EngineInterface, text: string) {
 }
 
 /** Checks a signed text the way both ways in must, and submits it as the person's own words. `unsigned` means it isn't
- * Fjord Computer's at all (the peer channel then passes it on); anything else is a refusal with its reason. */
+ * Fjord's at all (the peer channel then passes it on); anything else is a refusal with its reason. */
 export async function accept(
   $: EngineInterface,
   text: string,
@@ -460,7 +460,7 @@ export const register: Register = (on) => {
   on('session.receive', async ($, e, next) => {
     const outcome = await accept($, e.text)
     if (!outcome.ok) return next(e)
-    return { consumed: 'relayed by Fjord Computer as the person’s own message' }
+    return { consumed: 'relayed by Fjord as the person’s own message' }
   }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
@@ -482,8 +482,8 @@ export const register: Register = (on) => {
       return await next(e)
     } finally {
       for (const s of mine) s.starting = false
-      // Taken back while it waited its turn (or as it started), and wholly Fjord Computer's: it ends as it begins. One that holds
-      // words of the person's own isn't stopped.
+      // Taken back while it waited its turn (or as it started), and wholly Fjord's: it ends as it begins.
+      // One that holds words of the person's own isn't stopped.
       if (!mixed && mine.some((s) => s.cancelled)) {
         for (const s of mine) s.ended = true
         await $.turn.abort({ turnId: e.turnId }).catch(() => undefined)
@@ -521,7 +521,7 @@ export const register: Register = (on) => {
     turn.cuts.add(cut)
     try {
       const done = await Promise.race([next(e), stopped])
-      return done === 'cut' ? { deny: 'Stopped: the person cancelled this message from Fjord Computer.' } : done
+      return done === 'cut' ? { deny: 'Stopped: the person cancelled this message from Fjord.' } : done
     } finally {
       turn.cuts.delete(cut)
     }
@@ -531,7 +531,7 @@ export const register: Register = (on) => {
     if (e.origin.kind === 'task-notification' && quiet.size) {
       const ids = [...e.text.matchAll(/<tool-use-id>([^<\s]+)<\/tool-use-id>/g)].map((m) => m[1])
       if (ids.length && ids.every((id) => quiet.has(id))) {
-        return { drop: 'A task of a message cancelled from Fjord Computer ended: not taken up again.' }
+        return { drop: 'A task of a message cancelled from Fjord ended: not taken up again.' }
       }
     }
     return next(e)

@@ -5,33 +5,33 @@ import Foundation
 
 /// Where the Router keeps its files, and the Claude Code folder the hook goes in. Tests give their own (see `live`).
 struct RouterPaths: Equatable, Sendable {
-    /// `~/Library/Application Support/Fjord Computer`.
+    /// `~/Library/Application Support/Fjord`.
     var support: URL
     /// `~/.claude`.
     var claudeDir: URL
 
-    /// Forms the hook holds open, one file each, and the answers Fjord Computer writes for them.
+    /// Forms the hook holds open, one file each, and the answers Fjord writes for them.
     var forms: URL { support.appendingPathComponent("forms", isDirectory: true) }
     /// The Router process's working folder.
     var routerHome: URL { support.appendingPathComponent("router", isDirectory: true) }
-    /// Fjord Computer's Claude Code plugin, a folder marketplace Claude Code reads in place (see `ClaudePlugin`).
+    /// Fjord's Claude Code plugin, a folder marketplace Claude Code reads in place (see `ClaudePlugin`).
     var plugin: URL { support.appendingPathComponent("claude-plugin", isDirectory: true) }
     /// One file per session the plugin runs in, written by the plugin itself.
     var pluginSessions: URL { support.appendingPathComponent("plugin-sessions", isDirectory: true) }
-    /// The key Fjord Computer signs relayed messages with. Not in the plugin's folder: Claude Code copies that into its
+    /// The key Fjord signs relayed messages with. Not in the plugin's folder: Claude Code copies that into its
     /// cache.
     var relayKey: URL { support.appendingPathComponent("relay.key") }
 
     /// The user's own folders; nil in a test run, which is stopped for reaching them (see `UnderTest`).
     static func live() -> RouterPaths? {
-        guard !UnderTest.refuses("the Router's files (Application Support/Fjord Computer and ~/.claude)") else { return nil }
+        guard !UnderTest.refuses("the Router's files (Application Support/Fjord and ~/.claude)") else { return nil }
         return unguarded
     }
 
     /// For the hook process, which is never a test run.
     static var unguarded: RouterPaths {
         RouterPaths(support: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                        .appendingPathComponent("Fjord Computer", isDirectory: true),
+                        .appendingPathComponent("Fjord", isDirectory: true),
                     claudeDir: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude", isDirectory: true))
     }
 }
@@ -87,7 +87,7 @@ enum PrivateFile {
 
 // MARK: - Pending forms
 
-/// A question form, or a plan to approve, that a session has open, held by Fjord Computer's hook until it is answered
+/// A question form, or a plan to approve, that a session has open, held by Fjord's hook until it is answered
 /// here or in the app.
 struct PendingForm: Hashable, Identifiable {
     struct Option: Hashable {
@@ -150,7 +150,7 @@ struct PendingForm: Hashable, Identifiable {
     }
 }
 
-/// Fjord Computer's side of the form hook: lists the forms the hook holds and writes the answers it waits for.
+/// Fjord's side of the form hook: lists the forms the hook holds and writes the answers it waits for.
 final class FormBridge: @unchecked Sendable {
     enum Failure: LocalizedError, Equatable {
         case unanswered(String)
@@ -290,9 +290,9 @@ final class FormBridge: @unchecked Sendable {
 
 /// `Fjord --form-hook`: what Claude Code runs when a session asks a question or has a plan to approve (a
 /// `PermissionRequest` hook on `AskUserQuestion` and `ExitPlanMode`). It leaves the form in the forms folder and waits: an
-/// answer written by Fjord Computer is printed as the hook's decision, which answers the form like a click. If it is answered in the
-/// app first, or anything else ends the wait, it leaves quietly and the app's own form stands. It prints nothing but that one
-/// decision.
+/// answer written by Fjord is printed as the hook's decision, which answers the form like a click. If it is answered
+/// in the app first, or anything else ends the wait, it leaves quietly and the app's own form stands. It prints nothing
+/// but that one decision.
 ///
 /// A plan's decision is the one the app's own buttons give (checked against Claude Code 2.1): Approve is `allow` with the
 /// input as it came (a bare `allow` is ignored for this tool), and the session leaves plan mode as it would there; Keep
@@ -406,7 +406,7 @@ enum FormHook {
                 return .answered
             }
             if transcript.answered() { cleanUp(); return .answeredElsewhere }
-            // The call is known: the form says which it is, so Fjord Computer puts it on that call's card only.
+            // The call is known: the form says which it is, so Fjord puts it on that call's card only.
             if let call = transcript.id, record["tool_use_id"] == nil {
                 record["tool_use_id"] = call
                 if let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
@@ -421,7 +421,7 @@ enum FormHook {
         }
     }
 
-    /// The decision for Fjord Computer's answer file, or nil while it isn't one for this tool: a question's answers go
+    /// The decision for Fjord's answer file, or nil while it isn't one for this tool: a question's answers go
     /// in its input; a plan is approved as it came or turned down with Claude Code's words and your note.
     static func decision(tool: String, input: [String: Any], answer: [String: Any]) -> [String: Any]? {
         if tool == planTool {
@@ -567,7 +567,7 @@ enum FormHook {
 struct FormHookInstaller {
     enum Status: Equatable, Sendable {
         case installed, notInstalled
-        /// Installed for another copy of Fjord Computer (the app moved), or by a Fjord Computer that held fewer tools.
+        /// Installed by another copy of Fjord (the app moved), or by a version of Fjord with fewer tools.
         case outdated
     }
 
@@ -575,17 +575,17 @@ struct FormHookInstaller {
         case invalidSettings(String)
         case notAnObject(String)
         case unreadable(String, String)
-        /// `hooks` or `hooks.PermissionRequest` has a shape Fjord Computer doesn't know how to add to.
+        /// `hooks` or `hooks.PermissionRequest` has a shape Fjord doesn't know how to add to.
         case incompatible(String, String)
         case keptChanging(String)
 
         var errorDescription: String? {
             switch self {
-            case .invalidSettings(let path): "\(path) isn't valid JSON, so Fjord Computer left it alone. Fix it and turn the Router on again."
-            case .notAnObject(let path): "\(path) doesn't hold a JSON object, so Fjord Computer left it alone."
-            case .unreadable(let path, let reason): "Fjord Computer couldn't read \(path): \(reason)"
-            case .incompatible(let path, let key): "In \(path), “\(key)” isn't what Claude Code expects, so Fjord Computer left the file alone."
-            case .keptChanging(let path): "\(path) kept changing while Fjord Computer was updating it. Try again."
+            case .invalidSettings(let path): "\(path) isn't valid JSON, so Fjord left it alone. Fix it and turn the Router on again."
+            case .notAnObject(let path): "\(path) doesn't hold a JSON object, so Fjord left it alone."
+            case .unreadable(let path, let reason): "Fjord couldn't read \(path): \(reason)"
+            case .incompatible(let path, let key): "In \(path), “\(key)” isn't what Claude Code expects, so Fjord left the file alone."
+            case .keptChanging(let path): "\(path) kept changing while Fjord was updating it. Try again."
             }
         }
     }
@@ -617,8 +617,8 @@ struct FormHookInstaller {
         let exe = Self.quoted(executable)
         return """
         #!/bin/sh
-        # Fjord Computer's form hook: lets you answer a Claude Code session's questions, and approve its plans, from Fjord Computer's Router.
-        # Fjord Computer manages this file (it is removed when you turn the Router off); edits are overwritten.
+        # Fjord's form hook lets you answer a Claude Code session's questions and approve its plans from Fjord's Router.
+        # Fjord manages this file (it is removed when you turn the Router off); edits are overwritten.
         [ -x \(exe) ] || exit 0
         exec \(exe) --form-hook
 
@@ -651,8 +651,8 @@ struct FormHookInstaller {
                 }
                 let ours = entries.filter(runsUs)
                 if ours.count == 1, isCurrent(ours[0]) { return false }
-                // Ours under another matcher (an older Fjord Computer's) goes; a hook of yours sharing that entry stays
-                // as it was.
+                // Ours under another matcher, left by an older Fjord hook, goes; a hook of yours sharing that entry
+                // stays as it was.
                 entries = removingUs(from: entries)
                 entries.append(["matcher": Self.matcher,
                                 "hooks": [["type": "command", "command": command, "timeout": Self.timeout]]] as [String: Any])
@@ -742,7 +742,7 @@ struct FormHookInstaller {
 
     /// Applies `change` (false: nothing to do) to the settings as they are, and writes them only if the file is still
     /// what was read; otherwise starts over from what is there now, a few times. A copy of the file as it was before
-    /// Fjord Computer first changed it is kept next to it.
+    /// Fjord first changed it is kept next to it.
     private func modify(_ change: (inout [String: Any]) throws -> Bool) throws {
         let fm = FileManager.default
         for _ in 0..<Self.attempts {

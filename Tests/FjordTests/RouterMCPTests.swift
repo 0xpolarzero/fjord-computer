@@ -139,7 +139,7 @@ import Testing
         let s = Store()
         s.persists = false
         s.routerPaths = RouterPaths(support: dir.path("support"), claudeDir: dir.path("claude"))
-        s.routerExecutable = "/Applications/Fjord Computer.app/Contents/MacOS/Fjord"
+        s.routerExecutable = "/Applications/Fjord.app/Contents/MacOS/Fjord"
         s.agents.enabled = true
         s.claudeSessions = [
             "local_a": session("local_a", "Fix the login bug", folder: "/code/lookout", running: true),
@@ -171,7 +171,7 @@ import Testing
         let peer = try! JSONSerialization.data(withJSONObject: ["pid": Int(getpid()), "hostSessionId": "local_a", "sessionId": "cli-local_a",
                                                                 "name": "Fix the login bug", "status": "busy"])
         try? peer.write(to: sessions.appendingPathComponent("\(getpid()).json"))
-        // Fjord Computer's plugin: installed, its key made, and running in local_a.
+        // Fjord's plugin is installed, its key is made, and it is running in local_a.
         s.routerPluginStatus = .installed
         try? Data("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".utf8).write(to: dir.path("support/relay.key"))
         PluginFixture.useKey(s)
@@ -356,7 +356,7 @@ import Testing
 
     // MARK: Preparing and starting
 
-    /// What Claude Code asks before a SendMessage runs (the input as 2.1.293 sends it), and Fjord Computer's answer.
+    /// What Claude Code asks before a SendMessage runs (the input as 2.1.293 sends it), and Fjord's answer.
     /// `message` is the body: what goes is the text prepare signed for it (else the body itself, unsigned).
     private func gate(_ t: RouterTools, to: String, message: String, extra: [String: String] = [:],
                       others: [String] = []) -> (allow: Bool, reason: String?) {
@@ -593,7 +593,7 @@ import Testing
         #expect(t.approveSend(input, otherFields: []) == nil)
     }
 
-    // MARK: Signed for Fjord Computer's plugin
+    // MARK: Signed for Fjord's plugin
 
     @Test func noPluginNoMessage() async throws {
         let dir = TempDir()
@@ -735,7 +735,8 @@ import Testing
         quiet.forker = { plan in plans.append(plan); return SessionStart.Started(sessionID: "local_new", peer: plan.title) }
         _ = try await quiet.forkSession(s, .init(session: "local_a"), ticket: quiet.ticket())
         #expect(plans.last?.at == nil && quiet.prepared.isEmpty)
-        // A session with an id that isn't a UUID, one whose conversation isn't found, one Fjord Computer doesn't know: said, nothing made.
+        // A session with an id that isn't a UUID, one whose conversation isn't found, or one that Fjord doesn't know:
+        // said, nothing made.
         let none = tools(s, turn: "Fork")
         none.transcriptsRoot = dir.path("projects")
         none.forker = { _ in Issue.record("forked"); throw RouterTools.Failure("no") }

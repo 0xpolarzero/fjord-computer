@@ -78,7 +78,7 @@ final class FakeClaudeCLI: @unchecked Sendable {
     var changes: [String] { lock.withLock { calls.filter { !$0.contains("list") } } }
 }
 
-/// Fjord Computer's plugin running in a session, as a test lays it out: Claude Code's registry lists the process (this test
+/// Fjord's plugin running in a session, as a test lays it out: Claude Code's registry lists the process (this test
 /// process's pid, alive) for the session, the plugin's presence file names it under the key in `support/relay.key`, and
 /// the plugin's config says where the registry and the key are.
 enum PluginFixture {
@@ -214,7 +214,7 @@ enum PluginFixture {
     }
 
     @Test func aPluginUnloadedWithoutAWordStopsCountingWhenItsLeaseRunsOut() throws {
-        // Disabled outside Fjord Computer and reloaded away: no session.end, the same process, session and key. The
+        // Disabled outside Fjord and reloaded away: no session.end, the same process, session and key. The
         // plugin no longer renews its file.
         let dir = TempDir()
         let t0 = Date(timeIntervalSince1970: 2_000_000_000)
@@ -423,8 +423,8 @@ enum PluginFixture {
     @Test func aMovedFolderIsInstalledAfresh() async throws {
         let dir = TempDir(), cli = FakeClaudeCLI()
         cli.folderVersion = version
-        cli.marketplaces["fjord"] = "/Old/Fjord Computer/claude-plugin"
-        cli.plugins["fjord@fjord"] = ("/Old/Fjord Computer/claude-plugin", version, true)
+        cli.marketplaces["fjord"] = "/Old/Fjord/claude-plugin"
+        cli.plugins["fjord@fjord"] = ("/Old/Fjord/claude-plugin", version, true)
         let i = installer(dir, cli)
         #expect(try await i.status(version: version) == .outdated)
         try await i.install(version: version)
@@ -467,7 +467,7 @@ enum PluginFixture {
 
     @Test func itAnswersWithTheProgramsOutputInACleanEnvironment() async throws {
         let dir = TempDir()
-        // Something of Fjord Computer's own environment that must not reach the CLI.
+        // Something of Fjord's own environment that must not reach the CLI.
         setenv("FJORD_TEST_LEAK", "secret", 1)
         defer { unsetenv("FJORD_TEST_LEAK") }
         let exe = try script(dir, "echo \"$1 [$FJORD_TEST_LEAK]\"")
@@ -522,7 +522,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         let s = Store()
         s.persists = false
         s.routerPaths = RouterPaths(support: dir.path("support"), claudeDir: dir.path("claude"))
-        s.routerExecutable = "/Applications/Fjord Computer.app/Contents/MacOS/Fjord"
+        s.routerExecutable = "/Applications/Fjord.app/Contents/MacOS/Fjord"
         s.routerPluginRunner = cli.runner
         s.routerClaudeBinary = { "/fake/claude" }
         s.routerAppVersion = version
@@ -602,7 +602,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
     @Test func atLaunchAMissingOrOutdatedPluginIsInstalled() async throws {
         let dir = TempDir(), cli = FakeClaudeCLI()
         cli.folderVersion = ClaudePlugin.version(app: "1.0.0")
-        // The Router was on before Fjord Computer had a plugin: launch installs it.
+        // The Router was on before Fjord had a plugin: launch installs it.
         let migrated = store(dir, cli)
         migrated.router.enabled = true
         migrated.startRouter()
@@ -616,7 +616,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         same.startRouter()
         await same.routerHookWork?.value
         #expect(cli.changes.count == installs && same.routerPluginStatus == .installed)
-        // An update of Fjord Computer: the folder holds the new version, Claude Code is brought to it.
+        // An update of Fjord: the folder holds the new version, Claude Code is brought to it.
         let updated = store(dir, cli, version: "1.1.0")
         updated.router.enabled = true
         updated.startRouter()

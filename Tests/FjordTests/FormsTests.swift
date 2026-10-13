@@ -27,7 +27,7 @@ let sampleInput: [String: Any] = ["questions": [
 /// ExitPlanMode's input as Claude Code gives it to the hook (2.1: the plan, and the file it was saved to).
 let planInput: [String: Any] = ["plan": "# Ship it\n\n1. Build\n2. Test", "planFilePath": "/Users/me/.claude/plans/ship-it.md"]
 
-/// What the hook leaves in the forms folder, and how Fjord Computer answers it.
+/// This suite checks what the hook leaves in the forms folder and how Fjord answers it.
 @Suite struct Forms {
     private func pendingFile(_ key: String, session: String = "cli-1", created: Int64 = 1000, pid: Int32 = getpid()) -> Data {
         try! JSONSerialization.data(withJSONObject: [

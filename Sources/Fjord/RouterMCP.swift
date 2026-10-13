@@ -462,7 +462,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
 // MARK: - Tools
 
-/// What a Router run can use: the board and Fjord Computer's own tools (RouterFjord.swift), and what the dispatcher calls
+/// What a Router run can use: the board and Fjord's own tools (RouterFjord.swift), and what the dispatcher calls
 /// directly (prepare, answer a form, start a session, the gate). Each acts on the store, on the main thread.
 @MainActor final class RouterTools {
     private(set) weak var store: Store?
@@ -499,10 +499,10 @@ final class RouterMCPServer: @unchecked Sendable {
     /// Why a send may no longer go, asked at each of its gates right before it is let through (the approval, the inbox's
     /// write, the fallback process's permission): a reason stops it. Nil for the Router's own turns.
     var deliveryCheck: (@MainActor () -> String?)?
-    /// The text goes exactly as given, with nothing taken out (a continuation Fjord Computer wrote itself).
+    /// The text goes exactly as given, with nothing taken out (a continuation Fjord wrote itself).
     var verbatim = false
     /// A folder you chose for a new session ("Choose folder…" on an ask): `start_session` may start there too, besides the
-    /// projects Fjord Computer knows.
+    /// projects Fjord knows.
     var chosenFolder: String?
     /// Making a session (folder, title) and waiting for its process; tests answer for it.
     var starter: ((String, String) async throws -> SessionStart.Started)?
@@ -587,7 +587,7 @@ final class RouterMCPServer: @unchecked Sendable {
     /// `live` as a yes/no, for a check made later (the form writer's, right before it writes).
     private func isLive(_ ticket: Ticket) -> Bool { (try? live(ticket)) != nil }
 
-    /// Every tool a run may be offered: the board and Fjord Computer's own (RouterFjord.swift).
+    /// Every tool a run may be offered: the board and Fjord's own (RouterFjord.swift).
     static let specs: [[String: Any]] = [boardSpec] + FjordTools.specs
 
     private static let boardSpec: [String: Any] = [
@@ -598,7 +598,7 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// Runs a tool; nil when there is no tool by that name. `ticket`: the request's (a batch shares one); now's by default.
     func call(_ name: String, _ args: [String: Any], ticket given: Ticket? = nil) async -> RouterRPC.ToolResult? {
-        guard let store else { return .error("Fjord Computer isn't ready") }
+        guard let store else { return .error("Fjord isn't ready") }
         let ticket = given ?? self.ticket()
         if name == "board" {
             let text = await board(store)
@@ -816,7 +816,7 @@ final class RouterMCPServer: @unchecked Sendable {
     /// folder name you own), the only one by that name, and it has exactly one session not archived. A session's title
     /// named in prose never sends the message there on its own (a session sets its own title: "me how", "note to self"
     /// could capture anything); it only ranks the ask (`spokenAddressee`). Counted among every session not archived and
-    /// every project Fjord Computer knows, never only the few offered to Jev.
+    /// every project Fjord knows, never only the few offered to Jev.
     static func addressedSession(_ message: String, store: Store) -> String? {
         guard let to = addressee(message) else { return nil }
         let sessions = store.claudeSessions.values.filter { !$0.isArchived }
@@ -895,7 +895,7 @@ final class RouterMCPServer: @unchecked Sendable {
         let card = try card(store, Self.string(args, "card"))
         guard let raw = args["answers"] as? [String: Any], !raw.isEmpty else { throw Failure("`answers` must be an object of question → answer") }
         guard let form = store.pendingForm(for: card) else {
-            throw Failure("“\(card.title)” has no form Fjord Computer can answer (it isn't stopped on a question Fjord Computer's hook holds). Tell the user to answer it on the card or in Claude.")
+            throw Failure("“\(card.title)” has no form Fjord can answer (it isn't stopped on a question Fjord's hook holds). Tell the user to answer it on the card or in Claude.")
         }
         guard !form.isPlan else {
             throw Failure("“\(card.title)” waits on a plan, not a question: the user approves it, or sends it back, on its card or in Claude.")
@@ -916,7 +916,7 @@ final class RouterMCPServer: @unchecked Sendable {
             answers[question?.question ?? key] = text
         }
         try live(ticket)
-        guard let dir = store.formBridge.dir else { throw Failure("Fjord Computer isn't holding forms (the Router is off)") }
+        guard let dir = store.formBridge.dir else { throw Failure("Fjord isn't holding forms (the Router is off)") }
         // Still worth writing when its turn comes: the same Router, the card still open, the same form still held.
         let cardID = card.id, formID = form.id
         try await FormWriter.write(form, answers: answers, dir: dir) { [weak self, weak store] in
@@ -927,7 +927,7 @@ final class RouterMCPServer: @unchecked Sendable {
         return "Answered “\(card.title)”: " + form.questions.map { "\($0.question) = \(answers[$0.question] ?? "")" }.joined(separator: "; ")
     }
 
-    /// A project by Fjord Computer's name for it (case-insensitive), its folder's last component, or its path.
+    /// A project by Fjord's name for it (case-insensitive), its folder's last component, or its path.
     static func folder(_ query: String, folders: [String], name: (String) -> String) throws -> String {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let path = (q as NSString).expandingTildeInPath
@@ -1009,7 +1009,7 @@ final class RouterMCPServer: @unchecked Sendable {
         return out
     }
 
-    /// The Claude Code sessions Fjord Computer's plugin runs in now, read off the main thread.
+    /// The Claude Code sessions Fjord's plugin runs in now, read off the main thread.
     private func pluginSessions(_ store: Store) async -> Set<String> {
         guard let paths = store.routerFiles else { return [] }
         let presence = paths.pluginSessions
@@ -1023,7 +1023,7 @@ final class RouterMCPServer: @unchecked Sendable {
         }
     }
 
-    /// Your words go to a session only as your own: signed for Fjord Computer's plugin running in it. No plugin, no
+    /// Your words go to a session only as your own: signed for Fjord's plugin running in it. No plugin, no
     /// message. How long a sign waits for the key to be read again (it wasn't cached yet, or the file changed).
     var keyReloadWait: TimeInterval = 2
     /// Reads the key again (the store's, by default); tests hold it.
@@ -1059,18 +1059,18 @@ final class RouterMCPServer: @unchecked Sendable {
     private func signed(_ store: Store, _ ready: Prepared, title: String, cli: String?, ticket: Ticket,
                         settings: SessionSettings? = nil) async throws -> Prepared {
         // What the user says to the Router in an @router aside never goes on: if one is still there, nothing is sent. Text
-        // Fjord Computer wrote itself goes as it is.
+        // Fjord wrote itself goes as it is.
         if !verbatim { try noAside(ready.text) }
         guard store.routerPluginStatus == .installed else {
-            throw Failure("Fjord Computer's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
+            throw Failure("Fjord's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
         guard let cli else { throw Failure("“\(title)” isn't running in the Claude app: open it first (open_session)") }
         guard await pluginSessions(store).contains(cli) else {
-            throw Failure("\(title) started before Fjord Computer's plugin was installed: restart it or run /reload-plugins in it")
+            throw Failure("\(title) started before Fjord's plugin was installed: restart it or run /reload-plugins in it")
         }
         // Settings go only to a plugin that takes them; to an older one the message goes plain (the delivery says so).
         let settings = settings == nil ? nil : (await store.supportsSettings(cli) ? settings : nil)
-        // What your message tags goes after your words, fenced: Fjord Computer's, never inside them, and never read for an
+        // What your message tags goes after your words, fenced: Fjord's, never inside them, and never read for an
         // aside (checked above on your words alone).
         let body = verbatim ? ready.text : RouterPointers.attach(tagged, to: ready.text)
         var text = store.signRelay(body: body, target: cli, settings: settings)
@@ -1082,7 +1082,7 @@ final class RouterMCPServer: @unchecked Sendable {
             text = store.signRelay(body: body, target: cli, settings: settings)
         }
         guard let text else {
-            throw Failure("Fjord Computer couldn't sign the message (its plugin key is missing); nothing was sent")
+            throw Failure("Fjord couldn't sign the message (its plugin key is missing); nothing was sent")
         }
         var out = ready
         out.body = ready.text
@@ -1165,7 +1165,7 @@ final class RouterMCPServer: @unchecked Sendable {
         let noTask = message.isEmpty
         // Nothing to send it without the plugin: said before a session is made.
         guard store.routerPluginStatus == .installed else {
-            throw Failure("Fjord Computer's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
+            throw Failure("Fjord's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
         }
         // Prepared first: if a part for the Router is left in it, no session is made.
         let ready = noTask ? Prepared(text: "", original: "", rephrased: false)
@@ -1197,7 +1197,7 @@ final class RouterMCPServer: @unchecked Sendable {
             peer = try await waiter(held.waiting.sessionID)
         } else {
             guard let peersDir = store.routerFiles?.claudeDir.appendingPathComponent("sessions") else {
-                throw Failure("Fjord Computer isn't ready")
+                throw Failure("Fjord isn't ready")
             }
             do {
                 // Only the time running out is said so; Stop, a reset or the Router off ends the wait as itself.
@@ -1244,7 +1244,7 @@ final class RouterMCPServer: @unchecked Sendable {
         // One last look: the wait may have been slow, not the plugin.
         try live(ticket)
         if await pluginSessions(store).contains(cli) { return }
-        throw Failure("The new session started, but Fjord Computer's plugin didn't come up in it within \(Int(Self.bounded(pluginWait))) s; nothing was sent")
+        throw Failure("The new session started, but Fjord's plugin didn't come up in it within \(Int(Self.bounded(pluginWait))) s; nothing was sent")
     }
 
     /// The verified way to make a desktop session: a CLI session with no model call, imported by the app, then its process.
@@ -1279,15 +1279,15 @@ final class RouterMCPServer: @unchecked Sendable {
     /// JSON, `SessionStart.Held` when the app has the fork but doesn't run it yet.
     func forkSession(_ store: Store, _ request: SessionFork.Request, ticket: Ticket) async throws -> String {
         guard let session = store.claudeSessions[request.session], !session.isArchived, let cli = session.cliID else {
-            throw Failure("That session isn't one Fjord Computer knows (archived, or not found)")
+            throw Failure("Fjord doesn't know that session (archived, or not found)")
         }
         // Its id goes into a path and the CLI's arguments: only a UUID, as Claude Code makes them.
-        guard UUID(uuidString: cli) != nil else { throw Failure("That session's Claude Code id isn't one Fjord Computer can fork") }
+        guard UUID(uuidString: cli) != nil else { throw Failure("Fjord can't fork that session: its Claude Code id isn't a UUID") }
         let name = store.folderName(session.folderKey)
         let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
         if !message.isEmpty {
             guard store.routerPluginStatus == .installed else {
-                throw Failure("Fjord Computer's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
+                throw Failure("Fjord's plugin isn't installed in Claude Code, so nothing can be sent (Settings → Router)")
             }
         }
         // Prepared first: if a part for the Router is left in it, no session is made.

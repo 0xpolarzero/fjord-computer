@@ -3,9 +3,9 @@ import Foundation
 
 extension RouterTools {
     /// The dispatcher calls prepare, answerForm and startSession directly (a run is offered only the board and
-    /// Fjord Computer's own tools); the tests go on naming them as the tools they were.
+    /// Fjord's own tools); the tests go on naming them as the tools they were.
     func tool(_ name: String, _ args: [String: Any], ticket given: Ticket? = nil) async -> RouterRPC.ToolResult? {
-        guard let store else { return .error("Fjord Computer isn't ready") }
+        guard let store else { return .error("Fjord isn't ready") }
         let ticket = given ?? self.ticket()
         do {
             switch name {
