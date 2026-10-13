@@ -1,13 +1,12 @@
 import SwiftUI
 
-// The canvas is a beta you opt into (Settings › Claude › Canvas view (beta), `RouterModel.canvasBeta`): only then does the
-// top bar show List / Canvas, and only once you pick Canvas does Now become one. The list is the Router's own and is drawn
-// as it always was; what the canvas needs of its own lives here and in the other RouterCanvas files.
+// The canvas is a beta you try from the Router's top bar (List / Canvas, tagged Beta); Now is the list until you pick
+// Canvas. The list is the Router's own and is drawn as it always was; what the canvas needs of its own lives here and in
+// the other RouterCanvas files.
 
 extension RouterModel {
-    /// The beta turned on and Canvas picked, as you would in Settings then the top bar (shots and tests).
+    /// Canvas picked, as the top bar's switch does (shots and tests).
     func pickCanvas() {
-        canvasBeta = true
         layout = .canvas
     }
 }
@@ -50,7 +49,7 @@ struct CanvasNowColumn: View {
     }
 }
 
-/// List or Canvas, in the top bar while the beta is on: how Now is drawn. The pane switch's pill (`PaneSwitch`), its two
+/// List or Canvas, in the top bar: how Now is drawn. The pane switch's pill (`PaneSwitch`), its two
 /// segments icons named in their tips, Canvas's tip saying it is a beta, and a Beta tag beside the pill.
 struct RouterLayoutSwitch: View {
     let model: RouterModel

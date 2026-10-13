@@ -9,14 +9,12 @@ enum RouterPane: String {
 }
 
 /// How Now is drawn: the list of sections, or the canvas (each project a frame, its sessions grouped and joined to their
-/// group by lines), a beta you opt into in Settings (`RouterModel.canvasBeta`). Kept across launches with the window's other
+/// group by lines), a beta picked in the Router's top bar; the list by default. Kept across launches with the window's other
 /// preferences.
 enum RouterLayout: String {
     case list, canvas
 
     static let key = "routerLayout"
-    /// Whether the canvas's beta is on.
-    static let betaKey = "routerCanvasBeta"
 }
 
 /// A section of Now, top to bottom by whose move is next.

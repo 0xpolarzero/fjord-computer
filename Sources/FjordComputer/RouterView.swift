@@ -357,26 +357,12 @@ final class RouterModel {
     /// Where the folds are kept: the app's preferences for the window's model, none for shots and tests.
     @ObservationIgnored private let defaults: UserDefaults?
 
-    /// The canvas, a beta you opt into in Settings (off by default, kept as the folds are): only then can Now be drawn as
-    /// one, the top bar showing List / Canvas. Turned on or off, Now is the list until you pick Canvas.
-    var canvasBeta: Bool {
-        didSet {
-            guard canvasBeta != oldValue else { return }
-            defaults?.set(canvasBeta, forKey: RouterLayout.betaKey)
-            chosenLayout = .list
-        }
-    }
-    /// Now as you picked it while the beta is on, kept as the folds are.
-    private var chosenLayout: RouterLayout {
-        didSet {
-            guard chosenLayout != oldValue else { return }
-            defaults?.set(chosenLayout.rawValue, forKey: RouterLayout.key)
-        }
-    }
-    /// Now as a list or a canvas: the list whenever the canvas's beta is off, whatever was picked before.
+    /// Now as a list (the default) or a canvas (a beta, picked in the top bar), kept as the folds are.
     var layout: RouterLayout {
-        get { canvasBeta ? chosenLayout : .list }
-        set { chosenLayout = canvasBeta ? newValue : .list }
+        didSet {
+            guard layout != oldValue else { return }
+            defaults?.set(layout.rawValue, forKey: RouterLayout.key)
+        }
     }
     /// What the canvas keeps while the window lives: its camera, filter and folds (RouterCanvas.swift).
     let canvas: RouterCanvasState
@@ -384,8 +370,7 @@ final class RouterModel {
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
         folded = RouterZone.folds(in: defaults)
-        canvasBeta = defaults?.bool(forKey: RouterLayout.betaKey) ?? false
-        chosenLayout = defaults?.string(forKey: RouterLayout.key).flatMap(RouterLayout.init(rawValue:)) ?? .list
+        layout = defaults?.string(forKey: RouterLayout.key).flatMap(RouterLayout.init(rawValue:)) ?? .list
         canvas = RouterCanvasState(defaults: defaults)
     }
     /// A fold of yours, or while a search is on, of the search's (`shownFolds`).

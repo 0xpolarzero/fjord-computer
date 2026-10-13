@@ -120,8 +120,8 @@ struct RouterMain: View {
                 .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 14))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 24)
-            // List or Canvas, only while the canvas's beta is on (RouterCanvasBeta.swift).
-            if model.canvasBeta { RouterLayoutSwitch(model: model).padding(.trailing, 12) }
+            // List or Canvas, the canvas a beta (RouterCanvasBeta.swift).
+            RouterLayoutSwitch(model: model).padding(.trailing, 12)
             // The inbox's search field, on the Router's own search: it filters Now and History as you type.
             InboxSearchField(search: model.search, label: "Search the Router")
         }
