@@ -180,7 +180,7 @@ enum AppWindowShots {
         }, appearance: .darkAqua),
         Shot(name: "router-canvas-open-working", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             model.layout = .canvas
-            model.canvas.openRow = RouterModel.workingID("local_demo-lookout")
+            model.canvas.openRow = RouterModel.workingID("local_demo-ci")
         }, appearance: .aqua),
         Shot(name: "router-canvas-open-notes", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             Demo.routerTriage(store)

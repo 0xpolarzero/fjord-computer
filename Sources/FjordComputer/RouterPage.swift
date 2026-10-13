@@ -310,10 +310,6 @@ private struct NowColumn: View {
 
     var body: some View {
         let page = model.zones(store)
-        // A session moving between the zones is the same card travelling, unless it has one in both.
-        let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
-        let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
-        let travellingWorking = Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID)))
         if model.layout == .canvas {
             // The canvas (RouterCanvas.swift) under the same bar: it places what Now's scroll holds over itself.
             if #available(macOS 26, *) {
@@ -331,7 +327,17 @@ private struct NowColumn: View {
                     RouterCanvas(store: store, model: model, page: page, narrow: bar)
                 }
             }
-        } else if #available(macOS 26, *) {
+        } else {
+            list(page)
+        }
+    }
+
+    @ViewBuilder private func list(_ page: RouterPage) -> some View {
+        // A session moving between the zones is the same card travelling, unless it has one in both.
+        let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
+        let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
+        let travellingWorking = Set(page.working.map(\.id)).subtracting(Set(page.needs.map(\.sessionID)))
+        if #available(macOS 26, *) {
             // The chips and the Router's status line are the column's bar: Now runs under it and the page's top bar, with a
             // hard edge, as its sections' headers pin under it (glass-plan §5.3).
             RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
@@ -1900,24 +1906,39 @@ struct UnansweredLine: View {
 /// A session's newest summary, under its row: its whole text, wrapped, and how long ago it was made (its time on hover).
 struct WorkingSummary: View {
     let summary: RouterSummary
+    @Environment(\.cdsColumnWidth) private var columnWidth
 
     var body: some View {
         let at = summary.at
         let time = exactTime(at)
+        // Narrow (a card on the canvas), the age follows the text: a column of its own reads as stray numbers there.
+        let inline = columnWidth < 480
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 9, weight: .medium)).foregroundStyle(CDS.Text.muted)
                 .frame(width: 18)
-            Text(summary.text).cdsText((12, 16), .regular, CDS.Text.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            MinuteTicking { now in
-                Text(shortAgo(at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+            if inline {
+                MinuteTicking { now in
+                    (Text(summary.text).foregroundStyle(CDS.Text.secondary)
+                        + Text(" · " + shortAgo(at, now: now)).foregroundStyle(CDS.Text.muted).monospacedDigit())
+                        .cdsText((12, 16), .regular, CDS.Text.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .help(time)
+            } else {
+                Text(summary.text).cdsText((12, 16), .regular, CDS.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                MinuteTicking { now in
+                    Text(shortAgo(at, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
+                }
+                .help(time)
             }
-            .help(time)
         }
         // The age under the row's duration, past its two buttons.
-        .padding(.trailing, 60)
+        .padding(.trailing, inline ? 8 : 60)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Summary \(agoPhrase(at)), at \(time)")
         .accessibilityValue(summary.text)
@@ -2014,9 +2035,13 @@ struct WorkingCard: View {
         .background {
             if standalone {
                 // The Working list's box, around this card alone.
+                // Open, as a card in full is: its ground and its ring stronger.
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.03))
-                    .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
+                    .fill(marked || expanded ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.03))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(CDS.border.opacity(expanded ? 1 : 0.7), lineWidth: expanded ? 1.5 : 1)
+                    }
             } else {
                 marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : .clear
             }
@@ -2097,6 +2122,8 @@ struct WaitingCard: View {
     /// On the canvas, opened in place: a click shows its brief and text in full (Open in Claude stays beside it) rather
     /// than opening the session.
     var open: Binding<Bool>? = nil
+    /// On the canvas, picked (the keys, a banner, Jev): its ring stronger.
+    var marked = false
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -2105,8 +2132,24 @@ struct WaitingCard: View {
 
     private var line: String {
         if triage.told != nil { return "told it to continue" }
-        if let ready = triage.ready { return "ready to continue · \(triage.waitingLabel) finished: \(ready.result)" }
+        if let ready = triage.ready {
+            // On the canvas, at 420, what finished goes under it: the line keeps to what it is.
+            return standalone ? "ready to continue" : "ready to continue · \(triage.waitingLabel) finished: \(ready.result)"
+        }
         return "waiting for \(triage.waitingLabel)"
+    }
+
+    /// What finished, under the line on the canvas.
+    private var finished: String? {
+        guard standalone, triage.told == nil, let ready = triage.ready else { return nil }
+        return "\(triage.waitingLabel) finished: \(ready.result)"
+    }
+
+    private var spoken: String {
+        var text = line
+        if let finished { text += ", " + finished }
+        if let brief = card.brief { text += ". " + brief }
+        return text
     }
 
     var body: some View {
@@ -2126,7 +2169,9 @@ struct WaitingCard: View {
                         Text(card.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
                         Image(systemName: ready ? "checkmark.circle.fill" : "hourglass").font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(tint)
+                        // On the canvas the line is short and kept whole: the title gives way first.
                         Text(line).cdsText((12, 16), ready ? .medium : .regular, tint).lineLimit(1).truncationMode(.tail)
+                            .fixedSize(horizontal: standalone, vertical: false)
                         Spacer(minLength: 4)
                         MinuteTicking { now in
                             Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
@@ -2139,7 +2184,7 @@ struct WaitingCard: View {
                 .help(expanded ? "" : card.text)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(card.title)
-                .accessibilityValue(line + (card.brief.map { ". " + $0 } ?? ""))
+                .accessibilityValue(spoken)
                 .accessibilityHint(open == nil ? "Opens it in Claude" : expanded ? "Folds it" : "Shows it in full")
                 .accessibilityAddTraits(expanded ? .isSelected : [])
                 .accessibilityAction(named: "Open in Claude") { store.openAgent(card.sessionID) }
@@ -2151,6 +2196,11 @@ struct WaitingCard: View {
                 }
             }
             .canvasHeader()
+            if let finished {
+                Text(finished).cdsText((12, 16), .medium, tint).lineLimit(expanded ? nil : 1).truncationMode(.tail)
+                    .padding(.leading, 26).padding(.trailing, 8)
+                    .accessibilityHidden(true)
+            }
             // What it waits on and what comes after, in your words' style (RouterBrief.swift).
             if let brief = card.brief {
                 Text(RouterText.inline(brief)).cdsText((12, 16), .regular, CDS.Text.secondary)
@@ -2170,7 +2220,8 @@ struct WaitingCard: View {
             if standalone {
                 RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tint.opacity(ready ? 0.13 : hovered ? 0.09 : 0.06))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(ready ? 0.5 : 0.2), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(tint.opacity(marked || expanded ? 0.9 : ready ? 0.5 : 0.2), lineWidth: marked ? 1.5 : 1)
                     }
             } else {
                 tint.opacity(ready ? 0.13 : hovered ? 0.09 : 0.06)
@@ -2411,12 +2462,20 @@ struct CardView: View {
                         HStack(spacing: 8) { lead; title; Spacer(minLength: 4); age; archiveButton; openButton }
                     }
                 } else {
-                    // No project to drop: the age goes before the chips, which say more of the turn.
+                    // No project to drop: a title too long for the line gives way, its kind, the chips and its age kept.
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); age; archiveButton; openButton }
-                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); archiveButton; openButton }
-                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); Spacer(minLength: 4); archiveButton; openButton }
-                        HStack(spacing: 8) { lead; title; Spacer(minLength: 4); archiveButton; openButton }
+                        // Too long for the line: the title gives way, its kind, Jev's chips and its age kept.
+                        HStack(spacing: 8) {
+                            lead
+                            title.truncationMode(.tail).layoutPriority(0)
+                            KindTag(kind: card.kind).layoutPriority(1)
+                            TriageChips(triage: card.triage).fixedSize().layoutPriority(1)
+                            Spacer(minLength: 4)
+                            age.layoutPriority(1)
+                            archiveButton.layoutPriority(1)
+                            openButton.layoutPriority(1)
+                        }
                     }
                     .canvasHeader()
                 }
