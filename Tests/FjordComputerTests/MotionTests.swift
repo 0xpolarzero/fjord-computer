@@ -45,3 +45,32 @@ import Testing
         #expect(Motion.hover(on: false).resolved(reduce: true) == nil)
     }
 }
+
+@MainActor
+struct WindowArrivalTests {
+    @Test func anArrivalLastsUntilEveryOneBegunHasEnded() {
+        let arrival = WindowArrival(inTests: true)
+        let a = arrival.begin(), b = arrival.begin()
+        #expect(arrival.active)
+        arrival.end(a)
+        #expect(arrival.active, "b's arrival is still under way")
+        arrival.end(a)
+        #expect(arrival.active, "a token ends once")
+        arrival.end(b)
+        #expect(!arrival.active)
+    }
+
+    @Test func theAppWindowsArrivalsDoNothingInATestRun() {
+        let token = WindowArrival.appWindow.begin()
+        #expect(!WindowArrival.appWindow.active)
+        WindowArrival.appWindow.end(token)
+    }
+
+    @Test func arriveEndsOnceItsTransactionHasCommitted() async {
+        let arrival = WindowArrival(inTests: true)
+        arrival.arrive()
+        #expect(arrival.active)
+        await waitUntil { !arrival.active }
+        #expect(!arrival.active)
+    }
+}
