@@ -1,0 +1,5 @@
+**B-27: PARTLY.** FileHandle networking passed substitution, non-allowed-host passthrough, live revocation, and sequential guest isolation. The guest’s default `dig` query timed out, so HTTPS tests explicitly queried engine DNS before using `curl --resolve`.
+
+**Shortest viable architecture:** VZ FileHandle → datagram socketpair → Rust gateway → patched MicroSandbox `SmoltcpNetwork`, with guest route/DNS setup and the engine CA trusted in the System keychain.
+
+The 10 MiB transfer median was 245 ms / 42.8 MB/s through the frame engine versus 122 ms / 85.6 MB/s with Apple NAT. [Full probe report](/Users/polarzero/code/projects/lookout/docs/design/silo-api/probes/proxy.md) · [Gateway source](/Users/polarzero/silo-probes/proxy/src/gateway.rs). VMs, clones, and temporary keys were removed; source and small evidence remain.
