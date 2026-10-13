@@ -1347,10 +1347,13 @@ enum AppTransition {
         /// gone, a shadow's fade later. `fading`: the overlay's picture may not be the window's exactly (it changed since,
         /// and no fresh picture could be in before now without holding the handoff up), so the overlay fades out over the
         /// real window (`pictureFade`) rather than going at once.
-        func handoff(fading: Bool = false, reveal: @escaping () -> Void, handedOver: (() -> Void)? = nil,
-                     finished: @escaping () -> Void) {
+        /// `stillExact`: asked again as the overlay lets go of a picture it would cut away from (something asked of the
+        /// window in the refreshes since the check has it fade instead).
+        func handoff(fading: Bool = false, stillExact: (() -> Bool)? = nil, reveal: @escaping () -> Void,
+                     handedOver: (() -> Void)? = nil, finished: @escaping () -> Void) {
             handoffSignpost = MorphSignposts.signposter.beginInterval("Handoff")
             fadesOut = fadesOut || fading
+            self.stillExact = stillExact
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             reveal()
@@ -1383,6 +1386,7 @@ enum AppTransition {
         static let shadowHandoff: TimeInterval = 0.1
         /// The handoff under way fades the overlay out over the real window (see `handoff`).
         private(set) var fadesOut = false
+        private var stillExact: (() -> Bool)?
 
         /// The window moved on from the overlay's picture with no time left for a fresh one: the handoff (under way or to
         /// come) fades into the real window rather than cutting to it.
@@ -1394,6 +1398,8 @@ enum AppTransition {
         /// overlay's shadow gives way to the window's own, then the overlay goes. On glass G1, G2 and the picture's clip go
         /// with the container: the real sidebar replaces G2 on the same `s1`.
         private func letGo(_ mine: Int, takenOver: () -> Void, finished: @escaping () -> Void) {
+            if !fadesOut, let stillExact, !stillExact() { fadesOut = true }
+            stillExact = nil
             handedOver = true
             endHandoffSignpost()
             let going = MorphSignposts.signposter.beginInterval("Overlay going")

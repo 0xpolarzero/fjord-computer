@@ -443,7 +443,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             let exact = current.picture?.exact == true && current.glance != nil
                 && AppTransition.glance(of: window)?.same(as: current.glance) == true
             // Work that can wait goes once the real window shows (the overlay's shadow fades on the render server).
-            current.handoff(fading: !exact, reveal: { self.reveal(window) }, handedOver: { self.handedOver(mine) },
+            let checked = self.marks
+            current.handoff(fading: !exact, stillExact: { [weak self] in self?.marks == checked },
+                            reveal: { self.reveal(window) }, handedOver: { self.handedOver(mine) },
                             finished: { self.finishOpening(mine) })
         }
         // The motion submitted to the render server, nothing captured or built yet: the rest waits a turn.

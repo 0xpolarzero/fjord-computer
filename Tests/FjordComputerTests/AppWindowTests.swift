@@ -1174,6 +1174,28 @@ extension WindowSeams {
             }
         }
 
+        /// Something asked of the window between the handoff's check and the overlay letting go (two refreshes) has the
+        /// overlay fade into the real window rather than cut away from a picture that no longer stands for it.
+        @Test func somethingAskedAsTheOverlayLetsGoHasItFade() throws {
+            try morphing { controller, ticks in
+                AppTransition.enabled = false
+                controller.show(.done)
+                AppTransition.enabled = true
+                let window = try #require(controller.window)
+                for asked in [false, true] {
+                    let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: controller.bar()))
+                    defer { run.end() }
+                    run.open(reduced: false) {
+                        run.handoff(fading: false, stillExact: { !asked }, reveal: {}, finished: {})
+                    }
+                    run.complete()
+                    ticks.blocks.removeFirst()()
+                    ticks.blocks.removeFirst()()
+                    #expect(run.handedOver && run.fadesOut == asked)
+                }
+            }
+        }
+
         /// A close turned round takes no picture either: it hands over on the one it shows, or fades from it.
         @Test func aCloseTurnedRoundTakesNoPicture() {
             morphing { controller, ticks in
