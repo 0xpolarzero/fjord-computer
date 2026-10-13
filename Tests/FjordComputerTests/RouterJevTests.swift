@@ -231,6 +231,10 @@ import Testing
         s.claudeSessions["local_b"]?.title = "Rewrite the docs"
         model.revalidateTarget(store: s)
         #expect(model.live.prediction?.title == "Rewrite the docs" && calls() == 0)
+        // The composer's watch sees a rename of the pick's target as a change, though no target came or went.
+        let before = RouterModel.targets(s, predicted: "session:local_b")
+        s.claudeSessions["local_b"]?.title = "Rewrite the docs again"
+        #expect(RouterModel.targets(s, predicted: "session:local_b") != before)
     }
 
     @Test func aPinnedSessionThatIsGoneIsUnpinned() {

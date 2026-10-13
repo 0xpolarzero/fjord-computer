@@ -528,7 +528,9 @@ private struct LiveTargetWatch: View {
     var body: some View {
         if model.live.pinned != nil || model.live.prediction != nil {
             Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
-                .onChange(of: RouterModel.targets(store)) { model.revalidateTarget(store: store) }
+                .onChange(of: RouterModel.targets(store, predicted: model.live.prediction?.target)) {
+                    model.revalidateTarget(store: store)
+                }
         }
     }
 }
@@ -539,20 +541,28 @@ extension RouterModel {
         var cards: [String]
         var working: Set<String>
         var sessions: Set<String>
+        /// The words Jev's pick shows for its target, as they would be now (a session renamed changes them).
+        var predicted: String? = nil
 
         func contains(_ id: String) -> Bool { cards.contains(id) || working.contains(id) || sessions.contains(id) }
     }
 
     /// The open cards as stored (the page's order doesn't matter here: no sort of every card), the working rows and the
     /// sessions kept as sets.
-    static func targets(_ store: Store) -> Targets {
+    static func targets(_ store: Store, predicted: String? = nil) -> Targets {
         let tasks = store.routerTasks
+        let words = predicted.flatMap { target in
+            store.routerDispatcher.option(target, store: store).map {
+                RouterLiveTarget.title(target, $0) + "\n" + store.routerDispatcher.describe(target, store: store)
+            }
+        }
         return Targets(cards: store.router.cards.filter { $0.isOpen && RouterPage.shows($0, tasks: tasks) }.map(\.id),
                        // The Working rows' sessions, as `routerWorkingRows` picks them, unsorted: a set.
                        working: Set(store.allAgentRows.lazy
                            .filter { ($0.session.running && !$0.waitsForYou) || (!$0.session.running && !$0.tasks.isEmpty) }
                            .map { workingID($0.id) }),
-                       sessions: Set(store.claudeSessions.values.lazy.filter { !$0.isArchived }.map(\.id)))
+                       sessions: Set(store.claudeSessions.values.lazy.filter { !$0.isArchived }.map(\.id)),
+                       predicted: words)
     }
 
     /// The targets changed: a pick or pin that can't go there any more goes (and Jev is asked again for the draft as it is).
