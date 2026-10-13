@@ -537,18 +537,21 @@ extension RouterModel {
     /// What a pick or a pin can go to, and where the page shows it: the open cards, the working sessions, the sessions kept.
     struct Targets: Equatable {
         var cards: [String]
-        var working: [String]
+        var working: Set<String>
         var sessions: Set<String>
 
         func contains(_ id: String) -> Bool { cards.contains(id) || working.contains(id) || sessions.contains(id) }
     }
 
-    /// The open cards as stored (the page's order doesn't matter here: no sort of every card), the working rows, the
-    /// sessions kept as a set.
+    /// The open cards as stored (the page's order doesn't matter here: no sort of every card), the working rows and the
+    /// sessions kept as sets.
     static func targets(_ store: Store) -> Targets {
         let tasks = store.routerTasks
         return Targets(cards: store.router.cards.filter { $0.isOpen && RouterPage.shows($0, tasks: tasks) }.map(\.id),
-                       working: store.routerWorkingRows.map { workingID($0.id) },
+                       // The Working rows' sessions, as `routerWorkingRows` picks them, unsorted: a set.
+                       working: Set(store.allAgentRows.lazy
+                           .filter { ($0.session.running && !$0.waitsForYou) || (!$0.session.running && !$0.tasks.isEmpty) }
+                           .map { workingID($0.id) }),
                        sessions: Set(store.claudeSessions.values.lazy.filter { !$0.isArchived }.map(\.id)))
     }
 
