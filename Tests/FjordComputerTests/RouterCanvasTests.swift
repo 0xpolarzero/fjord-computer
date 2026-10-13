@@ -19,7 +19,7 @@ import Testing
 
     private func canvas(_ store: Store) -> RouterModel {
         let model = RouterModel()
-        model.layout = .canvas
+        model.pickCanvas()
         return model
     }
 

@@ -156,7 +156,7 @@ enum AccessibilityTree {
             if name == "Router" { model.selection = store.openRouterCards.first { $0.kind == .question }?.id }
             // The canvas with the question open on it, its form's controls counted too.
             if name == "Router canvas", let id = store.openRouterCards.first(where: { $0.kind == .question })?.id {
-                model.layout = .canvas
+                model.pickCanvas()
                 model.select(id, store: store)
             }
             let root = AppRootView(store: store, navigator: AppNavigator(start: destination(store), defaults: nil),

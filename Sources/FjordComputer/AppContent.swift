@@ -239,7 +239,7 @@ struct AppContent: View {
                                leadingInset: leadingInset)
             case .settings:
                 AppPage(title: "Settings", leadingInset: leadingInset, trailing: { EmptyView() }) {
-                    column { SettingsView(store: store, hub: hub) }
+                    column { SettingsView(store: store, hub: hub, routerModel: routerModel) }
                 }
             case .categories:
                 AppPage(title: "Inbox categories", leadingInset: leadingInset, trailing: { EmptyView() }) {

@@ -183,7 +183,7 @@ extension Store {
 // MARK: - Page
 
 private struct GutterKey: EnvironmentKey { static let defaultValue = CDS.Transcript.gutter }
-private extension EnvironmentValues {
+extension EnvironmentValues {
     /// The page's side margin: 32, 16 in a narrow column.
     var routerGutter: CGFloat {
         get { self[GutterKey.self] }
@@ -222,9 +222,16 @@ struct RouterPageView: View {
                     .allowsHitTesting(!historyHidden)
                     .accessibilityHidden(historyHidden)
                 if showsNow {
-                    NowColumn(store: store, model: model, height: height, bar: !wide)
-                        .column(nowWidth)
-                        .frame(width: nowWidth, height: height)
+                    // The canvas (a beta, RouterCanvas.swift) in Now's place when it is picked; the list otherwise.
+                    if model.layout == .canvas {
+                        CanvasNowColumn(store: store, model: model, bar: !wide)
+                            .column(nowWidth)
+                            .frame(width: nowWidth, height: height)
+                    } else {
+                        NowColumn(store: store, model: model, height: height, bar: !wide)
+                            .column(nowWidth)
+                            .frame(width: nowWidth, height: height)
+                    }
                 }
                 if wide {
                     Rectangle().fill(CDS.border).frame(width: CDS.hairline, height: height).offset(x: nowWidth)
@@ -306,33 +313,9 @@ private struct NowColumn: View {
     let height: CGFloat
     let bar: Bool
     @Namespace private var ns
-    @Environment(\.routerGutter) private var gutter
 
     var body: some View {
         let page = model.zones(store)
-        if model.layout == .canvas {
-            // The canvas (RouterCanvas.swift) under the same bar: it places what Now's scroll holds over itself.
-            if #available(macOS 26, *) {
-                RouterCanvas(store: store, model: model, page: page, narrow: bar)
-                    .safeAreaBar(edge: .top, spacing: 0) {
-                        VStack(spacing: 0) {
-                            chips(page)
-                            RouterBusyLine(store: store)
-                        }
-                        .background(CDS.Surface.s1)
-                    }
-            } else {
-                VStack(spacing: 0) {
-                    chips(page)
-                    RouterCanvas(store: store, model: model, page: page, narrow: bar)
-                }
-            }
-        } else {
-            list(page)
-        }
-    }
-
-    @ViewBuilder private func list(_ page: RouterPage) -> some View {
         // A session moving between the zones is the same card travelling, unless it has one in both.
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
@@ -358,25 +341,15 @@ private struct NowColumn: View {
         }
     }
 
-    @ViewBuilder private func chips(_ page: RouterPage) -> some View {
-        if model.layout == .canvas {
-            // The canvas's chips filter it, with its own buttons at the column's end (RouterCanvas.swift).
-            HStack(spacing: 12) {
-                if bar { PaneSwitch(store: store, model: model) }
-                CanvasBar(store: store, model: model, page: page, compact: bar, gutter: gutter)
-            }
-            .padding(.top, 6)
-            .padding(.bottom, 2)
-        } else {
-            HStack(spacing: 12) {
-                if bar { PaneSwitch(store: store, model: model) }
-                ZoneChips(model: model, page: page, compact: bar)
-                Spacer(minLength: 0)
-            }
-            .measured()
-            .padding(.top, 6)
-            .padding(.bottom, 2)
+    private func chips(_ page: RouterPage) -> some View {
+        HStack(spacing: 12) {
+            if bar { PaneSwitch(store: store, model: model) }
+            ZoneChips(model: model, page: page, compact: bar)
+            Spacer(minLength: 0)
         }
+        .measured()
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 }
 
@@ -399,72 +372,39 @@ private extension View {
 /// contained SegmentedControl (forms-buttons.md §5.4) as a pill, as its own app switch is (global-sidebar-titlebar.md
 /// §2): the white-5% track with 1 of padding, the side shown on the white-10% thumb with its ring, the names muted until
 /// shown or hovered. As tall as the sections' chips beside it, and drawn the same on both sides, so it never moves.
-private struct PaneSwitch: View {
+struct PaneSwitch: View {
     let store: Store
     let model: RouterModel
     @Environment(\.routerGutter) private var gutter
-
-    var body: some View {
-        PillSwitch(segments: [
-            // What needs you, as the badge counts it, and the messages waiting for you to say where they go.
-            .init(value: RouterPane.now, title: "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count,
-                  tint: CDS.Fill.warning, help: "What's live: what needs you, what waits and what works"),
-            .init(value: .history, title: "History", count: store.routerUnread.count, tint: CDS.Fill.accent,
-                  help: "The Router's conversation and what was handled"),
-        ], picked: model.pane, label: "Show") { model.show($0) }
-        .padding(.leading, gutter)
-    }
-}
-
-/// A pill of segments, one picked: the pane switch's look, for any choice. A segment is named, or an icon with its name in a
-/// tip; a count beside a name in its tint.
-struct PillSwitch<Value: Hashable>: View {
-    struct Segment {
-        let value: Value
-        var title: String
-        var icon: String? = nil
-        var count = 0
-        var tint: Color = CDS.Text.muted
-        var help: String? = nil
-    }
-
-    let segments: [Segment]
-    let picked: Value
-    let label: String
-    let pick: (Value) -> Void
-    @State private var hovered: Value?
+    @State private var hovered: RouterPane?
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(segments.indices, id: \.self) { segment(segments[$0]) }
+            // What needs you, as the badge counts it, and the messages waiting for you to say where they go.
+            segment(.now, "Now", count: store.routerCounts.needsYou + store.routerDispatcher.askBacks.count, tint: CDS.Fill.warning)
+            segment(.history, "History", count: store.routerUnread.count, tint: CDS.Fill.accent)
         }
         .padding(1)
         .frame(height: ZoneChip.height)
         // The track on the page's ground, so no history line scrolled under the switch shows through its names.
         .background(Capsule(style: .continuous).fill(CDS.Segmented.track).background(Capsule(style: .continuous).fill(CDS.Surface.s1)))
         .fixedSize()
+        .padding(.leading, gutter)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(label)
+        .accessibilityLabel("Show")
     }
 
-    @ViewBuilder private func segment(_ segment: Segment) -> some View {
-        let value = segment.value
-        let picked = self.picked == value
+    private func segment(_ pane: RouterPane, _ title: String, count: Int, tint: Color) -> some View {
+        let picked = model.pane == pane
         let thumb = ZoneChip.height - 2
-        let ink = picked || hovered == value ? CDS.Text.primary : CDS.Text.muted
-        let button = Button { pick(value) } label: {
+        return Button { model.show(pane) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if let icon = segment.icon {
-                    Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundStyle(ink)
-                        .frame(width: 14).frame(maxHeight: .infinity)
-                } else {
-                    Text(segment.title).cdsText((12, 16), .regular, ink)
-                }
-                if segment.count > 0 {
-                    Text(segment.count > 99 ? "99+" : "\(segment.count)").cdsText((12, 16), .medium, segment.tint).monospacedDigit()
+                Text(title).cdsText((12, 16), .regular, picked || hovered == pane ? CDS.Text.primary : CDS.Text.muted)
+                if count > 0 {
+                    Text(count > 99 ? "99+" : "\(count)").cdsText((12, 16), .medium, tint).monospacedDigit()
                 }
             }
-            .padding(.horizontal, segment.icon == nil ? CDS.Segmented.padX : 6)
+            .padding(.horizontal, CDS.Segmented.padX)
             .frame(maxHeight: .infinity)
             .background {
                 if picked {
@@ -476,15 +416,10 @@ struct PillSwitch<Value: Hashable>: View {
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 ? value : (hovered == value ? nil : hovered) }
-        .accessibilityLabel(segment.count > 0 ? "\(segment.title), \(segment.count)" : segment.title)
+        .onHover { hovered = $0 ? pane : (hovered == pane ? nil : hovered) }
+        .help(pane == .now ? "What's live: what needs you, what waits and what works" : "The Router's conversation and what was handled")
+        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
         .accessibilityAddTraits(picked ? .isSelected : [])
-        // An icon's name is its tip; a name's tip says more.
-        if segment.icon != nil {
-            button.tip(segment.title, segment.help)
-        } else {
-            button.help(segment.help ?? "")
-        }
     }
 }
 
@@ -1906,13 +1841,14 @@ struct UnansweredLine: View {
 /// A session's newest summary, under its row: its whole text, wrapped, and how long ago it was made (its time on hover).
 struct WorkingSummary: View {
     let summary: RouterSummary
-    @Environment(\.cdsColumnWidth) private var columnWidth
+    @Environment(\.canvasNodeID) private var canvasNode
 
     var body: some View {
         let at = summary.at
         let time = exactTime(at)
-        // Narrow (a card on the canvas), the age follows the text: a column of its own reads as stray numbers there.
-        let inline = columnWidth < 480
+        // On a card of the canvas, the age follows the text: a column of its own reads as stray numbers there. The list's
+        // rows keep theirs.
+        let inline = canvasNode != nil
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 9, weight: .medium)).foregroundStyle(CDS.Text.muted)
                 .frame(width: 18)

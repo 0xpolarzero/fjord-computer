@@ -29,15 +29,30 @@ import Testing
     @Test func theLayoutAndTheFramesFoldsAreKeptInTheWindowsPreferences() throws {
         let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
         let model = RouterModel(defaults: defaults)
+        #expect(model.layout == .list && !model.canvasBeta)
+        // The beta off: no canvas, whatever is asked.
+        model.layout = .canvas
+        #expect(model.layout == .list)
+        // On: still the list until Canvas is picked.
+        model.canvasBeta = true
         #expect(model.layout == .list)
         model.layout = .canvas
         let folder = try #require(make(RouterPage(), done: [card("d", "s", "/code/app", kind: .done, addressed: true)]).first)
         #expect(model.canvas.folded(folder))
         model.canvas.toggleFold(folder)
         let again = RouterModel(defaults: defaults)
-        #expect(again.layout == .canvas && !again.canvas.folded(folder))
+        #expect(again.canvasBeta && again.layout == .canvas && !again.canvas.folded(folder))
+        // Turned off, the list, and turned on again, still the list until Canvas is picked.
+        again.canvasBeta = false
+        #expect(again.layout == .list && RouterModel(defaults: defaults).layout == .list)
+        again.canvasBeta = true
+        #expect(again.layout == .list)
+        // A canvas kept from before with the beta off is the list.
+        defaults.set(RouterLayout.canvas.rawValue, forKey: RouterLayout.key)
+        defaults.set(false, forKey: RouterLayout.betaKey)
+        #expect(RouterModel(defaults: defaults).layout == .list)
         // Shots and tests keep nothing.
-        #expect(RouterModel().layout == .list)
+        #expect(RouterModel().layout == .list && !RouterModel().canvasBeta)
     }
 
     @Test func itemsGoToTheirFolderAndGroupScratchTooAndMutedFoldersAreLeftOut() throws {

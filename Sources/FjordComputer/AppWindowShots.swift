@@ -139,14 +139,14 @@ enum AppWindowShots {
             for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
         // Now as a canvas: each project a frame, its sessions grouped and joined to their groups by lines.
-        Shot(name: "router-canvas", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.layout = .canvas },
+        Shot(name: "router-canvas", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.pickCanvas() },
              appearance: .aqua),
-        Shot(name: "router-canvas-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.layout = .canvas },
+        Shot(name: "router-canvas-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.pickCanvas() },
              appearance: .darkAqua),
         // Jev's triage on the canvas: an OK asked, a turn asking two questions (one answered), sessions waiting and one ready.
         Shot(name: "router-canvas-triage", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             Demo.routerTriage(store)
-            model.layout = .canvas
+            model.pickCanvas()
         }, appearance: .aqua),
         // A card at the canvas's 420: its kind, Jev's chips, the approval's tint and how many questions are left.
         Shot(name: "router-canvas-card420", destination: { _ in .router }, size: canvasSize, compose: { model, store in
@@ -156,7 +156,7 @@ enum AppWindowShots {
                 store.router.cards[i].left = Array(asks.dropFirst().map(\.question))
                 store.router.cards[i].total = asks.count
             }
-            model.layout = .canvas
+            model.pickCanvas()
             // The second column, where microsandbox's frame is, at full size.
             model.canvas.camera.transform = CanvasTransform(origin: CGPoint(x: CanvasMetrics.pad - CanvasMetrics.frameWidth
                 - CanvasMetrics.colGap, y: CanvasMetrics.pad), scale: 1)
@@ -164,43 +164,43 @@ enum AppWindowShots {
         }, appearance: .darkAqua),
         Shot(name: "router-canvas-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 760), compose: { model, store in
             Demo.routerTriage(store)
-            model.layout = .canvas
+            model.pickCanvas()
         }, appearance: .aqua),
         // A card opened in place on the canvas: the question's form, the plan, a working session's summaries and tasks, a
         // finished turn worth a look, a finished one's details; the canvas gone to it.
         Shot(name: "router-canvas-open-needs", destination: { _ in .router }, size: canvasSize, compose: { model, store in
-            model.layout = .canvas
+            model.pickCanvas()
             if let card = store.router.cards.first(where: { $0.kind == .question && $0.isOpen }) {
                 model.select(card.id, store: store)
             }
         }, appearance: .aqua),
         Shot(name: "router-canvas-open-plan", destination: { _ in .router }, size: canvasSize, compose: { model, store in
-            model.layout = .canvas
+            model.pickCanvas()
             if let card = store.router.cards.first(where: { $0.kind == .plan && $0.isOpen }) { model.select(card.id, store: store) }
         }, appearance: .darkAqua),
         Shot(name: "router-canvas-open-working", destination: { _ in .router }, size: canvasSize, compose: { model, store in
-            model.layout = .canvas
+            model.pickCanvas()
             model.canvas.openRow = RouterModel.workingID("local_demo-ci")
         }, appearance: .aqua),
         Shot(name: "router-canvas-open-notes", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             Demo.routerTriage(store)
-            model.layout = .canvas
+            model.pickCanvas()
             if let card = model.zones(store).notes.first { model.select(card.id, store: store) }
         }, appearance: .aqua),
         Shot(name: "router-canvas-open-waiting", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             Demo.routerTriage(store)
-            model.layout = .canvas
+            model.pickCanvas()
             if let card = model.zones(store).ready.first { model.select(card.id, store: store) }
         }, appearance: .darkAqua),
         // The chips: only Needs you and Working shown, the other groups gone from their frames in place.
         Shot(name: "router-canvas-filter", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             Demo.routerTriage(store)
-            model.layout = .canvas
+            model.pickCanvas()
             model.canvas.filter = [.needs, .working]
         }, appearance: .aqua),
         // The frames of finished sessions only, opened from their fold.
         Shot(name: "router-canvas-done-open", destination: { _ in .router }, size: canvasSize, compose: { model, store in
-            model.layout = .canvas
+            model.pickCanvas()
             for folder in model.canvasFolders(store, page: model.zones(store)) where folder.doneOnly {
                 model.canvas.folderFolds[folder.key] = false
             }
@@ -211,15 +211,15 @@ enum AppWindowShots {
         }, appearance: .darkAqua),
         // A search on the canvas: only the frames with a match.
         Shot(name: "router-canvas-search", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
-            model.layout = .canvas
+            model.pickCanvas()
             model.search.query = "lcu"
         }, appearance: .aqua),
         // Your messages over the composer: one being sent, with what the Router is doing, and one it asks you about.
         Shot(name: "router-canvas-pending", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
-            model.layout = .canvas
+            model.pickCanvas()
         }, appearance: .aqua),
         Shot(name: "router-canvas-pending-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
-            model.layout = .canvas
+            model.pickCanvas()
         }, appearance: .darkAqua),
         // The message being sent goes to its session once the canvas is up, held mid-arc; an earlier one landed on a card.
         Shot(name: "router-canvas-flight", destination: { _ in .router }, size: canvasSize, compose: { model, store in
@@ -249,7 +249,7 @@ enum AppWindowShots {
     /// The demo's message under way sent to its session a moment after the canvas is drawn, its flight held halfway; and
     /// "You: …" on the plan card, as an earlier message left it.
     private static func flight(_ model: RouterModel, _ store: Store) {
-        model.layout = .canvas
+        model.pickCanvas()
         model.canvas.freezeFlight = 0.5
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(1200))

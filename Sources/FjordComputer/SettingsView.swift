@@ -9,6 +9,8 @@ struct SettingsView: View {
     static let accountAvatar: CGFloat = 32
     @Bindable var store: Store
     let hub: HubState
+    /// The Router's window state, for its canvas's beta; none where Settings is drawn without it.
+    var routerModel: RouterModel? = nil
     @Environment(\.accessibilityReduceMotion) private var reduce
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var launchError: String?
@@ -194,6 +196,20 @@ struct SettingsView: View {
             }
             SettingsDivider()
             sessionIcons
+            if let routerModel {
+                SettingsDivider()
+                canvasBeta(routerModel)
+            }
+        }
+    }
+
+    /// The Router's canvas, a beta: on, its top bar shows List / Canvas (RouterCanvasBeta.swift); Now stays the list until
+    /// you pick Canvas.
+    private func canvasBeta(_ model: RouterModel) -> some View {
+        SettingsRow("Canvas view (beta)",
+                    description: "Try the Router as a canvas: each project a frame, its sessions grouped by state.",
+                    info: ("Canvas view (beta)", "Adds a List / Canvas switch to the Router's top bar. On the canvas each project folder is a frame on a ground you pan and zoom, its sessions grouped under Needs you, Worth a look, Waiting, Working and Done. The list stays as it is, and Now shows it until you pick Canvas. Off, the Router is the list.")) {
+            SettingsSwitch("Canvas view (beta)", isOn: Binding(get: { model.canvasBeta }, set: { model.canvasBeta = $0 }))
         }
     }
 

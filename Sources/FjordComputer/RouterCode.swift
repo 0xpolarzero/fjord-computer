@@ -120,7 +120,8 @@ struct RouterMain: View {
                 .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 14))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 24)
-            RouterLayoutSwitch(model: model).padding(.trailing, 12)
+            // List or Canvas, only while the canvas's beta is on (RouterCanvasBeta.swift).
+            if model.canvasBeta { RouterLayoutSwitch(model: model).padding(.trailing, 12) }
             // The inbox's search field, on the Router's own search: it filters Now and History as you type.
             InboxSearchField(search: model.search, label: "Search the Router")
         }
@@ -130,19 +131,6 @@ struct RouterMain: View {
         .onChange(of: model.search.query) { model.searchChanged(store: store) }
         // The page's ground behind its title line, so nothing scrolled under it shows through the title.
         .background(CDS.Surface.s1)
-    }
-}
-
-/// List or Canvas, in the top bar: how Now is drawn.
-struct RouterLayoutSwitch: View {
-    let model: RouterModel
-
-    var body: some View {
-        PillSwitch(segments: [
-            .init(value: RouterLayout.list, title: "List", icon: "list.bullet", help: "Now as sections, one under the other"),
-            .init(value: .canvas, title: "Canvas", icon: "square.on.square.dashed",
-                  help: "Each project a frame, its sessions grouped; pan, pinch, double-click to fit"),
-        ], picked: model.layout, label: "Show Now as") { model.layout = $0 }
     }
 }
 
