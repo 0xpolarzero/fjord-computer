@@ -333,10 +333,10 @@ import Testing
         try process.run()
         defer { Self.reap(process) }
         // Ready once it catches SIGTERM: before that (the binary still loading), the signal would kill it outright.
-        let ready = Self.waitUntil(within: 60) { Self.catches(SIGTERM, pid: process.processIdentifier) || !process.isRunning }
+        let ready = Self.waitUntil { Self.catches(SIGTERM, pid: process.processIdentifier) || !process.isRunning }
         #expect(ready && process.isRunning)
         process.terminate()
-        let quit = Self.waitForExit(process, within: 60)
+        let quit = Self.waitForExit(process)
         Self.reap(process)
         try? stdin.fileHandleForWriting.close()
         #expect(quit && process.terminationReason == .exit && process.terminationStatus == 0)
@@ -344,13 +344,14 @@ import Testing
     }
 
     /// A watchdog, not a timing budget: the outcome is what's checked.
-    private static func waitForExit(_ process: Process, within seconds: TimeInterval) -> Bool {
-        waitUntil(within: seconds) { !process.isRunning }
+    private static func waitForExit(_ process: Process) -> Bool {
+        waitUntil { !process.isRunning }
     }
 
-    private static func waitUntil(within seconds: TimeInterval, _ done: () -> Bool) -> Bool {
+    /// `waitUntil` for these synchronous tests, against the same watchdog; whether `done` held is the test's to check.
+    private static func waitUntil(_ done: () -> Bool) -> Bool {
         let started = Date()
-        while !done() && Date().timeIntervalSince(started) < seconds { Thread.sleep(forTimeInterval: 0.01) }
+        while !done() && Date().timeIntervalSince(started) < waitWatchdog { Thread.sleep(forTimeInterval: 0.01) }
         return done()
     }
 
@@ -385,7 +386,7 @@ import Testing
         defer { Self.reap(process) }
         stdin.fileHandleForWriting.write(request(transcript: nil, tool: "Bash"))
         try stdin.fileHandleForWriting.close()
-        let quit = Self.waitForExit(process, within: 60)
+        let quit = Self.waitForExit(process)
         Self.reap(process)
         #expect(quit && process.terminationStatus == 0)
         #expect(stdout.fileHandleForReading.readDataToEndOfFile().isEmpty)

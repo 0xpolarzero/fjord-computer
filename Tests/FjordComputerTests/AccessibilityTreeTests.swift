@@ -72,9 +72,9 @@ enum AccessibilityTree {
     }
 
     /// The tree once it is `ready` and the same over several turns of the main actor in a row (SwiftUI has drawn what it had
-    /// pending), however slow the machine; a watchdog of a minute, past which the test fails.
+    /// pending), however slow the machine; the shared watchdog, past which the test fails.
     private static func settled(_ hosting: NSView, ready: (AXNode) -> Bool) async -> AXNode {
-        let deadline = Date().addingTimeInterval(60)
+        let deadline = Date().addingTimeInterval(waitWatchdog)
         var last: AXNode?, same = 0
         while Date() < deadline {
             try? await Task.sleep(for: .milliseconds(20))
@@ -87,7 +87,7 @@ enum AccessibilityTree {
         // Never ready, or never still: the tree read now would prove nothing (an empty one has no unnamed control).
         hosting.layoutSubtreeIfNeeded()
         let tree = node(hosting)
-        Issue.record("The accessibility tree wasn't ready and steady within a minute (\(ready(tree) ? "still changing" : "no controls"))")
+        Issue.record("The accessibility tree wasn't ready and steady within \(waitWatchdog) s (\(ready(tree) ? "still changing" : "no controls"))")
         return tree
     }
 
