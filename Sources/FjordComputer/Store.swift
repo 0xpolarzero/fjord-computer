@@ -514,15 +514,24 @@ final class Store {
     /// `load()`, then `startServices()`: launch can run them a turn apart (the bar shown between them).
     func start() {
         load()
+        wireNotifications()
         startServices()
     }
 
-    /// Everything that runs once the state is loaded (`load()`): notifications, updates, the sleep observer, GitHub's
-    /// polling, Claude's sessions, the Router, the code folders and the Keychain's read.
+    /// The banners' clicks routed to the store and the notification center's delegate set: at launch, before it finishes
+    /// (a click that launched the app is delivered then) and before anything chains its own routing onto `notifier.onOpen`
+    /// (`RouterBanners.attach`), which `startServices` leaves alone.
+    func wireNotifications() {
+        notifier.onOpen = { [weak self] id, url in self?.openNotification(id: id, url: url) }
+        notifier.attach()
+    }
+
+    /// Everything that runs once the state is loaded (`load()`) and the banners wired (`wireNotifications()`): asking for
+    /// banners, updates, the sleep observer, GitHub's polling, Claude's sessions, the Router, the code folders and the
+    /// Keychain's read.
     func startServices() {
         if !UnderTest.isRunning { ClaudeMark.warm() }
-        notifier.onOpen = { [weak self] id, url in self?.openNotification(id: id, url: url) }
-        notifier.setup()
+        notifier.requestAuthorization()
         updater.automatic = { [weak self] in self?.settings.checkUpdates ?? true }
         updater.skipped = { [weak self] in self?.settings.skippedVersion }
         updater.onSkip = { [weak self] in self?.settings.skippedVersion = $0 }

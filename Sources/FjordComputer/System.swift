@@ -17,11 +17,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private var available: Bool { Self.canReachSystem }
     private nonisolated static var canReachSystem: Bool { Bundle.main.bundleIdentifier != nil && !UnderTest.isRunning }
 
-    func setup() {
+    /// The notification center's delegate: set as launch finishes, so the click on a banner that launched the app is
+    /// heard.
+    func attach() {
         guard available else { return }
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    /// Asks for banners (the system prompts once); can wait until the app has shown its bar.
+    func requestAuthorization() {
+        guard available else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     /// Whether macOS refuses this app's banners: said no at the first prompt, or turned off since in System Settings.
@@ -467,9 +473,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let name = CommandLine.arguments.dropFirst(i + 1).first ?? ""
             Demo.populate(store, Demo.Scenario(rawValue: name) ?? .busy)
         } else {
-            // The state now, what runs on it (notifications, updates, polling, Claude's sessions, the Router, the code
-            // folders) once the bar has been drawn: see the end of this function.
+            // The state now, and the banners' delegate and routing (before the Router's chains onto it, below); what runs on
+            // the state (updates, polling, Claude's sessions, the Router, the code folders) once the bar has been drawn: see
+            // the end of this function.
             store.load()
+            store.wireNotifications()
         }
         let demo = CommandLine.arguments.contains("--demo")
         let window = AppWindowController(store: store)
