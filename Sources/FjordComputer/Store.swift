@@ -484,8 +484,15 @@ final class Store {
 
     // MARK: Lifecycle
 
+    /// `load()`, then `startServices()`: launch can run them a turn apart (the bar shown between them).
     func start() {
         load()
+        startServices()
+    }
+
+    /// Everything that runs once the state is loaded (`load()`): notifications, updates, the sleep observer, GitHub's
+    /// polling, Claude's sessions, the Router, the code folders and the Keychain's read.
+    func startServices() {
         notifier.onOpen = { [weak self] id, url in self?.openNotification(id: id, url: url) }
         notifier.setup()
         updater.automatic = { [weak self] in self?.settings.checkUpdates ?? true }
