@@ -108,6 +108,15 @@ struct CategoryEditor: View {
             .scrollIndicators(.never)
         }
         .task(id: c.name) { await pickIcon() }
+        // The name changed in the store by something else while a typed one waited (the Router renaming it): that one
+        // stands, and what was typed is dropped. (Undo and redo write what waits first, `CategoryHistory.flush`.)
+        .onChange(of: c.name) { _, _ in
+            guard typedName != nil else { return }
+            nameWrite?.cancel()
+            nameWrite = nil
+            PendingEdits.release(nameField)
+            typedName = nil
+        }
         .onAppear { if isNew { nameFocused = true } }
     }
 

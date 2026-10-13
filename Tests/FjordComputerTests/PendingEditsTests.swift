@@ -41,3 +41,22 @@ struct PendingEditsFlushTests {
         #expect(written == ["a"], "each write once")
     }
 }
+
+@MainActor
+struct PendingEditsUndoTests {
+    @Test func undoWritesATypedNameStillWaitingThenTakesItBack() {
+        let store = InboxFixture.store([InboxFixture.pr(1)])
+        let history = CategoryHistory(store: store)
+        let before = store.categories[0].name
+        let field = UUID()
+        PendingEdits.hold(field) {
+            PendingEdits.release(field)
+            store.categories[0].name = "Typed"
+        }
+        history.undo(store)
+        #expect(store.categories[0].name == before, "undo took the typed name back, nothing landed over it")
+        #expect(history.canRedo)
+        history.redo(store)
+        #expect(store.categories[0].name == "Typed")
+    }
+}

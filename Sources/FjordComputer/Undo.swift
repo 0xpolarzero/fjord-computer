@@ -157,8 +157,10 @@ final class CategoryHistory {
         lastField = nil
     }
 
-    /// An edit the page has not yet been told about counts as the step it belongs to.
+    /// An edit the page has not yet been told about counts as the step it belongs to: one still waiting for its typing to
+    /// pause (`PendingEdits`) is written first, so undo takes it back rather than it landing over what undo put back.
     private func flush(_ store: Store) {
+        PendingEdits.flushAll()
         observe(store, field: lastField, now: lastAt)
     }
 
