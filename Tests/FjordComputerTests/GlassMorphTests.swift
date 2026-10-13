@@ -238,6 +238,8 @@ import Testing
     @Test func theGlassMorphLastsTheSpringsSettlingTime() {
         #expect(abs(GlassMorph.duration(.opening) - 9.23 / 946.0.squareRoot()) < 0.0001)
         #expect(abs(GlassMorph.duration(.closing) - 9.23 / 946.0.squareRoot()) < 0.0001)
+        // The bar's own fade on a close lasts as long as the close, glass or not.
+        #expect(abs(AppTransition.duration - GlassMorph.duration(.closing)) < 0.005)
         // About 0.30 s each way.
         #expect(abs(GlassMorph.duration(.opening) - 0.30) < 0.005 && abs(GlassMorph.duration(.closing) - 0.30) < 0.005)
     }

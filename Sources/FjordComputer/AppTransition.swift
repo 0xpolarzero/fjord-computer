@@ -1234,14 +1234,11 @@ enum AppTransition {
                                                 container: (0.1, 0.45), glass: (0.7, 0.3))
         }
 
-        /// The length of the motion for `spring`: its settling time; on glass, the critically damped spring's as one curve
-        /// (`GlassMorph`), which the glass can run.
+        /// The length of the motion for `spring`, glass or not: the critically damped spring's time to within 0.1% of its
+        /// end (`GlassMorph.duration`, 0.30 s), which the bar's own fade on a close matches (`AppTransition.duration`).
+        /// Core Animation's `settlingDuration` asks for more (0.35 s), the last 0.05 s moving under a point.
         func motionLength(_ spring: Spring) -> TimeInterval {
-            if isGlass { return GlassMorph.duration(spring) }
-            let total = CASpringAnimation(keyPath: "x")
-            total.stiffness = spring.stiffness
-            total.damping = spring.damping
-            return total.settlingDuration
+            GlassMorph.duration(spring)
         }
 
         /// From `start` (else from where the layers are now). `lead`: how long before the spring settles `done` runs.
@@ -1280,7 +1277,7 @@ enum AppTransition {
                     s.stiffness = spring.stiffness
                     s.damping = spring.damping
                     s.initialVelocity = 0
-                    s.duration = s.settlingDuration
+                    s.duration = length
                     animation = s
                 }
                 animation.fromValue = a

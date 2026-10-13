@@ -123,6 +123,20 @@ extension WindowSeams {
             window.setContentSize(NSSize(width: 101, height: 80))
             #expect(!picture.fits(window, glass: true, sidebar: sidebar))
         }
+
+        /// Without glass the morph lasts as long as with it, and as the bar's fade on a close: 0.30 s, not Core Animation's
+        /// 0.35 s settling time.
+        @Test func theMorphWithoutGlassLastsAsLongAsTheBarsFade() throws {
+            _ = NSApplication.shared
+            let window = AwayWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 400, height: 300)),
+                                    styleMask: [.titled], backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: nil, glass: false))
+            defer { run.end() }
+            #expect(!run.isGlass && run.motionLength(.closing) == GlassMorph.duration(.closing))
+            #expect(abs(run.motionLength(.closing) - AppTransition.duration) < 0.005)
+        }
     }
 }
 
