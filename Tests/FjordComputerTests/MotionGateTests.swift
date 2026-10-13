@@ -194,3 +194,52 @@ import Testing
         #expect(s.inboxError != nil)
     }
 }
+
+/// A poll, and a refresh that stops early, say nothing while the window moves.
+@MainActor @Suite struct PollHeldByMotion {
+    private func store(_ gate: MotionGate.Gate) -> Store {
+        let s = Store()
+        s.persists = false
+        s.settings.triage = true
+        s.motionGate = gate
+        return s
+    }
+
+    @Test func aPollStartsAndEndsOnlyOnceTheWindowIsStill() async {
+        let gate = MotionGate.Gate()
+        let s = store(gate)
+        s.me = nil
+        s.gh.token = nil
+        s.resolveToken = { nil }
+        gate.began()
+        let poll = Task { await s.pollAll() }
+        for _ in 0..<200 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.waitingCount == 1)
+        #expect(!s.isSyncing && s.authError == nil && s.lastSync == nil)
+        gate.ended()
+        await poll.value
+        #expect(s.authError != nil && s.lastSync != nil && !s.isSyncing)
+    }
+
+    @Test func aRefreshThatStopsAtItsTeamsSaysSoOnlyOnceTheWindowIsStill() async {
+        final class Ref: @unchecked Sendable { var gate: MotionGate.Gate? }
+        let gate = MotionGate.Gate(), ref = Ref()
+        ref.gate = gate
+        let s = store(gate)
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        // The window starts to open while GitHub is asked for your teams.
+        s.gh.session = StubbedGitHub.session { _ in
+            DispatchQueue.main.sync { MainActor.assumeIsolated { ref.gate?.began() } }
+            return .init(502, #"{"message":"Server Error"}"#)
+        }
+        s.categories = [InboxCategory(name: "Team", symbol: "eye", color: .blue, rules: [
+            Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested])),
+        ])]
+        let sync = Task { await s.syncInbox() }
+        for _ in 0..<200 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.waitingCount == 1 && s.inboxError == nil)
+        gate.ended()
+        await sync.value
+        #expect(s.inboxError?.hasPrefix("Your teams couldn't be looked up") == true)
+    }
+}

@@ -1281,6 +1281,9 @@ extension Store {
         let window = InboxSync.workflowWindow(allTargets, cursor: inboxSyncState.workflowCursor)
         let targets = window.targets
         guard !searches.isEmpty || !targets.isEmpty || !unknownOwners.isEmpty else {
+            // Taken in once the window's morph has played (`MotionGate`), as any refresh's results are.
+            await motionGate.still()
+            guard current() else { return }
             // Nothing asked for: every thing is gone, and its marks start their month.
             applyThings([:])
             inboxError = nil
@@ -1776,7 +1779,13 @@ extension Store {
     /// The repos you own and those you merged a PR in. Kept for a day.
     func resolveRepos(me: String) async throws {
         let fence = inboxFence
-        let json = try await gh.graphql(InboxSync.reposRequest(me: me))
+        let json: [String: Any]
+        do { json = try await gh.graphql(InboxSync.reposRequest(me: me)) } catch {
+            // Said (by the refresh) once the window's morph has played, as what it found is taken in.
+            await motionGate.still()
+            throw error
+        }
+        await motionGate.still()
         guard inboxFence == fence else { return }
         guard let data = json["data"] as? [String: Any] else {
             throw GitHubError(message: ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer")
@@ -1853,11 +1862,14 @@ extension Store {
         let fence = inboxFence
         let json: [String: Any]
         do { json = try await gh.graphql(InboxSync.teamsRequest(me: me)) } catch {
+            // Said (by the refresh) once the window's morph has played, as what it found is taken in.
+            await motionGate.still()
             // Asked for an account signed out since: its failure isn't the new one's to wait on.
             guard inboxFence == fence else { return nil }
             inboxSyncState.teamsFailedAt = Date()
             return error.localizedDescription
         }
+        await motionGate.still()
         guard inboxFence == fence else { return nil }
         guard let data = json["data"] as? [String: Any] else {
             inboxSyncState.teamsFailedAt = Date()

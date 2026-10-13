@@ -1224,6 +1224,8 @@ final class Store {
             lastAuthAttempt = Date()
             let find = resolveToken
             let resolved = await Task.detached(operation: find).value
+            // What it found is said once the window's morph has played (`MotionGate`).
+            await motionGate.still()
             guard asked == credentialsChanged else { return }
             guard let (token, source) = resolved else {
                 gh.token = nil
@@ -1237,14 +1239,11 @@ final class Store {
             tokenSource = source
             foundAt = asked
         }
+        let user: GHUser
         do {
-            let user = try await gh.get("/user", as: GHUser.self)
-            guard asked == credentialsChanged else { return }
-            me = user
-            authError = nil
-            awaitingSignIn = false
-            unreachable = false
+            user = try await gh.get("/user", as: GHUser.self)
         } catch {
+            await motionGate.still()
             guard asked == credentialsChanged else { return }
             if error is URLError {
                 // Only a missing or refused token is a sign-in problem: an earlier one is not this attempt's.
@@ -1255,7 +1254,14 @@ final class Store {
             me = nil
             unreachable = false
             signInFailed(error.localizedDescription)
+            return
         }
+        await motionGate.still()
+        guard asked == credentialsChanged else { return }
+        me = user
+        authError = nil
+        awaitingSignIn = false
+        unreachable = false
     }
 
     /// Sets the sign-in problem. The editor in Settings closes once the Keychain has a token, before GitHub answers, so the
@@ -1312,10 +1318,20 @@ final class Store {
     // MARK: Polling
 
     /// Nothing with Triage off, a refresh asked for meanwhile included.
+    /// Started, and its end said (`isSyncing`, `lastSync`, a token GitHub refused), once the window's morph has played
+    /// (`MotionGate`): all of it is observed.
     func pollAll() async {
+        await motionGate.still()
         guard triageOn, !isSyncing else { return }
         isSyncing = true
-        defer {
+        let synced = await pollOnce()
+        await motionGate.still()
+        if synced, gh.tokenRejected { dropRejectedToken() }
+        finishPoll()
+    }
+
+    private func finishPoll() {
+        do {
             isSyncing = false
             lastSync = Date()
             if rateRemaining != gh.rateRemaining { rateRemaining = gh.rateRemaining }
@@ -1337,6 +1353,10 @@ final class Store {
                 Task { await pollAll() }
             }
         }
+    }
+
+    /// One poll: the sign-in, then the inbox's refresh; whether it got that far.
+    private func pollOnce() async -> Bool {
         // Signed out: look for a token when asked (Retry, a refresh) or once the backoff has passed. One already held is
         // asked about at every poll: that is a request, not a look in the Keychain and `gh`.
         let asked = authRetry
@@ -1347,9 +1367,9 @@ final class Store {
             await authenticate()
         }
         // Switched off while it signed in: nothing is fetched.
-        guard me != nil, triageOn else { return }
-        defer { if gh.tokenRejected { dropRejectedToken() } }
+        guard me != nil, triageOn else { return false }
         await syncInbox(manual: asked)
+        return true
     }
 
     /// How long a repo's default branch is taken as known before it is looked up again (an unchanged answer is a 304).
