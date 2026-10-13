@@ -1,0 +1,29 @@
+name: Commits
+
+# Every commit pushed to main starts with a conventional type: "feat: ", "fix: ", "perf: " and so on (no scope).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  prefix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check each new commit's prefix
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          range="$BEFORE..$GITHUB_SHA"
+          git cat-file -e "$BEFORE^{commit}" 2>/dev/null || range="-1 $GITHUB_SHA"
+          bad=$(git log --no-merges --format='%h %s' $range | grep -vE '^[0-9a-f]+ (feat|fix|perf|refactor|test|docs|build|ci|chore|style|revert): ' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Commits without a conventional prefix (feat:, fix:, perf:, refactor:, test:, docs:, build:, ci:, chore:, style:, revert:)"
+            echo "$bad"
+            exit 1
+          fi

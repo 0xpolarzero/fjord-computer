@@ -26,6 +26,10 @@ Shots can't show:
 
 Only for those, and only when the user asks for a live check, build the bundle (`./scripts/build-app.sh`) and drive it with LCU. Live runs steal focus and add to the Dock.
 
+## Commits
+
+Every commit message starts with a conventional type and no scope: `feat: `, `fix: `, `perf: `, `refactor: `, `test: `, `docs: `, `build: `, `ci: `, `chore: `, `style: ` or `revert: `, then the usual plain sentence about the result. The Commits workflow fails on a push to main with a commit that doesn't.
+
 ## Tests
 
 Run `scripts/test.sh`, or a filtered `swift test --filter <Suite>` while iterating. One run at a time; never run test loads in parallel or in loops.
