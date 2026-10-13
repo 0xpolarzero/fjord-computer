@@ -10,10 +10,10 @@ struct SettingsView: View {
     @Bindable var store: Store
     let hub: HubState
     @Environment(\.accessibilityReduceMotion) private var reduce
-    @State private var launchAtLogin = LaunchAtLogin.isEnabled
+    @State private var launchAtLogin = SystemState.known.launchAtLogin
     @State private var launchError: String?
     @State private var restoreError: String?
-    @State private var accessibilityTrusted = AXIsProcessTrusted()
+    @State private var accessibilityTrusted = SystemState.known.accessibility
     @State private var notificationsBlocked = false
 
     static let updatesID = "updates"
@@ -29,8 +29,10 @@ struct SettingsView: View {
                     tools
                     if store.triageOn { account }
                     notifications.id(Self.notificationsID)
-                    if store.router.enabled { claude }
-                    if store.triageOn || store.router.enabled { CodeFoldersSettings(store: store) }
+                    // The Router's own sections read the Router's state in views of their own: what changes with every read of
+                    // Claude's sessions redraws them, not the whole page.
+                    if store.routerOn { RouterSettings(store: store, part: .claude) }
+                    if store.triageOn || store.routerOn { CodeFoldersSettings(store: store) }
                     shortcuts
                     updates.id(Self.updatesID)
                     general.id(Self.generalID)
@@ -48,10 +50,38 @@ struct SettingsView: View {
         // The page is kept while the window is closed: what the system holds is read again when it is back, and a pasted
         // secret that wasn't saved doesn't wait behind a closed window. A login item that failed to change says so only
         // until then: what the system now holds is what the switch shows (it may have been fixed in System Settings).
-        .onAppear {
-            launchAtLogin = LaunchAtLogin.isEnabled
-            launchError = nil
-            accessibilityTrusted = AXIsProcessTrusted()
+        .onAppear { launchError = nil }
+        // Asked of the system off the main thread (the login item is an XPC call), after the page shows: it opens on what
+        // was last read, and changes only if the system changed since.
+        .task {
+            let now = await SystemState.read()
+            if launchAtLogin != now.launchAtLogin { launchAtLogin = now.launchAtLogin }
+            if accessibilityTrusted != now.accessibility { accessibilityTrusted = now.accessibility }
+        }
+    }
+
+    /// What Settings shows of the system: the login item and Accessibility access, as last read. Read once when first
+    /// asked for, then again each time Settings shows (`read`), never as the page's view is made (which is on every redraw
+    /// of what holds it).
+    @MainActor enum SystemState {
+        struct Known { var launchAtLogin: Bool; var accessibility: Bool }
+        private static var last: Known?
+
+        static var known: Known {
+            if let last { return last }
+            let now = Known(launchAtLogin: LaunchAtLogin.isEnabled, accessibility: AXIsProcessTrusted())
+            last = now
+            return now
+        }
+
+        static func remember(launchAtLogin on: Bool) { last?.launchAtLogin = on }
+
+        static func read() async -> Known {
+            let now = await Task.detached(priority: .userInitiated) {
+                Known(launchAtLogin: LaunchAtLogin.isEnabled, accessibility: AXIsProcessTrusted())
+            }.value
+            last = now
+            return now
         }
     }
 
@@ -74,7 +104,7 @@ struct SettingsView: View {
                 SettingsSwitch("Triage", isOn: Binding(get: { store.triageOn }, set: { store.setTool(.triage, on: $0) }))
             }
             SettingsDivider()
-            router
+            RouterSettings(store: store, part: .tool)
         }
     }
 
@@ -181,6 +211,124 @@ struct SettingsView: View {
         }
     }
 
+    private var updates: some View {
+        let updater = store.updater
+        return SettingsSection("Updates") {
+            Ticking(coarse: true) { now in
+                SettingsRow("Fjord Computer \(updater.current)", description: updateStatus(now), descriptionColor: updateStatusColor) {
+                    if updater.isRelease { updateButton }
+                }
+            }
+            if updater.isRelease {
+                SettingsDivider()
+                SettingsRow("Check for updates automatically") {
+                    SettingsSwitch("Check for updates automatically", isOn: Binding(
+                        get: { store.settings.checkUpdates ?? true },
+                        set: { store.settings.checkUpdates = $0 }
+                    ))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var updateButton: some View {
+        let updater = store.updater
+        switch updater.phase {
+        case .available, .failed:
+            ActionButton(updater.phase == .available ? "Download & install" : "Try again") { updater.advance() }
+        case .ready:
+            ActionButton("Restart to update") { updater.install() }
+        case .downloading, .installing:
+            EmptyView()
+        case .idle:
+            ActionButton(updater.checking ? "Checking…" : "Check now") {
+                store.settings.skippedVersion = nil
+                Task { await updater.check(manual: true) }
+            }
+            .disabled(updater.checking)
+        }
+    }
+
+    private func updateStatus(_ now: Date) -> String {
+        let updater = store.updater
+        guard updater.isRelease else { return "Development build: updates come from git" }
+        let version = updater.release?.version ?? ""
+        switch updater.phase {
+        case .available: return "Version \(version) is available"
+        case .downloading: return "Downloading \(version)… \(Int(updater.fraction * 100))%"
+        case .ready: return "Version \(version) is ready to install"
+        case .installing: return "Installing…"
+        case .failed(let message): return message
+        case .idle:
+            if let error = updater.checkError { return error }
+            guard let last = updater.lastCheck else { return "Not checked yet" }
+            return "Up to date · checked \(agoPhrase(last, now: now))"
+        }
+    }
+
+    private var updateStatusColor: Color {
+        switch store.updater.phase {
+        case .failed: CDS.Text.danger
+        case .available, .ready: CDS.Text.accent
+        default: store.updater.checkError == nil ? CDS.Text.muted : CDS.Text.danger
+        }
+    }
+
+    private var general: some View {
+        SettingsSection("General") {
+            if store.triageOn {
+                SettingsRow("Check every") {
+                    SettingsSegmented(label: "Check every",
+                                      options: [("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)],
+                                      selection: $store.settings.pollInterval)
+                        .onChange(of: store.settings.pollInterval) { store.restartPolling() }
+                }
+                SettingsDivider()
+            }
+            SettingsRow("Launch at login", description: launchError, descriptionColor: CDS.Text.danger) {
+                // Your switch changes the login item; the page reading it again from the system (back after a close) doesn't.
+                SettingsSwitch("Launch at login", isOn: Binding(get: { launchAtLogin }, set: { on in
+                    launchAtLogin = on
+                    launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
+                    SystemState.remember(launchAtLogin: on)
+                }))
+            }
+            SettingsDivider()
+            SettingsRow("Center the bar on its edge") {
+                SettingsSwitch("Center the bar on its edge", isOn: Binding(
+                    get: { store.settings.centerPill ?? false },
+                    set: { store.settings.centerPill = $0 }
+                ))
+            }
+            SettingsDivider()
+            // Destructive actions are a secondary button on their row (settings.md §3.5), never red.
+            SettingsRow("Quit Fjord Computer",
+                        info: ("Quit Fjord Computer", "Stops checking GitHub and takes the bar away until it's opened again")) {
+                ActionButton("Quit Fjord Computer") { NSApp.terminate(nil) }
+            }
+        }
+    }
+
+}
+
+/// Settings' Router parts: its switch with how it is doing (in Tools), and the Claude section. What they read of the store
+/// (the Router's state, the sessions' folders, the agents' settings) changes with every read of Claude's sessions, so they are
+/// views of their own and only they redraw for it.
+private struct RouterSettings: View {
+    enum Part { case tool, claude }
+
+    @Bindable var store: Store
+    let part: Part
+
+    private var footnote: (CGFloat, CGFloat) { CDS.Density.comfortable.footnote }
+
+    var body: some View {
+        switch part {
+        case .tool: router
+        case .claude: claude
+        }
+    }
+
     private var claude: some View {
         SettingsSection("Claude") {
             routerStyle
@@ -203,12 +351,12 @@ struct SettingsView: View {
         let needsClaude = !store.router.enabled && !Claude.isInstalled
         SettingsRow("Router",
                     description: needsClaude ? "Needs the Claude desktop app" : nil,
-                    adornment: Self.toolMark(.router),
+                    adornment: SettingsView.toolMark(.router),
                     info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Fjord Computer or answers a question. Messages reach your sessions through Fjord Computer's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
             SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setTool(.router, on: $0) }))
                 .disabled(needsClaude)
         }
-        .id(Self.routerID)
+        .id(SettingsView.routerID)
         // Off, but taking the hook or the plugin out failed: that stays in sight, with a way to try again.
         if !store.router.enabled, let error = store.routerRemovalError {
             SettingsRow(nil, description: "Couldn't take the Router out of Claude Code: \(error)", descriptionColor: CDS.Text.danger) {
@@ -338,104 +486,6 @@ struct SettingsView: View {
             .disabled(unmuted.isEmpty)
         }
     }
-
-    private var updates: some View {
-        let updater = store.updater
-        return SettingsSection("Updates") {
-            Ticking(coarse: true) { now in
-                SettingsRow("Fjord Computer \(updater.current)", description: updateStatus(now), descriptionColor: updateStatusColor) {
-                    if updater.isRelease { updateButton }
-                }
-            }
-            if updater.isRelease {
-                SettingsDivider()
-                SettingsRow("Check for updates automatically") {
-                    SettingsSwitch("Check for updates automatically", isOn: Binding(
-                        get: { store.settings.checkUpdates ?? true },
-                        set: { store.settings.checkUpdates = $0 }
-                    ))
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var updateButton: some View {
-        let updater = store.updater
-        switch updater.phase {
-        case .available, .failed:
-            ActionButton(updater.phase == .available ? "Download & install" : "Try again") { updater.advance() }
-        case .ready:
-            ActionButton("Restart to update") { updater.install() }
-        case .downloading, .installing:
-            EmptyView()
-        case .idle:
-            ActionButton(updater.checking ? "Checking…" : "Check now") {
-                store.settings.skippedVersion = nil
-                Task { await updater.check(manual: true) }
-            }
-            .disabled(updater.checking)
-        }
-    }
-
-    private func updateStatus(_ now: Date) -> String {
-        let updater = store.updater
-        guard updater.isRelease else { return "Development build: updates come from git" }
-        let version = updater.release?.version ?? ""
-        switch updater.phase {
-        case .available: return "Version \(version) is available"
-        case .downloading: return "Downloading \(version)… \(Int(updater.fraction * 100))%"
-        case .ready: return "Version \(version) is ready to install"
-        case .installing: return "Installing…"
-        case .failed(let message): return message
-        case .idle:
-            if let error = updater.checkError { return error }
-            guard let last = updater.lastCheck else { return "Not checked yet" }
-            return "Up to date · checked \(agoPhrase(last, now: now))"
-        }
-    }
-
-    private var updateStatusColor: Color {
-        switch store.updater.phase {
-        case .failed: CDS.Text.danger
-        case .available, .ready: CDS.Text.accent
-        default: store.updater.checkError == nil ? CDS.Text.muted : CDS.Text.danger
-        }
-    }
-
-    private var general: some View {
-        SettingsSection("General") {
-            if store.triageOn {
-                SettingsRow("Check every") {
-                    SettingsSegmented(label: "Check every",
-                                      options: [("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)],
-                                      selection: $store.settings.pollInterval)
-                        .onChange(of: store.settings.pollInterval) { store.restartPolling() }
-                }
-                SettingsDivider()
-            }
-            SettingsRow("Launch at login", description: launchError, descriptionColor: CDS.Text.danger) {
-                // Your switch changes the login item; the page reading it again from the system (back after a close) doesn't.
-                SettingsSwitch("Launch at login", isOn: Binding(get: { launchAtLogin }, set: { on in
-                    launchAtLogin = on
-                    launchError = Self.launchFailure(turningOn: on, using: LaunchAtLogin.set)
-                }))
-            }
-            SettingsDivider()
-            SettingsRow("Center the bar on its edge") {
-                SettingsSwitch("Center the bar on its edge", isOn: Binding(
-                    get: { store.settings.centerPill ?? false },
-                    set: { store.settings.centerPill = $0 }
-                ))
-            }
-            SettingsDivider()
-            // Destructive actions are a secondary button on their row (settings.md §3.5), never red.
-            SettingsRow("Quit Fjord Computer",
-                        info: ("Quit Fjord Computer", "Stops checking GitHub and takes the bar away until it's opened again")) {
-                ActionButton("Quit Fjord Computer") { NSApp.terminate(nil) }
-            }
-        }
-    }
-
 }
 
 /// GitHub's sign-in, as Settings and the onboarding show it: who is signed in and with what, then a token to paste.
