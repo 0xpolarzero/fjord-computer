@@ -14,6 +14,8 @@ enum InboxTab: Hashable {
 extension EnvironmentValues {
     /// Opens the app window on a place. The window controller in the app; a toast in shots.
     @Entry var openApp: (AppDestination) -> Void = { _ in }
+    /// Opens the app window where it was left (the mark at the end of the bar).
+    @Entry var reopenApp: () -> Void = {}
     /// Opens the app window on Settings, scrolled to Updates.
     @Entry var openUpdates: () -> Void = {}
     /// Opens the app window on the Router, on a card if one is given.
@@ -191,6 +193,7 @@ struct FjordHub: View {
     @Environment(\.accessibilityReduceMotion) var reduce
     /// Opens the app window on a place, or on a Router card.
     @Environment(\.openApp) var openApp
+    @Environment(\.reopenApp) var reopenApp
     @Environment(\.openUpdates) var openUpdates
     @Environment(\.openRouter) var openRouter
     @Environment(\.pickRouterCard) var pickRouterCard
@@ -327,7 +330,7 @@ struct FjordHub: View {
     var vertical: some View {
         VStack(spacing: 0) {
             VStack(spacing: 0) { mainRows }
-            // Last, the gear: hover for the controls, a click for Settings.
+            // Last, Fjord's mark: hover for the controls, a click for the window where it was left.
             if store.triageOn || store.routerOn { sectionDivider }
             controlsCell.padding(.vertical, 9)
                 .frame(width: Self.cell)
@@ -400,7 +403,7 @@ struct FjordHub: View {
             .frame(height: Self.cell)
     }
 
-    /// The bar along the top or bottom: the inbox's segment, the Router's, the gear, the update button.
+    /// The bar along the top or bottom: the inbox's segment, the Router's, Fjord's mark, the update button.
     @ViewBuilder var strip: some View {
         if store.triageOn {
             let sections = store.barSections

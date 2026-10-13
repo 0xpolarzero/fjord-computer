@@ -364,7 +364,7 @@ extension WindowSeams {
             await Self.concurrently(Self.edges) { edge in
                 let rig = await Rig(edge: edge, scenario: .router)
                 defer { rig.close() }
-                for (section, cell) in [(HubSection.router, "Router"), (.controls, "Controls")] {
+                for (section, cell) in [(HubSection.router, "Router"), (.controls, "Fjord")] {
                     #expect(await rig.open(section, cell: cell), "\(edge) \(cell): no panel")
                     await rig.hoverEachItem(cell)
                     await rig.graceElapsed()

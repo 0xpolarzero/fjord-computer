@@ -396,6 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The bar is back on its edge while the window is out of sight (another app in front, minimized), away when it returns.
         window.onFront = { [weak hub] front in hub?.setWindowFront(front) }
         hub.openApp = { [weak self] in self?.showWindow($0) }
+        hub.reopenApp = { [weak self] in self?.showWindow(nil) }
         hub.openUpdates = { [weak self] in
             self?.appWindow?.showUpdates()
             self?.hub?.setWindowOpen(true)

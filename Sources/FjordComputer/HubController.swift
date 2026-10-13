@@ -90,6 +90,7 @@ struct HubRoot: View {
     let hub: HubState
     let layout: HubLayout
     var openApp: (AppDestination) -> Void = { _ in }
+    var reopenApp: () -> Void = {}
     var openUpdates: () -> Void = {}
     var openRouter: (String?) -> Void = { _ in }
     var openRouterMessage: (UUID) -> Void = { _ in }
@@ -104,6 +105,7 @@ struct HubRoot: View {
             .coordinateSpace(.named(FjordHub.rootSpace))
             .environment(chrome)
             .environment(\.openApp, openApp)
+            .environment(\.reopenApp, reopenApp)
             .environment(\.openUpdates, openUpdates)
             .environment(\.openRouter, openRouter)
             .environment(\.openRouterMessage, openRouterMessage)
@@ -182,6 +184,10 @@ final class HubController {
     /// Opens the app window on a place (the app's delegate owns it).
     var openApp: (AppDestination) -> Void = { _ in } {
         didSet { host.rootView.openApp = { [weak self] in self?.opened($0) } }
+    }
+    /// Opens the app window where it was left.
+    var reopenApp: () -> Void = {} {
+        didSet { host.rootView.reopenApp = { [weak self] in self?.reopened() } }
     }
     /// Opens the app window on Settings, scrolled to Updates: the window's own Settings is the one that scrolls.
     var openUpdates: () -> Void = {} {
@@ -266,6 +272,7 @@ final class HubController {
         stretched = false
         host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout,
                                 openApp: { [weak self] in self?.opened($0) },
+                                reopenApp: { [weak self] in self?.reopened() },
                                 openUpdates: { [weak self] in self?.openedUpdates() },
                                 openRouter: { [weak self] in self?.opened(.router, card: $0) },
                                 openRouterMessage: { [weak self] in self?.pickRouterMessage($0); self?.opened(.router) },
@@ -398,6 +405,12 @@ final class HubController {
         hub.cancelDwell()
         if let card { pickRouterCard(card) }
         openApp(destination)
+    }
+
+    /// The mark at the end of the bar: the app window, where it was left.
+    private func reopened() {
+        hub.cancelDwell()
+        reopenApp()
     }
 
     /// Check for Updates, from the bar's menu: the app window opens on Settings, scrolled to Updates.
