@@ -193,8 +193,16 @@ import Testing
         model.predictTarget(store: s)
         await waitUntil { model.live.prediction != nil }
         #expect(calls() == 1 && model.live.prediction?.target == "answer:local_a#w1")
+        // Gone and back with the same words: the pick is still theirs, and nothing is asked again.
         model.live.suspend()
+        model.predictTarget(store: s)
+        try? await Task.sleep(for: .milliseconds(250))
+        #expect(calls() == 1 && model.live.prediction?.target == "answer:local_a#w1")
+        // Back with other words: they are asked about.
+        model.live.suspend()
+        type("use postgres for the database instead", model, s)
         #expect(model.live.prediction == nil)
+        await waitUntil { calls() == 2 }
     }
 
     @Test func aPickWhoseCardIsAddressedGoesWithItsMark() async {

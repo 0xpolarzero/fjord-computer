@@ -84,9 +84,12 @@ struct RouterComposer: View {
         }
         .onAppear {
             if on { requestFocus() }
-            // What was pinned before the page was left may be gone since (the watch below only sees changes from now on).
+            // What was pinned or picked before the page was left may be gone since (the watch below only sees changes from
+            // now on). A pick still good for the draft as it is stays, and asks Jev nothing: only new words are asked about.
             model.live.revalidate(store: store)
             model.predictTarget(store: store)
+            // Its card or row marked again, unless something else is marked for now (it comes back after).
+            if model.highlighted == nil, let mark = model.live.prediction?.mark { model.markPrediction(from: nil, to: mark) }
         }
         .onChange(of: model.focusRequest) { requestFocus() }
         .onDisappear {

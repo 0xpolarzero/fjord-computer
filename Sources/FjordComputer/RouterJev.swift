@@ -136,12 +136,12 @@ final class RouterLiveTarget {
         predicted = RouterDispatcher.liveKey(prediction.text, [])
     }
 
-    /// The composer is gone (its window closed, the page left): nothing more is asked, and no pick is shown, until it is
-    /// back. What you pinned or waved off stays with the draft.
+    /// The composer is gone (its window closed, the page left): nothing more is asked until it is back, and a question on
+    /// its way is dropped. What you pinned or waved off stays with the draft, and so does a pick already in for it: back
+    /// with the same words, it shows again (once `revalidate` has checked its target) without asking Jev again; with
+    /// other words, it goes and they are asked about.
     func suspend() {
         cancel()
-        clear()
-        current = nil
     }
 
     /// Sent or cleared: everything starts over.
