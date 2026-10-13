@@ -93,6 +93,9 @@ enum AppTransition {
     static let clickableAlpha: CGFloat = 0.01
     /// A fresh picture fading in over another (or over the bare surface) during an opening.
     static let pictureFade: TimeInterval = 0.12
+    /// A close with no picture of the window as it is: the live window fades out in place over this, above the overlay
+    /// already shrinking beneath it, rather than anything being captured before the motion.
+    static let liveFade: TimeInterval = 0.1
     static let curve = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
     /// A window's corner radius when the system does not say.
     static let fallbackRadius: CGFloat = 16
@@ -201,10 +204,10 @@ enum AppTransition {
         }
     }
 
-    /// The pixel scale of a picture that may be soft: half the window's (1x on a Retina screen, some 3.6 times cheaper to
-    /// draw), never under 1. A close's shrink and fade, or a picture under a cross-fade, hide it.
+    /// The pixel scale of a picture that may be soft: half the window's (1x on a Retina screen, 0.5 on a 1x one: a quarter
+    /// of the pixels, some 3.6 times cheaper to draw). A close's shrink and fade, or a picture under a cross-fade, hide it.
     static func reducedScale(of window: NSWindow) -> CGFloat {
-        max(1, window.backingScaleFactor / 2)
+        window.backingScaleFactor / 2
     }
 
     /// What a picture of `window` at `pixelScale` would cost now (`costs`).

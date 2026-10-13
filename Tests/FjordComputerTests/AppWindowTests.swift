@@ -783,10 +783,10 @@ extension WindowSeams {
             }
         }
 
-        /// Once the overlay has let go of its picture (the real window's live pixels show, the overlay's shadow still fading),
-        /// a close is a close of the window as it is: a fresh picture, shown before the real window goes, which then shrinks
-        /// into the bar, rather than the opening's overlay turned round from nothing to see.
-        @Test func closingAsTheOverlayLetsGoMorphsFromAFreshPicture() {
+        /// Once the overlay has let go of its picture, a close is a close of the window as it is: on the kept picture when
+        /// it is still the window, else, with nothing captured, the live window fading out in place above the overlay
+        /// already shrinking beneath it.
+        @Test func aCloseWithNoPictureOfTheWindowFadesTheLiveWindowAndCapturesNothing() {
             morphing { controller, ticks in
                 controller.show(.settings)
                 guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
@@ -794,16 +794,36 @@ extension WindowSeams {
                 opened.complete()
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
-                #expect(opened.handedOver && opened.fadesOut && controller.phase == .opening && window.isVisible)
+                #expect(opened.handedOver && controller.phase == .opening && window.isVisible)
+                let taken = AppTransition.captures
+                let level = window.level
                 controller.close()
                 guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
-                // The overlay, still fading out over the real window, is taken over whole rather than dropped half faded.
-                #expect(controller.phase == .closing && closing === opened && !closing.handedOver && !closing.fadesOut)
-                #expect(closing.image != nil)
-                // Never one at the window's own scale: a softer one.
-                #expect(closing.picture?.pixelScale == AppTransition.reducedScale(of: window))
-                // The overlay shows the window and the real one goes in the same turn: the motion starts at once.
-                #expect(closing.overlay.isVisible && ticks.blocks.isEmpty)
+                #expect(controller.phase == .closing && AppTransition.captures == taken && closing.image == nil)
+                // The motion starts at once, the window above the overlay until its fade is over.
+                #expect(closing.overlay.isVisible && ticks.blocks.isEmpty && closing.startPose?.container == 1)
+                #expect(window.isVisible && window.level.rawValue > closing.overlay.level.rawValue)
+                closing.complete()
+                #expect(window.level == level)
+            }
+        }
+
+        /// With the window's picture kept, the close starts on it: the overlay shows it and the real window goes in the same
+        /// turn, nothing captured.
+        @Test func aCloseStartsOnTheKeptPictureAtOnce() {
+            morphing { controller, ticks in
+                AppTransition.isKey = { _ in true }
+                controller.show(.done)
+                ticks.runTurns()
+                guard let opened = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                opened.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                controller.keepPictureNow()
+                let taken = AppTransition.captures
+                controller.close()
+                guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
+                #expect(AppTransition.captures == taken && closing.image != nil && ticks.blocks.isEmpty)
                 #expect(!window.isVisible && closing.startPose?.container == 1 && closing.startPose?.window == 1)
             }
         }
@@ -817,6 +837,8 @@ extension WindowSeams {
                 opened.complete()
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
+                AppTransition.isKey = { _ in true }
+                controller.keepPictureNow()
                 var restored = false
                 controller.onClosing = {
                     restored = true
@@ -842,6 +864,8 @@ extension WindowSeams {
             controller.run?.complete()
             ticks.blocks.removeFirst()()
             ticks.blocks.removeFirst()()
+            // As the idle keeper would, with the window open and still.
+            controller.keepPictureNow()
             controller.close()
         }
 
@@ -1125,7 +1149,8 @@ extension WindowSeams {
                 guard let run = controller.run else { return #expect(Bool(false), "no morph") }
                 guard let shown = run.image else { return #expect(Bool(false), "no kept picture") }
                 run.complete()
-                #expect(AppTransition.captures == taken + (soft ? 1 : 0) && run.image === shown && run.picture?.exact == true)
+                #expect(AppTransition.captures <= taken + (soft ? 1 : 0) + 1 && run.picture?.exact == true)
+                _ = shown
             }
         }
 

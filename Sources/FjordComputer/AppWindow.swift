@@ -407,6 +407,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
+        // A close's live fade turned round: the window back under the overlay.
+        restoreLevel()
         // Work that can wait holds until the window has handed over (`handedOver`), or a close that takes over ends.
         span.begin("Open")
         generation += 1
@@ -637,6 +639,14 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// The idle keeper's timer, while it runs (the tests look).
     var keeperTimer: Timer? { pictureKeeper }
 
+    /// The picture the keeper would keep, taken at once at the window's own scale whatever its pace, phase or budget: for
+    /// the tests, which have no idle to wait for.
+    func keepPictureNow() {
+        guard let window, !memoryShort else { return }
+        closedPicture = AppTransition.picture(of: window, glassWindow: glassWindow(window), glass: AppTransition.usesGlass,
+                                              destination: navigator.selection, marks: marks)
+    }
+
     /// One look of the idle keeper (see `keepPictureFresh`).
     func keepPicture() {
         defer { if keeping, pictureKeeper == nil { scheduleKeeper(after: keeperPace) } }
@@ -772,6 +782,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         stopKeepingPicture()
         let existing = interrupting ? run : nil
         let current: AppTransition.Run?
+        var liveFade = false
         let chrome = glassWindow(sender)
         if let existing {
             current = existing
@@ -779,8 +790,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             if fading == nil { run?.end() }
             let glass = AppTransition.usesGlass
             let barMorph = AppTransition.reduceMotion ? nil : bar()
-            // The picture kept at idle, when the window is still (near enough, `Glance.closeTolerance`) as it was drawn
-            // then: the close starts on it at once. Otherwise a soft one is taken now, before anything moves.
+            // The picture kept at idle, when the window is still (near enough, `Glance.closeTolerance`, nothing having
+            // happened to it since) as it was drawn then: the close starts on it at once. Nothing is ever captured here
+            // (what a capture costs depends on what the window shows: up to 520 ms); without such a picture the live
+            // window fades out in place over the overlay shrinking beneath it.
             let now = AppTransition.glance(of: sender)
             let picture: AppTransition.Picture?
             if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar), AppTransition.isKey(sender),
@@ -788,11 +801,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                                        tolerance: AppTransition.Glance.closeTolerance) != .stale {
                 picture = kept
             } else {
-                // Never one at the window's own scale (520 ms on heavy content): a softer one, a quarter of its pixels,
-                // which the shrink and its fade (gone by half of it) hide.
-                picture = AppTransition.takePicture(of: sender, glassWindow: chrome, glass: glass,
-                                                    destination: navigator.selection, glance: now, restoreLater: true,
-                                                    pixelScale: AppTransition.reducedScale(of: sender), marks: marks)
+                picture = nil
             }
             if let fading, let picture, fading.isGlass == glass {
                 // On the overlay still fading out: back to the window's picture whole, from where it is.
@@ -800,10 +809,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 current = fading
             } else {
                 fading?.end()
-                current = picture.flatMap {
-                    AppTransition.makeRun(for: sender, picture: $0, bar: barMorph, glassWindow: chrome, glass: glass)
-                }
+                current = AppTransition.makeRun(for: sender, picture: picture, bar: barMorph, glassWindow: chrome,
+                                                glass: glass)
             }
+            liveFade = picture == nil
         }
         guard let current else {
             MorphSignposts.signposter.endInterval("Close to first flush", asked)
@@ -814,6 +823,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // Kept for the next opening to start on, when it was taken with the window key, as it was taken (an opening cut
         // short may still show the place, the sidebar or the size it started on), unless memory is short.
         if !memoryShort, let picture = current.picture, picture.key { closedPicture = picture }
+        if liveFade {
+            // Above the overlay for its fade: the overlay's bare surface and glass shrink beneath the window going.
+            liftedLevel = liftedLevel ?? sender.level
+            sender.level = NSWindow.Level(rawValue: current.overlay.level.rawValue + 1)
+        }
         if !interrupting {
             // The overlay shows the window before the real one goes, in this turn: its frame is submitted to the render
             // server ahead of the window going, which reaches the server after it, so no frame shows neither.
@@ -824,15 +838,38 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // key window out takes some 11 ms (its key and main status handed on). After the overlay's flush, not inside its
         // transaction: if AppKit sends the alpha with the next commit, it lands with or after the overlay either way; if it
         // sends it at once, only this order has the overlay's frame reach the server first.
-        sender.alphaValue = 0
+        if liveFade {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = AppTransition.liveFade * Double(AppTransition.slowdown)
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                sender.animator().alphaValue = 0
+            } completionHandler: { [weak self, weak sender] in
+                MainActor.assumeIsolated {
+                    guard let self, let sender, self.generation == mine else { return }
+                    sender.orderOut(nil)
+                    self.restoreLevel()
+                }
+            }
+        } else {
+            sender.alphaValue = 0
+        }
         current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }
             self.finishClosing(sender, mine)
         }
         MorphSignposts.signposter.endInterval("Close to first flush", asked)
-        if generation == mine { sender.orderOut(nil) }
+        if generation == mine, !liveFade { sender.orderOut(nil) }
         if generation == mine { onClosing?() }
         return false
+    }
+
+    /// The window's own level, while a close's live fade has it above the overlay.
+    private var liftedLevel: NSWindow.Level?
+
+    private func restoreLevel() {
+        guard let liftedLevel else { return }
+        window?.level = liftedLevel
+        self.liftedLevel = nil
     }
 
     private func finishClosing(_ window: NSWindow, _ mine: Int) {
@@ -841,6 +878,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         run = nil
         phase = .idle
         span.end()
+        restoreLevel()
         window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false
