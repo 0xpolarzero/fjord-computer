@@ -56,6 +56,25 @@ enum AppPolicy {
             MainActor.assumeIsolated { remember(app) }
         }
         remember(NSWorkspace.shared.frontmostApplication)
+        becameActive = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
+                                                              queue: .main) { _ in
+            MainActor.assumeIsolated {
+                if shouldYieldAgain(yieldedAt: yieldedAt, now: ProcessInfo.processInfo.systemUptime,
+                                    windowShown: AppWindowController.anyShown) { yieldFocus() }
+            }
+        }
+    }
+
+    private static var becameActive: NSObjectProtocol?
+    /// When the keyboard was last given back (system uptime).
+    private static var yieldedAt: TimeInterval?
+
+    /// Whether Fjord Computer, just made active, gives the keyboard back again: it gave it back a moment ago (a close
+    /// started, or tidied) and no window is open or on its way in, so this is an opening's activation landing late (a
+    /// close under Reduce Motion, or at once, can end before it does), not someone asking for Fjord Computer.
+    static func shouldYieldAgain(yieldedAt: TimeInterval?, now: TimeInterval, windowShown: Bool) -> Bool {
+        guard let yieldedAt, !windowShown else { return false }
+        return now - yieldedAt < 2
     }
 
     /// The keyboard back to the app that had it before, as the window starts closing: what you type next goes there at
@@ -64,6 +83,7 @@ enum AppPolicy {
     /// just stops being active. Nothing when it is not active, or under a test.
     static func yieldFocus() {
         guard !UnderTest.isRunning, NSApp.isActive else { return }
+        yieldedAt = ProcessInfo.processInfo.systemUptime
         // Asked again now: it may have quit, or turned into an app without windows, since it was remembered.
         previous = takingFocusBack(previous)
         guard let previous else {
@@ -87,6 +107,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     static weak var active: AppWindowController?
     /// The controllers whose window has been brought in: whether another is still open when one's close is tidied.
     private static let broughtIn = NSHashTable<AppWindowController>.weakObjects()
+    /// Whether a window is open or on its way in (`isOpen`), of those brought in or the last one made.
+    static var anyShown: Bool { active?.isOpen == true || broughtIn.allObjects.contains { $0.isOpen } }
     static let autosave = "FjordApp"
     static let minSize = NSSize(width: 1000, height: 600)
 

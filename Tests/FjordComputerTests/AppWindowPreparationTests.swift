@@ -69,6 +69,15 @@ import Testing
         #expect(opened == "card#1")
     }
 
+    /// Made active a moment after giving the keyboard back, with no window open or opening (an opening's activation landing
+    /// after a quick close), Fjord Computer gives it back again; not with a window shown, nor long after.
+    @Test func aLateActivationAfterAQuickCloseIsGivenBack() {
+        #expect(AppPolicy.shouldYieldAgain(yieldedAt: 10, now: 10.3, windowShown: false))
+        #expect(!AppPolicy.shouldYieldAgain(yieldedAt: 10, now: 10.3, windowShown: true))
+        #expect(!AppPolicy.shouldYieldAgain(yieldedAt: 10, now: 15, windowShown: false))
+        #expect(!AppPolicy.shouldYieldAgain(yieldedAt: nil, now: 10, windowShown: false))
+    }
+
     @Test(arguments: [NSEvent.ModifierFlags.command, .control, .option, .shift])
     func eachShortcutModifierPostponesPreparation(_ modifiers: NSEvent.ModifierFlags) {
         #expect(AppDelegate.preparationIsBlocked(mouseButtons: 0, modifiers: modifiers, barInteracting: false))
