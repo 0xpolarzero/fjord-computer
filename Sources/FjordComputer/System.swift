@@ -136,7 +136,9 @@ final class HotKeys {
         didSet {
             guard isSuspended != oldValue else { return }
             for id in combos.keys { register(id) }
-            updateButtonTap()
+            // Told only: a tap that couldn't be made (no Accessibility access) is not tried, and access not asked for,
+            // again at each start and end of a shortcut's recording.
+            tellButtonTap()
         }
     }
     var registeredIDs: Set<UInt32> { Set(refs.keys) }
@@ -286,6 +288,11 @@ final class HotKeys {
             }
             buttonTap = tap
         }
+        tellButtonTap()
+    }
+
+    /// The running tap told the buttons and whether shortcuts are suspended.
+    private func tellButtonTap() {
         buttonTap?.update(buttons: buttons.map { ButtonTap.Button(id: $0.key, button: $0.value.button, flags: $0.value.flags) },
                           paused: isSuspended)
     }
