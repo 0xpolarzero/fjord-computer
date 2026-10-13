@@ -913,7 +913,7 @@ enum AppTransition {
         }
 
         /// One refresh of the overlay's screen.
-        private var frameDuration: TimeInterval { 1 / Double(max(screen.maximumFramesPerSecond, 60)) }
+        private var frameDuration: TimeInterval { 1 / Double(max(screen.maximumFramesPerSecond, 1)) }
 
         /// Shrinks from where the overlay is now to the bar's cell.
         func close(reduced: Bool, done: @escaping () -> Void) {
@@ -1427,8 +1427,13 @@ final class FrameTick: NSObject {
     private var block: (@MainActor () -> Void)?
     private var left = 1
     private var fallback: DispatchWorkItem?
-    /// How long a refresh is waited for at most: one at 60 Hz.
-    static let fallbackFrame: TimeInterval = 1.0 / 60
+    /// How long `count` refreshes of `screen` are waited for at most: one of its refreshes each (at least a 60 Hz one), and
+    /// half of one more, so a link that ticks late but ticks is never beaten (a 24, 30 or 50 Hz screen's included).
+    static func fallback(_ count: Int, on screen: NSScreen?) -> TimeInterval {
+        let rate = screen.map { $0.maximumFramesPerSecond } ?? 60
+        let frame = max(1.0 / 60, 1 / Double(max(rate, 1)))
+        return frame * (Double(max(count, 1)) + 0.5)
+    }
 
     static func wait(_ count: Int, on screen: NSScreen?, _ block: @escaping @MainActor () -> Void) {
         let tick = FrameTick()
@@ -1440,11 +1445,11 @@ final class FrameTick: NSObject {
             link.add(to: .main, forMode: .common)
             tick.link = link
         }
-        // A display that is asleep (or a link that stalls) gives no refresh: do not wait for them for ever, nor longer than
-        // the refreshes would take at 60 Hz (the slowest a moving screen runs). Called off once they came.
+        // A display that is asleep (or a link that stalls) gives no refresh: do not wait for them for ever, only about as long
+        // as they would take. Called off once they came.
         let fallback = DispatchWorkItem { MainActor.assumeIsolated { tick.finish() } }
         tick.fallback = fallback
-        DispatchQueue.main.asyncAfter(deadline: .now() + fallbackFrame * Double(tick.left), execute: fallback)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.fallback(tick.left, on: screen), execute: fallback)
     }
 
     @objc private func fire() {

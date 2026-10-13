@@ -625,6 +625,16 @@ extension WindowSeams {
         }
 
         /// A wait for several refreshes runs once, after them (or after its fallback, a display giving none).
+        /// A stalled link is given up on about as long as its refreshes take: a 120 Hz screen's at 60 Hz, a 24 Hz one's at
+        /// 24, with half a refresh more so a late tick still wins.
+        @Test func aWaitGivesUpAfterTheScreensOwnRefreshes() {
+            #expect(abs(FrameTick.fallback(2, on: nil) - 2.5 / 60) < 1e-9)
+            for screen in NSScreen.screens {
+                let rate = Double(max(screen.maximumFramesPerSecond, 1))
+                #expect(abs(FrameTick.fallback(1, on: screen) - 1.5 * max(1.0 / 60, 1 / rate)) < 1e-9)
+            }
+        }
+
         @Test func aWaitForSeveralRefreshesRunsOnce() async {
             var runs = 0
             FrameTick.wait(2, on: NSScreen.main) { runs += 1 }
