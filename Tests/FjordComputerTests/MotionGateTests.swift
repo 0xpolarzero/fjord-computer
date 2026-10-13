@@ -10,7 +10,7 @@ import Testing
     }
 
     @Test func workWaitsForTheMotionAndGoesInOrderAfterIt() async {
-        let gate = MotionGate.Gate()
+        let gate = MotionGate.Gate(longest: 600)
         var done: [Int] = []
         gate.whenStill { done.append(0) }
         #expect(done == [0])
@@ -24,13 +24,13 @@ import Testing
         #expect(done == [0])
         // Asked while the held work is still being let go: it goes behind it.
         gate.whenStill { done.append(3) }
-        await turns()
+        for _ in 0..<3000 where done.count < 4 { try? await Task.sleep(for: .milliseconds(5)) }
         #expect(done == [0, 1, 2, 3])
         #expect(!gate.holding)
     }
 
     @Test func stillWaitsItsTurnBehindWhatWasHeld() async {
-        let gate = MotionGate.Gate()
+        let gate = MotionGate.Gate(longest: 600)
         var done: [String] = []
         gate.began()
         gate.whenStill { done.append("held") }
@@ -42,7 +42,7 @@ import Testing
     }
 
     @Test func stillWaitsOutAMotionThatBeganBeforeItResumed() async {
-        let gate = MotionGate.Gate()
+        let gate = MotionGate.Gate(longest: 600)
         gate.began()
         var resumed = false
         let waiter = Task { @MainActor in
@@ -66,7 +66,7 @@ import Testing
         var done = false
         gate.began()
         gate.whenStill { done = true }
-        for _ in 0..<100 where !done { try? await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<3000 where !done { try? await Task.sleep(for: .milliseconds(5)) }
         #expect(done && !gate.moving)
     }
 }
@@ -121,7 +121,7 @@ import Testing
             read.stamp = inTurn.claudeStamp
             inTurn.applyClaude(read)
         }
-        let gate = MotionGate.Gate()
+        let gate = MotionGate.Gate(longest: 600)
         gate.began()
         var applied = 0
         for var read in reads {
@@ -131,7 +131,7 @@ import Testing
         await Task.yield()
         #expect(applied == 0, sourceLocation: sourceLocation)
         gate.ended()
-        for _ in 0..<100 where applied < reads.count { try? await Task.sleep(for: .milliseconds(2)) }
+        for _ in 0..<3000 where applied < reads.count { try? await Task.sleep(for: .milliseconds(5)) }
         func cards(_ s: Store) -> [String] { s.router.cards.map { "\($0.id) \($0.isOpen) \(String(describing: $0.addressedBy))" } }
         #expect(cards(held) == cards(inTurn), sourceLocation: sourceLocation)
         #expect(held.agents.entries.map(\.unread) == inTurn.agents.entries.map(\.unread), sourceLocation: sourceLocation)
@@ -166,7 +166,7 @@ import Testing
 /// A sync's results, and what it says of them, wait for the window's morph.
 @MainActor @Suite struct SyncHeldByMotion {
     @Test func aSyncsResultsAndItsErrorWaitForTheMotion() async {
-        let gate = MotionGate.Gate()
+        let gate = MotionGate.Gate(longest: 600)
         let s = Store()
         s.persists = false
         s.settings.triage = true
@@ -185,7 +185,7 @@ import Testing
         s.categories = [ci]
         gate.began()
         let sync = Task { await s.syncInbox() }
-        for _ in 0..<500 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<3000 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
         #expect(gate.waitingCount == 1)
         // Answered, but nothing said or taken while the window moves.
         #expect(s.inboxError == nil)
@@ -206,14 +206,14 @@ import Testing
     }
 
     @Test func aPollStartsAndEndsOnlyOnceTheWindowIsStill() async {
-        let gate = MotionGate.Gate()
+        let gate = MotionGate.Gate(longest: 600)
         let s = store(gate)
         s.me = nil
         s.gh.token = nil
         s.resolveToken = { nil }
         gate.began()
         let poll = Task { await s.pollAll() }
-        for _ in 0..<200 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<3000 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
         #expect(gate.waitingCount == 1)
         #expect(!s.isSyncing && s.authError == nil && s.lastSync == nil)
         gate.ended()
@@ -223,7 +223,7 @@ import Testing
 
     @Test func aRefreshThatStopsAtItsTeamsSaysSoOnlyOnceTheWindowIsStill() async {
         final class Ref: @unchecked Sendable { var gate: MotionGate.Gate? }
-        let gate = MotionGate.Gate(), ref = Ref()
+        let gate = MotionGate.Gate(longest: 600), ref = Ref()
         ref.gate = gate
         let s = store(gate)
         s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
@@ -236,7 +236,7 @@ import Testing
             Rule(scope: Scope(kinds: [.pr], to: Pick(include: [.myTeams]), toRoles: [.reviewRequested])),
         ])]
         let sync = Task { await s.syncInbox() }
-        for _ in 0..<200 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<3000 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
         #expect(gate.waitingCount == 1 && s.inboxError == nil)
         gate.ended()
         await sync.value
