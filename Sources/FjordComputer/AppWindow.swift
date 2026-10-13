@@ -686,8 +686,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
 
     func close() {
-        // An opening whose window is not in yet: in now, so there is a window to close.
-        if let pending { bringInPending(pending) }
+        // The overlay can reverse before its window is brought in: cancel that turn without building or warming content.
+        if pending != nil, phase == .opening, let window {
+            if windowShouldClose(window) { window.close() }
+            return
+        }
         window?.performClose(nil)
     }
 
@@ -699,6 +702,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let asked = MorphSignposts.signposter.beginInterval("Close to first flush")
         // An opening whose overlay has let go of its picture shows the real window already: it closes as an open one does.
         let interrupting = phase == .opening && run?.handedOver != true
+        let unshown = phase == .opening && pending != nil && !sender.isVisible
         // One that has let go but whose overlay is still fading out over the real window (its picture, or its shadow):
         // the close takes that overlay over, rather than dropping it half faded.
         let fading = phase == .opening && !interrupting && run?.ended == false ? run : nil
@@ -761,7 +765,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         guard let current else {
             MorphSignposts.signposter.endInterval("Close to first flush", asked)
-            finishClosing(sender, mine)
+            finishClosing(sender, mine, unshown: unshown)
             return false
         }
         run = current
@@ -803,7 +807,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }
-            self.finishClosing(sender, mine)
+            self.finishClosing(sender, mine, unshown: unshown)
         }
         MorphSignposts.signposter.endInterval("Close to first flush", asked)
         if generation == mine, !liveFade, !blended { sender.orderOut(nil) }
@@ -820,7 +824,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         self.liftedLevel = nil
     }
 
-    private func finishClosing(_ window: NSWindow, _ mine: Int) {
+    private func finishClosing(_ window: NSWindow, _ mine: Int, unshown: Bool) {
         guard generation == mine else { return }
         run?.end()
         run = nil
@@ -830,7 +834,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false
-        window.close()
+        if unshown {
+            // A cancelled bring-in can reuse an already closed NSWindow, which sends no second willClose notification.
+            windowWillClose(Notification(name: NSWindow.willCloseNotification, object: window))
+        } else {
+            window.close()
+        }
     }
 
     /// Whether the window is in front of the user: the app is active and the window is on screen and not covered.

@@ -742,6 +742,28 @@ extension WindowSeams {
             }
         }
 
+        @Test(arguments: [false, true]) func closingBeforeBringInReversesWithoutWarmingContent(prepared: Bool) throws {
+            try morphing { controller, ticks in
+                if prepared { controller.prepare() }
+                let content = controller.content
+                controller.show(.settings)
+                let run = try #require(controller.run)
+                let window = try #require(controller.window)
+                let glances = AppTransition.glances, captures = AppTransition.captures
+                #expect(!window.isVisible && window.contentViewController == nil)
+                controller.close()
+                #expect(controller.phase == .closing && controller.run === run && run.overlay.isVisible)
+                #expect(!window.isVisible && window.contentViewController == nil && controller.content === content)
+                ticks.runTurns() // The cancelled bring-in must stay cancelled.
+                #expect(!window.isVisible && window.contentViewController == nil && controller.content === content)
+                #expect(AppTransition.glances == glances && AppTransition.captures == captures)
+                controller.show(.settings)
+                #expect(controller.run === run && controller.phase == .opening)
+                ticks.runTurns()
+                #expect(window.contentViewController != nil && window.isVisible)
+            }
+        }
+
         @Test func theMorphMovesBeforeTheWindowIsBuilt() {
             morphing { controller, ticks in
                 controller.show(.settings)
@@ -779,8 +801,9 @@ extension WindowSeams {
                 ticks.turns = []
                 turns.dropLast().forEach { $0() }
                 #expect(closed == 0 && controller.isOpen && AppPolicy.current == .regular)
-                #expect(controller.window?.contentViewController != nil)
+                #expect(controller.window?.contentViewController == nil)
                 turns.last?()
+                #expect(controller.window?.contentViewController != nil)
                 #expect(closed == 0 && controller.window?.isVisible == true)
             }
         }
