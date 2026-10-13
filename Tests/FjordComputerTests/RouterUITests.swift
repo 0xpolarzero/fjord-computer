@@ -347,6 +347,10 @@ import UserNotifications
                                        attributes: [.posixPermissions: 0o755])
         await model.checkClaudeCode(store)
         #expect(model.claudeCodeMissing == false && model.canSend(store))
+        // The app's copy taken away: the window showing again sees it is gone.
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("2.1.293"))
+        await model.checkClaudeCode(store)
+        #expect(model.claudeCodeMissing == true && !model.canSend(store))
     }
 
     // MARK: Reply and @

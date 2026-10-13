@@ -496,8 +496,8 @@ final class RouterModel {
 
     /// Whether Claude Code was looked for and isn't there (see `checkClaudeCode`); nil until looked for.
     var claudeCodeMissing: Bool?
-    /// The folder it was last found in.
-    @ObservationIgnored private var claudeCodeFound: URL?
+    /// The folder it was last found in, and its binary there.
+    @ObservationIgnored private var claudeCodeFound: (root: URL, path: String)?
     /// Forms whose answer is being written.
     var sending: Set<String> = []
     /// The latest answer being written, for tests to wait on.
@@ -534,8 +534,8 @@ final class RouterModel {
 
     /// Looks for Claude Code once the window shows (the app updates its copy now and then): until the search has finished
     /// nothing is said, and Send waits. In a demo it is never missing.
-    /// Once found in a folder it is there for good (the app's updates put their copy beside the last): the window showing
-    /// again doesn't look again; a copy missing is looked for each time.
+    /// Once found, the window showing again only checks that binary is still there (one stat); gone (the app updated or
+    /// removed its copy), or missing, it is looked for again.
     func checkClaudeCode(_ store: Store) async {
         if store.routerIsPretend || store.routerStatus.claudeCode != nil {
             if claudeCodeMissing != false { claudeCodeMissing = false }
@@ -545,10 +545,11 @@ final class RouterModel {
             if claudeCodeMissing != false { claudeCodeMissing = false }
             return
         }
-        if claudeCodeMissing == false, claudeCodeFound == root { return }
-        let found = await Task.detached(priority: .utility) { RouterStatus.find(in: root) != nil }.value
-        claudeCodeFound = found ? root : nil
-        if claudeCodeMissing != !found { claudeCodeMissing = !found }
+        if claudeCodeMissing == false, let known = claudeCodeFound, known.root == root,
+           FileManager.default.isExecutableFile(atPath: known.path) { return }
+        let found = await Task.detached(priority: .utility) { RouterStatus.find(in: root)?.path }.value
+        claudeCodeFound = found.map { (root, $0) }
+        if claudeCodeMissing != (found == nil) { claudeCodeMissing = found == nil }
     }
 
     /// The pick follows the list: kept while it is listed; when the search or the cards change and it isn't, the nearest
