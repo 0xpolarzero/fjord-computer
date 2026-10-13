@@ -131,15 +131,11 @@ Once Fjord is installed, it picks up later releases on its own. The updater inst
 
 Releases are signed with one self-signed certificate. That keeps the app's Accessibility access across updates, and lets the updater check a release is genuine. Set it up once:
 
-1. In Keychain Access, choose Certificate Assistant → Create a Certificate. Identity type: *Self-Signed Root*. Certificate type: *Code Signing*. Name it as `build-app.sh` expects: `Fjord Dev`, or whatever you set in `SIGN_IDENTITY`.
-2. Export it with its private key as a `.p12`, with a password. Add two repository secrets:
-   - `SIGNING_CERT_P12`: the file in base64 (`base64 -i cert.p12 | pbcopy`)
-   - `SIGNING_CERT_PASSWORD`: its password
-3. Keep the `.p12` safe. Existing apps refuse a release signed with another certificate, and everyone would have to update by hand once.
+Run `scripts/make-signing-cert.sh` once. It makes a self-signed `Fjord Dev` code-signing certificate, imports it into your login keychain, keeps its `.p12` in `~/.fjord-signing` (its password in the login keychain), and sets the repository secrets `SIGNING_CERT_P12` and `SIGNING_CERT_PASSWORD`. It stops if a `Fjord Dev` certificate already exists. Back the `.p12` up: existing apps refuse a release signed with another certificate, and everyone would have to update by hand once.
 
 With the certificate in your keychain, `build-app.sh` signs local builds with it too.
 
-**One-time transition from Fjord Computer.** Quit Fjord Computer. Create the `Fjord Dev` certificate and update the CI secrets `SIGNING_CERT_P12` and `SIGNING_CERT_PASSWORD`. Run `scripts/build-app.sh`, move `build/Fjord.app` to `/Applications/Fjord.app`, then run `scripts/migrate-to-fjord.sh` before launching Fjord and follow its output.
+**One-time transition from Fjord Computer.** Quit Fjord Computer. Run `scripts/make-signing-cert.sh`. Run `scripts/build-app.sh`, move `build/Fjord.app` to `/Applications/Fjord.app`, then run `scripts/migrate-to-fjord.sh` before launching Fjord and follow its output.
 
 ## Implementation notes
 
