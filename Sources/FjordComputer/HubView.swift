@@ -40,7 +40,30 @@ final class HubState {
     /// The bar is away while the app window is open (the playground draws it, the app orders its panel out).
     var barHidden = false
     /// "i:<item id>": the row the pointer is on (or the one an opened notification names); its actions show.
-    var selection: String?
+    var selection: String? {
+        didSet {
+            guard selection != oldValue else { return }
+            if let oldValue { marks[oldValue]?.on = false }
+            if let selection { marks[selection]?.on = true }
+        }
+    }
+    /// Whether a row is the selection, read by the row itself (`isSelected`): each row observes its own mark, so the pointer
+    /// moving from row to row redraws the two rows it left and entered, not every row that compares itself with
+    /// `selection`.
+    @ObservationIgnored private var marks: [String: Mark] = [:]
+    @Observable final class Mark {
+        var on: Bool
+        init(on: Bool) { self.on = on }
+    }
+
+    /// Whether `id` is the selection, observing only that row's mark.
+    func isSelected(_ id: String) -> Bool {
+        if let mark = marks[id] { return mark.on }
+        // The stored value, read without observing it (the row observes its mark alone).
+        let mark = Mark(on: _selection == id)
+        marks[id] = mark
+        return mark.on
+    }
     /// The last row asked for (a notification's): the lists scroll to it. Never set by hovering, so the pointer moving over a
     /// row doesn't move the list.
     var keyboardSelection: ScrollRequest?

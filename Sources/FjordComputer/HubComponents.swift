@@ -183,8 +183,8 @@ struct EntryRow: View {
     @Environment(\.openInRouter) private var openInRouter
 
     private var thing: Thing { entry.thing }
-    /// Compared here, in this row's own body: hovering another row doesn't rebuild the whole hub.
-    private var selected: Bool { hub.selection == "i:" + entry.id }
+    /// Read here, in this row's own body, through its own mark: hovering another row redraws neither the hub nor this row.
+    private var selected: Bool { hub.isSelected("i:" + entry.id) }
     private var open: Bool { hover || selected }
     private var unread: Bool { entry.isUnread && !entry.isDone }
     private var tint: Color { store.categories.first { $0.id == entry.categoryID }?.color.swatch ?? Theme.tertiary }
