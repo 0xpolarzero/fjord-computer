@@ -2441,20 +2441,37 @@ struct CardView: View {
                     }
                 } else {
                     // No project to drop: a title too long for the line gives way, its kind, the chips and its age kept.
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); age; archiveButton; openButton }
-                        // Too long for the line: the title gives way, its kind, Jev's chips and its age kept.
-                        HStack(spacing: 8) {
-                            lead
-                            title.truncationMode(.tail).layoutPriority(0)
-                            KindTag(kind: card.kind).layoutPriority(1)
-                            TriageChips(triage: card.triage).fixedSize().layoutPriority(1)
-                            Spacer(minLength: 4)
-                            age.layoutPriority(1)
-                            archiveButton.layoutPriority(1)
-                            openButton.layoutPriority(1)
+                    // A narrow canvas card: Jev's chips go first, then the kind's name (its icon kept); nothing draws past
+                    // the card.
+                    Group {
+                        if columnWidth >= Self.chipsRoom {
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 8) { lead; title; KindTag(kind: card.kind); TriageChips(triage: card.triage); Spacer(minLength: 4); age; archiveButton; openButton }
+                                // Too long for the line: the title gives way, its kind, Jev's chips and its age kept.
+                                HStack(spacing: 8) {
+                                    lead
+                                    title.truncationMode(.tail).layoutPriority(0)
+                                    KindTag(kind: card.kind).layoutPriority(1)
+                                    TriageChips(triage: card.triage).fixedSize().layoutPriority(1)
+                                    Spacer(minLength: 4)
+                                    age.layoutPriority(1)
+                                    archiveButton.layoutPriority(1)
+                                    openButton.layoutPriority(1)
+                                }
+                            }
+                        } else {
+                            HStack(spacing: columnWidth >= Self.kindRoom ? 8 : 6) {
+                                lead
+                                title.truncationMode(.tail).layoutPriority(0)
+                                if columnWidth >= Self.kindRoom { KindTag(kind: card.kind).layoutPriority(1) } else { KindGlyph(kind: card.kind).layoutPriority(1) }
+                                Spacer(minLength: 2)
+                                age.layoutPriority(1)
+                                archiveButton.layoutPriority(1)
+                                openButton.layoutPriority(1)
+                            }
                         }
                     }
+                    .clipped()
                     .canvasHeader()
                 }
                 // Under the title, past the glyph's room when it has one.
@@ -2465,6 +2482,10 @@ struct CardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
+
+    /// The card widths (the canvas's narrow frames) under which Jev's chips, then the kind's name, give way.
+    static let chipsRoom: CGFloat = 380
+    static let kindRoom: CGFloat = 280
 
     /// Archive, on Needs you and Worth a look alike: in the header, always. The only way a card leaves the list from here.
     private var archiveButton: some View {

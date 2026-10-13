@@ -194,6 +194,22 @@ struct KindTag: View {
     }
 }
 
+/// A card's kind as its icon alone, in its tag's tint, named in its tip: `KindTag` where there is no room for its name.
+struct KindGlyph: View {
+    let kind: RouterCard.Kind
+
+    var body: some View {
+        Image(systemName: kind.symbol)
+            .font(Theme.Typography.caption.weight(.semibold))
+            .foregroundStyle(kind.color)
+            .frame(width: 18, height: 16)
+            .background(Capsule().fill(kind.color.opacity(0.14)))
+            .fixedSize()
+            .help(kind.label)
+            .accessibilityLabel(kind.label)
+    }
+}
+
 /// Card text is the app's own summary or the session's question: inline Markdown (**bold**, `code`) as the sessions show it.
 enum RouterText {
     /// Parsed once per text: cards, the page and the transcript ask again on every redraw. Up to 1000 texts, 4 MB of them.
