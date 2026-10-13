@@ -294,6 +294,21 @@ extension Store {
         refreshSessionRows(ids)
     }
 
+    /// Runs `body` (held Claude reads taken in one after the other) with what follows from them made once, at its end: the
+    /// kept session rows and the Router's history.
+    func batchingClaudeReads(_ body: () -> Void) {
+        batchingSessionRows {
+            guard !routerHistoryDeferred else { return body() }
+            routerHistoryDeferred = true
+            body()
+            routerHistoryDeferred = false
+            if routerHistoryStale {
+                routerHistoryStale = false
+                rebuildRouterHistory()
+            }
+        }
+    }
+
     /// The ids, among the kept rows', whose value differs between two maps.
     func sessionRowsChanged<Value: Equatable>(_ old: [String: Value], _ new: [String: Value]) -> [String] {
         sessionRowBoxes.keys.filter { old[$0] != new[$0] }
@@ -416,7 +431,7 @@ extension Store {
     }
 
     /// Takes a read of the app back onto the main thread; properties are only set when they changed.
-    private func applyClaude(_ snapshot: ClaudeSnapshot) {
+    func applyClaude(_ snapshot: ClaudeSnapshot) {
         guard agents.enabled, snapshot.stamp.generation == claudeStamp.generation else { return }
         // You changed something since this read was asked for: it could undo that, so read again instead.
         if snapshot.sessions != nil, snapshot.stamp.revision != claudeStamp.revision {

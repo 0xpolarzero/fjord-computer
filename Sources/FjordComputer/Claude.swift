@@ -763,27 +763,6 @@ struct ClaudeSnapshot {
     var stamp = ClaudeStamp()
 }
 
-extension ClaudeSnapshot {
-    /// This read with a later one folded in, as taking both in turn would leave things: what the later one read replaces
-    /// what this one did (the sessions with their link, dots and front app; the activity; the tasks), and what it didn't read
-    /// is kept. Nil when they can't be one: asked for under another stamp, or the later one a read that failed (no sessions,
-    /// the app gone or unreadable), which is taken on its own.
-    func merging(_ later: ClaudeSnapshot) -> ClaudeSnapshot? {
-        guard later.stamp == stamp, later.sessions != nil || later.link == nil else { return nil }
-        var merged = self
-        if let sessions = later.sessions {
-            merged.link = later.link
-            merged.sessions = sessions
-            merged.appUnread = later.appUnread ?? appUnread
-            merged.frontmost = later.frontmost
-        }
-        if let activity = later.activity { merged.activity = activity }
-        if let tasks = later.tasks { merged.tasks = tasks }
-        if let inventory = later.taskInventory { merged.taskInventory = inventory }
-        return merged
-    }
-}
-
 /// `generation` changes when the extension is switched; `revision` when you change something about an agent.
 struct ClaudeStamp: Equatable {
     var generation = 0
@@ -843,28 +822,29 @@ final class ClaudeFeed: @unchecked Sendable {
         }
     }
 
-    /// Reads that came while the window's morph played (`MotionGate`), on the main thread: one, the reads after it folded in
-    /// (`ClaudeSnapshot.merging`), taken in once the motion is over, rather than each read taken in a turn at a time just as
-    /// the window wants its frames.
-    private var held: [ClaudeSnapshot] = []
-    private var heldApply: (@MainActor (ClaudeSnapshot) -> Void)?
+    /// Reads that came while the window's morph played (`MotionGate`), on the main thread: taken in once the motion is
+    /// over, every one in the order read (what they make of the sessions, the dots and the Router's cards goes by each step,
+    /// so none is folded into another), all in the one turn, inside `batched` (the store makes the work that follows from
+    /// them once, at its end), rather than a turn each just as the window wants its frames.
+    private var held: [(read: ClaudeSnapshot, apply: @MainActor (ClaudeSnapshot) -> Void)] = []
+    private var heldWaiting = false
+    /// Runs the held reads' taking in as one (the store's `batchingClaudeReads`); nil runs them as they are.
+    @MainActor var batched: ((() -> Void) -> Void)?
 
     @MainActor func deliver(_ snapshot: ClaudeSnapshot, _ apply: @escaping @MainActor (ClaudeSnapshot) -> Void,
                             gate: MotionGate.Gate = MotionGate.shared) {
         guard gate.holding || !held.isEmpty else { return apply(snapshot) }
-        heldApply = apply
-        if let last = held.last, let merged = last.merging(snapshot) { held[held.count - 1] = merged } else { held.append(snapshot) }
+        held.append((snapshot, apply))
         guard !heldWaiting else { return }
         heldWaiting = true
         gate.whenStill { [self] in
             heldWaiting = false
-            let reads = held, apply = heldApply
+            let reads = held
             held = []
-            heldApply = nil
-            for read in reads { apply?(read) }
+            let all = { for (read, apply) in reads { apply(read) } }
+            if let batched { batched(all) } else { all() }
         }
     }
-    private var heldWaiting = false
 
     /// Whether a changed transcript path belongs to a session that is working or has background tasks.
     func isRelevant(_ paths: [String]) -> Bool {

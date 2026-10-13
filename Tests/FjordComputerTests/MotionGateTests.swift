@@ -71,50 +71,95 @@ import Testing
     }
 }
 
-/// Claude's reads that come while the window moves are taken in once, folded together, after it.
+/// Claude's reads that come while the window moves are taken in after it, every one in order, as if each came then.
 @MainActor @Suite struct ClaudeFeedHold {
-    private func session(_ id: String) -> ClaudeSession {
-        ClaudeSession(id: id, title: id, folder: nil, lastActivity: Date())
+    private let now = Date()
+
+    private func session(_ id: String, turns: Int, message: Double = -120, archived: Bool = false) -> ClaudeSession {
+        var s = ClaudeSession(id: id, title: "Session \(id)", folder: "/code/app", completedTurns: turns,
+                              lastActivity: now.addingTimeInterval(-60), lastFocused: now.addingTimeInterval(-3600),
+                              lastUserMessage: now.addingTimeInterval(message), summary: .init(blocked: false, detail: "Done it"),
+                              cliID: "cli-\(id)")
+        s.isArchived = archived
+        return s
     }
 
-    @Test func readsHeldByAMotionAreTakenInOnceFoldedTogether() async {
+    private func store(_ dir: TempDir, _ sessions: [ClaudeSession], dots: Set<String> = []) -> Store {
+        let s = Store()
+        s.persists = false
+        s.routerPaths = RouterPaths(support: dir.path("support"), claudeDir: dir.path("claude"))
+        s.routerExecutable = "/Applications/Fjord Computer.app/Contents/MacOS/FjordComputer"
+        s.interceptOpen = { _ in }
+        s.claudeIsFrontmost = { false }
+        s.claudeLink = .ok
+        s.agents.enabled = true
+        s.agents.enabledAt = now.addingTimeInterval(-7200)
+        s.ingest(sessions, appUnread: dots, claudeFrontmost: false)
+        s.setRouterEnabled(true)
+        s.feedRouter()
+        return s
+    }
+
+    private func read(_ sessions: [ClaudeSession], dots: Set<String> = []) -> ClaudeSnapshot {
+        var read = ClaudeSnapshot()
+        read.link = .ok
+        read.sessions = sessions
+        read.appUnread = dots
+        read.activity = [:]
+        read.tasks = [:]
+        return read
+    }
+
+    /// The reads taken in one by one, and held by a motion then let go: the same cards, the same read flags.
+    private func expectHeldAsInTurn(_ start: [ClaudeSession], dots: Set<String> = [], setUp: (Store) -> Void = { _ in },
+                                    _ reads: [ClaudeSnapshot], sourceLocation: SourceLocation = #_sourceLocation) async {
+        let dirA = TempDir(), dirB = TempDir()
+        let inTurn = store(dirA, start, dots: dots), held = store(dirB, start, dots: dots)
+        setUp(inTurn)
+        setUp(held)
+        for var read in reads {
+            read.stamp = inTurn.claudeStamp
+            inTurn.applyClaude(read)
+        }
         let gate = MotionGate.Gate()
-        let feed = ClaudeFeed(activityReader: Claude.ActivityReader())
-        var applied: [ClaudeSnapshot] = []
-        let apply: @MainActor (ClaudeSnapshot) -> Void = { applied.append($0) }
-        var full = ClaudeSnapshot()
-        full.link = .ok
-        full.sessions = [session("a")]
-        full.appUnread = ["a"]
-        full.activity = [:]
-        var activity = ClaudeSnapshot()
-        activity.activity = ["a": ClaudeActivity(text: "Reading", since: Date())]
-        activity.tasks = [:]
         gate.began()
-        feed.deliver(full, apply, gate: gate)
-        feed.deliver(activity, apply, gate: gate)
-        feed.deliver(activity, apply, gate: gate)
-        #expect(applied.isEmpty)
+        var applied = 0
+        for var read in reads {
+            read.stamp = held.claudeStamp
+            held.claudeFeed.deliver(read, { applied += 1; held.applyClaude($0) }, gate: gate)
+        }
+        await Task.yield()
+        #expect(applied == 0, sourceLocation: sourceLocation)
         gate.ended()
-        for _ in 0..<20 where applied.isEmpty { try? await Task.sleep(for: .milliseconds(2)) }
-        #expect(applied.count == 1)
-        #expect(applied.first?.sessions?.map(\.id) == ["a"] && applied.first?.appUnread == ["a"])
-        #expect(applied.first?.activity?["a"]?.text == "Reading" && applied.first?.tasks?.isEmpty == true)
-        // Nothing moving: taken in at once.
-        feed.deliver(activity, apply, gate: gate)
-        #expect(applied.count == 2)
+        for _ in 0..<100 where applied < reads.count { try? await Task.sleep(for: .milliseconds(2)) }
+        func cards(_ s: Store) -> [String] { s.router.cards.map { "\($0.id) \($0.isOpen) \(String(describing: $0.addressedBy))" } }
+        #expect(cards(held) == cards(inTurn), sourceLocation: sourceLocation)
+        #expect(held.agents.entries.map(\.unread) == inTurn.agents.entries.map(\.unread), sourceLocation: sourceLocation)
+        #expect(held.routerHistory.map(\.id) == inTurn.routerHistory.map(\.id), sourceLocation: sourceLocation)
     }
 
-    @Test func aReadThatFailedOrAnotherStampIsNotFoldedIn() {
-        var ok = ClaudeSnapshot()
-        ok.link = .ok
-        ok.sessions = []
-        var failed = ClaudeSnapshot()
-        failed.link = .missing
-        #expect(ok.merging(failed) == nil)
-        var other = ClaudeSnapshot()
-        other.stamp.generation = 1
-        #expect(ok.merging(other) == nil)
+    @Test func aTurnThatEndedThenANewMessageStillMakesItsCard() async {
+        await expectHeldAsInTurn([session("local_a", turns: 1)], [
+            read([session("local_a", turns: 2)]),
+            read([session("local_a", turns: 2, message: -1)]),
+        ])
+    }
+
+    @Test func aSessionArchivedThenBackLeavesItsCardGone() async {
+        await expectHeldAsInTurn([session("local_a", turns: 1)], setUp: { s in
+            s.ingest([self.session("local_a", turns: 2)], appUnread: [], claudeFrontmost: false)
+            s.feedRouter()
+        }, [
+            read([session("local_a", turns: 2, archived: true)]),
+            read([session("local_a", turns: 2)]),
+        ])
+    }
+
+    @Test func aDotClearedThenBackLeavesTheSessionUnread() async {
+        await expectHeldAsInTurn([session("local_a", turns: 1)], dots: ["local_a"], [
+            read([session("local_a", turns: 1)], dots: []),
+            read([session("local_a", turns: 1)], dots: ["local_a"]),
+        ])
     }
 }
 

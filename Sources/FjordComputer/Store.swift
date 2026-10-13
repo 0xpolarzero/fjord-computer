@@ -243,10 +243,17 @@ final class Store {
             // Worked out again only if what it is made of changed: a session's stamps or an open card changing leave it (and
             // what draws it) alone.
             if oldValue.decisions != router.decisions || oldValue.summaries != router.summaries || oldValue.cards != router.cards {
-                let next = RouterPage.history(cards: router.cards, decisions: router.decisions, summaries: router.summaries)
-                if next != routerHistory { routerHistory = next }
+                // Held Claude reads taken in together (`batchingClaudeReads`): worked out once, at their end.
+                if routerHistoryDeferred { routerHistoryStale = true } else { rebuildRouterHistory() }
             }
         }
+    }
+    @ObservationIgnored var routerHistoryDeferred = false
+    @ObservationIgnored var routerHistoryStale = false
+
+    func rebuildRouterHistory() {
+        let next = RouterPage.history(cards: router.cards, decisions: router.decisions, summaries: router.summaries)
+        if next != routerHistory { routerHistory = next }
     }
     /// The Router page's history (see `RouterPage.history`), worked out when the router changes and only then: the page
     /// reads it on every redraw.
@@ -460,7 +467,11 @@ final class Store {
     /// The app's version, which the plugin's is stamped with.
     @ObservationIgnored var routerAppVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0-dev"
     @ObservationIgnored let activityReader = Claude.ActivityReader()
-    @ObservationIgnored lazy var claudeFeed = ClaudeFeed(activityReader: activityReader)
+    @ObservationIgnored lazy var claudeFeed: ClaudeFeed = {
+        let feed = ClaudeFeed(activityReader: activityReader)
+        feed.batched = { [weak self] body in if let self { self.batchingClaudeReads(body) } else { body() } }
+        return feed
+    }()
     /// Derived rows, rebuilt after any change to the agents or what was read (see Agents.swift).
     @ObservationIgnored var agentCache: AgentCache?
     /// Tells a read of the app that was asked for before you changed something from one asked for after.
