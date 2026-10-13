@@ -9,6 +9,15 @@ final class Store {
     /// Demo and snapshot runs: never touch the Keychain (a new build would stop on an access prompt).
     nonisolated static let isDemo = CommandLine.arguments.contains { ["--demo", "--snapshot", "--playground", "--playground-shots"].contains($0) }
 
+    @ObservationIgnored let engineClient: any EngineClient
+    @ObservationIgnored let computers: ComputersModel
+
+    init(engineClient: (any EngineClient)? = nil) {
+        let client = engineClient ?? MockEngineClient()
+        self.engineClient = client
+        self.computers = ComputersModel(client: client, initialInventory: (client as? MockEngineClient)?.inventory)
+    }
+
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).
     var categories: [InboxCategory] = InboxStore.defaultCategories {
         didSet {
