@@ -30,7 +30,7 @@ final class Updater {
         let page: URL
     }
 
-    static let repo = "0xpolarzero/fjord"
+    static let repo = "amontlabs/fjord"
     static let interval: TimeInterval = 3600
 
     private(set) var phase: Phase = .idle {

@@ -8,7 +8,7 @@
 
 Coding agents multiply what you ship, and what you have to keep up with. Fjord sits between them and everything they work with, and brings you only what you need to know or decide.
 
-[Download](https://github.com/0xpolarzero/fjord/releases/latest) · [Install](#install) · [Privacy](#privacy) · [Development](DEVELOPMENT.md)
+[Download](https://github.com/amontlabs/fjord/releases/latest) · [Install](#install) · [Privacy](#privacy) · [Development](DEVELOPMENT.md)
 
 </div>
 
@@ -51,7 +51,7 @@ With both tools on, you can also set up Triage by talking to the Router (*"make 
 
 ## Install
 
-1. Download `Fjord-<version>.zip` from [Releases](https://github.com/0xpolarzero/fjord/releases/latest), unzip it, and move **Fjord.app** to `/Applications`.
+1. Download `Fjord-<version>.zip` from [Releases](https://github.com/amontlabs/fjord/releases/latest), unzip it, and move **Fjord.app** to `/Applications`.
 2. It isn't notarized yet, so clear the quarantine flag once, in Terminal:
    ```sh
    xattr -dr com.apple.quarantine "/Applications/Fjord.app"

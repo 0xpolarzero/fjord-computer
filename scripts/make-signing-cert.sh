@@ -7,7 +7,7 @@
 set -euo pipefail
 umask 077
 NAME="Fjord Dev"
-REPO="0xpolarzero/fjord"
+REPO="amontlabs/fjord"
 DIR="$HOME/.fjord-signing"
 P12="$DIR/fjord-dev.p12"
 SERVICE="Fjord Dev signing certificate (.p12 password)"

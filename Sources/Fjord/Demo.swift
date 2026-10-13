@@ -50,7 +50,7 @@ enum Demo {
                 .map { $0 > now ? $0 : now.addingTimeInterval(3600) }
         case .error:
             store.rateRemaining = 312
-            let ci = "workflow:0xpolarzero/fjord:\(ciWorkflowID)@main"
+            let ci = "workflow:amontlabs/fjord:\(ciWorkflowID)@main"
             store.things[ci]?.checks = .failing
             store.things[ci]?.failingJobs = ["test (macos-15)"]
             store.things[ci]?.title = "Drag the pill from anywhere"
@@ -120,8 +120,8 @@ enum Demo {
             for (index, title) in titles.enumerated() {
                 let n = 30 + index
                 let reviewer = person(["kylef", "mattt", "allevato"][index % 3])
-                let thing = Thing(id: "pr:0xpolarzero/fjord#\(n)", kind: .pr, repo: "0xpolarzero/fjord", number: n, title: title,
-                                  url: URL(string: "https://github.com/0xpolarzero/fjord/pull/\(n)")!, author: me,
+                let thing = Thing(id: "pr:amontlabs/fjord#\(n)", kind: .pr, repo: "amontlabs/fjord", number: n, title: title,
+                                  url: URL(string: "https://github.com/amontlabs/fjord/pull/\(n)")!, author: me,
                                   createdAt: now.addingTimeInterval(-86400),
                                   updatedAt: now.addingTimeInterval(-Double(130 + index * 40) * 60),
                                   comments: [ThingComment(id: "many-\(n)", author: reviewer, at: now.addingTimeInterval(-Double(130 + index * 40) * 60),
@@ -432,13 +432,13 @@ enum Demo {
     private static let ciWorkflowID = 1001
     private static let workflowIDs = ["CI": ciWorkflowID, "Sandbox tests": 1002, "Release": 1003]
 
-    private static let ciRepoNames = ["0xpolarzero/fjord", "apple/swift-format", "ziglang/zig", "amontlabs/lcu",
+    private static let ciRepoNames = ["amontlabs/fjord", "apple/swift-format", "ziglang/zig", "amontlabs/lcu",
                                       "superradcompany/microsandbox"]
 
     /// The inbox on the demo data: things fetched from GitHub, in the categories above, some seen, some done.
     private static func inbox(_ store: Store, _ now: Date) {
         store.categories = categories(ciRepos: ciRepoNames)
-        store.contributedRepos = ["ziglang/zig", "apple/swift-format", "0xpolarzero/fjord", "amontlabs/lcu"]
+        store.contributedRepos = ["ziglang/zig", "apple/swift-format", "amontlabs/fjord", "amontlabs/lcu"]
         let me = person("0xpolarzero")
         var things: [Thing] = []
 
@@ -467,7 +467,7 @@ enum Demo {
         let andrew = person("andrewrk", assoc: .owner)
         let allevato = person("allevato", assoc: .member)
         let greptile = person("greptile-apps[bot]", bot: true)
-        things.append(pr("0xpolarzero/fjord", 15, "Add GitHub Enterprise host setting", by: me, minutes: 12, greptile: 4,
+        things.append(pr("amontlabs/fjord", 15, "Add GitHub Enterprise host setting", by: me, minutes: 12, greptile: 4,
                          comments: [comment("c15-1", greptile, "Confidence 4/5: one path still uses the fixed host.", minutes: 95),
                                     comment("c15-2", toks, "Can the host be validated before we save it?", minutes: 12)],
                          threads: [thread("t15-1", by: toks, reply: toks, minutes: 12, path: "Sources/Fjord/GitHub.swift",
@@ -503,7 +503,7 @@ enum Demo {
         let vercel = person("vercel[bot]", bot: true)
         let rabbit = person("coderabbitai[bot]", bot: true)
         let codecov = person("codecov[bot]", bot: true)
-        things.append(pr("0xpolarzero/fjord", 14, "Group notifications by repo", by: kylef, minutes: 6, assignees: ["0xpolarzero"],
+        things.append(pr("amontlabs/fjord", 14, "Group notifications by repo", by: kylef, minutes: 6, assignees: ["0xpolarzero"],
                          comments: [comment("c14-1", vercel, "Deployment ready. Preview: lookout-git-group.vercel.app", minutes: 6)]))
         things.append(pr("apple/swift-format", 1047, "Fix a crash on an empty file", by: allevato, minutes: 22, mentioned: ["0xpolarzero"],
                          comments: [comment("c1047-1", rabbit, "Consider extracting this into a helper.", minutes: 22),
@@ -525,7 +525,7 @@ enum Demo {
                                jobs: ["Linux / build", "Windows / test"]))
         things.append(workflow("superradcompany/microsandbox", "Sandbox tests", state: .failing,
                                title: "Mount host directories read-only (#412)", minutes: 380, jobs: ["Linux / integration"]))
-        things.append(workflow("0xpolarzero/fjord", "CI", state: .passing, title: "Compact, draggable repo cards", minutes: 25))
+        things.append(workflow("amontlabs/fjord", "CI", state: .passing, title: "Compact, draggable repo cards", minutes: 25))
         things.append(workflow("ziglang/zig", "CI", branch: "master", state: .pending, title: "std.Io: add vectored reads to File",
                                minutes: 4))
         things.append(workflow("amontlabs/lcu", "Release", state: .passing, title: "Release 0.4.2", minutes: 1440))
@@ -545,13 +545,13 @@ enum Demo {
             }
             things[i].signals = signals
         }
-        jev("pr:0xpolarzero/fjord#15", asks: ["c15-2"], todo: ["t15-1-r"])
+        jev("pr:amontlabs/fjord#15", asks: ["c15-2"], todo: ["t15-1-r"])
         jev("pr:apple/swift-format#1042", todo: ["c1042-1"])
         jev("pr:ziglang/zig#21877", todo: ["c21877-1"])
         jev("pr:apple/swift-format#1051", importance: .urgent)
         jev("pr:ziglang/zig#21840", importance: .high)
         jev("pr:superradcompany/microsandbox#412", importance: .low)
-        jev("pr:0xpolarzero/fjord#14", noise: ["c14-1"], importance: .normal)
+        jev("pr:amontlabs/fjord#14", noise: ["c14-1"], importance: .normal)
         jev("pr:apple/swift-format#1047", noise: ["c1047-2"])
 
         store.things = Dictionary(uniqueKeysWithValues: things.map { ($0.id, $0) })
@@ -586,7 +586,7 @@ enum Demo {
 
     /// 15 repositories with CI: nine failing, two running, four passing; more than the list shows.
     private static func manyCI(_ store: Store, _ now: Date) {
-        let names = ["0xpolarzero/fjord", "apple/swift-format", "ziglang/zig", "amontlabs/lcu", "e2b-dev/runtime",
+        let names = ["amontlabs/fjord", "apple/swift-format", "ziglang/zig", "amontlabs/lcu", "e2b-dev/runtime",
                      "superradcompany/microsandbox", "apple/swift-argument-parser", "pointfreeco/swift-composable-architecture",
                      "vapor/vapor", "swiftlang/swift-package-manager", "tuist/tuist", "realm/SwiftLint", "Alamofire/Alamofire",
                      "hummingbird-project/hummingbird", "apple/swift-nio"]
