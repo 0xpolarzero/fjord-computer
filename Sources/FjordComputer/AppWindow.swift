@@ -779,68 +779,91 @@ struct AppRootView: View {
     let navigator: AppNavigator
     let routerModel: RouterModel
     let hub: HubState
-    var search = InboxSearch()
-    var checksClaudeCode = true
-    var sidebar: SidebarState = .shared
+    let search: InboxSearch
+    let checksClaudeCode: Bool
+    let sidebar: SidebarState
     /// How the sidebar and the floating controls draw: the app's, or a fixed one in tests and shots.
-    var chrome: Chrome = .shared
+    let chrome: Chrome
     /// The window's corner radius, which the shapes inside it are concentric with.
-    var corner = WindowCorner()
+    let corner: WindowCorner
     /// The window's capture flag (`GlassCapture`): none in shots and tests, which draw no glass to capture.
-    var capture: GlassCapture? = nil
+    let capture: GlassCapture?
 
     static let sidebarWidth: CGFloat = 240
 
+    /// What the window's lists do to it, made once with the root: the same closures on every update, so the environment
+    /// that carries them never tells the views that read them (each row) that they changed.
+    private let actions: AppRootActions
+
+    @MainActor
+    init(store: Store, navigator: AppNavigator, routerModel: RouterModel, hub: HubState, search: InboxSearch? = nil,
+         checksClaudeCode: Bool = true, sidebar: SidebarState = .shared, chrome: Chrome = .shared,
+         corner: WindowCorner? = nil, capture: GlassCapture? = nil) {
+        self.store = store
+        self.navigator = navigator
+        self.routerModel = routerModel
+        self.hub = hub
+        self.search = search ?? InboxSearch()
+        self.checksClaudeCode = checksClaudeCode
+        self.sidebar = sidebar
+        self.chrome = chrome
+        self.corner = corner ?? WindowCorner()
+        self.capture = capture
+        actions = AppRootActions(store: store, navigator: navigator, routerModel: routerModel, hub: hub)
+    }
+
+    // Reads nothing that changes: what does is read by the small pieces below (the page, the corner, the follow-ups and the
+    // Router's offer), so a settings write, a corner read when the window becomes key or a category's change redraws them
+    // alone, not the root and every reader of its environment.
     var body: some View {
-        Group {
-            if store.settings.toolsPicked == true {
-                if #available(macOS 26, *) {
-                    InsetWindowLayout(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                                      checksClaudeCode: checksClaudeCode, sidebar: sidebar, chrome: chrome)
-                } else {
-                    flat(collapsed: sidebar.collapsed)
-                }
-            } else {
-                OnboardingView(store: store) {
-                    store.settings.toolsPicked = true
-                    navigator.go(store.firstPlace.resolved(shown: store.shownCategories.map(\.id), tools: store.tools))
-                }
-            }
-        }
-        .frame(minWidth: 640, minHeight: 600)
-        .environment(chrome)
-        .environment(\.glassCapture, capture)
-        // A shape inside the window can be concentric with its corners (`ConcentricRectangle`, `Theme.Radius.concentric`).
-        .containerShape(.rect(cornerRadius: corner.radius))
-        .foregroundStyle(Theme.text)
-        .modifier(Brand.Scheme())
-        .tipSpace()
-        .ignoresSafeArea(.container, edges: .top)
-        .background(CDS.Surface.s1)
-        .onChange(of: store.shownCategories.map(\.id)) { _, shown in navigator.settle(shown: shown, tools: store.tools) }
-        // Another place has its own pick and search; a row asked for there (a banner's click) stays.
-        .onChange(of: navigator.selection) { _, place in
-            search.end()
-            routerModel.endSearch()
-            if let pick = hub.selection, let tab = place.tab, store.entries(in: tab).contains(where: { "i:" + $0.id == pick }) { return }
-            hub.selection = nil
-            hub.keyboardSelection = nil
-        }
-        .onChange(of: store.tools) { _, tools in navigator.settle(shown: store.shownCategories.map(\.id), tools: tools) }
-        .environment(\.openRouter) { card in
+        AppRootPage(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                    checksClaudeCode: checksClaudeCode, sidebar: sidebar, chrome: chrome)
+            .frame(minWidth: 640, minHeight: 600)
+            .environment(chrome)
+            .environment(\.glassCapture, capture)
+            // A shape inside the window can be concentric with its corners (`ConcentricRectangle`, `Theme.Radius.concentric`).
+            .modifier(WindowCornerShape(corner: corner))
+            .foregroundStyle(Theme.text)
+            .modifier(Brand.Scheme())
+            .tipSpace()
+            .ignoresSafeArea(.container, edges: .top)
+            .background(CDS.Surface.s1)
+            .modifier(AppRootFollow(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search))
+            .environment(\.openRouter, actions.openRouter)
+            .environment(\.pickRouterCard, actions.pickRouterCard)
+            // Chips in the window's own lists: a place, or the Router on the message an action left in its conversation.
+            .environment(\.openApp, actions.openApp)
+            .environment(\.openRouterMessage, actions.openRouterMessage)
+            .environment(\.openChange, actions.openChange)
+            .modifier(AppRootRouterOffer(store: store, openInRouter: actions.openInRouter))
+            // Its content put back in after a close draws what changed meanwhile as it is (`WindowArrival`).
+            .windowArrival()
+    }
+}
+
+/// The window's actions on itself, for its lists' chips, cards and changes (see `AppRootView.actions`).
+@MainActor
+final class AppRootActions {
+    let openRouter: (String?) -> Void
+    let pickRouterCard: (String) -> Void
+    let openInRouter: (String) -> Void
+    let openApp: (AppDestination) -> Void
+    let openRouterMessage: (UUID) -> Void
+    let openChange: (FjordChange) -> Void
+
+    init(store: Store, navigator: AppNavigator, routerModel: RouterModel, hub: HubState) {
+        openRouter = { card in
             if let card { routerModel.select(card, store: store) }
             navigator.go(.router)
         }
-        .environment(\.pickRouterCard) { card in routerModel.select(card, store: store) }
-        // A row's "Open in Router", while the Router is on.
-        .environment(\.openInRouter, store.offers(.openInRouter) ? { routerModel.open(thing: $0, in: navigator) } : nil)
-        // Chips in the window's own lists: a place, or the Router on the message an action left in its conversation.
-        .environment(\.openApp) { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), tools: store.tools)) }
-        .environment(\.openRouterMessage) { message in
+        pickRouterCard = { card in routerModel.select(card, store: store) }
+        openInRouter = { routerModel.open(thing: $0, in: navigator) }
+        openApp = { navigator.go($0.resolved(shown: store.shownCategories.map(\.id), tools: store.tools)) }
+        openRouterMessage = { message in
             routerModel.show(message: message)
             navigator.go(.router)
         }
-        .environment(\.openChange) { change in
+        openChange = { change in
             switch change.target(in: store) {
             case .category(let id): navigator.go(.categories); hub.openCategory(id)
             case .group(let id): navigator.go(.categories); hub.openGroup(id)
@@ -855,6 +878,75 @@ struct AppRootView: View {
             }
         }
     }
+}
+
+/// The window's corners for the shapes inside it, read here alone: a new radius redraws what is concentric with them.
+private struct WindowCornerShape: ViewModifier {
+    let corner: WindowCorner
+
+    func body(content: Content) -> some View { content.containerShape(.rect(cornerRadius: corner.radius)) }
+}
+
+/// A row's "Open in Router", while the Router is on: the one value of the root's environment that follows the store.
+private struct AppRootRouterOffer: ViewModifier {
+    let store: Store
+    let openInRouter: (String) -> Void
+
+    func body(content: Content) -> some View {
+        content.environment(\.openInRouter, store.offers(.openInRouter) ? openInRouter : nil)
+    }
+}
+
+/// What the window keeps in step as the store and the place change: the place settled on one that exists, and another
+/// place's own pick and search.
+private struct AppRootFollow: ViewModifier {
+    let store: Store
+    let navigator: AppNavigator
+    let routerModel: RouterModel
+    let hub: HubState
+    let search: InboxSearch
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: store.shownCategories.map(\.id)) { _, shown in navigator.settle(shown: shown, tools: store.tools) }
+            // Another place has its own pick and search; a row asked for there (a banner's click) stays.
+            .onChange(of: navigator.selection) { _, place in
+                search.end()
+                routerModel.endSearch()
+                if let pick = hub.selection, let tab = place.tab, store.entries(in: tab).contains(where: { "i:" + $0.id == pick }) { return }
+                hub.selection = nil
+                hub.keyboardSelection = nil
+            }
+            .onChange(of: store.tools) { _, tools in navigator.settle(shown: store.shownCategories.map(\.id), tools: tools) }
+    }
+}
+
+/// The window's page: the onboarding until the tools are picked, then the sidebar and the destination.
+private struct AppRootPage: View {
+    let store: Store
+    let navigator: AppNavigator
+    let routerModel: RouterModel
+    let hub: HubState
+    let search: InboxSearch
+    let checksClaudeCode: Bool
+    let sidebar: SidebarState
+    let chrome: Chrome
+
+    var body: some View {
+        if store.settings.toolsPicked == true {
+            if #available(macOS 26, *) {
+                InsetWindowLayout(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
+                                  checksClaudeCode: checksClaudeCode, sidebar: sidebar, chrome: chrome)
+            } else {
+                flat(collapsed: sidebar.collapsed)
+            }
+        } else {
+            OnboardingView(store: store) {
+                store.settings.toolsPicked = true
+                navigator.go(store.firstPlace.resolved(shown: store.shownCategories.map(\.id), tools: store.tools))
+            }
+        }
+    }
 
     /// macOS 14 and 15: the flat sidebar beside the page, the top bar the sidebar's ground the whole width. The sidebar
     /// toggle, back and forward stay put after the window's three buttons: over the sidebar when it is out, at the
@@ -865,7 +957,7 @@ struct AppRootView: View {
         return HStack(spacing: 0) {
             AppSidebar(store: store, navigator: navigator, hub: hub, collapsed: collapsed)
                 .padding(.top, CDS.TitleBar.header)
-                .frame(width: collapsed ? AppSidebar.railWidth : Self.sidebarWidth, alignment: .leading)
+                .frame(width: collapsed ? AppSidebar.railWidth : AppRootView.sidebarWidth, alignment: .leading)
                 .frame(maxHeight: .infinity)
                 .clipped()
                 .background(CDS.Surface.sidebar)
