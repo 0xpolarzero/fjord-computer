@@ -130,15 +130,14 @@ final class HotKeys {
         didSet {
             guard isSuspended != oldValue else { return }
             for id in combos.keys { register(id) }
+            updateButtonTap()
         }
     }
     var registeredIDs: Set<UInt32> { Set(refs.keys) }
     private var taps: [UInt32: (key: UInt16, handler: () -> Void)] = [:]
     /// Mouse button shortcuts, caught (and kept from the app under the pointer) by an event tap.
     private var buttons: [UInt32: (button: Int, flags: NSEvent.ModifierFlags, handler: () -> Void)] = [:]
-    private var buttonTap: CFMachPort?
-    /// Buttons whose press was a shortcut: their release is kept from the app under the pointer too.
-    private var swallowedUps: Set<Int> = []
+    private var buttonTap: ButtonTap?
     private var tap = ModifierTap()
     private var monitors: [Any] = []
     /// Waits for Fjord Computer to come back to the front while taps or mouse buttons are set and Accessibility is not
@@ -258,47 +257,33 @@ final class HotKeys {
     }
 
     /// A session event tap for the mouse buttons in use: it sees them in every app and can keep a shortcut's click
-    /// from also going back in a browser. It needs Accessibility access, like modifier taps.
+    /// from also going back in a browser. It needs Accessibility access, like modifier taps. It runs on a thread of its
+    /// own (`ButtonTap`) and is told the buttons and whether shortcuts are suspended (a shortcut being recorded).
     private func updateButtonTap() {
         if buttons.isEmpty {
-            if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: false) }
+            buttonTap?.stop()
             buttonTap = nil
             return
         }
-        guard buttonTap == nil else { return }
-        if !AXIsProcessTrusted() {
-            AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+        if buttonTap == nil {
+            if !AXIsProcessTrusted() {
+                AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+            }
+            let tap = ButtonTap { [weak self] id in self?.buttonPressed(id) }
+            guard tap.start() else {
+                NSLog("Fjord Computer: can't watch mouse buttons (Accessibility access?)")
+                return
+            }
+            buttonTap = tap
         }
-        let mask = CGEventMask(1 << CGEventType.otherMouseDown.rawValue | 1 << CGEventType.otherMouseUp.rawValue)
-        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-                                          eventsOfInterest: mask, callback: { _, type, event, info in
-            guard let info else { return Unmanaged.passUnretained(event) }
-            return Unmanaged<HotKeys>.fromOpaque(info).takeUnretainedValue().button(type, event)
-        }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            NSLog("Fjord Computer: can't watch mouse buttons (Accessibility access?)")
-            return
-        }
-        CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        buttonTap = tap
+        buttonTap?.update(buttons: buttons.map { ButtonTap.Button(id: $0.key, button: $0.value.button, flags: $0.value.flags) },
+                          paused: isSuspended)
     }
 
-    /// Runs on the main run loop. Returns nil to keep the click from the app under the pointer.
-    private func button(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return Unmanaged.passUnretained(event)
-        }
-        let number = Int(event.getIntegerValueField(.mouseEventButtonNumber))
-        if type == .otherMouseUp { return swallowedUps.remove(number) == nil ? Unmanaged.passUnretained(event) : nil }
-        guard !paused() else { return Unmanaged.passUnretained(event) }
-        let flags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)).intersection(Shortcut.relevant)
-        guard let match = buttons.values.first(where: { $0.button == number && $0.flags == flags }) else {
-            return Unmanaged.passUnretained(event)
-        }
-        swallowedUps.insert(number)
-        DispatchQueue.main.async { match.handler() }
-        return nil
+    /// A shortcut's mouse button was pressed (the tap kept the click from the app under the pointer).
+    private func buttonPressed(_ id: UInt32) {
+        guard !paused() else { return }
+        buttons[id]?.handler()
     }
 
     private func handle(_ event: NSEvent) {
@@ -313,6 +298,93 @@ final class HotKeys {
               !paused(), AXIsProcessTrusted() else { return }
         if let since, interrupted(since: since) { return }
         for entry in taps.values where entry.key == key { entry.handler() }
+    }
+}
+
+/// The mouse-button shortcuts' event tap, on a thread and run loop of its own: the window server holds every side and
+/// middle click, in every app, until a tap has answered, so the answer must not wait on Fjord Computer's main thread (and
+/// a long wait there would get the tap disabled). It decides from what it was last told (the buttons, whether shortcuts
+/// are suspended) and goes to the main queue only to run a shortcut's action.
+private final class ButtonTap: @unchecked Sendable {
+    struct Button {
+        let id: UInt32
+        let button: Int
+        let flags: NSEvent.ModifierFlags
+    }
+
+    private let lock = NSLock()
+    private var buttons: [Button] = []
+    private var paused = false
+    /// Buttons whose press was a shortcut: their release is kept from the app under the pointer too.
+    private var swallowedUps: Set<Int> = []
+    private var port: CFMachPort?
+    private var loop: CFRunLoop?
+    /// On the main queue: the shortcut whose button was pressed.
+    private let pressed: (UInt32) -> Void
+
+    init(pressed: @escaping (UInt32) -> Void) { self.pressed = pressed }
+
+    /// The tap made and running on its thread; false when the system refuses it (no Accessibility access).
+    func start() -> Bool {
+        let mask = CGEventMask(1 << CGEventType.otherMouseDown.rawValue | 1 << CGEventType.otherMouseUp.rawValue)
+        guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                           eventsOfInterest: mask, callback: { _, type, event, info in
+            guard let info else { return Unmanaged.passUnretained(event) }
+            return Unmanaged<ButtonTap>.fromOpaque(info).takeUnretainedValue().handle(type, event)
+        }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
+        self.port = port
+        let source = CFMachPortCreateRunLoopSource(nil, port, 0)
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [self] in
+            let loop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(loop, source, .commonModes)
+            lock.withLock { self.loop = loop }
+            CGEvent.tapEnable(tap: port, enable: true)
+            ready.signal()
+            CFRunLoopRun()
+        }
+        thread.name = "Fjord Computer mouse buttons"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
+        return true
+    }
+
+    func update(buttons: [Button], paused: Bool) {
+        lock.withLock {
+            self.buttons = buttons
+            self.paused = paused
+        }
+    }
+
+    /// The tap off and its thread ended.
+    func stop() {
+        guard let port else { return }
+        CGEvent.tapEnable(tap: port, enable: false)
+        CFMachPortInvalidate(port)
+        if let loop = lock.withLock({ loop }) { CFRunLoopStop(loop) }
+    }
+
+    /// On the tap's thread. Returns nil to keep the click from the app under the pointer.
+    private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let port { CGEvent.tapEnable(tap: port, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        let number = Int(event.getIntegerValueField(.mouseEventButtonNumber))
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue)).intersection(Shortcut.relevant)
+        let match: UInt32? = lock.withLock {
+            if type == .otherMouseUp { return swallowedUps.remove(number) == nil ? nil : 0 }
+            guard !paused, let button = buttons.first(where: { $0.button == number && $0.flags == flags }) else { return nil }
+            swallowedUps.insert(number)
+            return button.id
+        }
+        guard let match else { return Unmanaged.passUnretained(event) }
+        // A release kept from the app: nothing to run.
+        guard type == .otherMouseDown else { return nil }
+        let pressed = pressed
+        DispatchQueue.main.async { pressed(match) }
+        return nil
     }
 }
 
