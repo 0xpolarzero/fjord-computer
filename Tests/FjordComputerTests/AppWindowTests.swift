@@ -835,6 +835,37 @@ extension WindowSeams {
             }
         }
 
+        @Test(arguments: [false, true]) func reopeningDuringTheLiveCloseFadeKeepsTheWindowVisible(reduced: Bool) throws {
+            try morphing { controller, ticks in
+                controller.show(.done)
+                ticks.runTurns()
+                controller.run?.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                controller.run?.end()
+                let window = try #require(controller.window)
+                if reduced { controller.bar = { nil } }
+                let level = window.level, fadeWindow = AppTransition.fadeWindow
+                var fades: [(from: CGFloat, to: CGFloat, done: @MainActor () -> Void)] = []
+                AppTransition.fadeWindow = { window, alpha, done in fades.append((window.alphaValue, alpha, done)) }
+                defer { AppTransition.fadeWindow = fadeWindow }
+                controller.close()
+                let run = try #require(controller.run)
+                #expect(fades.count == 1 && fades[0].to == 0 && run.image == nil)
+                window.alphaValue = 0.4 // Step the live fade to its presentation halfway through the close.
+                let lifted = window.level
+                controller.show(.done)
+                #expect(controller.phase == .opening && controller.run === run)
+                #expect(window.alphaValue == 0.4 && window.level == lifted && lifted.rawValue > run.overlay.level.rawValue)
+                #expect(fades.count == 2 && fades[1].from == 0.4 && fades[1].to == 1)
+                fades[0].done() // The superseded close cannot hide or lower the reopened window.
+                ticks.runTurns()
+                #expect(window.isVisible && window.alphaValue == 0.4 && window.level == lifted)
+                run.complete() // Once the overlay covers the window, handoff restores its ordinary level.
+                #expect(window.alphaValue == 1 && window.level == level && !window.ignoresMouseEvents)
+            }
+        }
+
         /// A close while the opening's picture is still fading into the real window goes on from that blend: the same
         /// overlay, not shown whole again, the live window fading out under it, nothing captured.
         @Test func aCloseDuringTheHandoffsFadeGoesOnFromTheBlend() {

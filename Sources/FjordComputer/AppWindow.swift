@@ -332,7 +332,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // The bar as it is now, before whoever called us hides it.
         let morph = opening && !reversing && !AppTransition.reduceMotion ? bar() : nil
         if opening {
-            window.alphaValue = 0
+            // A live close fade reverses from what is on screen, without a transparent frame in between.
+            if !reversing || !window.isVisible { window.alphaValue = 0 }
             window.ignoresMouseEvents = true
             startOpening(window, bar: morph, reversing: reversing)
         } else {
@@ -401,12 +402,14 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
-        // A close's live fade turned round: the window back under the overlay.
-        restoreLevel()
+        // A live close fade turned round stays above the bare overlay until the opening covers the window.
+        let reversingLive = reversing && window.isVisible
+        if !reversingLive { restoreLevel() }
         // Work that can wait holds until the window has handed over (`handedOver`), or a close that takes over ends.
         span.begin("Open")
         generation += 1
         let mine = generation
+        if reversingLive { AppTransition.fadeWindow(window, 1, {}) }
         stopKeepingPicture()
         let current: AppTransition.Run?
         let chrome = glassWindow(window)
@@ -658,6 +661,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     /// The real window, shown (under the overlay), with the keyboard.
     private func reveal(_ window: NSWindow) {
+        restoreLevel()
         window.alphaValue = 1
         window.ignoresMouseEvents = false
         window.makeKeyAndOrderFront(nil)
@@ -791,16 +795,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // transaction: if AppKit sends the alpha with the next commit, it lands with or after the overlay either way; if it
         // sends it at once, only this order has the overlay's frame reach the server first.
         if liveFade || blended {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = AppTransition.liveFade * Double(AppTransition.slowdown)
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                sender.animator().alphaValue = 0
-            } completionHandler: { [weak self, weak sender] in
-                MainActor.assumeIsolated {
-                    guard let self, let sender, self.generation == mine else { return }
-                    sender.orderOut(nil)
-                    self.restoreLevel()
-                }
+            AppTransition.fadeWindow(sender, 0) { [weak self, weak sender] in
+                guard let self, let sender, self.generation == mine else { return }
+                sender.orderOut(nil)
+                self.restoreLevel()
             }
         } else {
             sender.alphaValue = 0

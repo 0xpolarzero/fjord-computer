@@ -135,6 +135,17 @@ enum AppTransition {
     /// Whether `window` is in the Dock. Replaceable, as `isKey` (a window under test does not minimize at once).
     static var isMiniaturized: (NSWindow) -> Bool = { $0.isMiniaturized }
 
+    /// AppKit reverses an in-flight window fade from its current alpha. Replaceable so tests can step that fade.
+    static var fadeWindow: (NSWindow, CGFloat, @escaping @MainActor () -> Void) -> Void = { window, alpha, done in
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = AppTransition.liveFade * Double(AppTransition.slowdown)
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = alpha
+        } completionHandler: {
+            MainActor.assumeIsolated { done() }
+        }
+    }
+
     /// The window's own corner radius (macOS 26's are larger than before), so nothing changes when the real window takes over.
     /// In full screen it has none.
     static func cornerRadius(of window: NSWindow) -> CGFloat {
