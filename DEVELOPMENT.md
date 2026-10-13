@@ -125,7 +125,7 @@ git tag v0.2.0 && git push origin v0.2.0
 
 The `Release` workflow runs the tests, builds a universal app and publishes `Fjord-<version>.zip` and its `.sha256` to GitHub Releases.
 
-Installed apps pick the release up on their own. The updater installs it only if the checksum matches and the app is signed by the same certificate as the running copy.
+Once Fjord is installed, it picks up later releases on its own. The updater installs a release only if its checksum matches and it is signed by the same certificate as the running copy.
 
 ## Signing certificate
 
@@ -138,6 +138,8 @@ Releases are signed with one self-signed certificate. That keeps the app's Acces
 3. Keep the `.p12` safe. Existing apps refuse a release signed with another certificate, and everyone would have to update by hand once.
 
 With the certificate in your keychain, `build-app.sh` signs local builds with it too.
+
+**One-time transition from Fjord Computer.** Quit Fjord Computer. Create the `Fjord Dev` certificate and update the CI secrets `SIGNING_CERT_P12` and `SIGNING_CERT_PASSWORD`. Run `scripts/build-app.sh`, move `build/Fjord.app` to `/Applications/Fjord.app`, then run `scripts/migrate-to-fjord.sh` before launching Fjord and follow its output.
 
 ## Implementation notes
 

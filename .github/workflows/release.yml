@@ -80,7 +80,7 @@ jobs:
              ```
           3. Open it and pick your tools. Triage uses your `gh` login (`gh auth login`), or a token you paste.
 
-          Already installed? Fjord offers the update itself: click the arrow on the bar, then restart.
+          Already installed Fjord? It offers later releases itself: click the arrow on the bar, then restart.
 
           Requires macOS 14 or later. Universal (Apple Silicon + Intel).
           NOTES
