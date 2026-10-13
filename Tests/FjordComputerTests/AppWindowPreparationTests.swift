@@ -50,6 +50,8 @@ import Testing
         #expect(!AppPolicy.canTakeFocusBack(policy: .prohibited, isSelf: false, terminated: false))
         #expect(!AppPolicy.canTakeFocusBack(policy: .regular, isSelf: true, terminated: false))
         #expect(!AppPolicy.canTakeFocusBack(policy: .regular, isSelf: false, terminated: true))
+        // Asked of an app as it is now: never Fjord Computer itself, nor nothing.
+        #expect(AppPolicy.takingFocusBack(.current) == nil && AppPolicy.takingFocusBack(nil) == nil)
     }
 
     /// Launch wires the banners' routing before the Router chains its own onto it: a Router banner's click opens its card,

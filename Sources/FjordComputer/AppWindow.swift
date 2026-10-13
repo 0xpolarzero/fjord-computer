@@ -38,9 +38,14 @@ enum AppPolicy {
     }
 
     private static func remember(_ app: NSRunningApplication?) {
+        if let app = takingFocusBack(app) { previous = app }
+    }
+
+    /// `app`, if the keyboard can go back to it as it is now (`canTakeFocusBack`).
+    static func takingFocusBack(_ app: NSRunningApplication?) -> NSRunningApplication? {
         guard let app, canTakeFocusBack(policy: app.activationPolicy, isSelf: app == NSRunningApplication.current,
-                                        terminated: app.isTerminated) else { return }
-        previous = app
+                                        terminated: app.isTerminated) else { return nil }
+        return app
     }
 
     private static func watchActivations() {
@@ -59,7 +64,8 @@ enum AppPolicy {
     /// just stops being active. Nothing when it is not active, or under a test.
     static func yieldFocus() {
         guard !UnderTest.isRunning, NSApp.isActive else { return }
-        if let app = previous, app.isTerminated { previous = nil }
+        // Asked again now: it may have quit, or turned into an app without windows, since it was remembered.
+        previous = takingFocusBack(previous)
         guard let previous else {
             NSApp.deactivate()
             return
