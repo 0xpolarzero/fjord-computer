@@ -263,12 +263,14 @@ struct RouterAskBack: Identifiable, Equatable {
     func clearPreview() {
         askBacks = []
         progress = [:]
+        flying = []
     }
 
     /// A demo or a shot: an ask waiting for you and runs shown under way, with nothing behind them.
-    func preview(ask: RouterAskBack, progress runs: [UUID: String] = [:]) {
-        askBacks = [ask]
+    func preview(ask: RouterAskBack? = nil, progress runs: [UUID: String] = [:], flying messages: [UUID] = []) {
+        askBacks = ask.map { [$0] } ?? []
         progress = runs
+        flying = messages
     }
 
     // MARK: Entry points

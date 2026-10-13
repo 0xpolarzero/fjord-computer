@@ -47,8 +47,8 @@ struct RouterComposer: View {
         let suggestions = model.suggestions(store)
         VStack(alignment: .leading, spacing: 0) {
             // Your messages on their way, rising from here until they fly to where they went.
-            FlightStack(store: store, flights: model.flights)
-                .padding(.bottom, model.flights.pills.isEmpty ? 0 : C.dockGap)
+            FlightStack(store: store, flights: model.flights, showsOtherAsks: model.layout == .canvas)
+                .padding(.bottom, model.flights.pills.isEmpty && (model.layout != .canvas || store.routerDispatcher.askBacks.isEmpty) ? 0 : C.dockGap)
             // Who your words go to, as the Code tab's strip over its composer: the card's session, the projects you tagged.
             if model.replyTo != nil || model.live.pinned != nil || model.live.prediction != nil || model.editing != nil {
                 strip.padding(.bottom, C.dockGap)

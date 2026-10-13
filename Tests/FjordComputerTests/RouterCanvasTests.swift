@@ -181,29 +181,15 @@ import Testing
     }
 
     /// A message keeps Now in view in either layout; each flight opens history only once an answer lands there.
-    @Test func aMessageSentOnTheCanvasStaysOnNowAndFliesOnceToItsCard() throws {
+    @Test func aDemoMessageSentOnTheCanvasStaysOnNow() throws {
         let store = demo()
         let model = canvas(store)
         let card = try #require(model.zones(store).needs.first)
-        let canvas = model.canvas
-        canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
-        #expect(canvas.settled != nil)
         model.reply(to: card.id, store: store)
         model.draft = "use sqlite"
         model.send(store: store)
         #expect(model.pane == .now)
-        // The demo's Router settles it at once: it lands on the card it answered (Reduce Motion: no arc, no pan).
-        // Its card off the view: the camera stays, a marker points to it.
-        canvas.free = CGRect(x: 16, y: 56, width: 800, height: 500)
-        canvas.nodeRects[card.id] = CGRect(x: 4000, y: 0, width: 420, height: 52)
-        let camera = canvas.camera.transform
-        canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
-        #expect(canvas.landed[card.id]?.text == "use sqlite" && canvas.flights.isEmpty)
-        #expect(canvas.camera.transform == camera && canvas.marker?.node == card.id)
-        canvas.landed = [:]
-        canvas.depart(store: store, model: model, page: model.zones(store), narrow: false, reduce: true)
-        #expect(canvas.landed.isEmpty)
-        canvas.stopFlights()
+        #expect(model.flights.pills.isEmpty, "a canned demo answer never claims to have sent to a session")
 
         let list = RouterModel()
         list.reply(to: card.id, store: store)

@@ -1,96 +1,92 @@
 import Foundation
-import SwiftUI
 import Testing
 @testable import FjordComputer
 
-/// Your messages on the canvas: which wait over the composer, which leave it as they settle, and where each flies.
+/// Canvas destinations use the shared flight's canonical keys and page measurements.
 @MainActor
 @Suite struct RouterFlightsTests {
-    private let now = Date(timeIntervalSince1970: 1_800_000_000)
-
-    private func card(_ id: String, _ session: String, _ folder: String?) -> RouterCard {
-        RouterCard(id: id, sessionID: session, kind: .question, title: id, folder: folder, text: "", createdAt: now)
-    }
-
-    private func row(_ session: String, _ folder: String?) -> AgentRow {
-        AgentRow(session: ClaudeSession(id: session, title: session, folder: folder, lastActivity: now, running: true),
-                 entry: AgentEntry(id: session), label: session)
-    }
-
-    /// A frame for /code/app with a question of session "a" and session "b" working; /code/web with nothing of "n" yet.
     private var folders: [CanvasFolder] {
         var page = RouterPage()
-        page.needs = [card("q", "a", "/code/app")]
-        page.working = [row("a", "/code/app"), row("b", "/code/app"), row("other", "/code/web")]
+        page.needs = [RouterCard(id: "q", sessionID: "a", kind: .question, title: "Question", folder: "/code/app",
+                                 text: "", createdAt: Date())]
+        page.working = ["a", "b"].map {
+            AgentRow(session: ClaudeSession(id: $0, title: $0, folder: "/code/app", lastActivity: Date(), running: true),
+                     entry: AgentEntry(id: $0), label: $0)
+        }
         return RouterCanvasModel.make(page: page, done: [], name: { $0 }, color: { _ in nil })
     }
 
-    private func message(_ text: String, outcome: RouterDecision.Outcome = .pending, sentTo session: String? = nil) -> RouterDecision {
-        var d = RouterDecision(at: now, trigger: .you(text), decision: .init(intent: "message"), outcome: outcome)
-        if let session { d.add(.sent(to: session, text: text, original: nil), session: session) }
-        return d
+    @Test func aSessionLandsOnItsCardBeforeItsWorkingRowAndAnAnswerNamesItsCard() {
+        #expect(CanvasFlightPlaces.target("session:a", folders: folders, folder: { _ in nil }, fallback: false) == .node("q"))
+        #expect(CanvasFlightPlaces.target("session:b", folders: folders, folder: { _ in nil }, fallback: false)
+                == .node(RouterModel.workingID("b")))
+        #expect(CanvasFlightPlaces.target("card:q", folders: folders, folder: { _ in nil }, fallback: false) == .node("q"))
     }
 
-    private func departures(_ settled: Set<UUID>, _ decisions: [RouterDecision]) -> (departures: [CanvasDepartures.Departure], settled: Set<UUID>) {
-        CanvasDepartures.departures(settled: settled, now: decisions, folders: folders) { ["n": "/code/web"][$0] }
+    @Test func aMissingOrFoldedNodeWaitsBeforeFallingBackToItsProject() {
+        #expect(CanvasFlightPlaces.target("session:new", folders: folders, folder: { _ in "/code/app" }, fallback: false) == nil)
+        #expect(CanvasFlightPlaces.target("session:new", folders: folders, folder: { _ in "/code/app" }, fallback: true)
+                == .folder("/code/app"))
+        #expect(CanvasFlightPlaces.target("session:a", folders: folders, folder: { _ in nil }, fallback: true) == .folder("/code/app"))
+        #expect(CanvasFlightPlaces.target("session:muted", folders: folders, folder: { _ in "/code/muted" }, fallback: true) == nil)
+        #expect(CanvasFlightPlaces.target("history", folders: folders, folder: { _ in nil }, fallback: true) == nil)
     }
 
-    @Test func onlyYourMessagesUnderWayWaitAndAQuestionAskedBackStandsForItsOwn() {
-        let typed = message("fix the tests")
-        let asked = message("ship it")
-        var action = message("from a category")
-        action.fromAction = SessionOrigin(category: "CI", thing: "build", actionID: "a", runID: "r")
-        let cardAction = RouterDecision(at: now, trigger: .you("Answered the form"), decision: .init(intent: "answer"))
-        let done = message("earlier", outcome: .done)
-        let pending = CanvasDepartures.pending([typed, asked, action, cardAction, done], asking: [asked.id])
-        #expect(pending.map(\.id) == [typed.id])
+    @Test func aHiddenGroupOrAnAnsweredCardUsesItsFrameWithoutChangingFilters() {
+        var hidden = folders
+        for i in hidden[0].groups.indices { hidden[0].groups[i].hidden = true }
+        #expect(CanvasFlightPlaces.target("card:q", folders: hidden, folder: { _ in "/code/app" }, fallback: false) == nil)
+        #expect(CanvasFlightPlaces.target("card:q", folders: hidden, folder: { _ in "/code/app" }, fallback: true) == .folder("/code/app"))
+        #expect(hidden[0].shown.isEmpty)
     }
 
-    @Test func aMessageSentToASessionFliesToItsCardBeforeItsRow() {
-        var sent = message("use sqlite", sentTo: "a")
-        let settled = CanvasDepartures.settled([sent])
-        #expect(settled.isEmpty)
-        sent.outcome = .done
-        let out = departures(settled, [sent])
-        #expect(out.departures == [.init(id: sent.id, text: "use sqlite", target: .node("q"))])
-        #expect(out.settled == [sent.id])
-        // Once flown, never again.
-        #expect(departures(out.settled, [sent]).departures.isEmpty)
-        // A session only working: its row.
-        let toB = message("go on", outcome: .done, sentTo: "b")
-        #expect(departures([], [toB]).departures.first?.target == .node(RouterModel.workingID("b")))
+    @Test func aNodeScrolledOutOfItsResizedFrameCannotReceiveAFlight() {
+        let canvas = RouterCanvasState()
+        canvas.free = CGRect(x: 16, y: 56, width: 868, height: 600)
+        let rect = CGRect(x: 120, y: 300, width: 420, height: 100)
+        let clip = CGRect(x: 100, y: 100, width: 560, height: 150)
+        #expect(canvas.flightPlace(.node("q"), frames: ["canvas:q": rect], clip: clip) == nil)
+        let header = CGRect(x: 100, y: 56, width: 560, height: 194)
+        #expect(canvas.flightPlace(.folder("/code/app"), frames: ["canvas:frame#/code/app": header])?.rect.height == 44)
     }
 
-    @Test func aNewSessionFliesToItsProjectsFrameUntilItsNodeIsThere() {
-        var started = message("start one in web", outcome: .done)
-        started.add(.started(session: "n", project: "web", model: nil, effort: nil), session: "n")
-        #expect(departures([], [started]).departures.first?.target == .folder("/code/web"))
-        // A project with no frame: nowhere to go.
-        var elsewhere = message("start one", outcome: .done)
-        elsewhere.add(.started(session: "x", project: "x", model: nil, effort: nil), session: "x")
-        #expect(departures([], [elsewhere]).departures.first?.target == nil)
+    @Test func theTransformedHeaderUsesThePageMeasurementExactlyOnce() throws {
+        let canvas = RouterCanvasState()
+        canvas.camera.transform = CanvasTransform(origin: CGPoint(x: 60, y: 80), scale: 0.5)
+        canvas.viewportFrame = CGRect(x: 200, y: 100, width: 900, height: 700)
+        canvas.free = CGRect(x: 16, y: 56, width: 868, height: 600)
+        // Content (100, 200, 420, 100) projected into the page by SwiftUI's FlightFrame.
+        let rect = CGRect(x: 310, y: 280, width: 210, height: 50)
+        let place = try #require(canvas.flightPlace(.node("q"), frames: ["canvas:q": rect]))
+        #expect(place.target == "canvas:q")
+        #expect(place.rect == CGRect(x: 310, y: 280, width: 210, height: 26))
     }
 
-    @Test func aReplyToTheRouterOnlyOrAFailureFadesAndOneTakenBackOrNotYoursNeverLeaves() {
-        var answered = message("what's running?", outcome: .done)
-        answered.reply = "Three sessions."
-        var failed = message("tell a", outcome: .done)
-        failed.add(.failed("no such session"), session: "a")
-        let out = departures([], [answered, failed])
-        #expect(out.departures.map(\.target) == [nil, nil])
-
-        var cancelled = message("stop that", outcome: .done, sentTo: "a")
-        cancelled.delivered = .init(session: "a", cli: "a", nonce: "n", at: now, turns: 0, busy: false, abortable: true, cancelled: .aborted)
-        let session = RouterDecision(at: now, trigger: .session(sessionID: "a", event: "asked"), outcome: .done)
-        let next = departures([], [cancelled, session])
-        #expect(next.departures.isEmpty)
-        #expect(next.settled == [cancelled.id])
+    @Test func aPartiallyVisibleCardLandsOnItsVisiblePartInsteadOfAnAbsentMarker() throws {
+        let canvas = RouterCanvasState()
+        canvas.free = CGRect(x: 16, y: 56, width: 800, height: 500)
+        let rect = CGRect(x: -200, y: 100, width: 420, height: 52)
+        let place = try #require(canvas.flightPlace(.node("q"), frames: ["canvas:q": rect]))
+        #expect(place.rect == CGRect(x: 16, y: 100, width: 204, height: 52))
     }
 
-    @Test func theArcLeavesAndLandsOnItsPointsAndRisesBetween() {
-        let from = CGPoint(x: 400, y: 800), to = CGPoint(x: 200, y: 300)
-        #expect(ArcFlight.point(0, from: from, to: to) == from)
-        #expect(ArcFlight.point(1, from: from, to: to) == to)
-        #expect(ArcFlight.point(0.5, from: from, to: to).y < (from.y + to.y) / 2)
+    @Test func anOffViewTargetFliesToItsMarkerAndLandingKeepsTheCameraStill() throws {
+        let canvas = RouterCanvasState()
+        canvas.freezeFlight = 0.5
+        canvas.camera.transform = CanvasTransform(origin: CGPoint(x: -2000, y: 100), scale: 0.5)
+        canvas.viewportFrame = CGRect(x: 200, y: 100, width: 900, height: 700)
+        canvas.free = CGRect(x: 16, y: 56, width: 868, height: 600)
+        canvas.nodeRects["q"] = CGRect(x: 100, y: 200, width: 420, height: 52)
+        let rect = CGRect(x: -1750, y: 300, width: 210, height: 26)
+        let place = try #require(canvas.flightPlace(.node("q"), frames: ["canvas:q": rect]))
+        #expect(place.rect.midX == 326, "the marker sits 110 points inside the left edge of the free canvas")
+        #expect(canvas.free.offsetBy(dx: 200, dy: 100).contains(CGPoint(x: place.rect.midX, y: place.rect.midY)))
+        let camera = canvas.camera.transform
+        canvas.flightLanded(.init(id: UUID(), text: "go on", status: "", from: .zero, to: place.rect, target: place.target))
+        #expect(canvas.marker?.node == "q")
+        #expect(canvas.landed["q"]?.text == "go on")
+        #expect(canvas.camera.transform == camera)
+        canvas.goToMarker(reduce: true)
+        #expect(canvas.marker == nil && canvas.camera.transform != camera)
     }
 }

@@ -37,22 +37,26 @@ struct RouterMain: View {
     @Bindable var model: RouterModel
     var leadingInset: CGFloat = 0
 
-    /// The window's space under the Router's top: where a message's flight is drawn, from its pending line to its card.
-    static let space = "routerMain"
-
     var body: some View {
         let flights = model.flights
         page
             // Your messages in flight, from over the composer to where each went (`RouterFlights`).
             .overlay {
-                if model.layout == .canvas { CanvasFlights(canvas: model.canvas) }
-                else { FlightLayer(store: store, flights: flights) }
+                FlightLayer(store: store, flights: flights)
             }
-            .coordinateSpace(.named(Self.space))
             .coordinateSpace(.named(FlightSpace.name))
             .onPreferenceChange(FlightFramesKey.self) { flights.frames = $0 }
             .environment(flights)
-            .onAppear { flights.landedInHistory = { [weak model] in model?.show(.history) } }
+            .onChange(of: model.layout, initial: true) {
+                flights.landedInHistory = { [weak model] in model?.show(.history) }
+                flights.resolvePlace = model.layout == .canvas ? { [weak model, weak store, weak flights] key, fallback in
+                    guard let model, let store, let flights else { return nil }
+                    return model.canvasFlightPlace(key, frames: flights.frames, fallback: fallback, store: store)
+                } : nil
+                flights.didLand = model.layout == .canvas ? { [weak model] flight in
+                    model?.canvas.flightLanded(flight)
+                } : { _ in }
+            }
     }
 
     @ViewBuilder private var page: some View {
@@ -93,17 +97,10 @@ struct RouterMain: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // On the canvas, your messages wait over the composer until they fly to their cards.
-            if model.layout == .canvas { RouterPendingStack(store: store, model: model) }
-            RouterComposer(store: store, model: model)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { rect in
-                    model.canvas.composerFrame = rect
-                }
-        }
-        .frame(maxWidth: RouterCodeView.column)
-        .padding(.horizontal, 32)
-        .padding(.bottom, 16)
+        RouterComposer(store: store, model: model)
+            .frame(maxWidth: RouterCodeView.column)
+            .padding(.horizontal, 32)
+            .padding(.bottom, 16)
     }
 
     /// §3: a 48pt header holding the 32pt session bar: the title (13pt, wght 460, primary).

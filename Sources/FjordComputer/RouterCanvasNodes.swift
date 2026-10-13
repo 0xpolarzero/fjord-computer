@@ -69,8 +69,10 @@ struct CanvasFolderFrame: View {
                     frameBody(width: width)
                         .modifier(CanvasBodyScrolling(scroll: canvas.scroll(folder.key),
                                                       visible: max(0, height - CanvasMetrics.header)))
+                        .flightFrame("canvasBody:\(folder.key)")
                 } else {
                     frameBody(width: width)
+                        .flightFrame("canvasBody:\(folder.key)")
                 }
             }
         }
@@ -78,7 +80,8 @@ struct CanvasFolderFrame: View {
         .frame(height: height > 0 && !folded ? height : nil, alignment: .top)
         .motion(.spatial, value: nodes.map(\.id))
         .motion(.spatial, value: nodes.map(\.hidden))
-        // Where a message for a session not drawn yet lands (RouterCanvasPending.swift).
+        .flightTarget("canvas:\(CanvasFolder.frameID(folder.key))", radius: 14)
+        // Where a message for a session not drawn yet lands.
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
             model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = CGRect(origin: rect.origin,
                                                                                size: CGSize(width: rect.width, height: CanvasMetrics.header))
@@ -136,6 +139,7 @@ struct CanvasFolderFrame: View {
                             more(node)
                         }
                     }
+                    .flightTarget(node.hidden ? nil : "canvas:\(node.id)", radius: 12)
                     .environment(\.canvasNodeID, node.id)
                     .environment(\.cdsColumnWidth, cardWidth)
                     .frame(width: cardWidth, alignment: .leading)
@@ -293,7 +297,6 @@ struct CanvasFolderFrame: View {
     @ViewBuilder private func landed(_ id: String, @ViewBuilder node: () -> some View) -> some View {
         let landing = model.canvas.landed[id]
         node()
-            .overlay { if let landing { CanvasRipple(landing: landing, frozen: model.canvas.freezeFlight != nil) } }
             .overlay(alignment: .bottomTrailing) {
                 if let landing {
                     // Astride the card's bottom edge, at its end: clear of its text and of the card under it.

@@ -763,7 +763,7 @@ final class RouterModel {
         }
         // A pill over the composer from here until it lands where it went (`RouterFlights`): the page stays where it is.
         var context = context(store)
-        context.flies = layout != .canvas
+        context.flies = true
         guard store.sendToRouter(text, context: context) else {
             sendRefused = Self.goneTarget
             Announce.say(Self.goneTarget)

@@ -274,12 +274,33 @@ enum AppWindowShots {
             model.search.query = "lcu"
         }, appearance: .aqua),
         // Your messages over the composer: one being sent, with what the Router is doing, and one it asks you about.
-        Shot(name: "router-canvas-pending", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
-            model.pickCanvas()
+        Shot(name: "router-canvas-pending", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            pending(model, store)
         }, appearance: .aqua),
-        Shot(name: "router-canvas-pending-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
-            model.pickCanvas()
+        Shot(name: "router-canvas-pending-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            pending(model, store)
         }, appearance: .darkAqua),
+        Shot(name: "router-canvas-pending-pill", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            pending(model, store, asks: false)
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-pending-pill-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            pending(model, store, asks: false)
+        }, appearance: .darkAqua),
+        Shot(name: "router-canvas-pending-pill-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 760), compose: { model, store in
+            pending(model, store, asks: false)
+        }, appearance: .aqua),
+        Shot(name: "router-list-pending-pill", destination: { _ in .router }, compose: { model, store in
+            pending(model, store, asks: false)
+            model.layout = .list
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-failed-pill", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            pending(model, store, asks: false)
+            guard let id = store.routerDispatcher.flying.first,
+                  let i = store.router.decisions.firstIndex(where: { $0.id == id }) else { return }
+            store.router.decisions[i].add(.failed("the session's inbox is closed"))
+            store.router.decisions[i].outcome = .done
+            store.routerDispatcher.preview(flying: [id])
+        }, appearance: .aqua),
         // The message being sent goes to its session once the canvas is up, held mid-arc; an earlier one landed on a card.
         Shot(name: "router-canvas-flight", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             flight(model, store)
@@ -346,6 +367,13 @@ enum AppWindowShots {
         model.canvas.scroll(folders[0].key).offset = 70
     }
 
+    private static func pending(_ model: RouterModel, _ store: Store, asks: Bool = true) {
+        model.pickCanvas()
+        let ask = asks ? store.routerDispatcher.askBacks.first : nil
+        let runs = store.routerDispatcher.progress
+        store.routerDispatcher.preview(ask: ask, progress: runs, flying: Array(runs.keys) + (ask.map { [$0.id] } ?? []))
+    }
+
     /// The demo's message going to a card off the view: it flies to the viewport's edge, towards it, where its marker is.
     private static func edge(_ model: RouterModel, _ store: Store) {
         flight(model, store)
@@ -356,9 +384,9 @@ enum AppWindowShots {
             model.canvas.camera.moved = true
             model.canvas.camera.transform = CanvasTransform(origin: CGPoint(x: -bounds.maxX - 200, y: 120), scale: 1)
             try? await Task.sleep(for: .milliseconds(500))
-            if let card = store.router.cards.first(where: { $0.kind == .plan && $0.isOpen }),
-               let rect = model.canvas.nodeRects[card.id] {
-                model.canvas.mark(rect, id: card.id, label: "You: run it on the lab box first")
+            if let flight = model.flights.flights.first {
+                // Complete the shared flight: its own destination supplies the matching marker and landed message.
+                model.flights.land(flight.id, store: store)
             }
         }
     }
@@ -366,19 +394,21 @@ enum AppWindowShots {
     /// The demo's message under way sent to its session a moment after the canvas is drawn, its flight held halfway; and
     /// "You: …" on the plan card, as an earlier message left it.
     private static func flight(_ model: RouterModel, _ store: Store) {
-        model.pickCanvas()
+        pending(model, store)
         model.canvas.freezeFlight = 0.5
+        model.flights.freezeFlight = 0.5
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(1200))
             if let card = store.router.cards.first(where: { $0.kind == .plan && $0.isOpen }) {
                 model.canvas.land("run it on the lab box first", on: card.id)
             }
-            guard let i = store.router.decisions.lastIndex(where: { CanvasDepartures.isMessage($0) && $0.outcome == .pending
+            guard let i = store.router.decisions.lastIndex(where: { store.routerDispatcher.flying.contains($0.id) && $0.outcome == .pending
                                                                     && !store.routerDispatcher.askBacks.map(\.id).contains($0.id) }) else { return }
             var decisions = store.router.decisions
             let text = decisions[i].triggerText
             decisions[i].add(.sent(to: "Repository ownership transfer setup", text: text, original: nil), session: "local_demo-transfer")
             decisions[i].outcome = .done
+            decisions[i].decision.targetID = "session:local_demo-transfer"
             store.router.decisions = decisions
         }
     }

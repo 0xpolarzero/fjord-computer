@@ -61,6 +61,32 @@ import Testing
         return s.routerDispatcher.submit(text, context: context)
     }
 
+    @Test func aCanvasComposerSendCreatesTheSameTrackedPill() async throws {
+        let (s, _, f) = setup()
+        let model = RouterModel()
+        model.pickCanvas()
+        f.hold = true
+        f.ranked = [.init(target: "session:local_b", p: 0.9)]
+        // Use the real submit seam without saving any state or reaching a real session.
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".build/flight-test-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        s.stateFile = dir.appendingPathComponent("state.json")
+        s.persists = true
+        model.draft = "add a changelog entry to the docs"
+        model.send(store: s)
+        s.persists = false
+        let id = try #require(s.router.decisions.last?.id)
+        model.flights.sync(store: s)
+        #expect(model.flights.pills.map(\.id) == [id])
+        #expect(model.flights.tracking)
+        #expect(model.pane == .now)
+        await waitUntil { f.held != nil }
+        f.held?.resume()
+        await waitUntil { f.finished.contains(id) }
+    }
+
     @Test func aComposerMessageIsAPillUntilItWentThenFliesIntoItsSessionsRow() async {
         let (s, flights, f) = setup()
         f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
@@ -82,6 +108,45 @@ import Testing
         flights.land(id!, store: s)
         #expect(flights.landed["session:local_b"] != nil && flights.flights.isEmpty)
         #expect(s.routerDispatcher.flying.isEmpty)
+    }
+
+    @Test func aCanvasFlightWaitsForItsNewWorkingRowAndLandsOnlyOnce() async throws {
+        let (store, flights, fake) = setup()
+        let model = RouterModel()
+        model.pickCanvas()
+        model.canvas.free = CGRect(x: 16, y: 56, width: 800, height: 450)
+        model.canvas.viewportFrame = CGRect(x: 0, y: 40, width: 832, height: 600)
+        model.canvas.camera.transform.scale = 0.5
+        flights.resolvePlace = { key, fallback in
+            model.canvasFlightPlace(key, frames: flights.frames, fallback: fallback, store: store)
+        }
+        defer { flights.resolvePlace = nil }
+        flights.didLand = { model.canvas.flightLanded($0) }
+        fake.ranked = [.init(target: "session:local_b", p: 0.9)]
+        let id = try #require(send("add a changelog entry to the docs", store))
+        let from = CGRect(x: 40, y: 520, width: 700, height: 34)
+        flights.frames["pill:\(id)"] = from
+        await waitUntil { fake.finished.contains(id) }
+        flights.sync(store: store)
+        await Task.yield()
+        #expect(flights.pills.map(\.id) == [id] && flights.flights.isEmpty)
+        #expect(store.claudeSessions["local_b"]?.running == true)
+        // A later layout publishes the node after the finished session becomes Working.
+        let node = RouterModel.workingID("local_b")
+        let rect = CGRect(x: 120, y: 240, width: 210, height: 50)
+        flights.frames["canvas:\(node)"] = rect
+        await waitUntil { flights.flights.count == 1 }
+        let flight = try #require(flights.flights.first)
+        #expect(flight.from == from && flight.to == CGRect(x: 120, y: 240, width: 210, height: 26))
+        #expect(flight.target == "canvas:\(node)" && flights.pills.isEmpty)
+        flights.land(id, store: store)
+        let landed = model.canvas.landed[node]
+        #expect(flights.landed[flight.target] != nil && landed?.text == flight.text)
+        flights.sync(store: store)
+        flights.land(id, store: store)
+        #expect(flights.flights.isEmpty && !flights.tracking && store.routerDispatcher.flying.isEmpty)
+        #expect(model.canvas.landed[node] == landed)
+        model.canvas.stopFlights()
     }
 
     @Test func aRowOutOfSightIsLandedOnByItsSectionsChip() async {
@@ -111,8 +176,16 @@ import Testing
         #expect(s.routerPage.asks.map(\.id) == [other].compactMap { $0 })
     }
 
-    @Test func aFailedSendStaysWithWhyAndRetrySendsItAgain() async {
+    @Test(arguments: [RouterLayout.list, .canvas]) func aFailedSendStaysWithWhyAndRetrySendsItAgain(layout: RouterLayout) async {
         let (s, flights, f) = setup()
+        let model = RouterModel()
+        model.layout = layout
+        if layout == .canvas {
+            flights.resolvePlace = { key, fallback in
+                model.canvasFlightPlace(key, frames: flights.frames, fallback: fallback, store: s)
+            }
+        }
+        defer { flights.resolvePlace = nil }
         f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
         f.failSend = "the session's inbox is closed"
         let id = send("add a changelog entry to the docs", s)
