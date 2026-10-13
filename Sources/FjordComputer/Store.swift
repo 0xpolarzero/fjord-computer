@@ -381,7 +381,7 @@ final class Store {
     private static let authBackoff: TimeInterval = 300
     @ObservationIgnored private var sleeper: Task<Void, Never>?
     /// When the sleeper is due to wake.
-    @ObservationIgnored private var sleeperWakes: Date?
+    @ObservationIgnored private(set) var sleeperWakes: Date?
     /// The reset an immediate check was already made for (see `pollAll`): never twice for the same one, so a check that
     /// fails (offline, keeping the spent budget and that reset) can't start another at once, and another.
     @ObservationIgnored private var retriedReset: Date?
@@ -705,13 +705,22 @@ final class Store {
 
     /// The hub being open means someone is looking: poll faster meanwhile, and, once the window is open (`window`), sync now
     /// if stale. A peek (the bar hovered, `window` false) syncs nothing at once: its rows would shuffle under the pointer
-    /// when the answer came. The sleeper isn't woken for it: the interval it is in now is taken at its next wake, so opening
-    /// the window starts no poll's work under its morph unless the inbox is stale.
+    /// when the answer came. The sleeper set for the longer interval is set again for the shorter once the window's morph
+    /// has played (`MotionGate`), so no poll's work starts under it unless the inbox is stale.
     func setHubOpen(_ open: Bool, window: Bool = true) {
         let windowWas = hubWindowOpen
         hubWindowOpen = open && window
         guard open != hubOpen || hubWindowOpen != windowWas else { return }
+        let opened = open && !hubOpen
         hubOpen = open
+        if opened {
+            MotionGate.whenStill { [weak self] in
+                // Due later than the open hub's interval from the last poll: woken, it sleeps again for the shorter one.
+                guard let self, self.hubOpen, let wakes = self.sleeperWakes,
+                      wakes > (self.lastSync ?? .distantPast).addingTimeInterval(self.effectivePollInterval) else { return }
+                self.sleeper?.cancel()
+            }
+        }
         guard hubWindowOpen, !windowWas, !isSyncing else { return }
         // Signed out for want of a token, `gh auth login` may have been run since: look again, however recent the last poll.
         if awaitsToken || Date().timeIntervalSince(lastSync ?? .distantPast) > 60 { refreshNow() }

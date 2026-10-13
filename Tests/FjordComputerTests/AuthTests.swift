@@ -197,6 +197,25 @@ final class StubAuthGitHub: URLProtocol, @unchecked Sendable {
         #expect(s.lastSync != stale)
     }
 
+    @Test func openingTheHubSetsTheNextPollForItsShorterInterval() async {
+        StubAuthGitHub.handler = { _ in (200, "[]") }
+        let s = store()
+        s.resolveToken = { nil }
+        s.settings.pollInterval = 300
+        s.restartPolling()
+        defer { s.stopPolling() }
+        for _ in 0..<300 where s.sleeperWakes == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        let last = try? #require(s.lastSync)
+        #expect(s.sleeperWakes.map { $0 > Date().addingTimeInterval(200) } == true)
+        // Opened 5 s or so after a poll: the next comes 30 s after it, not 300.
+        s.setHubOpen(true)
+        for _ in 0..<300 where s.sleeperWakes.map({ $0 > Date().addingTimeInterval(60) }) ?? true {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(s.sleeperWakes.map { $0 <= (last ?? .distantPast).addingTimeInterval(31) } == true)
+        #expect(s.lastSync == last)
+    }
+
     @Test func aTokenHeldIsNotLookedForAgainWhenTheAppComesBack() async {
         let s = store()
         s.me = nil
