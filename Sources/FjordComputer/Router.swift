@@ -270,48 +270,81 @@ struct RouterCard: Codable, Identifiable, Hashable {
     }
 
     /// `<session>#t<completedTurns>` for a turn, `<session>#w<ms of the wait's start>` for a wait.
-    var id: String
-    var sessionID: String
-    var kind: Kind
-    var title: String
-    var folder: String?
-    var text: String
+    var id: String { didSet { if id != oldValue { contents = Contents() } } }
+    var sessionID: String { didSet { if sessionID != oldValue { contents = Contents() } } }
+    var kind: Kind { didSet { if kind != oldValue { contents = Contents() } } }
+    var title: String { didSet { if title != oldValue { contents = Contents() } } }
+    var folder: String? { didSet { if folder != oldValue { contents = Contents() } } }
+    var text: String { didSet { if text != oldValue { contents = Contents() } } }
     /// When it was made, in ms since 1970: kept exactly (a date in the state file loses its fraction of a second), so a
     /// reply in the same second as the card is still told apart from one before it.
-    var createdMs: Int64
-    var addressedAt: Date?
-    var addressedBy: Addressed?
+    var createdMs: Int64 { didSet { if createdMs != oldValue { contents = Contents() } } }
+    var addressedAt: Date? { didSet { if addressedAt != oldValue { contents = Contents() } } }
+    var addressedBy: Addressed? { didSet { if addressedBy != oldValue { contents = Contents() } } }
     /// For a question or plan: the call it waits on (`tool_use` id), which ties it to the form Fjord Computer's hook holds.
-    var toolUseID: String?
+    var toolUseID: String? { didSet { if toolUseID != oldValue { contents = Contents() } } }
     /// For a turn card made once the turn could be told done (see `RouterFeed.update`): your last message when the turn
     /// ended (ms). A later one is a reply to it, however late the card was made.
-    var turnMessage: Int64?
+    var turnMessage: Int64? { didSet { if turnMessage != oldValue { contents = Contents() } } }
     /// Set when an inbox action started the session this is about.
-    var origin: SessionOrigin?
+    var origin: SessionOrigin? { didSet { if origin != oldValue { contents = Contents() } } }
     /// The questions of a form, or the asks of a turn (by question), still unanswered after your messages (it had `total`),
     /// so the card says "2 of 3 left".
-    var left: [String]?
-    var total: Int?
+    var left: [String]? { didSet { if left != oldValue { contents = Contents() } } }
+    var total: Int? { didSet { if total != oldValue { contents = Contents() } } }
     /// Your message that resolved the card, when Jev judged it did.
-    var addressedNote: String?
+    var addressedNote: String? { didSet { if addressedNote != oldValue { contents = Contents() } } }
     /// What Jev made of a finished turn's final message (see RouterTriage.swift); nil until then, or without a key.
-    var triage: RouterTriage?
+    var triage: RouterTriage? { didSet { if triage != oldValue { contents = Contents() } } }
     /// What the card tells you, in your words' style: one Haiku call (see RouterBrief.swift); nil until then, or when it
     /// isn't made (a trivial turn, no Claude Code), and the card's own text stands.
-    var brief: String?
+    var brief: String? { didSet { if brief != oldValue { contents = Contents() } } }
     /// What the brief was made from (a hash): it is made again only when that changes.
-    var briefSource: String?
+    var briefSource: String? { didSet { if briefSource != oldValue { contents = Contents() } } }
     /// What a turn's final message asks you, each with its choices, read by its brief's call (RouterBrief.swift): nil until
     /// then, or when that call failed (the card shows its own text); empty when it asks nothing.
-    var asks: [RouterAsk]?
+    var asks: [RouterAsk]? { didSet { if asks != oldValue { contents = Contents() } } }
     /// A finished turn that went to the history on its own (`settled`) and that you haven't acknowledged yet.
-    var unread: Bool?
+    var unread: Bool? { didSet { if unread != oldValue { contents = Contents() } } }
     /// What the turn asked that your message clearing the card left untouched, as Jev was clearly sure (RouterCardJudge.swift):
     /// said on the session's working line until you answer it or its next turn ends. Nil when none, or not judged.
-    var skipped: [String]?
+    var skipped: [String]? { didSet { if skipped != oldValue { contents = Contents() } } }
     /// The previous turn's `skipped`: what the session went on without. The card says so unless its final message asks it
     /// again (`wentAheadWithout`).
-    var wentAhead: [String]?
+    var wentAhead: [String]? { didSet { if wentAhead != oldValue { contents = Contents() } } }
+
+    /// Copies share a contents token until a stored field changes. Most view and memo comparisons therefore finish
+    /// by identity; independently created or decoded cards still compare by value. The token is never persisted.
+    private final class Contents {}
+    private var contents = Contents()
+
+    static func == (a: Self, b: Self) -> Bool {
+        if a.contents === b.contents { return true }
+        return a.id == b.id
+            && a.sessionID == b.sessionID
+            && a.kind == b.kind
+            && a.title == b.title
+            && a.folder == b.folder
+            && a.text == b.text
+            && a.createdMs == b.createdMs
+            && a.addressedAt == b.addressedAt
+            && a.addressedBy == b.addressedBy
+            && a.toolUseID == b.toolUseID
+            && a.turnMessage == b.turnMessage
+            && a.origin == b.origin
+            && a.left == b.left
+            && a.total == b.total
+            && a.addressedNote == b.addressedNote
+            && a.triage == b.triage
+            && a.brief == b.brief
+            && a.briefSource == b.briefSource
+            && a.asks == b.asks
+            && a.unread == b.unread
+            && a.skipped == b.skipped
+            && a.wentAhead == b.wentAhead
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     /// The card less how it is told to you (its brief and the asks read with it, read or not): what an action on it goes by.
     var acted: RouterCard {
