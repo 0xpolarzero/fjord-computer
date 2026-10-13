@@ -725,12 +725,16 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // happened to it since) as it was drawn then: the close starts on it at once. Nothing is ever captured here
             // (what a capture costs depends on what the window shows: up to 520 ms); without such a picture the live
             // window fades out in place over the overlay shrinking beneath it.
-            let now = AppTransition.glance(of: sender)
             // The picture an opening still fading out just handed over on is newer than the kept one: looked at first.
-            let picture = [fading?.picture, closedPicture].compactMap { $0 }.first { kept in
-                kept.fits(sender, glass: glass, sidebar: chrome.sidebar) && AppTransition.isKey(sender)
-                    && AppTransition.freshness(of: kept, glance: now, marks: marks, destination: navigator.selection,
-                                               tolerance: AppTransition.Glance.closeTolerance) != .stale
+            let eligible = [fading?.picture, closedPicture].compactMap { $0 }.filter {
+                $0.fits(sender, glass: glass, sidebar: chrome.sidebar) && AppTransition.isKey(sender)
+                    && $0.destination == navigator.selection && $0.glance != nil
+            }
+            // A glance is work only a candidate can justify: a bare close starts moving without drawing the window.
+            let now = eligible.isEmpty ? nil : AppTransition.glance(of: sender)
+            let picture = eligible.first {
+                AppTransition.freshness(of: $0, glance: now, marks: marks, destination: navigator.selection,
+                                        tolerance: AppTransition.Glance.closeTolerance) != .stale
             }
             // The overlay still fading out is taken over only when it stands where this close would put one.
             let compatible = fading.map {

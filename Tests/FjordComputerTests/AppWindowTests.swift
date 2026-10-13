@@ -970,6 +970,34 @@ extension WindowSeams {
             return controller.window
         }
 
+        @Test(arguments: ["none", "size", "place", "key"])
+        func aCloseWithoutAnEligiblePictureDrawsNoGlance(reason: String) throws {
+            try morphing { controller, ticks in
+                AppTransition.isKey = { _ in true }
+                controller.show(.done)
+                ticks.runTurns()
+                controller.run?.complete()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                controller.run?.end()
+                let window = try #require(controller.window)
+                if reason != "none" {
+                    controller.keepPictureNow()
+                    #expect(controller.keepsPicture)
+                }
+                switch reason {
+                case "size": window.setContentSize(NSSize(width: 1100, height: 700))
+                case "place": controller.navigator.go(.settings)
+                case "key": AppTransition.isKey = { _ in false }
+                default: break
+                }
+                let glances = AppTransition.glances, captures = AppTransition.captures
+                controller.close()
+                #expect(controller.phase == .closing && controller.run?.image == nil)
+                #expect(AppTransition.glances == glances && AppTransition.captures == captures)
+            }
+        }
+
         /// The idle keeper keeps off the user's input, waiting three times what its picture would cost, and keeps a soft
         /// picture when a sharp one would cost over its budget, so no look holds a key typed meanwhile for long.
         @Test func theIdleKeeperBoundsWhatItCosts() throws {
