@@ -11,7 +11,13 @@ final class Store {
 
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).
     var categories: [InboxCategory] = InboxStore.defaultCategories {
-        didSet { inboxRevision &+= 1; persistedRevision &+= 1; logCategories(from: oldValue) }
+        didSet {
+            // A name, a symbol or a colour (each keystroke in the editor) changes what the inbox is called, not what is
+            // in it: it isn't worked out again for that.
+            if InboxStore.evaluatesAlike(categories, oldValue) { inboxDisplayRevision &+= 1 } else { inboxRevision &+= 1 }
+            persistedRevision &+= 1
+            logCategories(from: oldValue)
+        }
     }
     var groups: [InboxGroup] = [] {
         didSet { inboxRevision &+= 1; persistedRevision &+= 1; logGroups(from: oldValue) }
@@ -186,7 +192,12 @@ final class Store {
     @ObservationIgnored var defaultBranchesCheckedAt: [String: Date] = [:]
     /// Bumped on every inbox change: the memo key for entries.
     private(set) var inboxRevision = 0
+    /// Bumped when only what the categories are called changed (names, symbols, colours, sections, switches): what is
+    /// searched by their names is made again, the entries aren't.
+    private(set) var inboxDisplayRevision = 0
     @ObservationIgnored var inboxMemo = InboxStore.Memo()
+    /// How many rules of each category are off, as of an `inboxRevision` (`rulesOff`).
+    @ObservationIgnored var rulesOffMemo: (revision: Int, counts: [UUID: Int])?
     /// Time alone changed what matches (InboxStore.swift): what reads the inbox reads it again.
     func inboxTimePassed() { inboxRevision &+= 1 }
     /// Done, taken back with ⌘Z or the inbox's undo line.
