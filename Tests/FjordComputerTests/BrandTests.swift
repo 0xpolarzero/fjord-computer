@@ -56,29 +56,41 @@ import Testing
         #expect(ClaudeFonts.fonts(in: made) == nil)
     }
 
-    @Test func olderGenerationsGoOnlyOnceTheNewestHasBeenInUseADay() throws {
+    @Test func olderGenerationsGoOnlyWhileNoOtherFjordRuns() throws {
         let dir = TempDir()
         let root = dir.path("fonts")
         let old = try #require(ClaudeFonts.store([font("A.woff2", "a")], root: root, stamp: "1 1 1.0"))
-        try FileManager.default.setAttributes([.creationDate: Date(timeIntervalSinceNow: -7200)], ofItemAtPath: old.path)
         let current = try #require(ClaudeFonts.store([font("A.woff2", "b")], root: root, stamp: "2 2 2.0"))
-        ClaudeFonts.sweep(root, keeping: current)
+        ClaudeFonts.sweep(root, keeping: current, othersRunning: true)
         #expect(FileManager.default.fileExists(atPath: old.path))
-        ClaudeFonts.sweep(root, keeping: current, now: Date(timeIntervalSinceNow: 2 * 86400))
+        ClaudeFonts.sweep(root, keeping: current, othersRunning: false)
         #expect(!FileManager.default.fileExists(atPath: old.path) && ClaudeFonts.fonts(in: current) != nil)
     }
 
-    @Test func aGenerationThatCantBeMadeIsTriedAFewLaunchesOnly() throws {
+    @Test func aGenerationNotWholeIsPutAsideAndMadeAgainInItsPlace() throws {
         let dir = TempDir()
         let root = dir.path("fonts")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        chmod(root.path, 0o500)
-        defer { chmod(root.path, 0o755) }
-        #expect(ClaudeFonts.store([font("A.woff2", "a")], root: root, stamp: "1 1 1.0") == nil)
-        chmod(root.path, 0o755)
-        for _ in 0..<ClaudeFonts.maxFailures { ClaudeFonts.noteFailure(root, stamp: "1 1 1.0") }
-        #expect(ClaudeFonts.failures(root, stamp: "1 1 1.0") == ClaudeFonts.maxFailures)
-        #expect(ClaudeFonts.failures(root, stamp: "2 2 2.0") == 0)
+        let made = try #require(ClaudeFonts.store([font("A.woff2", "a"), font("B.woff2", "b")], root: root, stamp: "1 1 1.0"))
+        try FileManager.default.removeItem(at: made.appendingPathComponent("B.woff2"))
+        #expect(ClaudeFonts.fonts(in: made) == nil)
+        // Made again over it would fail (the folder is there): put aside first, it is made whole.
+        ClaudeFonts.setAside(made, in: root)
+        let again = try #require(ClaudeFonts.store([font("A.woff2", "a"), font("B.woff2", "b")], root: root, stamp: "1 1 1.0"))
+        #expect(again == made && ClaudeFonts.fonts(in: again) == ["A.woff2", "B.woff2"])
+        // What was put aside goes with the next sweep.
+        ClaudeFonts.sweep(root, keeping: again, othersRunning: false)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == [again.lastPathComponent])
+    }
+
+    @Test func failuresAreCountedInTheDefaultsForTheArchiveAlone() throws {
+        let defaults = try #require(UserDefaults(suiteName: "fjord-fonts-\(UUID().uuidString)"))
+        // A cache folder that can't be written doesn't stop the count.
+        for _ in 0..<ClaudeFonts.maxFailures { ClaudeFonts.noteFailure(stamp: "1 1 1.0", defaults: defaults) }
+        #expect(ClaudeFonts.failures(stamp: "1 1 1.0", defaults: defaults) == ClaudeFonts.maxFailures)
+        // Another archive: counted afresh, the old one's forgotten.
+        ClaudeFonts.noteFailure(stamp: "2 2 2.0", defaults: defaults)
+        #expect(ClaudeFonts.failures(stamp: "2 2 2.0", defaults: defaults) == 1)
+        #expect(ClaudeFonts.failures(stamp: "1 1 1.0", defaults: defaults) == 0)
     }
 }
 

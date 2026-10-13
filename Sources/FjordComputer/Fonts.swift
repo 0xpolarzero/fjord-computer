@@ -1,3 +1,4 @@
+import AppKit
 import CoreText
 import Foundation
 
@@ -22,30 +23,58 @@ enum ClaudeFonts {
             .appendingPathComponent("com.amontlabs.fjord/fonts", isDirectory: true)
         let folder = generation(root: root, stamp: stamp)
         if let names = fonts(in: folder) {
-            register(names, in: folder)
-            // Made by an earlier launch: what older archives left goes now (a process still running with one of them
-            // started before this generation was made).
-            sweep(root, keeping: folder)
-            return
+            if register(names, in: folder) {
+                // Made by an earlier launch: what older archives left goes now, unless another Fjord Computer runs (it may
+                // have registered them).
+                sweep(root, keeping: folder, othersRunning: otherFjordRunning)
+                return
+            }
         }
+        // Not whole (a font gone, or one that doesn't register): put aside, so it is made again in its place.
+        setAside(folder, in: root)
         // Taking them out failed launch after launch (a full disk, a folder that can't be written): not tried again for
         // this archive, so each launch doesn't read its header for nothing.
-        guard failures(root, stamp: stamp) < maxFailures else { return }
+        guard failures(stamp: stamp) < maxFailures else { return }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: asar), options: .alwaysMapped),
               let files = AsarIndex(data) else { return }
         let fonts = files.entries
             .filter { $0.0.hasPrefix(".vite/renderer/main_window/assets/AnthropicSans-") && $0.0.hasSuffix(".woff2") }
             .map { entry in (name: (entry.0 as NSString).lastPathComponent, bytes: { data.subdata(in: entry.1) }) }
-        guard let made = store(fonts, root: root, stamp: stamp), let names = Self.fonts(in: made) else {
-            noteFailure(root, stamp: stamp)
+        guard let made = store(fonts, root: root, stamp: stamp), let names = Self.fonts(in: made), register(names, in: made) else {
+            noteFailure(stamp: stamp)
             return
         }
-        register(names, in: made)
     }
 
-    private static func register(_ names: [String], in folder: URL) {
-        for name in names where CTFontManagerRegisterFontsForURL(folder.appendingPathComponent(name) as CFURL, .process, nil) {
-            available = true
+    /// Registers the fonts for this process; whether every one of them took.
+    @discardableResult
+    private static func register(_ names: [String], in folder: URL) -> Bool {
+        var all = true
+        for name in names {
+            if CTFontManagerRegisterFontsForURL(folder.appendingPathComponent(name) as CFURL, .process, nil) {
+                available = true
+            } else {
+                all = false
+            }
+        }
+        return all
+    }
+
+    /// Moves a generation that isn't whole out of the way (`.bad-…`, swept later), so it can be made again.
+    static func setAside(_ folder: URL, in root: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: folder.path) else { return }
+        try? fm.moveItem(at: folder, to: root.appendingPathComponent(".bad-\(UUID().uuidString)", isDirectory: true))
+    }
+
+    /// Another Fjord Computer is running (the installed app beside a build, say): by bundle id or executable name.
+    static var otherFjordRunning: Bool {
+        let me = ProcessInfo.processInfo.processIdentifier
+        let name = Bundle.main.executableURL?.lastPathComponent ?? "FjordComputer"
+        let id = Bundle.main.bundleIdentifier
+        return NSWorkspace.shared.runningApplications.contains { app in
+            app.processIdentifier != me
+                && ((id != nil && app.bundleIdentifier == id) || app.executableURL?.lastPathComponent == name)
         }
     }
 
@@ -88,37 +117,30 @@ enum ClaudeFonts {
         return folder
     }
 
-    /// Takes away the generations older than `current` (and what the cache held before generations), and folders left half
-    /// made by a launch that stopped: run only once `current` was made by an earlier launch, and a day ago at least, so a
-    /// Fjord Computer still running from before it (with an older generation's fonts registered) has long been relaunched.
-    static func sweep(_ root: URL, keeping current: URL, now: Date = Date()) {
+    /// Takes away the other generations (and what the cache held before generations, and folders left half made or put
+    /// aside), only while no other Fjord Computer runs: one that does may have registered them, and keeps reading them.
+    static func sweep(_ root: URL, keeping current: URL, othersRunning: Bool) {
+        guard !othersRunning else { return }
         let fm = FileManager.default
-        func made(_ url: URL) -> Date { ((try? fm.attributesOfItem(atPath: url.path))?[.creationDate] as? Date) ?? .distantPast }
-        let since = made(current)
-        guard now.timeIntervalSince(since) > sweepAfter else { return }
         for name in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] where name != current.lastPathComponent {
-            let url = root.appendingPathComponent(name)
-            guard name.hasPrefix("g-") || name.hasPrefix(".making-") || name.hasSuffix(".woff2") || name == "archive.stamp"
-                    || name.hasPrefix("failed-") else { continue }
-            if made(url) < since { try? fm.removeItem(at: url) }
+            guard name.hasPrefix("g-") || name.hasPrefix(".making-") || name.hasPrefix(".bad-") || name.hasSuffix(".woff2")
+                    || name == "archive.stamp" || name.hasPrefix("failed-") else { continue }
+            try? fm.removeItem(at: root.appendingPathComponent(name))
         }
     }
 
-    /// How long a generation is in use before the older ones go.
-    static let sweepAfter: TimeInterval = 86400
-
     /// How many launches failed to take the fonts out of the archive with `stamp`, at most.
     static let maxFailures = 3
+    /// Where the failures are counted: the defaults, which a cache folder that can't be written doesn't stop.
+    static let failuresKey = "ClaudeFontFailures"
 
-    static func failures(_ root: URL, stamp: String) -> Int {
-        let note = root.appendingPathComponent("failed-" + generation(root: root, stamp: stamp).lastPathComponent)
-        return (try? String(contentsOf: note, encoding: .utf8)).flatMap { Int($0) } ?? 0
+    static func failures(stamp: String, defaults: UserDefaults = .standard) -> Int {
+        (defaults.dictionary(forKey: failuresKey)?[stamp] as? Int) ?? 0
     }
 
-    static func noteFailure(_ root: URL, stamp: String) {
-        let note = root.appendingPathComponent("failed-" + generation(root: root, stamp: stamp).lastPathComponent)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try? String(failures(root, stamp: stamp) + 1).write(to: note, atomically: true, encoding: .utf8)
+    /// Counts a failure for `stamp`; those of other archives are forgotten.
+    static func noteFailure(stamp: String, defaults: UserDefaults = .standard) {
+        defaults.set([stamp: failures(stamp: stamp, defaults: defaults) + 1], forKey: failuresKey)
     }
 
     /// The archive's size, inode and modification time (to the nanosecond): another for any other build of the app.
