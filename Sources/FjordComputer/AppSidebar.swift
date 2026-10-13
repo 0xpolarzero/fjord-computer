@@ -363,7 +363,7 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
                     // only; it comes in after the labels have gone.
                     .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear, small: true,
                                  opacity: collapsed ? 1 : 0)
-                    .animation(collapsed ? .easeIn(duration: 0.18).delay(0.12) : .easeOut(duration: 0.08), value: collapsed)
+                    .animation(collapsed ? .easeIn(duration: 0.16).delay(0.06) : .easeOut(duration: 0.08), value: collapsed)
                     // The indent eases out with the sidebar's width, so a nested icon reaches its tile as the rail closes.
                     .padding(.leading, M.railShift + (collapsed ? 0 : indent))
                 Group {
@@ -424,7 +424,7 @@ private struct SidebarTextModifier: ViewModifier {
             .opacity(collapsed ? 0 : 1)
             .offset(x: collapsed && !reduce ? -8 : 0)
             .animation(reduce ? .easeOut(duration: 0.1)
-                       : collapsed ? .easeOut(duration: 0.12) : .easeOut(duration: 0.22).delay(0.14), value: collapsed)
+                       : collapsed ? .easeOut(duration: 0.12) : .easeOut(duration: 0.16).delay(0.06), value: collapsed)
             .allowsHitTesting(!collapsed)
     }
 }
