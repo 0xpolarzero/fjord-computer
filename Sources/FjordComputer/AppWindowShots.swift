@@ -157,10 +157,8 @@ enum AppWindowShots {
                 store.router.cards[i].total = asks.count
             }
             model.pickCanvas()
-            // The second column, where microsandbox's frame is, at full size.
-            model.canvas.camera.transform = CanvasTransform(origin: CGPoint(x: CanvasMetrics.pad - CanvasMetrics.frameWidth
-                - CanvasMetrics.colGap, y: CanvasMetrics.pad), scale: 1)
-            model.canvas.camera.moved = true
+            // microsandbox's frame at full size.
+            look(model, at: "microsandbox")
         }, appearance: .darkAqua),
         Shot(name: "router-canvas-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 760), compose: { model, store in
             Demo.routerTriage(store)
@@ -204,10 +202,33 @@ enum AppWindowShots {
             for folder in model.canvasFolders(store, page: model.zones(store)) where folder.doneOnly {
                 model.canvas.folderFolds[folder.key] = false
             }
-            // The second column, where they are.
-            model.canvas.camera.transform = CanvasTransform(origin: CGPoint(x: CanvasMetrics.pad - CanvasMetrics.frameWidth
-                - CanvasMetrics.colGap, y: CanvasMetrics.pad), scale: 1)
-            model.canvas.camera.moved = true
+        }, appearance: .darkAqua),
+        // The canvas at full size on one frame, the rest of the ground round it.
+        Shot(name: "router-canvas-zoom", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.pickCanvas()
+            look(model, at: "lcu")
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-zoom-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.pickCanvas()
+            look(model, at: "lcu")
+        }, appearance: .darkAqua),
+        // The history's panel open over the canvas's right side.
+        Shot(name: "router-canvas-history", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
+            model.pickCanvas()
+            model.show(.history)
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-history-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
+            model.pickCanvas()
+            model.show(.history)
+        }, appearance: .darkAqua),
+        // The frames moved by hand: in a row, staggered, Reset layout among the buttons.
+        Shot(name: "router-canvas-arranged", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            arranged(model, store)
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-arranged-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            arranged(model, store)
         }, appearance: .darkAqua),
         // A search on the canvas: only the frames with a match.
         Shot(name: "router-canvas-search", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
@@ -245,6 +266,26 @@ enum AppWindowShots {
     ]
 
     private static let canvasSize = CGSize(width: 1440, height: 900)
+
+    /// The canvas at full size on the frame of the project named `name`, once the frames are drawn.
+    private static func look(_ model: RouterModel, at name: String) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard let key = model.canvas.frameRects.keys.first(where: { URL(fileURLWithPath: $0).lastPathComponent == name }) else { return }
+            model.canvas.look(at: key)
+        }
+    }
+
+    /// Every frame moved by hand, as a drag would leave them: in one staggered row, the frames opened.
+    private static func arranged(_ model: RouterModel, _ store: Store) {
+        Demo.routerTriage(store)
+        model.pickCanvas()
+        let folders = model.canvasFolders(store, page: model.zones(store))
+        for folder in folders where folder.doneOnly { model.canvas.folderFolds[folder.key] = false }
+        model.canvas.positions = Dictionary(uniqueKeysWithValues: folders.enumerated().map { i, folder in
+            (folder.key, CGPoint(x: CGFloat(i) * (CanvasMetrics.frameWidth + 96), y: i.isMultiple(of: 2) ? 0 : 160))
+        })
+    }
 
     /// The demo's message under way sent to its session a moment after the canvas is drawn, its flight held halfway; and
     /// "You: …" on the plan card, as an earlier message left it.
