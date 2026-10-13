@@ -48,8 +48,20 @@ struct FlightFramesKey: PreferenceKey {
     }
 
     /// Over the composer, oldest first (the newest nearest the composer).
-    private(set) var pills: [Pill] = []
-    private(set) var flights: [Flight] = []
+    private(set) var pills: [Pill] = [] {
+        didSet { track() }
+    }
+    private(set) var flights: [Flight] = [] {
+        didSet { track() }
+    }
+    /// Whether the places are measured (`frames`): only while a message is on its way, so the page's cards and rows carry no
+    /// measuring the rest of the time. Written only when it changes.
+    private(set) var tracking = false
+
+    private func track() {
+        let on = !pills.isEmpty || !flights.isEmpty
+        if tracking != on { tracking = on }
+    }
     /// When each place was last landed on: its flash.
     private(set) var landed: [String: Date] = [:]
     /// The places as last laid out, in `FlightSpace`. Read when a flight starts, never drawn from.
@@ -279,11 +291,23 @@ extension View {
         modifier(FlightTarget(key: key, radius: radius, flashes: flashes))
     }
 
-    /// A frame the flights read but nothing lands on (Now's view, the composer, a pill).
+    /// A frame the flights read but nothing lands on (Now's view, the composer, a pill). Measured only while a message is on
+    /// its way (`RouterFlights.tracking`).
     func flightFrame(_ key: String) -> some View {
-        background {
-            GeometryReader { geometry in
-                Color.clear.preference(key: FlightFramesKey.self, value: [key: geometry.frame(in: .named(FlightSpace.name))])
+        modifier(FlightFrame(key: key))
+    }
+}
+
+private struct FlightFrame: ViewModifier {
+    let key: String
+    @Environment(RouterFlights.self) private var flights: RouterFlights?
+
+    func body(content: Content) -> some View {
+        content.background {
+            if flights?.tracking == true {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: FlightFramesKey.self, value: [key: geometry.frame(in: .named(FlightSpace.name))])
+                }
             }
         }
     }
@@ -301,11 +325,15 @@ private struct FlightTarget: ViewModifier {
         if let key {
             content
                 .flightFrame(key)
+                // Only while it flashes: the rest of the time a card carries no shapes for it. Coming and going, the flash
+                // fades as a whole (the default transition), as its glow would.
                 .overlay {
-                    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    shape.fill(CDS.Text.accent.opacity(0.14 * glow))
-                        .overlay { shape.strokeBorder(CDS.Text.accent.opacity(0.55 * glow), lineWidth: 1) }
-                        .allowsHitTesting(false)
+                    if glow > 0 {
+                        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        shape.fill(CDS.Text.accent.opacity(0.14 * glow))
+                            .overlay { shape.strokeBorder(CDS.Text.accent.opacity(0.55 * glow), lineWidth: 1) }
+                            .allowsHitTesting(false)
+                    }
                 }
                 .onChange(of: flights?.landed[key]) { _, at in
                     guard at != nil, flashes else { return }
