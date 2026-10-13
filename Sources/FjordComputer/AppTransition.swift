@@ -147,6 +147,101 @@ enum AppTransition {
 
     /// How many pictures of a window were taken (the tests count them).
     private(set) static var captures = 0
+    /// What a picture costs on the main thread (its last few, smoothed; seconds), and when the last was taken (media
+    /// time): an opening takes one only when it can be in before the handoff, and the idle keeper spaces them out.
+    private(set) static var captureCost: CFTimeInterval = 0.1
+    private(set) static var lastCapture: CFTimeInterval = -.infinity
+
+    /// The window's content drawn small (a quarter of its points, from its layers as they are, no glass stand-ins; not the
+    /// title bar's buttons, whose colour says only whether the window has the keyboard, which a picture is never kept
+    /// without): two equal glances say nothing the window shows changed in between. Some 3 ms on demo data at 1480 by 940 pt against 50 to 70 for a
+    /// picture, so a close and an opening can ask whether the picture they have is still the window's.
+    struct Glance: Equatable {
+        let width: Int
+        let height: Int
+        let pixels: [UInt8]
+
+        /// Whether it is `other` (none is never), to within two levels a channel.
+        func same(as other: Glance?) -> Bool {
+            guard let other else { return false }
+            return self == other || difference(from: other) == 0
+        }
+
+        /// The share of pixels (0…1) that differ from `other`'s by more than two levels in a channel; 1 for another size.
+        func difference(from other: Glance) -> Double {
+            guard width == other.width, height == other.height, !pixels.isEmpty, pixels.count == other.pixels.count else {
+                return 1
+            }
+            var differing = 0
+            pixels.withUnsafeBufferPointer { a in
+                other.pixels.withUnsafeBufferPointer { b in
+                    var i = 0
+                    while i < a.count {
+                        if abs(Int(a[i]) - Int(b[i])) > 2 || abs(Int(a[i + 1]) - Int(b[i + 1])) > 2
+                            || abs(Int(a[i + 2]) - Int(b[i + 2])) > 2 || abs(Int(a[i + 3]) - Int(b[i + 3])) > 2 {
+                            differing += 1
+                        }
+                        i += 4
+                    }
+                }
+            }
+            return Double(differing) / Double(width * height)
+        }
+
+        /// How far the window may have moved on from the picture a close starts on: a hover come or gone, a count or a
+        /// time ticked (0.5% of the window: a sidebar row's highlight is 0.3%). Shown only as the window starts to shrink
+        /// and fade, against a fresh picture's whole cost before anything moves; more than that and the close takes one.
+        static let closeTolerance = 0.005
+    }
+
+    static let glanceScale: CGFloat = 0.25
+
+    /// The window's glance as it is drawn now (laid out and displayed first, as a picture would be); nil when it has no
+    /// layers to draw.
+    static func glance(of window: NSWindow) -> Glance? {
+        guard let view = window.contentView, let layer = view.layer, view.bounds.width > 0, view.bounds.height > 0 else {
+            return nil
+        }
+        let signpost = MorphSignposts.signposter.beginInterval("Glance drawn")
+        defer { MorphSignposts.signposter.endInterval("Glance drawn", signpost) }
+        (view.superview ?? view).layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let width = max(1, Int((view.bounds.width * glanceScale).rounded(.up)))
+        let height = max(1, Int((view.bounds.height * glanceScale).rounded(.up)))
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.scaleBy(x: glanceScale, y: glanceScale)
+            layer.render(in: context)
+            return true
+        }
+        return drawn ? Glance(width: width, height: height, pixels: pixels) : nil
+    }
+
+    /// Whether a picture taken now would be in before `deadline` (media time) with `after` to spare: by what pictures
+    /// have cost lately.
+    static func pictureFits(before deadline: CFTimeInterval, after: TimeInterval = 0) -> Bool {
+        if let picturesFit { return picturesFit }
+        return CACurrentMediaTime() + captureCost * 1.25 + after <= deadline
+    }
+
+    /// Says whether a picture fits instead of the clock (a test, whose pictures take what a debug build takes).
+    static var picturesFit: Bool?
+
+    /// Whether the idle keeper may take a picture now: at most a twentieth of the main thread's time, every 2 s at most.
+    static var mayCaptureAtIdle: Bool {
+        CACurrentMediaTime() - lastCapture >= max(2, 20 * captureCost)
+    }
+
+    /// No key, click or pointer move for `seconds`: the user is not in the middle of something a picture would hold up.
+    static func inputIdle(for seconds: TimeInterval) -> Bool {
+        guard NSEvent.pressedMouseButtons == 0 else { return false }
+        // kCGAnyInputEventType.
+        guard let any = CGEventType(rawValue: ~0) else { return true }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any) >= seconds
+    }
 
     /// A place in a window's picture whose ground is taken out: the inset sidebar's rounded rect (window coordinates),
     /// which the glass morph's G2 shows through, under the sidebar's labels.
@@ -165,7 +260,13 @@ enum AppTransition {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
         captures += 1
         let signpost = MorphSignposts.signposter.beginInterval("Capture")
-        defer { MorphSignposts.signposter.endInterval("Capture", signpost) }
+        let started = CACurrentMediaTime()
+        defer {
+            MorphSignposts.signposter.endInterval("Capture", signpost)
+            lastCapture = CACurrentMediaTime()
+            let cost = lastCapture - started
+            captureCost = captures == 1 ? cost : (captureCost + cost) / 2
+        }
         let glass = GlassCapture.chromeIsGlass
         let cleared = glass ? hole : nil
         let draw = { () -> CGImage? in
@@ -360,31 +461,48 @@ enum AppTransition {
 
     /// An overlay for `window` (laid out at its frame) on the window's picture as it is now, ready to show; nil when there
     /// is nothing to draw. `glass`: the glass morph (M1). `closing`: the window goes out of sight in this turn (see
-    /// `snapshot`'s `restoreLater`).
+    /// `snapshot`'s `restoreLater`). `glance`: the window's, taken just before (see `Run.glance`).
     static func makeRun(for window: NSWindow, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
-                        glass: Bool? = nil, closing: Bool = false) -> Run? {
+                        glass: Bool? = nil, closing: Bool = false, glance: Glance? = nil) -> Run? {
         let isGlass = glass ?? usesGlass
         let radius = cornerRadius(of: window)
         guard let image = snapshot(of: window, capture: glassWindow.capture,
                                    hole: glassWindow.hole(glass: isGlass, radius: radius), restoreLater: closing),
               let screen = window.screen ?? NSScreen.main else { return nil }
-        return Run(window: window, image: image, imageIsKey: isKey(window), screen: screen, bar: bar,
-                   radius: radius, glassWindow: glassWindow, glass: isGlass)
+        let run = Run(window: window, image: image, imageIsKey: isKey(window), screen: screen, bar: bar,
+                      radius: radius, glassWindow: glassWindow, glass: isGlass)
+        run.glance = glance
+        return run
     }
 
-    /// An overlay for `window` with nothing captured: on `image` (a picture kept from before), else on the window's bare
-    /// surface until `refresh` brings one.
+    /// An overlay for `window` with nothing captured: on `image` (a picture kept from before, the window as `glance`
+    /// says it was drawn then), else on the window's bare surface until `refresh` brings one.
     static func makeRun(for window: NSWindow, image: CGImage?, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
-                        glass: Bool? = nil) -> Run? {
+                        glass: Bool? = nil, glance: Glance? = nil) -> Run? {
         guard let screen = window.screen ?? NSScreen.main else { return nil }
-        // A picture kept was taken at a close, with the window key.
-        return Run(window: window, image: image, imageIsKey: image != nil, screen: screen, bar: bar,
-                   radius: cornerRadius(of: window), glassWindow: glassWindow, glass: glass ?? usesGlass)
+        // A picture kept was taken with the window key (at idle, or at a close).
+        let run = Run(window: window, image: image, imageIsKey: image != nil, screen: screen, bar: bar,
+                      radius: cornerRadius(of: window), glassWindow: glassWindow, glass: glass ?? usesGlass)
+        run.glance = image == nil ? nil : glance
+        return run
     }
 
-    /// The window's picture at its last close, taken while it had the keyboard (its buttons in colour, as the real window
-    /// shows them once it is key): the next opening starts on it. Only one taken at a close will do: a picture taken out
-    /// of sight has the grey buttons of a window in the background.
+    /// A picture of `window` as it is now, to keep (see `Picture`): its glance first, then the picture itself, for the
+    /// morph `glass` is or isn't, of `destination`. Nil without the keyboard (a picture taken then has grey buttons).
+    static func picture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool,
+                        destination: AppDestination) -> Picture? {
+        guard isKey(window), let glance = glance(of: window),
+              let image = snapshot(of: window, capture: glassWindow.capture,
+                                   hole: glassWindow.hole(glass: glass, radius: cornerRadius(of: window))) else { return nil }
+        return Picture(image: image, frame: window.frame, scale: window.backingScaleFactor, destination: destination,
+                       glass: glass, glance: glance, appearance: window.effectiveAppearance.name,
+                       sidebar: glassWindow.sidebar)
+    }
+
+    /// The window's picture as it was last seen, taken while it had the keyboard (its buttons in colour, as the real
+    /// window shows them once it is key): kept fresh while the window is open and still, so a close starts on it at once,
+    /// then kept from the close for the next opening to start on. A picture taken out of sight has the grey buttons of a
+    /// window in the background: never kept.
     struct Picture {
         var image: CGImage
         var frame: NSRect
@@ -393,10 +511,19 @@ enum AppTransition {
         var destination: AppDestination
         /// Taken for the glass morph (its sidebar cleared, its small glass pieces opaque): only that morph may use it.
         var glass = false
+        /// The window as it was drawn when the picture was taken: an equal glance now says the picture is still the
+        /// window's (nil: not known, so it never is).
+        var glance: Glance?
+        /// The appearance it was taken in (nil: any): another (light or dark changed while the window was closed) never
+        /// stands in, not even for a moment.
+        var appearance: NSAppearance.Name?
+        /// The inset sidebar's frame it was taken with (its hole on glass): another (the sidebar folded since) never
+        /// stands in.
+        var sidebar: NSRect?
 
         /// Whether it can stand for `window` as it opens: the same size, at the scale a picture of it would be taken at now
         /// (the window's own, as `scale` is: a window off every screen keeps that of the last one it was on, which need not
-        /// be the main screen's).
+        /// be the main screen's), in the same appearance.
         @MainActor func fits(_ window: NSWindow) -> Bool {
             fits(window, glass: AppTransition.usesGlass)
         }
@@ -404,6 +531,12 @@ enum AppTransition {
         /// `fits`, for a morph that is the glass one (`glass`) or not: a picture taken for the other never stands in.
         @MainActor func fits(_ window: NSWindow, glass: Bool) -> Bool {
             frame.size == window.frame.size && scale == window.backingScaleFactor && self.glass == glass
+                && (appearance == nil || appearance == window.effectiveAppearance.name)
+        }
+
+        /// `fits`, with the window's sidebar where it was when the picture was taken.
+        @MainActor func fits(_ window: NSWindow, glass: Bool, sidebar: NSRect?) -> Bool {
+            fits(window, glass: glass) && self.sidebar == sidebar
         }
     }
 
@@ -560,8 +693,11 @@ enum AppTransition {
         private(set) var imageIsKey: Bool
         /// The place that picture shows, as its window says (nil: none, or not known).
         var shows: AppDestination?
+        /// The window as it was drawn when that picture was taken (nil: not known, or no picture): an equal glance of the
+        /// window now says the picture is exactly what it shows, so the opening hands over on it with a cut.
+        fileprivate(set) var glance: Glance?
         /// When the animation under way has settled (media time): the overlay does not go before.
-        private var settlesAt: CFTimeInterval = 0
+        private(set) var settlesAt: CFTimeInterval = 0
         /// The opening has handed over: its picture is gone and the real window's live pixels show (the overlay's shadow
         /// may still be fading). Nothing is left to turn round: a close starts from the window as it is.
         private(set) var handedOver = false
@@ -653,10 +789,13 @@ enum AppTransition {
 
         /// A newer picture of the window (it was built, or its content changed since): the same frame. `crossFade`: the
         /// picture shown is another (none, or another place's), so the new one fades in over it rather than popping in.
-        func refresh(_ window: NSWindow, crossFade: Bool = false) {
+        /// `glance`: the window's, taken just before (else one is taken here).
+        func refresh(_ window: NSWindow, crossFade: Bool = false, glance: Glance? = nil) {
             let hole = GlassWindow(sidebar: sidebar).hole(glass: isGlass, radius: windowRadius)
+            let glance = glance ?? AppTransition.glance(of: window)
             guard let image = AppTransition.snapshot(of: window, capture: capture, hole: hole) else { return }
             self.image = image
+            self.glance = glance
             imageIsKey = AppTransition.isKey(window)
             let signpost = MorphSignposts.signposter.beginInterval("Install picture")
             defer { MorphSignposts.signposter.endInterval("Install picture", signpost) }
@@ -794,7 +933,13 @@ enum AppTransition {
             end.shadow = 0
             end.container = 0
             end.glass = 0
-            play(to: end, spring: .closing, opacities: isGlass ? .glassClosing : .closing, lead: 0, done: done)
+            let opacities: Opacities = isGlass ? .glassClosing : .closing
+            // Gone once all of it has faded out (today's at 85% of the spring), the rest of the shrink unseen: the window
+            // closes then rather than when the spring is still.
+            let faded = [opacities.window, opacities.shadow, opacities.container, isGlass ? opacities.glass : (0, 0)]
+                .map { $0.0 + $0.1 }.max() ?? 1
+            let lead = motionLength(.closing) * max(0, 1 - faded) * Double(AppTransition.slowdown)
+            play(to: end, spring: .closing, opacities: opacities, lead: lead, done: done)
         }
 
         /// A cross-fade of the overlay alone, at the window's frame, from `start` (else from where it is now). On glass G1
@@ -810,6 +955,7 @@ enum AppTransition {
             let mine = token
             // A handoff under way is called off.
             endHandoffSignpost()
+            fadesOut = false
             startPose = from
             completion = done
             settlesAt = CACurrentMediaTime() + AppTransition.reducedDuration * Double(AppTransition.slowdown)
@@ -873,6 +1019,7 @@ enum AppTransition {
             let mine = token
             // A handoff under way is called off.
             endHandoffSignpost()
+            fadesOut = false
             startPose = from
             completion = done
             let fromRect = local(from.rect)
@@ -983,10 +1130,15 @@ enum AppTransition {
         // MARK: Handoff
 
         /// Shows the real window under the overlay, then lets the overlay go once the window has been composited (two
-        /// refreshes later), its shadow giving way to the window's own. `reveal` makes the real window visible; `finished`
-        /// runs when the overlay is gone.
-        func handoff(reveal: @escaping () -> Void, finished: @escaping () -> Void) {
+        /// refreshes later), its shadow giving way to the window's own. `reveal` makes the real window visible; `handedOver`
+        /// runs as the overlay lets go of its picture (the real window's live pixels show), `finished` once the overlay is
+        /// gone, a shadow's fade later. `fading`: the overlay's picture may not be the window's exactly (it changed since,
+        /// and no fresh picture could be in before now without holding the handoff up), so the overlay fades out over the
+        /// real window (`pictureFade`) rather than going at once.
+        func handoff(fading: Bool = false, reveal: @escaping () -> Void, handedOver: (() -> Void)? = nil,
+                     finished: @escaping () -> Void) {
             handoffSignpost = MorphSignposts.signposter.beginInterval("Handoff")
+            fadesOut = fadesOut || fading
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             reveal()
@@ -997,38 +1149,56 @@ enum AppTransition {
             let mine = token
             AppTransition.nextFrames(screen, 2) { [weak self] in
                 guard let self, !self.ended, self.token == mine else { return }
-                self.letGoWhenStill(mine, finished: finished)
+                self.letGoWhenStill(mine, takenOver: { handedOver?() }, finished: finished)
             }
         }
 
         /// Lets go once the spring is still (the handoff starts ahead of its end) and the overlay shows the window's exact
         /// picture: a fresh one still fading in over the last (taken late, or asked for since) is let finish, rather than
         /// snapping to its end as the picture goes.
-        private func letGoWhenStill(_ mine: Int, finished: @escaping () -> Void) {
+        private func letGoWhenStill(_ mine: Int, takenOver: @escaping () -> Void, finished: @escaping () -> Void) {
             let wait = max(settlesAt, fadeEnds) - CACurrentMediaTime()
-            guard wait > 0 else { return letGo(mine, finished: finished) }
+            guard wait > 0 else { return letGo(mine, takenOver: takenOver, finished: finished) }
             DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, !self.ended, self.token == mine else { return }
-                    self.letGoWhenStill(mine, finished: finished)
+                    self.letGoWhenStill(mine, takenOver: takenOver, finished: finished)
                 }
             }
         }
 
         /// How long the overlay's shadow takes to give way to the window's own at the handoff.
         static let shadowHandoff: TimeInterval = 0.1
+        /// The handoff under way fades the overlay out over the real window (see `handoff`).
+        private(set) var fadesOut = false
+
+        /// The window moved on from the overlay's picture with no time left for a fresh one: the handoff (under way or to
+        /// come) fades into the real window rather than cutting to it.
+        func fadeHandoff() {
+            fadesOut = true
+        }
 
         /// The window's picture goes at once (the real window under it has the same pixels, and its own are live), the
         /// overlay's shadow gives way to the window's own, then the overlay goes. On glass G1, G2 and the picture's clip go
         /// with the container: the real sidebar replaces G2 on the same `s1`.
-        private func letGo(_ mine: Int, finished: @escaping () -> Void) {
+        private func letGo(_ mine: Int, takenOver: () -> Void, finished: @escaping () -> Void) {
             handedOver = true
             endHandoffSignpost()
             let going = MorphSignposts.signposter.beginInterval("Overlay going")
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             container.opacity = 0
-            glass?.hide()
+            if fadesOut {
+                let out = CABasicAnimation(keyPath: "opacity")
+                out.fromValue = 1
+                out.toValue = 0
+                out.duration = AppTransition.pictureFade
+                out.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                container.add(out, forKey: "handoff")
+                glass?.hide(fading: out)
+            } else {
+                glass?.hide()
+            }
             // A layer's shadow is drawn under its shape too: only what lies outside the window may show now.
             let mask = CAShapeLayer()
             mask.frame = shadow.bounds
@@ -1045,8 +1215,11 @@ enum AppTransition {
             fade.duration = Self.shadowHandoff
             shadow.add(fade, forKey: "handoff")
             CATransaction.commit()
-            // The layers run at 1/slowdown: the overlay goes once the fade is over as it is seen.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.shadowHandoff * Double(AppTransition.slowdown)) { [weak self] in
+            // The window has taken over: whoever waits for that need not wait for the shadow.
+            takenOver()
+            // The layers run at 1/slowdown: the overlay goes once the fades are over as they are seen.
+            let fades = fadesOut ? max(Self.shadowHandoff, AppTransition.pictureFade) : Self.shadowHandoff
+            DispatchQueue.main.asyncAfter(deadline: .now() + fades * Double(AppTransition.slowdown)) { [weak self] in
                 MainActor.assumeIsolated {
                     MorphSignposts.signposter.endInterval("Overlay going", going)
                     guard let self, self.token == mine else { return }
@@ -1224,12 +1397,15 @@ enum AppTransition {
             g2.layer?.removeAllAnimations()
         }
 
-        /// Gone at once (the handoff): the real window shows under the overlay.
-        func hide() {
+        /// Gone at once (the handoff): the real window shows under the overlay. `fading`: gone by that animation of their
+        /// opacity instead (a handoff whose picture may not be the window's exactly).
+        func hide(fading: CABasicAnimation? = nil) {
             stop()
             clip.opacity = 0
             g1.alphaValue = 0
             g2.alphaValue = 0
+            guard let fading else { return }
+            for layer in [clip, g1.layer, g2.layer].compactMap({ $0 }) { layer.add(fading, forKey: "handoff") }
         }
 
         private static func round(_ view: NSView, _ radius: CGFloat, animated: Bool) {

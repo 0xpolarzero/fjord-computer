@@ -651,7 +651,7 @@ extension WindowSeams {
         /// test never has the keyboard (the test runner is not the active app): `AppTransition.isKey` may say otherwise.
         private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
             let saved = (AppTransition.enabled, AppTransition.nextFrames, AppTransition.nextTurn, AppTransition.isKey,
-                         AppTransition.isMiniaturized, AppTransition.flushInitial)
+                         AppTransition.isMiniaturized, AppTransition.flushInitial, AppTransition.picturesFit)
             // The app's policy as found: the morph's close never gets to its tidying turn here, which would put it back, and a
             // test awaiting its own close meanwhile reads it.
             let policy = AppPolicy.current
@@ -663,6 +663,8 @@ extension WindowSeams {
                 wait(count)
             }
             AppTransition.nextTurn = { block in ticks.turns.append(block) }
+            // A fresh picture is in before the handoff whatever a debug build's take: a test that has none fit says so.
+            AppTransition.picturesFit = true
             _ = NSApplication.shared
             let store = Store()
             store.persists = false
@@ -680,6 +682,7 @@ extension WindowSeams {
                 AppTransition.isKey = saved.3
                 AppTransition.isMiniaturized = saved.4
                 AppTransition.flushInitial = saved.5
+                AppTransition.picturesFit = saved.6
                 AppPolicy.update(windowOpen: policy == .regular)
                 // A morph the test left under way holds no other test's waiting work.
                 MotionGate.ended()
@@ -736,9 +739,12 @@ extension WindowSeams {
                 #expect(ticks.turns.count == 1)
                 ticks.turns.removeFirst()()
                 #expect(window.isVisible && window.alphaValue == 0 && window.contentViewController != nil)
-                // The picture is there before the real window takes over.
+                // No picture is taken as the real window takes over (it would hold the handoff up): the window never had the
+                // keyboard here, so none was, and the overlay fades into the real window rather than cutting to it.
+                let taken = AppTransition.captures
                 run.complete()
-                #expect(run.image != nil && window.alphaValue == 1 && run.overlay.isVisible)
+                #expect(AppTransition.captures == taken && run.image == nil && run.fadesOut)
+                #expect(window.alphaValue == 1 && run.overlay.isVisible)
             }
         }
 
@@ -815,7 +821,7 @@ extension WindowSeams {
         private func openAndStartClosing(_ controller: AppWindowController, _ ticks: Ticks, on place: AppDestination) {
             AppTransition.isKey = { _ in true }
             controller.show(place)
-            ticks.turns.forEach { $0() }
+            ticks.runTurns()
             ticks.turns = []
             controller.run?.complete()
             ticks.blocks.removeFirst()()
@@ -842,7 +848,7 @@ extension WindowSeams {
             morphing { controller, ticks in
                 controller.show(.settings)
                 #expect(MotionGate.moving)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 controller.close()
                 #expect(controller.phase == .closing && MotionGate.moving)
@@ -872,18 +878,19 @@ extension WindowSeams {
                 guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
                 controller.show(card: cards[1].id)
                 #expect(controller.phase == .opening && controller.run === run && controller.navigator.selection == .router)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 #expect(run.image != nil && run.image !== shown)
             }
         }
 
         /// Closed before its fresh picture came, an opening to another place keeps the picture it started on as that of the
-        /// place it shows: turned round, it still owes the fresh one.
+        /// place it shows: turned round, it still owes the fresh one, and without one the overlay fades into the real window
+        /// rather than handing over on the other place's picture.
         @Test func aCloseCutShortBeforeItsFreshPictureStillOwesItWhenTurnedRound() {
             morphing { controller, ticks in
                 openAndStartClosing(controller, ticks, on: .router)
                 controller.run?.complete()
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 #expect(controller.phase == .idle && controller.window?.isVisible == false)
                 // Settings starts on the Router's picture; the window does not get the keyboard before the toggle.
@@ -895,7 +902,7 @@ extension WindowSeams {
                 controller.show(.settings)
                 #expect(controller.phase == .opening && controller.run === run && run.image === started)
                 run.complete()
-                #expect(run.image != nil && run.image !== started)
+                #expect(run.image === started && run.fadesOut)
             }
         }
 
@@ -905,11 +912,11 @@ extension WindowSeams {
             morphing { controller, ticks in
                 AppTransition.isKey = { _ in true }
                 controller.show(.settings)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let run = controller.run, let taken = run.image else { return #expect(Bool(false), "no picture") }
                 controller.navigator.go(.done)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 #expect(run.image != nil && run.image !== taken && run.shows == .done)
             }
         }
@@ -920,7 +927,7 @@ extension WindowSeams {
             try morphing { controller, ticks in
                 AppTransition.isKey = { _ in true }
                 controller.show(.settings)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let run = controller.run else { return #expect(Bool(false), "no morph") }
                 run.complete()
@@ -931,7 +938,7 @@ extension WindowSeams {
                 controller.navigator.go(.done)
                 controller.showUpdates()
                 if let card = controller.store.openRouterCards.first { controller.pick(card: card.id) }
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 #expect(AppTransition.captures == taken)
             }
         }
@@ -945,51 +952,96 @@ extension WindowSeams {
                 AppTransition.isKey = { _ in true }
                 controller.routerModel.select(cards[0].id, store: controller.store)
                 controller.show(.router)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let run = controller.run, let taken = run.image else { return #expect(Bool(false), "no picture") }
                 controller.pick(card: cards[1].id)
                 controller.show(.router)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let card = run.image else { return #expect(Bool(false), "no picture") }
                 #expect(card !== taken && controller.routerModel.selection == cards[1].id)
+                // Checked again: the picture shown is the window as drawn now (kept if nothing changed, else taken again).
                 controller.pick(message: UUID())
-                ticks.turns.forEach { $0() }
-                #expect(run.image != nil && run.image !== card)
+                ticks.runTurns()
+                let window = try #require(controller.window)
+                #expect(run.image != nil && AppTransition.glance(of: window)?.same(as: run.glance) == true)
             }
         }
 
-        /// Any close turned round takes a fresh picture: what the window shows may have changed meanwhile (the store, a message
-        /// asked for) with nothing to say so.
-        @Test func everyCloseTurnedRoundRefreshesThePicture() {
+        /// Opened again with nothing changed since its close, the window takes no picture: the one kept from the close is
+        /// still the window as drawn (a glance says so, but for a detail such as a scroller shown again, over which the
+        /// handoff fades), and the overlay hands over on it.
+        @Test func reopeningUnchangedTakesNoPicture() {
             morphing { controller, ticks in
-                openAndStartClosing(controller, ticks, on: .settings)
-                guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
-                controller.show(.settings)
-                #expect(controller.phase == .opening && controller.run === run)
-                ticks.turns.forEach { $0() }
-                #expect(run.image != nil && run.image !== shown)
+                // The archive: no field takes the keyboard (and draws its focus ring) as the window comes back.
+                openAndStartClosing(controller, ticks, on: .done)
+                controller.run?.complete()
+                ticks.runTurns()
+                #expect(controller.phase == .idle && controller.keepsPicture)
+                let taken = AppTransition.captures
+                controller.show(.done)
+                ticks.runTurns()
+                ticks.turns = []
+                guard let run = controller.run else { return #expect(Bool(false), "no morph") }
+                guard let kept = run.image else { return #expect(Bool(false), "no kept picture") }
+                run.complete()
+                #expect(AppTransition.captures == taken && run.image === kept)
             }
         }
 
-        /// Another place asked for as the opening hands over: its fresh picture fades in over the last before the overlay lets
-        /// go of it, rather than snapping to the end of its fade.
+        /// Any close turned round checks its picture against the window (what it shows may have changed meanwhile: the store,
+        /// a message asked for, with nothing to say so), and keeps it when it still is the window as drawn.
+        @Test func everyCloseTurnedRoundChecksThePicture() {
+            morphing { controller, ticks in
+                openAndStartClosing(controller, ticks, on: .done)
+                guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
+                let taken = AppTransition.captures
+                controller.show(.done)
+                #expect(controller.phase == .opening && controller.run === run)
+                ticks.runTurns()
+                #expect(run.image === shown && AppTransition.captures == taken)
+            }
+        }
+
+        /// Another place asked for as the opening hands over, with time for a fresh picture: it fades in over the last before
+        /// the overlay lets go of it, rather than snapping to the end of its fade.
         @Test func theHandoffWaitsForAPictureStillFadingIn() {
             morphing { controller, ticks in
                 controller.show(.settings)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let run = controller.run else { return #expect(Bool(false), "no morph") }
                 run.complete()
                 #expect(ticks.blocks.count == 1)
                 AppTransition.isKey = { _ in true }
                 controller.show(.done)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 #expect(run.isFadingPicture)
                 ticks.blocks.removeFirst()()
                 ticks.blocks.removeFirst()()
                 #expect(!run.handedOver && run.isFadingPicture && !run.ended)
+            }
+        }
+
+        /// Another place asked for as the opening hands over: no picture is taken then (it would hold the handoff up), and the
+        /// overlay, whose picture is no longer the window's, fades into the real window rather than cutting to it.
+        @Test func anotherPlaceAskedForAsTheOpeningHandsOverFadesIntoIt() {
+            morphing { controller, ticks in
+                AppTransition.isKey = { _ in true }
+                controller.show(.settings)
+                ticks.runTurns()
+                ticks.turns = []
+                guard let run = controller.run else { return #expect(Bool(false), "no morph") }
+                run.complete()
+                #expect(!run.fadesOut && ticks.blocks.count == 1)
+                AppTransition.picturesFit = false
+                let taken = AppTransition.captures
+                controller.show(.done)
+                ticks.runTurns()
+                ticks.blocks.removeFirst()()
+                ticks.blocks.removeFirst()()
+                #expect(AppTransition.captures == taken && run.handedOver && run.fadesOut)
             }
         }
 
@@ -999,7 +1051,7 @@ extension WindowSeams {
             morphing { controller, ticks in
                 AppTransition.isKey = { _ in true }
                 controller.show(.settings)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let run = controller.run else { return #expect(Bool(false), "no morph") }
                 #expect(run.isFadingPicture)
@@ -1015,7 +1067,7 @@ extension WindowSeams {
         @Test func aCloseOfAWindowMinimizedOnItsWayInTurnsRound() {
             morphing { controller, ticks in
                 controller.show(.settings)
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 ticks.turns = []
                 guard let window = controller.window else { return #expect(Bool(false), "no window") }
                 // ⌘M: a window under test does not minimize at once.
@@ -1026,7 +1078,7 @@ extension WindowSeams {
                 controller.show(.settings)
                 #expect(controller.phase == .opening && controller.isOpen)
                 closing.complete()
-                ticks.turns.forEach { $0() }
+                ticks.runTurns()
                 #expect(controller.phase != .closing && controller.isOpen)
             }
         }

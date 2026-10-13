@@ -222,8 +222,22 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// timeline or animation ticks, its tasks are cancelled), and back in it picks up where it was, its scroll positions and
     /// the rest of its state kept, its appearing (`onAppear`, `.task`, `onChange(initial:)`) run again as on a first open.
     private(set) var content: NSViewController?
-    /// The window's picture at its last close: the next opening starts on it (see `startOpening`).
+    /// The window's picture as it was last seen: kept the window as drawn while it is open and still (`keepPicture`), so a
+    /// close starts on it with nothing captured, then kept from the close for the next opening to start on (see
+    /// `startOpening`), until the window has stayed closed `keptPictureLife`.
     private var closedPicture: AppTransition.Picture?
+    /// The opening whose picture was checked against its window once already (see `payPicture`).
+    private var checked: Int?
+    /// The opening asked to show something else on its way in (`contentChanged`): its picture is taken again even for a
+    /// small change.
+    private var askedFor: Int?
+    /// Keeps `closedPicture` fresh while the window is open (see `keepPicture`).
+    private var pictureKeeper: Timer?
+    /// Lets go of `closedPicture` once the window has stayed closed `keptPictureLife`.
+    private var pictureExpiry: DispatchWorkItem?
+    /// How long a closed window keeps its picture (some 15 to 30 MB): by then what it shows has likely moved on (its times,
+    /// its counts), so an opening would not hand over on it anyway.
+    static let keptPictureLife: TimeInterval = 300
     /// An opening whose window is still to be brought in: its generation.
     private var pending: Int?
     /// A fresh picture the overlay of an opening still needs, and whether it fades in over the one shown. Taken once the
@@ -330,18 +344,25 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
-        // Work that can wait holds until the window has handed over (`finishOpening`), or a close that takes over ends.
+        // Work that can wait holds until the window has handed over (`handedOver`), or a close that takes over ends.
         span.begin("Open")
         generation += 1
         let mine = generation
+        pictureExpiry?.cancel()
+        pictureExpiry = nil
+        stopKeepingPicture()
         let current: AppTransition.Run?
-        let kept = closedPicture.flatMap { $0.fits(window) ? $0 : nil }
+        let chrome = glassWindow(window)
+        let glass = AppTransition.usesGlass
+        // Taken in another appearance, at another size or scale, with the sidebar folded otherwise: not even for a moment.
+        let kept = closedPicture.flatMap { $0.fits(window, glass: glass, sidebar: chrome.sidebar) ? $0 : nil }
         if reversing, let run {
             // Keep the overlay's bounds and coordinate origin for the whole trip, including this reversal.
             current = run
         } else {
             run?.end()
-            current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar, glassWindow: glassWindow(window))
+            current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar, glassWindow: chrome, glass: glass,
+                                            glance: kept?.glance)
             current?.shows = kept?.destination
         }
         run = current
@@ -351,23 +372,29 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             finishOpening(mine)
             return
         }
-        // No picture yet, or another place's: the fresh one fades in over it. A close turned round takes a fresh one too,
-        // faded in over the one it shows: what the window shows may have changed while it was on its way out (the store,
-        // a message or a card asked for, another place) with nothing else to say so.
+        // Whatever the overlay starts on is checked against the window once it is in and has the keyboard (`payPicture`): a
+        // picture still the window's stays, another is taken when it can be in before the handoff, faded in over the one
+        // shown (none, another place's, or one the window has moved on from since: the store, a message or a card asked
+        // for while it was closed or on its way out).
         let other = current.shows != navigator.selection
         pending = mine
         owed = (generation: mine, crossFade: reversing || other || kept == nil)
+        // A close turned round may have been asked for something (a card from the bar): any change is taken again.
+        askedFor = reversing || other ? mine : nil
         current.open(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak window] in
             guard let self, let window, self.generation == mine else { return }
-            // The real window must be in, and the overlay show it as it is now, before it takes over: whatever has not
-            // happened yet happens now (the picture as the window is, key or not, since that is what will be seen).
+            // The real window must be in before it takes over. No picture is taken now: it would hold the handoff up. The
+            // overlay cuts to the real window when its picture is the window as drawn now, and fades into it otherwise.
             self.bringInPending(mine)
+            var exact = current.image != nil && current.glance != nil
             if self.owed != nil {
                 self.owed = nil
                 self.stopKeyWatch()
-                self.refresh(current, window)
+                exact = exact && AppTransition.glance(of: window)?.same(as: current.glance) == true
             }
-            current.handoff(reveal: { self.reveal(window) }, finished: { self.finishOpening(mine) })
+            // Work that can wait goes once the real window shows (the overlay's shadow fades on the render server).
+            current.handoff(fading: !exact, reveal: { self.reveal(window) }, handedOver: { self.handedOver(mine) },
+                            finished: { self.finishOpening(mine) })
         }
         // The motion submitted to the render server, nothing captured or built yet: the rest waits a turn.
         AppTransition.flushInitial()
@@ -382,8 +409,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         payPicture(mine)
     }
 
-    /// The fresh picture the opening `mine` needs, once its window is in and has the keyboard (the app becomes active a
-    /// little after it is asked to: the picture waits for it, rather than being taken twice).
+    /// The picture the opening `mine` shows checked against its window, once the window is in and has the keyboard (the
+    /// app becomes active a little after it is asked to: the check waits for it, as the picture would): still the window
+    /// as drawn (a glance, a few ms), it stays; otherwise a fresh one is taken if it can be in before the handoff (by what
+    /// pictures cost lately), else the handoff fades into the real window from what the overlay shows.
     private func payPicture(_ mine: Int) {
         guard let owed, owed.generation == mine, generation == mine, pending == nil, let window, let run else { return }
         // The overlay has let go of its picture: the real window shows itself, nothing is owed.
@@ -405,13 +434,81 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         self.owed = nil
         stopKeyWatch()
-        refresh(run, window, crossFade: owed.crossFade)
+        let now = AppTransition.glance(of: window)
+        let first = checked != mine
+        checked = mine
+        if run.image != nil, let now, now.same(as: run.glance) {
+            run.shows = navigator.selection
+            return
+        }
+        // Moved on by a detail of its own (a scroller shown again, a count, a hover; not something asked for): no picture
+        // for that, the handoff fades into the real window over it instead of cutting to it.
+        if run.image != nil, askedFor != mine, let now, let then = run.glance,
+           now.difference(from: then) <= AppTransition.Glance.closeTolerance {
+            self.owed = owed
+            run.fadeHandoff()
+            return
+        }
+        // Just brought in, the window may still be drawing what changed while it was out (its appearing runs a turn
+        // later): the first look is taken again a turn on before a picture is.
+        if run.image != nil, first {
+            self.owed = owed
+            AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
+            return
+        }
+        // The handoff is not held up for a picture: one that would be in late is not taken (the handoff fades instead).
+        let fade = owed.crossFade ? AppTransition.pictureFade * Double(AppTransition.slowdown) : 0
+        guard AppTransition.pictureFits(before: run.settlesAt, after: fade) else {
+            self.owed = owed
+            run.fadeHandoff()
+            return
+        }
+        askedFor = nil
+        refresh(run, window, crossFade: owed.crossFade, glance: now)
     }
 
-    /// The overlay's picture taken again, of the place the window shows now.
-    private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false) {
-        run.refresh(window, crossFade: crossFade)
+    /// The overlay's picture taken again, of the place the window shows now (`glance`: the window's, taken just before).
+    private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false,
+                         glance: AppTransition.Glance? = nil) {
+        run.refresh(window, crossFade: crossFade, glance: glance)
         run.shows = navigator.selection
+    }
+
+    /// While the window is open and still, its picture is kept the window as drawn, so a close starts on it at once with
+    /// nothing captured: half a second after it opened then about every second, once nothing was pressed or moved for half
+    /// a second, a glance says whether the
+    /// window still is what `closedPicture` shows, and when it isn't a picture is taken there and then, at most a
+    /// twentieth of the main thread's time (`mayCaptureAtIdle`). Not short of memory, nor out of sight.
+    private func keepPictureFresh() {
+        guard pictureKeeper == nil, AppTransition.enabled else { return }
+        let timer = Timer(fire: Date(timeIntervalSinceNow: 0.5), interval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.keepPicture() }
+        }
+        timer.tolerance = 0.25
+        // The default mode only: not while a scroll, a drag or a menu tracks.
+        RunLoop.main.add(timer, forMode: .default)
+        pictureKeeper = timer
+    }
+
+    private func stopKeepingPicture() {
+        pictureKeeper?.invalidate()
+        pictureKeeper = nil
+    }
+
+    /// One look of the idle keeper (see `keepPictureFresh`).
+    private func keepPicture() {
+        guard let window, window.isVisible else { return stopKeepingPicture() }
+        guard phase == .idle, !memoryShort, isFront, AppTransition.isKey(window), !MotionGate.moving,
+              AppTransition.inputIdle(for: 0.5) else { return }
+        let chrome = glassWindow(window)
+        let glass = AppTransition.usesGlass
+        if let kept = closedPicture, kept.fits(window, glass: glass, sidebar: chrome.sidebar),
+           kept.destination == navigator.selection, AppTransition.glance(of: window)?.same(as: kept.glance) == true { return }
+        guard AppTransition.mayCaptureAtIdle else { return }
+        if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
+                                               destination: navigator.selection) {
+            closedPicture = picture
+        }
     }
 
     /// What an opening's window shows changed after its overlay's picture was taken (another place, a card, a row or a
@@ -421,6 +518,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         guard phase == .opening, let run, !run.handedOver else { return }
         let mine = generation
         owed = (mine, crossFade: true)
+        askedFor = mine
         AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
     }
 
@@ -446,14 +544,29 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// The opening `mine` has handed over: its interval ends and the motion gate opens.
+    private func handedOver(_ mine: Int) {
+        guard generation == mine else { return }
+        span.end()
+    }
+
     private func finishOpening(_ mine: Int) {
         guard generation == mine else { return }
         stopKeyWatch()
+        // The picture the overlay handed over on is kept with the glance of what it shows, so a close at once starts on it
+        // when the window is still that (near enough); the idle keeper takes another once it has moved on.
+        if let run, !memoryShort, let image = run.image, run.imageIsKey, let glance = run.glance, let window {
+            closedPicture = AppTransition.Picture(image: image, frame: window.frame, scale: window.backingScaleFactor,
+                                                  destination: run.shows ?? navigator.selection, glass: run.isGlass,
+                                                  glance: glance, appearance: window.effectiveAppearance.name,
+                                                  sidebar: glassWindow(window).sidebar)
+        } else {
+            closedPicture = nil
+        }
         run = nil
         phase = .idle
         span.end()
-        // Used: the next close takes another.
-        closedPicture = nil
+        keepPictureFresh()
         reportFront()
     }
 
@@ -478,14 +591,28 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         owed = nil
         stopKeyWatch()
         sender.ignoresMouseEvents = true
+        stopKeepingPicture()
         let existing = interrupting ? run : nil
         let current: AppTransition.Run?
+        let chrome = glassWindow(sender)
         if let existing {
             current = existing
         } else {
             run?.end()
-            current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar(),
-                                            glassWindow: glassWindow(sender), closing: true)
+            let glass = AppTransition.usesGlass
+            let barMorph = AppTransition.reduceMotion ? nil : bar()
+            // The picture kept at idle, when the window is still (near enough, `Glance.closeTolerance`) as it was drawn
+            // then: the close starts on it at once. Otherwise one is taken now, before anything moves.
+            let now = AppTransition.glance(of: sender)
+            if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar),
+               kept.destination == navigator.selection, AppTransition.isKey(sender), let then = kept.glance, let now,
+               now.difference(from: then) <= AppTransition.Glance.closeTolerance {
+                current = AppTransition.makeRun(for: sender, image: kept.image, bar: barMorph, glassWindow: chrome,
+                                                glass: glass, glance: then)
+            } else {
+                current = AppTransition.makeRun(for: sender, bar: barMorph, glassWindow: chrome, glass: glass, closing: true,
+                                                glance: now)
+            }
             current?.shows = navigator.selection
         }
         guard let current else {
@@ -497,17 +624,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // cut short may still show the place it started on), unless memory is short.
         if !memoryShort, let image = current.image, current.imageIsKey, let place = current.shows {
             closedPicture = AppTransition.Picture(image: image, frame: sender.frame, scale: sender.backingScaleFactor,
-                                                  destination: place, glass: current.isGlass)
-        }
-        let start = { [weak self, weak sender] in
-            guard let self, let sender, self.generation == mine else { return }
-            sender.orderOut(nil)
-            current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
-                guard let self, let sender, self.generation == mine else { return }
-                self.finishClosing(sender, mine)
-            }
-            guard self.generation == mine else { return }
-            self.onClosing?()
+                                                  destination: place, glass: current.isGlass, glance: current.glance,
+                                                  appearance: sender.effectiveAppearance.name, sidebar: chrome.sidebar)
         }
         if !interrupting {
             // The overlay shows the window before the real one goes, in this turn: its frame is submitted to the render
@@ -515,7 +633,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             current.present()
             CATransaction.flush()
         }
-        start()
+        sender.orderOut(nil)
+        current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
+            guard let self, let sender, self.generation == mine else { return }
+            self.finishClosing(sender, mine)
+        }
+        if generation == mine { onClosing?() }
         return false
     }
 
@@ -525,6 +648,16 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         run = nil
         phase = .idle
         span.end()
+        // Kept for an opening soon; let go once the window has stayed closed a while.
+        pictureExpiry?.cancel()
+        let expiry = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.phase == .idle, self.window?.isVisible != true else { return }
+                self.closedPicture = nil
+            }
+        }
+        pictureExpiry = expiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.keptPictureLife, execute: expiry)
         window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false
