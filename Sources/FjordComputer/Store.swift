@@ -308,6 +308,7 @@ final class Store {
             refreshFolderNames()
             refreshSessionRows(sessionRowsChanged(oldValue, claudeSessions))
             pruneSessionRows()
+            updateRouterTasks()
         }
     }
     /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
@@ -330,7 +331,16 @@ final class Store {
         didSet {
             agentCache = nil
             refreshSessionRows(sessionRowsChanged(oldValue, claudeTasks))
+            updateRouterTasks()
         }
+    }
+    /// `routerTasks` as last worked out (`updateRouterTasks`, as the tasks or the sessions change), and a revision bumped
+    /// only when it changed: what reads it observes that rather than every session.
+    @ObservationIgnored var routerTasksKept: [String: [ClaudeTask]] = [:]
+    private(set) var routerTasksRevision = 0
+    func bumpRouterTasks(_ tasks: [String: [ClaudeTask]]) {
+        routerTasksKept = tasks
+        routerTasksRevision &+= 1
     }
     /// Filled in right after launch (see `start`): the Keychain read stays off the main thread.
     var hasTypesafeKey = false

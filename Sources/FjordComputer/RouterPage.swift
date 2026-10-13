@@ -153,13 +153,18 @@ extension Store {
     }
 
     /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
-    var routerTasks: [String: [ClaudeTask]] { claudeTasks.filter { claudeSessions[$0.key]?.running != true } }
+    /// Worked out as the tasks or the sessions change, not on each read: a read allocates nothing and observes only its
+    /// revision, which moves when it changed.
+    var routerTasks: [String: [ClaudeTask]] {
+        _ = routerTasksRevision
+        return routerTasksKept
+    }
 
-    /// What `routerTasks` is worked out from, for the memos to compare (`RouterMemo.TaskKey`).
-    var routerTaskKey: RouterMemo.TaskKey {
+    /// Called by the tasks' and the sessions' didSets: the tasks of sessions not running, kept when they changed.
+    func updateRouterTasks() {
         let tasks = claudeTasks
-        guard !tasks.isEmpty else { return RouterMemo.TaskKey(tasks: tasks, running: []) }
-        return RouterMemo.TaskKey(tasks: tasks, running: Set(tasks.keys.filter { claudeSessions[$0]?.running == true }))
+        let now = tasks.isEmpty ? tasks : tasks.filter { claudeSessions[$0.key]?.running != true }
+        if now != routerTasksKept { bumpRouterTasks(now) }
     }
 
     /// The Router's cards less those the page doesn't show (`RouterPage.shows`): what the keys and the away strip go by.
@@ -188,10 +193,10 @@ extension Store {
     /// (`RouterMemo`). Its reads are those of the work, so a view reading it still redraws on any of them.
     var routerZones: RouterPage {
         let inputs = RouterMemo.ZoneInputs(cards: router.cards, rows: allAgentRows, asks: routerDispatcher.askBacks,
-                                           summaries: router.summaries, tasks: routerTaskKey)
+                                           summaries: router.summaries, tasks: routerTasks)
         if let memo = RouterMemo.zones, memo.inputs == inputs { return memo.page }
         let page = RouterPage.make(cards: inputs.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: [],
-                                   summaries: inputs.summaries, tasks: routerTasks)
+                                   summaries: inputs.summaries, tasks: inputs.tasks)
         RouterMemo.zones = (inputs, page)
         return page
     }
@@ -207,20 +212,14 @@ enum RouterMemo {
         var rows: [AgentRow]
         var asks: [RouterAskBack]
         var summaries: [RouterSummary]
-        var tasks: TaskKey
+        /// `Store.routerTasks`: kept by the store, the same dictionary until it changes, so compared by its storage.
+        var tasks: [String: [ClaudeTask]]
     }
     static var zones: (inputs: ZoneInputs, page: RouterPage)?
 
     struct CountInputs: Equatable {
         var cards: [RouterCard]
-        var tasks: TaskKey
-    }
-
-    /// What `Store.routerTasks` is made of, without making it: what runs in the background by session, and which of those
-    /// sessions are running (their tasks then aren't counted). Nothing is allocated while nothing runs in the background.
-    struct TaskKey: Equatable {
         var tasks: [String: [ClaudeTask]]
-        var running: Set<String>
     }
     static var counts: (inputs: CountInputs, counts: (needsYou: Int, notes: Int))?
 }
