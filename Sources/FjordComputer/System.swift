@@ -147,6 +147,9 @@ final class HotKeys {
     private var heldSince: TimeInterval?
     /// Taps are ignored while this is true (e.g. while a shortcut is being recorded).
     var paused: () -> Bool = { false }
+    /// Whether Accessibility access was granted when last asked, and when (system uptime): see `isTrusted`.
+    private var trusted = false
+    private var trustedAt: TimeInterval?
 
     init(backend: HotKeyBackend = CarbonHotKeys()) {
         self.backend = backend
@@ -219,6 +222,7 @@ final class HotKeys {
     }
 
     private func accessMayBeGranted() {
+        trustedAt = nil
         guard AXIsProcessTrusted() else { return }
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
@@ -286,6 +290,16 @@ final class HotKeys {
         buttons[id]?.handler()
     }
 
+    /// Whether Accessibility access is granted, for a modifier tap that just completed: the system is asked (a call to
+    /// another process) at most every two seconds, and again as Fjord Computer comes to the front (`accessMayBeGranted`).
+    private func isTrusted() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let trustedAt, now - trustedAt < 2 { return trusted }
+        trusted = AXIsProcessTrusted()
+        trustedAt = now
+        return trusted
+    }
+
     private func handle(_ event: NSEvent) {
         if Self.debug {
             NSLog("Fjord Computer keys: flagsChanged %d flags %lx trusted %d", event.keyCode, event.modifierFlags.rawValue, AXIsProcessTrusted() ? 1 : 0)
@@ -295,7 +309,7 @@ final class HotKeys {
         if held { if heldSince == nil { heldSince = event.timestamp } } else { heldSince = nil }
         // Without Accessibility the keys typed elsewhere are invisible, so right ⌘ + C would look like a tap.
         guard let key = tap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags.rawValue),
-              !paused(), AXIsProcessTrusted() else { return }
+              !paused(), isTrusted() else { return }
         if let since, interrupted(since: since) { return }
         for entry in taps.values where entry.key == key { entry.handler() }
     }
