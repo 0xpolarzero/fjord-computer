@@ -208,7 +208,10 @@ struct MentionField: NSViewRepresentable {
         // Set only when they change: the text view's font set again lays out its whole storage, on every update (each
         // keystroke's) otherwise.
         let (font, base) = Self.attributes()
-        if view.font !== font {
+        // Tracked here, not read back from the view: its font can come back as another (a fallback for emoji or CJK in the
+        // text) and would never compare equal.
+        if c.appliedFont !== font {
+            c.appliedFont = font
             view.base = base
             view.font = font
         }
@@ -275,8 +278,9 @@ struct MentionField: NSViewRepresentable {
         var store: Store?
         var focusTick = 0
         var syncing = false
-        /// The store the view's pill and name makers were made for.
+        /// The store the view's pill and name makers were made for, and the font set on it.
         weak var pillsFor: Store?
+        var appliedFont: NSFont?
         var onCommand: ((Selector) -> Bool)?
         var onSelection: ((NSTextView) -> Void)?
         /// The text's height at a width, for the text it had then (a pill is one character of it; pills made anew clear it).
