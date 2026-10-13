@@ -161,6 +161,8 @@ final class HubController {
     private var pendingHover: Bool?
     /// Whether the hub was last reported to the store as visible beyond the bare bar.
     private var reportedOpen = false
+    /// Whether that was as the app window, rather than a peek.
+    private var reportedWindow = false
     /// The app window is open. The bar is off the edge only while the window is also in front.
     private(set) var windowOpen = false
     /// The open window is in front of the user (else the bar is back on its edge, the window behind it).
@@ -578,9 +580,12 @@ final class HubController {
     /// window's place, or the peek's tab).
     private func reportOpen() {
         let open = windowOpen || (hub.section != nil && !hub.quiet)
-        guard open != reportedOpen else { return }
+        // A peek turned into the window (or back) is told too: only the window syncs at once (`Store.setHubOpen`).
+        let window = open && windowOpen
+        guard open != reportedOpen || window != reportedWindow else { return }
         reportedOpen = open
-        store.setHubOpen(open)
+        reportedWindow = window
+        store.setHubOpen(open, window: window)
         if open {
             // A frame later: the opening's own work comes first.
             AppTransition.nextFrame(screen) { [weak self] in
