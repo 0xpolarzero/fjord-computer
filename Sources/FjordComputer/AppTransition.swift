@@ -223,6 +223,11 @@ enum AppTransition {
                 return cost * pow(key.pixels / other.pixels, Self.growth)
             }
             var estimate = worst(key, now) ?? guesses.max() ?? key.pixels * Self.prior
+            // A page that got heavier since this scale was drawn cannot keep its old, cheaper estimate.
+            let glance = key.at(AppTransition.glanceScale)
+            if glance.pixels > 0, let cost = worst(glance, now) {
+                estimate = max(estimate, cost * pow(key.pixels / glance.pixels, Self.growth))
+            }
             // Never under the latest softer picture's cost times the pixels.
             let softer = recent.filter {
                 $0.key.width == key.width && $0.key.height == key.height && $0.key.page == page

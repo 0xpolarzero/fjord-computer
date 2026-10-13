@@ -950,11 +950,20 @@ extension WindowSeams {
             AppTransition.isFront = { _ in true }
             AppTransition.inputIdle = { _ in true }
             AppTransition.lastCapture = -.infinity
+            // A flat page isolates the keeper's decisions from SwiftUI's drawing cost and appearing callbacks.
+            if let window = controller.window {
+                let page = NSViewController()
+                page.view = NSView(frame: window.contentView?.bounds ?? .zero)
+                page.view.wantsLayer = true
+                page.view.layer?.backgroundColor = NSColor.white.cgColor
+                window.contentViewController = page
+            }
             // Pictures of this page known to be cheap (a debug build's own would not be).
             AppTransition.costs = AppTransition.CaptureCosts()
             if let window = controller.window {
                 for scale in [window.backingScaleFactor, AppTransition.reducedScale(of: window)] {
-                    AppTransition.costs.record(0.01, size: AppTransition.drawnSize(window), pixelScale: scale,
+                    let cost = scale == window.backingScaleFactor ? 0.01 : 0.0025
+                    AppTransition.costs.record(cost, size: AppTransition.drawnSize(window), pixelScale: scale,
                                                page: AppTransition.page(.done))
                 }
             }

@@ -59,6 +59,22 @@ import Testing
         #expect(fresh(base, marks, .settings) == .stale && fresh(nil) == .stale)
     }
 
+    @Test func newerGlancesRaiseTheEstimateOfAlreadyMeasuredPictures() {
+        typealias Costs = AppTransition.CaptureCosts
+        var costs = Costs()
+        let size = NSSize(width: 1000, height: 500)
+        for scale: CGFloat in [0.5, 1, 2] {
+            costs.record(0.01, size: size, pixelScale: scale, page: "router", at: 0)
+        }
+        for at in [1.0, 2.0] {
+            costs.record(0.04, size: size, pixelScale: AppTransition.glanceScale, page: "router", at: at)
+        }
+        for scale: CGFloat in [0.5, 1, 2] {
+            let floor = 0.04 * pow(Double(scale / AppTransition.glanceScale), 2 * Costs.growth)
+            #expect(costs.estimate(size: size, pixelScale: scale, page: "router", at: 2) >= floor)
+        }
+    }
+
     /// A capture's cost is the longest of the last few on that page at that size and scale, so one slow capture keeps the
     /// next from being let in on a mean, until it is a minute old; another page is its own (a heavy one at the same size
     /// is not let in on a light one's costs); a scale never drawn there is guessed from those drawn (a glance) and with
