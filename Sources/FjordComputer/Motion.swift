@@ -63,8 +63,9 @@ enum Motion: Equatable {
     }
 
     /// The animation to run (nil: none), with Reduce Motion on or off. Pass to `withAnimation`, `.animation` or a
-    /// `Transaction`.
-    func resolved(reduce: Bool) -> Animation? { curve(reduce: reduce).animation }
+    /// `Transaction`. None while the window's content arrives (`WindowArrival`): what changed while it was away is
+    /// already there.
+    func resolved(reduce: Bool) -> Animation? { WindowArrival.active ? nil : curve(reduce: reduce).animation }
 
     /// A hover fill's token: instant as the pointer comes in, released as it goes.
     static func hover(on: Bool) -> Motion { on ? .instant : .release }
@@ -75,8 +76,60 @@ enum Motion: Equatable {
 
 extension Animation {
     /// No animation at all when Reduce Motion is on: for the few deliberate curves that are not tokens (a control's own
-    /// press or knob, a badge's count). Prefer a `Motion` token.
-    func resolved(reduce: Bool) -> Animation? { reduce ? nil : self }
+    /// press or knob, a badge's count). Prefer a `Motion` token. None either while the window's content arrives.
+    func resolved(reduce: Bool) -> Animation? { reduce || WindowArrival.active ? nil : self }
+}
+
+/// The app window's content coming into view: its first update after the window shows (ordered in, or its content attached
+/// again) is drawn as it is, with no animation. While the window was away its views may have held changes (cards in and
+/// out of Needs you, sessions moving to Working, the inbox's rows) that SwiftUI would otherwise play on that update, so the
+/// window would open on things sliding into place. The window says when its content arrives (`begin`) and when its first
+/// frame is drawn (`end`), or both at once (`arrive`); a `begin` that never ends ends after `longest`.
+///
+/// While it is on: every `Motion` token and `.motion` curve resolves to none (so `.motion(_:value:)`, the insertions and
+/// removals and the matched geometry they would animate, and a `withAnimation` asked for meanwhile, all jump), and under
+/// `.windowArrival()` (the window's root) any animation still in a transaction is dropped. A flag rather than view state:
+/// turning it on and off redraws nothing, it is read as views update.
+@MainActor
+enum WindowArrival {
+    /// A safety net: longer than a first frame takes, short enough that a missed `end` costs nothing anyone sees.
+    static let longest: TimeInterval = 0.5
+
+    /// Read by views as they update (on the main thread), written only here.
+    nonisolated(unsafe) private(set) static var active = false
+    private static var generation = 0
+
+    /// The window's content is about to show: what it draws next is drawn without animation.
+    static func begin() {
+        active = true
+        generation &+= 1
+        let mine = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + longest) {
+            MainActor.assumeIsolated { if generation == mine { active = false } }
+        }
+    }
+
+    /// Its first frame is drawn: animations are back.
+    static func end() { active = false }
+
+    /// `begin`, then `end` on the main queue's next turn: after the update and the commit of the turn it is called in.
+    static func arrive() {
+        begin()
+        let mine = generation
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { if generation == mine { active = false } }
+        }
+    }
+}
+
+private struct WindowArrivalModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.transaction { transaction in
+            guard WindowArrival.active else { return }
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
 }
 
 extension AnyTransition {
@@ -133,4 +186,8 @@ extension View {
     func hoverMotion(_ hovering: Bool) -> some View {
         modifier(HoverMotionModifier(hovering: hovering))
     }
+
+    /// At a window's root: while its content arrives (`WindowArrival`), no animation reaches anything in it, a `withAnimation`
+    /// made while the window was away included.
+    func windowArrival() -> some View { modifier(WindowArrivalModifier()) }
 }

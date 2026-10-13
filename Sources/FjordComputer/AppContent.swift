@@ -256,6 +256,8 @@ struct AppContent: View {
         // Under the window's top bar only, where it has a ground of its own (before macOS 26): the header shows it.
         .background { CDS.Surface.s1.padding(.top, Self.groundTop) }
         .clipped()
+        // The page's first update as the window shows is drawn as it is (`WindowArrival`).
+        .windowArrival()
     }
 
     /// Where the page's own ground starts: under the top bar before macOS 26, at the top on 26, where the page runs under
