@@ -2325,8 +2325,7 @@ struct CardView: View, Equatable {
     /// Who, what kind, what it asks and when: one line when there is room, else two.
     private func summary(project: RouterProject) -> some View {
         let title = Text(card.title).cdsText(quiet ? (13, 18) : (14, 20), quiet ? .medium : .semibold, CDS.Text.primary).lineLimit(1)
-        let age = Text(shortAgo(when)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit().fixedSize()
-            .help(exactTime(when))
+        let age = CardAge(date: when).fixedSize()
         let ask = Text(excerpt).cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
         // A form has its own buttons: Archive sits in the header beside it.
         return VStack(alignment: .leading, spacing: 1) {
@@ -2428,6 +2427,19 @@ struct CardView: View, Equatable {
     }
 }
 
+/// A card's age, on the minute's clock: the card is drawn from its own values only (Equatable), so its age keeps time here,
+/// and its time on hover.
+private struct CardAge: View {
+    let date: Date
+
+    var body: some View {
+        MinuteTicking { now in
+            Text(shortAgo(date, now: now)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
+        }
+        .help(exactTime(date))
+    }
+}
+
 // MARK: - Ask-back card
 
 /// "Where should this go?": a message the Router couldn't place with confidence. The top targets are buttons, "Something else…"
@@ -2448,8 +2460,7 @@ struct AskBackCard: View, Equatable {
                 Image(systemName: "questionmark.bubble").font(.system(size: 13, weight: .medium)).foregroundStyle(warm)
                 Text("Where should this go?").cdsText((14, 20), .semibold, CDS.Text.primary)
                 Spacer(minLength: 4)
-                Text(shortAgo(ask.at)).cdsText((12, 16), .regular, CDS.Text.secondary).monospacedDigit()
-                    .help(exactTime(ask.at))
+                CardAge(date: ask.at)
             }
             Text((ask.context.action.map { "\($0.origin.category) · " } ?? "") + "“\(RouterDecision.clip(ask.message, 160))”")
                 .cdsText((13, 18), .regular, CDS.Text.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
