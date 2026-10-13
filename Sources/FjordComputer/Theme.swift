@@ -42,12 +42,45 @@ func shortAgo(_ date: Date, now: Date = Date()) -> String {
     if s < 3600 { return "\(s / 60)m" }
     if s < 86400 { return "\(s / 3600)h" }
     if s < 7 * 86400 { return "\(s / 86400)d" }
-    return date.formatted(.dateTime.month(.abbreviated).day())
+    return TimeTexts.cached(date, .day) { $0.formatted(.dateTime.month(.abbreviated).day()) }
 }
 
 /// The time an age stands for, shown on hovering it: the clock time today, with the date before.
 func exactTime(_ date: Date) -> String {
-    date.formatted(date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated, time: .shortened)
+    TimeTexts.cached(date, .exact) {
+        $0.formatted(date: Calendar.current.isDateInToday($0) ? .omitted : .abbreviated, time: .shortened)
+    }
+}
+
+/// The dates the lists write out (a line's time on hover and in what VoiceOver says, an old age's day), each formatted once:
+/// a history line asks for its time twice each time it is drawn, and every line is drawn again on the minute. Kept until
+/// midnight (what "today" leaves out changes then), at most a few thousand; the main thread's alone (elsewhere, formatted).
+enum TimeTexts {
+    enum Kind { case exact, day }
+    nonisolated(unsafe) private static var exact: [Date: String] = [:]
+    nonisolated(unsafe) private static var days: [Date: String] = [:]
+    nonisolated(unsafe) private static var until = Date.distantPast
+
+    static func cached(_ date: Date, _ kind: Kind, _ make: (Date) -> String) -> String {
+        guard Thread.isMainThread else { return make(date) }
+        let now = Date()
+        if now >= until {
+            exact = [:]
+            days = [:]
+            until = Calendar.current.startOfDay(for: now).addingTimeInterval(86400)
+        }
+        if let hit = kind == .exact ? exact[date] : days[date] { return hit }
+        let text = make(date)
+        switch kind {
+        case .exact:
+            if exact.count > 4000 { exact = [:] }
+            exact[date] = text
+        case .day:
+            if days.count > 4000 { days = [:] }
+            days[date] = text
+        }
+        return text
+    }
 }
 
 /// `shortAgo` for a sentence: "just now", "3m ago", "on Sep 28" (never "now ago" or "Sep 28 ago").
