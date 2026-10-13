@@ -157,10 +157,10 @@ struct ActionLedger: Codable, Equatable {
     /// `restoredReviewIDs` instead.
     var restoredReviews: Set<String>?
     /// The same, by PR: the ids of the reviews it had all along (made by the time it was last read), back now. One made
-    /// since, while Fjord Computer was closed, isn't among them, and is new.
+    /// since, while Fjord was closed, isn't among them, and is new.
     var restoredReviewIDs: [String: Set<String>]?
     /// Each such PR as it was last read, with the reviews it had all along back: the categories it was in then, and its
-    /// facts there. Only those were there before; what it has besides (a commit pushed while Fjord Computer was closed)
+    /// facts there. Only those were there before; what it has besides (a commit pushed while Fjord was closed)
     /// is new.
     var restoredBefore: [String: [UUID: Set<String>]]?
     /// By category, then thing: a review request or assignment of yours that was there, not yet rated by Jev, when the
@@ -918,7 +918,7 @@ extension InboxActions {
                 lines.append("A session it starts runs with " + [model.map { "model \($0)" }, effort.map { "effort \($0)" }]
                     .compactMap { $0 }.joined(separator: ", ") + ".")
             }
-            lines.append("With what Fjord Computer knows of \(reference), marked as written by others:")
+            lines.append("With what Fjord knows of \(reference), marked as written by others:")
             lines.append(RouterPointers.notification(name: reference, thing: thing, category: category, facts: facts, done: false))
         case .comment(let text):
             let body = substitute(text, thing: thing)

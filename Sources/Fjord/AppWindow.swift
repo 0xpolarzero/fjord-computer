@@ -1,11 +1,11 @@
 import AppKit
 import SwiftUI
 
-// Fjord Computer as a window: everything the bar holds, with the bar's items as a navigation sidebar. The other mode is
+// Fjord as a window: everything the bar holds, with the bar's items as a navigation sidebar. The other mode is
 // the bar docked on a screen edge; whoever switches between them calls `show` and listens to `onClose`.
 
 /// How the app is present on the system. An accessory app has no Dock icon and no menu bar; while the app window is open
-/// Fjord Computer is a regular app (Dock icon, ⌘-Tab, menu bar).
+/// Fjord is a regular app (Dock icon, ⌘-Tab, menu bar).
 @MainActor
 enum AppPolicy {
     /// The policy the app wants now. A test run keeps it to itself: applied, every test that opens the window would put
@@ -19,7 +19,7 @@ enum AppPolicy {
         if NSApp.activationPolicy() != current { NSApp.setActivationPolicy(current) }
     }
 
-    /// Fjord Computer to the front, unless this is a test run (which must not take the focus from whoever is at the Mac).
+    /// Brings Fjord to the front unless this is a test run, which must not take focus from whoever is at the Mac.
     static func activate() {
         guard !UnderTest.isRunning else { return }
         watchActivations()
@@ -27,13 +27,13 @@ enum AppPolicy {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// The app with windows that was in front before Fjord Computer last was: where the keyboard goes back to as the
-    /// window closes. Held (a weak one would let go of it as the workspace does) and dropped once it has quit.
+    /// The app with windows that was in front before Fjord became active: where the keyboard goes back when the window
+    /// closes. It is held strongly (a weak reference would let the workspace release it) and dropped once it has quit.
     private static var previous: NSRunningApplication?
     private static var activations: NSObjectProtocol?
 
     /// Whether the keyboard can go back to an app: a regular one (a menu-bar or launcher app, such as Raycast or a password
-    /// manager, has no window to type in) other than Fjord Computer, still running.
+    /// manager, has no window to type in) other than Fjord that is still running.
     static func canTakeFocusBack(policy: NSApplication.ActivationPolicy, isSelf: Bool, terminated: Bool) -> Bool {
         policy == .regular && !isSelf && !terminated
     }
@@ -76,7 +76,7 @@ enum AppPolicy {
     /// An activation `activate` asked for, until it lands or the app resigns.
     private static var request = ActivationRequest()
 
-    /// Whether an activation Fjord Computer asked for has yet to land.
+    /// Whether an activation requested by Fjord has yet to land.
     static var activationPending: Bool { request.isPending(at: ProcessInfo.processInfo.systemUptime) }
 
     /// An activation asked for, from the asking until it lands (`didBecomeActive`), the app resigns or another app comes to
@@ -104,7 +104,7 @@ enum AppPolicy {
     /// The close's tidying, as a safety net: still active with no window, while an activation asked for is pending (its
     /// notice still to come), the keyboard goes back.
     static func yieldsAtTidy(active: Bool, windowShown: Bool, pending: Bool) -> Bool { active && !windowShown && pending }
-    /// The user made Fjord Computer active (⌘-Tab, the Dock) while its window was closing: the app delegate opens it again.
+    /// The user made Fjord active (⌘-Tab, the Dock) while its window was closing: the app delegate opens it again.
     static var reopen: (() -> Void)?
 
     private static func becameActiveNow() {
@@ -118,7 +118,7 @@ enum AppPolicy {
 
     enum Activation: Equatable { case stay, yield, reopen }
 
-    /// What Fjord Computer does as it becomes active. An activation it asked for (`ours`, an opening's) that lands with no
+    /// What Fjord does as it becomes active. An activation it asked for (`ours`, an opening's) that lands with no
     /// window open or on its way in (the close was quick: under Reduce Motion, or with no morph) gives the keyboard back
     /// again. One it didn't ask for (⌘-Tab, the Dock) while the window closes is the user asking for it: the window opens
     /// again. Anything else stays (the user's, or a banner's click, which opens what it opens).
@@ -128,8 +128,8 @@ enum AppPolicy {
     }
 
     /// The keyboard back to the app that had it before, as the window starts closing: what you type next goes there at
-    /// once rather than after the close's motion (the Dock icon still goes at its end, `update`). Fjord Computer yields its
-    /// activation to that app, which is then asked to the front; with no such app, or one that won't come, Fjord Computer
+    /// once rather than after the close's motion (the Dock icon still goes at its end, `update`). Fjord yields its
+    /// activation to that app, which is then asked to the front; with no such app, or one that won't come, Fjord
     /// just stops being active. Nothing when it is not active, or under a test.
     static func yieldFocus() {
         guard !UnderTest.isRunning, NSApp.isActive else { return }
@@ -878,9 +878,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         watch(NSWindow.didChangeOcclusionStateNotification, object: window)
         watch(NSWindow.didMiniaturizeNotification, object: window)
         watch(NSWindow.didDeminiaturizeNotification, object: window)
-        // Fjord Computer made active (⌘-Tab) while the window is open behind another app or minimized: the window comes
+        // Fjord made active (⌘-Tab) while the window is open behind another app or minimized: the window comes
         // in front, as any app's does. The bar never makes the app active, so this is the user asking for
-        // Fjord Computer.
+        // Fjord.
         observers.append(center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
             [weak self] _ in
             MainActor.assumeIsolated { self?.raise() }
@@ -990,7 +990,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     /// The window's look: dark like the bar's panels, the content running up under a transparent unified title bar.
     static func style(_ window: NSWindow) {
-        window.title = "Fjord Computer"
+        window.title = "Fjord"
         window.isReleasedWhenClosed = false
         window.minSize = minSize
         window.appearance = Brand.appearance

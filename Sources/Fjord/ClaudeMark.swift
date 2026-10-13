@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Claude's spark, read from the Claude app the user has installed, so Fjord Computer ships no copy of it (as with its typeface,
+/// Claude's spark, read from the Claude app the user has installed, so Fjord ships no copy of it (as with its typeface,
 /// `ClaudeFonts`): the white spark of its About window's 512px icon (inside its `app.asar`), as a mask, cropped to its rays.
 /// Without that, the app's menu bar icon (a small template image); without the app, nil, and an asterisk stands in.
 enum ClaudeMark {

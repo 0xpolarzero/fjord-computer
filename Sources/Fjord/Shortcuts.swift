@@ -135,7 +135,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .togglePanel: "Open Fjord Computer window"
+        case .togglePanel: "Open Fjord window"
         case .openItem: "Open on GitHub"
         case .toggleRead: "Mark as read or unread"
         case .discard: "Archive / back to inbox"
@@ -219,7 +219,7 @@ extension Store {
 /// Why a shortcut wasn't taken: the sentence under its recorder.
 enum ShortcutRefusal: Equatable {
     case usedBy(ShortcutAction)
-    /// Another app holds a system-wide key: Fjord Computer keeps the one it had.
+    /// Another app holds a system-wide key: Fjord keeps the one it had.
     case unavailable(Shortcut)
     /// Restore defaults found one of the defaults held by another app: nothing was restored.
     case defaultUnavailable(Shortcut)
@@ -227,8 +227,8 @@ enum ShortcutRefusal: Equatable {
     var message: String {
         switch self {
         case .usedBy(let other): "Already used for \(other.title)"
-        case .unavailable(let shortcut): "\(shortcut.display) is used by another app. Fjord Computer keeps the old shortcut"
-        case .defaultUnavailable(let shortcut): "\(shortcut.display) is used by another app. Fjord Computer keeps your shortcuts"
+        case .unavailable(let shortcut): "\(shortcut.display) is used by another app. Fjord keeps the old shortcut"
+        case .defaultUnavailable(let shortcut): "\(shortcut.display) is used by another app. Fjord keeps your shortcuts"
         }
     }
 }

@@ -1708,7 +1708,7 @@ extension Store {
         }
         // Read for the first time as this build reads reviews: those it had all along and that come back now are old
         // (those it was read with already were never left out). It had them by the time it was last read (when it was
-        // last updated then, or its newest review): one made after, while Fjord Computer was closed, is new. Where it
+        // last updated then, or its newest review): one made after, while Fjord was closed, is new. Where it
         // was then, those reviews back, and with what facts, is kept too: only that is old (`restoredBefore`).
         var restored = actionLedger.restoredReviewIDs ?? [:]
         var then: [Thing] = []
@@ -1992,7 +1992,7 @@ enum InboxCheck {
                 ]),
                 InboxCategory(name: "All mine", symbol: "list.bullet", color: .blue, rules: [Rule(scope: scope, createdAt: past)]),
                 InboxCategory(name: "CI", symbol: "xmark.seal", color: .red, rules: [
-                    Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("amontlabs/lcu"), .repo("0xpolarzero/fjord-computer")])),
+                    Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("amontlabs/lcu"), .repo("0xpolarzero/fjord")])),
                          conditions: [.workflow([.failing])], createdAt: past),
                 ]),
                 InboxCategory(name: "Probe", symbol: "magnifyingglass", color: .gray, rules: [

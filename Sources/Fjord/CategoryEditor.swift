@@ -319,7 +319,7 @@ struct CategoryEditor: View {
     }
 }
 
-/// Every symbol Fjord Computer knows, filtered by what is typed.
+/// Every symbol Fjord knows, filtered by what is typed.
 struct SymbolPicker: View {
     let selection: String
     let color: CategoryColor

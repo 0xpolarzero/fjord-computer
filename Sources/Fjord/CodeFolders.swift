@@ -178,7 +178,7 @@ enum CodeFolders {
 
 // MARK: - Keeping it fresh
 
-/// Keeps what your code folders hold known: looked through at launch, when you change them, when Fjord Computer comes to
+/// Keeps what your code folders hold known: looked through at launch, when you change them, when Fjord comes to
 /// the front (at most once a minute) and every five minutes, off the main thread. A request made while a scan runs folds
 /// into one more scan after it; what reads `repos` is redrawn only when a scan found something else.
 ///
@@ -416,7 +416,7 @@ struct CodeFoldersSettings: View {
         let scanner = store.codeFolders
         SettingsSection("Code folders") {
             SettingsRow("Where your clones are",
-                        info: ("Code folders", "Fjord Computer looks through these folders, \(CodeFolders.maxDepth) levels deep, for git clones and the GitHub repos they're of, again every few minutes: @ in the Router can point at any of your projects, and an inbox action can work in any clone of its repo, not only where a Claude session ran. Only each repo's .git is read (its remotes); nothing leaves this Mac. Hidden, build and dependency folders (node_modules, .build…) are skipped, and Desktop, Documents and Downloads are only looked through when you add them, or a folder in them."),
+                        info: ("Code folders", "Fjord looks through these folders, \(CodeFolders.maxDepth) levels deep, for git clones and the GitHub repos they're of, again every few minutes: @ in the Router can point at any of your projects, and an inbox action can work in any clone of its repo, not only where a Claude session ran. Only each repo's .git is read (its remotes); nothing leaves this Mac. Hidden, build and dependency folders (node_modules, .build…) are skipped, and Desktop, Documents and Downloads are only looked through when you add them, or a folder in them."),
                         below: AnyView(Group {
                             if roots.isEmpty {
                                 Text("None").cdsText(footnote, .regular, CDS.Text.secondary)

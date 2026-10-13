@@ -399,7 +399,7 @@ import Testing
                                     patch: .order(before: [], after: []))
         let linked = RouterDecision(at: Date(timeIntervalSince1970: 1_800_000_200), trigger: .you("hi"), outcome: .done)
         // Its entry can't be read: the change waiting for your Apply is still reached, through an entry of
-        // Fjord Computer's.
+        // Fjord's.
         let state = try dec.decode(RouterState.self, from: Data("""
         {"changes": [\(try json(waiting)), \(try json(applied))], "decisions": [{"at": 5}, \(try json(linked))]}
         """.utf8))

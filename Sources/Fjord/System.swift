@@ -111,7 +111,7 @@ final class CarbonHotKeys: HotKeyBackend {
                                          EventHotKeyID(signature: OSType(0x4C4B4F54), id: id),
                                          GetApplicationEventTarget(), 0, &ref)
         if status == noErr, let ref { return Registration(ref) }
-        NSLog("Fjord Computer: global shortcut \(shortcut.display) unavailable (\(status))")
+        NSLog("Fjord: global shortcut \(shortcut.display) unavailable (\(status))")
         return nil
     }
 
@@ -148,7 +148,7 @@ final class HotKeys {
     private var buttonTap: ButtonTap?
     private var tap = ModifierTap()
     private var monitors: [Any] = []
-    /// Waits for Fjord Computer to come back to the front while taps or mouse buttons are set and Accessibility is not
+    /// Waits for Fjord to come back to the front while taps or mouse buttons are set and Accessibility is not
     /// granted.
     private var activation: NSObjectProtocol?
     /// When the held modifier went down (event timestamps, i.e. system uptime), to ask whether anything else happened since.
@@ -217,7 +217,7 @@ final class HotKeys {
         HotKeys.handlers[id] = handler
     }
 
-    /// Access is granted in System Settings, with Fjord Computer behind it, and the tap that failed before it, or the
+    /// Access is granted in System Settings, with Fjord behind it, and the tap that failed before it, or the
     /// monitors that heard nothing, are not tried again by themselves: coming back to the front is when to look.
     /// Nothing listens otherwise.
     private func updateActivation() {
@@ -285,7 +285,7 @@ final class HotKeys {
             }
             let tap = ButtonTap { [weak self] id in self?.buttonPressed(id) }
             guard tap.start() else {
-                NSLog("Fjord Computer: can't watch mouse buttons (Accessibility access?)")
+                NSLog("Fjord: can't watch mouse buttons (Accessibility access?)")
                 return
             }
             buttonTap = tap
@@ -312,7 +312,7 @@ final class HotKeys {
 
     private func handle(_ event: NSEvent) {
         if Self.debug {
-            NSLog("Fjord Computer keys: flagsChanged %d flags %lx trusted %d", event.keyCode, event.modifierFlags.rawValue, AXIsProcessTrusted() ? 1 : 0)
+            NSLog("Fjord keys: flagsChanged %d flags %lx trusted %d", event.keyCode, event.modifierFlags.rawValue, AXIsProcessTrusted() ? 1 : 0)
         }
         let held = UInt(event.modifierFlags.rawValue) & Shortcut.sideBits != 0
         let since = heldSince
@@ -401,7 +401,7 @@ final class TrustCache: @unchecked Sendable {
 }
 
 /// The mouse-button shortcuts' event tap, on a thread and run loop of its own: the window server holds every side and
-/// middle click, in every app, until a tap has answered, so the answer must not wait on Fjord Computer's main thread (and
+/// middle click, in every app, until a tap has answered, so the answer must not wait on Fjord's main thread (and
 /// a long wait there would get the tap disabled). It decides from what it was last told (the buttons, whether shortcuts
 /// are suspended) and goes to the main queue only to run a shortcut's action.
 private final class ButtonTap: @unchecked Sendable {
@@ -443,7 +443,7 @@ private final class ButtonTap: @unchecked Sendable {
             ready.signal()
             CFRunLoopRun()
         }
-        thread.name = "Fjord Computer mouse buttons"
+        thread.name = "Fjord mouse buttons"
         thread.qualityOfService = .userInteractive
         thread.start()
         ready.wait()
@@ -792,7 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit Fjord Computer", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit Fjord", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
         appMenu.insertItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",", at: 0)

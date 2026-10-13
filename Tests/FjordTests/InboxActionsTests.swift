@@ -528,7 +528,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         performer.store = store
         store.stateFile = folder.appendingPathComponent("state.json")
         store.persists = true
-        // Taken in before Jev rated it; Fjord Computer quits and opens again before his rating comes.
+        // Taken in before Jev rated it; Fjord quits and opens again before his rating comes.
         await store.runActions()
         store.flushSave()
         #expect(store.actionLedger.awaitedRatings?.isEmpty == false)
@@ -834,7 +834,7 @@ final class DiskCheckingPerformer: ActionPerformer {
         store.actionPerformer = performer
         performer.store = store
         await store.runActions()
-        // Read again by this build: bob's follow-up, there all along, and one he made since, while Fjord Computer was
+        // Read again by this build: bob's follow-up, there all along, and one he made since, while Fjord was
         // closed.
         var after = before
         after.updatedAt = Date()

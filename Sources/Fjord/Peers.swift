@@ -30,7 +30,7 @@ enum ClaudePeers {
         var startedAt: Int64?
     }
 
-    /// Every live process in the registry, by pid (what Fjord Computer's plugin binds its presence to). A pid has one
+    /// Every live process in the registry, by pid (what Fjord's plugin binds its presence to). A pid has one
     /// entry in Claude Code's own registry; all are kept in case two files name it.
     static func registry(dir: URL, alive: (Int32) -> Bool = FormBridge.processAlive) -> [Int32: [Registered]] {
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []

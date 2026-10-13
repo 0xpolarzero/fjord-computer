@@ -162,7 +162,7 @@ enum Demo {
     }
 
     /// The Router on, over the `agents` sessions: the one that asks is stopped on its question (whose form
-    /// Fjord Computer holds), a plan and a stuck turn wait, a turn is done, older cards are addressed; a short chat
+    /// Fjord holds), a plan and a stuck turn wait, a turn is done, older cards are addressed; a short chat
     /// with what the Router did.
     private static func router(_ store: Store, _ now: Date) {
         let lcu = blockedAgentID
@@ -345,7 +345,7 @@ enum Demo {
         icons.unread = true
         icons.brief = "All 24 icons are exported, committed and pushed; nothing left to do."
         var theme = card(s("local_demo-theme"), finish, minutes: 1)
-        theme.brief = "PR #88 is green: merge it, then relaunch Fjord Computer to check light mode."
+        theme.brief = "PR #88 is green: merge it, then relaunch Fjord to check light mode."
         store.router.cards += [icons, theme]
         if let i = store.router.cards.firstIndex(where: { $0.sessionID == "local_demo-docs" }) {
             store.router.cards[i].brief = "The new docs layout is in, but it wasn't checked on mobile widths."
@@ -356,7 +356,7 @@ enum Demo {
         }
     }
 
-    /// The Router changing Fjord Computer itself: a record for each change (one taken back).
+    /// The Router changing Fjord itself: a record for each change (one taken back).
     private static func fjordChanges(_ store: Store, _ now: Date) -> [FjordChange] {
         let look = InboxCategory(
             name: "Needs a look", symbol: "eye", color: .aqua,
@@ -621,7 +621,7 @@ enum Demo {
                              summary: running ? nil : ClaudeSession.Summary(blocked: blocked, detail: detail), running: running)
     }
 
-    /// A session and how Fjord Computer lists it: read or not, with the label or icon it was given.
+    /// A session and how Fjord lists it: read or not, with the label or icon it was given.
     private struct Listed {
         var session: ClaudeSession
         var unread = false

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// Fjord Computer docked: one bar on a screen edge. Hovering an item opens its peek beside the bar, and the peek's rows
+// Fjord docked: one bar on a screen edge. Hovering an item opens its peek beside the bar, and the peek's rows
 // act; a click opens the app window (AppWindow.swift) on that item, and the bar leaves the edge until the window
 // closes.
 
@@ -269,7 +269,7 @@ struct FjordHub: View {
         .motion(glass ? Motion.glass : Motion.fade, value: peeking != nil)
         .fixedSize()
         .contextMenu {
-            Button("Open Fjord Computer") { openApp(firstDestination) }
+            Button("Open Fjord") { openApp(firstDestination) }
             if store.routerOn {
                 Button("Open Router") { openApp(.router) }
             }
@@ -289,7 +289,7 @@ struct FjordHub: View {
                 }
             }
             Divider()
-            Button("Quit Fjord Computer") { NSApp.terminate(nil) }
+            Button("Quit Fjord") { NSApp.terminate(nil) }
         }
         .modifier(Brand.Scheme())
         .background(UpdateAnnouncer(updater: store.updater))

@@ -56,7 +56,7 @@ import Testing
             scope: Scope(kinds: [.pr]), conditions: [.newCommits(by: Pick(), since: .myLastReview)], createdAt: .distantPast)])
         let s = InboxFixture.store([thing], category: sinceReview)
         #expect(s.entries.isEmpty)
-        // Fjord Computer is closed: Alice pushes c1 and you review it. Opened again, c1 is first seen now, after your
+        // Fjord is closed: Alice pushes c1 and you review it. Opened again, c1 is first seen now, after your
         // review.
         var reviewed = thing
         reviewed.commits.append(ThingCommit(id: "c1", author: "alice", at: Date().addingTimeInterval(-1800)))

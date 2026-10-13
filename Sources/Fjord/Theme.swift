@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum Theme {
-    // Claude's own palette (CDS, dark mode), read from the Claude app: Fjord Computer is part of it.
+    // Claude's own palette (CDS, dark mode), read from the Claude app: Fjord is part of it.
     /// The bar and its panels: black.
     static let bg = Brand.map(Color.black)
     static let raised = CDS.alpha(0.05)

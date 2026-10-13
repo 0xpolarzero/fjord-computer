@@ -1,6 +1,6 @@
 import Foundation
 
-// What the Router changed in Fjord Computer itself, kept so the user can see it in the history and take it back. A
+// What the Router changed in Fjord itself, kept so the user can see it in the history and take it back. A
 // record holds the before and after of exactly the one thing it touched (a category, a group, the categories' order, a
 // setting, the marks of some entries), nothing around it. The records live in the Router's state
 // (`RouterState.changes`) and are saved with it.
@@ -238,7 +238,7 @@ extension FjordChange {
 
 // MARK: - Settings
 
-/// The settings the Router may change: the ones a person sets on the Settings page for how Fjord Computer behaves.
+/// The settings the Router may change: the ones a person sets on the Settings page for how Fjord behaves.
 /// Never the GitHub token, the account, quitting, or the Router's own switch. One table gives `get_settings`,
 /// `set_setting`'s schema and the cards' words, so they can't disagree.
 @MainActor
@@ -322,7 +322,7 @@ struct FjordSetting {
         FjordSetting(key: "centerBar", label: "centering the bar", doc: "Keep the bar at the middle of its screen edge (dragging only picks the edge).",
                        schema: ["type": "boolean"], read: { .on($0.settings.centerPill ?? false) }, parse: { v, _ in try flag(v) },
                        apply: { s, v in if case .on(let on) = v { s.settings.centerPill = on } }, display: onOff),
-        FjordSetting(key: "launchAtLogin", label: "launch at login", doc: "Open Fjord Computer when the Mac starts.",
+        FjordSetting(key: "launchAtLogin", label: "launch at login", doc: "Open Fjord when the Mac starts.",
                        schema: ["type": "boolean"], read: { _ in .on(launchAtLogin.read()) }, parse: { v, _ in try flag(v) },
                        apply: { _, v in if case .on(let on) = v { try launchAtLogin.write(on) } }, display: onOff),
         FjordSetting(key: "sessionIcons", label: "icons picked for sessions", doc: "Icons picked for Claude sessions in the Router (their titles go to TypeSafe; needs its key).",

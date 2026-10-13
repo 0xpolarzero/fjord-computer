@@ -213,7 +213,7 @@ final class Store {
     /// Triage's switch (`settings.triage`; the Router's is `routerOn`), kept in step by `settings` and written only when it
     /// changes: what reads it (the bar, the window's root) doesn't redraw with every other setting.
     private(set) var triageOn = false
-    /// The Router's switch: on only while Fjord Computer reads Claude's sessions too (`router.enabled && agents.enabled`,
+    /// The Router's switch: on only while Fjord reads Claude's sessions too (`router.enabled && agents.enabled`,
     /// which follow each other). Kept in step by `router` and `agents` and written only when it changes, so what reads it
     /// doesn't redraw with every read of Claude's sessions, as reading those two whole would.
     private(set) var routerOn = false
@@ -271,7 +271,7 @@ final class Store {
     private(set) var routerRevision = 0
     /// How many times each card has changed (see `countCardChanges`).
     @ObservationIgnored var cardRevisions: [String: Int] = [:]
-    /// The question forms Fjord Computer's hook holds, by Claude Code session id (`ClaudeSession.cliID`).
+    /// The question forms Fjord's hook holds, by Claude Code session id (`ClaudeSession.cliID`).
     var pendingForms: [String: PendingForm] = [:] {
         didSet { shownRevision &+= 1 }
     }
@@ -279,7 +279,7 @@ final class Store {
     var routerHookError: String?
     /// The form hook as last checked (nil until the Router has been switched on in this run).
     var routerHookStatus: FormHookInstaller.Status?
-    /// Fjord Computer's Claude Code plugin as last checked (nil until the Router has been switched on in this run, or
+    /// Fjord's Claude Code plugin as last checked (nil until the Router has been switched on in this run, or
     /// in a test that stands in no CLI), and why installing or removing it failed, if it did.
     var routerPluginStatus: ClaudePluginInstaller.Status?
     var routerPluginError: String?
@@ -361,7 +361,7 @@ final class Store {
     var claudeLink: ClaudeLink = .off {
         didSet { if claudeLink == .ok { claudeSessionsRead = true } }
     }
-    /// Claude's sessions have been read since Fjord Computer started reading them: a read failing after that leaves the
+    /// Claude's sessions have been read since Fjord started reading them: a read failing after that leaves the
     /// last ones known (`claudeSessions`), not nothing known.
     var claudeSessionsRead = false
 
@@ -543,12 +543,12 @@ final class Store {
     /// The file the state is read from and written to; nil when a test has not said where, and was stopped for it.
     private var file: URL? {
         if let stateFile { return stateFile }
-        return UnderTest.refuses("the saved state (Application Support/Fjord Computer/state.json)") ? nil : Self.fileURL
+        return UnderTest.refuses("the saved state (Application Support/Fjord/state.json)") ? nil : Self.fileURL
     }
 
     nonisolated private static let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Fjord Computer", isDirectory: true)
+            .appendingPathComponent("Fjord", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("state.json")
     }()
@@ -1200,7 +1200,7 @@ final class Store {
         settings.shortcuts?[action.rawValue] ?? action.defaultShortcut
     }
 
-    /// A stored system-wide shortcut that another app held when Fjord Computer tried to register it.
+    /// A stored system-wide shortcut that another app held when Fjord tried to register it.
     func isShortcutHeldByAnotherApp(_ action: ShortcutAction) -> Bool {
         refusedShortcuts[action].map { $0 == shortcut(action) } ?? false
     }

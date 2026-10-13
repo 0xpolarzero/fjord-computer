@@ -385,7 +385,7 @@ import Testing
     }
 }
 
-/// The system's hot keys as Carbon keeps them: a combination already held, by Fjord Computer or by another app, is refused.
+/// The system's hot keys as Carbon keeps them: a combination already held, by Fjord or by another app, is refused.
 private final class SystemKeys: HotKeyBackend {
     private final class Registration {
         let id: UInt32, shortcut: Shortcut

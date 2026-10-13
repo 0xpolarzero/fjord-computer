@@ -118,7 +118,7 @@ struct HubRoot: View {
     @ViewBuilder private var content: some View {
         let view = FjordHub(store: store, ui: ui, hub: hub)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(FjordHub.rootSpace)) } action: { frame in
-                if HubController.debug { NSLog("Fjord Computer hub frame \(frame)") }
+                if HubController.debug { NSLog("Fjord hub frame \(frame)") }
                 layout.frame = frame
                 layout.restLength = ui.edge.isHorizontal ? frame.width : frame.height
                 layout.restSize = frame.size

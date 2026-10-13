@@ -157,7 +157,7 @@ struct SettingsView: View {
                 SettingsSwitch("Desktop notifications", isOn: $store.settings.notifications)
             }
             if blocked {
-                SettingsRow(nil, description: "macOS is blocking Fjord Computer's notifications. Allow them in System Settings › Notifications.",
+                SettingsRow(nil, description: "macOS is blocking Fjord's notifications. Allow them in System Settings › Notifications.",
                             descriptionColor: CDS.Text.warning) {
                     ActionButton("Open Settings") {
                         let id = Bundle.main.bundleIdentifier.map { "?id=\($0)" } ?? ""
@@ -228,7 +228,7 @@ struct SettingsView: View {
             }
             .onChange(of: store.hasCustomShortcuts) { restoreError = nil }
         }
-        // Granted in System Settings, which Fjord Computer comes back from.
+        // Granted in System Settings, which Fjord comes back from.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             accessibilityTrusted = AXIsProcessTrusted()
         }
@@ -238,7 +238,7 @@ struct SettingsView: View {
         let updater = store.updater
         return SettingsSection("Updates") {
             Ticking(coarse: true) { now in
-                SettingsRow("Fjord Computer \(updater.current)", description: updateStatus(now), descriptionColor: updateStatusColor) {
+                SettingsRow("Fjord \(updater.current)", description: updateStatus(now), descriptionColor: updateStatusColor) {
                     if updater.isRelease { updateButton }
                 }
             }
@@ -325,9 +325,9 @@ struct SettingsView: View {
             }
             SettingsDivider()
             // Destructive actions are a secondary button on their row (settings.md §3.5), never red.
-            SettingsRow("Quit Fjord Computer",
-                        info: ("Quit Fjord Computer", "Stops checking GitHub and takes the bar away until it's opened again")) {
-                ActionButton("Quit Fjord Computer") { NSApp.terminate(nil) }
+            SettingsRow("Quit Fjord",
+                        info: ("Quit Fjord", "Stops checking GitHub and takes the bar away until it's opened again")) {
+                ActionButton("Quit Fjord") { NSApp.terminate(nil) }
             }
         }
     }
@@ -375,7 +375,7 @@ private struct RouterSettings: View {
         SettingsRow("Router",
                     description: needsClaude ? "Needs the Claude desktop app" : nil,
                     adornment: SettingsView.toolMark(.router),
-                    info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Fjord Computer or answers a question. Messages reach your sessions through Fjord Computer's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
+                    info: ("Router", "Shows what your Claude Code sessions are doing, what is waiting on you and what is done, and answers their forms here. Each message you send runs on its own: rules first, then Jev (TypeSafe's classifier, if a key is set) picks where it goes, and a short Haiku run only changes Fjord or answers a question. Messages reach your sessions through Fjord's Claude Code plugin. Every run is logged in the Router's history. The Router never acts on GitHub. Forms need a hook in Claude Code's settings (`~/.claude/settings.json`); turning the Router off removes the hook and the plugin. \(store.shortcut(.router).display) opens it.")) {
             SettingsSwitch("Router", isOn: Binding(get: { store.router.enabled }, set: { store.setTool(.router, on: $0) }))
                 .disabled(needsClaude)
         }
@@ -399,17 +399,17 @@ private struct RouterSettings: View {
         }
     }
 
-    /// Fjord Computer's Claude Code plugin, which makes your words arrive in a session as yours.
+    /// Fjord's Claude Code plugin, which makes your words arrive in a session as yours.
     private static func pluginLine(_ status: ClaudePluginInstaller.Status?, error: String?) -> (String, Color) {
-        if let error { return ("Fjord Computer's Claude Code plugin: \(error)", Theme.red) }
+        if let error { return ("Fjord's Claude Code plugin: \(error)", Theme.red) }
         return switch status {
-        case .installed: ("Fjord Computer's Claude Code plugin: installed: your messages reach sessions as yours. Sessions already "
+        case .installed: ("Fjord's Claude Code plugin: installed: your messages reach sessions as yours. Sessions already "
                           + "open pick it up when restarted (or /reload-plugins).", Theme.green)
-        case .outdated: ("Fjord Computer's Claude Code plugin: update needed (Claude Code has an older copy): updating. Sessions already "
+        case .outdated: ("Fjord's Claude Code plugin: update needed (Claude Code has an older copy): updating. Sessions already "
                          + "open pick it up when restarted (or /reload-plugins).", Theme.amber)
-        case .notInstalled: ("Fjord Computer's Claude Code plugin isn't installed: messages can't reach sessions", Theme.amber)
-        case .noClaudeCode: ("Fjord Computer's Claude Code plugin needs Claude Code, which comes with the Claude desktop app", Theme.amber)
-        case nil: ("Fjord Computer's Claude Code plugin will be installed", Theme.tertiary)
+        case .notInstalled: ("Fjord's Claude Code plugin isn't installed: messages can't reach sessions", Theme.amber)
+        case .noClaudeCode: ("Fjord's Claude Code plugin needs Claude Code, which comes with the Claude desktop app", Theme.amber)
+        case nil: ("Fjord's Claude Code plugin will be installed", Theme.tertiary)
         }
     }
 
@@ -417,7 +417,7 @@ private struct RouterSettings: View {
         if let error = store.routerHookError { return ("Form hook: \(error)", Theme.red) }
         return switch store.routerHookStatus {
         case .installed: ("Form hook installed", Theme.green)
-        case .outdated: ("Form hook points at another copy of Fjord Computer: installing it again", Theme.amber)
+        case .outdated: ("Form hook points at another Fjord install: installing it again", Theme.amber)
         case .notInstalled: ("Form hook not installed", Theme.amber)
         case nil: ("Form hook will be installed", Theme.tertiary)
         }

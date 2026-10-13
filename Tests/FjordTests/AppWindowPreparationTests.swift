@@ -53,14 +53,14 @@ import Testing
     }
 
     /// A close hands the keyboard back only to a regular app still running: never to a menu-bar or launcher app (no window
-    /// to type in), nor to Fjord Computer itself.
+    /// to type in), nor to Fjord itself.
     @Test func theKeyboardGoesBackOnlyToARegularAppStillRunning() {
         #expect(AppPolicy.canTakeFocusBack(policy: .regular, isSelf: false, terminated: false))
         #expect(!AppPolicy.canTakeFocusBack(policy: .accessory, isSelf: false, terminated: false))
         #expect(!AppPolicy.canTakeFocusBack(policy: .prohibited, isSelf: false, terminated: false))
         #expect(!AppPolicy.canTakeFocusBack(policy: .regular, isSelf: true, terminated: false))
         #expect(!AppPolicy.canTakeFocusBack(policy: .regular, isSelf: false, terminated: true))
-        // Asked of an app as it is now: never Fjord Computer itself, nor nothing.
+        // Asked of an app as it is now: never Fjord itself, nor nothing.
         #expect(AppPolicy.takingFocusBack(.current) == nil && AppPolicy.takingFocusBack(nil) == nil)
     }
 
@@ -79,7 +79,7 @@ import Testing
         #expect(opened == "card#1")
     }
 
-    /// Becoming active: an activation Fjord Computer asked for landing with no window shown (a quick close got there first)
+    /// Becoming active: an activation Fjord asked for landing with no window shown (a quick close got there first)
     /// gives the keyboard back; one the user made (⌘-Tab, the Dock) while the window closes opens it again rather than being
     /// bounced; anything else stays, a banner's click shortly after a close included.
     @Test func whatBecomingActiveDoes() {

@@ -16,7 +16,7 @@ struct OnboardingView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 FjordLogo().frame(width: 40, height: 40).accessibilityHidden(true)
-                Text("Fjord Computer").cdsText(comfy.title, .medium).padding(.top, 20)
+                Text("Fjord").cdsText(comfy.title, .medium).padding(.top, 20)
                     .accessibilityAddTraits(.isHeader)
                 Text("The power without the storm. Pick your tools; Settings can change them later.")
                     .cdsText(comfy.body, .regular, CDS.Text.secondary).padding(.top, 6)

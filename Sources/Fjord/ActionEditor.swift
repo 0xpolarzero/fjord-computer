@@ -192,7 +192,7 @@ private struct RouterWarning: View {
         .foregroundStyle(CDS.Text.warning)
         .padding(.horizontal, strong ? 8 : 0).padding(.vertical, strong ? 4 : 0)
         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(CDS.Text.warning.opacity(strong ? 0.16 : 0)))
-        .tip("Prompt injection", "Anyone who can write a title or comment on matching items can try to steer the session it reaches. That session runs with your Claude Code permission settings, unattended. The Router never acts on it itself (it never changes Fjord Computer for an action), but keep the prompt narrow and the rules tight (by me, Maintainers)."
+        .tip("Prompt injection", "Anyone who can write a title or comment on matching items can try to steer the session it reaches. That session runs with your Claude Code permission settings, unattended. The Router never acts on the item itself (it never changes Fjord in response to one), but keep the prompt narrow and the rules tight (by me, Maintainers)."
              + (strong ? " These rules match items others write." : ""))
         .accessibilityElement(children: .combine)
     }

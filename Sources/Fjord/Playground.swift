@@ -12,7 +12,7 @@ struct PlaygroundView: View {
     let store: Store
     @Bindable var ui: UIState
     @Bindable var hub: HubState
-    /// The "Fjord Computer playground" card: hidden in shots, where it is no part of what is looked at.
+    /// The "Fjord playground" card: hidden in shots, where it is no part of what is looked at.
     var showsExplainer = true
     var minSize = CGSize(width: 1280, height: 820)
     /// Opens the app window on a place; a toast says so when there is none (in shots).
@@ -119,7 +119,7 @@ struct PlaygroundView: View {
                 Text("Some app behind").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black.opacity(0.6))
                 Spacer()
             }
-            Text("An app under Fjord Computer: clicks around the bar reach it.")
+            Text("An app under Fjord: clicks around the bar reach it.")
                 .font(.system(size: 12.5)).foregroundStyle(.black.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
             Button("Clicked \(behindClicks) times") { behindClicks += 1 }
@@ -134,7 +134,7 @@ struct PlaygroundView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Fjord Computer playground").font(.system(size: 15, weight: .semibold))
+            Text("Fjord playground").font(.system(size: 15, weight: .semibold))
             Picker("Edge", selection: Binding(get: { ui.edge }, set: { ui.edge = $0 })) {
                 Text("Left").tag(DockEdge.left)
                 Text("Top").tag(DockEdge.top)
@@ -186,7 +186,7 @@ final class Playground: NSObject, NSWindowDelegate {
                                   })
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                           styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Fjord Computer playground"
+        window.title = "Fjord playground"
         // As in the app's panel: the hub's native menus and popovers are dark.
         window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = NSHostingView(rootView: view)
@@ -397,7 +397,7 @@ enum PlaygroundShots {
         shots.append(window("-composing") { $0.routerWindow?.composing = true })
         shots.append(window("-plan") { $0.routerWindow?.picksPlan = true })
         shots.append(window("-plan-sent-back") { $0.routerWindow?.planSentBack = true })
-        // The Router's own conversation, with the cards of what it changed in Fjord Computer.
+        // The Router's own conversation, with the cards of what it changed in Fjord.
         shots.append(window("-changes") { _ in })
 
         return shots

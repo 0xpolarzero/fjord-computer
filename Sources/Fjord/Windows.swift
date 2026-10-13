@@ -45,7 +45,7 @@ class FloatingPanel: NSPanel {
         hidesOnDeactivate = false
         isMovable = false
         isReleasedWhenClosed = false
-        // Fjord Computer is an accessory app, inactive most of the time: without this, `.help` tooltips never show.
+        // Fjord is an accessory app, inactive most of the time: without this, `.help` tooltips never show.
         allowsToolTipsWhenApplicationIsInactive = true
     }
 

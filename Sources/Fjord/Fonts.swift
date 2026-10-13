@@ -3,7 +3,7 @@ import CoreText
 import Foundation
 
 /// Claude's own typeface, Anthropic Sans, read from the Claude app the user has installed (inside its `app.asar`), so
-/// Fjord Computer looks like part of it without shipping the font. Registered for this process only; when Claude isn't
+/// Fjord looks like part of it without shipping the font. Registered for this process only; when Claude isn't
 /// there or its bundle changes, `available` stays false and Theme falls back to the system font.
 enum ClaudeFonts {
     nonisolated(unsafe) private(set) static var available = false
@@ -24,8 +24,8 @@ enum ClaudeFonts {
         let folder = generation(root: root, stamp: stamp)
         if let names = fonts(in: folder) {
             if register(names, in: folder) {
-                // Made by an earlier launch: what older archives left goes now, unless another Fjord Computer runs (it may
-                // have registered them).
+                // Made by an earlier launch: what older archives left goes now, unless another Fjord process is running
+                // (it may have registered them).
                 sweep(root, keeping: folder, othersRunning: { otherFjordRunning })
                 return
             }
@@ -68,7 +68,7 @@ enum ClaudeFonts {
         try? fm.moveItem(at: folder, to: root.appendingPathComponent(".bad-\(UUID().uuidString)", isDirectory: true))
     }
 
-    /// Another Fjord Computer is running (the installed app beside a build, say): by bundle id or executable name.
+    /// Whether another Fjord process is running (the installed app beside a build, say), by bundle id or executable name.
     static var otherFjordRunning: Bool {
         let me = ProcessInfo.processInfo.processIdentifier
         let name = Bundle.main.executableURL?.lastPathComponent ?? "Fjord"
@@ -99,7 +99,7 @@ enum ClaudeFonts {
 
     /// Writes the fonts into a folder of their own, whole (each written out, then the list of them), and only then puts it
     /// where `generation` looks, in one rename: a launch stopped midway leaves nothing found, and a generation once made is
-    /// never written again, so another Fjord Computer running with it (the installed app beside a build) keeps its fonts.
+    /// never written again, so another Fjord process running beside this build keeps its fonts.
     /// Nil when that failed. One made meanwhile by another process is taken as it is.
     static func store(_ fonts: [(name: String, bytes: () -> Data)], root: URL, stamp: String) -> URL? {
         let fm = FileManager.default
@@ -119,7 +119,7 @@ enum ClaudeFonts {
     }
 
     /// Takes away the other generations (and what the cache held before generations, and folders left half made or put
-    /// aside), only while no other Fjord Computer runs: one that does may have registered them, and keeps reading them.
+    /// aside), only while no other Fjord process is running: one that does may have registered them and keeps reading them.
     /// `othersRunning` is asked only when there is something to take away (the running apps' list, before the first frame,
     /// isn't asked for on every launch).
     static func sweep(_ root: URL, keeping current: URL, othersRunning: () -> Bool) {
