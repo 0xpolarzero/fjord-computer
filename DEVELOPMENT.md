@@ -69,7 +69,7 @@ Mock data with Triage on (and the Router, in its scenarios). Nothing is saved. `
 | --- | --- |
 | `--window` | The window alone, on demo data. |
 | `--window --flight-demo` | The Router's page types and sends four messages through the real dispatcher (Jev and the send stood in for, at their usual pace): one to a working session, one to a finished one, one that starts a session, one the Router asks about. Shows each fly to where it went. |
-| `--window-shots <dir>` | Renders the window's pages as PNGs, offscreen. |
+| `--window-shots <dir> [name…]` | Renders the window's pages as PNGs, offscreen (`window-<name>.png`); given names, only shots containing one of them. |
 | `--playground` | The bar on a fake desktop, demo data, every edge. |
 | `--playground-shots <dir> [name…]` | Renders the bar's states as PNGs, offscreen: every edge, every demo scenario, Reduce Motion / Increase Contrast / Differentiate Without Color variants, and a 1280×720 screen. Shots are named `<edge>-<state>` (`right-open`, `top-rest-signed-out`…); given names, only shots containing one of them are rendered. |
 
