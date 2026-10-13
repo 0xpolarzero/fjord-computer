@@ -636,8 +636,9 @@ enum RouterFeed {
             }
 
             // The summary is written after the turn ends: the open card of that turn takes it when it comes.
-            if let summary = session.summary,
-               let i = state.cards.firstIndex(where: { $0.id == "\(id)#t\(session.completedTurns)" && $0.isOpen }) {
+            // (The turn's card id is made once, not once per card it is compared with: every session against every card.)
+            if let summary = session.summary, case let turnID = "\(id)#t\(session.completedTurns)",
+               let i = state.cards.firstIndex(where: { $0.isOpen && $0.id == turnID }) {
                 let kind = RouterTriage.kind(blocked: summary.blocked, triage: state.cards[i].triage)
                 let text = summary.detail.isEmpty ? placeholder : summary.detail
                 if state.cards[i].kind != kind { state.cards[i].kind = kind }

@@ -389,6 +389,17 @@ extension Claude {
     var unwatched: [String: String] = [:]
     /// Those whose message was read again for it (once each: after a relaunch, say).
     var unwatchedRead: Set<String> = []
+    /// What each of those messages was last found to name among the inbox's CI (thing ids), with what that was worked out
+    /// from: the feed asks every half second while sessions work, and the same message, repos, things and sessions name the
+    /// same, so it is read again (patterns over every session and workflow) only once one of them changed.
+    var unwatchedNamed: [String: (key: UnwatchedKey, named: [String])] = [:]
+    struct UnwatchedKey: Equatable {
+        var message: String
+        var repos: Set<String>
+        /// `Store.inboxRevision` and `Store.claudeSessionsRevision` when it was worked out.
+        var inbox: Int
+        var sessions: Int
+    }
     private var running = 0
 
     /// Waits until no triage is under way (tests).
@@ -696,19 +707,27 @@ extension Store {
             }
             // Read long ago: read again (an `upstream` added since), and bound by what was read meanwhile.
             if reposExpired(session.folder) { readUnwatched(card.id, session: session) }
-            let reading = waitReading(message, by: session)
-            let named = things.values.filter { thing in
-                (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
-                    && (thing.checks == .pending || thing.ciRunning
-                        || (thing.checks != nil && max(thing.updatedAt, thing.ciChangedAt ?? .distantPast) > session.lastActivity))
-                    && bindsTo(thing, message: message, reading: reading, by: session)
+            let key = RouterTriager.UnwatchedKey(message: message, repos: repos, inbox: inboxRevision, sessions: claudeSessionsRevision)
+            let named: [String]
+            if let kept = routerTriager.unwatchedNamed[card.id], kept.key == key {
+                named = kept.named
+            } else {
+                let reading = waitReading(message, by: session)
+                named = things.values.filter { thing in
+                    (thing.kind == .pr || thing.kind == .workflow) && repos.contains(thing.repo.lowercased())
+                        && (thing.checks == .pending || thing.ciRunning
+                            || (thing.checks != nil && max(thing.updatedAt, thing.ciChangedAt ?? .distantPast) > session.lastActivity))
+                        && bindsTo(thing, message: message, reading: reading, by: session)
+                }.map(\.id)
+                routerTriager.unwatchedNamed[card.id] = (key, named)
             }
-            guard named.count == 1, let thing = named.first else { continue }
+            guard named.count == 1, let thing = things[named[0]] else { continue }
             state.cards[i].triage?.watch = .init(target: .ci(thing: thing.id), label: RouterWaits.ciLabel(thing),
                                                  ref: RouterWaits.ref(thing))
             kept[card.id] = nil
         }
         routerTriager.unwatched = kept
+        routerTriager.unwatchedNamed = routerTriager.unwatchedNamed.filter { kept[$0.key] != nil }
         if state != router { router = state }
     }
 

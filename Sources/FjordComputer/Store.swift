@@ -272,10 +272,13 @@ final class Store {
     @ObservationIgnored lazy var codeFolders = CodeFolderScanner(store: self)
     var claudeSessions: [String: ClaudeSession] = [:] {
         didSet {
+            claudeSessionsRevision &+= 1
             agentCache = nil
             refreshFolderNames()
         }
     }
+    /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
+    @ObservationIgnored private(set) var claudeSessionsRevision = 0
     var claudeActivity: [String: ClaudeActivity] = [:] {
         didSet {
             agentCache = nil
