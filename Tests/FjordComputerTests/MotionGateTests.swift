@@ -45,6 +45,15 @@ import Testing
         #expect(done == 4)
     }
 
+    @Test func aStoreUnderTestWaitsOnAGateOfItsOwnAndItsFeedOnTheSame() {
+        let s = Store()
+        // The app's gate, which window tests hold, holds no store's work in the suites beside them.
+        #expect(s.motionGate !== MotionGate.shared && s.claudeFeed.gate === s.motionGate)
+        let gate = MotionGate.Gate(longest: 600)
+        s.motionGate = gate
+        #expect(s.claudeFeed.gate === gate)
+    }
+
     @Test func stillWaitsItsTurnBehindWhatWasHeld() async {
         let gate = MotionGate.Gate(longest: 600)
         var done: [String] = []

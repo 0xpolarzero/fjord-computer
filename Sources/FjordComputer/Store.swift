@@ -380,8 +380,12 @@ final class Store {
     var suggestions: [String] = []
 
     @ObservationIgnored let gh = GitHubClient()
-    /// What the window's morph holds the store's results back with (`MotionGate`); a test gives one of its own.
-    @ObservationIgnored var motionGate = MotionGate.shared
+    /// What the window's morph holds the store's results back with (`MotionGate`). Under test, a gate of the store's own,
+    /// which only a test that holds it holds: the app's, which window tests hold, would hold every store's work in the suites
+    /// running beside them.
+    @ObservationIgnored var motionGate = UnderTest.isRunning ? MotionGate.Gate() : MotionGate.shared {
+        didSet { claudeFeed.gate = motionGate }
+    }
     @ObservationIgnored let notifier = Notifier()
     @ObservationIgnored let updater = Updater()
     @ObservationIgnored private var pollTask: Task<Void, Never>?
@@ -482,6 +486,7 @@ final class Store {
     @ObservationIgnored lazy var claudeFeed: ClaudeFeed = {
         let feed = ClaudeFeed(activityReader: activityReader)
         feed.batched = { [weak self] body in if let self { self.batchingClaudeReads(body) } else { body() } }
+        feed.gate = motionGate
         return feed
     }()
     /// Derived rows, rebuilt after any change to the agents or what was read (see Agents.swift).

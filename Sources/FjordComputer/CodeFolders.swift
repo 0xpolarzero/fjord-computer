@@ -259,7 +259,7 @@ final class CodeFolderScanner {
                 guard self.activationScan == nil else { return }
                 self.activationScan = Task { [weak self] in
                     try? await Task.sleep(for: Self.activationDelay)
-                    await MotionGate.still()
+                    await (self?.store?.motionGate ?? MotionGate.shared).still()
                     guard let self else { return }
                     self.activationScan = nil
                     if let last = self.lastScan, Date().timeIntervalSince(last) < Self.activationGap { return }
@@ -333,7 +333,7 @@ final class CodeFolderScanner {
             (roots.isEmpty ? CodeFolders.Found() : scan(roots), Dictionary(uniqueKeysWithValues: sessions.map { ($0, read($0)) }))
         }
         // Taken in once the window's morph has played: the projects worked out again redraw what lists them.
-        await MotionGate.still()
+        await (store?.motionGate ?? MotionGate.shared).still()
         sessionRemotes = sessionRemotes.filter { sessionFolders.contains($0.key) }.merging(sessionsRead) { _, new in new }
         // The folders changed while it ran: what it found is old, and the change has asked for another scan.
         guard roots == self.roots else { rebuild(); return }

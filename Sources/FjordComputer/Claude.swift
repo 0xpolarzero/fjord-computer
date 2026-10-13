@@ -817,7 +817,7 @@ final class ClaudeFeed: @unchecked Sendable {
                 var snapshot = unread ? readUnread() : read(full: full)
                 snapshot.stamp = stamp
                 guard let apply else { continue }
-                DispatchQueue.main.async { MainActor.assumeIsolated { self.deliver(snapshot, apply) } }
+                DispatchQueue.main.async { MainActor.assumeIsolated { self.deliver(snapshot, apply, gate: self.gate) } }
             }
         }
     }
@@ -835,6 +835,8 @@ final class ClaudeFeed: @unchecked Sendable {
     @MainActor var batched: ((() -> Void) -> Void)?
     /// How long a slice of held reads may take before the rest waits for the next turn (at least one read a slice).
     @MainActor var sliceBudget: TimeInterval = 0.006
+    /// The gate reads wait at (the store's `motionGate`).
+    @MainActor var gate: MotionGate.Gate = MotionGate.shared
 
     @MainActor func deliver(_ snapshot: ClaudeSnapshot, _ apply: @escaping @MainActor (ClaudeSnapshot) -> Void,
                             gate: MotionGate.Gate = MotionGate.shared) {

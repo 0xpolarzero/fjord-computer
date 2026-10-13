@@ -412,7 +412,7 @@ extension Store {
             return
         }
         // Put on the card once the window's morph has played (`MotionGate`): the Router's history is made again for it.
-        await MotionGate.still()
+        await store.motionGate.still()
         // The card may have gone meanwhile, the Router been turned off, or what it is made from changed (a reply answered
         // some of its questions): then it is made again, from what it is now.
         guard generation == self.generation, store.router.enabled,
