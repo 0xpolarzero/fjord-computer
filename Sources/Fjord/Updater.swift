@@ -357,7 +357,7 @@ final class Updater {
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", script, "sh", String(ProcessInfo.processInfo.processIdentifier), target.path, staged.path]
         try process.run()
-        NSApp.terminate(nil)
+        AppTermination.terminateWithoutPrompt()
     }
 
     /// Screenshots and demos: show a release in a given phase without touching the network.

@@ -54,6 +54,12 @@ import Testing
         #expect(s.firstPlace == .router)
     }
 
+    @Test func withOnlyComputersOnTheWindowOpensOnComputers() {
+        let s = store()
+        s.setTool(.computers, on: true)
+        #expect(s.firstPlace == .computers)
+    }
+
     @Test func anActionThatStartsASessionWaitsForTheRouterAndThenOnlyForWhatComesAfter() async {
         let performer = FakePerformer()
         var category = InboxFixture.category()

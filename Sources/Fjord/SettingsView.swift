@@ -128,6 +128,11 @@ struct SettingsView: View {
             }
             SettingsDivider()
             RouterSettings(store: store, part: .tool)
+            SettingsDivider()
+            SettingsRow("Computers", adornment: Self.toolMark(.computers),
+                        info: ("Computers", "Manage Linux and macOS computers, lifecycle actions, displays and checkpoints.")) {
+                SettingsSwitch("Computers", isOn: Binding(get: { store.computersOn }, set: { store.setTool(.computers, on: $0) }))
+            }
         }
     }
 

@@ -55,6 +55,8 @@ enum AppWindowShots {
         var size = CGSize(width: 1280, height: 800)
         /// Sets the Router's composer up (a draft with a pill in it).
         var compose: ((RouterModel, Store) -> Void)?
+        /// Prepares a tool page or stateful overlay for this shot.
+        var prepare: ((Store) -> Void)? = nil
         /// The window's look; nil follows the Mac.
         var appearance: NSAppearance.Name?
     }
@@ -64,6 +66,18 @@ enum AppWindowShots {
         Shot(name: "reviews") { store in store.shownCategories.first { $0.name.contains("Review") }?.id.asCategory ?? .done },
         Shot(name: "ci") { store in store.shownCategories.first(where: \.isCI)?.id.asCategory ?? .done },
         Shot(name: "done") { _ in .done },
+        Shot(name: "computers", destination: { _ in .computers }, prepare: { store in
+            store.setTool(.computers, on: true)
+        }),
+        Shot(name: "computer-detail", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+        }),
+        Shot(name: "computers-quit-dialog", destination: { _ in .computers }, prepare: { store in
+            store.setTool(.computers, on: true)
+            if let prompt = ComputerQuitPrompt.make(inventory: MockEngineClient.demoInventory) {
+                store.computers.presentQuitPrompt(prompt)
+            }
+        }),
         Shot(name: "router") { _ in .router },
         Shot(name: "router-composing", destination: { _ in .router }, compose: { model, store in
             let folder = store.knownFolders.first { !$0.isEmpty } ?? "/Users/me/code/lookout"
@@ -446,6 +460,7 @@ enum AppWindowShots {
     private static func open(_ shot: Shot) -> NSWindow {
         let store = Store()
         Demo.populate(store, .router)
+        shot.prepare?(store)
         let navigator = AppNavigator(start: shot.destination(store), defaults: nil)
         let routerModel = RouterModel()
         shot.compose?(routerModel, store)
