@@ -1031,11 +1031,34 @@ extension WindowSeams {
             }
         }
 
+        /// The keeper runs only for a window shown, with the keyboard and in front, and stops as it resigns the keyboard,
+        /// whatever the morph's phase.
+        @Test func theKeeperRunsOnlyForAWindowInFrontWithTheKeyboard() throws {
+            try morphing { controller, _ in
+                _ = try #require(openForTheKeeper(controller))
+                AppTransition.isFront = { _ in false }
+                controller.keepPictureFresh()
+                #expect(controller.keeperTimer == nil)
+                AppTransition.isFront = { _ in true }
+                controller.keepPictureFresh()
+                #expect(controller.keeperTimer != nil)
+                controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+                #expect(controller.keeperTimer == nil)
+            }
+        }
+
         /// The idle keeper's timer goes with its controller: it does not wake every second for nothing once the window is gone.
         @Test func theKeeperStopsWithItsController() {
             morphing { _, _ in
                 var other: AppWindowController? = AppWindowController(store: Store(), remembers: false, checksClaudeCode: false)
+                AppTransition.enabled = false
+                other?.show(.done)
+                AppTransition.enabled = true
+                AppTransition.isKey = { _ in true }
+                AppTransition.isFront = { _ in true }
                 other?.keepPictureFresh()
+                let window = other?.window
+                defer { window?.close() }
                 guard let timer = other?.keeperTimer else { return #expect(Bool(false), "no keeper") }
                 #expect(timer.isValid)
                 other = nil

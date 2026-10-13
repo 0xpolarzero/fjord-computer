@@ -489,7 +489,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// cost over `idleCaptureBudget`, at most a twentieth of the main thread's time (`mayCaptureAtIdle`). Not short of
     /// memory.
     func keepPictureFresh() {
-        guard AppTransition.enabled else { return }
+        // Only for a window there to close: shown, with the keyboard, in front.
+        guard AppTransition.enabled, let window, window.isVisible, AppTransition.isKey(window), AppTransition.isFront(window)
+        else { return }
         keeping = true
         keeperPace = Self.keeperPaces.shortest
         scheduleKeeper(after: keeperPace)
@@ -1004,7 +1006,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
     /// Out of the keyboard: nothing to close from, so no picture to keep fresh, and no wakeups.
     func windowDidResignKey(_ notification: Notification) {
-        if phase == .idle { stopKeepingPicture() }
+        stopKeepingPicture()
     }
     func windowDidEnterFullScreen(_ notification: Notification) { readCorner() }
     func windowDidExitFullScreen(_ notification: Notification) {
