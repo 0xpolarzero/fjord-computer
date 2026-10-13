@@ -68,12 +68,17 @@ struct SettingsView: View {
         struct Known: Sendable { var launchAtLogin: Bool; var accessibility: Bool }
         private static var last: Known?
 
+        /// What was last read, never asked on the main thread: before the first answer is in, off and not granted (and the
+        /// system is asked, off it), which the page's own read on showing then corrects.
         static var known: Known {
             if let last { return last }
-            let now = Known(launchAtLogin: LaunchAtLogin.isEnabled, accessibility: AXIsProcessTrusted())
-            last = now
-            return now
+            if !asking {
+                asking = true
+                Task { _ = await read() }
+            }
+            return Known(launchAtLogin: false, accessibility: false)
         }
+        private static var asking = false
 
         /// The system asked, off the main thread.
         nonisolated static func ask() async -> Known {
