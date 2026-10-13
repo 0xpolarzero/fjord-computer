@@ -607,10 +607,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mouseButtons != 0 || !modifiers.intersection(Shortcut.relevant).isEmpty || barInteracting
     }
 
-    /// A busy user gets another chance at idle in 250 ms; the scheduler is replaceable so tests can step retries.
+    /// A busy user gets another chance in 250 ms, once the main run loop is idle again (`atIdle`); the scheduler is
+    /// replaceable so tests can step retries.
     static func prepareWhenIdle(interacting: @escaping () -> Bool, prepare: @escaping () -> Void,
                                 schedule: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, block in
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, qos: .utility) { MainActor.assumeIsolated { block() } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, qos: .utility) { MainActor.assumeIsolated { atIdle(block) } }
     }) {
         if interacting() {
             schedule(0.25) { prepareWhenIdle(interacting: interacting, prepare: prepare, schedule: schedule) }
