@@ -284,6 +284,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
+        // Work that can wait holds until the window has handed over (`finishOpening`), or a close that takes over ends.
+        MotionGate.began()
         generation += 1
         let mine = generation
         let current: AppTransition.Run?
@@ -403,6 +405,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         stopKeyWatch()
         run = nil
         phase = .idle
+        MotionGate.ended()
         // Used: the next close takes another.
         closedPicture = nil
         reportFront()
@@ -421,6 +424,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // An opening whose overlay has let go of its picture shows the real window already: it closes as an open one does.
         let interrupting = phase == .opening && run?.handedOver != true
         phase = .closing
+        // Held until the overlay is gone (`finishClosing`), or an opening that turns it round has handed over.
+        MotionGate.began()
         generation += 1
         let mine = generation
         pending = nil
@@ -473,6 +478,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         run?.end()
         run = nil
         phase = .idle
+        MotionGate.ended()
         window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false

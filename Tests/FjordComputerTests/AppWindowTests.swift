@@ -681,6 +681,8 @@ extension WindowSeams {
                 AppTransition.isMiniaturized = saved.4
                 AppTransition.flushInitial = saved.5
                 AppPolicy.update(windowOpen: policy == .regular)
+                // A morph the test left under way holds no other test's waiting work.
+                MotionGate.ended()
             }
             try body(window, ticks)
         }
@@ -835,6 +837,20 @@ extension WindowSeams {
                 #expect(!controller.keepsPicture && controller.content != nil)
                 ticks.runTurns()
                 #expect(controller.window?.contentViewController == nil && controller.content == nil)
+            }
+        }
+
+        /// Work that can wait holds from the morph's start (the opening's, then the close's that takes over) until it is over.
+        @Test func theMotionGateHoldsWhileTheWindowMorphs() {
+            morphing { controller, ticks in
+                controller.show(.settings)
+                #expect(MotionGate.moving)
+                ticks.turns.forEach { $0() }
+                ticks.turns = []
+                controller.close()
+                #expect(controller.phase == .closing && MotionGate.moving)
+                controller.run?.complete()
+                #expect(controller.phase == .idle && !MotionGate.moving)
             }
         }
 
