@@ -1167,6 +1167,24 @@ extension WindowSeams {
             }
         }
 
+        /// The handoff looks at the window again, whatever was checked before: a change since the last look (its appearing's,
+        /// a turn on) has it fade into the real window rather than cut to it.
+        @Test func theHandoffLooksAgainBeforeItCuts() {
+            morphing { controller, ticks in
+                AppTransition.isKey = { _ in true }
+                controller.show(.done)
+                ticks.runTurns()
+                guard let run = controller.run, let view = controller.window?.contentView else {
+                    return #expect(Bool(false), "no morph")
+                }
+                #expect(run.picture?.exact == true)
+                view.layer?.backgroundColor = NSColor.systemRed.cgColor
+                view.layer?.opacity = 0.5
+                run.complete()
+                #expect(run.fadesOut)
+            }
+        }
+
         /// A picture of the window's own scale that would not be in before the handoff is not taken: a softer one is, when it
         /// would be, and the handoff then fades from it rather than cutting to it.
         @Test func anOpeningTakesASofterPictureWhenOnlyThatFits() {

@@ -443,12 +443,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // The real window must be in before it takes over. No picture is taken now: it would hold the handoff up. The
             // overlay cuts to the real window when its picture is the window as drawn now, and fades into it otherwise.
             self.bringInPending(mine)
-            var exact = current.picture?.exact == true && current.glance != nil
-            if self.owed != nil {
-                self.owed = nil
-                self.stopKeyWatch()
-                exact = exact && AppTransition.glance(of: window)?.same(as: current.glance) == true
-            }
+            self.owed = nil
+            self.stopKeyWatch()
+            // Looked at again whatever was checked before (a few ms, within the handoff's two-refresh lead): what the
+            // window's appearing changed a turn after the last look must not pop as the overlay cuts away.
+            let exact = current.picture?.exact == true && current.glance != nil
+                && AppTransition.glance(of: window)?.same(as: current.glance) == true
             // Work that can wait goes once the real window shows (the overlay's shadow fades on the render server).
             current.handoff(fading: !exact, reveal: { self.reveal(window) }, handedOver: { self.handedOver(mine) },
                             finished: { self.finishOpening(mine) })
