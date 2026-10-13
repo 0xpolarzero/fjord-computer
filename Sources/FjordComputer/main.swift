@@ -3,6 +3,8 @@ import AppKit
 // Claude Code runs this binary as its form hook (see `FormHook`): no app, nothing on stdout but the hook's decision.
 if CommandLine.arguments.dropFirst().first == "--form-hook" { FormHook.main() }
 
+// The saved state is read and decoded in the background meanwhile: `Store.load` takes it.
+if !Store.isDemo { Store.readSavedStateEarly() }
 ClaudeFonts.load()
 Brand.loadFonts()
 // Text drawn as Claude's web view draws it (`-webkit-font-smoothing: antialiased`): no stem thickening. For this process

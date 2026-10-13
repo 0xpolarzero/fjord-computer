@@ -475,7 +475,7 @@ final class Store {
         return UnderTest.refuses("the saved state (Application Support/Fjord Computer/state.json)") ? nil : Self.fileURL
     }
 
-    private static let fileURL: URL = {
+    nonisolated private static let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Fjord Computer", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -755,9 +755,12 @@ final class Store {
         guard let file else { return }
         // Nothing read: nothing was fetched for any category.
         fetchedFor = .categories([], [])
+        // Read and decoded off the main thread at launch, when it was (`readSavedStateEarly`).
+        let early = Self.early.take(file)
         let data: Data
         do {
-            guard let read = try Self.readExisting(file) else { loadActions(); return }
+            let bytes = try early.map { try $0.data.get() } ?? Self.readExisting(file)
+            guard let read = bytes else { loadActions(); return }
             data = read
         } catch {
             // There but unreadable (its mode, say): not fresh state. Nothing is written over it until it can be read and
@@ -769,9 +772,7 @@ final class Store {
             loadActions(keepingAside: true)
             return
         }
-        let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
-        guard let state = try? dec.decode(PersistedState.self, from: data) else {
+        guard let state = early.map({ $0.state }) ?? Self.decodeState(data) else {
             keepAside(file, data, dropped: ["everything"])
             loadActions(keepingAside: true)
             return
@@ -808,6 +809,58 @@ final class Store {
         // Once the login, marks and actions' records are in: carried during the load, a cached rating or Done was lost.
         loading = false
         carryAssignmentStamps(seenBefore: things)
+    }
+
+    /// The saved state as decoded from what the file held; nil when it doesn't decode.
+    nonisolated static func decodeState(_ data: Data) -> PersistedState? {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return try? dec.decode(PersistedState.self, from: data)
+    }
+
+    /// The saved state as read (what `readExisting` gave, or its error) and decoded off the main thread.
+    struct SavedRead: @unchecked Sendable {
+        let file: URL
+        let data: Result<Data?, Error>
+        let state: PersistedState?
+    }
+
+    /// Starts reading and decoding the user's saved state on a background queue, at launch's first line (beside the fonts):
+    /// the first `load()` of that file takes it, waiting for it if it isn't done, rather than decoding half a megabyte of
+    /// JSON on the main thread. Nothing writes the file before that load.
+    nonisolated static func readSavedStateEarly(at file: URL? = nil) { early.start(file ?? fileURL) }
+    nonisolated private static let early = EarlyRead()
+
+    private final class EarlyRead: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: (file: URL, done: DispatchSemaphore)?
+        private var result: SavedRead?
+
+        func start(_ file: URL) {
+            let done = DispatchSemaphore(value: 0)
+            guard lock.withLock({ () -> Bool in
+                guard pending == nil else { return false }
+                pending = (file, done)
+                return true
+            }) else { return }
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                let data = Result { try Store.readExisting(file) }
+                let state = (try? data.get()).flatMap { $0 }.flatMap(Store.decodeState)
+                lock.withLock { result = SavedRead(file: file, data: data, state: state) }
+                done.signal()
+            }
+        }
+
+        /// Once: the early read of `file`, waited for; nil when none was begun for it.
+        func take(_ file: URL) -> SavedRead? {
+            guard let begun = lock.withLock({ () -> (file: URL, done: DispatchSemaphore)? in
+                guard let begun = pending, begun.file == file else { return nil }
+                pending = nil
+                return begun
+            }) else { return nil }
+            begun.done.wait()
+            return lock.withLock { defer { result = nil }; return result }
+        }
     }
 
     /// A file read only in part is copied aside (`state.json.bak-<date>`) before anything is written over it: what this
