@@ -320,7 +320,7 @@ final class Store {
     /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
     @ObservationIgnored private(set) var claudeSessionsRevision = 0
     /// Bumped on every change to what the window shows of Claude besides the inbox and the Router (the sessions, their
-    /// activity, the agents, the forms pending, a recent session ageing out): the window's kept picture is not forgiven
+    /// activity, task titles, the agents, the forms pending, a recent session ageing out): the window's kept picture is not forgiven
     /// a small difference across one (`AppTransition.Marks`). Unobserved.
     @ObservationIgnored private(set) var shownRevision = 0
     var claudeActivity: [String: ClaudeActivity] = [:] {
@@ -341,6 +341,7 @@ final class Store {
     /// Subagents and commands still running in sessions whose turn is over.
     var claudeTasks: [String: [ClaudeTask]] = [:] {
         didSet {
+            shownRevision &+= 1
             agentCache = nil
             refreshSessionRows(sessionRowsChanged(oldValue, claudeTasks))
             updateRouterTasks()

@@ -1042,6 +1042,29 @@ extension WindowSeams {
             }
         }
 
+        @Test func aChangedTaskTitleIsNotForgivenAsPictureNoise() throws {
+            try morphing { controller, _ in
+                controller.store.claudeTasks = ["session": [ClaudeTask(id: "task", kind: .agent, title: "Read logs", since: .now)]]
+                let bitmap = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
+                                                    space: CGColorSpaceCreateDeviceRGB(),
+                                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let pixels = [UInt8](repeating: 100, count: 20 * 20 * 4)
+                let before = AppTransition.Glance(width: 20, height: 20, pixels: pixels)
+                var changed = pixels
+                changed[0] = 200 // One pixel changed: within the close's noise tolerance.
+                let now = AppTransition.Glance(width: 20, height: 20, pixels: changed)
+                let picture = AppTransition.Picture(image: try #require(bitmap.makeImage()), frame: .zero, scale: 1,
+                                                    destination: .router, glance: before, marks: controller.marks)
+                @MainActor func freshness() -> AppTransition.Freshness {
+                    AppTransition.freshness(of: picture, glance: now, marks: controller.marks, destination: .router,
+                                            tolerance: AppTransition.Glance.closeTolerance)
+                }
+                #expect(freshness() == .cosmetic)
+                controller.store.claudeTasks["session"]?[0].title = "Fix the failure"
+                #expect(freshness() == .stale)
+            }
+        }
+
         /// The keeper runs only for a window shown, with the keyboard and in front, and stops as it resigns the keyboard,
         /// whatever the morph's phase.
         @Test func theKeeperRunsOnlyForAWindowInFrontWithTheKeyboard() throws {
