@@ -230,6 +230,29 @@ enum AppWindowShots {
         Shot(name: "router-canvas-arranged-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             arranged(model, store)
         }, appearance: .darkAqua),
+        // A frame's Done group of mixed lines (one unread, short and long words): their caret, age and Open in Claude in the
+        // same columns.
+        Shot(name: "router-canvas-done-lines", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            let closed = store.router.cards.filter { !$0.isOpen }
+            let folder = store.router.cards.first { $0.isOpen && $0.folder != nil }?.folder
+            store.router.cards += closed.enumerated().map { i, card in
+                var card = card
+                card.id += "#line\(i)"
+                card.sessionID += "#line\(i)"
+                card.folder = folder
+                if i == 0 { card.unread = true }
+                return card
+            }
+            model.pickCanvas()
+            if let folder { model.canvas.expandedMore.insert("\(folder)#done") }
+        }, appearance: .aqua),
+        // A message to a card off the view: flown to the edge, its marker there pointing the way.
+        Shot(name: "router-canvas-edge", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            edge(model, store)
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-edge-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            edge(model, store)
+        }, appearance: .darkAqua),
         // A search on the canvas: only the frames with a match.
         Shot(name: "router-canvas-search", destination: { _ in .router }, size: canvasSize, compose: { model, _ in
             model.pickCanvas()
@@ -276,15 +299,40 @@ enum AppWindowShots {
         }
     }
 
-    /// Every frame moved by hand, as a drag would leave them: in one staggered row, the frames opened.
+    /// Frames moved and resized by hand, as drags would leave them: one widened, one narrowed, one dropped over another
+    /// (the last moved on top), one far off on its own; Done's lines opened.
     private static func arranged(_ model: RouterModel, _ store: Store) {
         Demo.routerTriage(store)
         model.pickCanvas()
         let folders = model.canvasFolders(store, page: model.zones(store))
         for folder in folders where folder.doneOnly { model.canvas.folderFolds[folder.key] = false }
-        model.canvas.positions = Dictionary(uniqueKeysWithValues: folders.enumerated().map { i, folder in
-            (folder.key, CGPoint(x: CGFloat(i) * (CanvasMetrics.frameWidth + 96), y: i.isMultiple(of: 2) ? 0 : 160))
-        })
+        let spots: [CGPoint] = [CGPoint(x: 0, y: 0), CGPoint(x: 900, y: 40), CGPoint(x: 300, y: 330),
+                                CGPoint(x: 1500, y: 900), CGPoint(x: -200, y: 700)]
+        var positions: [String: CGPoint] = [:]
+        for (i, folder) in folders.enumerated() { positions[folder.key] = spots[i % spots.count] }
+        model.canvas.positions = positions
+        if folders.count > 1 {
+            model.canvas.sizes[folders[0].key] = CGSize(width: 820, height: 0)
+            model.canvas.sizes[folders[1].key] = CGSize(width: CanvasMetrics.minFrameWidth, height: 0)
+        }
+        if folders.count > 2 { model.canvas.stack = [folders[2].key] }
+    }
+
+    /// The demo's message going to a card off the view: it flies to the viewport's edge, towards it, where its marker is.
+    private static func edge(_ model: RouterModel, _ store: Store) {
+        flight(model, store)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            // The camera far right of the frames, so every card is off the view, to the left.
+            let bounds = model.canvas.contentBounds
+            model.canvas.camera.moved = true
+            model.canvas.camera.transform = CanvasTransform(origin: CGPoint(x: -bounds.maxX - 200, y: 120), scale: 1)
+            try? await Task.sleep(for: .milliseconds(500))
+            if let card = store.router.cards.first(where: { $0.kind == .plan && $0.isOpen }),
+               let rect = model.canvas.nodeRects[card.id] {
+                model.canvas.mark(rect, id: card.id, label: "You: run it on the lab box first")
+            }
+        }
     }
 
     /// The demo's message under way sent to its session a moment after the canvas is drawn, its flight held halfway; and
