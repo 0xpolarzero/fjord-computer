@@ -334,32 +334,52 @@ final class HotKeys {
 
 /// Whether Accessibility access is granted (`AXIsProcessTrusted`, a call to another process), as last asked: asked at the
 /// first read, then again off the main thread when `refresh`ed once two seconds old.
-private final class TrustCache: @unchecked Sendable {
+final class TrustCache: @unchecked Sendable {
     private let lock = NSLock()
     private var trusted = false
     private var at: TimeInterval?
     private var refreshing = false
+    /// Bumped by `forget` and by a read that asks itself: an answer asked for before it is dropped, so a background refresh
+    /// that heard "no" before access was granted can't land over a fresher "yes".
+    private var generation = 0
+    /// The system's answer, and where a refresh asks for it: replaceable, so a test can step them.
+    private let ask: @Sendable () -> Bool
+    private let inBackground: (@escaping @Sendable () -> Void) -> Void
+
+    init(ask: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
+         inBackground: @escaping (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }) {
+        self.ask = ask
+        self.inBackground = inBackground
+    }
 
     func value() -> Bool {
-        if let known = lock.withLock({ at == nil ? nil : trusted }) { return known }
-        let now = AXIsProcessTrusted()
+        let mine: Int? = lock.withLock {
+            guard at == nil else { return nil }
+            generation += 1
+            return generation
+        }
+        guard let mine else { return lock.withLock { trusted } }
+        let now = ask()
         lock.withLock {
+            guard generation == mine else { return }
             trusted = now
             at = ProcessInfo.processInfo.systemUptime
+            refreshing = false
         }
         return now
     }
 
     func refresh() {
-        let due = lock.withLock {
-            guard let at, !refreshing, ProcessInfo.processInfo.systemUptime - at >= 2 else { return false }
+        let mine: Int? = lock.withLock {
+            guard let at, !refreshing, ProcessInfo.processInfo.systemUptime - at >= 2 else { return nil }
             refreshing = true
-            return true
+            return generation
         }
-        guard due else { return }
-        DispatchQueue.global(qos: .userInitiated).async { [self] in
-            let now = AXIsProcessTrusted()
+        guard let mine else { return }
+        inBackground { [self] in
+            let now = ask()
             lock.withLock {
+                guard generation == mine else { return }
                 trusted = now
                 at = ProcessInfo.processInfo.systemUptime
                 refreshing = false
@@ -367,8 +387,17 @@ private final class TrustCache: @unchecked Sendable {
         }
     }
 
-    /// Asked again at the next read.
-    func forget() { lock.withLock { at = nil } }
+    /// Asked again at the next read; an answer still on its way is dropped.
+    func forget() {
+        lock.withLock {
+            generation += 1
+            at = nil
+            refreshing = false
+        }
+    }
+
+    /// Tests: as if the answer were `seconds` old.
+    func age(by seconds: TimeInterval) { lock.withLock { at = at.map { $0 - seconds } } }
 }
 
 /// The mouse-button shortcuts' event tap, on a thread and run loop of its own: the window server holds every side and
