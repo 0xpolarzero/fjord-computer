@@ -45,6 +45,29 @@ import Testing
         #expect(store.sessionRow("no such session") == nil)
     }
 
+    @Test func anotherSessionsEntryOrProjectColourLeavesARowAloneAndAGoneSessionsRowGoes() {
+        let store = Store()
+        Demo.populate(store, .router)
+        let id = store.claudeSessions.keys.sorted()[0]
+        let folder = store.claudeSessions[id]!.folderKey
+        let other = store.claudeSessions.values.first { s in s.id != id && s.folderKey != folder && store.agents.entries.contains { $0.id == s.id } }!
+        _ = store.sessionRow(id)
+        _ = store.sessionRow(other.id)
+        var notified = false
+        withObservationTracking { _ = store.sessionRow(id) } onChange: { notified = true }
+        let i = store.agents.entries.firstIndex { $0.id == other.id }!
+        store.agents.entries[i].label = "ZZ"
+        store.setProjectColor(other.folderKey, 5)
+        #expect(!notified)
+        #expect(store.sessionRow(other.id)?.label == "ZZ")
+        #expect(store.sessionRow(other.id) == store.row(store.claudeSessions[other.id]!))
+        // Gone, and no card names it: its row is let go of.
+        store.router.cards.removeAll { $0.sessionID == other.id }
+        store.claudeSessions[other.id] = nil
+        #expect(store.sessionRowBoxes[other.id] == nil)
+        #expect(store.sessionRow(id) == store.row(store.claudeSessions[id]!))
+    }
+
     @Test func aCardsExcerptIsParsedOncePerText() {
         let text = "Should I **push** to `main`?"
         #expect(CardView.inline(text) == RouterText.inline(text))

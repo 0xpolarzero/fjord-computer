@@ -228,7 +228,11 @@ extension Store {
     /// only when what it shows changed (`refreshSessionRows`): a view that draws one session's glyph redraws for that
     /// session alone, not for every change to every session's activity.
     func sessionRow(_ id: String) -> AgentRow? {
-        if let box = sessionRowBoxes[id] { return box.row }
+        if let box = sessionRowBoxes[id] {
+            // Changed in a read still being taken in: made now, for whoever asks meanwhile.
+            if sessionRowsPending?.remove(id) != nil, case let row = makeSessionRow(id), row != box.row { box.row = row }
+            return box.row
+        }
         let box = SessionRowBox(makeSessionRow(id))
         sessionRowBoxes[id] = box
         return box.row

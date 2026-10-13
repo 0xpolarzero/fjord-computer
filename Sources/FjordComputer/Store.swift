@@ -230,7 +230,7 @@ final class Store {
             persistedRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
-            if oldValue.entries != agents.entries || oldValue.folderColors != agents.folderColors { refreshSessionRows() }
+            refreshSessionRows(sessionRowsChanged(from: oldValue))
         }
     }
     /// The Router (see Router.swift): its cards, its decision log and the changes it made.
@@ -279,13 +279,15 @@ final class Store {
         // The history is searched by its cards' project names too.
         didSet {
             routerSearchRevision &+= 1
-            refreshSessionRows()
+            refreshSessionRows(sessionRowsChanged(names: oldValue))
         }
     }
     /// Names of folders no session is in, worked out among `namedFoldersSeen` (`folderName`); cleared when that changes.
     @ObservationIgnored var folderNameMisses: [String: String] = [:]
     /// Each session's row as `sessionRow` gives it, in a box of its own (see `refreshSessionRows`).
     @ObservationIgnored var sessionRowBoxes: [String: SessionRowBox] = [:]
+    /// The rows to make again once a read of Claude is taken in (`batchingSessionRows`); nil outside one.
+    @ObservationIgnored var sessionRowsPending: Set<String>?
     /// The agents' entries by session, made when a row is and dropped with every change to `agents`.
     @ObservationIgnored var agentEntryIndex: [String: AgentEntry]?
     /// The folders `folderNames` was worked out for: the work is skipped while they are the same.
@@ -298,6 +300,7 @@ final class Store {
             agentCache = nil
             refreshFolderNames()
             refreshSessionRows(sessionRowsChanged(oldValue, claudeSessions))
+            pruneSessionRows()
         }
     }
     /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
