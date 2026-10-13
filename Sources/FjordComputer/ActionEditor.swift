@@ -213,6 +213,7 @@ struct ActionPromptField: View {
     @State private var editor = EditorBox()
     @State private var focused = false
     @State private var focusTick = 0
+    @State private var pendingWrite: Task<Void, Never>?
 
     /// The text view, once it has told where its caret is (a pick puts the caret after it).
     final class EditorBox {
@@ -252,8 +253,12 @@ struct ActionPromptField: View {
         }
         .onAppear { Self.load(prompt, into: model) }
         .onChange(of: prompt) { _, now in Self.load(now, into: model) }
-        .onChange(of: model.draft) { write() }
+        // Typing is written to the category once it pauses (each write is a change of the categories: saved, logged, a step
+        // of the page's history, the bar redrawn); a pill picked, the field left or gone, at once.
+        .onChange(of: model.draft) { writeSoon() }
         .onChange(of: model.pointers) { write() }
+        .onChange(of: focused) { _, now in if !now { write() } }
+        .onDisappear { write() }
         .onChange(of: model.caretRequest) { _, request in
             guard let request else { return }
             model.caretRequest = nil
@@ -267,8 +272,20 @@ struct ActionPromptField: View {
     }
 
     private func write() {
+        pendingWrite?.cancel()
+        pendingWrite = nil
         let now = Self.prompt(of: model)
         if now != prompt { prompt = now }
+    }
+
+    /// `write`, once typing has paused for `pause`.
+    private func writeSoon() {
+        pendingWrite?.cancel()
+        pendingWrite = Task {
+            try? await Task.sleep(for: TypingPause.pause)
+            guard !Task.isCancelled else { return }
+            write()
+        }
     }
 
     /// The keys while @ suggestions show: ↑↓ walk them, Return or Tab picks, Esc dismisses. Otherwise the text view's own.

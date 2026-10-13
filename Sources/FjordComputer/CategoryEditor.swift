@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// How long typing in a category's fields (its name, an action's prompt) pauses before what was typed is written to the
+/// store.
+enum TypingPause {
+    static let pause: Duration = .milliseconds(250)
+}
+
 private let body14 = CDS.Density.comfortable.body
 private let foot12: (CGFloat, CGFloat) = (12, 16)
 
@@ -23,6 +29,11 @@ struct CategoryEditor: View {
     @State private var pickingIcon = false
     @State private var confirmingDelete = false
     @FocusState private var nameFocused: Bool
+    /// A category's name as typed, until it is written to the store (`commitName`): once typing pauses, on Return, or when
+    /// the field is left. Each write is a change of the categories (saved, logged, a step of the page's history, the bar
+    /// and the list redrawn), so not one per keystroke. A new category's draft takes each keystroke: it isn't in the store.
+    @State private var typedName: String?
+    @State private var nameWrite: Task<Void, Never>?
 
     init(store: Store, editing: CategoryEditing, history: CategoryHistory, draft: Binding<InboxCategory>? = nil,
          create: @escaping () -> Void = {}, firstRuleNotice: String? = nil, close: @escaping () -> Void) {
@@ -78,6 +89,28 @@ struct CategoryEditor: View {
         }
         .task(id: c.name) { await pickIcon() }
         .onAppear { if isNew { nameFocused = true } }
+    }
+
+    private func nameField(_ c: InboxCategory) -> Binding<String> {
+        guard !isNew else { return draft.name }
+        return Binding(get: { typedName ?? c.name }, set: { name in
+            typedName = name
+            nameWrite?.cancel()
+            nameWrite = Task {
+                try? await Task.sleep(for: TypingPause.pause)
+                guard !Task.isCancelled else { return }
+                commitName()
+            }
+        })
+    }
+
+    /// The name typed, written to the store (if it is still there and the name changed).
+    private func commitName() {
+        nameWrite?.cancel()
+        nameWrite = nil
+        guard let name = typedName else { return }
+        typedName = nil
+        if draft.wrappedValue.name != name { draft.wrappedValue.name = name }
     }
 
     // MARK: Header
@@ -139,10 +172,15 @@ struct CategoryEditor: View {
                             pickingIcon = false
                         }
                     }
-                TextField("", text: draft.name)
-                    .cdsPlaceholder("Name, like Reviews or Mine", shown: c.name.isEmpty)
+                TextField("", text: nameField(c))
+                    .cdsPlaceholder("Name, like Reviews or Mine", shown: (typedName ?? c.name).isEmpty)
                     .focused($nameFocused)
-                    .onSubmit { if isNew, canCreate { create() } }
+                    .onSubmit {
+                        commitName()
+                        if isNew, canCreate { create() }
+                    }
+                    .onChange(of: nameFocused) { _, now in if !now { commitName() } }
+                    .onDisappear { commitName() }
                     .cdsField(focused: nameFocused)
                     .accessibilityLabel("Category name")
             }
