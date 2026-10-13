@@ -161,7 +161,7 @@ enum AppTransition {
     /// within its budget. What it costs depends on what the page shows far more than on its size (65 ms on a light page,
     /// 160 to 520 on a heavy one at the same size), so each page is its own; a scale never drawn on that page is worked
     /// out from the others drawn there (a glance is always drawn before a picture), and with none from a cost per pixel
-    /// as high as heavy content has shown. An estimate is the most of the last few drawn there in the last minute (a slow
+    /// as high as heavy content has shown. An estimate is the most drawn there in the last minute (a slow
     /// one counts until it is a minute old, then no longer holds the page back), and a full picture's is never under the
     /// latest soft one's times their pixels.
     struct CaptureCosts {
@@ -185,8 +185,7 @@ enum AppTransition {
             }
         }
 
-        /// How many of the last costs are kept at each key, for how long, and how many keys at most.
-        static let kept = 5
+        /// How long costs count, and how many keys are kept at most.
         static let life: TimeInterval = 60
         static let keys = 24
         /// Seconds per pixel with nothing measured yet: 520 ms over 1617 × 1188 pt at 2x.
@@ -200,8 +199,10 @@ enum AppTransition {
         mutating func record(_ cost: CFTimeInterval, size: NSSize, pixelScale: CGFloat, page: String,
                              at now: CFTimeInterval = CACurrentMediaTime()) {
             let key = Key(size: size, pixelScale: pixelScale, page: page)
+            // An older cost no higher than this one will never be the window's maximum again: this one expires later.
+            // Keep the decreasing costs that can still become the maximum, for the whole minute rather than five draws.
+            recent[key, default: []].removeAll { now - $0.at >= Self.life || $0.cost <= cost }
             recent[key, default: []].append((cost, now))
-            if recent[key, default: []].count > Self.kept { recent[key]?.removeFirst() }
             if recent.count > Self.keys,
                let stalest = recent.min(by: { ($0.value.last?.at ?? 0) < ($1.value.last?.at ?? 0) })?.key {
                 recent[stalest] = nil

@@ -75,7 +75,18 @@ import Testing
         }
     }
 
-    /// A capture's cost is the longest of the last few on that page at that size and scale, so one slow capture keeps the
+    @Test func aSlowCaptureCountsForAMinuteRegardlessOfHowManyFollow() {
+        var costs = AppTransition.CaptureCosts()
+        let size = NSSize(width: 1000, height: 500)
+        costs.record(0.52, size: size, pixelScale: 1, page: "router", at: 0)
+        for at in 1...10 {
+            costs.record(0.01, size: size, pixelScale: 1, page: "router", at: Double(at))
+        }
+        #expect(costs.estimate(size: size, pixelScale: 1, page: "router", at: 59.999) == 0.52)
+        #expect(costs.estimate(size: size, pixelScale: 1, page: "router", at: 60) == 0.01)
+    }
+
+    /// A capture's cost is the longest in the last minute on that page at that size and scale, so one slow capture keeps the
     /// next from being let in on a mean, until it is a minute old; another page is its own (a heavy one at the same size
     /// is not let in on a light one's costs); a scale never drawn there is guessed from those drawn (a glance) and with
     /// none from a pessimistic prior; a full picture is never guessed under the latest soft one times its pixels.
