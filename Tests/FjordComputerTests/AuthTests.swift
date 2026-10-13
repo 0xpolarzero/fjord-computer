@@ -183,6 +183,20 @@ final class StubAuthGitHub: URLProtocol, @unchecked Sendable {
         while s.isSyncing { await Task.yield() }
     }
 
+    @Test func aPeekSyncsNothingAtOnceAndTheWindowThenSyncsAStaleInbox() async {
+        let s = store()
+        let stale = Date(timeIntervalSinceNow: -120)
+        s.lastSync = stale
+        // The bar hovered: its rows aren't reshuffled under the pointer by a sync it started.
+        s.setHubOpen(true, window: false)
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(!s.isSyncing && s.lastSync == stale)
+        // The window opened from it: the stale inbox is synced.
+        s.setHubOpen(true, window: true)
+        for _ in 0..<200 where s.lastSync == stale { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(s.lastSync != stale)
+    }
+
     @Test func aTokenHeldIsNotLookedForAgainWhenTheAppComesBack() async {
         let s = store()
         s.me = nil

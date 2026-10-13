@@ -338,6 +338,8 @@ final class Store {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var hubOpen = false
+    /// The hub is open as the app window, not only a peek (`setHubOpen`).
+    @ObservationIgnored private var hubWindowOpen = false
     @ObservationIgnored private var systemAsleep = false
     @ObservationIgnored private var pollNow = false
     /// Where the token comes from; replaced in tests (the real one can spawn `gh`).
@@ -667,13 +669,16 @@ final class Store {
         if isSyncing { refreshQueued = true } else { Task { await pollAll() } }
     }
 
-    /// The hub being open means someone is looking: sync now if stale, and poll faster meanwhile. The sleeper isn't woken
-    /// for it: the interval it is in now is taken at its next wake, so opening the window starts no poll's work under its
-    /// morph unless the inbox is stale.
-    func setHubOpen(_ open: Bool) {
-        guard open != hubOpen else { return }
+    /// The hub being open means someone is looking: poll faster meanwhile, and, once the window is open (`window`), sync now
+    /// if stale. A peek (the bar hovered, `window` false) syncs nothing at once: its rows would shuffle under the pointer
+    /// when the answer came. The sleeper isn't woken for it: the interval it is in now is taken at its next wake, so opening
+    /// the window starts no poll's work under its morph unless the inbox is stale.
+    func setHubOpen(_ open: Bool, window: Bool = true) {
+        let windowWas = hubWindowOpen
+        hubWindowOpen = open && window
+        guard open != hubOpen || hubWindowOpen != windowWas else { return }
         hubOpen = open
-        guard open, !isSyncing else { return }
+        guard hubWindowOpen, !windowWas, !isSyncing else { return }
         // Signed out for want of a token, `gh auth login` may have been run since: look again, however recent the last poll.
         if awaitsToken || Date().timeIntervalSince(lastSync ?? .distantPast) > 60 { refreshNow() }
     }
