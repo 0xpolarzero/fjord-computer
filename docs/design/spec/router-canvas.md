@@ -2,7 +2,7 @@
 
 The Router gets a second way to show Now: a canvas. It keeps the approved prototype's layout and UX (`docs/design/router-viz/demo/canvas2.html` and `canvas2-spec.md`): an infinite pan/zoom ground, each project folder a frame, state groups joined to their cards by curved lines, cards opening in place, filter chips, done-only folders folding, and messages that wait above the composer and then fly to their card. What goes inside comes from the app: its real cards and sessions, components, wording, actions and polish. Where they conflict, the graph keeps its shape and the app keeps its content.
 
-**The canvas is an opt-in beta, an alternate view to try; the list is untouched.** It is off by default: Settings › Claude › **Canvas view (beta)** ("Try the Router as a canvas: each project a frame, its sessions grouped by state") turns it on, kept in the window's preferences under `routerCanvasBeta`. Only then does the top bar show the List / Canvas switch, with a Beta tag; turning it on (or off) leaves Now as the list until you pick Canvas. Off, `RouterModel.layout` is `.list` whatever was stored. The list draws and behaves exactly as before the canvas: every shared view (`CardView`, `WaitingCard`, `WorkingCard`, `WorkingSummary`, `HistoryCardLine`) keeps its list output by default and changes only on a canvas node (`canvasNodeID` set, or `standalone`/`showsProject: false`/`open` passed by the canvas); `PaneSwitch` and `NowColumn` are as they were, and the canvas's own column, switch and Beta tag live in `RouterCanvasBeta.swift`. The list shots render the same pixels as before the canvas (but for the busy line's dots, which animate).
+**The canvas is a beta, an alternate view to try; the list is the default and untouched.** The Router's top bar always shows the List / Canvas switch, a Beta tag beside it and Canvas's tip starting "Beta:". A fresh install shows the list; your pick is kept under `routerLayout`. The list draws and behaves exactly as before the canvas: every shared view (`CardView`, `WaitingCard`, `WorkingCard`, `WorkingSummary`, `HistoryCardLine`) keeps its list output by default and changes only on a canvas node (`canvasNodeID` set, or `standalone`/`showsProject: false`/`open` passed by the canvas); `PaneSwitch` and `NowColumn` are as they were, and the canvas's own column, switch and Beta tag live in `RouterCanvasBeta.swift`. The list shots render the same pixels as before the canvas, but for the switch in the top bar and the busy line's dots, which animate.
 
 Another session has uncommitted Router work in the main checkout, so this branch moves no code between files: types the canvas reuses lose `private` where they are, and nothing else about them changes unless stated.
 
@@ -22,9 +22,8 @@ Another session has uncommitted Router work in the main checkout, so this branch
 ## 1. Switch and persistence
 
 - `enum RouterLayout: String { case list, canvas }` in `RouterZones.swift`, beside `RouterPane`, with `static let key = "routerLayout"`.
-- `RouterModel.canvasBeta: Bool` (`RouterLayout.betaKey = "routerCanvasBeta"`, off by default), set from Settings' Claude section (`SettingsView.canvasBeta`, given the window's `RouterModel`). Changing it resets the pick to the list.
-- `RouterModel.layout: RouterLayout`: the pick (written to `defaults` under `routerLayout`, as `folded` is) while the beta is on, else `.list`. `init(defaults:)` reads both; shots and tests get the list unless they call `pickCanvas()` (beta on, Canvas picked).
-- `RouterLayoutSwitch` goes in `RouterMain.topBar` (`RouterCode.swift`), between the Spacer and `InboxSearchField`, only while the beta is on.
+- `RouterModel.layout: RouterLayout`, `.list` by default. Its `didSet` writes `defaults` under `routerLayout`, as `folded` is written. `init(defaults:)` reads it; shots and tests get the list unless they call `pickCanvas()`.
+- `RouterLayoutSwitch` goes in `RouterMain.topBar` (`RouterCode.swift`), between the Spacer and `InboxSearchField`, always.
   - Two icon segments: `list.bullet` ("List") and `square.on.square.dashed` ("Canvas", its tip starting "Beta:"), each with `.tip`, then a `BetaTag` (the app's Badge, xs, accent tint).
   - It draws `PaneSwitch`'s pill itself (`RouterCanvasBeta.swift`); `PaneSwitch` stays as it is.
 - `RouterPageView` picks Now's column: `CanvasNowColumn` (the canvas under the same bar, with the canvas's chips) when `model.layout == .canvas`, else the list's `NowColumn`, unchanged.
@@ -160,7 +159,7 @@ enum CanvasMetrics { /* the constants below */
 
 | Shot | Setup |
 |---|---|
-| `router-canvas` | `pickCanvas()` (the beta on, Canvas picked; every canvas shot starts so) |
+| `router-canvas` | `pickCanvas()` (every canvas shot starts so) |
 | `router-canvas-dark` | dark |
 | `router-canvas-card420` | a Needs-you card with KindTag, TriageChips, approval tint, "n of N left" (§4 check) |
 | `router-canvas-open-needs` | the question card (lcu) open |
@@ -190,7 +189,7 @@ ls /tmp/router-canvas   # then Read /tmp/router-canvas/window-router-canvas*.png
 **Tests**, one suite per run (`swift test --filter <Suite>`):
 - `RouterCanvasLayoutTests` (new, pure): grouping by folder and Scratch; muted dropped; a session in Needs you and Working has both nodes, ids `card.id` and `working#…`; Done newest per session from searched history (Unread filter ignored), 3 then +n, picked kept; Worth a look 3 then +n, widened for a pick; busiest first; column choice by closed heights; an open height pushes only its column; connector endpoints; filtered groups hidden in place, search-emptied frames hide; folded folders header-tall; `order`; `target(forReveal:)`; camera `zoom(by:at:)`, `fit` clamps to 1.0, `origin(toShow:)`.
 - `RouterFlightsTests` (new, pure): a sent session, a new session (folder target), a Router-only reply (nil), a non-`.you` trigger (none), a cancel (none).
-- `RouterCanvasTests` (new, `.hostsWindows`): mounts `RouterCodeView` with `.canvas`; the beta off forces the list and a pick reads the list until Canvas is picked; the switch writes `routerLayout` and a new model reads it; ↑↓ follow `earlier` then canvas order; the Esc chain folds, then clears the filter; Esc with nothing open never enters revise.
+- `RouterCanvasTests` (new, `.hostsWindows`): mounts `RouterCodeView` with `.canvas`; the list by default; the switch writes `routerLayout` and a new model reads it; ↑↓ follow `earlier` then canvas order; the Esc chain folds, then clears the filter; Esc with nothing open never enters revise.
 - Rerun: `RouterMotionTests`, `AccessibilityTreeTests`, `RouterUITests`, `RouterZonesTests`, `RouterLayoutTests`, `RouterCardRedrawTests`.
 
 ## 9. Build order (three stages, each one commit, gated on build, its tests and its shots)
