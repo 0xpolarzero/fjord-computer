@@ -79,3 +79,16 @@ import Testing
         #expect(ClaudeFonts.cached(in: readOnly, stamp: "s2") == nil)
     }
 }
+
+/// Claude's spark is made off the main thread and published once made.
+@MainActor @Suite struct ClaudeMarkWarming {
+    @Test func theSparkIsPublishedOnceMadeOffTheMainThread() async {
+        ClaudeMark.warm()
+        for _ in 0..<400 where !ClaudeMark.state.done { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(ClaudeMark.state.done)
+        #expect((ClaudeMark.state.image == nil) == (ClaudeMark.image == nil))
+        // Asked again: nothing more is made.
+        ClaudeMark.warm()
+        #expect(ClaudeMark.state.done)
+    }
+}

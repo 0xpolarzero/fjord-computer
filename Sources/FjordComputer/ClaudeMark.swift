@@ -10,9 +10,33 @@ enum ClaudeMark {
     /// thread (one drawn before it is done waits for it, rather than making it again).
     static let image: NSImage? = sparkMask() ?? trayIcon()
 
-    /// Makes `image` in the background.
-    static func warm() {
-        DispatchQueue.global(qos: .utility).async { _ = image }
+    /// What the glyphs draw: the spark once `image` is made, published on the main thread, so a glyph drawn before then
+    /// shows nothing in its place rather than waiting on the main thread for it.
+    @MainActor static let state = Loaded()
+
+    @Observable @MainActor
+    final class Loaded {
+        /// `image` is made (nil there: no Claude app, the asterisk stands in).
+        private(set) var done = false
+        private(set) var image: NSImage?
+        @ObservationIgnored fileprivate var started = false
+
+        fileprivate func set(_ image: NSImage?) {
+            self.image = image
+            done = true
+        }
+    }
+
+    /// Makes `image` in the background, once, and publishes it (`state`).
+    @MainActor static func warm() {
+        guard !state.started else { return }
+        state.started = true
+        // Demo and snapshot runs draw it at once, as they are shot.
+        if Store.isDemo { return state.set(image) }
+        DispatchQueue.global(qos: .utility).async {
+            let made = image
+            DispatchQueue.main.async { MainActor.assumeIsolated { state.set(made) } }
+        }
     }
 
     /// What `ClaudeButton` and the icon buttons take, in place of a symbol's name, for Open in Claude.
@@ -80,8 +104,12 @@ struct OpenInClaudeGlyph: View {
     var size: CGFloat = 13
 
     var body: some View {
+        let mark = ClaudeMark.state
         Group {
-            if let image = ClaudeMark.image {
+            if !mark.done {
+                // Still being made off the main thread: its place, kept.
+                Color.clear.onAppear { ClaudeMark.warm() }
+            } else if let image = mark.image {
                 Image(nsImage: image).renderingMode(.template).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
             } else {
                 Image(systemName: "asterisk").resizable().fontWeight(.bold).aspectRatio(contentMode: .fit)
