@@ -758,6 +758,27 @@ struct ClaudeSnapshot {
     var stamp = ClaudeStamp()
 }
 
+extension ClaudeSnapshot {
+    /// This read with a later one folded in, as taking both in turn would leave things: what the later one read replaces
+    /// what this one did (the sessions with their link, dots and front app; the activity; the tasks), and what it didn't read
+    /// is kept. Nil when they can't be one: asked for under another stamp, or the later one a read that failed (no sessions,
+    /// the app gone or unreadable), which is taken on its own.
+    func merging(_ later: ClaudeSnapshot) -> ClaudeSnapshot? {
+        guard later.stamp == stamp, later.sessions != nil || later.link == nil else { return nil }
+        var merged = self
+        if let sessions = later.sessions {
+            merged.link = later.link
+            merged.sessions = sessions
+            merged.appUnread = later.appUnread ?? appUnread
+            merged.frontmost = later.frontmost
+        }
+        if let activity = later.activity { merged.activity = activity }
+        if let tasks = later.tasks { merged.tasks = tasks }
+        if let inventory = later.taskInventory { merged.taskInventory = inventory }
+        return merged
+    }
+}
+
 /// `generation` changes when the extension is switched; `revision` when you change something about an agent.
 struct ClaudeStamp: Equatable {
     var generation = 0
@@ -812,11 +833,33 @@ final class ClaudeFeed: @unchecked Sendable {
                 var snapshot = unread ? readUnread() : read(full: full)
                 snapshot.stamp = stamp
                 guard let apply else { continue }
-                // Taken in once the window's morph has played (`MotionGate`): a read that lands mid-motion waits for it.
-                DispatchQueue.main.async { MainActor.assumeIsolated { MotionGate.whenStill { apply(snapshot) } } }
+                DispatchQueue.main.async { MainActor.assumeIsolated { self.deliver(snapshot, apply) } }
             }
         }
     }
+
+    /// Reads that came while the window's morph played (`MotionGate`), on the main thread: one, the reads after it folded in
+    /// (`ClaudeSnapshot.merging`), taken in once the motion is over, rather than each read taken in a turn at a time just as
+    /// the window wants its frames.
+    private var held: [ClaudeSnapshot] = []
+    private var heldApply: (@MainActor (ClaudeSnapshot) -> Void)?
+
+    @MainActor func deliver(_ snapshot: ClaudeSnapshot, _ apply: @escaping @MainActor (ClaudeSnapshot) -> Void,
+                            gate: MotionGate.Gate = MotionGate.shared) {
+        guard gate.holding || !held.isEmpty else { return apply(snapshot) }
+        heldApply = apply
+        if let last = held.last, let merged = last.merging(snapshot) { held[held.count - 1] = merged } else { held.append(snapshot) }
+        guard !heldWaiting else { return }
+        heldWaiting = true
+        gate.whenStill { [self] in
+            heldWaiting = false
+            let reads = held, apply = heldApply
+            held = []
+            heldApply = nil
+            for read in reads { apply?(read) }
+        }
+    }
+    private var heldWaiting = false
 
     /// Whether a changed transcript path belongs to a session that is working or has background tasks.
     func isRelevant(_ paths: [String]) -> Bool {
