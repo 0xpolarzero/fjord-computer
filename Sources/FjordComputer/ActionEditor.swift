@@ -42,6 +42,16 @@ struct ActionsEditor: View {
                        set: { new in Self.replace(new, in: &actions.items) })
     }
 
+    /// An action's prompt, read from the action as it is when asked (not as it was when the row was drawn: the field holds
+    /// its write for as long as it is on screen, `PendingEdits`, and compares what it holds with this), `fallback` once the
+    /// action sends no prompt.
+    static func prompt(of action: Binding<CategoryAction>, else fallback: ActionPrompt) -> Binding<ActionPrompt> {
+        Binding(get: {
+            if case .askRouter(let prompt) = action.wrappedValue.kind { return prompt }
+            return fallback
+        }, set: { action.wrappedValue.kind = .askRouter(prompt: $0) })
+    }
+
     /// `action` in place of the one with its id; nothing when that one is gone.
     static func replace(_ action: CategoryAction, in items: inout [CategoryAction]) {
         guard let i = items.firstIndex(where: { $0.id == action.id }) else { return }
@@ -96,7 +106,7 @@ private struct ActionRow: View {
             }
             switch action.kind {
             case .askRouter(let prompt):
-                ActionPromptField(prompt: Binding(get: { prompt }, set: { action.kind = .askRouter(prompt: $0) }), store: store)
+                ActionPromptField(prompt: ActionsEditor.prompt(of: $action, else: prompt), store: store)
                     .tip("Prompt", "Sent to the Router as yours, from this category, with the thing tagged: @this notification says where it goes in your words (else it is added at the end). The Router sends it to a session working in a local clone of the repo, or starts one there; if it isn't sure where, it asks you and waits. Its title, link, why it is here and the last comment go with it in a block marked as written by others, so nothing others wrote reads as your words. @ also inserts a snippet, or tags a project, a session or a category.")
                 HStack(spacing: 8) {
                     MenuChip(title: "Model: " + (action.model?.capitalized ?? "Default"), label: "Model") {

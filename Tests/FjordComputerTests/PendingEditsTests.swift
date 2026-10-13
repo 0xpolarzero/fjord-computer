@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import FjordComputer
 
@@ -63,6 +64,30 @@ struct PendingEditsUndoTests {
         #expect(history.canRedo)
         history.redo(store)
         #expect(store.categories[0].name == "Typed")
+    }
+}
+
+@MainActor
+struct PromptBindingTests {
+    /// The field's write, held from its appearing, compares what it holds with the prompt as stored now: saved as B, then A
+    /// typed again, a quit writes A rather than finding it equal to the A the row was drawn with.
+    @Test func aPromptIsReadAsItIsStoredWhenAsked() {
+        let a = ActionPrompt(text: "A"), b = ActionPrompt(text: "B")
+        var stored = CategoryAction(kind: .askRouter(prompt: a))
+        let action = Binding(get: { stored }, set: { stored = $0 })
+        let prompt = ActionsEditor.prompt(of: action, else: a)
+        prompt.wrappedValue = b
+        #expect(prompt.wrappedValue == b, "the binding made when the row showed A reads B now")
+        // What the held write does: what the field holds (A again), against what is stored (B): written.
+        let typed = a
+        if typed != prompt.wrappedValue { prompt.wrappedValue = typed }
+        #expect(ActionsEditor.prompt(of: action, else: b).wrappedValue == a)
+        // Already stored: nothing written.
+        var writes = 0
+        let counted = Binding(get: { stored }, set: { stored = $0; writes += 1 })
+        let again = ActionsEditor.prompt(of: counted, else: b)
+        if typed != again.wrappedValue { again.wrappedValue = typed }
+        #expect(writes == 0)
     }
 }
 
