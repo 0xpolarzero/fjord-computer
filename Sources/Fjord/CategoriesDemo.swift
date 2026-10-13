@@ -184,7 +184,7 @@ enum CategoriesDemo {
             preview.editing = .existing(switched)
         case .kinds:
             // One rule for PRs and issues alike, in an org and the repos you own; an issue fetched there counts in its preview.
-            store.ownedRepos = ["0xpolarzero/lookout"]
+            store.ownedRepos = ["0xpolarzero/fjord"]
             var issue = Thing(id: "issue:superradcompany/microsandbox#77", kind: .issue, repo: "superradcompany/microsandbox", number: 77,
                               title: "Sandboxes leak on SIGTERM", url: URL(string: "https://github.com/superradcompany/microsandbox/issues/77")!,
                               author: Person(login: "appcypher"), createdAt: Date().addingTimeInterval(-86400), updatedAt: Date())
