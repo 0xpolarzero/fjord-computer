@@ -176,11 +176,39 @@ extension Store {
         return page.needs + page.ready + page.notes + page.waiting
     }
 
-    /// The page's zones alone: what the live part of the page redraws on, without the history.
+    /// The page's zones alone: what the live part of the page redraws on, without the history. Read by Now's column, the
+    /// keys, the bar's panel and the pick on every redraw and press: worked out again only when what it is made of changed
+    /// (`RouterMemo`). Its reads are those of the work, so a view reading it still redraws on any of them.
     var routerZones: RouterPage {
-        .make(cards: router.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: [],
-              summaries: router.summaries, tasks: routerTasks)
+        let inputs = RouterMemo.ZoneInputs(cards: router.cards, rows: allAgentRows, asks: routerDispatcher.askBacks,
+                                           summaries: router.summaries, tasks: routerTasks)
+        if let memo = RouterMemo.zones, memo.inputs == inputs { return memo.page }
+        let page = RouterPage.make(cards: inputs.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: [],
+                                   summaries: inputs.summaries, tasks: inputs.tasks)
+        RouterMemo.zones = (inputs, page)
+        return page
     }
+}
+
+/// The Router's derived lists, kept with what they were worked out from: a read that finds the same inputs (most often the
+/// very same arrays, compared by their storage at once) gets the last answer. One slot each, whatever store asks (the
+/// answer is a function of the inputs alone), so a test's stores only miss.
+@MainActor
+enum RouterMemo {
+    struct ZoneInputs: Equatable {
+        var cards: [RouterCard]
+        var rows: [AgentRow]
+        var asks: [RouterAskBack]
+        var summaries: [RouterSummary]
+        var tasks: [String: [ClaudeTask]]
+    }
+    static var zones: (inputs: ZoneInputs, page: RouterPage)?
+
+    struct CountInputs: Equatable {
+        var cards: [RouterCard]
+        var tasks: [String: [ClaudeTask]]
+    }
+    static var counts: (inputs: CountInputs, counts: (needsYou: Int, notes: Int))?
 }
 
 // MARK: - Page
