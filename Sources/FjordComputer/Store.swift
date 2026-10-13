@@ -642,11 +642,12 @@ final class Store {
         if isSyncing { refreshQueued = true } else { Task { await pollAll() } }
     }
 
-    /// The hub being open means someone is looking: sync now if stale, and poll faster meanwhile.
+    /// The hub being open means someone is looking: sync now if stale, and poll faster meanwhile. The sleeper isn't woken
+    /// for it: the interval it is in now is taken at its next wake, so opening the window starts no poll's work under its
+    /// morph unless the inbox is stale.
     func setHubOpen(_ open: Bool) {
         guard open != hubOpen else { return }
         hubOpen = open
-        sleeper?.cancel()
         guard open, !isSyncing else { return }
         // Signed out for want of a token, `gh auth login` may have been run since: look again, however recent the last poll.
         if awaitsToken || Date().timeIntervalSince(lastSync ?? .distantPast) > 60 { refreshNow() }
