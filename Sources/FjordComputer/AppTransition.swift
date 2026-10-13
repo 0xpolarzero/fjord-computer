@@ -260,6 +260,38 @@ enum AppTransition {
         /// time ticked (0.5% of the window: a sidebar row's highlight is 0.3%). Shown only as the window starts to shrink
         /// and fade, against a fresh picture's whole cost before anything moves; more than that and the close takes one.
         static let closeTolerance = 0.005
+        /// The same for an opening's picture, which shows at full size before the handoff: 0.1% (a few glyphs).
+        static let openTolerance = 0.001
+    }
+
+    /// What may have changed what the window shows, besides its pixels: the user's input to it (a key, a click, a scroll),
+    /// what was asked of it (a card, a message, a place), and the store's revisions of what the window lists. A picture
+    /// taken with other marks is not forgiven a small difference: a word typed is 0.14% of the window, a moved selection
+    /// 0.3%. With the same marks, a small difference is the window's own noise (a hover, a ticking duration, the
+    /// thinking dots).
+    struct Marks: Equatable {
+        var changes = 0
+        var inbox = 0
+        var inboxDisplay = 0
+        var router = 0
+    }
+
+    /// How a picture stands against the window as it is now.
+    enum Freshness: Equatable {
+        /// Drawn alike.
+        case same
+        /// Off by the window's own noise only (nothing asked, typed or synced since, and within `tolerance`).
+        case cosmetic
+        /// Something changed since, or more than noise.
+        case stale
+    }
+
+    static func freshness(of picture: Picture, glance now: Glance?, marks: Marks, destination: AppDestination,
+                          tolerance: Double) -> Freshness {
+        guard let now, picture.destination == destination else { return .stale }
+        if now.same(as: picture.glance) { return .same }
+        guard picture.marks == marks else { return .stale }
+        return now.within(tolerance, of: picture.glance) ? .cosmetic : .stale
     }
 
     static let glanceScale: CGFloat = 0.25
@@ -562,7 +594,8 @@ enum AppTransition {
     /// caller has just drawn one (else one is drawn here). `restoreLater`: see `snapshot`.
     /// `pixelScale`: a softer picture (`reducedScale`), not one an opening may cut to the real window on.
     static func takePicture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool, destination: AppDestination,
-                            glance: Glance? = nil, restoreLater: Bool = false, pixelScale: CGFloat? = nil) -> Picture? {
+                            glance: Glance? = nil, restoreLater: Bool = false, pixelScale: CGFloat? = nil,
+                            marks: Marks? = nil) -> Picture? {
         let glance = glance ?? self.glance(of: window)
         let key = isKey(window)
         let frame = window.frame, scale = window.backingScaleFactor, appearance = window.effectiveAppearance.name
@@ -571,16 +604,16 @@ enum AppTransition {
                                    restoreLater: restoreLater, pixelScale: pixelScale) else { return nil }
         return Picture(image: image, frame: frame, scale: scale, destination: destination, glass: glass, glance: glance,
                        appearance: appearance, sidebar: glassWindow.sidebar, key: key,
-                       pixelScale: min(pixelScale ?? scale, scale))
+                       pixelScale: min(pixelScale ?? scale, scale), marks: marks)
     }
 
     /// A picture of `window` to keep (see `Picture`): only one taken with the keyboard (a picture taken without has grey
     /// buttons).
     static func picture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool, destination: AppDestination,
-                        glance: Glance? = nil, pixelScale: CGFloat? = nil) -> Picture? {
+                        glance: Glance? = nil, pixelScale: CGFloat? = nil, marks: Marks? = nil) -> Picture? {
         guard isKey(window) else { return nil }
         return takePicture(of: window, glassWindow: glassWindow, glass: glass, destination: destination, glance: glance,
-                           pixelScale: pixelScale)
+                           pixelScale: pixelScale, marks: marks)
     }
 
     /// The window's picture as it was last seen, taken while it had the keyboard (its buttons in colour, as the real
@@ -610,6 +643,8 @@ enum AppTransition {
         var pixelScale: CGFloat?
         /// At the window's own scale: an opening may cut to the real window on it.
         var exact: Bool { (pixelScale ?? scale) >= scale }
+        /// What had happened to the window when it was taken (nil: not known, so no difference is forgiven).
+        var marks: Marks?
 
         /// Whether it can stand for `window` as it opens: the same size, at the scale a picture of it would be taken at now
         /// (the window's own, as `scale` is: a window off every screen keeps that of the last one it was on, which need not
@@ -885,10 +920,10 @@ enum AppTransition {
         /// than popping in. `glance`: the window's, taken just before (else one is taken here).
         /// `pixelScale`: a softer picture (see `takePicture`).
         func refresh(_ window: NSWindow, destination: AppDestination, crossFade: Bool = false, glance: Glance? = nil,
-                     pixelScale: CGFloat? = nil) {
+                     pixelScale: CGFloat? = nil, marks: Marks? = nil) {
             guard let picture = AppTransition.takePicture(of: window, glassWindow: GlassWindow(capture: capture, sidebar: sidebar),
                                                           glass: isGlass, destination: destination, glance: glance,
-                                                          pixelScale: pixelScale)
+                                                          pixelScale: pixelScale, marks: marks)
             else { return }
             install(picture, crossFade: crossFade)
         }

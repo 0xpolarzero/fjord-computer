@@ -23,7 +23,7 @@ enum AppPolicy {
     static func activate() {
         guard !UnderTest.isRunning else { return }
         watchActivations()
-        request.asked(active: NSApp.isActive)
+        request.asked(active: NSApp.isActive, at: ProcessInfo.processInfo.systemUptime)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -54,7 +54,11 @@ enum AppPolicy {
         activations = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated { remember(app) }
+            MainActor.assumeIsolated {
+                remember(app)
+                // Another app came to the front after the request: it was refused, or has been overtaken.
+                if let app, app != NSRunningApplication.current { request.overtaken() }
+            }
         }
         remember(NSWorkspace.shared.frontmostApplication)
         becameActive = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
@@ -73,23 +77,28 @@ enum AppPolicy {
     private static var request = ActivationRequest()
 
     /// Whether an activation Fjord Computer asked for has yet to land.
-    static var activationPending: Bool { request.pending }
+    static var activationPending: Bool { request.isPending(at: ProcessInfo.processInfo.systemUptime) }
 
-    /// An activation asked for, from the asking until it lands (`didBecomeActive`) or the app resigns: however long it takes
-    /// (the main thread may be busy bringing the window in), never by age.
+    /// An activation asked for, from the asking until it lands (`didBecomeActive`), the app resigns or another app comes to
+    /// the front (refused, or overtaken), and at most `life` seconds of uptime: long enough for a main thread busy bringing
+    /// the window in, short enough that a refusal no one reported can't pass a later activation of the user's for ours.
     struct ActivationRequest: Equatable {
-        private(set) var pending = false
+        static let life: TimeInterval = 5
+        private(set) var askedAt: TimeInterval?
 
-        /// Asked; none comes when the app is active already.
-        mutating func asked(active: Bool) { if !active { pending = true } }
+        /// Asked (`now`: system uptime); none comes when the app is active already.
+        mutating func asked(active: Bool, at now: TimeInterval) { if !active { askedAt = now } }
+
+        func isPending(at now: TimeInterval) -> Bool { askedAt.map { now - $0 < Self.life } ?? false }
 
         /// The app became active: whether that was the activation asked for.
-        mutating func landed() -> Bool {
-            defer { pending = false }
-            return pending
+        mutating func landed(at now: TimeInterval) -> Bool {
+            defer { askedAt = nil }
+            return isPending(at: now)
         }
 
-        mutating func resigned() { pending = false }
+        mutating func resigned() { askedAt = nil }
+        mutating func overtaken() { askedAt = nil }
     }
 
     /// The close's tidying, as a safety net: still active with no window, while an activation asked for is pending (its
@@ -99,7 +108,7 @@ enum AppPolicy {
     static var reopen: (() -> Void)?
 
     private static func becameActiveNow() {
-        let ours = request.landed()
+        let ours = request.landed(at: ProcessInfo.processInfo.systemUptime)
         switch onActivation(ours: ours, windowShown: AppWindowController.anyShown, closing: AppWindowController.anyClosing) {
         case .yield: yieldFocus()
         case .reopen: reopen?()
@@ -270,9 +279,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private var closedPicture: AppTransition.Picture?
     /// The opening whose picture was checked against its window once already (see `payPicture`).
     private var checked: Int?
-    /// The opening asked to show something else on its way in (`contentChanged`): its picture is taken again even for a
-    /// small change.
-    private var askedFor: Int?
+    /// Input to the window and what was asked of it, counted (see `AppTransition.Marks`).
+    private var changes = 0
+    private var inputWatch: Any?
     /// Keeps `closedPicture` fresh while the window is open (see `keepPicture`).
     private var pictureKeeper: Timer?
     /// Lets go of `closedPicture` once the window has stayed closed `keptPictureLife`.
@@ -302,7 +311,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         settle()
         var destination = destination
         if card != nil { destination = .router }
-        if let card { routerModel.select(card, store: store) }
+        if let card {
+            routerModel.select(card, store: store)
+            changes &+= 1
+        }
         // Another place, while on its way in: the navigator says so (see `init`).
         if let destination { navigator.go(destination.resolved(shown: shownIDs, tools: store.tools)) }
         let window = self.window ?? makeWindow()
@@ -337,6 +349,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         // A card picked on the way in: the place may be the same, what it shows is not.
         if card != nil, arriving { contentChanged() }
         watchKeys()
+        watchInput()
         watchFront()
         reportFront()
     }
@@ -421,8 +434,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let other = current.shows != navigator.selection
         pending = mine
         owed = (generation: mine, crossFade: reversing || other || kept == nil)
-        // A close turned round may have been asked for something (a card from the bar): any change is taken again.
-        askedFor = reversing || other ? mine : nil
         current.open(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak window] in
             guard let self, let window, self.generation == mine else { return }
             // The real window must be in before it takes over. No picture is taken now: it would hold the handoff up. The
@@ -479,49 +490,65 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let now = AppTransition.glance(of: window)
         let first = checked != mine
         checked = mine
-        let unchanged = run.image != nil && now?.same(as: run.glance) == true
-        if unchanged, run.picture?.exact == true { return }
-        // Moved on by a detail of its own (a scroller shown again, a count, a hover; not something asked for): no picture
-        // for that, the handoff fades into the real window over it instead of cutting to it.
-        if run.image != nil, !unchanged, askedFor != mine,
-           now?.within(AppTransition.Glance.closeTolerance, of: run.glance) == true {
-            self.owed = owed
-            run.fadeHandoff()
-            return
-        }
+        let marks = self.marks
+        let fresh = run.picture.map {
+            AppTransition.freshness(of: $0, glance: now, marks: marks, destination: navigator.selection,
+                                    tolerance: AppTransition.Glance.openTolerance)
+        } ?? .stale
+        if fresh == .same, run.picture?.exact == true { return }
         // Just brought in, the window may still be drawing what changed while it was out (its appearing runs a turn
         // later): the first look is taken again a turn on before a picture is.
-        if run.image != nil, !unchanged, first {
+        if fresh == .stale, run.image != nil, first {
             self.owed = owed
             AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
             return
         }
         // The handoff is never held up for a picture: one sure to be in before it (by the most such pictures have cost),
-        // else a softer one sure to be (the handoff then fades from it), else none (the handoff fades from what shows).
+        // else for a window that moved on a softer one sure to be (the handoff then fades from it), else none (the
+        // handoff fades from what shows). A picture off by noise only, or soft, is taken again only at full scale.
         let fade = owed.crossFade ? AppTransition.pictureFade * Double(AppTransition.slowdown) : 0
         let full = window.backingScaleFactor, soft = AppTransition.reducedScale(of: window)
         let scale: CGFloat
         if AppTransition.pictureFits(window, pixelScale: full, before: run.settlesAt, after: fade) {
             scale = full
-        } else if soft < full, !unchanged,
+        } else if fresh == .stale, soft < full,
                   AppTransition.pictureFits(window, pixelScale: soft, before: run.settlesAt, after: fade) {
-            // (A soft picture of the window as it still is would gain nothing over the one shown.)
             scale = soft
         } else {
             self.owed = owed
             run.fadeHandoff()
             return
         }
-        askedFor = nil
         refresh(run, window, crossFade: owed.crossFade, glance: now, pixelScale: scale)
         if run.picture?.exact != true { run.fadeHandoff() }
+    }
+
+    /// What may have changed the window since a picture was taken, besides its pixels (see `AppTransition.Marks`).
+    var marks: AppTransition.Marks {
+        AppTransition.Marks(changes: changes, inbox: store.inboxRevision, inboxDisplay: store.inboxDisplayRevision,
+                            router: store.routerRevision)
+    }
+
+    /// Counts the user's input to the window (a key, a click, a scroll; not the pointer's moves, whose hovers are noise),
+    /// for `marks`.
+    private func watchInput() {
+        guard inputWatch == nil else { return }
+        inputWatch = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                                                                 .scrollWheel]) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, event.window === self.window else { return }
+                self.changes &+= 1
+            }
+            return event
+        }
     }
 
     /// The overlay's picture taken again, of the place the window shows now (`glance`: the window's, taken just before;
     /// `pixelScale`: see `AppTransition.takePicture`).
     private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false,
                          glance: AppTransition.Glance? = nil, pixelScale: CGFloat? = nil) {
-        run.refresh(window, destination: navigator.selection, crossFade: crossFade, glance: glance, pixelScale: pixelScale)
+        run.refresh(window, destination: navigator.selection, crossFade: crossFade, glance: glance, pixelScale: pixelScale,
+                    marks: marks)
     }
 
     /// While the window is open and still, its picture is kept the window as drawn, so a close starts on it at once with
@@ -561,6 +588,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: expiry)
     }
 
+    /// Whether the kept picture is a soft one (see `AppTransition.reducedScale`).
+    var keptPictureIsSoft: Bool { closedPicture?.exact == false }
+
     /// Whether the kept picture is to be let go (the window closed, and not opened since).
     var keptPictureExpires: Bool { pictureExpiry != nil }
 
@@ -580,7 +610,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         guard AppTransition.mayCaptureAtIdle(cost: AppTransition.estimate(window, pixelScale: window.backingScaleFactor))
         else { return }
         if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
-                                               destination: navigator.selection, glance: now) {
+                                               destination: navigator.selection, glance: now, marks: marks) {
             closedPicture = picture
         }
     }
@@ -589,10 +619,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// section asked for): a fresh one fades in over it, a turn later (once the change has been drawn), at the latest as
     /// the real window takes over. Not once it has (its live pixels show).
     private func contentChanged() {
+        // Asked of the window open or not: no picture taken before stands for it, whatever its pixels.
+        changes &+= 1
         guard phase == .opening, let run, !run.handedOver else { return }
         let mine = generation
         owed = (mine, crossFade: true)
-        askedFor = mine
         AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
     }
 
@@ -677,14 +708,15 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // The picture kept at idle, when the window is still (near enough, `Glance.closeTolerance`) as it was drawn
             // then: the close starts on it at once. Otherwise a soft one is taken now, before anything moves.
             let now = AppTransition.glance(of: sender)
-            if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar),
-               kept.destination == navigator.selection, AppTransition.isKey(sender), let then = kept.glance,
-               now?.within(AppTransition.Glance.closeTolerance, of: then) == true {
+            if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar), AppTransition.isKey(sender),
+               AppTransition.freshness(of: kept, glance: now, marks: marks, destination: navigator.selection,
+                                       tolerance: AppTransition.Glance.closeTolerance) != .stale {
                 current = AppTransition.makeRun(for: sender, picture: kept, bar: barMorph, glassWindow: chrome, glass: glass)
             } else if let taken = AppTransition.takePicture(of: sender, glassWindow: chrome, glass: glass,
                                                            destination: navigator.selection, glance: now,
                                                            restoreLater: true,
-                                                           pixelScale: AppTransition.reducedScale(of: sender)) {
+                                                           pixelScale: AppTransition.reducedScale(of: sender),
+                                                           marks: marks) {
                 // Never one at the window's own scale (520 ms on heavy content): a softer one, a quarter of its pixels,
                 // which the shrink and its fade (gone by half of it) hide.
                 current = AppTransition.makeRun(for: sender, picture: taken, bar: barMorph, glassWindow: chrome, glass: glass)
@@ -942,6 +974,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         expireKeptPicture(after: Self.keptPictureLife)
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if let inputWatch { NSEvent.removeMonitor(inputWatch) }
+        inputWatch = nil
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         lastFront = nil

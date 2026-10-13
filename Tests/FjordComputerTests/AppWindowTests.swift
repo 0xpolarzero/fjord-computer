@@ -903,6 +903,35 @@ extension WindowSeams {
             }
         }
 
+        /// A close starts on the kept picture when nothing happened to the window since; something asked of it (a card, a
+        /// message) marks it, so a small difference is no longer forgiven (`aPicturesFreshness…`).
+        @Test func aCloseTakesAPictureAgainOnlyWhenSomethingHappened() {
+            morphing { controller, ticks in
+                openAndStartClosing(controller, ticks, on: .done)
+                // Turned round, and handed over: the close's picture is kept.
+                controller.show(.done)
+                ticks.runTurns()
+                controller.run?.complete()
+                ticks.blocks.forEach { $0() }
+                ticks.blocks = []
+                #expect(controller.keepsPicture)
+                let taken = AppTransition.captures
+                controller.close()
+                #expect(controller.phase == .closing && AppTransition.captures == taken)
+                controller.show(.done)
+                ticks.runTurns()
+                controller.run?.complete()
+                ticks.blocks.forEach { $0() }
+                ticks.blocks = []
+                // Something asked of it marks the window: no small difference is forgiven any more.
+                let before = controller.marks
+                controller.pick(message: UUID())
+                #expect(controller.marks != before)
+                controller.close()
+                #expect(controller.phase == .closing)
+            }
+        }
+
         /// Short of memory while open, a morphing close keeps no picture for the next open.
         @Test func memoryPressureWhileOpenKeepsNoPictureOnAMorphingClose() {
             morphing { controller, ticks in
@@ -1025,14 +1054,16 @@ extension WindowSeams {
                 controller.run?.complete()
                 ticks.runTurns()
                 #expect(controller.phase == .idle && controller.keepsPicture)
+                // A close's picture is soft (it never takes a sharp one): an unchanged window's is only taken again sharp.
+                let soft = controller.run == nil && controller.keptPictureIsSoft
                 let taken = AppTransition.captures
                 controller.show(.done)
                 ticks.runTurns()
                 ticks.turns = []
                 guard let run = controller.run else { return #expect(Bool(false), "no morph") }
-                guard let kept = run.image else { return #expect(Bool(false), "no kept picture") }
+                guard let shown = run.image else { return #expect(Bool(false), "no kept picture") }
                 run.complete()
-                #expect(AppTransition.captures == taken && run.image === kept)
+                #expect(AppTransition.captures == taken + (soft ? 1 : 0) && run.image === shown && run.picture?.exact == true)
             }
         }
 

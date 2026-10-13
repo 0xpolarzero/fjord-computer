@@ -33,6 +33,32 @@ import Testing
         #expect(moved.within(0.1, of: base) && !moved.within(0.05, of: base))
     }
 
+    /// A picture is the window's when drawn alike; forgiven a small difference only when nothing was typed, clicked, asked
+    /// or synced since (the window's own noise); stale otherwise, or for another place, or with nothing to compare.
+    @Test func aPicturesFreshnessWeighsItsPixelsAgainstWhatHappenedSince() throws {
+        let bitmap = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
+                                            space: CGColorSpaceCreateDeviceRGB(),
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let base = glance(20, 20)
+        let marks = AppTransition.Marks(changes: 3, inbox: 1, inboxDisplay: 0, router: 7)
+        let picture = AppTransition.Picture(image: try #require(bitmap.makeImage()), frame: .zero, scale: 2,
+                                            destination: .router, glance: base, marks: marks)
+        func fresh(_ now: Glance?, _ marks: AppTransition.Marks = marks, _ place: AppDestination = .router,
+                   tolerance: Double = 0.005) -> AppTransition.Freshness {
+            AppTransition.freshness(of: picture, glance: now, marks: marks, destination: place, tolerance: tolerance)
+        }
+        let speck = glance(20, 20, [(0, 200)])  // one pixel of 400: 0.25%
+        #expect(fresh(base) == .same)
+        #expect(fresh(speck) == .cosmetic)
+        // A key typed (or a sync) since: not forgiven.
+        var typed = marks
+        typed.changes += 1
+        #expect(fresh(speck, typed) == .stale && fresh(base, typed) == .same)
+        // Tighter for an opening, and never for another place or nothing to compare.
+        #expect(fresh(speck, tolerance: 0.001) == .stale)
+        #expect(fresh(base, marks, .settings) == .stale && fresh(nil) == .stale)
+    }
+
     /// A capture's cost is the longest of the last few at that size and scale, so one slow capture keeps the next from being
     /// let in on a mean; a size never taken is guessed from the others by pixels, and with none from a pessimistic prior.
     @Test func aCapturesCostIsItsRecentWorst() {
