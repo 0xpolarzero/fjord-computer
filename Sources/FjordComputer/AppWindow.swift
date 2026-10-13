@@ -329,8 +329,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             if content.view.frame.size != size { content.view.setFrameSize(size) }
             self.content = content
             seedCorner(window)
-            // What changed while it was out is drawn as it is now, not played as it goes back in.
-            WindowArrival.arrive()
+            // What changed while it was out is drawn as it is now, not played as it goes back in: from before the window takes
+            // it until it has been laid out and drawn, and a turn after.
+            WindowArrival.appWindow.arrive(laying: content.view)
             window.contentViewController = content
         }
         Self.broughtIn.add(self)

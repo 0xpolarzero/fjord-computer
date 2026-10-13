@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Testing
 @testable import FjordComputer
@@ -66,11 +67,22 @@ struct WindowArrivalTests {
         WindowArrival.appWindow.end(token)
     }
 
-    @Test func arriveEndsOnceItsTransactionHasCommitted() async {
+    @Test func anArrivalLastsUntilItsContentIsLaidOutAndATurnMore() async {
         let arrival = WindowArrival(inTests: true)
-        arrival.arrive()
-        #expect(arrival.active)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.setFrameOrigin(UnderTest.away)
+        let content = NSHostingView(rootView: Text("Arrived"))
+        arrival.arrive(laying: content)
+        window.contentView = content
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.orderOut(nil) }
+        #expect(arrival.active, "on while the window takes its content")
+        // The turn it is laid out in: still on (what that update scheduled for later lands in the next).
+        await Task.yield()
+        #expect(arrival.active || !content.needsLayout)
         await waitUntil { !arrival.active }
-        #expect(!arrival.active)
+        #expect(!arrival.active && !content.needsLayout)
     }
 }

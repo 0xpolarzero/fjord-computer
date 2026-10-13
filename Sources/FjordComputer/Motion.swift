@@ -85,15 +85,17 @@ extension Animation {
 /// window would open on things sliding into place.
 ///
 /// One per window, set on its root with `.windowArrival(_:)` (an environment value that never changes, so it invalidates
-/// nothing): `.motion` curves under that root resolve to none while it is on, and the root drops any animation still in a
-/// transaction; other windows (the bar, its panels) are untouched. The window says when its content arrives: `begin()`
-/// gives a token that `end(_:)` takes back (it is on while any token is out, so one arrival ending doesn't end another), and
-/// `arrive()` begins and ends once the Core Animation transaction it is called in has committed (the update that draws the
-/// content is in it); a token never given back ends after `longest`. Off in test runs but for one made `inTests`.
-/// A flag rather than view state: turning it on and off redraws nothing, it is read as views update.
+/// nothing): `.motion` curves under that root resolve to none while it is on, the root drops any animation still in a
+/// transaction, and the scrolls asked for meanwhile jump (their call sites read `active`); other windows (the bar, its
+/// panels) are untouched. `begin()` gives a token that `end(_:)` takes back (it is on while any token is out, so one
+/// arrival ending doesn't end another); `arrive(laying:)` holds one from before the window takes its content until that
+/// content has been laid out and drawn, and one more turn of the main run loop after it (what its first update scheduled
+/// for later, a reveal's scroll, a follow-up's change, lands then, unanimated too). A token never given back ends after
+/// `longest`. Off in test runs but for one made `inTests`. A flag rather than view state: turning it on and off redraws
+/// nothing, it is read as views update.
 @MainActor
 final class WindowArrival {
-    /// The app window's (`.windowArrival()` and `WindowArrival.arrive()` without one name it).
+    /// The app window's (`.windowArrival()` without one names it).
     static let appWindow = WindowArrival()
 
     /// A safety net: longer than a first frame takes, short enough that a missed `end` costs nothing anyone sees.
@@ -130,19 +132,41 @@ final class WindowArrival {
         if tokens.isEmpty { active = false }
     }
 
-    /// `begin`, then `end` once the Core Animation transaction this is called in has committed: the content's update and
-    /// first frame are in it.
-    func arrive() {
+    /// Call right before the window takes `view` (its content): on until `view` has been laid out at the end of a run loop
+    /// turn (after Core Animation's commit, which lays it out and draws it), then for one more turn, whose updates (what
+    /// the first one scheduled for later) are drawn as they are too.
+    func arrive(laying view: NSView) {
         let token = begin()
-        CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak self] in
-            MainActor.assumeIsolated { self?.end(token) }
+        guard active else { return }
+        let progress = ArrivalProgress()
+        // After everything else about to wait (Core Animation's commit included).
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) {
+            [weak self, weak view] _, _ in
+            MainActor.assumeIsolated {
+                guard let self, let view, self.tokens.contains(token.id) else { return progress.stop() }
+                if !progress.laidOut {
+                    if !view.needsLayout, view.window != nil { progress.laidOut = true }
+                    return
+                }
+                progress.stop()
+                self.end(token)
+            }
         }
-        CATransaction.commit()
+        progress.observer = observer
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
     }
+}
 
-    /// The app window's `arrive`.
-    static func arrive() { appWindow.arrive() }
+/// How far an arrival's content is: laid out yet, and the run loop observer watching for it.
+@MainActor
+private final class ArrivalProgress {
+    var laidOut = false
+    var observer: CFRunLoopObserver?
+
+    func stop() {
+        if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        observer = nil
+    }
 }
 
 extension EnvironmentValues {

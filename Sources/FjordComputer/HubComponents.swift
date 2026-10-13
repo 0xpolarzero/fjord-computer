@@ -88,6 +88,7 @@ struct CappedScroll<Content: View>: View {
     @State private var lazyShort: CGFloat?
     @State private var edges: [CGFloat] = []
     @Environment(\.accessibilityReduceMotion) private var reduce
+    @Environment(\.windowArrival) private var arrival
 
     var body: some View {
         // Whole rows only; with no rows marked (or none ending within the cap) the plain cap.
@@ -135,7 +136,10 @@ struct CappedScroll<Content: View>: View {
                 }
             }
             .onChange(of: hub?.keyboardSelection) { _, request in
-                if let id = request?.id { withAnimation(Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(id) } }
+                // While the window's content arrives, a jump (`WindowArrival`).
+                if let id = request?.id {
+                    withAnimation(arrival?.active == true ? nil : Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(id) }
+                }
             }
         }
     }

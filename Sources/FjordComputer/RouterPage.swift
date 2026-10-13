@@ -687,6 +687,7 @@ private struct RouterHistory: View {
     let hidden: Bool
     @Environment(\.routerGutter) private var gutter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowArrival) private var arrival
     /// The oldest line drawn, once you scroll up or ask for earlier ones (so nothing drops off the top while you read); at the
     /// bottom, the newest `page` lines.
     @State private var oldest: HistoryWindow.Boundary?
@@ -838,7 +839,8 @@ private struct RouterHistory: View {
         DispatchQueue.main.async { perform(proxy) }
         // Going to a line leaves the bottom (until the scroll, once done, finds it there after all); going to the bottom pins.
         pinned = scroll.id == RouterModel.endID
-        if scroll.animated, let motion = Motion.scroll.resolved(reduce: reduceMotion) {
+        // While the window's content arrives, a jump (`WindowArrival`).
+        if scroll.animated, arrival?.active != true, let motion = Motion.scroll.resolved(reduce: reduceMotion) {
             withAnimation(motion) { proxy.scrollTo(scroll.id, anchor: scroll.anchor) }
         } else {
             // A jump, even when what asked for it was animated (a line opening): it doesn't ride that animation.
@@ -1522,6 +1524,7 @@ private struct RouterNow: View {
     let travelling: Set<String>
     let travellingWorking: Set<String>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.windowArrival) private var arrival
     @Environment(\.routerGutter) private var gutter
     @Environment(\.cdsColumnWidth) private var columnWidth
     /// Every card of Worth a look shown, not the first few.
@@ -1625,7 +1628,10 @@ private struct RouterNow: View {
         DispatchQueue.main.async {
             guard pending == request else { return }
             pending = nil
-            withAnimation(Motion.scroll.resolved(reduce: reduceMotion)) { proxy.scrollTo(request.id, anchor: request.anchor) }
+            // While the window's content arrives (a card asked for as it opens), a jump (`WindowArrival`).
+            withAnimation(arrival?.active == true ? nil : Motion.scroll.resolved(reduce: reduceMotion)) {
+                proxy.scrollTo(request.id, anchor: request.anchor)
+            }
         }
     }
 

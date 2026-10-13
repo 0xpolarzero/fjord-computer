@@ -12,6 +12,7 @@ struct InboxListView: View {
     @State private var search: InboxSearch
     @Environment(\.accessibilityReduceMotion) private var reduce
     @Environment(\.openApp) private var openApp
+    @Environment(\.windowArrival) private var arrival
 
     static let column: CGFloat = 880
     /// Room the header leaves at its start (the window's buttons, when the sidebar is away).
@@ -82,7 +83,12 @@ struct InboxListView: View {
 
     private func scroll(_ proxy: ScrollViewProxy, to request: ScrollRequest?) {
         guard let id = request?.id.dropFirst(2) else { return }
-        DispatchQueue.main.async { withAnimation(Motion.follow.resolved(reduce: reduce)) { proxy.scrollTo(String(id), anchor: .center) } }
+        DispatchQueue.main.async {
+            // While the window's content arrives, a jump (`WindowArrival`).
+            withAnimation(arrival?.active == true ? nil : Motion.follow.resolved(reduce: reduce)) {
+                proxy.scrollTo(String(id), anchor: .center)
+            }
+        }
     }
 
     private var title: String {
@@ -286,8 +292,6 @@ struct AppContent: View {
         // Under the window's top bar only, where it has a ground of its own (before macOS 26): the header shows it.
         .background { CDS.Surface.s1.padding(.top, Self.groundTop) }
         .clipped()
-        // The page's first update as the window shows is drawn as it is (`WindowArrival`).
-        .windowArrival()
     }
 
     /// Where the page's own ground starts: under the top bar before macOS 26, at the top on 26, where the page runs under
