@@ -45,6 +45,7 @@ final class HubState {
             guard selection != oldValue else { return }
             if let oldValue { marks[oldValue]?.on = false }
             if let selection { marks[selection]?.on = true }
+            if marks.count > Mark.kept { marks = Mark.pruned(marks) }
         }
     }
     /// Whether a row is the selection, read by the row itself (`isSelected`): each row observes its own mark, so the pointer
@@ -54,6 +55,17 @@ final class HubState {
     @Observable final class Mark {
         var on: Bool
         init(on: Bool) { self.on = on }
+
+        /// More marks than rows are ever drawn: those of rows gone (archived, filtered out, another tab's) are let go.
+        static let kept = 400
+
+        /// None kept: each is touched on the way out, so a row still drawn reads its mark again (making a new one) and
+        /// one gone is forgotten. Called on a change of the pick, never while a row is drawn.
+        static func pruned(_ marks: [String: Mark]) -> [String: Mark] {
+            // Flipped there and back: setting the same value tells nobody.
+            for mark in marks.values { mark.on.toggle(); mark.on.toggle() }
+            return [:]
+        }
     }
 
     /// Whether `id` is the selection, observing only that row's mark.

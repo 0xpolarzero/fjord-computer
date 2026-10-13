@@ -317,7 +317,7 @@ final class RouterModel {
     @ObservationIgnored let flights = RouterFlights()
     /// The card the keys act on.
     var selection: String? {
-        didSet { if selection != oldValue { remark(oldValue); remark(selection) } }
+        didSet { if selection != oldValue { remark(oldValue); remark(selection); pruneMarks() } }
     }
     /// Whether an item is picked or marked, by item, read by the item itself (`isMarked`): each card or row observes its
     /// own, so the keys moving the pick redraw the two cards it left and reached, not every card of the page.
@@ -334,6 +334,14 @@ final class RouterModel {
         let mark = Mark(on: _selection == id || _highlighted == id)
         marks[id] = mark
         return mark.on
+    }
+
+    /// The marks of items gone (cards archived to the history, sessions done) let go once there are more than the page
+    /// draws (`HubState.Mark.pruned`: an item still drawn makes its own again).
+    private func pruneMarks() {
+        guard marks.count > HubState.Mark.kept else { return }
+        for mark in marks.values { mark.on.toggle(); mark.on.toggle() }
+        marks = [:]
     }
 
     private func remark(_ id: String?) {
@@ -633,7 +641,7 @@ final class RouterModel {
     var revealRequest: ScrollRequest?
     /// The item marked for a moment after it was scrolled to.
     var highlighted: String? {
-        didSet { if highlighted != oldValue { remark(oldValue); remark(highlighted) } }
+        didSet { if highlighted != oldValue { remark(oldValue); remark(highlighted); pruneMarks() } }
     }
     /// The card of Needs you shown in full (see `RouterPage.openNeed`); the others are summary rows.
     var expandedNeed: String?
