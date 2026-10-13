@@ -52,15 +52,21 @@ enum MotionGate {
         /// the morph (its handoff), and with frames free to come between items. A motion that starts again meanwhile holds
         /// the rest.
         private func release() {
-            guard !waiting.isEmpty else { return }
+            // One chain at a time: a morph that begins and ends in one turn while one is queued doesn't start a second
+            // (which would let two items go a turn).
+            guard !waiting.isEmpty, !releasing else { return }
+            releasing = true
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let self, !self.moving, !self.waiting.isEmpty else { return }
+                    guard let self else { return }
+                    self.releasing = false
+                    guard !self.moving, !self.waiting.isEmpty else { return }
                     self.waiting.removeFirst()()
                     self.release()
                 }
             }
         }
+        private var releasing = false
 
         /// Runs `work` now when nothing moves and nothing still waits, else once the motion ends, in the order it was asked.
         func whenStill(_ work: @escaping () -> Void) {

@@ -29,6 +29,22 @@ import Testing
         #expect(!gate.holding)
     }
 
+    @Test func aMorphBegunAndEndedInOneTurnStartsNoSecondRelease() async {
+        let gate = MotionGate.Gate(longest: 600)
+        var done = 0
+        gate.began()
+        for _ in 0..<4 { gate.whenStill { done += 1 } }
+        gate.ended()
+        // A morph that never ran: began and ended in the same turn, the release already queued.
+        gate.began()
+        gate.ended()
+        // One hop of the main queue: one release chain lets at most its first item and the one it queued go by then.
+        await withCheckedContinuation { (hop: CheckedContinuation<Void, Never>) in DispatchQueue.main.async { hop.resume() } }
+        #expect(done <= 2)
+        for _ in 0..<3000 where done < 4 { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(done == 4)
+    }
+
     @Test func stillWaitsItsTurnBehindWhatWasHeld() async {
         let gate = MotionGate.Gate(longest: 600)
         var done: [String] = []
