@@ -1344,6 +1344,10 @@ extension Store {
                 if inboxError == nil, let failure = rechecked.error { inboxError = failure }
             }
         }
+        // Taken in once the window's morph has played (`MotionGate`): the things, the inbox worked out again and the
+        // banners are main-thread work that can wait. What is kept from before is read after it.
+        await MotionGate.still()
+        guard current() else { return }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }

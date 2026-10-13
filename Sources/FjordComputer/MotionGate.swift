@@ -25,14 +25,25 @@ enum MotionGate {
     static func ended() {
         guard moving else { return }
         moving = false
-        let work = waiting
-        waiting = []
-        for item in work { item() }
+        release()
     }
 
-    /// Runs `work` now when nothing moves, else once the motion ends, in the order it was asked.
+    /// What waited goes one item per turn of the main run loop, starting with the next: not inside the turn that ends the
+    /// morph (its handoff), and with frames free to come between items. A motion that starts again meanwhile holds the rest.
+    private static func release() {
+        guard !waiting.isEmpty else { return }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard !moving, !waiting.isEmpty else { return }
+                waiting.removeFirst()()
+                release()
+            }
+        }
+    }
+
+    /// Runs `work` now when nothing moves and nothing still waits, else once the motion ends, in the order it was asked.
     static func whenStill(_ work: @escaping () -> Void) {
-        if moving { waiting.append(work) } else { work() }
+        if moving || !waiting.isEmpty { waiting.append(work) } else { work() }
     }
 
     /// Returns at once when nothing moves, else once the motion ends.

@@ -707,7 +707,8 @@ final class ClaudeFeed: @unchecked Sendable {
                 var snapshot = unread ? readUnread() : read(full: full)
                 snapshot.stamp = stamp
                 guard let apply else { continue }
-                DispatchQueue.main.async { MainActor.assumeIsolated { apply(snapshot) } }
+                // Taken in once the window's morph has played (`MotionGate`): a read that lands mid-motion waits for it.
+                DispatchQueue.main.async { MainActor.assumeIsolated { MotionGate.whenStill { apply(snapshot) } } }
             }
         }
     }
