@@ -815,7 +815,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             CATransaction.flush()
         }
         // Out of sight at once (a window's alpha is cheap); ordered out only once the motion is submitted, as ordering a
-        // key window out takes some 11 ms (its key and main status handed on).
+        // key window out takes some 11 ms (its key and main status handed on). After the overlay's flush, not inside its
+        // transaction: if AppKit sends the alpha with the next commit, it lands with or after the overlay either way; if it
+        // sends it at once, only this order has the overlay's frame reach the server first.
         sender.alphaValue = 0
         current.close(reduced: AppTransition.reduceMotion || current.bar == nil) { [weak self, weak sender] in
             guard let self, let sender, self.generation == mine else { return }
