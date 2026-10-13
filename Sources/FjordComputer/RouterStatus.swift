@@ -53,6 +53,16 @@ import Observation
         }
     }
 
+    /// The binary as it is now: the one known if it is still there (one stat), else looked for again off the main thread
+    /// and kept (nil once none is left), for the Router's notice, Send and every run alike.
+    func current() async -> (path: String, version: String)? {
+        if let known = claudeCode, FileManager.default.isExecutableFile(atPath: known.path) { return known }
+        guard let root = codeRoot else { return claudeCode }
+        let found = await OffMain.run(qos: .utility) { Self.find(in: root) }
+        set(found)
+        return found
+    }
+
     private func set(_ found: (path: String, version: String)?) {
         if found?.path != claudeCode?.path || found?.version != claudeCode?.version { claudeCode = found }
     }

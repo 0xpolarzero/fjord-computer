@@ -504,8 +504,6 @@ final class RouterModel {
 
     /// Whether Claude Code was looked for and isn't there (see `checkClaudeCode`); nil until looked for.
     var claudeCodeMissing: Bool?
-    /// The folder it was last found in, and its binary there.
-    @ObservationIgnored private var claudeCodeFound: (root: URL, path: String)?
     /// Forms whose answer is being written.
     var sending: Set<String> = []
     /// The latest answer being written, for tests to wait on.
@@ -541,23 +539,19 @@ final class RouterModel {
     }
 
     /// Looks for Claude Code once the window shows (the app updates its copy now and then): until the search has finished
-    /// nothing is said, and Send waits. In a demo it is never missing.
-    /// Once found, the window showing again only checks that binary is still there (one stat); gone (the app updated or
-    /// removed its copy), or missing, it is looked for again.
+    /// nothing is said, and Send waits. In a demo it is never missing. The binary known (`RouterStatus`, which every run
+    /// takes its path from) is only checked to be still there, one stat; gone, or none known, it is looked for again.
     func checkClaudeCode(_ store: Store) async {
-        if store.routerIsPretend || store.routerStatus.claudeCode != nil {
+        if store.routerIsPretend {
             if claudeCodeMissing != false { claudeCodeMissing = false }
             return
         }
-        guard let root = store.routerStatus.codeRoot else {
+        guard store.routerStatus.codeRoot != nil || store.routerStatus.claudeCode != nil else {
             if claudeCodeMissing != false { claudeCodeMissing = false }
             return
         }
-        if claudeCodeMissing == false, let known = claudeCodeFound, known.root == root,
-           FileManager.default.isExecutableFile(atPath: known.path) { return }
-        let found = await Task.detached(priority: .utility) { RouterStatus.find(in: root)?.path }.value
-        claudeCodeFound = found.map { (root, $0) }
-        if claudeCodeMissing != (found == nil) { claudeCodeMissing = found == nil }
+        let found = await store.routerStatus.current() != nil
+        if claudeCodeMissing != !found { claudeCodeMissing = !found }
     }
 
     /// The pick follows the list: kept while it is listed; when the search or the cards change and it isn't, the nearest
