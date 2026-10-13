@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -29,18 +30,43 @@ let waitWatchdog: TimeInterval = 20
 @MainActor func waitUntilSteady<T: Equatable>(within seconds: TimeInterval = waitWatchdog, turns: Int = 5,
                                               quiet: TimeInterval = 0, sourceLocation: SourceLocation = #_sourceLocation,
                                               _ value: () -> T) async {
-    let deadline = Date().addingTimeInterval(seconds)
-    var last = value(), same = 0, since = Date()
+    let start = Date(), deadline = start.addingTimeInterval(seconds)
+    var last = value(), same = 0, since = start
+    // What a wait that runs out reports: how often it got to read, and the values it read last with when, so a starved
+    // main actor tells from a value that keeps moving.
+    var polls = 0, longest: TimeInterval = 0, polled = start, changes = 0, seen: [String] = []
     while same < turns || Date().timeIntervalSince(since) < quiet {
         guard Date() < deadline else {
-            Issue.record("Waited \(seconds) s for a value that never settled (last \(last))", sourceLocation: sourceLocation)
+            Issue.record("""
+                Waited \(seconds) s for a value that never settled (last \(last)): \(polls) reads, the longest gap \
+                \(Int(longest * 1000)) ms, \(changes) changes, the last at \(seen.joined(separator: ", ")); \
+                \(waitContext())
+                """, sourceLocation: sourceLocation)
             return
         }
         try? await Task.sleep(for: .milliseconds(20))
         let now = value()
-        if now == last { same += 1 } else { same = 0; since = Date() }
+        polls += 1
+        longest = max(longest, Date().timeIntervalSince(polled))
+        polled = Date()
+        if now == last { same += 1 } else {
+            same = 0; since = Date(); changes += 1
+            seen = (seen + ["\(String(format: "%.2f", since.timeIntervalSince(start))) s: \(now)"]).suffix(6)
+        }
         last = now
     }
+}
+
+/// The runner's screens and process, for a wait's failure: a test run on a machine unlike the one it was written on.
+@MainActor func waitContext() -> String {
+    let screens = NSScreen.screens.map { "\($0.frame) @\($0.backingScaleFactor)x" }.joined(separator: " ")
+    var context = "screens \(screens.isEmpty ? "none" : screens), \(ProcessInfo.processInfo.activeProcessorCount) cores"
+    if let app = NSApp {
+        let shown = app.windows.filter(\.isVisible)
+        context += ", app active \(app.isActive), \(app.windows.count) windows, \(shown.count) shown, "
+            + "\(shown.filter { $0.occlusionState.contains(.visible) }.count) of them unoccluded"
+    }
+    return context
 }
 
 /// `waitUntil` for a test off the main actor: `condition` reads only what is safe to read from any thread.

@@ -87,7 +87,12 @@ enum AccessibilityTree {
         // Never ready, or never still: the tree read now would prove nothing (an empty one has no unnamed control).
         hosting.layoutSubtreeIfNeeded()
         let tree = node(hosting)
-        Issue.record("The accessibility tree wasn't ready and steady within \(waitWatchdog) s (\(ready(tree) ? "still changing" : "no controls"))")
+        Issue.record("""
+            The accessibility tree wasn't ready and steady within \(waitWatchdog) s (\(ready(tree) ? "still changing" : "no controls")): \
+            \(tree.children.count) children at the top, \(hosting.subviews.count) subviews, in a window \
+            \(hosting.window.map { "\($0.frame), visible \($0.isVisible), occlusion \($0.occlusionState.rawValue)" } ?? "none"); \
+            \(waitContext())
+            """)
         return tree
     }
 
