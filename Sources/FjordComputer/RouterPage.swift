@@ -687,10 +687,35 @@ private struct RouterHistory: View {
     /// Lines drawn at first, and more each time Show earlier is clicked.
     static let page = 100
 
+    /// What the history was last drawn from while it showed: hidden under Now, it is drawn from this and reads nothing
+    /// of the store or the model, so a new line, a pick or a card read doesn't redraw it out of sight; shown again, it reads
+    /// them afresh. Not view state: written as it is drawn.
+    @State private var shown = Shown()
+    private final class Shown {
+        var taken = false
+        var all: [RouterPage.Entry] = []
+        var expanded: Set<String> = []
+        var picked: String?
+        var highlighted: String?
+        var cancels: [UUID: HistoryDecisionLine.Cancel] = [:]
+    }
+
+    /// The model's history and marks, read only while the history shows (or before it was ever drawn).
+    private func read() -> Shown {
+        guard !hidden || !shown.taken else { return shown }
+        shown.taken = true
+        shown.all = model.history(store)
+        shown.expanded = model.expanded
+        shown.picked = model.selection
+        shown.highlighted = model.highlighted
+        return shown
+    }
+
     var body: some View {
-        let all = model.history(store)
+        let state = read()
+        let all = state.all
         let entries = HistoryWindow.drawn(all, from: oldest, page: Self.page)
-        let expanded = model.expanded, picked = model.selection, highlighted = model.highlighted
+        let expanded = state.expanded, picked = state.picked, highlighted = state.highlighted
         // One clock for every age in the history, on the minute (stopped while the history is out of sight).
         MinuteTicking(paused: hidden) { now in
             ScrollViewReader { proxy in
@@ -811,6 +836,14 @@ private struct RouterHistory: View {
 
     /// Whether a run's message can be cancelled now, and whether it is being.
     private func cancelState(_ decision: RouterDecision, now: Date) -> HistoryDecisionLine.Cancel {
+        // Hidden: as last drawn (the dispatcher and the sessions aren't read out of sight).
+        if hidden, shown.taken { return shown.cancels[decision.id] ?? .none }
+        let state = liveCancelState(decision, now: now)
+        if state == .none { shown.cancels[decision.id] = nil } else { shown.cancels[decision.id] = state }
+        return state
+    }
+
+    private func liveCancelState(_ decision: RouterDecision, now: Date) -> HistoryDecisionLine.Cancel {
         guard let sent = decision.delivered else { return .none }
         if store.routerDispatcher.cancelling.contains(decision.id) { return .cancelling }
         // Only a message still within its window looks at its session: the history reads Claude's sessions (which change
