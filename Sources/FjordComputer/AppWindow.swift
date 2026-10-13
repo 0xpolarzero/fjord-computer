@@ -23,8 +23,7 @@ enum AppPolicy {
     static func activate() {
         guard !UnderTest.isRunning else { return }
         watchActivations()
-        // An activation asked for, still to land (none comes when the app is active already).
-        if !NSApp.isActive { requestedAt = ProcessInfo.processInfo.systemUptime }
+        request.asked(active: NSApp.isActive)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -62,28 +61,51 @@ enum AppPolicy {
                                                               queue: .main) { _ in
             MainActor.assumeIsolated { becameActiveNow() }
         }
+        resignedActive = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                                                object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { request.resigned() }
+        }
     }
 
     private static var becameActive: NSObjectProtocol?
-    /// When an activation `activate` asked for was asked (system uptime), until it lands.
-    private static var requestedAt: TimeInterval?
+    private static var resignedActive: NSObjectProtocol?
+    /// An activation `activate` asked for, until it lands or the app resigns.
+    private static var request = ActivationRequest()
+
+    /// Whether an activation Fjord Computer asked for has yet to land.
+    static var activationPending: Bool { request.pending }
+
+    /// An activation asked for, from the asking until it lands (`didBecomeActive`) or the app resigns: however long it takes
+    /// (the main thread may be busy bringing the window in), never by age.
+    struct ActivationRequest: Equatable {
+        private(set) var pending = false
+
+        /// Asked; none comes when the app is active already.
+        mutating func asked(active: Bool) { if !active { pending = true } }
+
+        /// The app became active: whether that was the activation asked for.
+        mutating func landed() -> Bool {
+            defer { pending = false }
+            return pending
+        }
+
+        mutating func resigned() { pending = false }
+    }
+
+    /// The close's tidying, as a safety net: still active with no window, while an activation asked for is pending (its
+    /// notice still to come), the keyboard goes back.
+    static func yieldsAtTidy(active: Bool, windowShown: Bool, pending: Bool) -> Bool { active && !windowShown && pending }
     /// The user made Fjord Computer active (⌘-Tab, the Dock) while its window was closing: the app delegate opens it again.
     static var reopen: (() -> Void)?
 
     private static func becameActiveNow() {
-        let now = ProcessInfo.processInfo.systemUptime
-        let ours = requestedAt.map { now - $0 < requestLife } ?? false
-        requestedAt = nil
+        let ours = request.landed()
         switch onActivation(ours: ours, windowShown: AppWindowController.anyShown, closing: AppWindowController.anyClosing) {
         case .yield: yieldFocus()
         case .reopen: reopen?()
         case .stay: break
         }
     }
-
-    /// How long an activation asked for may take to land and still count as ours: past it (refused, say), an activation is
-    /// taken as the user's.
-    static let requestLife: TimeInterval = 1
 
     enum Activation: Equatable { case stay, yield, reopen }
 
@@ -927,8 +949,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 // must not take the policy from another that has opened since. Asked of the windows themselves, so a close
                 // whose tidying never came (or a controller gone) leaves nothing behind that reads as open.
                 Self.broughtIn.remove(self)
-                // (An opening's activation landing after the close gave the keyboard back gives it back again as it
-                // lands: `AppPolicy.onActivation`.)
+                // An opening's activation landing after the close gave the keyboard back gives it back again as it lands
+                // (`AppPolicy.onActivation`); active already with that notice still to come, it goes back here.
+                if AppPolicy.yieldsAtTidy(active: NSApp.isActive, windowShown: Self.anyShown,
+                                          pending: AppPolicy.activationPending) { AppPolicy.yieldFocus() }
                 AppPolicy.update(windowOpen: Self.broughtIn.allObjects.contains { $0.isOpen })
             }
         }

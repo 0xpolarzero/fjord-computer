@@ -81,6 +81,27 @@ import Testing
         #expect(AppPolicy.onActivation(ours: false, windowShown: true, closing: false) == .stay)
     }
 
+    /// An activation asked for counts as ours until it lands, however late (the main thread busy bringing the window in),
+    /// not after the app resigned, and not when the app was active already; the close's tidying gives the keyboard back
+    /// only for such a pending activation, active with no window.
+    @Test func anActivationAskedForIsOursUntilItLandsHoweverLate() {
+        var request = AppPolicy.ActivationRequest()
+        request.asked(active: false)
+        #expect(request.pending)
+        let first = request.landed(), again = request.landed()
+        #expect(first && !again)
+        request.asked(active: true)
+        #expect(!request.pending)
+        request.asked(active: false)
+        request.resigned()
+        let afterResigning = request.landed()
+        #expect(!afterResigning)
+        #expect(AppPolicy.yieldsAtTidy(active: true, windowShown: false, pending: true))
+        #expect(!AppPolicy.yieldsAtTidy(active: true, windowShown: false, pending: false))
+        #expect(!AppPolicy.yieldsAtTidy(active: true, windowShown: true, pending: true))
+        #expect(!AppPolicy.yieldsAtTidy(active: false, windowShown: false, pending: true))
+    }
+
     @Test(arguments: [NSEvent.ModifierFlags.command, .control, .option, .shift])
     func eachShortcutModifierPostponesPreparation(_ modifiers: NSEvent.ModifierFlags) {
         #expect(AppDelegate.preparationIsBlocked(mouseButtons: 0, modifiers: modifiers, barInteracting: false))
