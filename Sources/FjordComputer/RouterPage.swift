@@ -811,8 +811,11 @@ private struct RouterHistory: View {
 
     /// Whether a run's message can be cancelled now, and whether it is being.
     private func cancelState(_ decision: RouterDecision, now: Date) -> HistoryDecisionLine.Cancel {
-        guard decision.delivered != nil else { return .none }
+        guard let sent = decision.delivered else { return .none }
         if store.routerDispatcher.cancelling.contains(decision.id) { return .cancelling }
+        // Only a message still within its window looks at its session: the history reads Claude's sessions (which change
+        // with every read of them) only while there is one, not for every message it ever sent.
+        guard sent.cancellable(session: nil, now: now) else { return .none }
         return store.canCancel(decision, now: now) ? .offered : .none
     }
 
