@@ -27,20 +27,41 @@ enum ClaudeFonts {
         }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: asar), options: .alwaysMapped),
               let files = AsarIndex(data) else { return }
-        try? FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        var names: [String] = []
-        for (path, range) in files.entries
-        where path.hasPrefix(".vite/renderer/main_window/assets/AnthropicSans-") && path.hasSuffix(".woff2") {
-            let name = (path as NSString).lastPathComponent
-            let file = cache.appendingPathComponent(name)
-            if !FileManager.default.fileExists(atPath: file.path) { try? data.subdata(in: range).write(to: file) }
-            if CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil) { available = true }
-            names.append(name)
+        let fonts = files.entries
+            .filter { $0.0.hasPrefix(".vite/renderer/main_window/assets/AnthropicSans-") && $0.0.hasSuffix(".woff2") }
+            .map { entry in (name: (entry.0 as NSString).lastPathComponent, size: entry.1.count, bytes: { data.subdata(in: entry.1) }) }
+        for name in Self.cache(fonts, in: cache, stamp: stamp)
+        where CTFontManagerRegisterFontsForURL(cache.appendingPathComponent(name) as CFURL, .process, nil) {
+            available = true
         }
-        // Only an archive whose fonts are all there is noted: one written in part is taken out again next launch.
-        if !names.isEmpty, names.allSatisfy({ FileManager.default.fileExists(atPath: cache.appendingPathComponent($0).path) }) {
+    }
+
+    /// Puts the archive's fonts in `cache`, each written whole or not at all (`.atomic`), again unless the one there is
+    /// the same size (a write cut short, or another build's font of the same name, is not); takes out the fonts of other
+    /// archives; and notes `stamp` with their names only once every one was written (else they are taken out again next
+    /// launch). Their names, in the archive's order.
+    @discardableResult
+    static func cache(_ fonts: [(name: String, size: Int, bytes: () -> Data)], in cache: URL, stamp: String) -> [String] {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        // Another archive: its stamp goes first, so a launch that stops midway takes the fonts out again.
+        try? fm.removeItem(at: cache.appendingPathComponent(stampName))
+        var written = true
+        for font in fonts {
+            let file = cache.appendingPathComponent(font.name)
+            let size = (try? fm.attributesOfItem(atPath: file.path)[.size] as? Int) ?? nil
+            if size != font.size {
+                do { try font.bytes().write(to: file, options: .atomic) } catch { written = false }
+            }
+        }
+        let names = fonts.map(\.name)
+        for old in (try? fm.contentsOfDirectory(atPath: cache.path)) ?? [] where old.hasSuffix(".woff2") && !names.contains(old) {
+            try? fm.removeItem(at: cache.appendingPathComponent(old))
+        }
+        if !names.isEmpty, written {
             try? ([stamp] + names).joined(separator: "\n").write(to: cache.appendingPathComponent(stampName), atomically: true, encoding: .utf8)
         }
+        return names
     }
 
     /// Beside the cached fonts: the archive's stamp they were taken from, then their names, a line each.

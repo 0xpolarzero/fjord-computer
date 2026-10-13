@@ -50,4 +50,32 @@ import Testing
         #expect(ClaudeFonts.archiveStamp(archive.path) != stamp)
         #expect(ClaudeFonts.cached(in: cache, stamp: try #require(ClaudeFonts.archiveStamp(archive.path))) == nil)
     }
+
+    @Test func fontsTakenOutOfAnArchiveReplaceWhatWasCutShortAndTheOldOnesGo() throws {
+        let dir = TempDir()
+        let cache = dir.path("fonts")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        // A write cut short of A, and B and an old build's font from before.
+        try Data("A".utf8).write(to: cache.appendingPathComponent("A.woff2"))
+        try Data("bbbb".utf8).write(to: cache.appendingPathComponent("B.woff2"))
+        try Data("old".utf8).write(to: cache.appendingPathComponent("Old.woff2"))
+        var read: [String] = []
+        func font(_ name: String, _ text: String) -> (name: String, size: Int, bytes: () -> Data) {
+            (name, text.utf8.count, { read.append(name); return Data(text.utf8) })
+        }
+        let names = ClaudeFonts.cache([font("A.woff2", "aaaa"), font("B.woff2", "bbbb")], in: cache, stamp: "s1")
+        #expect(names == ["A.woff2", "B.woff2"])
+        #expect(try Data(contentsOf: cache.appendingPathComponent("A.woff2")) == Data("aaaa".utf8))
+        // Whole already: not taken out again.
+        #expect(read == ["A.woff2"])
+        #expect(!FileManager.default.fileExists(atPath: cache.appendingPathComponent("Old.woff2").path))
+        #expect(ClaudeFonts.cached(in: cache, stamp: "s1") == ["A.woff2", "B.woff2"])
+        // One that can't be written: nothing is noted, so they are taken out again next launch.
+        let readOnly = dir.path("readonly")
+        try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: true)
+        chmod(readOnly.path, 0o500)
+        defer { chmod(readOnly.path, 0o755) }
+        ClaudeFonts.cache([font("A.woff2", "aaaa")], in: readOnly, stamp: "s2")
+        #expect(ClaudeFonts.cached(in: readOnly, stamp: "s2") == nil)
+    }
 }
