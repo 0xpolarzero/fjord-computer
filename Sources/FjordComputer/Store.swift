@@ -1361,8 +1361,9 @@ final class Store {
         async let statusReq = branchStatuses(name, target: sha, branch: branch)
         let ((checks, checksRead), (combined, statusesRead)) = try await (checksReq, statusReq)
         // Runs not all read are like checks not all read: what isn't read may still run.
-        let reading = Self.readCI(runs: runs, sha: sha, checks: checks, combined: combined,
-                                  complete: checksRead && statusesRead && runsRead)
+        // Folded off the main thread.
+        let reading = await InboxSync.foldCI(runs: runs, sha: sha, checks: checks, combined: combined,
+                                             complete: checksRead && statusesRead && runsRead)
         let title = runs.first { $0.headSha == sha }?.displayTitle ?? head.headline
         return CIStatus(branch: current, sha: sha, url: URL(string: "https://github.com/\(name)/commit/\(sha)"),
                         checkedAt: Date(), title: title, updatedAt: reading.changedAt, workflows: reading.workflows,

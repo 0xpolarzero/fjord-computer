@@ -361,6 +361,35 @@ enum InboxSync {
         return "query { rateLimit { cost remaining resetAt } \(body.joined(separator: "\n")) }"
     }
 
+    /// A search page's node made into a thing: its index on the page (what GitHub's errors name), and where its review
+    /// threads go on past those that came with it.
+    struct PageThing {
+        var index: Int
+        var thing: Thing
+        var more: (node: String, cursor: String, total: Int)?
+    }
+
+    /// The things of each search's page in a GraphQL answer's `data`, by alias, made off the main thread (this is
+    /// nonisolated and async: a sync's dozens of PRs, their comments, reviews and threads, each date parsed, never hold the
+    /// main thread). A node GitHub couldn't give (null), or that isn't a thing, is left out.
+    static func pageThings(_ data: [String: Any], aliases: [String]) async -> [String: [PageThing]] {
+        var pages: [String: [PageThing]] = [:]
+        for alias in aliases {
+            guard let result = data[alias] as? [String: Any] else { continue }
+            pages[alias] = ((result["nodes"] as? [Any]) ?? []).enumerated().compactMap { n, value in
+                guard let node = value as? [String: Any], let thing = thing(node) else { return nil }
+                return PageThing(index: n, thing: thing, more: moreThreads(node))
+            }
+        }
+        return pages
+    }
+
+    /// `Store.readCI`, off the main thread (nonisolated and async): what a branch's CI says, folded from its runs and checks.
+    static func foldCI(runs: [GHWorkflowRuns.Run], sha: String?, checks: [GHCheckRuns.Run], combined: GHCombinedStatus,
+                       complete: Bool) async -> Store.CIReading {
+        Store.readCI(runs: runs, sha: sha, checks: checks, combined: combined, complete: complete)
+    }
+
     /// Where a PR's review threads go on past the page read, if they do: its node id, the cursor, and how many it has.
     static func moreThreads(_ node: [String: Any]) -> (node: String, cursor: String, total: Int)? {
         guard node["__typename"] as? String == "PullRequest", let id = node["id"] as? String else { return nil }
@@ -1286,7 +1315,9 @@ extension Store {
         await withTaskGroup(of: RepoRead.self) { group in
             var queue = targets.makeIterator()
             func add(_ target: (repo: String, branch: String?)) {
-                group.addTask { @MainActor in
+                // Not on the main actor itself: only what the store keeps is read there (`workflowThings`); the answers are
+                // decoded and folded off it.
+                group.addTask {
                     do {
                         return RepoRead(repo: target.repo, things: try await self.workflowThings(target.repo, target.branch))
                     } catch {
@@ -1442,15 +1473,18 @@ extension Store {
                     guard path.count > 3, let index = path[2] as? Int else { missing.insert(alias); continue }
                     broken.insert([alias, String(index)])
                 }
+                // Made into things off the main thread; what is kept of them from before is looked up here, as it is now.
+                let pages = await InboxSync.pageThings(data, aliases: batch.map { "s\($0)" })
                 for i in batch {
                     if missing.contains("s\(i)") { failed.insert(searches[i]) }
                     guard let result = data["s\(i)"] as? [String: Any] else { failed.insert(searches[i]); continue }
                     // A node GitHub couldn't give is null: the others are still things.
-                    for (n, value) in ((result["nodes"] as? [Any]) ?? []).enumerated() {
-                        guard let node = value as? [String: Any], var thing = InboxSync.thing(node) else { continue }
+                    for page in pages["s\(i)"] ?? [] {
+                        let n = page.index
+                        var thing = page.thing
                         foundBy[thing.id, default: []].insert(searches[i])
                         moreThreads[thing.id] = nil
-                        if let more = InboxSync.moreThreads(node) {
+                        if let more = page.more {
                             if let old = things[thing.id], InboxSync.keepsTail(old, total: more.total, updatedAt: thing.updatedAt,
                                                                               now: now, remaining: gh.graphqlRemaining) {
                                 InboxSync.takeTail(of: old, into: &thing)
