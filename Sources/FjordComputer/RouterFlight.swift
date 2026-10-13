@@ -54,12 +54,13 @@ struct FlightFramesKey: PreferenceKey {
     private(set) var flights: [Flight] = [] {
         didSet { track() }
     }
-    /// Whether the places are measured (`frames`): only while a message is on its way, so the page's cards and rows carry no
-    /// measuring the rest of the time. Written only when it changes.
+    /// Whether the places are measured (`frames`): only while a message is on its way (a pill pending, or flying), so the
+    /// page's cards and rows carry no measuring the rest of the time. Written only when it changes.
     private(set) var tracking = false
 
     private func track() {
-        let on = !pills.isEmpty || !flights.isEmpty
+        // A pill that failed (waiting for its Retry or dismissal) or is leaving goes nowhere: it measures nothing.
+        let on = pills.contains { $0.phase == .pending } || !flights.isEmpty
         if tracking != on { tracking = on }
     }
     /// When each place was last landed on: its flash.
