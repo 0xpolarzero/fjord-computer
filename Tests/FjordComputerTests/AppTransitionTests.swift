@@ -19,7 +19,7 @@ extension WindowSeams {
             let picture = NSImage(cgImage: try #require(bitmap.makeImage()), size: NSSize(width: 46, height: 200))
             let bar = BarMorph(frame: NSRect(x: screen.frame.minX + 100, y: screen.frame.minY + 100, width: 46, height: 200),
                                snapshot: picture)
-            let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: bar))
+            let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: bar))
             defer { run.end(); window.close() }
             let expected = window.frame.union(bar.frame).union(bar.cellFrame).insetBy(dx: -200, dy: -200)
                 .intersection(screen.frame)
@@ -45,7 +45,7 @@ extension WindowSeams {
                                     styleMask: [.borderless], backing: .buffered, defer: true)
             window.isReleasedWhenClosed = false
             let bar = BarMorph(frame: NSRect(x: screen.frame.minX + 100, y: screen.frame.minY + 100, width: 46, height: 200))
-            let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: bar))
+            let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: bar))
             defer { run.end(); window.close() }
             let frame = run.overlay.frame
             let geometry = run.geometry.frame
@@ -55,7 +55,7 @@ extension WindowSeams {
             #expect(run.overlay.frame == frame && run.geometry.frame == geometry)
             run.end()
             let moved = BarMorph(frame: bar.frame.offsetBy(dx: 100, dy: 100))
-            let next = try #require(AppTransition.makeRun(for: window, image: nil, bar: moved))
+            let next = try #require(AppTransition.makeRun(for: window, picture: nil, bar: moved))
             defer { next.end() }
             #expect(next.overlay === run.overlay)
             #expect(next.overlay.frame.size != frame.size)

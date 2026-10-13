@@ -97,7 +97,7 @@ extension WindowSeams {
             window.isReleasedWhenClosed = false
             let screen = try #require(window.screen ?? NSScreen.main)
             let prepared = AppTransition.prepareOverlay(on: screen)
-            let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: nil))
+            let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: nil))
             defer { run.end() }
             #expect(prepared === run.overlay && !prepared.isVisible && !window.isVisible)
             let content = run.overlay.contentView

@@ -469,45 +469,36 @@ enum AppTransition {
         }
     }
 
-    /// An overlay for `window` (laid out at its frame) on the window's picture as it is now, ready to show; nil when there
-    /// is nothing to draw. `glass`: the glass morph (M1). `closing`: the window goes out of sight in this turn (see
-    /// `snapshot`'s `restoreLater`). `glance`: the window's, taken just before (see `Run.glance`).
-    static func makeRun(for window: NSWindow, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
-                        glass: Bool? = nil, closing: Bool = false, glance: Glance? = nil) -> Run? {
-        let isGlass = glass ?? usesGlass
-        let radius = cornerRadius(of: window)
-        guard let image = snapshot(of: window, capture: glassWindow.capture,
-                                   hole: glassWindow.hole(glass: isGlass, radius: radius), restoreLater: closing),
-              let screen = window.screen ?? NSScreen.main else { return nil }
-        let run = Run(window: window, image: image, imageIsKey: isKey(window), screen: screen, bar: bar,
-                      radius: radius, glassWindow: glassWindow, glass: isGlass)
-        run.glance = glance
-        return run
-    }
-
-    /// An overlay for `window` with nothing captured: on `image` (a picture kept from before, the window as `glance`
-    /// says it was drawn then), else on the window's bare surface until `refresh` brings one.
-    static func makeRun(for window: NSWindow, image: CGImage?, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
-                        glass: Bool? = nil, glance: Glance? = nil) -> Run? {
+    /// An overlay for `window` with nothing captured: on `picture` (taken before, and what it shows, with what it was
+    /// taken with), else on the window's bare surface until `refresh` brings one.
+    static func makeRun(for window: NSWindow, picture: Picture?, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
+                        glass: Bool? = nil) -> Run? {
         guard let screen = window.screen ?? NSScreen.main else { return nil }
-        // A picture kept was taken with the window key (at idle, or at a close).
-        let run = Run(window: window, image: image, imageIsKey: image != nil, screen: screen, bar: bar,
-                      radius: cornerRadius(of: window), glassWindow: glassWindow, glass: glass ?? usesGlass)
-        run.glance = image == nil ? nil : glance
-        return run
+        return Run(window: window, picture: picture, screen: screen, bar: bar, radius: cornerRadius(of: window),
+                   glassWindow: glassWindow, glass: glass ?? usesGlass)
     }
 
-    /// A picture of `window` as it is now, to keep (see `Picture`): its glance first, then the picture itself, for the
-    /// morph `glass` is or isn't, of `destination`. Nil without the keyboard (a picture taken then has grey buttons).
-    /// `glance`: the window's, when the caller has just drawn one (else one is drawn here).
+    /// A picture of `window` as it is now, with everything it is taken with (its frame, scale, appearance and sidebar, the
+    /// keyboard's, its glance), for the morph `glass` is or isn't, of `destination`. `glance`: the window's, when the
+    /// caller has just drawn one (else one is drawn here). `restoreLater`: see `snapshot`.
+    static func takePicture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool, destination: AppDestination,
+                            glance: Glance? = nil, restoreLater: Bool = false) -> Picture? {
+        let glance = glance ?? self.glance(of: window)
+        let key = isKey(window)
+        let frame = window.frame, scale = window.backingScaleFactor, appearance = window.effectiveAppearance.name
+        guard let image = snapshot(of: window, capture: glassWindow.capture,
+                                   hole: glassWindow.hole(glass: glass, radius: cornerRadius(of: window)),
+                                   restoreLater: restoreLater) else { return nil }
+        return Picture(image: image, frame: frame, scale: scale, destination: destination, glass: glass, glance: glance,
+                       appearance: appearance, sidebar: glassWindow.sidebar, key: key)
+    }
+
+    /// A picture of `window` to keep (see `Picture`): only one taken with the keyboard (a picture taken without has grey
+    /// buttons).
     static func picture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool, destination: AppDestination,
                         glance: Glance? = nil) -> Picture? {
-        guard isKey(window), let glance = glance ?? self.glance(of: window),
-              let image = snapshot(of: window, capture: glassWindow.capture,
-                                   hole: glassWindow.hole(glass: glass, radius: cornerRadius(of: window))) else { return nil }
-        return Picture(image: image, frame: window.frame, scale: window.backingScaleFactor, destination: destination,
-                       glass: glass, glance: glance, appearance: window.effectiveAppearance.name,
-                       sidebar: glassWindow.sidebar)
+        guard isKey(window) else { return nil }
+        return takePicture(of: window, glassWindow: glassWindow, glass: glass, destination: destination, glance: glance)
     }
 
     /// The window's picture as it was last seen, taken while it had the keyboard (its buttons in colour, as the real
@@ -531,6 +522,8 @@ enum AppTransition {
         /// The inset sidebar's frame it was taken with (its hole on glass): another (the sidebar folded since) never
         /// stands in.
         var sidebar: NSRect?
+        /// Taken while the window had the keyboard: only such a picture is kept.
+        var key = true
 
         /// Whether it can stand for `window` as it opens: the same size, at the scale a picture of it would be taken at now
         /// (the window's own, as `scale` is: a window off every screen keeps that of the last one it was on, which need not
@@ -698,15 +691,17 @@ enum AppTransition {
         private(set) var startPose: Pose?
         private var token = 0
         private var completion: (() -> Void)?
-        /// The window's picture shown, if any yet.
-        private(set) var image: CGImage?
+        /// The window's picture shown, if any yet, with all it was taken with (never relabelled from the window as it is
+        /// later: what the sidebar, the frame or the appearance are now says nothing of what the picture shows).
+        private(set) var picture: Picture?
+        var image: CGImage? { picture?.image }
         /// Whether that picture was taken while the window had the keyboard (its buttons as the real window will show them).
-        private(set) var imageIsKey: Bool
+        var imageIsKey: Bool { picture?.key == true }
         /// The place that picture shows, as its window says (nil: none, or not known).
         var shows: AppDestination?
         /// The window as it was drawn when that picture was taken (nil: not known, or no picture): an equal glance of the
         /// window now says the picture is exactly what it shows, so the opening hands over on it with a cut.
-        fileprivate(set) var glance: Glance?
+        var glance: Glance? { picture?.glance }
         /// When the animation under way has settled (media time): the overlay does not go before.
         private(set) var settlesAt: CFTimeInterval = 0
         /// The opening has handed over: its picture is gone and the real window's live pixels show (the overlay's shadow
@@ -719,12 +714,13 @@ enum AppTransition {
         /// Whether this is the glass morph (M1).
         var isGlass: Bool { glass != nil }
 
-        fileprivate init(window: NSWindow, image: CGImage?, imageIsKey: Bool, screen: NSScreen, bar: BarMorph?,
+        fileprivate init(window: NSWindow, picture: Picture?, screen: NSScreen, bar: BarMorph?,
                          radius: CGFloat, glassWindow: GlassWindow, glass useGlass: Bool) {
             self.screen = screen
             self.bar = bar
-            self.image = image
-            self.imageIsKey = imageIsKey
+            self.picture = picture
+            shows = picture?.destination
+            let image = picture?.image
             capture = glassWindow.capture
             sidebar = glassWindow.sidebar
             windowFrame = window.frame
@@ -798,16 +794,21 @@ enum AppTransition {
             overlay.orderFrontRegardless()
         }
 
-        /// A newer picture of the window (it was built, or its content changed since): the same frame. `crossFade`: the
-        /// picture shown is another (none, or another place's), so the new one fades in over it rather than popping in.
-        /// `glance`: the window's, taken just before (else one is taken here).
-        func refresh(_ window: NSWindow, crossFade: Bool = false, glance: Glance? = nil) {
-            let hole = GlassWindow(sidebar: sidebar).hole(glass: isGlass, radius: windowRadius)
-            let glance = glance ?? AppTransition.glance(of: window)
-            guard let image = AppTransition.snapshot(of: window, capture: capture, hole: hole) else { return }
-            self.image = image
-            self.glance = glance
-            imageIsKey = AppTransition.isKey(window)
+        /// A newer picture of the window (it was built, or its content changed since), of `destination`: the same frame.
+        /// `crossFade`: the picture shown is another (none, or another place's), so the new one fades in over it rather
+        /// than popping in. `glance`: the window's, taken just before (else one is taken here).
+        func refresh(_ window: NSWindow, destination: AppDestination, crossFade: Bool = false, glance: Glance? = nil) {
+            guard let picture = AppTransition.takePicture(of: window, glassWindow: GlassWindow(capture: capture, sidebar: sidebar),
+                                                          glass: isGlass, destination: destination, glance: glance)
+            else { return }
+            install(picture, crossFade: crossFade)
+        }
+
+        /// `picture` shown from now on (see `refresh`).
+        func install(_ picture: Picture, crossFade: Bool = false) {
+            self.picture = picture
+            shows = picture.destination
+            let image = picture.image
             let signpost = MorphSignposts.signposter.beginInterval("Install picture")
             defer { MorphSignposts.signposter.endInterval("Install picture", signpost) }
             CATransaction.begin()

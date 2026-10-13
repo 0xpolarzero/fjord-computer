@@ -272,7 +272,7 @@ extension WindowSeams {
                                     styleMask: [.borderless], backing: .buffered, defer: true)
             window.isReleasedWhenClosed = false
             let bar = BarMorph(frame: NSRect(x: screen.frame.minX + 100, y: screen.frame.minY + 100, width: 46, height: 200))
-            let run = try #require(AppTransition.makeRun(for: window, image: nil, bar: bar,
+            let run = try #require(AppTransition.makeRun(for: window, picture: nil, bar: bar,
                                                          glassWindow: .init(sidebar: sidebar), glass: true))
             return (run, window)
         }

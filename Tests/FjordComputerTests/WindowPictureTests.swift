@@ -33,3 +33,43 @@ import Testing
         #expect(moved.within(0.1, of: base) && !moved.within(0.05, of: base))
     }
 }
+
+extension WindowSeams {
+    /// What a kept picture may stand in for: only the window it was taken of, as it was then.
+    @MainActor @Suite(.hostsWindows) struct KeptPictureFits {
+        @Test func aPictureFitsOnlyTheSizeScaleMorphAppearanceAndSidebarItWasTakenWith() throws {
+            _ = NSApplication.shared
+            let window = ScaledWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 100, height: 80)),
+                                      styleMask: [.borderless], backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.scale = 2
+            window.appearance = NSAppearance(named: .darkAqua)
+            let bitmap = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
+                                                space: CGColorSpaceCreateDeviceRGB(),
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            let sidebar = NSRect(x: 8, y: 8, width: 40, height: 64)
+            let picture = AppTransition.Picture(image: try #require(bitmap.makeImage()), frame: window.frame, scale: 2,
+                                                destination: .settings, glass: true, appearance: .darkAqua,
+                                                sidebar: sidebar)
+            #expect(picture.fits(window, glass: true, sidebar: sidebar))
+            // The sidebar folded since, the other morph, light mode, another scale or size: none stands in.
+            #expect(!picture.fits(window, glass: true, sidebar: nil))
+            #expect(!picture.fits(window, glass: false, sidebar: sidebar))
+            window.appearance = NSAppearance(named: .aqua)
+            #expect(!picture.fits(window, glass: true, sidebar: sidebar))
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.scale = 1
+            #expect(!picture.fits(window, glass: true, sidebar: sidebar))
+            window.scale = 2
+            window.setContentSize(NSSize(width: 101, height: 80))
+            #expect(!picture.fits(window, glass: true, sidebar: sidebar))
+        }
+    }
+}
+
+@MainActor
+private final class ScaledWindow: AwayWindow {
+    var scale: CGFloat = 1
+    override var backingScaleFactor: CGFloat { scale }
+}

@@ -383,9 +383,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             current = run
         } else {
             run?.end()
-            current = AppTransition.makeRun(for: window, image: kept?.image, bar: bar, glassWindow: chrome, glass: glass,
-                                            glance: kept?.glance)
-            current?.shows = kept?.destination
+            current = AppTransition.makeRun(for: window, picture: kept, bar: bar, glassWindow: chrome, glass: glass)
         }
         run = current
         guard let current else {
@@ -459,10 +457,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let now = AppTransition.glance(of: window)
         let first = checked != mine
         checked = mine
-        if run.image != nil, let now, now.same(as: run.glance) {
-            run.shows = navigator.selection
-            return
-        }
+        if run.image != nil, let now, now.same(as: run.glance) { return }
         // Moved on by a detail of its own (a scroller shown again, a count, a hover; not something asked for): no picture
         // for that, the handoff fades into the real window over it instead of cutting to it.
         if run.image != nil, askedFor != mine, now?.within(AppTransition.Glance.closeTolerance, of: run.glance) == true {
@@ -491,8 +486,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// The overlay's picture taken again, of the place the window shows now (`glance`: the window's, taken just before).
     private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false,
                          glance: AppTransition.Glance? = nil) {
-        run.refresh(window, crossFade: crossFade, glance: glance)
-        run.shows = navigator.selection
+        run.refresh(window, destination: navigator.selection, crossFade: crossFade, glance: glance)
     }
 
     /// While the window is open and still, its picture is kept the window as drawn, so a close starts on it at once with
@@ -597,13 +591,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private func finishOpening(_ mine: Int) {
         guard generation == mine else { return }
         stopKeyWatch()
-        // The picture the overlay handed over on is kept with the glance of what it shows, so a close at once starts on it
-        // when the window is still that (near enough); the idle keeper takes another once it has moved on.
-        if let run, !memoryShort, let image = run.image, run.imageIsKey, let glance = run.glance, let window {
-            closedPicture = AppTransition.Picture(image: image, frame: window.frame, scale: window.backingScaleFactor,
-                                                  destination: run.shows ?? navigator.selection, glass: run.isGlass,
-                                                  glance: glance, appearance: window.effectiveAppearance.name,
-                                                  sidebar: glassWindow(window).sidebar)
+        // The picture the overlay handed over on is kept as it was taken (with the glance of what it shows), so a close at
+        // once starts on it when the window is still that (near enough); the idle keeper takes another once it has moved on.
+        if let picture = run?.picture, picture.key, picture.glance != nil, !memoryShort {
+            closedPicture = picture
         } else {
             closedPicture = nil
         }
@@ -653,13 +644,14 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar),
                kept.destination == navigator.selection, AppTransition.isKey(sender), let then = kept.glance,
                now?.within(AppTransition.Glance.closeTolerance, of: then) == true {
-                current = AppTransition.makeRun(for: sender, image: kept.image, bar: barMorph, glassWindow: chrome,
-                                                glass: glass, glance: then)
+                current = AppTransition.makeRun(for: sender, picture: kept, bar: barMorph, glassWindow: chrome, glass: glass)
+            } else if let taken = AppTransition.takePicture(of: sender, glassWindow: chrome, glass: glass,
+                                                           destination: navigator.selection, glance: now,
+                                                           restoreLater: true) {
+                current = AppTransition.makeRun(for: sender, picture: taken, bar: barMorph, glassWindow: chrome, glass: glass)
             } else {
-                current = AppTransition.makeRun(for: sender, bar: barMorph, glassWindow: chrome, glass: glass, closing: true,
-                                                glance: now)
+                current = nil
             }
-            current?.shows = navigator.selection
         }
         guard let current else {
             MorphSignposts.signposter.endInterval("Close to first flush", asked)
@@ -667,13 +659,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             return false
         }
         run = current
-        // Kept for the next opening to start on, when it was taken with the window key, of the place it shows (an opening
-        // cut short may still show the place it started on), unless memory is short.
-        if !memoryShort, let image = current.image, current.imageIsKey, let place = current.shows {
-            closedPicture = AppTransition.Picture(image: image, frame: sender.frame, scale: sender.backingScaleFactor,
-                                                  destination: place, glass: current.isGlass, glance: current.glance,
-                                                  appearance: sender.effectiveAppearance.name, sidebar: chrome.sidebar)
-        }
+        // Kept for the next opening to start on, when it was taken with the window key, as it was taken (an opening cut
+        // short may still show the place, the sidebar or the size it started on), unless memory is short.
+        if !memoryShort, let picture = current.picture, picture.key { closedPicture = picture }
         if !interrupting {
             // The overlay shows the window before the real one goes, in this turn: its frame is submitted to the render
             // server ahead of the window going, which reaches the server after it, so no frame shows neither.
