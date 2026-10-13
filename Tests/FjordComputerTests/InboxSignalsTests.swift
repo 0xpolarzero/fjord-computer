@@ -278,6 +278,22 @@ import Testing
         return (s, calls)
     }
 
+    @Test func labelsHeldByTheMorphAreDroppedIfTheKeyChangedOrTheReadWasCancelled() async {
+        for cancel in [false, true] {
+            let (s, _) = store([pr(1, comments: [comment("c1", tok)])])
+            let gate = MotionGate.Gate(longest: 600)
+            s.motionGate = gate
+            gate.began()
+            let read = Task { await s.readInbox() }
+            for _ in 0..<3000 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+            // While the window moves: the key changes, or the poll the read is part of is cancelled.
+            if cancel { read.cancel() } else { s.jevGate.keyChanged() }
+            gate.ended()
+            await read.value
+            #expect(s.things["pr:a/one#1"]?.signals?.messages == nil)
+        }
+    }
+
     @Test func oneCallReadsEachNewMessageOnceAndNeverAgain() async {
         let mine = ThingComment(id: "c0", author: Person(login: "me"), at: now.addingTimeInterval(-500), snippet: "Done")
         let (s, calls) = store([pr(1, comments: [mine, comment("c1", tok), comment("c2", bot, ago: 120)])])

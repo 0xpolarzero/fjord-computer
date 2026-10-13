@@ -658,7 +658,13 @@ extension Store {
                 return
             }
             // Taken in once the window's morph has played (`MotionGate`): the card changes, and the Router's history with it.
-            await MotionGate.still()
+            await self.motionGate.still()
+            // Stopped while it waited (the Router switched off, the key changed): nothing of it is taken, and it is asked
+            // again once it can be.
+            if Task.isCancelled || self.jevGate.generation != generation || !self.router.enabled {
+                stopped = true
+                return
+            }
             if !self.jevReadsInbox { options.removeAll(where: \.fromInbox) }
             var triage = RouterTriage.parse(answers, options: options, source: source)
             for extra in extras { extra.apply(answers, &triage) }
