@@ -499,10 +499,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// a second, a glance says whether the
     /// window still is what `closedPicture` shows, and when it isn't a picture is taken there and then, at most a
     /// twentieth of the main thread's time (`mayCaptureAtIdle`). Not short of memory, nor out of sight.
-    private func keepPictureFresh() {
+    func keepPictureFresh() {
         guard pictureKeeper == nil, AppTransition.enabled else { return }
-        let timer = Timer(fire: Date(timeIntervalSinceNow: 0.5), interval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.keepPicture() }
+        let timer = Timer(fire: Date(timeIntervalSinceNow: 0.5), interval: 1, repeats: true) { [weak self] timer in
+            // A controller gone takes its keeper with it.
+            guard let self else { return timer.invalidate() }
+            MainActor.assumeIsolated { self.keepPicture() }
         }
         timer.tolerance = 0.25
         // The default mode only: not while a scroll, a drag or a menu tracks.
@@ -514,6 +516,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         pictureKeeper?.invalidate()
         pictureKeeper = nil
     }
+
+    /// The idle keeper's timer, while it runs (the tests look).
+    var keeperTimer: Timer? { pictureKeeper }
 
     /// One look of the idle keeper (see `keepPictureFresh`).
     private func keepPicture() {

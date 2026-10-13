@@ -867,6 +867,19 @@ extension WindowSeams {
             }
         }
 
+        /// The idle keeper's timer goes with its controller: it does not wake every second for nothing once the window is gone.
+        @Test func theKeeperStopsWithItsController() {
+            morphing { _, _ in
+                var other: AppWindowController? = AppWindowController(store: Store(), remembers: false, checksClaudeCode: false)
+                other?.keepPictureFresh()
+                guard let timer = other?.keeperTimer else { return #expect(Bool(false), "no keeper") }
+                #expect(timer.isValid)
+                other = nil
+                timer.fire()
+                #expect(!timer.isValid)
+            }
+        }
+
         /// Short of memory while open, a morphing close keeps no picture for the next open.
         @Test func memoryPressureWhileOpenKeepsNoPictureOnAMorphingClose() {
             morphing { controller, ticks in
