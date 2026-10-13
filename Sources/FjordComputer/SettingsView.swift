@@ -435,7 +435,7 @@ private struct RouterSettings: View {
 
     @ViewBuilder private var sessionIcons: some View {
         SettingsRow("Icons picked for you",
-                    info: ("Icons picked for you", "Each session in the Router gets an icon instead of letters. Its title, project name and first message go to TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), then one of that kind not already on screen, from \(SessionIcons.drawable.count) in all. Two small requests, about $0.0002 a session. Keys come from console.typesafe.ai.")) {
+                    info: ("Icons picked for you", "Each session in the Router gets an icon instead of letters. Its title, project name and first message go to TypeSafe (api.typesafe.ai), whose Jev model picks what kind of icon fits (code, debugging, data, people…), then one of that kind not already on screen, from \(SessionIcons.drawableCount ?? SessionIcons.iconCount) in all. Two small requests, about $0.0002 a session. Keys come from console.typesafe.ai.")) {
             SettingsSwitch("Icons picked for you", isOn: Binding(get: { store.agents.iconsEnabled }, set: { store.setIconsEnabled($0) }))
         }
         if store.agents.iconsEnabled {
