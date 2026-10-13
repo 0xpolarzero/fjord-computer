@@ -22,9 +22,9 @@ struct ActionsEditor: View {
                 .padding(.bottom, 12)
             VStack(alignment: .leading, spacing: 6) {
                 // One that sends to the Router shows only while Triage and the Router are both on (it is kept meanwhile).
-                ForEach($actions.items) { $action in
+                ForEach(actions.items) { action in
                     if store.toolsLinked || !action.kind.sendsToRouter {
-                        ActionRow(action: $action, store: store, rules: rules, categoryName: categoryName, kinds: kinds) {
+                        ActionRow(action: binding(action), store: store, rules: rules, categoryName: categoryName, kinds: kinds) {
                             actions.items.removeAll { $0.id == action.id }
                         }
                     }
@@ -32,6 +32,20 @@ struct ActionsEditor: View {
                 addMenu.padding(.top, actions.isEmpty ? 0 : 6)
             }
         }
+    }
+
+    /// An action's binding by its id, not its place in the list: a write that comes after it was removed (its prompt's
+    /// typing written as the field goes) is dropped, rather than landing on the action that took its place, or past the end.
+    private func binding(_ action: CategoryAction) -> Binding<CategoryAction> {
+        let id = action.id
+        return Binding(get: { actions.items.first { $0.id == id } ?? action },
+                       set: { new in Self.replace(new, in: &actions.items) })
+    }
+
+    /// `action` in place of the one with its id; nothing when that one is gone.
+    static func replace(_ action: CategoryAction, in items: inout [CategoryAction]) {
+        guard let i = items.firstIndex(where: { $0.id == action.id }) else { return }
+        items[i] = action
     }
 
     private var addMenu: some View {
