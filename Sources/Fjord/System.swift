@@ -521,6 +521,10 @@ enum AppTermination {
         defer { bypassNextRequest = false }
         return bypassNextRequest
     }
+
+    static func shouldInspectComputers(computersEnabled: Bool, engineAvailable: Bool) -> Bool {
+        computersEnabled && engineAvailable
+    }
 }
 
 @MainActor
@@ -536,6 +540,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !AppTermination.consumeBypass(), let store, store.persists, !Store.isDemo else { return .terminateNow }
+        guard AppTermination.shouldInspectComputers(computersEnabled: store.computersOn,
+                                                   engineAvailable: store.hasEngineConnection) else { return .terminateNow }
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {

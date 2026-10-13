@@ -7,15 +7,18 @@ import OSLog
 @MainActor
 final class Store {
     /// Demo and snapshot runs: never touch the Keychain (a new build would stop on an access prompt).
-    nonisolated static let isDemo = CommandLine.arguments.contains { ["--demo", "--snapshot", "--playground", "--playground-shots"].contains($0) }
+    nonisolated static let isDemo = CommandLine.arguments.contains { ["--demo", "--snapshot", "--playground", "--playground-shots", "--window", "--window-shots"].contains($0) }
 
     @ObservationIgnored let engineClient: any EngineClient
+    @ObservationIgnored let hasEngineConnection: Bool
     @ObservationIgnored let computers: ComputersModel
 
     init(engineClient: (any EngineClient)? = nil) {
-        let client = engineClient ?? MockEngineClient()
-        self.engineClient = client
-        self.computers = ComputersModel(client: client, initialInventory: (client as? MockEngineClient)?.inventory)
+        let client = engineClient ?? ((Store.isDemo || UnderTest.isRunning) ? MockEngineClient() : nil)
+        let selectedClient = client ?? UnavailableEngineClient()
+        self.engineClient = selectedClient
+        self.hasEngineConnection = client != nil
+        self.computers = ComputersModel(client: selectedClient, initialInventory: (selectedClient as? MockEngineClient)?.inventory)
     }
 
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).

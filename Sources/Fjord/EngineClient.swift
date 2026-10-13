@@ -417,10 +417,12 @@ enum EngineClientError: LocalizedError, Equatable {
     case unsupported(String)
     case invalidAction(String)
     case jobFailed(String)
+    case unavailable
 
     var errorDescription: String? {
         switch self {
         case .notFound(let message), .unsupported(let message), .invalidAction(let message), .jobFailed(let message): message
+        case .unavailable: "No Silo engine is connected."
         }
     }
 }
@@ -445,6 +447,29 @@ protocol EngineClient {
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String
     func eventsUnsubscribe(subscription: String) async
     func engineDisconnect() async throws
+}
+
+/// Keeps Computers unavailable in ordinary Fjord launches until a real Silo adapter is connected.
+@MainActor
+final class UnavailableEngineClient: EngineClient {
+    private func unavailable<T>() throws -> T { throw EngineClientError.unavailable }
+
+    func computersList(deviceId: String?) async throws -> ComputerInventory { try unavailable() }
+    func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult { try unavailable() }
+    func computersStart(_ reference: ComputerReference) async throws -> ComputerJob { try unavailable() }
+    func computersStop(_ reference: ComputerReference) async throws -> ComputerJob { try unavailable() }
+    func computersForceStop(_ reference: ComputerReference) async throws { try unavailable() }
+    func computersDelete(_ request: ComputerDeleteRequest) async throws -> ComputerJob { try unavailable() }
+    func computersConfigurationRead(deviceId: String?) async throws -> ComputerConfigurationRequest { try unavailable() }
+    func checkpointsList(computerId: String, deviceId: String?) async throws -> [ComputerCheckpoint] { try unavailable() }
+    func checkpointsCreate(_ request: CheckpointCreateRequest) async throws -> ComputerJob { try unavailable() }
+    func checkpointsRestore(_ request: CheckpointRestoreRequest) async throws -> ComputerJob { try unavailable() }
+    func checkpointsFork(_ request: CheckpointForkRequest) async throws -> ComputerJob { try unavailable() }
+    func checkpointsDelete(_ request: CheckpointDeleteRequest) async throws -> ComputerJob { try unavailable() }
+    func displayShow(_ reference: ComputerReference) async throws { try unavailable() }
+    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String { try unavailable() }
+    func eventsUnsubscribe(subscription: String) async {}
+    func engineDisconnect() async throws {}
 }
 
 /// A deterministic in-process client for the first Computers slice and its window shots.

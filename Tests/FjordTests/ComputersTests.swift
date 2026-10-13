@@ -25,6 +25,12 @@ import Testing
         #expect(ComputerQuitPrompt.make(inventory: inventory) == nil)
     }
 
+    @Test func normalQuitSkipsComputerInspectionWhenComputersAreOffOrEngineIsAbsent() {
+        #expect(!AppTermination.shouldInspectComputers(computersEnabled: false, engineAvailable: true))
+        #expect(!AppTermination.shouldInspectComputers(computersEnabled: true, engineAvailable: false))
+        #expect(AppTermination.shouldInspectComputers(computersEnabled: true, engineAvailable: true))
+    }
+
     @Test func cancelLeavesEngineConnectedAndDoesNotStopComputers() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client)
