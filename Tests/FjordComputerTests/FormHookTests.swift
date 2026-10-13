@@ -350,8 +350,8 @@ import Testing
 
     /// `waitUntil` for these synchronous tests, against the same watchdog; whether `done` held is the test's to check.
     private static func waitUntil(_ done: () -> Bool) -> Bool {
-        let started = Date()
-        while !done() && Date().timeIntervalSince(started) < waitWatchdog { Thread.sleep(forTimeInterval: 0.01) }
+        var watchdog = Watchdog()
+        while !done() && !watchdog.expired() { Thread.sleep(forTimeInterval: 0.01) }
         return done()
     }
 

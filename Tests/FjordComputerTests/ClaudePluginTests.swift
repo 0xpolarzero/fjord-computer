@@ -706,8 +706,8 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
     private func plugin(_ inbox: RelayInbox, session: String, nonce: String, answer: String?) -> Task<String?, Never> {
         Task.detached {
             let folder = inbox.folder(for: session)
-            let deadline = Date().addingTimeInterval(waitWatchdog)
-            while Date() < deadline {
+            var watchdog = Watchdog()
+            while !watchdog.expired() {
                 if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
                     if let answer { try? Data((answer + "\n").utf8).write(to: folder.appendingPathComponent("\(nonce).ack"), options: .atomic) }
                     return text

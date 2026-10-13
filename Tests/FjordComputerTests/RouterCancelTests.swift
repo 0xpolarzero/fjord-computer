@@ -28,8 +28,8 @@ import Testing
         let nonce = try #require(RelayInbox.header(of: abort)?.nonce)
         let folder = inbox.folder(for: "cli-a")
         let fake = Task.detached { () -> String? in
-            let deadline = Date().addingTimeInterval(waitWatchdog)
-            while Date() < deadline {
+            var watchdog = Watchdog()
+            while !watchdog.expired() {
                 if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
                     try? Data("ok aborted\n".utf8).write(to: folder.appendingPathComponent("\(nonce).ack"), options: .atomic)
                     return text

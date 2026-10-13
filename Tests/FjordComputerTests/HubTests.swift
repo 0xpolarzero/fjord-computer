@@ -352,11 +352,10 @@ import Testing
 /// height reads the same over several turns, at least as many turns as before. Counted in turns, not time, so a slow
 /// machine only takes longer; the shared watchdog ends a layout that never settles, and fails the test.
 @MainActor func steadyHeight(_ hosting: NSView, turns: Int = 6, sourceLocation: SourceLocation = #_sourceLocation) -> CGFloat {
-    let deadline = Date().addingTimeInterval(waitWatchdog)
-    var last = -1.0, same = 0, passes = 0
+    var watchdog = Watchdog(), last = -1.0, same = 0, passes = 0
     while same < turns || passes < 8 {
-        guard Date() < deadline else {
-            Issue.record("Waited \(waitWatchdog) s for a height that never settled (last \(last))", sourceLocation: sourceLocation)
+        guard !watchdog.expired() else {
+            Issue.record("Waited \(Int(watchdog.elapsed)) s for a height that never settled (last \(last))", sourceLocation: sourceLocation)
             break
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))

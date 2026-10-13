@@ -7,16 +7,39 @@ import Testing
 /// not in a minute.
 let waitWatchdog: TimeInterval = 20
 
+/// A wait's watchdog, counting the time the process got to run rather than the time that passed: each check counts at most
+/// a quarter of a second since the last. A parallel run on the macos-26 runner (3 cores, no GPU) stops the whole process
+/// for 13 to 26 s while its windows first draw; counting that, a wait stopped in it got three reads in 20 s and failed with
+/// nothing wrong but the machine. A process that never runs again still ends its waits, at six times the watchdog.
+struct Watchdog {
+    let seconds: TimeInterval
+    private let started = Date()
+    private var checked = Date(), ran: TimeInterval = 0
+
+    init(_ seconds: TimeInterval = waitWatchdog) { self.seconds = seconds }
+
+    /// Whether the wait has had its time; called once a check, so the time since the last is the check's own.
+    mutating func expired() -> Bool {
+        let now = Date()
+        ran += min(now.timeIntervalSince(checked), 0.25)
+        checked = now
+        return ran >= seconds || now.timeIntervalSince(started) >= seconds * 6
+    }
+
+    /// The time that passed, which a stall makes more than the watchdog's.
+    var elapsed: TimeInterval { Date().timeIntervalSince(started) }
+}
+
 /// Waits for `condition`, which something the test started brings about: returns as soon as it holds. `seconds` is a
 /// watchdog, not a guess at how long the work takes: a runner many times slower still gets there, and one that runs out
 /// fails the test at the wait, so a wait on a condition that can't hold doesn't sit out the watchdog and let the checks
 /// after it pass on whatever state it left.
 @MainActor func waitUntil(within seconds: TimeInterval = waitWatchdog, sourceLocation: SourceLocation = #_sourceLocation,
                           _ condition: () -> Bool) async {
-    let deadline = Date().addingTimeInterval(seconds)
+    var watchdog = Watchdog(seconds)
     while !condition() {
-        guard Date() < deadline else {
-            Issue.record("Waited \(seconds) s for a condition that never held", sourceLocation: sourceLocation)
+        guard !watchdog.expired() else {
+            Issue.record("Waited \(Int(watchdog.elapsed)) s for a condition that never held", sourceLocation: sourceLocation)
             return
         }
         try? await Task.sleep(for: .milliseconds(10))
@@ -30,15 +53,15 @@ let waitWatchdog: TimeInterval = 20
 @MainActor func waitUntilSteady<T: Equatable>(within seconds: TimeInterval = waitWatchdog, turns: Int = 5,
                                               quiet: TimeInterval = 0, sourceLocation: SourceLocation = #_sourceLocation,
                                               _ value: () -> T) async {
-    let start = Date(), deadline = start.addingTimeInterval(seconds)
-    var last = value(), same = 0, since = start
+    let start = Date()
+    var watchdog = Watchdog(seconds), last = value(), same = 0, since = start
     // What a wait that runs out reports: how often it got to read, and the values it read last with when, so a starved
     // main actor tells from a value that keeps moving.
     var polls = 0, longest: TimeInterval = 0, polled = start, changes = 0, seen: [String] = []
     while same < turns || Date().timeIntervalSince(since) < quiet {
-        guard Date() < deadline else {
+        guard !watchdog.expired() else {
             Issue.record("""
-                Waited \(seconds) s for a value that never settled (last \(last)): \(polls) reads, the longest gap \
+                Waited \(Int(watchdog.elapsed)) s for a value that never settled (last \(last)): \(polls) reads, the longest gap \
                 \(Int(longest * 1000)) ms, \(changes) changes, the last at \(seen.joined(separator: ", ")); \
                 \(waitContext())
                 """, sourceLocation: sourceLocation)
@@ -72,10 +95,10 @@ let waitWatchdog: TimeInterval = 20
 /// `waitUntil` for a test off the main actor: `condition` reads only what is safe to read from any thread.
 func waitUntilAnywhere(within seconds: TimeInterval = waitWatchdog, sourceLocation: SourceLocation = #_sourceLocation,
                        _ condition: @Sendable () -> Bool) async {
-    let deadline = Date().addingTimeInterval(seconds)
+    var watchdog = Watchdog(seconds)
     while !condition() {
-        guard Date() < deadline else {
-            Issue.record("Waited \(seconds) s for a condition that never held", sourceLocation: sourceLocation)
+        guard !watchdog.expired() else {
+            Issue.record("Waited \(Int(watchdog.elapsed)) s for a condition that never held", sourceLocation: sourceLocation)
             return
         }
         try? await Task.sleep(for: .milliseconds(10))
