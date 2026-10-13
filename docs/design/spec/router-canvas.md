@@ -6,6 +6,19 @@ The Router gets a second way to show Now: a canvas. It keeps the approved protot
 
 Another session has uncommitted Router work in the main checkout, so this branch moves no code between files: types the canvas reuses lose `private` where they are, and nothing else about them changes unless stated.
 
+## Infinite canvas (revision, supersedes §0.1, §2's range and first look, §3's columns and §5's bar)
+
+The first build put the canvas in Now's column with History beside it and its frames in one column: it read as a list in boxes. As the prototype does, the canvas now is the page:
+
+- **Whole page.** In Canvas mode `RouterPageView` draws `CanvasPage` (`RouterCanvasBeta.swift`) instead of the two columns: the canvas under the top bar, edge to edge, running under the composer. The list's branch is untouched.
+- **Ground.** `CanvasDotGrid`, one `Path` of dots 24 apart in the content, offset and scaled with the camera, doubled in spacing until 14 pt or more on screen. No pan bounds. Zoom **0.25…1.0** about the pointer: above 1 `scaleEffect` scales the drawn layers and text blurs, so 1.0 stays the maximum. First look fits everything (the frames' union, `contentBounds`); Fit, a double-click and the ground's context menu fit too.
+- **2D layout.** `CanvasMetrics.columnCount(closed:)` picks the column count whose masonry packing is nearest 16:10, from the frames' closed heights alone (never the window). `preferred(_:placed:)` packs the frames you haven't moved as masonry under the ones you have; `CanvasBoard` places each at its preferred point and `resolve` pushes a frame down under one above it that it would overlap (an opened card pushes down only what is under it). Gaps are 48.
+- **Moving frames.** A drag on a frame's header or its own ground (never a card) moves it in content points at any zoom, lifted (1.01, a shadow, on top). On drop it snaps to 8, every other frame keeps where it was drawn, and all of them are saved under `routerCanvasPositions` (`[folder: [x, y]]`). Frames that overlap are nudged down. New folders are packed under the saved ones. **Reset layout** (a top-right button shown once a frame was moved, and the ground's context menu) clears them. The ground still pans; a frame's drag never does.
+- **Floating chrome.** `CanvasChips` (chips, "Nothing needs you") and `CanvasNotices` (away strip, busy line, nothing found or matches) at the top left; `CanvasControls` at the top right: Summarize what's running, Zoom out, Zoom in, Fit, Reset layout, History (`IconButton`s with tips; History with its unread badge). They float on `ComposerMaterial` (glass on macOS 26 with glass chrome, else `s3` with a ring and the panels' shadow). The content's room starts under them (`topRoom`).
+- **History panel.** `model.pane == .history` opens it: `HistoryColumn` in a 480-wide (45% at most) panel over the canvas's right side, under the buttons, sliding in; the History button or Esc (after the reply chip in the Esc chain) closes it. A message the Router answers with no card opens it, as a narrow window switched to History.
+- **Composer.** On the canvas the composer and pending stack float with no ground behind them.
+- **Shots** can't draw scroll views offscreen (`cacheDisplay`), so the history panel's lines and a plan's body show empty in them, as History does in the list's shots.
+
 ## 0. Decisions
 
 1. **Scope.** The canvas replaces only `RouterNow`'s body. The top bar (title, search), `RouterSetupNotice`, `NowColumn`'s bar (pane switch, chips, `RouterBusyLine` on 26), the History column and the composer stay. `AwayStripView`, the pre-26 `RouterBusyLine`, `RouterNothingFound` and the "Nothing needs you" line live inside `RouterNow` today, so the canvas places them itself (§5). In a wide window (≥1040), History stays beside the canvas. In a narrow one, `PaneSwitch` Now/History still switches, and Now is the canvas.
@@ -95,9 +108,9 @@ enum CanvasMetrics { /* the constants below */
 | moreH | 24 |
 | gap | 6 |
 | groupGap | 16 |
-| columns | as the room holds at 0.85, 1 to 3 |
-| colGap | 40 |
-| rowGap | 40 |
+| columns | as many as give a 16:10 whole, from the frames (see the revision) |
+| colGap | 48 |
+| rowGap | 48 |
 | labelH | 22 |
 
 ## 4. Nodes (`RouterCanvasNodes.swift`) and what they reuse
