@@ -529,6 +529,7 @@ final class MockEngineClient: EngineClient {
     private(set) var disconnected = false
     private(set) var disconnectCount = 0
     private(set) var stopRequests: [String] = []
+    var stopRefusalIDs: Set<String> = []
     private var nextJob = 1
     private var finished: [String: OperationJobFinished] = [:]
     private var subscribers: [String: Subscriber] = [:]
@@ -651,7 +652,11 @@ final class MockEngineClient: EngineClient {
             if case .linux = (try? self.requireComputer(reference.computerId)) {
                 self.updateLinux(reference.computerId) { $0.state = .stopped; $0.stateDetail = "Stopped" }
             } else if case .macos = (try? self.requireComputer(reference.computerId)) {
-                self.updateMacos(reference.computerId) { $0.state = .stopped; $0.detail = nil }
+                if self.stopRefusalIDs.contains(reference.computerId) {
+                    self.updateMacos(reference.computerId) { $0.state = .running; $0.detail = nil }
+                } else {
+                    self.updateMacos(reference.computerId) { $0.state = .stopped; $0.detail = nil }
+                }
             }
         }
         return ComputerJob(jobId: jobId)

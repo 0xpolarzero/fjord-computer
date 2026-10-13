@@ -50,12 +50,6 @@ final class ComputersModel {
     @ObservationIgnored private var subscription: String?
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
     @ObservationIgnored private var finishWaiters: [String: [CheckedContinuation<OperationJobFinished, Never>]] = [:]
-    @ObservationIgnored private var stoppedWaiters: [StoppedWaiter] = []
-
-    private struct StoppedWaiter {
-        var computerIds: Set<String>
-        var continuation: CheckedContinuation<Void, Never>
-    }
 
     init(client: any EngineClient, initialInventory: ComputerInventory? = nil) {
         self.client = client
@@ -92,7 +86,6 @@ final class ComputersModel {
     func refresh() async throws {
         inventory = try await client.computersList(deviceId: nil)
         error = nil
-        resumeStoppedWaiters()
     }
 
     func loadCheckpoints(for computerId: String) async {
@@ -157,7 +150,7 @@ final class ComputersModel {
                 let finished = await waitForFinish(job.jobId)
                 if let failure = finished.error { throw EngineClientError.jobFailed(failure.message) }
             }
-            await waitUntilStopped(Set(prompt.runningComputers.map(\.computerId)))
+            try await waitUntilStopped(Set(prompt.runningComputers.map(\.computerId)))
             try await client.engineDisconnect()
         }
     }
@@ -218,7 +211,6 @@ final class ComputersModel {
         case .computersChanged(let inventory):
             self.inventory = inventory
             error = nil
-            resumeStoppedWaiters()
         case .jobProgress(let progress):
             activeJob = progress
         case .jobFinished(let result):
@@ -236,26 +228,29 @@ final class ComputersModel {
         }
     }
 
-    private func waitUntilStopped(_ computerIds: Set<String>) async {
-        guard !computerIds.isEmpty, !areStopped(computerIds) else { return }
-        await withCheckedContinuation { continuation in
-            stoppedWaiters.append(StoppedWaiter(computerIds: computerIds, continuation: continuation))
+    func waitUntilStopped(_ computerIds: Set<String>, timeout: Duration = .seconds(20)) async throws {
+        guard !computerIds.isEmpty else { return }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while true {
+            var allStopped = true
+            for id in computerIds {
+                guard let row = inventory?.computer(id) else { continue }
+                switch row.displayState {
+                case .stopped:
+                    continue
+                case .stopping:
+                    allStopped = false
+                default:
+                    let detail = row.detail ?? "The stop request for \(row.name) was refused; it is still \(row.displayState.title.lowercased())."
+                    throw EngineClientError.jobFailed(detail)
+                }
+            }
+            if allStopped { return }
+            guard clock.now < deadline else {
+                throw EngineClientError.jobFailed("The computers did not stop before the deadline. You can keep Fjord open and try again.")
+            }
+            try await Task.sleep(for: .milliseconds(100))
         }
-    }
-
-    private func areStopped(_ computerIds: Set<String>) -> Bool {
-        computerIds.allSatisfy { id in
-            guard let row = inventory?.computer(id) else { return true }
-            return row.displayState == .stopped
-        }
-    }
-
-    private func resumeStoppedWaiters() {
-        var waiting: [StoppedWaiter] = []
-        for waiter in stoppedWaiters {
-            if areStopped(waiter.computerIds) { waiter.continuation.resume() }
-            else { waiting.append(waiter) }
-        }
-        stoppedWaiters = waiting
     }
 }

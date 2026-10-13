@@ -61,6 +61,42 @@ import Testing
         #expect(prompt.runningComputers.allSatisfy { model.inventory?.computer($0.computerId)?.displayState == .stopped })
     }
 
+    @Test func refusedMacosStopRestoresQuitChoicesAfterJobSuccess() async throws {
+        var inventory = MockEngineClient.demoInventory
+        inventory.linux.computers = inventory.linux.computers.map { row in
+            var row = row
+            row.state = .stopped
+            row.stateDetail = "Stopped"
+            return row
+        }
+        let client = MockEngineClient(inventory: inventory)
+        client.stopRefusalIDs = [MockEngineClient.devID]
+        let model = ComputersModel(client: client, initialInventory: inventory)
+        let prompt = try #require(ComputerQuitPrompt.make(inventory: inventory))
+        try await model.connect()
+        model.presentQuitPrompt(prompt)
+        model.chooseQuit(.stopAndQuit)
+        try await Task.sleep(for: .milliseconds(1_200))
+        #expect(model.quitError?.contains("refused") == true)
+        #expect(!model.isQuitWorking)
+        #expect(model.quitPrompt != nil)
+    }
+
+    @Test func quitStopWaitHasABoundedDeadline() async throws {
+        var inventory = MockEngineClient.demoInventory
+        inventory.linux.computers = []
+        inventory.macos.computers[0].state = .stopping
+        let client = MockEngineClient(inventory: inventory)
+        let model = ComputersModel(client: client, initialInventory: inventory)
+
+        do {
+            try await model.waitUntilStopped([MockEngineClient.devID], timeout: .milliseconds(30))
+            Issue.record("A computer that remains stopping must time out.")
+        } catch {
+            #expect(error.localizedDescription.contains("deadline"))
+        }
+    }
+
     @Test func stateMappingCoversLinuxAndMacOSStates() throws {
         let inventory = MockEngineClient.demoInventory
         #expect(try #require(inventory.computer(MockEngineClient.linuxID)).displayState == .running)
