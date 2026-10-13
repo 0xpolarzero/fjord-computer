@@ -21,6 +21,30 @@ import Testing
         #expect(!notified)
     }
 
+    @Test func aSessionsRowRedrawsForThatSessionAloneAndIsAsMadeAfresh() {
+        let store = Store()
+        Demo.populate(store, .router)
+        let id = store.claudeSessions.keys.sorted()[0]
+        let other = store.claudeSessions.keys.first { $0 != id }!
+        _ = store.sessionRow(id)
+        var notified = false
+        withObservationTracking { _ = store.sessionRow(id) } onChange: { notified = true }
+        store.claudeActivity[other] = ClaudeActivity(text: "Reading a file", since: Date())
+        store.claudeSessions[other]?.title = "Another title"
+        store.claudeTasks[other] = []
+        #expect(!notified)
+        #expect(store.sessionRow(id) == store.row(store.claudeSessions[id]!))
+        // Its own session renamed, its project renamed, its letters set: made again, as a row made now is.
+        store.claudeSessions[id]?.title = "Renamed session"
+        #expect(notified)
+        #expect(store.sessionRow(id)?.session.title == "Renamed session")
+        let folder = store.claudeSessions[id]!.folderKey
+        store.folderNames[folder] = "qqwwee"
+        store.setProjectColor(folder, 3)
+        #expect(store.sessionRow(id) == store.row(store.claudeSessions[id]!))
+        #expect(store.sessionRow("no such session") == nil)
+    }
+
     @Test func aCardsExcerptIsParsedOncePerText() {
         let text = "Should I **push** to `main`?"
         #expect(CardView.inline(text) == RouterText.inline(text))

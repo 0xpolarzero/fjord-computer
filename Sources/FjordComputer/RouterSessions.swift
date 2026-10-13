@@ -224,8 +224,15 @@ struct SessionMenu: View {
 }
 
 extension Store {
-    /// The row of a session, listed or not (a card's, say).
-    func sessionRow(_ id: String) -> AgentRow? { claudeSessions[id].map { row($0) } }
+    /// The row of a session, listed or not (a card's, say). Each session's row is kept in a box of its own, made again
+    /// only when what it shows changed (`refreshSessionRows`): a view that draws one session's glyph redraws for that
+    /// session alone, not for every change to every session's activity.
+    func sessionRow(_ id: String) -> AgentRow? {
+        if let box = sessionRowBoxes[id] { return box.row }
+        let box = SessionRowBox(makeSessionRow(id))
+        sessionRowBoxes[id] = box
+        return box.row
+    }
 }
 
 /// The Claude link's state as a dot and a line ("Synced with Claude", "Claude's sessions not found"…).
@@ -269,4 +276,11 @@ extension View {
     @ViewBuilder func runningTip(_ tasks: [ClaudeTask]) -> some View {
         if tasks.isEmpty { self } else { tip("Running", tasks.map(\.title).joined(separator: "\n")) }
     }
+}
+
+/// One session's row, observed on its own (`Store.sessionRow`).
+@Observable @MainActor
+final class SessionRowBox {
+    var row: AgentRow?
+    init(_ row: AgentRow?) { self.row = row }
 }

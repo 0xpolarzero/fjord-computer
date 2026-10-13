@@ -260,6 +260,30 @@ extension Store {
         makeRow(session, entry ?? cache.entries[session.id], label: label)
     }
 
+    /// A session's row as `sessionRow` gives it: `row(session)`, its entry looked up without the listed rows being made.
+    func makeSessionRow(_ id: String) -> AgentRow? {
+        guard let session = claudeSessions[id] else { return nil }
+        if agentEntryIndex == nil {
+            agentEntryIndex = Dictionary(agents.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        }
+        return makeRow(session, agentEntryIndex?[id], label: nil)
+    }
+
+    /// Makes again the rows `sessionRow` keeps of `ids` (all of them when nil), writing a box only when its row changed.
+    func refreshSessionRows(_ ids: [String]? = nil) {
+        guard !sessionRowBoxes.isEmpty else { return }
+        for id in ids ?? Array(sessionRowBoxes.keys) {
+            guard let box = sessionRowBoxes[id] else { continue }
+            let row = makeSessionRow(id)
+            if row != box.row { box.row = row }
+        }
+    }
+
+    /// The ids, among the kept rows', whose value differs between two maps.
+    func sessionRowsChanged<Value: Equatable>(_ old: [String: Value], _ new: [String: Value]) -> [String] {
+        sessionRowBoxes.keys.filter { old[$0] != new[$0] }
+    }
+
     private func makeRow(_ session: ClaudeSession, _ entry: AgentEntry?, label: String?) -> AgentRow {
         AgentRow(session: session, entry: entry ?? AgentEntry(id: session.id),
                  // Sessions outside the cache (hidden ones found through search) still show their saved label.
@@ -290,7 +314,13 @@ extension Store {
     /// A project's name wherever it is named: its own, with as much of the path above it as it takes to tell it from another
     /// project of the same name (`customer-a/app`), the same in every menu, tag and spoken value.
     func folderName(_ folder: String) -> String {
-        folder.isEmpty ? "Scratch" : folderNames[folder] ?? FolderNames.name(folder, among: Array(namedFolders))
+        if folder.isEmpty { return "Scratch" }
+        if let name = folderNames[folder] { return name }
+        // One no session is in (an old card's): named among the folders `folderNames` was worked out for, once per set.
+        if let name = folderNameMisses[folder] { return name }
+        let name = FolderNames.name(folder, among: Array(namedFoldersSeen ?? namedFolders))
+        if namedFoldersSeen != nil { folderNameMisses[folder] = name }
+        return name
     }
 
     /// Called when the sessions or the muted folders change : the
@@ -302,6 +332,7 @@ extension Store {
         let folders = namedFolders(sessions: sessions)
         guard folders != namedFoldersSeen else { return }
         namedFoldersSeen = folders
+        folderNameMisses = [:]
         let names = FolderNames.names(for: folders)
         if names != folderNames { folderNames = names }
     }

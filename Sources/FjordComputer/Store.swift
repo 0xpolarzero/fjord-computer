@@ -226,9 +226,11 @@ final class Store {
         didSet {
             updateRouterOn()
             agentCache = nil
+            agentEntryIndex = nil
             persistedRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
+            if oldValue.entries != agents.entries || oldValue.folderColors != agents.folderColors { refreshSessionRows() }
         }
     }
     /// The Router (see Router.swift): its cards, its decision log and the changes it made.
@@ -275,8 +277,17 @@ final class Store {
     /// out when the folders change, not by each view that names a project. Only a change in it redraws what reads it.
     var folderNames: [String: String] = [:] {
         // The history is searched by its cards' project names too.
-        didSet { routerSearchRevision &+= 1 }
+        didSet {
+            routerSearchRevision &+= 1
+            refreshSessionRows()
+        }
     }
+    /// Names of folders no session is in, worked out among `namedFoldersSeen` (`folderName`); cleared when that changes.
+    @ObservationIgnored var folderNameMisses: [String: String] = [:]
+    /// Each session's row as `sessionRow` gives it, in a box of its own (see `refreshSessionRows`).
+    @ObservationIgnored var sessionRowBoxes: [String: SessionRowBox] = [:]
+    /// The agents' entries by session, made when a row is and dropped with every change to `agents`.
+    @ObservationIgnored var agentEntryIndex: [String: AgentEntry]?
     /// The folders `folderNames` was worked out for: the work is skipped while they are the same.
     @ObservationIgnored var namedFoldersSeen: Set<String>?
     /// The git repos in your code folders, kept fresh (CodeFolders.swift).
@@ -286,6 +297,7 @@ final class Store {
             claudeSessionsRevision &+= 1
             agentCache = nil
             refreshFolderNames()
+            refreshSessionRows(sessionRowsChanged(oldValue, claudeSessions))
         }
     }
     /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
@@ -293,6 +305,7 @@ final class Store {
     var claudeActivity: [String: ClaudeActivity] = [:] {
         didSet {
             agentCache = nil
+            refreshSessionRows(sessionRowsChanged(oldValue, claudeActivity))
         }
     }
     /// Bumped when a recent session ages out of the list (see `Store.recentWindow`).
@@ -306,6 +319,7 @@ final class Store {
     var claudeTasks: [String: [ClaudeTask]] = [:] {
         didSet {
             agentCache = nil
+            refreshSessionRows(sessionRowsChanged(oldValue, claudeTasks))
         }
     }
     /// Filled in right after launch (see `start`): the Keychain read stays off the main thread.
