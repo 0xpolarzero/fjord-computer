@@ -12,8 +12,9 @@ enum BarGlass {
     static let panelRadius: CGFloat = barRadius
     /// How near two glass shapes in the bar's container start to blend: bar and panel touch, so they always read as one.
     static let spacing: CGFloat = 12
-    /// A panel's content comes in this long after its glass starts growing out of the bar.
-    static let contentDelay: TimeInterval = 0.04
+    /// A panel's content comes in as its glass starts growing out of the bar, on this short fade (Motion's `fade` less a
+    /// third, so what you hovered reads at once).
+    static let contentFade: Animation = .easeOut(duration: 0.1)
 
     /// The glass shapes' identities in the bar's container.
     enum ID: Hashable, Sendable { case bar, panel }
@@ -104,8 +105,8 @@ struct PeekLeave: Transition {
     }
 }
 
-/// A panel's content on glass comes in `BarGlass.contentDelay` behind the glass growing out of the bar, and goes on `fade`
-/// as the glass goes back into it. With Reduce Motion the panel fades as a whole (its transition), so its content is there
+/// A panel's content on glass comes in on `BarGlass.contentFade` as the glass grows out of the bar, and goes on `fade` as the
+/// glass goes back into it. With Reduce Motion the panel fades as a whole (its transition), so its content is there
 /// from the start.
 struct PeekReveal: ViewModifier {
     let reduce: Bool
@@ -119,7 +120,7 @@ struct PeekReveal: ViewModifier {
             .animation(Motion.fade.resolved(reduce: reduce), value: leaving)
             .onAppear {
                 guard !reduce, !shown else { return }
-                withAnimation(Motion.fade.resolved(reduce: reduce).map { $0.delay(BarGlass.contentDelay) }) { shown = true }
+                withAnimation(BarGlass.contentFade.resolved(reduce: reduce)) { shown = true }
             }
     }
 }

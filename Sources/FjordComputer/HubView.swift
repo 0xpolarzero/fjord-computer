@@ -78,6 +78,10 @@ final class HubState {
     /// opens already placed and its glass grows out of the bar's.
     private(set) var arriving: HubSection?
 
+    /// How long the pointer rests on a section before its first panel opens: long enough that sweeping along the edge opens
+    /// nothing, short enough that a hover reads as instant.
+    static let dwell: Duration = .milliseconds(70)
+
     /// The pointer entered a section. The first panel waits for the pointer to settle (so sweeping along the edge
     /// opens nothing); once one is open, moving to another section switches at once, with no transition.
     func enter(_ next: HubSection) {
@@ -93,7 +97,7 @@ final class HubState {
         }
         arrive(next)
         dwell = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: HubState.dwell)
             guard let self, !Task.isCancelled else { return }
             arrive(nil)
             guard !barHidden, !quiet, !dragging else { return }
