@@ -138,6 +138,47 @@ import Testing
         #expect(held.routerHistory.map(\.id) == inTurn.routerHistory.map(\.id), sourceLocation: sourceLocation)
     }
 
+    @Test func aBacklogGoesASliceATurnInOrderAndActivityReadsInARowAreOne() async {
+        let gate = MotionGate.Gate(longest: 600)
+        let feed = ClaudeFeed(activityReader: Claude.ActivityReader())
+        feed.sliceBudget = 0.004
+        var batches = 0, open = 0
+        feed.batched = { body in batches += 1; open += 1; body(); open -= 1 }
+        var applied: [String] = [], inBatch: [Bool] = []
+        let apply: @MainActor (ClaudeSnapshot) -> Void = { read in
+            inBatch.append(open == 1)
+            applied.append(read.activity?.keys.first ?? "full")
+            Thread.sleep(forTimeInterval: 0.003)
+        }
+        func activity(_ id: String) -> ClaudeSnapshot {
+            var read = ClaudeSnapshot()
+            read.activity = [id: ClaudeActivity(text: id, since: Date())]
+            read.tasks = [:]
+            return read
+        }
+        var full = ClaudeSnapshot()
+        full.link = .ok
+        full.sessions = []
+        gate.began()
+        // Two activity reads in a row are one (the later); a full read keeps its place, and the reads around it theirs.
+        for read in [activity("a"), activity("b"), full, activity("c"), full, activity("d"), activity("e"), full, activity("f")] {
+            feed.deliver(read, apply, gate: gate)
+        }
+        gate.ended()
+        // The first slice, the turn after the motion: not all of it.
+        for _ in 0..<3000 where applied.isEmpty { try? await Task.sleep(for: .milliseconds(1)) }
+        #expect(applied.count < 7)
+        // Read while the backlog goes: behind it.
+        feed.deliver(activity("g"), apply, gate: gate)
+        for _ in 0..<3000 where applied.last != "g" { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(applied == ["b", "full", "c", "full", "e", "full", "f", "g"] || applied == ["b", "full", "c", "full", "e", "full", "g"])
+        #expect(batches > 1 && open == 0 && inBatch.allSatisfy { $0 })
+        // Nothing held: taken in at once.
+        let before = applied.count
+        feed.deliver(full, apply, gate: gate)
+        #expect(applied.count == before + 1)
+    }
+
     @Test func aTurnThatEndedThenANewMessageStillMakesItsCard() async {
         await expectHeldAsInTurn([session("local_a", turns: 1)], [
             read([session("local_a", turns: 2)]),

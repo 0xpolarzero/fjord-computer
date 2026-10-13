@@ -763,6 +763,12 @@ struct ClaudeSnapshot {
     var stamp = ClaudeStamp()
 }
 
+extension ClaudeSnapshot {
+    /// A read of what working sessions are doing and what runs in the background, nothing else (`ClaudeFeed.read(full: false)`
+    /// once the sessions are known).
+    var isActivityOnly: Bool { sessions == nil && link == nil && appUnread == nil && activity != nil }
+}
+
 /// `generation` changes when the extension is switched; `revision` when you change something about an agent.
 struct ClaudeStamp: Equatable {
     var generation = 0
@@ -823,27 +829,45 @@ final class ClaudeFeed: @unchecked Sendable {
     }
 
     /// Reads that came while the window's morph played (`MotionGate`), on the main thread: taken in once the motion is
-    /// over, every one in the order read (what they make of the sessions, the dots and the Router's cards goes by each step,
-    /// so none is folded into another), all in the one turn, inside `batched` (the store makes the work that follows from
-    /// them once, at its end), rather than a turn each just as the window wants its frames.
+    /// over, in the order read (what they make of the sessions, the dots and the Router's cards goes by each step), a slice
+    /// of them per turn of the main run loop (`sliceBudget`), each slice inside `batched` (the store makes the work that
+    /// follows from them once, at its end), so a backlog never holds the main thread just as the window wants its frames.
+    /// Reads that come while some still wait queue behind them. Activity-only reads in a row are one: they say no session's
+    /// turns, messages or dots, only what is happening now, which the later one says.
     private var held: [(read: ClaudeSnapshot, apply: @MainActor (ClaudeSnapshot) -> Void)] = []
-    private var heldWaiting = false
-    /// Runs the held reads' taking in as one (the store's `batchingClaudeReads`); nil runs them as they are.
+    /// A slice is asked for (after the motion) or under way.
+    private var draining = false
+    /// Runs a slice of held reads as one (the store's `batchingClaudeReads`); nil runs them as they are.
     @MainActor var batched: ((() -> Void) -> Void)?
+    /// How long a slice of held reads may take before the rest waits for the next turn (at least one read a slice).
+    @MainActor var sliceBudget: TimeInterval = 0.006
 
     @MainActor func deliver(_ snapshot: ClaudeSnapshot, _ apply: @escaping @MainActor (ClaudeSnapshot) -> Void,
                             gate: MotionGate.Gate = MotionGate.shared) {
-        guard gate.holding || !held.isEmpty else { return apply(snapshot) }
-        held.append((snapshot, apply))
-        guard !heldWaiting else { return }
-        heldWaiting = true
-        gate.whenStill { [self] in
-            heldWaiting = false
-            let reads = held
-            held = []
-            let all = { for (read, apply) in reads { apply(read) } }
-            if let batched { batched(all) } else { all() }
+        guard gate.holding || draining || !held.isEmpty else { return apply(snapshot) }
+        if let last = held.last, last.read.isActivityOnly, snapshot.isActivityOnly, last.read.stamp == snapshot.stamp {
+            held[held.count - 1] = (snapshot, apply)
+        } else {
+            held.append((snapshot, apply))
         }
+        guard !draining else { return }
+        draining = true
+        gate.whenStill { [self] in drain(gate) }
+    }
+
+    @MainActor private func drain(_ gate: MotionGate.Gate) {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let budget = UInt64(sliceBudget * 1_000_000_000)
+        let slice = { [self] in
+            repeat {
+                let (read, apply) = held.removeFirst()
+                apply(read)
+            } while !held.isEmpty && DispatchTime.now().uptimeNanoseconds - start < budget
+        }
+        if let batched { batched(slice) } else { slice() }
+        guard !held.isEmpty else { draining = false; return }
+        // The rest on the next turn, after any motion begun meanwhile.
+        DispatchQueue.main.async { [self] in MainActor.assumeIsolated { gate.whenStill { [self] in drain(gate) } } }
     }
 
     /// Whether a changed transcript path belongs to a session that is working or has background tasks.
