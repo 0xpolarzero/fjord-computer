@@ -193,14 +193,27 @@ final class Store {
     let undoStack = UndoStack()
     var settings = AppSettings() {
         didSet {
+            if (settings.triage == true) != triageOn { triageOn = settings.triage == true }
             persistedRevision &+= 1
             armSnoozeExpiry()
         }
     }
 
+    /// Triage's switch (`settings.triage`; the Router's is `routerOn`), kept in step by `settings` and written only when it
+    /// changes: what reads it (the bar, the window's root) doesn't redraw with every other setting.
+    private(set) var triageOn = false
+    /// The Router's switch: on only while Fjord Computer reads Claude's sessions too (`router.enabled && agents.enabled`,
+    /// which follow each other). Kept in step by `router` and `agents` and written only when it changes, so what reads it
+    /// doesn't redraw with every read of Claude's sessions, as reading those two whole would.
+    private(set) var routerOn = false
+    private func updateRouterOn() {
+        if (router.enabled && agents.enabled) != routerOn { routerOn = router.enabled && agents.enabled }
+    }
+
     /// Claude sessions extension (see Agents.swift).
     var agents = AgentsState() {
         didSet {
+            updateRouterOn()
             agentCache = nil
             persistedRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
@@ -210,6 +223,7 @@ final class Store {
     /// The Router (see Router.swift): its cards, its decision log and the changes it made.
     var router = RouterState() {
         didSet {
+            updateRouterOn()
             routerRevision &+= 1
             persistedRevision &+= 1
             if oldValue.cards != router.cards { countCardChanges(from: oldValue.cards) }

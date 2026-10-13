@@ -8,9 +8,6 @@ import SwiftUI
 // MARK: - Store
 
 extension Store {
-    /// The Router works on the sessions: it is on only while Fjord Computer reads them too (they follow its switch).
-    var routerOn: Bool { router.enabled && agents.enabled }
-
     /// A card's project, as the lists name and colour it.
     func routerProject(_ card: RouterCard) -> (name: String, color: Color?) {
         let folder = card.folder ?? ""
