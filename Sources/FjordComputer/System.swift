@@ -541,8 +541,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The first launch opens on the onboarding, where the tools are picked.
         if CommandLine.arguments.contains("--open") || store.settings.toolsPicked != true { toggleWindow() }
         playMotionScript(demo: demo)
-        // The bar on screen first (its first frame shown, or a tenth of a second at most), the store's services after it.
-        if !demo { AppTransition.nextFrame(hub.dockedScreen) { [weak self] in self?.store.startServices() } }
+        // The bar on screen first (its first frame shown, or a tenth of a second at most), the store's services after it,
+        // and after the window's morph when the launch opens the window (the onboarding, `--open`).
+        if !demo {
+            AppTransition.nextFrame(hub.dockedScreen) {
+                MotionGate.whenStill { [weak self] in self?.store.startServices() }
+            }
+        }
         if CommandLine.arguments.contains(Lifecycle.flag) {
             Lifecycle.start(store)
         } else {
