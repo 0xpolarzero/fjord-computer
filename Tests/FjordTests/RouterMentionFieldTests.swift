@@ -305,18 +305,18 @@ import Testing
                                    characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 53)!
         #expect(keys.key(esc, responder: editor) && closed)
         // Esc on a list: words typed on past a space don't bring it back.
-        model.draft = "ask @fjord"
+        model.draft = "ask @claude"
         #expect(!names().isEmpty)
         model.dismissMention()
-        model.draft = "ask @fjord "
+        model.draft = "ask @claude "
         #expect(names().isEmpty)
-        model.draft = "ask @fjord comp"
+        model.draft = "ask @claude code"
         #expect(names().isEmpty)
-        // Picked: the pill takes the whole "@fjord comp", the rest of the text kept.
+        // Picked: the pill takes the whole "@claude code", the rest of the text kept.
         model.draft = ""
-        model.draft = "ask @fjord comp now"
-        model.caret = 15
-        #expect(model.mention == "fjord comp")
+        model.draft = "ask @claude code now"
+        model.caret = 16
+        #expect(model.mention == "claude code")
         model.pickMention(.session("local_b"))
         #expect(model.draft == "ask \(MentionText.markString) now" && model.pointers == [.session("local_b")] && model.caretRequest == 6)
     }
