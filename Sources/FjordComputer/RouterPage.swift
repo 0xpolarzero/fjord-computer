@@ -1142,6 +1142,7 @@ private struct HistoryDecisionLine: View, Equatable {
     let model: RouterModel
     @Environment(\.historyOutOfSight) private var outOfSight
     @State private var lastStatus = LastRead<(text: String, held: Bool)>()
+    @State private var lastTrigger = LastRead<Text>()
     @State private var hovered = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1245,6 +1246,14 @@ private struct HistoryDecisionLine: View, Equatable {
         guard case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty else {
             return Text(RouterDecision.clip(decision.triggerText, 90))
         }
+        // Its pills name sessions and projects as they are now (all of Claude's sessions read): out of sight, as last read.
+        if outOfSight, let kept = lastTrigger.value { return kept }
+        let made = styledTrigger(text, mentions)
+        lastTrigger.value = made
+        return made
+    }
+
+    private func styledTrigger(_ text: String, _ mentions: [RouterMention]) -> Text {
         let message = MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
         guard let from = decision.fromAction else { return message }
         return Text("\(Text(verbatim: "\(from.category) · ").fontWeight(.medium))\(message)")
@@ -1258,15 +1267,46 @@ private struct DecisionDetails: View {
     let cancel: HistoryDecisionLine.Cancel
     let store: Store
     let model: RouterModel
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var last = LastRead<Live>()
+
+    /// What it shows of the store (the pills' names, its changes, the sessions and their titles, whether Triage, the Router
+    /// and the run are on): read live while the history shows, as last read while it is out of sight.
+    private struct Live {
+        var styled: Text?
+        var changes: [FjordChange]
+        var toolsLinked: Bool
+        var running: Bool
+        var sessions: [(id: String, title: String)]
+        var canEdit: Bool
+    }
+
+    private var live: Live {
+        if outOfSight, let kept = last.value { return kept }
+        var styled: Text?
+        if case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty {
+            styled = MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+        }
+        let changes = decision.links.changes.compactMap { id in store.router.changes.first { $0.id == id } }
+        let sessions = decision.links.sessions.compactMap { id in store.claudeSessions[id].map { (id, $0.title) } }
+        let canEdit = decision.sentMessage.map { sent in
+            store.routerOn && store.claudeSessions[sent.session].map { !$0.isArchived } == true
+        } ?? false
+        let read = Live(styled: styled, changes: changes, toolsLinked: store.toolsLinked,
+                        running: store.routerDispatcher.progress[decision.id] != nil, sessions: sessions, canEdit: canEdit)
+        last.value = read
+        return read
+    }
 
     var body: some View {
+        let live = live
         VStack(alignment: .leading, spacing: 10) {
             if let from = decision.fromAction {
                 Text("⚡ Sent by \(from.category)'s Then for \(from.thing)").cdsText((12, 16), .regular, CDS.Text.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if case .you(let text) = decision.trigger, let mentions = decision.mentions, !mentions.isEmpty {
-                MentionText.styled(text, mentions: mentions, store: store, role: CDS.Transcript.text)
+            if let styled = live.styled {
+                styled
                     .cdsText(CDS.Transcript.text, .regular, CDS.Text.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -1277,11 +1317,7 @@ private struct DecisionDetails: View {
             ForEach(Array(decision.doneLines.enumerated()), id: \.offset) { _, line in
                 Text(line).cdsText((12, 16), .regular, CDS.Text.muted).fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(decision.links.changes, id: \.self) { id in
-                if let change = store.router.changes.first(where: { $0.id == id }) {
-                    ChangeCard(change: change, store: store)
-                }
-            }
+            ForEach(live.changes) { change in ChangeCard(change: change, store: store) }
             if cancel != .none {
                 Text(HistoryDecisionLine.cancelHelp).cdsText((12, 16), .regular, CDS.Text.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1295,24 +1331,22 @@ private struct DecisionDetails: View {
                             store.routerDispatcher.sendElsewhere(decision.id)
                         }
                         // An action's message goes anywhere only while Triage and the Router are both on.
-                        .help(decision.fromAction != nil && !store.toolsLinked
+                        .help(decision.fromAction != nil && !live.toolsLinked
                               ? "Triage is off: an action's message can't be sent elsewhere until it is on again"
                               : "Cancels it here, then asks where it should go instead, this session left out. Your pick teaches the Router.")
-                        .disabled(cancel == .cancelling || store.routerDispatcher.progress[decision.id] != nil
-                                  || (decision.fromAction != nil && !store.toolsLinked))
+                        .disabled(cancel == .cancelling || live.running || (decision.fromAction != nil && !live.toolsLinked))
                     }
                 }
             }
-            let sessions = decision.links.sessions.filter { store.claudeSessions[$0] != nil }
-            if !sessions.isEmpty {
+            if !live.sessions.isEmpty {
                 HStack(spacing: 6) {
-                    ForEach(sessions, id: \.self) { id in
-                        ClaudeButton("Open \(store.claudeSessions[id]?.title ?? "session")", variant: .ghost, size: .sm,
-                                     icon: ClaudeMark.openSymbol) { store.openAgent(id) }
+                    ForEach(live.sessions, id: \.id) { session in
+                        ClaudeButton("Open \(session.title)", variant: .ghost, size: .sm,
+                                     icon: ClaudeMark.openSymbol) { store.openAgent(session.id) }
                     }
                     // The message it sent, taken back in a fork: the session as it was before it (this one stays as it is),
                     // and that again with the message edited.
-                    if let sent = decision.sentMessage, store.routerOn, store.claudeSessions[sent.session].map({ !$0.isArchived }) == true {
+                    if let sent = decision.sentMessage, live.canEdit {
                         ClaudeButton("Edit and resend", variant: .ghost, size: .sm, icon: "pencil") {
                             model.edit(session: sent.session, message: sent.text, sentAt: sent.at)
                         }
@@ -1427,9 +1461,20 @@ private struct CardDetails: View {
     let card: RouterCard
     let store: Store
     let model: RouterModel
+    @Environment(\.historyOutOfSight) private var outOfSight
+    @State private var last = LastRead<(project: RouterProject, reopens: Bool)>()
+
+    /// Its project and whether it can be reopened (its session's state): live while the history shows, as last read while
+    /// it is out of sight.
+    private var live: (project: RouterProject, reopens: Bool) {
+        if outOfSight, let kept = last.value { return kept }
+        let read = (store.routerProject(card), store.routerCanReopen(card))
+        last.value = read
+        return read
+    }
 
     var body: some View {
-        let project = store.routerProject(card)
+        let (project, reopens) = live
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 KindTag(kind: card.kind)
@@ -1439,7 +1484,7 @@ private struct CardDetails: View {
                 if let origin = card.origin { OriginTag(origin: origin) }
             }
             CDSProse(text: card.text, color: CDS.Text.secondary, inset: false)
-            if store.routerCanReopen(card) {
+            if reopens {
                 ClaudeButton("Reopen", variant: .secondary, size: .sm, icon: "arrow.uturn.backward") {
                     model.reopen(card.id, store: store)
                 }
