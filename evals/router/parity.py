@@ -1,6 +1,6 @@
 """What the measured policy decided, with its inputs, for Fjord Computer's tests to check RouteFusion and RouterLexical against.
 
-python3 parity.py  →  Tests/FjordComputerTests/Fixtures/router-fusion-parity.json (written cases, synth and heldout, their boards
+python3 parity.py  →  Tests/FjordTests/Fixtures/router-fusion-parity.json (written cases, synth and heldout, their boards
 scrubbed of real text by `scrub`;
 real boards stay on this machine). Policy: explore.final3 (round 3), format combo-o."""
 import copy
@@ -16,7 +16,7 @@ from explore import fusion as Fu
 from explore import lexical as L
 from explore import recency as R
 
-OUT = pathlib.Path(__file__).parent.parent.parent / "Tests" / "FjordComputerTests" / "Fixtures" / "router-fusion-parity.json"
+OUT = pathlib.Path(__file__).parent.parent.parent / "Tests" / "FjordTests" / "Fixtures" / "router-fusion-parity.json"
 
 
 WORD = re.compile(r"[^\W_]+")

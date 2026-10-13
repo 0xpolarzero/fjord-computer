@@ -28,7 +28,7 @@ A Swift package (Swift tools 5.10, macOS 14+). The app is built into a bundle, w
 
 Without `SIGN_IDENTITY`, local builds are signed with the release certificate (default name `Fjord Computer Dev`) when it's in your keychain, and ad hoc otherwise. macOS treats every ad-hoc build as a new app, so Accessibility access has to be granted again each time. See [Signing certificate](#signing-certificate).
 
-The debug flags below run the debug binary: `swift build`, then `.build/debug/FjordComputer …`.
+The debug flags below run the debug binary: `swift build`, then `.build/debug/Fjord …`.
 
 **Credentials.** GitHub access comes from `gh auth token`, `GH_TOKEN` / `GITHUB_TOKEN`, or a token pasted in Settings, which is stored in the Keychain. The optional TypeSafe key (for Jev, TypeSafe's classifier) is kept in the Keychain too. Demo, snapshot and playground runs never touch the Keychain, so a new build doesn't stop on an access prompt.
 
@@ -49,7 +49,7 @@ The `Test` workflow runs the same script on every push to `main`, on the same ru
 ### Demo data
 
 ```sh
-.build/debug/FjordComputer --demo [scenario] [--open] [--edge left|right|top|bottom]
+.build/debug/Fjord --demo [scenario] [--open] [--edge left|right|top|bottom]
 ```
 
 Mock data with Triage on (and the Router, in its scenarios). Nothing is saved. `--open` opens the window; `--edge` puts the bar on that edge.
@@ -79,7 +79,7 @@ For release window timings, run `scripts/morph-timings.sh --scenario routerCanva
 `FJORD_THEME=dark|light|claude` pins the look: Fjord light, Fjord dark, or Claude's own. The default is Fjord, following the Mac's appearance live.
 
 ```sh
-FJORD_THEME=dark .build/debug/FjordComputer --window
+FJORD_THEME=dark .build/debug/Fjord --window
 ```
 
 ### Live data
@@ -93,7 +93,7 @@ FJORD_THEME=dark .build/debug/FjordComputer --window
 ### Updater
 
 ```sh
-"build/Fjord Computer.app/Contents/MacOS/FjordComputer" --update 0.1.0
+"build/Fjord Computer.app/Contents/MacOS/Fjord" --update 0.1.0
 ```
 
 Pretends to be version 0.1.0: checks for, downloads and verifies the latest release. Run it from the built bundle, not the debug binary.
@@ -123,7 +123,7 @@ Push a version tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The `Release` workflow runs the tests, builds a universal app and publishes `FjordComputer-<version>.zip` and its `.sha256` to GitHub Releases.
+The `Release` workflow runs the tests, builds a universal app and publishes `Fjord-<version>.zip` and its `.sha256` to GitHub Releases.
 
 Installed apps pick the release up on their own. The updater installs it only if the checksum matches and the app is signed by the same certificate as the running copy.
 

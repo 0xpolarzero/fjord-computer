@@ -1,0 +1,176 @@
+import Foundation
+import os
+import Testing
+@testable import Fjord
+
+/// What the client remembers of GitHub's answers: a 304 costs nothing to read, and what a poll visits stays remembered.
+@Suite(.serialized) struct GitHubClientCache {
+    private struct Counted: Decodable {
+        let id: Int
+    }
+
+    /// A GitHub that gives every path an ETag and answers 304 to a request that has it; counts the full answers.
+    private final class Server: @unchecked Sendable {
+        let full = OSAllocatedUnfairLock(initialState: 0)
+
+        var session: URLSession {
+            StubbedGitHub.session { [self] request in
+                let etag = "\"\(request.url!.path)\""
+                if request.value(forHTTPHeaderField: "If-None-Match") == etag { return .init(304, headers: ["ETag": etag]) }
+                full.withLock { $0 += 1 }
+                return .init(200, #"{"id": 7}"#, headers: ["ETag": etag])
+            }
+        }
+    }
+
+    @Test func aNotModifiedAnswerIsReadFromWhatWasRemembered() async throws {
+        let client = GitHubClient()
+        let server = Server()
+        client.session = server.session
+        let first: Counted = try await client.get("/repos/a/b/issues")
+        let second: Counted = try await client.get("/repos/a/b/issues")
+        #expect(first.id == 7 && second.id == 7)
+        #expect(server.full.withLock { $0 } == 1)
+        // Asked for as another type, the same body is parsed as that one.
+        let other: [String: Int] = try await client.get("/repos/a/b/issues")
+        #expect(other == ["id": 7])
+    }
+
+    @Test func aPollThroughEveryWorkflowRepositoryKeepsEveryAnswerItAsksForAgain() async throws {
+        let client = GitHubClient()
+        let server = Server()
+        client.session = server.session
+        // More answers in a poll than the client keeps without being told: the reservation is what keeps them.
+        let repositories = 100
+        client.reserveETags(forRepositories: repositories)
+        let sha = String(repeating: "a", count: 40)
+        // A branch's three answers (its runs, then its commit's check runs and status), each repository in turn as a poll
+        // visits them, twice.
+        for _ in 0..<2 {
+            for r in 0..<repositories {
+                let _: Counted = try await client.get("/repos/o/r\(r)/actions/runs", ["branch": "main", "event": "push", "per_page": "30"])
+                let _: Counted = try await client.get("/repos/o/r\(r)/commits/\(sha)/check-runs", ["per_page": "100"])
+                let _: Counted = try await client.get("/repos/o/r\(r)/commits/\(sha)/status")
+            }
+        }
+        // Only the first visit was answered in full: the second was all 304s.
+        #expect(server.full.withLock { $0 } == repositories * 3)
+    }
+
+    @Test func aNewCommitsAnswersTakeThePlaceOfTheOldOnes() async throws {
+        let client = GitHubClient()
+        client.session = Server().session
+        for sha in ["a", "b", "c"] {
+            let commit = String(repeating: sha, count: 40)
+            let _: Counted = try await client.get("/repos/o/r/commits/\(commit)/check-runs")
+            let _: Counted = try await client.get("/repos/o/r/commits/\(commit)/status")
+        }
+        #expect(client.remembered == 2)
+        // Another repository's are its own.
+        let _: Counted = try await client.get("/repos/o/other/commits/\(String(repeating: "a", count: 40))/status")
+        #expect(client.remembered == 3)
+    }
+
+    @Test func twoBranchesAtDifferentCommitsKeepTheirAnswersSideBySide() async throws {
+        let client = GitHubClient()
+        let server = Server()
+        client.session = server.session
+        let heads = ["main": String(repeating: "a", count: 40), "release": String(repeating: "b", count: 40)]
+        // Polls going through both branches in turn: once each was asked, every answer is a 304.
+        for _ in 0..<3 {
+            for branch in ["main", "release"] {
+                let sha = heads[branch]!
+                let _: Counted = try await client.get("/repos/o/r/actions/runs", ["branch": branch, "head_sha": sha], lineage: branch)
+                let _: Counted = try await client.get("/repos/o/r/commits/\(sha)/check-runs", lineage: branch)
+                let _: Counted = try await client.get("/repos/o/r/commits/\(sha)/status", lineage: branch)
+            }
+        }
+        #expect(server.full.withLock { $0 } == 6)
+        // A new commit on main takes the place of main's old one only, runs included.
+        let next = String(repeating: "c", count: 40)
+        let _: Counted = try await client.get("/repos/o/r/actions/runs", ["branch": "main", "head_sha": next], lineage: "main")
+        let _: Counted = try await client.get("/repos/o/r/commits/\(next)/status", lineage: "main")
+        #expect(client.remembered == 6)
+    }
+
+    @Test func nothingIsAskedOfTheCoreBudgetBetweenItsEndAndItsResetButSearchStillIs() async throws {
+        let client = GitHubClient()
+        let asked = OSAllocatedUnfairLock(initialState: [String]())
+        let reset = Date().addingTimeInterval(600)
+        client.session = StubbedGitHub.session { request in
+            asked.withLock { $0.append(request.url!.path) }
+            return .init(200, #"{"id": 7}"#, headers: [
+                "x-ratelimit-resource": "core", "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset": String(Int(reset.timeIntervalSince1970)),
+            ])
+        }
+        let _: Counted = try await client.get("/repos/o/r/issues")
+        #expect(client.rateRemaining == 0)
+        #expect(client.rateResetsAt.map { abs($0.timeIntervalSince(reset)) < 1 } == true)
+        await #expect(throws: GitHubError.self) { let _: Counted = try await client.get("/repos/o/r/issues") }
+        let _: Counted = try await client.get("/search/issues")
+        #expect(asked.withLock { $0 } == ["/repos/o/r/issues", "/search/issues"])
+    }
+
+    @Test func requestsGoOutAgainOnceTheResetHasPassed() async throws {
+        let client = GitHubClient()
+        let asked = OSAllocatedUnfairLock(initialState: 0)
+        let reset = Date().addingTimeInterval(-5)
+        client.session = StubbedGitHub.session { _ in
+            asked.withLock { $0 += 1 }
+            return .init(200, #"{"id": 7}"#, headers: [
+                "x-ratelimit-resource": "core", "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset": String(Int(reset.timeIntervalSince1970)),
+            ])
+        }
+        let _: Counted = try await client.get("/repos/o/r/issues")
+        let _: Counted = try await client.get("/repos/o/r/issues")
+        #expect(asked.withLock { $0 } == 2)
+    }
+
+    @Test func anotherTokenStartsWithItsOwnBudgetAndNothingTheOldOneAskedForReachesIt() async throws {
+        let client = GitHubClient()
+        let reset = Date().addingTimeInterval(600)
+        let gate = StubbedGitHub.Gate()
+        client.token = "a"
+        client.session = StubbedGitHub.session { request in
+            // The old account's last answer is still on its way when the token changes.
+            .init(200, #"{"id": 7}"#, headers: [
+                "x-ratelimit-resource": "core", "x-ratelimit-remaining": "0", "ETag": "\"e\"",
+                "x-ratelimit-reset": String(Int(reset.timeIntervalSince1970)),
+            ], gate: request.url!.path == "/search/slow" ? gate : nil)
+        }
+        let _: Counted = try await client.get("/repos/o/r/issues")
+        #expect(client.rateRemaining == 0 && client.remembered == 1)
+        let late = Task { let _: Counted = try await client.get("/search/slow") }
+        while gate.held == 0 { await Task.yield() }
+        client.token = "b"
+        #expect(client.rateRemaining == nil && client.rateResetsAt == nil && client.remembered == 0)
+        let _: Counted = try await client.get("/user")
+        #expect(client.rateRemaining == 0)
+        client.token = "c"
+        gate.open()
+        _ = try await late.value
+        #expect(client.rateRemaining == nil && client.remembered == 0)
+    }
+
+    /// A request goes out with a token and the generation it was set under, however a poll and a login interleave.
+    @Test func aRejectionOfTheTokenARequestWentOutWithIsNotTakenForAStaleOne() async throws {
+        let client = GitHubClient()
+        let sentBad = OSAllocatedUnfairLock(initialState: false)
+        client.session = StubbedGitHub.session { request in
+            let bad = request.value(forHTTPHeaderField: "Authorization") == "Bearer bad"
+            if bad { sentBad.withLock { $0 = true } }
+            return bad ? .init(401, #"{"message": "Bad credentials"}"#) : .init(200, #"{"id": 7}"#)
+        }
+        for _ in 0..<500 {
+            client.token = "good"
+            sentBad.withLock { $0 = false }
+            async let swap: Void = Task.detached { client.token = "bad" }.value
+            async let poll: Counted? = try? await client.get("/user")
+            _ = await (swap, poll)
+            // The request carried the new token only along with its generation, so GitHub's answer to it counts.
+            if sentBad.withLock({ $0 }) { #expect(client.tokenRejected) }
+        }
+    }
+}

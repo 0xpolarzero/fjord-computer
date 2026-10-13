@@ -62,7 +62,7 @@ ab=${AB:-0}
 runs=${RUNS:-5}
 ws_limit=${WS_LIMIT:-0.3}  # points of one core: glass's WindowServer median over opaque's, at most
 ab_states=${AB_STATES:-"rest open"}
-bin=.build/release/FjordComputer
+bin=.build/release/Fjord
 
 number() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
 for value in "$limit" "$settle" "$window" "$ws_limit"; do

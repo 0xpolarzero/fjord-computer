@@ -54,8 +54,8 @@ STARTS = ("start a new session", "open a session", "create a new chat",
           "begin a new conversation", "kick off a session", "new chat",
           "can you start a new session")
 TRANSFORMS = ("option-order", "ids", "case", "typo", "title-noise", "irrelevant-sessions")
-SOURCE = "Sources/FjordComputer/RouterDispatcher.swift:plan/classifyAndAct; " \
-         "Sources/FjordComputer/RouterMCP.swift:destination/addressedSession; v2/run/rules.py"
+SOURCE = "Sources/Fjord/RouterDispatcher.swift:plan/classifyAndAct; " \
+         "Sources/Fjord/RouterMCP.swift:destination/addressedSession; v2/run/rules.py"
 
 
 def digest(value):

@@ -6,15 +6,15 @@ cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.0.0-dev}"
 if [ "${UNIVERSAL:-0}" = "1" ]; then
   swift build -c release --arch arm64 --arch x86_64
-  BIN=.build/apple/Products/Release/FjordComputer
+  BIN=.build/apple/Products/Release/Fjord
 else
   swift build -c release
-  BIN=.build/release/FjordComputer
+  BIN=.build/release/Fjord
 fi
 APP="build/Fjord Computer.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/FjordComputer"
+cp "$BIN" "$APP/Contents/MacOS/Fjord"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 # The layered icon, compiled from the Icon Composer document: light, dark, tinted and clear on macOS 26, its light tile on
 # earlier systems (CFBundleIconName picks the catalog over the .icns, which stays for whatever reads the file alone).
@@ -31,7 +31,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.amontlabs.fjord</string>
   <key>CFBundleName</key><string>Fjord Computer</string>
   <key>CFBundleDisplayName</key><string>Fjord Computer</string>
-  <key>CFBundleExecutable</key><string>FjordComputer</string>
+  <key>CFBundleExecutable</key><string>Fjord</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>

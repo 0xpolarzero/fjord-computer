@@ -8,10 +8,10 @@ Don't build the app bundle and launch it to see how something looks. Render it o
 
 ```sh
 swift build
-.build/debug/FjordComputer --window-shots .build/shots router-composing settings
+.build/debug/Fjord --window-shots .build/shots router-composing settings
 ```
 
-- `--window-shots <dir> [name…]` renders the window's pages (`window-<name>.png`). Given names, it renders only the shots whose names contain one of them. The catalog is in `Sources/FjordComputer/AppWindowShots.swift`: `router`, `router-composing`, `router-history`, `router-narrow-now`, `settings`, `categories`, `category-collapsed`, and more.
+- `--window-shots <dir> [name…]` renders the window's pages (`window-<name>.png`). Given names, it renders only the shots whose names contain one of them. The catalog is in `Sources/Fjord/AppWindowShots.swift`: `router`, `router-composing`, `router-history`, `router-narrow-now`, `settings`, `categories`, `category-collapsed`, and more.
 - `--playground-shots <dir> [name…]` renders the bar: every edge, every demo scenario, and the accessibility variants (`right-open`, `top-rest-signed-out`, and so on).
 - `FJORD_THEME=dark|light|claude` pins the theme for a run.
 - Then read the PNGs. A run takes about 2 s per shot after an incremental `swift build`, with no Dock icon, no focus change and no Keychain prompt.

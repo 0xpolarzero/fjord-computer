@@ -5,7 +5,7 @@
 // `--preview DIR` also writes the icon on ink and on paper at 1024 px.
 import AppKit
 
-// The construction, in the circle's diameters from its top: keep in step with `FjordMark` (Sources/FjordComputer/FjordMark.swift).
+// The construction, in the circle's diameters from its top: keep in step with `FjordMark` (Sources/Fjord/FjordMark.swift).
 let split = 0.55, gap = 0.072, bands = [0.2, 0.11]
 let spans: [(top: Double, bottom: Double)] = {
     var y = split, out = [(top: 0.0, bottom: split)]

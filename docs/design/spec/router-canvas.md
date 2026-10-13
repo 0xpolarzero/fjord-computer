@@ -215,9 +215,9 @@ tracking, frame waiters, the Fjord loader, failure and Retry.
 ```
 cd /Users/polarzero/code/projects/lookout/.claude/worktrees/router-canvas
 swift build
-.build/debug/FjordComputer --window-shots /tmp/router-canvas router-canvas
+.build/debug/Fjord --window-shots /tmp/router-canvas router-canvas
 ls /tmp/router-canvas   # then Read /tmp/router-canvas/window-router-canvas*.png
-.build/debug/FjordComputer --window-shots /tmp/router-shots router   # the list mode is unchanged
+.build/debug/Fjord --window-shots /tmp/router-shots router   # the list mode is unchanged
 ```
 
 **Check in the shots:** each open card 420 wide and fully above the composer; no frame shifts sideways; no text both in a header and its body; lines meet the headers' middles; nothing drawn over History or the top bar; light and dark both read.

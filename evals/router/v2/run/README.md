@@ -19,12 +19,12 @@ Historical policies are selectable with `--format swift --policy final` (round 1
 and `--format combo --policy explore.fuse2:guarded` (round 2). `lexical-only` is
 also available as a baseline.
 
-`rules.py` ports [RouterDispatcher](../../../../Sources/FjordComputer/RouterDispatcher.swift),
-[RouterMCP](../../../../Sources/FjordComputer/RouterMCP.swift), and the Addressing/start
-contracts in [RouterPrepare](../../../../Sources/FjordComputer/RouterPrepare.swift).
+`rules.py` ports [RouterDispatcher](../../../../Sources/Fjord/RouterDispatcher.swift),
+[RouterMCP](../../../../Sources/Fjord/RouterMCP.swift), and the Addressing/start
+contracts in [RouterPrepare](../../../../Sources/Fjord/RouterPrepare.swift).
 `test_rules.py` names the Swift behaviors it ports. The default policy remains
 `explore.final3:best`; its rounded numeric tables come from the shipped
-[RouterRoute](../../../../Sources/FjordComputer/RouterRoute.swift). The evaluator seeds
+[RouterRoute](../../../../Sources/Fjord/RouterRoute.swift). The evaluator seeds
 final3's fit cache with those tables instead of refitting on legacy data.
 The adapter installs a redacted-state `past_turns` seam in memory and disables
 all corpus loaders. Legacy source files are unchanged.

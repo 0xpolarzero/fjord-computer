@@ -64,8 +64,8 @@ jobs:
 
       - name: Package
         run: |
-          ditto -c -k --keepParent "build/Fjord Computer.app" "FjordComputer-$VERSION.zip"
-          shasum -a 256 "FjordComputer-$VERSION.zip" | tee "FjordComputer-$VERSION.zip.sha256"
+          ditto -c -k --keepParent "build/Fjord Computer.app" "Fjord-$VERSION.zip"
+          shasum -a 256 "Fjord-$VERSION.zip" | tee "Fjord-$VERSION.zip.sha256"
 
       - name: Publish release
         env:
@@ -73,7 +73,7 @@ jobs:
         run: |
           cat > notes.md <<'NOTES'
           ### Install
-          1. Download `FjordComputer-*.zip`, unzip, and move **Fjord Computer.app** to `/Applications`.
+          1. Download `Fjord-*.zip`, unzip, and move **Fjord Computer.app** to `/Applications`.
           2. The app is not notarized yet, so clear the download quarantine once:
              ```
              xattr -dr com.apple.quarantine "/Applications/Fjord Computer.app"
@@ -84,5 +84,5 @@ jobs:
 
           Requires macOS 14 or later. Universal (Apple Silicon + Intel).
           NOTES
-          gh release create "$TAG" "FjordComputer-$VERSION.zip" "FjordComputer-$VERSION.zip.sha256" \
+          gh release create "$TAG" "Fjord-$VERSION.zip" "Fjord-$VERSION.zip.sha256" \
             --title "Fjord Computer $VERSION" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"

@@ -11,7 +11,7 @@ ranges only for literal, whole @names, and use the names to narrow projects. A
 ``context.jev`` can carry its ranking, ``sure`` and ``assisted`` explicitly.
 Cards default to open and visible, as in the schema. Optional hidden/closed/
 addressedAt/shown flags and state.tasks represent Swift visibility when known.
-Source: Sources/FjordComputer/{RouterDispatcher,RouterMCP,RouterPrepare}.swift.
+Source: Sources/Fjord/{RouterDispatcher,RouterMCP,RouterPrepare}.swift.
 """
 
 from __future__ import annotations

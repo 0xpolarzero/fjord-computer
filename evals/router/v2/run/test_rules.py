@@ -1,4 +1,4 @@
-"""Behavior ports from Tests/FjordComputerTests/RouterDispatcherTests.swift.
+"""Behavior ports from Tests/FjordTests/RouterDispatcherTests.swift.
 
 Run from evals/router: python3 -m unittest v2.run.test_rules
 Each test cites the Swift behavior it preserves rather than testing regex internals.

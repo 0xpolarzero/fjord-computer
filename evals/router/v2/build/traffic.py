@@ -1,4 +1,4 @@
-"""Fjord Computer's routing trace (Sources/FjordComputer/RouterTrace.swift) turned into labelled traffic for the evals.
+"""Fjord Computer's routing trace (Sources/Fjord/RouterTrace.swift) turned into labelled traffic for the evals.
 
     python3 -m v2.build.traffic summary [--trace PATH] [--since DATE]
     python3 -m v2.build.traffic export  [--trace PATH] [--since DATE] [--out v2/data/traffic/decisions.jsonl]

@@ -2,7 +2,7 @@
 
     python3 v2/asks_eval/new.py [--workers 4]  →  v2/data/asks_eval/new.jsonl
 
-The system prompt, schema, and the context's wording are read from Sources/FjordComputer/RouterBrief.swift at run time
+The system prompt, schema, and the context's wording are read from Sources/Fjord/RouterBrief.swift at run time
 (common.swift_prompt): edit the prompt there, rerun this, judge.py and score.py. Every turn is briefed as an "Asks you" card
 under "needs you" that extracts its asks: the context has the title and project, what to explain (tierAsk .asks + the
 extracting suffix), the old triage's sure lines (work label, unverified), the card's own text (the message's first two

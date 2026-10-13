@@ -36,7 +36,7 @@ steps="open,fold,fold,close,peek,drag x5"
 baseline=
 keep=
 slack=${SLACK_MS:-1}
-bin=.build/release/FjordComputer
+bin=.build/release/Fjord
 
 while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || { echo "motion-trace: $1 needs a value"; exit 2; }
@@ -148,7 +148,7 @@ import json, math, os, sys, time, xml.etree.ElementTree as ET
 
 folder, hitch_schema, signpost_schema, template, scenario, steps, baseline, slack = sys.argv[1:9]
 slack = float(slack)
-SUBSYSTEM, APP = "com.amontlabs.fjord", "FjordComputer"
+SUBSYSTEM, APP = "com.amontlabs.fjord", "Fjord"
 
 def rows(schema):
     """The table's rows as {column: (raw text, fmt)}; a cell given as ref="n" is the one with id="n"."""

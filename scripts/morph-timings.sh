@@ -6,12 +6,12 @@
 # length of the script (some 1.5 s per step): no typing meanwhile.
 #
 #   scripts/morph-timings.sh                                       release build, "open,close x10" on busy
-#   scripts/morph-timings.sh --bin /tmp/fjord-before/.build/release/FjordComputer --steps "open,close x6"
+#   scripts/morph-timings.sh --bin /tmp/fjord-before/.build/release/Fjord --steps "open,close x6"
 #   scripts/morph-timings.sh --json out.json                       also write the summary as JSON
 set -u
 cd "$(dirname "$0")/.." || exit 2
 
-bin=.build/release/FjordComputer
+bin=.build/release/Fjord
 scenario=busy
 steps="open,close x10"
 json=

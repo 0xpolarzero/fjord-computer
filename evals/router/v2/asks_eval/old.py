@@ -32,7 +32,10 @@ S_INSTR = "Does sentence s{i} of the candidate sentences ask the user something,
 
 def check_head():
     """The hints above and the s<i> instruction are HEAD's (fails loudly if HEAD moved on)."""
-    src = subprocess.run(["git", "-C", str(C.REPO), "show", "fe1e147:Sources/FjordComputer/RouterTriage.swift"],
+    files = subprocess.run(["git", "-C", str(C.REPO), "ls-tree", "-r", "--name-only", "fe1e147"],
+                           capture_output=True, text=True, check=True).stdout.splitlines()
+    triage = next(path for path in files if path.endswith("/RouterTriage.swift"))
+    src = subprocess.run(["git", "-C", str(C.REPO), "show", f"fe1e147:{triage}"],
                          capture_output=True, text=True, check=True).stdout
     for hint in list(HEAD_STATE_HINTS.values()) + [HEAD_REVIEW, S_INSTR.replace("{i}", "\\(i)")]:
         assert hint in src, hint[:60]

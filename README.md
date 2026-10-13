@@ -51,7 +51,7 @@ With both tools on, you can also set up Triage by talking to the Router (*"make 
 
 ## Install
 
-1. Download `FjordComputer-<version>.zip` from [Releases](https://github.com/0xpolarzero/fjord-computer/releases/latest), unzip it, and move **Fjord Computer.app** to `/Applications`.
+1. Download `Fjord-<version>.zip` from [Releases](https://github.com/0xpolarzero/fjord-computer/releases/latest), unzip it, and move **Fjord Computer.app** to `/Applications`.
 2. It isn't notarized yet, so clear the quarantine flag once, in Terminal:
    ```sh
    xattr -dr com.apple.quarantine "/Applications/Fjord Computer.app"

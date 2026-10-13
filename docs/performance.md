@@ -105,7 +105,7 @@ first Open **304 ms** and first Handoff **23 ms** (`open,close x10`).
   returns only after the overlay is ordered out. The regression steps both refreshes and waits for removal, for glass
   and opaque morphs with normal and reduced motion.
 - **Springs**: open and close are critically damped at 0.30 s (glass and opaque alike); they are now the floor.
-- **`MotionGate`** (`Sources/FjordComputer/MotionGate.swift`): the morph calls `began`/`ended`; main-thread work that can wait
+- **`MotionGate`** (`Sources/Fjord/MotionGate.swift`): the morph calls `began`/`ended`; main-thread work that can wait
   goes through `whenStill { }` / `await still()`. Released work runs one item per run-loop turn. A missed `ended` lets work go
   after 1.5 s. The sync, the Claude feed, Jev and brief results, `reportOpen`, service start-up and post-open scans use it.
   New work that lands on main and can wait half a second **must** use it.
@@ -179,7 +179,7 @@ No capture intervals appeared in that run. `--demo routerCanvas --open` selects 
 same data, so measurement does not depend on the last saved page or layout. The targeted run passed **64 tests in 14
 suites**; the final `scripts/test.sh` passed **1567 tests in 155 suites** in 45.733 s. Offscreen renders verified a narrow
 frame, a resized scrolling frame and an expanded working card. Temporary counters, samples, binaries and shots were
-removed and the bare binary's `FjordComputer` preferences restored.
+removed and the bare binary's `Fjord` preferences restored.
 
 ## Rules for new code
 

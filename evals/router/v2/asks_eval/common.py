@@ -16,7 +16,7 @@ ROUTER = HERE.parents[1]
 REPO = ROUTER.parents[1]
 DATA = ROUTER / "v2" / "data" / "asks_eval"
 CACHE = DATA / "cache"
-BRIEF_SWIFT = REPO / "Sources" / "FjordComputer" / "RouterBrief.swift"
+BRIEF_SWIFT = REPO / "Sources" / "Fjord" / "RouterBrief.swift"
 sys.path.insert(0, str(ROUTER / "v2" / "build"))
 sys.path.insert(0, str(ROUTER / "real"))
 sys.path.insert(0, str(ROUTER))

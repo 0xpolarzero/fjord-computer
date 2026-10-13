@@ -48,7 +48,7 @@ bar (§5.3), the Router transcript scrolling under its composer (§5.4).
 
 ## 3. What exists today (the parts this touches)
 
-From the code survey (`Sources/FjordComputer/`):
+From the code survey (`Sources/Fjord/`):
 
 - **No glass or vibrancy anywhere.** Reduce Transparency is never read; Increase Contrast once (`RouterComposer.swift:27`,
   ring at `:142`).
