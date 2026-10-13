@@ -564,7 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 { [weak window, weak hub, weak self] in
                     guard let window, let hub, !window.memoryShort else { return }
                     AppTransition.prepareOverlay(on: hub.dockedScreen)
-                    if self?.store.router.enabled == true { _ = SessionIcons.drawable }
+                    if self?.store.router.enabled == true { SessionIcons.warm() }
                 },
                 { [weak window] in window?.prepare() },
             ]
