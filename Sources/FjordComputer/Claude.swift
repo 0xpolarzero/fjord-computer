@@ -367,6 +367,69 @@ enum Claude {
         return folders
     }
 
+    /// `readTaskFolders`, read again only where a folder changed (`FolderStamp`): the root (which holds some thousand files
+    /// of Claude Code's besides the project folders) and each project are listed again only once an entry came or went, so
+    /// a read while sessions work (every half second) is a stat of each folder rather than a walk of them all. One reader
+    /// per queue: it keeps what it listed.
+    final class TaskFolderReader {
+        private var rootListing: (stamp: FolderStamp, projects: [URL])?
+        private var projectListings: [URL: (stamp: FolderStamp, sessions: [URL])] = [:]
+
+        func read(root: URL = tasksRoot) -> [String: URL]? {
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: root.path) else {
+                rootListing = nil
+                projectListings = [:]
+                return [:]
+            }
+            let projects: [URL]
+            let rootStamp = FolderStamp(root.path)
+            if let rootStamp, let kept = rootListing, kept.stamp == rootStamp {
+                projects = kept.projects
+            } else {
+                guard let listed = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else {
+                    rootListing = nil
+                    return nil
+                }
+                projects = listed.filter { project in
+                    var isFolder: ObjCBool = false
+                    return fm.fileExists(atPath: project.path, isDirectory: &isFolder) && isFolder.boolValue
+                }
+                rootListing = rootStamp.map { ($0, projects) }
+            }
+            var folders: [String: URL] = [:]
+            var listings: [URL: (stamp: FolderStamp, sessions: [URL])] = [:]
+            for project in projects {
+                // Gone (or no longer a folder) since the root was listed: as if it hadn't been there.
+                guard let stamp = FolderStamp(project.path) else { continue }
+                let sessions: [URL]
+                if let kept = projectListings[project], kept.stamp == stamp {
+                    sessions = kept.sessions
+                } else {
+                    guard let listed = try? fm.contentsOfDirectory(at: project, includingPropertiesForKeys: nil) else {
+                        projectListings = listings
+                        return nil
+                    }
+                    sessions = listed
+                }
+                listings[project] = (stamp, sessions)
+                for session in sessions {
+                    let tasks = session.appendingPathComponent("tasks", isDirectory: true)
+                    // No folder is none; one that can't be looked into (no permission) isn't known.
+                    var info = stat()
+                    if stat(tasks.path, &info) == 0 {
+                        folders[session.lastPathComponent] = tasks
+                    } else if errno != ENOENT && errno != ENOTDIR {
+                        projectListings = listings
+                        return nil
+                    }
+                }
+            }
+            projectListings = listings
+            return folders
+        }
+    }
+
     /// Files under `root` (`tasksRoot`) that a process of yours has as its output: the shell commands still running. A
     /// command's output stays open exactly as long as it runs, so this is the system's answer, with no timeout to guess.
     static func openTaskOutputs(under root: URL = tasksRoot) -> Set<String> {
@@ -413,13 +476,43 @@ enum Claude {
             scans[url] = scan
         }
 
+        /// A task's output in a folder, as listed: a link to a subagent's transcript, or a command's file.
+        private struct Output {
+            let url: URL
+            let id: String
+            let isLink: Bool
+            let created: Date?
+        }
+        /// Each folder's outputs as last listed, kept while the folder is unchanged (`FolderStamp`): a read every half second
+        /// while sessions work lists again only the folders a task came to or left, not every one, three times.
+        private var listings: [URL: (stamp: FolderStamp, outputs: [Output])] = [:]
+
+        /// The outputs in `folder`; nil when it can't be read.
+        private func outputs(in folder: URL) -> [Output]? {
+            let stamp = FolderStamp(folder.path)
+            if let stamp, let kept = listings[folder], kept.stamp == stamp { return kept.outputs }
+            let keys: [URLResourceKey] = [.isSymbolicLinkKey, .creationDateKey]
+            guard let entries = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys) else {
+                listings[folder] = nil
+                return nil
+            }
+            let outputs = entries.filter { $0.pathExtension == "output" }.map { entry in
+                let values = try? entry.resourceValues(forKeys: Set(keys))
+                return Output(url: entry, id: entry.deletingPathExtension().lastPathComponent,
+                              isLink: values?.isSymbolicLink == true, created: values?.creationDate)
+            }
+            listings[folder] = stamp.map { ($0, outputs) }
+            return outputs
+        }
+
+        /// Forgets the listings of folders other than `folders` (sessions archived, folders gone).
+        func keepListings(of folders: Set<URL>) {
+            if listings.keys.contains(where: { !folders.contains($0) }) { listings = listings.filter { folders.contains($0.key) } }
+        }
+
         /// Whether some command in the folder is still unaccounted for, i.e. whether the process list is worth reading.
         func needsOpenOutputs(in folder: URL) -> Bool {
-            let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey])) ?? []
-            return entries.contains { entry in
-                entry.pathExtension == "output" && !finished.contains(entry.deletingPathExtension().lastPathComponent)
-                    && (try? entry.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink != true
-            }
+            (outputs(in: folder) ?? []).contains { !$0.isLink && !finished.contains($0.id) }
         }
 
         func tasks(in folder: URL, transcript: URL?, openOutputs: Set<String>, now: Date = Date()) -> [ClaudeTask] {
@@ -430,9 +523,8 @@ enum Claude {
         /// about to start, so its session's background work isn't known yet.
         func read(_ folder: URL, transcript: URL?, openOutputs: Set<String>, now: Date = Date()) -> (tasks: [ClaudeTask], certain: Bool) {
             let fm = FileManager.default
-            let keys: [URLResourceKey] = [.isSymbolicLinkKey, .creationDateKey]
             // A folder that can't be read says nothing: not "no tasks".
-            guard let entries = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys) else { return ([], false) }
+            guard let entries = outputs(in: folder) else { return ([], false) }
             var certain = true
             var tasks: [ClaudeTask] = []
             // The transcript is read in full at most once per call, and only for a command's title.
@@ -450,12 +542,11 @@ enum Claude {
                 }
                 return scans[transcript]?.ended.contains(id) == true
             }
-            for entry in entries where entry.pathExtension == "output" {
-                let id = entry.deletingPathExtension().lastPathComponent
+            for output in entries {
+                let id = output.id, entry = output.url
                 guard !finished.contains(id) else { continue }
-                let values = try? entry.resourceValues(forKeys: Set(keys))
-                let since = values?.creationDate ?? now
-                if values?.isSymbolicLink == true {
+                let since = output.created ?? now
+                if output.isLink {
                     guard let target = try? fm.destinationOfSymbolicLink(atPath: entry.path) else { continue }
                     let agent = URL(fileURLWithPath: target)
                     let modified = (try? agent.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
@@ -484,13 +575,7 @@ enum Claude {
         /// When the newest command output in `folder` was made (subagents' links aside): a scan of open files older than
         /// that hasn't seen it.
         func newestCommand(in folder: URL) -> Date? {
-            let keys: [URLResourceKey] = [.isSymbolicLinkKey, .creationDateKey]
-            let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? []
-            return entries.compactMap { entry -> Date? in
-                guard entry.pathExtension == "output",
-                      let values = try? entry.resourceValues(forKeys: Set(keys)), values.isSymbolicLink != true else { return nil }
-                return values.creationDate
-            }.max()
+            (outputs(in: folder) ?? []).compactMap { $0.isLink ? nil : $0.created }.max()
         }
 
         private func activity(_ url: URL, _ modified: Date) -> ClaudeActivity? {
@@ -637,6 +722,25 @@ final class FolderWatcher {
     }
 }
 
+/// What a folder's own inode says of it: its identity and when it last changed (an entry added, removed or renamed in it,
+/// or its mode, gives another). What was listed in a folder holds while its stamp is the same. Nil for what isn't a
+/// folder, or can't be looked at.
+struct FolderStamp: Equatable {
+    let device: Int64, inode: UInt64
+    let changed: Int64, changedNanos: Int, modified: Int64, modifiedNanos: Int
+
+    init?(_ path: String) {
+        var info = stat()
+        guard stat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+        device = Int64(info.st_dev)
+        inode = UInt64(info.st_ino)
+        changed = Int64(info.st_ctimespec.tv_sec)
+        changedNanos = info.st_ctimespec.tv_nsec
+        modified = Int64(info.st_mtimespec.tv_sec)
+        modifiedNanos = info.st_mtimespec.tv_nsec
+    }
+}
+
 // MARK: - Background reading
 
 /// Everything one read of the app produced. `sessions` is nil for an activity-only refresh.
@@ -666,6 +770,7 @@ final class ClaudeFeed: @unchecked Sendable {
     private let queue = DispatchQueue(label: "fjord.claude", qos: .utility)
     private let sessionReader = Claude.SessionReader()
     private let taskReader = Claude.TaskReader()
+    private let taskFolderReader = Claude.TaskFolderReader()
     let activityReader: Claude.ActivityReader
     private let lock = NSLock()
     private var scheduled = false
@@ -760,7 +865,7 @@ final class ClaudeFeed: @unchecked Sendable {
             watched.insert(cli)
             if let found = activityReader.activity(for: cli) { activity[session.id] = found }
         }
-        let folders = Claude.isRunning ? Claude.readTaskFolders() : [:]
+        let folders = Claude.isRunning ? taskFolderReader.read() : [:]
         let reader = activityReader
         let found = Self.readTasks(sessions: sessions, folders: folders, reader: taskReader, outputs: openOutputs,
                                    transcript: { reader.transcript($0) })
@@ -787,6 +892,7 @@ final class ClaudeFeed: @unchecked Sendable {
         guard let folders else { return ([:], []) }
         let idle = sessions.filter { !$0.running }
         let withFolders = idle.compactMap { s in s.cliID.flatMap { folders[$0] }.map { (s, $0) } }
+        reader.keepListings(of: Set(withFolders.map(\.1)))
         // The process list is only worth walking while some command's fate is still unknown; a cached walk is used only if
         // no command was started after it.
         let needed = withFolders.filter { reader.needsOpenOutputs(in: $0.1) }

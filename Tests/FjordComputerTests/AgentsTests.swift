@@ -707,4 +707,47 @@ import Testing
         chmod(session.path, 0o755)
         #expect(Claude.readTaskFolders(root: dir.path("root"))?.keys.sorted() == ["cli-a"])
     }
+
+    @Test func aReaderThatKeepsItsListingsSeesWhatChangesAsAFreshReadDoes() throws {
+        let dir = TempDir(), fm = FileManager.default, reader = Claude.TaskFolderReader()
+        let root = dir.path("root")
+        #expect(reader.read(root: root) == [:])
+        try fm.createDirectory(at: root.appendingPathComponent("project/cli-a/tasks"), withIntermediateDirectories: true)
+        // Claude Code's own files beside the projects aren't folders of sessions.
+        try Data().write(to: root.appendingPathComponent("cache-break-state-1.json"))
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-a"])
+        // A session's tasks folder made in a project already listed, and a project made since.
+        try fm.createDirectory(at: root.appendingPathComponent("project/cli-b/tasks"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("other/cli-c/tasks"), withIntermediateDirectories: true)
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-a", "cli-b", "cli-c"])
+        try fm.removeItem(at: root.appendingPathComponent("project/cli-a/tasks"))
+        try fm.removeItem(at: root.appendingPathComponent("other"))
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-b"])
+        let project = root.appendingPathComponent("project")
+        chmod(project.path, 0)
+        defer { chmod(project.path, 0o755) }
+        #expect(reader.read(root: root) == nil)
+        chmod(project.path, 0o755)
+        #expect(reader.read(root: root)?.keys.sorted() == ["cli-b"])
+    }
+
+    @Test func aTaskReaderListsAgainOnlyAFolderThatChangedAndSeesWhatChanged() throws {
+        let dir = TempDir()
+        let folder = dir.path("tasks")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let reader = Claude.TaskReader()
+        let now = Date()
+        #expect(!reader.needsOpenOutputs(in: folder))
+        #expect(reader.newestCommand(in: folder) == nil)
+        let output = folder.appendingPathComponent("b1.output")
+        try Data().write(to: output)
+        #expect(reader.needsOpenOutputs(in: folder))
+        #expect(reader.newestCommand(in: folder) != nil)
+        // As the listing names it (the system may give /private/var for /var).
+        let open = Set(try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).map(\.path))
+        #expect(reader.read(folder, transcript: nil, openOutputs: open, now: now).tasks.map(\.id) == ["b1"])
+        try FileManager.default.removeItem(at: output)
+        #expect(reader.read(folder, transcript: nil, openOutputs: open, now: now).tasks.isEmpty)
+        #expect(!reader.needsOpenOutputs(in: folder))
+    }
 }
