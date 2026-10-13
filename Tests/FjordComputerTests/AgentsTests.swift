@@ -76,6 +76,38 @@ import Testing
         while let task = s.iconTask { await task.value }
     }
 
+    @Test func anIconPickedForWhatASessionWasIsPickedAgainAndOneSetMeanwhileWins() async {
+        final class Latch: @unchecked Sendable { var open = false }
+        let latch = Latch()
+        let s = iconStore([session("a")])
+        var titles: [String] = []
+        s.iconChooser = { options, _, state, _ in
+            titles.append(state["session title"] ?? "")
+            while !latch.open { try? await Task.sleep(for: .milliseconds(2)) }
+            return .init(choice: options[0], confidence: 1, probabilities: [options[0]: 1])
+        }
+        s.pickIcons()
+        for _ in 0..<2000 where titles.isEmpty { try? await Task.sleep(for: .milliseconds(2)) }
+        // Renamed while Jev answers: the pick for the old name isn't taken; one is made for the new.
+        var renamed = session("a")
+        renamed.title = "Fix the login form"
+        s.ingest([renamed], appUnread: [], claudeFrontmost: false, now: now)
+        latch.open = true
+        await finishIcons(s)
+        #expect(titles.first == "Session a" && titles.last == "Fix the login form" && entry(s, "a")?.icon != nil)
+
+        // An icon set by hand while one is picked: yours stays.
+        latch.open = false
+        titles = []
+        s.repickIcon("a")
+        for _ in 0..<2000 where titles.isEmpty { try? await Task.sleep(for: .milliseconds(2)) }
+        let i = s.agents.entries.firstIndex { $0.id == "a" }!
+        s.agents.entries[i].label = "ZZ"
+        latch.open = true
+        await finishIcons(s)
+        #expect(entry(s, "a")?.icon == nil && entry(s, "a")?.label == "ZZ")
+    }
+
     @Test func theIconPickedForAHiddenSessionIsKept() async {
         var hidden = session("a")
         hidden.cliID = "cli-a"

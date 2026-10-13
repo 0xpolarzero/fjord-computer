@@ -572,6 +572,13 @@ extension Store {
             ?? allAgentRows.first { $0.needsIcon && ready($0) }
     }
 
+    /// Whether a pick begun for `session` (as it was then) may still be taken: the session still wants an icon (none set
+    /// meanwhile, by hand or otherwise), and what it was picked from (its title, its project, its transcript) is the same.
+    func iconStillWanted(_ session: ClaudeSession) -> Bool {
+        guard let now = claudeSessions[session.id], iconRow(session.id)?.needsIcon == true else { return false }
+        return now.title == session.title && now.folderName == session.folderName && now.cliID == session.cliID
+    }
+
     /// What a session looked like when it had nothing to go on: new activity, a title or a transcript changes it.
     private func iconStamp(_ session: ClaudeSession) -> String {
         "\(session.title)|\(session.activity)|\(session.cliID ?? "")"
@@ -615,6 +622,8 @@ extension Store {
             }
             let used = Set(rows.compactMap(\.entry.icon)).union(current.entry.rejectedIcons ?? [])
             let open = await SessionIcons.openOffMain(excluding: used)
+            // Renamed meanwhile (or given an icon by hand): picked again from what it is now.
+            guard self.iconStillWanted(session) else { self.iconTask = nil; return self.pickIcons() }
             guard !open.isEmpty else { self.iconTask = nil; return }
             var state = ["session title": session.title, "project": session.folderName]
             if let first { state["first message"] = first }
@@ -626,9 +635,13 @@ extension Store {
                 let options = SessionIcons.shortlist(open, probabilities: kinds.probabilities)
                 let pick = try await choose(options, SessionIcons.hints, state,
                     "Pick the icon that best shows what this coding session is about, so its owner can tell it apart from their other sessions at a glance.")
-                self.mutateAgent(session.id) { $0.icon = pick.choice }
                 self.iconError = nil
                 self.iconTask = nil
+                // What it was picked for changed while Jev answered, an icon was set meanwhile, or another session took
+                // this one: not taken, and picked again (or left as you set it).
+                if self.iconStillWanted(session), !self.allAgentRows.contains(where: { $0.id != session.id && $0.entry.icon == pick.choice }) {
+                    self.mutateAgent(session.id) { $0.icon = pick.choice }
+                }
                 self.pickIcons()
             } catch {
                 self.iconPickFailed(error)
