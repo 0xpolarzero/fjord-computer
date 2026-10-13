@@ -1704,8 +1704,12 @@ private struct RouterNow: View {
     /// One picked past the first few of Worth a look shows them all, so the keys never land on a card that isn't drawn; a
     /// search shows every match.
     private var showsAllNotes: Bool {
+        if showAllNotes || model.searching { return true }
+        // The pick read only when there are cards past the first few for it to be on: Now's column doesn't redraw for each
+        // arrow key otherwise.
+        guard page.notes.count > Self.notesShown else { return false }
         let picked = [model.selection, model.highlighted, model.expandedNeed].compactMap { $0 }
-        return showAllNotes || model.searching || page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
+        return page.notes.dropFirst(Self.notesShown).contains { picked.contains($0.id) }
     }
 
     /// Finished turns with nothing to do but something to tell: quieter than Needs you, a line each, the first few shown.
