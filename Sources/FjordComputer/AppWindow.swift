@@ -633,7 +633,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         // Never one that may cost more than the budget, by what this page has cost lately (the glance just drawn included):
         // a close without a fresh picture fades the live window instead.
-        guard let (scale, cost) = choice(), AppTransition.mayCaptureAtIdle(cost: cost) else { return }
+        guard let (scale, cost) = choice(), AppTransition.mayCaptureAtIdle(cost: cost) else {
+            // An expensive canvas still settles: skipping its capture must not redraw a glance every half second.
+            slower()
+            return
+        }
         if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
                                                destination: navigator.selection, glance: now, pixelScale: scale,
                                                marks: marks) {

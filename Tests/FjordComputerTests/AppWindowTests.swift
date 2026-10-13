@@ -1101,6 +1101,24 @@ extension WindowSeams {
             }
         }
 
+        @Test func theIdleKeeperBacksOffWhenNeitherCaptureScaleFitsItsBudget() throws {
+            try morphing { controller, _ in
+                let window = try #require(openForTheKeeper(controller))
+                let size = AppTransition.drawnSize(window), page = AppTransition.page(.done)
+                for scale in [window.backingScaleFactor, AppTransition.reducedScale(of: window)] {
+                    AppTransition.costs.record(0.2, size: size, pixelScale: scale, page: page)
+                }
+                let captures = AppTransition.captures
+                controller.keepPicture()
+                #expect(controller.keeperPace == 0.5)
+                controller.keepPicture()
+                controller.keepPicture()
+                controller.keepPicture()
+                #expect(controller.keeperPace == AppWindowController.keeperPaces.longest)
+                #expect(AppTransition.captures == captures && !controller.keepsPicture)
+            }
+        }
+
         /// The idle keeper settles: a picture only once two looks agree, then no glance at all while nothing is typed, clicked,
         /// asked or synced (what ticks on its own is noise a close forgives), its looks further and further apart; something
         /// asked of the window has it look again, and a window drawn alike keeps its picture.
