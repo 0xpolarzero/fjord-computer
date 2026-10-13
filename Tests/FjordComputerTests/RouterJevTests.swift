@@ -225,6 +225,14 @@ import Testing
         #expect(model.live.prediction?.mark == "local_a#w1")
     }
 
+    @Test func aKeptPickTakesItsSessionsNewTitleWithoutAskingJevAgain() {
+        let (s, model, calls) = setup()
+        model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "", text: "x", mark: nil))
+        s.claudeSessions["local_b"]?.title = "Rewrite the docs"
+        model.revalidateTarget(store: s)
+        #expect(model.live.prediction?.title == "Rewrite the docs" && calls() == 0)
+    }
+
     @Test func aPinnedSessionThatIsGoneIsUnpinned() {
         let (s, model, _) = setup()
         model.live.preview(.init(target: "session:local_b", title: "Update the docs", detail: "", text: "x", mark: nil))

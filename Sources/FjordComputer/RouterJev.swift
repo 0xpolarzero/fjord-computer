@@ -110,9 +110,14 @@ final class RouterLiveTarget {
         guard found.assisted, found.sure, let top = found.top, top.target != dismissed,
               store.routerDispatcher.eligible(top.target, store: store),
               let option = store.routerDispatcher.option(top.target, store: store) else { return nil }
-        let title = top.target.hasPrefix("new:") ? "\(option.title) · \(option.detail)" : option.title
-        return Prediction(target: top.target, title: title, detail: store.routerDispatcher.describe(top.target, store: store),
+        return Prediction(target: top.target, title: Self.title(top.target, option),
+                          detail: store.routerDispatcher.describe(top.target, store: store),
                           text: text, mark: Self.mark(top.target, store: store), found: found)
+    }
+
+    /// The chip's words for a target's option: a new session's with its folder.
+    static func title(_ target: String, _ option: RouterAskBack.Option) -> String {
+        target.hasPrefix("new:") ? "\(option.title) · \(option.detail)" : option.title
     }
 
     /// The page's item for a target: the card, or the session's working row, else its open card.
@@ -274,11 +279,14 @@ extension RouterLiveTarget {
             clear()
             return true
         }
-        let mark = Self.mark(p.target, store: store)
-        if mark != p.mark {
-            p.mark = mark
-            prediction = p
+        let before = p
+        p.mark = Self.mark(p.target, store: store)
+        // Its words from the target as it is now (a session renamed while the pick was kept), without asking Jev again.
+        if let option = dispatcher.option(p.target, store: store) {
+            p.title = Self.title(p.target, option)
+            p.detail = dispatcher.describe(p.target, store: store)
         }
+        if p != before { prediction = p }
         return false
     }
 }
