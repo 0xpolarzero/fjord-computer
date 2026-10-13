@@ -882,10 +882,11 @@ enum SessionStart {
     /// How long its first message is held for once the app has the session but doesn't run it yet (`NotRunning`).
     static let heldWait: TimeInterval = 30 * 60
 
-    /// The Claude app has the session (it imported it) but doesn't run it: its process isn't there to take a message yet.
-    /// Usually the app is at its limit of sessions run at once (its CLI governor: one per 3 GB of memory, at least 6): an
-    /// imported session's start is then given up, not retried, until a slot frees and it is opened, or something is sent to
-    /// it in the app. Fjord Computer can't count the app's sessions as the app does, so it never says the app is full.
+    /// The Claude app has the session (it imported it) but doesn't run it: its process isn't there to take a message
+    /// yet. Usually the app is at its limit of sessions run at once (its CLI governor: one per 3 GB of memory, at least
+    /// 6): an imported session's start is then given up, not retried, until a slot frees and it is opened, or something
+    /// is sent to it in the app. Fjord can't count the app's sessions as the app does, so it never says the app is
+    /// full.
     struct NotRunning: LocalizedError, Equatable {
         /// `local_<uuid>`.
         var sessionID: String

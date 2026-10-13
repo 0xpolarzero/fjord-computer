@@ -1,7 +1,7 @@
 import Foundation
 
-// The Router's second surface: Fjord Computer itself (Triage's categories, groups and inbox, and the settings), besides
-// the Claude Code sessions. It never touches GitHub. Reads answer from the store; a change applies at once and leaves a
+// The Router's second surface: Fjord itself (Triage's categories, groups and inbox, and the settings), besides the
+// Claude Code sessions. It never touches GitHub. Reads answer from the store; a change applies at once and leaves a
 // record in the history (a card with Open and Revert, see FjordChange).
 
 // MARK: - JSON
@@ -283,8 +283,8 @@ extension RouterTools {
         return Self.json(out)
     }
 
-    /// A change the Router makes: applied by `apply` (which gives the record, as it came out) and recorded, unless the gate
-    /// holds it for the user (`FjordGate`): then nothing is applied, and the record waits for their Apply.
+    /// A change the Router makes: applied by `apply` (which gives the record, as it came out) and recorded, unless the
+    /// gate holds it for the user (`FjordGate`): then nothing is applied, and the record waits for their Apply.
     /// `reason`: why it waits, worked out by the caller (the gate's own reasons still apply).
     private func commit(_ store: Store, _ change: FjordChange, reason given: String? = nil,
                         apply: () throws -> FjordChange) throws -> FjordChange? {

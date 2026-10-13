@@ -2311,8 +2311,8 @@ struct WorkingCard: View, Equatable {
 // MARK: - Waiting card
 
 /// A session whose turn ended waiting on something (CI, a deploy, another session): with the working ones, in a cool
-/// tint and an hourglass, saying what for. Once Fjord Computer sees that done it says the session is ready to continue,
-/// and Tell it sends the session so. Opening it, or the Claude button beside it, opens the session in Claude.
+/// tint and an hourglass, saying what for. Once Fjord sees that done it says the session is ready to continue, and Tell
+/// it sends the session so. Opening it, or the Claude button beside it, opens the session in Claude.
 struct WaitingCard: View, Equatable {
     let store: Store
     let card: RouterCard

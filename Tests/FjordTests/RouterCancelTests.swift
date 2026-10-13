@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Fjord
 
-/// Cancel: the abort Fjord Computer signs (the vector the plugin's tests check too), its trip through the inbox, how a cancel is
+/// Cancel: the abort Fjord signs (the vector the plugin's tests check too), its trip through the inbox, how a cancel is
 /// recorded on its entry and in the trace, when the history offers it, and a wrong send sent elsewhere.
 @MainActor
 @Suite(.serialized) struct RouterCancelTests {
@@ -294,7 +294,7 @@ import Testing
         let id = try #require(w.dispatcher.submit(text, context: context))
         await w.finish(id)
         #expect(w.fakes.prepared == ["local_a"] && w.entry(id)?.actionSource == context.action)
-        // Asked again, Jev now sure it changes Fjord Computer: still never the Router's own runs, nor a folder not offered.
+        // Asked again, Jev now sure it changes Fjord: still never the Router's own runs, nor a folder not offered.
         w.fakes.finished = []
         w.fakes.ranked = [.init(target: "change_fjord", p: 0.9), .init(target: "question", p: 0.05), .init(target: "new:/code/lookout-2", p: 0.05)]
         w.dispatcher.sendElsewhere(id)

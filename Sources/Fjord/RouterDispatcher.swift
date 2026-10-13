@@ -3,10 +3,9 @@ import Observation
 
 // Workflow B of docs/design/spec/router.md: what you type. Each message is a run of its own (several can be in flight),
 // with no transcript: deterministic rules first (a reply armed on a card, a typed @project), then Jev with context,
-// then a Haiku run only for what needs judgment or tools (changing Fjord Computer, a question about its state). Every
-// run is one entry of the decision log, and the line on the page shows how far it is. When Jev isn't sure, nothing is
-// sent: an ask-back card puts the question to you, and your pick is logged (as a correction when it isn't what Jev
-// suggested).
+// then a Haiku run only for what needs judgment or tools (changing Fjord, a question about its state). Every run is one
+// entry of the decision log, and the line on the page shows how far it is. When Jev isn't sure, nothing is sent: an
+// ask-back card puts the question to you, and your pick is logged (as a correction when it isn't what Jev suggested).
 
 /// What a message of yours comes with besides its text: the card you're replying to (its session is the target), the
 /// projects you tagged (routing is narrowed to them, and a new session starts there), and what you made of Jev's pick while
@@ -168,8 +167,7 @@ struct RouterAskBack: Identifiable, Equatable {
         var settingsSigned = false
     }
 
-    /// Everything a run does outside Fjord Computer's own state, so a test stands in for each. The defaults are the
-    /// real ones.
+    /// Everything a run does outside Fjord's own state, so a test stands in for each. The defaults are the real ones.
     struct Effects {
         /// Jev's probabilities over the targets, with the other questions of the same call, or why not.
         var rank: @MainActor (RouterTools, _ message: String, _ projects: [String]) async throws -> Ranking
@@ -359,7 +357,7 @@ struct RouterAskBack: Identifiable, Equatable {
         return true
     }
 
-    /// "Choose folder…" on an ask: a new session in the folder you chose, with the message, whether Fjord Computer knew the
+    /// "Choose folder…" on an ask: a new session in the folder you chose, with the message, whether Fjord knew the
     /// folder or not.
     @discardableResult
     func pick(_ id: UUID, folder: String) -> Bool {
@@ -1219,7 +1217,7 @@ struct RouterAskBack: Identifiable, Equatable {
     func eligible(_ target: String, store: Store) -> Bool {
         if target.hasPrefix("answer:") { return store.routerShownOpenCards.contains { $0.id == String(target.dropFirst(7)) } }
         if target.hasPrefix("session:") { return store.claudeSessions[String(target.dropFirst(8))].map { !$0.isArchived } ?? false }
-        // A project Fjord Computer knows: a session's folder, or a repo in your code folders (a clone with no session yet).
+        // A project Fjord knows: a session's folder, or a repo in your code folders (a clone with no session yet).
         if target.hasPrefix("new:") { return store.isProjectFolder(String(target.dropFirst(4))) }
         return true
     }
@@ -1308,8 +1306,8 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         switch target {
         case RouterAskBack.chooseFolder: return .init(target: target, title: "Choose folder…", detail: "a new session there")
-        case "change_fjord", "compound": return .init(target: target, title: "Change Fjord Computer", detail: "Categories, groups, settings")
-        case "question": return .init(target: target, title: "Answer from what Fjord Computer knows", detail: "A question about now")
+        case "change_fjord", "compound": return .init(target: target, title: "Change Fjord", detail: "Categories, groups, settings")
+        case "question": return .init(target: target, title: "Answer from what Fjord knows", detail: "A question about now")
         default: return nil
         }
     }
@@ -1345,7 +1343,7 @@ extension RouterDispatcher.Effects {
     @MainActor
     static func live(_ dispatcher: RouterDispatcher) -> Self {
         func store(_ d: RouterDispatcher) throws -> Store {
-            guard let store = d.storeForEffects else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+            guard let store = d.storeForEffects else { throw RouterTools.Failure("Fjord isn't ready") }
             return store
         }
         func object(_ json: String) -> [String: Any] {
@@ -1365,7 +1363,7 @@ extension RouterDispatcher.Effects {
         }
         return Self(
             rank: { [weak dispatcher] tools, message, projects in
-                guard let dispatcher, let store = dispatcher.storeForEffects else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher, let store = dispatcher.storeForEffects else { throw RouterTools.Failure("Fjord isn't ready") }
                 guard let ask = dispatcher.jevForEffects(tools) else { throw RouterTools.Failure("no TypeSafe key is set") }
                 // One option per destination, described in its own criteria; the message alone as the state; the board's
                 // recency weighed with Jev's answers (RouterRoute).
@@ -1404,7 +1402,7 @@ extension RouterDispatcher.Effects {
                 return RouterDispatcher.Ranking(scored: verdict.ranked, sure: verdict.sure, card: card, trace: trace)
             },
             prepare: { [weak dispatcher] tools, session in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.prepare(store, session: session, ticket: tools.ticket()))
                 guard let to = answer["to"] as? String, let ready = tools.prepared[to] else { throw RouterTools.Failure("Not prepared") }
@@ -1412,13 +1410,13 @@ extension RouterDispatcher.Effects {
                              rephrased: ready.rephrased, session: session, newSessionIn: nil)
             },
             start: { [weak dispatcher] tools, folder, title, settings in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.startSession(store, project: folder, title: title, ticket: tools.ticket(), settings: settings))
                 return try started(answer, tools, project: store.folderName(folder), settings: settings)
             },
             send: { [weak dispatcher] tools, delivery in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 guard let binary = dispatcher.claudePath(), let home = store.routerFiles?.routerHome else {
                     throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
@@ -1428,11 +1426,11 @@ extension RouterDispatcher.Effects {
                                                    inbox: await store.relayInbox(forSigned: delivery.text))
             },
             answer: { [weak dispatcher] tools, card, answers in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 return try await tools.answerForm(try store(dispatcher), ["card": card, "answers": answers], ticket: tools.ticket())
             },
             run: { [weak dispatcher] tools, intent, input in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 guard let binary = dispatcher.claudePath() else { throw RouterTools.Failure("Claude Code wasn't found") }
                 return try await RouterRun.run(intent, input: input, tools: tools, store: store, binary: binary)
@@ -1442,17 +1440,17 @@ extension RouterDispatcher.Effects {
                 return await store.supportsAbort(cli)
             },
             cancel: { [weak dispatcher] sent in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 return try await store(dispatcher).cancelDelivery(sent)
             },
             finish: { [weak dispatcher] tools, held in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.finishStart(store, held, ticket: tools.ticket()))
                 return try started(answer, tools, project: held.project, settings: held.settings)
             },
             fork: { [weak dispatcher] tools, request in
-                guard let dispatcher else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.forkSession(store, request, ticket: tools.ticket()))
                 let project = store.claudeSessions[request.session].map { store.folderName($0.folderKey) } ?? ""

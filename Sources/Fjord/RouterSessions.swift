@@ -18,8 +18,8 @@ extension ClaudeDot.Kind {
 }
 
 /// Claude's session status dot (§1.7), 6pt in a 14pt box: awaiting #fab219 (a question or a plan), ready #2a78d6 (a
-/// finished turn), running #898781 blinking (a working session), idle a 1pt hollow ring at 50% (addressed). Claude has no
-/// "stuck" state; Fjord Computer's stuck card keeps a red 6pt dot (`CDS.Text.danger`).
+/// finished turn), running #898781 blinking (a working session), idle a 1pt hollow ring at 50% (addressed). Claude has
+/// no "stuck" state; Fjord's stuck card keeps a red 6pt dot (`CDS.Text.danger`).
 struct ClaudeDot: View {
     enum Kind {
         case needsYou, done, stuck, working, waiting, quiet

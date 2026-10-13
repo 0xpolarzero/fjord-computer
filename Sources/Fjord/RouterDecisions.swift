@@ -13,7 +13,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case action(category: String, thing: String, actionID: String, runID: String?)
         /// A session did something the Router acted on.
         case session(sessionID: String, event: String)
-        /// Fjord Computer itself (a change with no message behind it).
+        /// Fjord itself (a change with no message behind it).
         case system
     }
 
@@ -82,15 +82,15 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             case .aborted: "cancelled: Claude stopped working on it; what it already did stays done, and a command it was running finishes unseen"
             case .tooLate: "too late to cancel: Claude had finished with it"
             case .together: "not cancelled: Claude read it together with words you typed there, which a cancel would stop too"
-            case .unknown: "couldn't tell whether it was cancelled: the session's Fjord Computer plugin was reloaded since"
+            case .unknown: "couldn't tell whether it was cancelled: Fjord's plugin in the session was reloaded since"
             }
         }
     }
 
-    /// The message a send put in a session, so it can be taken back (`RouterDispatcher.cancel`): the session (Fjord Computer's id,
-    /// and Claude Code's, which its inbox goes by), the delivery's nonce, when, how many turns the session had finished then
-    /// and whether one was running, whether its plugin takes aborts, and how a cancel went. Nil for anything else and in
-    /// entries from before.
+    /// The message a send put in a session, so it can be taken back (`RouterDispatcher.cancel`): the session (Fjord's
+    /// id, and Claude Code's, which its inbox goes by), the delivery's nonce, when, how many turns the session had
+    /// finished then and whether one was running, whether its plugin takes aborts, and how a cancel went. Nil for
+    /// anything else and in entries from before.
     struct Delivered: Codable, Equatable {
         var session: String
         var cli: String
@@ -104,10 +104,10 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         /// How long a Cancel is offered after a send: past it, the turn has nearly always finished.
         static let window: TimeInterval = 10 * 60
 
-        /// Whether a Cancel can still stop it, as Fjord Computer sees the session (`now`, and its turns finished now): not cancelled
-        /// yet, its plugin takes aborts, sent within `window`, the session not archived, and its turn not seen to finish (the
-        /// one it waited behind, then its own). A session Fjord Computer hasn't read yet (one just started) is given the window. The
-        /// plugin has the last word: a turn over meanwhile is told as too late.
+        /// Whether a Cancel can still stop it, as Fjord sees the session (`now`, and its turns finished now): not
+        /// cancelled yet, its plugin takes aborts, sent within `window`, the session not archived, and its turn not
+        /// seen to finish (the one it waited behind, then its own). A session Fjord hasn't read yet (one just started)
+        /// is given the window. The plugin has the last word: a turn over meanwhile is told as too late.
         func cancellable(session: ClaudeSession?, now: Date) -> Bool {
             guard cancelled == nil, abortable, now.timeIntervalSince(at) < Self.window else { return false }
             guard let session else { return true }
@@ -196,7 +196,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .you(let text): fromAction.map { "\($0.category) · " + text } ?? text
         case .action(let category, let thing, _, _): "From \(category) · \(thing)"
         case .session(_, let event): event
-        case .system: "Fjord Computer"
+        case .system: "Fjord"
         }
     }
 
@@ -206,7 +206,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             switch item {
             case .sent(let to, let text, _): "sent to \(to): \(Self.clip(text, 80))"
             case .started(_, let project, let model, let effort): "started a session in \(project)" + settingsWords(model, effort)
-            case .changed(let id): "changed Fjord Computer (\(id.uuidString.prefix(8)))"
+            case .changed(let id): "changed Fjord (\(id.uuidString.prefix(8)))"
             case .answered(let card): "answered \(card)"
             case .asked(let options): "asked which: " + options.joined(separator: " / ")
             case .resolved(let card, let message): "addressed \(card) by your message: \(Self.clip(message, 80))"
@@ -229,7 +229,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         switch first {
         case .sent(let to, _, _): return "sent to \(to)" + more
         case .started(_, let project, let model, let effort): return "started in \(project)" + settingsWords(model, effort) + more
-        case .changed: return "changed Fjord Computer" + more
+        case .changed: return "changed Fjord" + more
         case .answered: return "answered" + more
         case .asked: return "asked you" + more
         case .resolved: return "addressed a card" + more
@@ -280,7 +280,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
                 ?? "you: “\(Self.clip(text, 100))”"
         case .action(let category, let thing, _, _): who = "action of the category “\(UntrustedText.clean(category, limit: 40))” · \(UntrustedText.clean(thing, limit: 80))"
         case .session(_, let event): who = "session: \(Self.clip(event, 100))"
-        case .system: who = "Fjord Computer"
+        case .system: who = "Fjord"
         }
         var parts = [who]
         if let target = decision.target { parts.append("target \(target)") }
@@ -323,13 +323,13 @@ extension RouterState {
         for i in decisions.indices where decisions[i].outcome == .pending {
             // A start whose first message was held for the session to run: the session is there, the message never went.
             let held = decisions[i].done.contains { if case .started = $0 { true } else { false } }
-            decisions[i].add(.failed(held ? "its first message wasn't sent: Fjord Computer quit while it waited for the session to run" : "interrupted"))
+            decisions[i].add(.failed(held ? "its first message wasn't sent: Fjord quit while it waited for the session to run" : "interrupted"))
             decisions[i].outcome = .done
         }
     }
 
-    /// A change waiting for your Apply or Discard, or one an older file kept in its chat, is reached only through an entry
-    /// linking it: one whose entry was lost (unreadable) or never made gets an entry of Fjord Computer's own, at its date.
+    /// A change waiting for your Apply or Discard, or one an older file kept in its chat, is reached only through an
+    /// entry linking it: one whose entry was lost (unreadable) or never made gets an entry of Fjord's own, at its date.
     mutating func linkUnlinkedChanges(legacy: Set<UUID>) {
         let linked = Set(decisions.flatMap(\.links.changes))
         for change in changes where !linked.contains(change.id) && (change.isPending || legacy.contains(change.id)) {
@@ -364,7 +364,7 @@ extension Store {
         router.decisions.filter { $0.id != excluding }.suffix(count).map { $0.contextLine(now: now) }.joined(separator: "\n")
     }
 
-    /// A change made in Fjord Computer: part of the run under way, else an entry of its own.
+    /// A change made in Fjord: part of the run under way, else an entry of its own.
     func logChange(_ change: FjordChange, into run: UUID? = nil) {
         if let id = run, router.decisions.contains(where: { $0.id == id }) {
             updateDecision(id) { $0.add(.changed(change.id)) }

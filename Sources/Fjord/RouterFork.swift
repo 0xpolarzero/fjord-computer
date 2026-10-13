@@ -65,9 +65,9 @@ enum SessionFork {
         return dirs.lazy.map { $0.appendingPathComponent("\(cliID).jsonl") }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    /// Your messages in a transcript, oldest first: what you typed (or Fjord Computer delivered as yours), never a tool's result, a
-    /// slash command's lines, a subagent's or one Claude Code adds itself. Only these lines are decoded; nothing is kept but
-    /// what `Message` holds.
+    /// Your messages in a transcript, oldest first: what you typed (or Fjord delivered as yours), never a tool's
+    /// result, a slash command's lines, a subagent's or one Claude Code adds itself. Only these lines are decoded;
+    /// nothing is kept but what `Message` holds.
     nonisolated static func messages(in data: Data) -> [Message] {
         data.split(separator: UInt8(ascii: "\n")).compactMap(message)
     }

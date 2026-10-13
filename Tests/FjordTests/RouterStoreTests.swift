@@ -19,7 +19,7 @@ import Testing
         let s = Store()
         s.persists = false
         s.routerPaths = RouterPaths(support: dir.path("support"), claudeDir: dir.path("claude"))
-        s.routerExecutable = "/Applications/Fjord Computer.app/Contents/MacOS/Fjord"
+        s.routerExecutable = "/Applications/Fjord.app/Contents/MacOS/Fjord"
         s.interceptOpen = { _ in }
         s.claudeIsFrontmost = { false }
         s.claudeLink = .ok
@@ -157,7 +157,7 @@ import Testing
         let paths = try #require(s.routerPaths)
         let installer = FormHookInstaller(claudeDir: paths.claudeDir)
         #expect(s.routerHookStatus == .installed && s.routerHookError == nil)
-        #expect(installer.status(executable: "/Applications/Fjord Computer.app/Contents/MacOS/Fjord") == .installed)
+        #expect(installer.status(executable: "/Applications/Fjord.app/Contents/MacOS/Fjord") == .installed)
         #expect(FileManager.default.fileExists(atPath: paths.forms.appendingPathComponent(".enabled").path))
 
         s.setRouterEnabled(false)
@@ -187,11 +187,11 @@ import Testing
         let moved = Store()
         moved.persists = false
         moved.routerPaths = s.routerPaths
-        moved.routerExecutable = "/Users/me/Applications/Fjord Computer.app/Contents/MacOS/Fjord"
+        moved.routerExecutable = "/Users/me/Applications/Fjord.app/Contents/MacOS/Fjord"
         moved.router.enabled = true
         moved.startRouter()
         await moved.routerHookWork?.value
-        #expect(installer.status(executable: "/Users/me/Applications/Fjord Computer.app/Contents/MacOS/Fjord") == .installed)
+        #expect(installer.status(executable: "/Users/me/Applications/Fjord.app/Contents/MacOS/Fjord") == .installed)
         #expect(moved.routerHookStatus == .installed)
 
         // Not installed (you took it out yourself): launch leaves it so.

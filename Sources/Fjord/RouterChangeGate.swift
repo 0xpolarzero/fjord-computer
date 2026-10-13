@@ -1,12 +1,12 @@
 import Foundation
 
-// Which of the Router's changes to Fjord Computer wait for you. A run acts on your message, but it reads what sessions
-// and GitHub wrote, and words there could try to steer it. So a change whose effect reaches outside Fjord Computer (an
-// action that comments on GitHub, starts sessions or re-runs CI by itself; what such a category runs on, or what
-// reaches it past the categories before it; session titles sent to TypeSafe), one that takes something away (a category
-// or group deleted, many things marked at once), and one your message didn't speak of (a setting it never named, marks
-// it never asked for) is not applied: its card says why, with Apply and Discard. A local change you asked for applies
-// at once, with Revert.
+// Which of the Router's changes to Fjord wait for you. A run acts on your message, but it reads what sessions and
+// GitHub wrote, and words there could try to steer it. So a change whose effect reaches outside Fjord (an action that
+// comments on GitHub, starts sessions or re-runs CI by itself; what such a category runs on, or what reaches it past
+// the categories before it; session titles sent to TypeSafe), one that takes something away (a category or group
+// deleted, many things marked at once), and one your message didn't speak of (a setting it never named, marks it never
+// asked for) is not applied: its card says why, with Apply and Discard. A local change you asked for applies at once,
+// with Revert.
 
 enum FjordGate {
     /// Things marked at once beyond which marking waits for Apply.

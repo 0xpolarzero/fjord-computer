@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Fjord
 
-/// A session waiting on something Fjord Computer sees finish: ready to continue, told by you, logged.
+/// A session waiting on something Fjord sees finish: ready to continue, told by you, logged.
 @MainActor
 @Suite(.serialized) struct RouterWaitingTests {
     final class Sent { var messages: [(String, String)] = []; var fail = false }
@@ -136,7 +136,7 @@ import Testing
     @Test func anotherSessionIsDoneOnlyOnceItsBackgroundWorkIsToo() {
         let watch = RouterTriage.Watch(target: .session(id: "b", turns: 5), label: "session “Migration”")
         let (s, _) = store(watch: watch)
-        // Its turn is over, but a subagent it started still runs (Working, in Fjord Computer).
+        // Its turn is over, but a subagent it started still runs (Working, in Fjord).
         s.claudeSessions["b"]?.completedTurns = 6
         s.claudeSessions["b"]?.running = false
         s.claudeTasks = ["b": [ClaudeTask(id: "t1", kind: .agent, title: "Backfill", since: Date())]]
@@ -283,7 +283,7 @@ import Testing
             await s.routerTriager.idle()
             #expect(offered.count == 1)
             #expect(offered.first?.contains("c0") == (when == "answering"))
-            // Not from Jev's answer: Fjord Computer's own reading of the message binds the PR it names, sending nothing.
+            // Not from Jev's answer: Fjord's own reading of the message binds the PR it names, sending nothing.
             let card = s.router.cards[0]
             #expect(card.triage?.state == .waiting && card.triage?.watch?.target == .ci(thing: "pr:o/app#1"))
             #expect(offered.count == 1)
@@ -608,7 +608,7 @@ import Testing
     }
 
     @Test func aCardReadyTheOlderWayOnAnotherHeadIsReadyAgain() {
-        // Saved untold, the older way, on head h1; h2 was pushed and failed the same way while Fjord Computer was closed.
+        // Saved untold, the older way, on head h1; h2 was pushed and failed the same way while Fjord was closed.
         var pr = ci(.failing)
         pr.headSha = "h1"
         let (s, _) = store(watch: ciWatch, things: [pr])
@@ -647,7 +647,7 @@ import Testing
 
     @Test func whatAWaitingMessageNamesIsFjordsOwnReading() {
         let (s, _) = store(watch: ciWatch, things: [ci(.pending)])
-        // What names it, as Fjord Computer reads the message itself.
+        // What names it, as Fjord reads the message itself.
         let a = s.claudeSessions["a"]!
         #expect(s.waitNamed(ciWatch, in: "Pushed; waiting on CI for o/app#1.", by: a))
         #expect(s.waitNamed(ciWatch, in: "Waiting for #1 to go green", by: a))

@@ -1,12 +1,12 @@
 import Foundation
 
-/// The Router's routing trace: one JSON line per routed message, with what it was decided on (the board as the Router saw
-/// it, Jev's answers, the fused ranking and its sureness, the ask card) and how it was decided, then lines for how it
-/// ended (a button picked on the ask, a correction, a message sent and then cancelled, and asked again to send it elsewhere).
-/// The first `decided` line of a message is what its outcomes join to; a re-ask is a `reasked` line, with what it was
-/// decided on. It stays on this Mac, in Application Support/Fjord Computer/router-trace.jsonl,
-/// with the message redacted as it is for Jev. evals/router turns it into benchmark episodes of your real traffic, and the
-/// corrections into labels: what in-session moments can only approximate.
+/// The Router's routing trace: one JSON line per routed message, with what it was decided on (the board as the Router
+/// saw it, Jev's answers, the fused ranking and its sureness, the ask card) and how it was decided, then lines for how
+/// it ended (a button picked on the ask, a correction, a message sent and then cancelled, and asked again to send it
+/// elsewhere). The first `decided` line of a message is what its outcomes join to; a re-ask is a `reasked` line, with
+/// what it was decided on. It stays on this Mac, in Application Support/Fjord/router-trace.jsonl, with the message
+/// redacted as it is for Jev. evals/router turns it into benchmark episodes of your real traffic, and the corrections
+/// into labels: what in-session moments can only approximate.
 struct RouterTrace: Codable, Equatable {
     /// What the fusion saw and made of it (RouteFusion): nil when the words alone, a rule or your own pick decided.
     struct Inputs: Codable, Equatable {
@@ -85,7 +85,7 @@ final class RouterTraceLog: @unchecked Sendable {
 
     static var defaultURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Fjord Computer", isDirectory: true)
+            .appendingPathComponent("Fjord", isDirectory: true)
         return dir.appendingPathComponent("router-trace.jsonl")
     }
 

@@ -207,8 +207,8 @@ import Testing
         try FileManager.default.createDirectory(at: peers, withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: ["pid": Int(getpid()), "hostSessionId": "local_busy", "name": "Busy"])
         try data.write(to: peers.appendingPathComponent("\(getpid()).json"))
-        // The app has it but doesn't run it by the end of the wait: said as such, never as a failed start; nothing said of
-        // how full the app is (Fjord Computer can't count its sessions as it does).
+        // The app has it but doesn't run it by the end of the wait: said as such, never as a failed start; nothing said
+        // of how full the app is (Fjord can't count its sessions as it does).
         await #expect(throws: SessionStart.NotRunning(sessionID: "local_u-1")) {
             try await SessionStart.waitForPeer(uuid: "u-1", dir: peers, timeout: 0.5, imported: { true })
         }

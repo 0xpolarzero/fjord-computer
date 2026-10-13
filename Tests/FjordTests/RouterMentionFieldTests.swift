@@ -250,45 +250,46 @@ import Testing
 
     @Test func anAtWordRunsAcrossSpacesWhileItStillNamesSomething() {
         func query(_ text: String, caret: Int? = nil) -> String? { RouterModel.mentionQuery(in: text, caret: caret) }
-        #expect(query("ask @fjord comp") == "fjord comp")
-        #expect(query("ask @fjord ") == "fjord ")
+        #expect(query("ask @claude code") == "claude code")
+        #expect(query("ask @claude ") == "claude ")
         // Not two spaces in a row, a new line, a space right after the @, a pill, an @ in a word (an email).
-        #expect(query("ask @fjord  comp") == nil && query("ask @fjord \t") == nil)
-        #expect(query("ask @fjord\ncomp") == nil)
+        #expect(query("ask @claude  code") == nil && query("ask @claude \t") == nil)
+        #expect(query("ask @claude\ncode") == nil)
         #expect(query("@ foo") == nil)
-        #expect(query("@fjord \(MentionText.markString) x") == nil)
+        #expect(query("@claude \(MentionText.markString) x") == nil)
         #expect(query("a@b c") == nil && query("a@b") == nil)
         // A few words, not too long: a stale @ further back doesn't come back.
         #expect(query("@a b c d") == "a b c d" && query("@a b c d e") == nil)
         #expect(query("@" + String(repeating: "x", count: 36) + " yyyy") == nil)
         // The caret after a space: the word past it isn't the @ word's.
-        let text = "@fjord comp"
-        let found = RouterModel.mention(in: text, caret: 7)
-        #expect(found?.query == "fjord " && found.map { String(text[$0.range]) } == "@fjord ")
-        #expect(RouterModel.mention(in: text, caret: nil).map { String(text[$0.range]) } == "@fjord comp")
+        let text = "@claude code"
+        let found = RouterModel.mention(in: text, caret: 8)
+        #expect(found?.query == "claude " && found.map { String(text[$0.range]) } == "@claude ")
+        #expect(RouterModel.mention(in: text, caret: nil).map { String(text[$0.range]) } == "@claude code")
 
         // Words across spaces each start a word of the name; nothing looser.
-        #expect(RouterMentions.score("Fjord Computer", query: "fjord comp") == 0)
-        #expect(RouterMentions.score("Fjord Computer", query: "fj co") == 1)
-        #expect(RouterMentions.score("Fjord Computer", query: "comp fj") == 2)
-        #expect(RouterMentions.score("Fjord Computer", query: "fjord ") == 0)
-        #expect(RouterMentions.score("Fjord Computer", query: "ord comp") == nil)
-        #expect(RouterMentions.score("Fjord Computer", query: "fjord please") == nil)
-        #expect(RouterMentions.score("Fjord Computer", query: "fjord") == 0 && RouterMentions.score("Fjord Computer", query: "fcr") == 3)
+        #expect(RouterMentions.score("Claude Code", query: "claude code") == 0)
+        #expect(RouterMentions.score("Claude Code", query: "cl co") == 1)
+        #expect(RouterMentions.score("Claude Code", query: "co cl") == 2)
+        #expect(RouterMentions.score("Claude Code", query: "claude ") == 0)
+        #expect(RouterMentions.score("Claude Code", query: "ude co") == nil)
+        #expect(RouterMentions.score("Claude Code", query: "claude please") == nil)
+        #expect(RouterMentions.score("Claude Code", query: "claude") == 0 &&
+                RouterMentions.score("Claude Code", query: "cc") == 3)
     }
 
     @Test func proseAfterAnAtClosesTheSuggestionsAndAPickTakesEveryWord() {
         let (store, _, _) = triage()
-        store.claudeSessions["local_b"] = ClaudeSession(id: "local_b", title: "Fjord Computer rebrand", folder: "/code/fjord",
+        store.claudeSessions["local_b"] = ClaudeSession(id: "local_b", title: "Claude Code rebrand", folder: "/code/fjord",
                                                         lastActivity: Date(), running: false)
         store.snippets = [Snippet(name: "Fix CI", text: "Find out why CI fails and fix it, please.")]
         let model = RouterModel()
         func names() -> [String] { model.suggestions(store).map(\.name) }
-        model.draft = "ask @fjord comp"
-        #expect(model.mention == "fjord comp" && names().contains(store.pointerLook(.session("local_b")).label))
-        model.draft = "ask @fj co"
+        model.draft = "ask @claude code"
+        #expect(model.mention == "claude code" && names().contains(store.pointerLook(.session("local_b")).label))
+        model.draft = "ask @cl co"
         #expect(!names().isEmpty)
-        model.draft = "ask @fjord "
+        model.draft = "ask @claude "
         #expect(!names().isEmpty)
         // Prose: nothing found (not the snippet by its text either), so no list, and Return and Esc are the composer's.
         model.draft = "ask @fix it please"

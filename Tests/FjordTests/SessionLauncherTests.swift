@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Fjord
 
-/// Where a session Fjord Computer starts for an action comes from, and the model and effort an action asks for it.
+/// Where a session Fjord starts for an action comes from, and the model and effort an action asks for it.
 @MainActor
 @Suite(.serialized) struct SessionStartTests {
     @Test func aCardNeverSeenBeforeIsMadeWithTheOriginAndItSurvivesSaving() throws {

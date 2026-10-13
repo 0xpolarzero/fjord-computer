@@ -45,7 +45,7 @@ struct RouterTriage: Codable, Hashable {
         case ci, tests, deploy, session, review, rateLimit, other
     }
 
-    /// Something Fjord Computer can see finish, and what a waiting session is told about it.
+    /// Something Fjord can see finish, and what a waiting session is told about it.
     struct Watch: Codable, Hashable {
         enum Target: Codable, Hashable {
             /// Another session finishing a turn after its `turns`th.
@@ -86,7 +86,7 @@ struct RouterTriage: Codable, Hashable {
     var unverified = false
     var work: Work = .unknown
     var waitingOn: WaitingOn?
-    /// What Fjord Computer watches for the wait to end, when it can see it.
+    /// What Fjord watches for the wait to end, when it can see it.
     var watch: Watch?
     var ready: Ready?
     /// When the session was told the wait is over (by you, or on its own).
@@ -204,10 +204,10 @@ struct RouterTriage: Codable, Hashable {
 
     // MARK: The call
 
-    /// Something a waiting session might be waiting on that Fjord Computer can see: offered to Jev under `key`.
+    /// Something a waiting session might be waiting on that Fjord can see: offered to Jev under `key`.
     struct WaitOption: Equatable {
         var key: String
-        /// Fjord Computer's own words for the kind of option (the same whatever it is called); what it is, in `about`.
+        /// Fjord's own words for the kind of option (the same whatever it is called); what it is, in `about`.
         var hint: String
         var watch: Watch
         /// What sessions and GitHub call it (a title, a project, a PR's title): only ever in the fenced state.
@@ -383,9 +383,8 @@ extension Claude {
     static let remotesTTL: TimeInterval = 300
     /// When a folder with no remotes found was last read again for an unbound wait.
     var remotesRetried: [String: Date] = [:]
-    /// Waiting cards Jev found waiting on CI with nothing Fjord Computer could watch yet (a PR the turn opened, before
-    /// the inbox has it), by id: the turn's final message, read for the CI it names as it comes
-    /// (`Store.bindUnwatchedWaits`).
+    /// Waiting cards Jev found waiting on CI with nothing Fjord could watch yet (a PR the turn opened, before the inbox
+    /// has it), by id: the turn's final message, read for the CI it names as it comes (`Store.bindUnwatchedWaits`).
     var unwatched: [String: String] = [:]
     /// Those whose message was read again for it (once each: after a relaunch, say).
     var unwatchedRead: Set<String> = []
@@ -671,7 +670,7 @@ extension Store {
             if rescue {
                 self.rescueTurn(session, triage: triage, message: message)
             } else {
-                // Waiting on CI Fjord Computer doesn't have yet: what the message names is bound once the inbox has it.
+                // Waiting on CI Fjord doesn't have yet: what the message names is bound once the inbox has it.
                 if triage.state == .waiting, triage.watch == nil, Self.waitsOnCI(triage) {
                     self.routerTriager.unwatched[id] = message
                 }
@@ -688,11 +687,11 @@ extension Store {
 
     /// The open waiting cards of their session's latest turn that wait on CI with nothing watched: a turn that opened a
     /// PR and ended waiting on its checks before the inbox had it. Once a PR or workflow of the session's repo comes
-    /// whose CI runs, or changed since the turn ended, and the turn's final message names it, by Fjord Computer's own
-    /// reading (its ref, its link or number for a PR, as `waitNamed` reads a workflow) and names no other, it is
-    /// watched: no call to Jev. The message is kept from the triage (read again once, when it isn't: after a
-    /// relaunch). Nothing of the inbox goes to TypeSafe here, so it is bound whether or not Jev may read the inbox;
-    /// only while Triage is on to have it.
+    /// whose CI runs, or changed since the turn ended, and the turn's final message names it, by Fjord's own reading
+    /// (its ref, its link or number for a PR, as `waitNamed` reads a workflow) and names no other, it is watched: no
+    /// call to Jev. The message is kept from the triage (read again once, when it isn't: after a relaunch). Nothing of
+    /// the inbox goes to TypeSafe here, so it is bound whether or not Jev may read the inbox; only while Triage is on
+    /// to have it.
     func bindUnwatchedWaits() {
         guard triageOn, router.enabled, router.cards.contains(where: { $0.isOpen && $0.kind == .waiting && $0.triage?.watch == nil })
         else { return }

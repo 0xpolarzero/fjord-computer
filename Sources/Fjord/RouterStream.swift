@@ -128,10 +128,10 @@ enum RouterStream {
     }
 }
 
-/// What a `claude` process Fjord Computer runs for a delivery is started with.
+/// What a `claude` process Fjord runs for a delivery is started with.
 enum RouterAgent {
-    /// The gate: every SendMessage asks first (Claude Code's own permission prompt, which Fjord Computer answers over
-    /// stdin). Its native path fails closed: no answer, a closed stream or a malformed one is a refusal.
+    /// The gate: every SendMessage asks first (Claude Code's own permission prompt, which Fjord answers over stdin).
+    /// Its native path fails closed: no answer, a closed stream or a malformed one is a refusal.
     nonisolated static func gateSettings() -> Data {
         Data(#"{"permissions":{"ask":["SendMessage"]}}"#.utf8)
     }

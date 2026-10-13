@@ -1,14 +1,14 @@
 import Foundation
 
-// A turn that ended waiting on something Fjord Computer can see (another session's turn, CI on a PR or workflow the
-// inbox tracks) closes its own loop: once that is done its row in Working says it's ready to continue, a banner says
-// so, and "Tell it" sends the session a short message through the Router's usual send path (signed, through the gate),
-// logged in the history like any run of the Router's.
+// A turn that ended waiting on something Fjord can see (another session's turn, CI on a PR or workflow the inbox
+// tracks) closes its own loop: once that is done its row in Working says it's ready to continue, a banner says so, and
+// "Tell it" sends the session a short message through the Router's usual send path (signed, through the gate), logged
+// in the history like any run of the Router's.
 
 enum RouterWaits {
-    /// What came of the watched thing, once it is done; nil while it isn't (or when Fjord Computer can't tell). Another session is
-    /// done once its background work is too: `tasks` is what sessions whose turn is over still run (`Store.routerTasks`),
-    /// `inventory` the sessions the last read looked at for it (nil: every one).
+    /// What came of the watched thing, once it is done; nil while it isn't (or when Fjord can't tell). Another session
+    /// is done once its background work is too: `tasks` is what sessions whose turn is over still run
+    /// (`Store.routerTasks`), `inventory` the sessions the last read looked at for it (nil: every one).
     static func result(_ watch: RouterTriage.Watch, sessions: [String: ClaudeSession], things: [String: Thing],
                        tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil) -> String? {
         switch watch.target {
@@ -50,8 +50,8 @@ enum RouterWaits {
     }
 
     /// What the session is told: "The CI on owner/repo#12 finished: passing." It goes to the session as your own words
-    /// (signed), so nothing free-form goes in, not even what Fjord Computer saw (a workflow's or job's name, a title,
-    /// another session's): only a repo and number checked to look like GitHub's, and the outcome in fixed words.
+    /// (signed), so nothing free-form goes in, not even what Fjord saw (a workflow's or job's name, a title, another
+    /// session's): only a repo and number checked to look like GitHub's, and the outcome in fixed words.
     static func message(_ triage: RouterTriage) -> String? {
         guard let ready = triage.ready, let target = triage.watch?.target else { return nil }
         switch target {
@@ -108,18 +108,18 @@ extension Store {
         return Date().timeIntervalSince(read) > RouterTriager.remotesTTL
     }
 
-    /// What a session's turn might be waiting on that Fjord Computer can watch: the other live sessions (working ones
-    /// first), and the checks still running on the inbox's PRs and workflows of the very repo the session's folder is a
-    /// clone of (its git remotes, owner and name: another owner's repo of the same name is not it). Each under a plain
-    /// key for Jev. What finished after the waiting turn ended (`session.lastActivity`) still counts, though it was
-    /// over by the time the options were read: a session whose latest turn ended since, with its summary, is watched
-    /// from the turn before it (so it is done already), and CI whose checks changed since is offered done. One that
-    /// stopped since without its summary (Claude quit mid-turn, or its turn ran past the time a turn without one is
-    /// taken as died, its summary yet to come) is not shown done: it is watched from the turn before its count, as one
-    /// at work, done once its summary comes or that count goes up. A session at work is watched for the turn it is on,
-    /// done once it stops: its count of finished turns may already include that turn (it is counted before its summary
-    /// is written, while it still shows running), so it is watched from the turn before that count, never for a turn
-    /// more, and done only once that count goes up or its turn ends with a summary (one that just stops, quit mid-turn,
+    /// What a session's turn might be waiting on that Fjord can watch: the other live sessions (working ones first),
+    /// and the checks still running on the inbox's PRs and workflows of the very repo the session's folder is a clone
+    /// of (its git remotes, owner and name: another owner's repo of the same name is not it). Each under a plain key
+    /// for Jev. What finished after the waiting turn ended (`session.lastActivity`) still counts, though it was over by
+    /// the time the options were read: a session whose latest turn ended since, with its summary, is watched from the
+    /// turn before it (so it is done already), and CI whose checks changed since is offered done. One that stopped
+    /// since without its summary (Claude quit mid-turn, or its turn ran past the time a turn without one is taken as
+    /// died, its summary yet to come) is not shown done: it is watched from the turn before its count, as one at work,
+    /// done once its summary comes or that count goes up. A session at work is watched for the turn it is on, done once
+    /// it stops: its count of finished turns may already include that turn (it is counted before its summary is
+    /// written, while it still shows running), so it is watched from the turn before that count, never for a turn more,
+    /// and done only once that count goes up or its turn ends with a summary (one that just stops, quit mid-turn,
     /// isn't). Past the few offered of each, what the turn's `message` names (`waitNamed`) is kept first; CI goes by
     /// when it last changed, its checks or its PR, so checks that just finished on a PR not updated for a while aren't
     /// left out.
@@ -191,12 +191,12 @@ extension Store {
         return kept
     }
 
-    /// Whether the waiting session's final message names what it waits on, by Fjord Computer's own reading (not Jev's): the other
-    /// session's id, or its title's words or project said of a session (`RouterDepends.namesSession`); the PR's ref (`owner/repo#12`, whole: not
-    /// `owner/repo#123`), its link (`github.com/owner/repo/pull/12`) or its number (`#12`), never its title's words, unless the message names another PR by its ref, or two PRs at all; a
-    /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named on
-    /// another branch too is either), from Fjord Computer's own data. A watch whose ref
-    /// isn't its thing's names nothing.
+    /// Whether the waiting session's final message names what it waits on, by Fjord's own reading (not Jev's): the
+    /// other session's id, or its title's words or project said of a session (`RouterDepends.namesSession`); the PR's
+    /// ref (`owner/repo#12`, whole: not `owner/repo#123`), its link (`github.com/owner/repo/pull/12`) or its number
+    /// (`#12`), never its title's words, unless the message names another PR by its ref, or two PRs at all; a
+    /// workflow's repo, its name and its branch together (a repo alone is any of its workflows; the same workflow named
+    /// on another branch too is either), from Fjord's own data. A watch whose ref isn't its thing's names nothing.
     func waitNamed(_ watch: RouterTriage.Watch, in message: String, by session: ClaudeSession) -> Bool {
         waitNamed(watch, in: waitReading(message, by: session), by: session)
     }
@@ -440,7 +440,7 @@ extension Store {
     /// every wait, so a wait handled meanwhile sends nothing.
     static func sendVerbatim(store: Store, check: @escaping @MainActor () throws -> Void) -> RouterTriager.Sender {
         { [weak store] session, text in
-            guard let store else { throw RouterTools.Failure("Fjord Computer isn't ready") }
+            guard let store else { throw RouterTools.Failure("Fjord isn't ready") }
             let tools = RouterTools(store: store)
             tools.claudePath = { [weak store] in store?.routerStatus.claudeCode?.path }
             tools.verbatim = true

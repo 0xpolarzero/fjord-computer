@@ -10,8 +10,8 @@ struct RouterState: Codable, Equatable {
     var enabledAt: Date?
     /// Oldest first.
     var cards: [RouterCard] = []
-    /// What the Router changed in Fjord Computer itself, oldest first: the records behind the decision log's change
-    /// cards (see FjordChange.swift).
+    /// What the Router changed in Fjord itself, oldest first: the records behind the decision log's change cards (see
+    /// FjordChange.swift).
     var changes: [FjordChange] = []
     /// The decision log, oldest first (see RouterDecisions.swift).
     var decisions: [RouterDecision] = []
@@ -25,18 +25,17 @@ struct RouterState: Codable, Equatable {
     var waits: [String: Int64] = [:]
     /// The call (`tool_use` id) each of those waits is on, when the transcript said.
     var waitTools: [String: String] = [:]
-    /// Waits whose form Fjord Computer's hook was seen holding (session → the wait's ms): that form going away ends the
-    /// wait.
+    /// Waits whose form Fjord's hook was seen holding (session → the wait's ms): that form going away ends the wait.
     var formSeen: [String: Int64] = [:]
     /// Turns that ended while the session still had subagents or commands running (see `RouterFeed.update`): carded once
     /// those are done, by session.
     var pendingTurns: [String: PendingTurn] = [:]
     /// What started a session the Router made for an inbox action, by session (its cards say so).
     var origins: [String: SessionOrigin] = [:]
-    /// Sessions Fjord Computer started (the Router, or an inbox action), by session → when. The app imports and shows
-    /// such a session on its own, so "viewed" and "read" mean nothing for it: its cards come at once, until you write
-    /// in it yourself from the app (a message no run of Fjord Computer's sent: see `RouterFeed.update`), after which
-    /// the usual rules apply.
+    /// Sessions Fjord started (the Router, or an inbox action), by session → when. The app imports and shows such a
+    /// session on its own, so "viewed" and "read" mean nothing for it: its cards come at once, until you write in it
+    /// yourself from the app (a message no run of Fjord's sent: see `RouterFeed.update`), after which the usual rules
+    /// apply.
     var fjordStarted: [String: Date] = [:]
     /// By session, the latest turn whose card was handled and then pruned away (`RouterFeed.prune`): the launch's look back
     /// never makes such a turn a card again, though its card is gone.
@@ -281,7 +280,7 @@ struct RouterCard: Codable, Identifiable, Hashable {
     var createdMs: Int64 { didSet { if createdMs != oldValue { contents = Contents() } } }
     var addressedAt: Date? { didSet { if addressedAt != oldValue { contents = Contents() } } }
     var addressedBy: Addressed? { didSet { if addressedBy != oldValue { contents = Contents() } } }
-    /// For a question or plan: the call it waits on (`tool_use` id), which ties it to the form Fjord Computer's hook holds.
+    /// For a question or plan: the call it waits on (`tool_use` id), which ties it to the form Fjord's hook holds.
     var toolUseID: String? { didSet { if toolUseID != oldValue { contents = Contents() } } }
     /// For a turn card made once the turn could be told done (see `RouterFeed.update`): your last message when the turn
     /// ended (ms). A later one is a reply to it, however late the card was made.
@@ -529,8 +528,8 @@ enum RouterFeed {
     }
 
     /// Whether a known wait is over, on evidence only: the transcript of the running session moved past its call, the
-    /// turn finished (a summary is written once it has), or the form Fjord Computer's hook held for it went away. A
-    /// session that merely stopped counting as running (two hours on, the app quit, nothing read yet) is still waiting.
+    /// turn finished (a summary is written once it has), or the form Fjord's hook held for it went away. A session that
+    /// merely stopped counting as running (two hours on, the app quit, nothing read yet) is still waiting.
     private static func waitEnded(_ state: RouterState, _ session: ClaudeSession, ms: Int64, toolUseID: String?,
                                   activity: ClaudeActivity?, forms: [String: Set<String>]?) -> Bool {
         if session.running, let activity, wait(activity)?.ms != ms { return true }
@@ -539,12 +538,12 @@ enum RouterFeed {
         return false
     }
 
-    /// `forms`: the calls (`tool_use` ids) whose forms Fjord Computer's hook holds, by desktop session; nil until the forms folder
-    /// has been read.
-    /// `tasks`: the subagents and commands sessions whose turn is over still have running (`Store.claudeTasks`), and
-    /// `inventory` the sessions that read looked at (nil: every one). A finished turn is carded only once its session is
-    /// no longer running (the app writes the summary after the count goes up) and its background work has been looked at
-    /// since: with some still running it is work under way, and the card waits until that is done.
+    /// `forms`: the calls (`tool_use` ids) whose forms Fjord's hook holds, by desktop session; nil until the forms
+    /// folder has been read. `tasks`: the subagents and commands sessions whose turn is over still have running
+    /// (`Store.claudeTasks`), and `inventory` the sessions that read looked at (nil: every one). A finished turn is
+    /// carded only once its session is no longer running (the app writes the summary after the count goes up) and its
+    /// background work has been looked at since: with some still running it is work under way, and the card waits until
+    /// that is done.
     static func update(_ state: inout RouterState, sessions: [ClaudeSession], activity: [String: ClaudeActivity],
                        muted: Set<String>, viewing: String?, unread: Set<String>? = nil, forms: [String: Set<String>]? = nil,
                        tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, listed: [String: Date]? = nil,
@@ -567,8 +566,8 @@ enum RouterFeed {
         for session in live.values.sorted(by: { $0.id < $1.id }) {
             let id = session.id
             let stamp = Stamp(session)
-            // A session Fjord Computer started has no backlog: seen for the first time after its first turn ended (a
-            // quick reply can end before the next look), that turn is still new.
+            // A session Fjord started has no backlog: seen for the first time after its first turn ended (a quick reply
+            // can end before the next look), that turn is still new.
             let before = state.seen[id].flatMap(Stamp.init) ?? (state.fjordStarted[id] != nil ? Stamp.start : nil)
             let busy = !(tasks[id] ?? []).isEmpty
             let previous = state.waits[id]
@@ -583,9 +582,9 @@ enum RouterFeed {
             }
             if let current { ongoing = current.ms }
 
-            // A session Fjord Computer started is yours to read only once you've written in it from the app: a message
-            // that none of Fjord Computer's runs on it sent. Until then the app showing it (it brings it to the front
-            // itself) means nothing.
+            // A session Fjord started is yours to read only once you've written in it from the app: a message that none
+            // of Fjord's runs on it sent. Until then the app showing it (it brings it to the front itself) means
+            // nothing.
             if let before, state.fjordStarted[id] != nil, stamp.message != before.message, let message = stamp.message,
                !fjordSent(state, id, turns: stamp.turns, atMs: message) {
                 state.fjordStarted[id] = nil
@@ -714,17 +713,17 @@ enum RouterFeed {
         }
         // One the app doesn't list yet is kept for an hour (it is imported a moment after it is made).
         keep(&state.fjordStarted) { key, at in live[key] != nil || now.timeIntervalSince(at) < 3600 }
-        // What started a session goes with it, past the same hour (a session is noted as Fjord Computer's before its
-        // origin is): its cards keep their own copy.
+        // What started a session goes with it, past the same hour (a session is noted as Fjord's before its origin is):
+        // its cards keep their own copy.
         let started = state.fjordStarted
         keep(&state.origins) { key, _ in live[key] != nil || started[key] != nil }
         prune(&state)
     }
 
-    /// A message after the session's open turn cards clears them at once: the session has the ball again. Yours is noted
-    /// too (`RouterState.replies`), for Jev to read for the questions it left untouched (RouterReplies.swift), and so is one
-    /// that may answer those an earlier message left (`unanswered`). One a run of Fjord Computer's sent clears them as the
-    /// Router's; the Router reads its own as it sends them. `turns`: the session's finished turns now.
+    /// A message after the session's open turn cards clears them at once: the session has the ball again. Yours is
+    /// noted too (`RouterState.replies`), for Jev to read for the questions it left untouched (RouterReplies.swift),
+    /// and so is one that may answer those an earlier message left (`unanswered`). One a run of Fjord's sent clears
+    /// them as the Router's; the Router reads its own as it sends them. `turns`: the session's finished turns now.
     static func queueReply(_ state: inout RouterState, _ session: String, turns: Int, _ message: Int64, now: Date) {
         let fjord = fjordSent(state, session, turns: turns, atMs: message)
         let older = { (card: RouterCard) in card.kind.isTurn && message > card.replyAfter }
@@ -748,12 +747,12 @@ enum RouterFeed {
             .skipped
     }
 
-    /// Whether Fjord Computer sent the session the user message at `ms` (`turns`: the session's finished turns now): its
-    /// first message as it was made, or one a run delivered, by the run's record of it (`RouterDecision.delivered`). The
+    /// Whether Fjord sent the session the user message at `ms` (`turns`: the session's finished turns now): its first
+    /// message as it was made, or one a run delivered, by the run's record of it (`RouterDecision.delivered`). The
     /// session's plugin submits a delivery a moment before the run hears it went, so the message is that send's within
-    /// `deliveredSlack` of it, never minutes after: a reply of yours a little later is yours. One sent while the session
-    /// was busy waits for the turn under way to end, so until that turn has (and the delivery's own turn hasn't), a
-    /// message is the delivery's.
+    /// `deliveredSlack` of it, never minutes after: a reply of yours a little later is yours. One sent while the
+    /// session was busy waits for the turn under way to end, so until that turn has (and the delivery's own turn
+    /// hasn't), a message is the delivery's.
     private static func fjordSent(_ state: RouterState, _ session: String, turns: Int, atMs ms: Int64) -> Bool {
         // The session's own first message goes out as soon as it is made, before any run links it.
         if let made = state.fjordStarted[session], Stamp.ms(made) - 5_000 <= ms, ms <= Stamp.ms(made) + 300_000 { return true }
@@ -941,8 +940,8 @@ extension Store {
         return (needsYou, notes)
     }
 
-    /// The form Fjord Computer's hook holds for this card's own question or plan: the one for the very call the card
-    /// waits on (an older card never shows a newer question's form, nor a card a form whose call isn't known yet).
+    /// The form Fjord's hook holds for this card's own question or plan: the one for the very call the card waits on
+    /// (an older card never shows a newer question's form, nor a card a form whose call isn't known yet).
     func pendingForm(for card: RouterCard) -> PendingForm? {
         guard card.kind == .question || card.kind == .plan, card.isOpen, let call = card.toolUseID,
               let cli = claudeSessions[card.sessionID]?.cliID, let form = pendingForms[cli], form.toolUseID == call,
@@ -950,7 +949,7 @@ extension Store {
         return form
     }
 
-    /// The calls whose forms Fjord Computer's hook holds, by desktop session; nil until the forms folder has been read.
+    /// The calls whose forms Fjord's hook holds, by desktop session; nil until the forms folder has been read.
     private var heldForms: [String: Set<String>]? {
         guard routerFormsLoaded else { return nil }
         var held: [String: Set<String>] = [:]
@@ -1199,9 +1198,9 @@ extension Store {
 
     // MARK: Relaying as the person
 
-    /// The CLI session ids of the sessions Fjord Computer's plugin runs in now (only those can take a message as the
-    /// person's own): its presence files under the current key, each bound to a live process Claude Code still
-    /// registers for that session. Reads the registry and the presence folder: call it off the main thread.
+    /// The CLI session ids of the sessions Fjord's plugin runs in now (only those can take a message as the person's
+    /// own): its presence files under the current key, each bound to a live process Claude Code still registers for
+    /// that session. Reads the registry and the presence folder: call it off the main thread.
     nonisolated func sessionsWithPlugin(paths: RouterPaths, keyID: String?) -> Set<String> {
         ClaudePlugin.sessions(in: paths.pluginSessions,
                               registry: ClaudePeers.registry(dir: paths.claudeDir.appendingPathComponent("sessions", isDirectory: true)),

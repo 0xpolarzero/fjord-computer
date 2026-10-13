@@ -224,7 +224,7 @@ import Testing
             RouterDecision(trigger: .you("what needs me?")),
         ]
         state.settleInterrupted()
-        #expect(state.decisions.map(\.doneLines.last) == ["failed: its first message wasn't sent: Fjord Computer quit while it waited for the session to run",
+        #expect(state.decisions.map(\.doneLines.last) == ["failed: its first message wasn't sent: Fjord quit while it waited for the session to run",
                                                          "failed: interrupted"])
         #expect(state.decisions.allSatisfy { $0.outcome == .done })
     }

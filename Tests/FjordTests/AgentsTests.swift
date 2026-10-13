@@ -176,7 +176,7 @@ import Testing
         #expect(entry(s, "a")?.unread == false)
         s.ingest([session("a", turns: 4, minutesAgo: 0)], appUnread: [], claudeFrontmost: false, now: now)
         #expect(entry(s, "a")?.unread == true)
-        // Opened from Fjord Computer, then another turn finishes: unread again.
+        // Opened from Fjord, then another turn finishes: unread again.
         s.interceptOpen = { _ in }
         s.openAgent("a")
         #expect(entry(s, "a")?.unread == false)
@@ -206,7 +206,7 @@ import Testing
         let s = store([session("a")], dots: [])
         s.ingest([session("a")], appUnread: ["a"], claudeFrontmost: false, now: now)
         #expect(entry(s, "a")?.unread == true)
-        // Opened from Fjord Computer: the app still shows the dot, unchanged, so Fjord Computer keeps your choice.
+        // Opened from Fjord: the app still shows the dot, unchanged, so Fjord keeps your choice.
         s.interceptOpen = { _ in }
         s.openAgent("a")
         s.ingest([session("a")], appUnread: ["a"], claudeFrontmost: false, now: now)

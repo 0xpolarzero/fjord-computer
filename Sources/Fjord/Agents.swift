@@ -3,13 +3,13 @@ import SwiftUI
 
 // MARK: - Persisted state
 
-/// What Fjord Computer remembers about a Claude session it has shown.
+/// What Fjord remembers about a Claude session it has shown.
 struct AgentEntry: Codable, Hashable, Identifiable {
     var id: String
     /// Two letters or an emoji chosen by you; nil uses letters from the title.
     var label: String?
-    /// Fjord Computer's own read flag. It follows the app (new turns, opening the session, the sidebar dot) but can be
-    /// changed here without touching the app.
+    /// Fjord's own read flag. It follows the app (new turns, opening the session, the sidebar dot) but can be changed
+    /// here without touching the app.
     var unread = false
     /// Activity last seen (see `ClaudeSession.activity`).
     var seen = ""
@@ -256,7 +256,7 @@ extension Store {
         recentExpiry = timer
     }
 
-    /// A row for any session, listed or not (search results show sessions Fjord Computer hasn't listed).
+    /// A row for any session, listed or not (search results show sessions Fjord hasn't listed).
     func row(_ session: ClaudeSession, _ entry: AgentEntry? = nil, label: String? = nil) -> AgentRow {
         makeRow(session, entry ?? cache.entries[session.id], label: label)
     }
@@ -464,7 +464,7 @@ extension Store {
         scheduleClaudeTick()
     }
 
-    /// Folds a fresh read of the app into what Fjord Computer remembers. Pure apart from `now`, so tests drive it directly.
+    /// Folds a fresh read of the app into what Fjord remembers. Pure apart from `now`, so tests drive it directly.
     func ingest(_ sessions: [ClaudeSession], appUnread: Set<String>?, claudeFrontmost: Bool, now: Date = Date()) {
         var state = agents
         let live = sessions.filter { !$0.isArchived }
@@ -479,7 +479,7 @@ extension Store {
         let seedIDs = state.seeded ? [] : Set(live.filter { now.timeIntervalSince($0.lastActivity) < 24 * 3600 }
             .sorted { $0.lastActivity > $1.lastActivity }.prefix(8).map(\.id))
 
-        // Archived (or deleted) sessions leave Fjord Computer.
+        // Archived (or deleted) sessions leave Fjord.
         state.entries.removeAll { byID[$0.id] == nil }
         var index = Dictionary(uniqueKeysWithValues: state.entries.enumerated().map { ($1.id, $0) })
 
@@ -510,7 +510,7 @@ extension Store {
                 if entry.hiddenAt != nil, entry.hiddenAt != session.activity { entry.hiddenAt = nil }
             }
             if let focused = session.lastFocused, focused > (entry.focusedAt ?? .distantPast) {
-                // Opened in the app (or from Fjord Computer).
+                // Opened in the app (or from Fjord).
                 if entry.focusedAt != nil { entry.unread = false }
                 entry.focusedAt = focused
             }
@@ -553,8 +553,8 @@ extension Store {
         mutateAgent(id) { $0.unread = false }
     }
 
-    /// Sessions Fjord Computer holds no entry for (old, muted, past the first read's cap) get one when an icon is
-    /// picked for them: hidden, so they stay unlisted until their next activity.
+    /// Sessions Fjord holds no entry for (old, muted, past the first read's cap) get one when an icon is picked for
+    /// them: hidden, so they stay unlisted until their next activity.
     private func ensureEntry(_ id: String) {
         guard !agents.entries.contains(where: { $0.id == id }), let session = claudeSessions[id] else { return }
         agents.entries.append(AgentEntry(id: id, seen: session.activity, hiddenAt: session.activity, focusedAt: session.lastFocused))
@@ -585,7 +585,7 @@ extension Store {
         "\(session.title)|\(session.activity)|\(session.cliID ?? "")"
     }
 
-    /// A row for a session Fjord Computer keeps an entry for, listed or hidden.
+    /// A row for a session Fjord keeps an entry for, listed or hidden.
     private func iconRow(_ id: String) -> AgentRow? {
         guard let session = claudeSessions[id], let entry = cache.entries[id] else { return nil }
         return row(session, entry)

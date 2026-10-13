@@ -1,8 +1,8 @@
 import SwiftUI
 
-// What the Router changed in Fjord Computer, as a card in its transcript: the icon and one line, a compact read-only
-// preview of what it touched (a category's rules as the editor's own chips, a setting's before → after…), and Open and
-// Revert. A card taken back says so.
+// What the Router changed in Fjord, as a card in its transcript: the icon and one line, a compact read-only preview of
+// what it touched (a category's rules as the editor's own chips, a setting's before → after…), and Open and Revert. A
+// card taken back says so.
 
 extension EnvironmentValues {
     /// Shows a change's place in the app window (the window's own; a shot or a hub shows nothing).

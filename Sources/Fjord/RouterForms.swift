@@ -10,8 +10,8 @@ import SwiftUI
 /// question on a white-5% header, the options as rows with a radio (one choice) or a checkbox (several), "Other" with its
 /// own field, then Next / Submit. Once answered, the receipt: each question and what was answered.
 ///
-/// Claude's footer also has Skip. Fjord Computer can't send a skipped answer (the hook only takes answers), and marking
-/// the card addressed wouldn't free the session, so Skip is left out.
+/// Claude's footer also has Skip. Fjord can't send a skipped answer (the hook only takes answers), and marking the card
+/// addressed wouldn't free the session, so Skip is left out.
 struct CodeFormCard: View {
     let form: PendingForm
     let card: String
@@ -257,11 +257,11 @@ private struct AnswerMark: View {
 
 // MARK: - Plans
 
-/// A plan to approve as Claude's plan card (§2) in the card shell (§3): "Claude proposed a plan", then Revise… (Esc) and
-/// Accept (⌘⏎); Revise… opens Claude's revise mode, a feedback field with Back and Revise. Claude opens the plan in a
-/// viewer; Fjord Computer has none, so the plan shows in the card, under its header.
+/// A plan to approve as Claude's plan card (§2) in the card shell (§3): "Claude proposed a plan", then Revise… (Esc)
+/// and Accept (⌘⏎); Revise… opens Claude's revise mode, a feedback field with Back and Revise. Claude opens the plan in
+/// a viewer; Fjord has none, so the plan shows in the card, under its header.
 ///
-/// Claude also offers Reject and a second, permission-mode Accept ("Accept and allow edits"): Fjord Computer's hook takes
+/// Claude also offers Reject and a second, permission-mode Accept ("Accept and allow edits"): Fjord's hook takes
 /// approve or keep planning only, so there is one "Accept" (Claude's label when there's no mode to pick) and no Reject.
 struct CodePlanCard: View {
     let form: PendingForm

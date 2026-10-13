@@ -497,7 +497,7 @@ import Testing
         #expect(((instructions as? [String: Any])?["card"] as? [String: Any])?["asks"] as? String == "Which database?")
         guard case .structuredNoul(let next) = call.questions["next0"] else { Issue.record("no next check"); return }
         #expect((next as? [String: Any])?["conversation"] as? [[String: String]] == [["session": "Which database?"]])
-        // In Fjord Computer's order: sessions first, then new sessions, then Fjord Computer's own.
+        // In Fjord's order: sessions first, then new sessions, then Fjord's own.
         #expect(names.first == "Fix the login bug" && names.last == "unclear")
     }
 
@@ -546,7 +546,7 @@ import Testing
              "gate_setting": .noul(0.01), "gate_compound": .noul(0.01)]
         }
         #expect(call.found?.top?.target == "answer:local_a#w1" && call.found?.sure == true)
-        // A setting turned off: Fjord Computer's, when the route leans that way too…
+        // A setting turned off: Fjord's, when the route leans that way too…
         d.forgetLive()
         call = await routed(d, "turn off the docs notifications") { _, _ in
             ["route": Self.choice(["Update the docs": 0.4, "change_fjord": 0.6]), "answers0": .noul(0.01),
@@ -560,7 +560,7 @@ import Testing
              "gate_setting": .noul(0.9), "gate_compound": .noul(0.01), "gate_you": .noul(0.05)]
         }
         #expect(call.found?.top?.target == "change_fjord" && call.found?.sure == true)
-        // Spoken to an agent as "you": never one of Fjord Computer's own.
+        // Spoken to an agent as "you": never one of Fjord's own.
         d.forgetLive()
         call = await routed(d, "did you turn off the docs notifications?") { _, _ in
             ["route": Self.choice(["question": 0.9, "Update the docs": 0.1]), "answers0": .noul(0.01),
@@ -595,7 +595,7 @@ import Testing
             }
             return (v.ranked.first?.target, v.sure)
         }
-        // A session at 0.7, a new session or Fjord Computer's own at 0.6; no lead asked for.
+        // A session at 0.7, a new session or Fjord's own at 0.6; no lead asked for.
         #expect(verdict(["session:a": 0.7, "session:b": 0.3]) == ("session:a", true))
         #expect(verdict(["session:a": 0.65, "session:b": 0.35]) == ("session:a", false))
         #expect(verdict(["new:/x": 0.6, "session:b": 0.4]) == ("new:/x", true))
@@ -610,7 +610,7 @@ import Testing
         #expect(verdict(["session:a": 0.9], gates: ["gate_compound": 0.8]) == ("compound", true))
         #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.8, "gate_compound": 0.1]) == ("change_fjord", true))
         #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.7]) == ("session:a", true))
-        // Several points for one session aren't several things; a message spoken to an agent isn't Fjord Computer's.
+        // Several points for one session aren't several things; a message spoken to an agent isn't Fjord's.
         #expect(verdict(["session:a": 0.9], gates: ["gate_compound": 0.8, "gate_compound2": 0.2]) == ("session:a", true))
         #expect(verdict(["session:a": 0.9], gates: ["gate_setting": 0.9, "gate_you": 0.8]) == ("session:a", true))
         #expect(verdict(["question": 0.9], gates: ["gate_you": 0.8]) == ("question", false))
@@ -1501,7 +1501,7 @@ import Testing
         let (text, context) = fromAction(s, [.text("Address what "), .pointer(.notification("pr:o/lookout#7")), .text(" is waiting on.")])
         // A run of the action, following the message.
         let category = UUID(), action = UUID()
-        // Jev is sure it changes Fjord Computer: never for an incoming PR. Nothing is sent and nothing runs: it asks.
+        // Jev is sure it changes Fjord: never for an incoming PR. Nothing is sent and nothing runs: it asks.
         f.ranked = [.init(target: "change_fjord", p: 0.97), .init(target: "new:/code/lookout-2", p: 0.03)]
         let id = try #require(d.submit(text, context: context))
         s.actionLedger.set(ActionRun(category: category, thing: "pr:o/lookout#7", action: action, trigger: "enter", state: .running,
@@ -1773,7 +1773,7 @@ import Testing
         #expect(entry?.decision.label == "change_fjord" && entry?.reply == "Done." && entry?.note == "set it")
         #expect(entry?.links.changes.count == 1 && decision(s, other)?.links.changes.isEmpty == true)
         #expect(s.router.changes.count == 1, "a card with Revert")
-        #expect(entry?.outcome == .done && entry?.summary == "changed Fjord Computer")
+        #expect(entry?.outcome == .done && entry?.summary == "changed Fjord")
         #expect(f.sent.isEmpty && f.prepared.isEmpty)
     }
 

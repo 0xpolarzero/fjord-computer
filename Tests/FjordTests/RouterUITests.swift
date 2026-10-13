@@ -653,7 +653,7 @@ import UserNotifications
         let s = Store()
         s.persists = false
         s.routerPaths = RouterPaths(support: dir.path("support"), claudeDir: dir.path("claude"))
-        s.routerExecutable = "/Applications/Fjord Computer.app/Contents/MacOS/Fjord"
+        s.routerExecutable = "/Applications/Fjord.app/Contents/MacOS/Fjord"
         s.routerPluginRunner = cli.runner
         s.routerClaudeBinary = { "/fake/claude" }
         s.routerAppVersion = "1.0.0"

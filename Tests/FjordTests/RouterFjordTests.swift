@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import Fjord
 
-/// The Router's second surface, Fjord Computer itself: its tools' schemas, what each change applies and refuses, the
-/// record each leaves in the history and what taking it back restores.
+/// The Router's second surface, Fjord itself: its tools' schemas, what each change applies and refuses, the record each
+/// leaves in the history and what taking it back restores.
 @MainActor
 @Suite(.serialized) struct RouterFjord {
     private let me = "me"
@@ -608,7 +608,7 @@ import Testing
         FjordSetting.launchAtLogin = ({ login }, { if fails { throw CocoaError(.userCancelled) }; login = $0 })
         defer { FjordSetting.launchAtLogin = saved }
         var waiting = FjordChange(title: "Changed launch at login", patch: .setting(key: "launchAtLogin", before: .on(false), after: .on(true)))
-        waiting.pending = "it changes how the Mac starts Fjord Computer"
+        waiting.pending = "it changes how the Mac starts Fjord"
         s.router.changes = [waiting]
         // Apply refused: the card is still waiting and says why.
         let refused = try #require(s.applyFjordChange(waiting.id))
@@ -1049,7 +1049,7 @@ import Testing
         }
         #expect(RouterRun.role(.changeFjord).contains("Revert"))
         #expect(RouterRun.toolNames(.changeFjord, triage: true) == FjordTools.names)
-        // A question only reads; the board and Fjord Computer's own tools are all a run is offered.
+        // A question only reads; the board and Fjord's own tools are all a run is offered.
         #expect(RouterRun.toolNames(.question, triage: true).isSubset(of: FjordTools.names.union(["board"])))
         #expect(RouterRun.specs(.changeFjord, triage: true).count == FjordTools.names.count)
         #expect(Set(RouterTools.specs.compactMap { $0["name"] as? String }) == FjordTools.names.union(["board"]))

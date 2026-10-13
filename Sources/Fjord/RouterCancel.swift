@@ -23,7 +23,7 @@ extension Store {
     func cancelDelivery(_ sent: RouterDecision.Delivered) async throws -> RouterDecision.Cancelled {
         guard let paths = routerFiles else { throw RouterTools.Failure("The Router is off") }
         guard await supportsAbort(sent.cli) else {
-            throw RouterTools.Failure("The session's Fjord Computer plugin can't cancel, or the session is gone")
+            throw RouterTools.Failure("Fjord's plugin in the session can't cancel, or the session is gone")
         }
         var text = signAbort(target: sent.cli, cancels: sent.nonce)
         if text == nil, await reloadRelayKey() { text = signAbort(target: sent.cli, cancels: sent.nonce) }
@@ -33,7 +33,7 @@ extension Store {
         return how
     }
 
-    /// Whether a history entry's message can still be cancelled, as Fjord Computer sees its session now.
+    /// Whether a history entry's message can still be cancelled, as Fjord sees its session now.
     func canCancel(_ decision: RouterDecision, now: Date = Date()) -> Bool {
         guard let sent = decision.delivered else { return false }
         return sent.cancellable(session: claudeSessions[sent.session], now: now)

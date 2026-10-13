@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// What the Router needs from outside Fjord Computer to work: Claude Code's binary (the copy the Claude app installs).
-/// Its runs are one-shot processes of the dispatcher, so there is nothing else to track; Settings, the page's notice
-/// and the composer read this.
+/// What the Router needs from outside Fjord to work: Claude Code's binary (the copy the Claude app installs). Its runs
+/// are one-shot processes of the dispatcher, so there is nothing else to track; Settings, the page's notice and the
+/// composer read this.
 @Observable @MainActor final class RouterStatus {
     /// Claude Code's bundled binary, if found, and its version ("2.1.293").
     private(set) var claudeCode: (path: String, version: String)?

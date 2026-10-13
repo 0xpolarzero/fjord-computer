@@ -34,10 +34,10 @@ enum ActionSettings {
     }
 }
 
-// MARK: - Sessions Fjord Computer started
+// MARK: - Sessions Fjord started
 
 extension Store {
-    /// Marks a session as started by Fjord Computer: its cards are never held for the app showing it (see
+    /// Marks a session as started by Fjord: its cards are never held for the app showing it (see
     /// `RouterState.fjordStarted`).
     func noteFjordStarted(_ session: String, at date: Date = Date()) {
         guard router.fjordStarted[session] == nil else { return }

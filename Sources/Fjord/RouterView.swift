@@ -995,8 +995,8 @@ final class RouterModel {
         return out
     }
 
-    /// Fjord Computer writes the answer itself (the hook passes it on to the session).
-    /// The file is written off the main thread; "Sent" or the error shows once it is.
+    /// Fjord writes the answer itself (the hook passes it on to the session). The file is written off the main thread;
+    /// "Sent" or the error shows once it is.
     func sendAnswer(_ form: PendingForm, card: String, store: Store) {
         guard let answers = answers(form), !sending.contains(form.id), !sent.contains(form.id) else { return }
         sending.insert(form.id)

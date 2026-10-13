@@ -63,7 +63,7 @@ enum RouterBriefContext {
         /// The card's own text: Claude's summary of the turn, or the question.
         var text: String
         var triage: RouterTriage?
-        /// The form Fjord Computer's hook holds for a question, when it does.
+        /// The form Fjord's hook holds for a question, when it does.
         var questions: [PendingForm.Question] = []
         /// A plan to approve, when the hook holds it.
         var plan: String?

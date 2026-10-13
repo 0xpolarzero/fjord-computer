@@ -3,7 +3,7 @@ import Foundation
 // How the Router asks Jev where a message goes, and when his answer is acted on. Measured on 360 boards like yours
 // (evals/router/README.md): one option per destination, named by the session and described by what it is doing and what
 // you last told it; the message alone as the state; in the same call, whether the message answers each waiting card,
-// whether it changes Fjord Computer, whether it asks for several things.
+// whether it changes Fjord, whether it asks for several things.
 
 extension RouterTools {
     /// Somewhere a message can go, as Jev reads it.
@@ -26,12 +26,12 @@ extension RouterTools {
         var card: [String: Any]
     }
 
-    /// Fjord Computer's own destinations, each worded by who the message is for: worded as "a question about what is going on",
+    /// Fjord's own destinations, each worded by who the message is for: worded as "a question about what is going on",
     /// `question` caught questions you ask a session about its own work, p > 0.95, on 1 real message in 10.
     static let intentCriteria: [(name: String, criteria: String)] = [
-        ("change_fjord", "Change how Fjord Computer itself behaves: its settings, its notifications, or Triage's inbox categories, rules or groups. Not asking a session to build or change code"),
+        ("change_fjord", "Change how Fjord itself behaves: its settings, its notifications, or Triage's inbox categories, rules or groups. Not asking a session to build or change code"),
         ("question", "A question to the Router, the assistant that watches the board, about the board: which sessions are working, done or waiting on the user, or what a session named in the third person is doing. Not a question for a session about its own work or what it said"),
-        ("compound", "Requests meant for two or more different places in one message: Fjord Computer itself and a session, or two different sessions. Not one long message with several points for one session"),
+        ("compound", "Requests meant for two or more different places in one message: Fjord itself and a session, or two different sessions. Not one long message with several points for one session"),
         ("unclear", "none of these: small talk, a fragment, or nothing says where it goes"),
     ]
 
@@ -43,14 +43,14 @@ extension RouterTools {
     static let answersInstructions = "Is `message` the user's answer to `card`: a reply to what it asks?"
 
     /// Checks that decide an intent before the route does: the route alone sent "turn off jev labels" to the session
-    /// building that feature, and "commit it and add a category" to the session as a whole.
-    /// `gate_compound2` keeps one long message with several points for one session from reading as several things;
-    /// `gate_you` (it speaks to one agent as "you") vetoes Fjord Computer's intents.
+    /// building that feature, and "commit it and add a category" to the session as a whole. `gate_compound2` keeps one
+    /// long message with several points for one session from reading as several things; `gate_you` (it speaks to one
+    /// agent as "you") vetoes Fjord's intents.
     static let gates: [String: JevClient.Question] = [
-        "gate_setting": .structuredNoul(instructions: ["question": "Does `message` ask to change how Fjord Computer behaves for the user (a setting turned on or off, its notifications, a Triage inbox category, a rule or a group), rather than for code to be written or for a session to do something?"]),
-        "gate_compound": .structuredNoul(instructions: ["question": "Does `message` ask for two or more different things, meant for different places (sessions or Fjord Computer itself)?"]),
+        "gate_setting": .structuredNoul(instructions: ["question": "Does `message` ask to change how Fjord behaves for the user (a setting turned on or off, its notifications, a Triage inbox category, a rule or a group), rather than for code to be written or for a session to do something?"]),
+        "gate_compound": .structuredNoul(instructions: ["question": "Does `message` ask for two or more different things, meant for different places (sessions or Fjord itself)?"]),
         "gate_question": .structuredNoul(instructions: ["question": "Is `message` a question to the user's assistant about what is going on (a session's progress, what is waiting), rather than a message for a session to read?"]),
-        "gate_compound2": .structuredNoul(instructions: ["question": "Does `message` ask for things meant for two or more different places: Fjord Computer itself and a session, or two different sessions it names? A message with several points or steps for one session is no."]),
+        "gate_compound2": .structuredNoul(instructions: ["question": "Does `message` ask for things meant for two or more different places: Fjord itself and a session, or two different sessions it names? A message with several points or steps for one session is no."]),
         "gate_you": .structuredNoul(instructions: ["question": "Does `message` speak to one agent as \"you\" about its own work (\"did you…\", \"your end\", \"what are you waiting for\", \"you said…\"), or reply to something it just said?"]),
     ]
 
@@ -107,7 +107,7 @@ extension RouterTools {
         return out
     }
 
-    /// Where a new session is offered: every project Fjord Computer knows, or only `projects` (all of them, a clone with no
+    /// Where a new session is offered: every project Fjord knows, or only `projects` (all of them, a clone with no
     /// session yet too: a notification's repo, `RouterDispatcher.repoWorld`), known ones first.
     static func newSessionFolders(_ store: Store, projects: Set<String>?) -> [String] {
         guard let projects else { return Array(store.knownFolders.filter { !$0.isEmpty }.prefix(60)) }
@@ -277,7 +277,7 @@ extension RouterTools {
     // MARK: When to act
 
     /// The bars, by what a wrong pick costs: your words in the wrong session, a new session started for nothing, or one
-    /// of Fjord Computer's own runs (answered, or a change you can revert).
+    /// of Fjord's own runs (answered, or a change you can revert).
     static let sessionSure = 0.7
     static let newSure = 0.6
     static let intentSure = 0.6
@@ -288,7 +288,7 @@ extension RouterTools {
     static let answersConflict = 0.5
     /// A gate that decides its intent first.
     static let gateSure = 0.75
-    /// The tight compound gate's bar beside it, and the second-person gate's veto of Fjord Computer's intents.
+    /// The tight compound gate's bar beside it, and the second-person gate's veto of Fjord's intents.
     static let compound2Sure = 0.5
     static let youVeto = 0.5
     /// A latest session's next-message yes that stands out (this sure, ahead of the others by `nextLead`) sends there
@@ -297,13 +297,13 @@ extension RouterTools {
     static let nextLead = 0.3
     static let nextAgree = 0.4
 
-    /// The ask card's buttons, in order: the ranking's first; its best new session or Fjord Computer intent among its first
+    /// The ask card's buttons, in order: the ranking's first; its best new session or Fjord intent among its first
     /// four, if any; then the sessions by recency; then the rest. The card is chosen for the answer being on it, not
     /// for its first being safe to send: on real moments the answer is among the four 85% of the time against 77% for
     /// the ranking's own four (evals/router/v2, `--card top1,other,recent`).
     static func askCard(ranked: [String], recent: [String]) -> [String] {
         let ranked = ranked.filter { $0 != "unclear" }
-        // A new session or one of Fjord Computer's intents: a card's answer (`answer:`) is its session's, as `session:` is.
+        // A new session or one of Fjord's intents: a card's answer (`answer:`) is its session's, as `session:` is.
         let other = ranked.prefix(4).dropFirst().first { !$0.hasPrefix("session:") && !$0.hasPrefix("answer:") }
         var seen = Set<String>()
         return (Array(ranked.prefix(1)) + [other].compactMap { $0 } + recent + ranked).filter { seen.insert($0).inserted }
@@ -318,7 +318,7 @@ extension RouterTools {
     /// 1. one latest session's next-message yes standing out, the route not sure of anything else: that session;
     /// 2. a gate sure enough: its intent (not when the message speaks to one agent as "you");
     /// 3. one card's check standing out: that card, unless the route is sure of another session (then you pick);
-    /// 4. the route's pick, against the bar of what it is; one of Fjord Computer's intents never when it speaks to an agent.
+    /// 4. the route's pick, against the bar of what it is; one of Fjord's intents never when it speaks to an agent.
     static func verdict(route: [String: Double], answers: [(target: String, session: String, p: Double)],
                         gates: [String: Double], next: [(target: String, p: Double)] = [],
                         sessionOf: (String) -> String?) -> (ranked: [RouterDispatcher.Scored], sure: Bool) {
@@ -391,8 +391,8 @@ enum RouteFusion {
         "bias": -0.47, "lPtop": 0.69, "lgap": 0.09, "ljev": -0.10, "agree": 0.06, "u": -0.47, "lenlog": 0.00,
         "recent2": 0.10, "top_fin0": 0.07, "top_intent": 0.46, "top_new": 0.81, "top_reply": 0.32,
     ]
-    /// The sureness of a pick that is one of Fjord Computer's intents: the earlier fit, which saw them. Real moments can't
-    /// refit it, since your transcripts predate the intents (every intent there would count as wrong).
+    /// The sureness of a pick that is one of Fjord's intents: the earlier fit, which saw them. Real moments can't refit
+    /// it, since your transcripts predate the intents (every intent there would count as wrong).
     static let surenessIntent: [String: Double] = [
         "bias": 0.88, "lPtop": 1.28, "lgap": -0.3, "ljev": -0.21, "agree": 0.44, "u": -1.44, "lenlog": -0.35,
         "recent2": -0.4, "top_fin0": -0.02, "top_intent": 0.46, "top_new": 0.82, "top_reply": 0.31,
@@ -406,7 +406,7 @@ enum RouteFusion {
     /// under an ask's (about 2 on real moments, where the labellers found many asks needless): p ≳ 0.92. On dev real
     /// moments 0.93 had the least loss (0.9: 1.86, 0.93: 1.71, 0.96: 1.76) and a third of the wrong sends of 0.9.
     static let sure = 0.93
-    /// The fused pick alone sends no message shorter than this, and never to one of Fjord Computer's intents…
+    /// The fused pick alone sends no message shorter than this, and never to one of Fjord's intents…
     static let fusedWords = 3
     /// …except a short reply ("go", "yes do it") to a session whose last message asks or proposes, at this sureness.
     static let shortSure = 0.95
@@ -487,7 +487,7 @@ enum RouteFusion {
 
     /// The decision: the rules' send (`RouterTools.verdict`) when the fused P agrees with it and the fused pick is the
     /// same, sure enough; else the fused pick when it is sure, a message of a few words (or a short reply to a session
-    /// waiting on one), and not one of Fjord Computer's intents; else you pick, among the fused top ones.
+    /// waiting on one), and not one of Fjord's intents; else you pick, among the fused top ones.
     static func decide(_ s: Signals, facts f: RouterTools.Facts, answers: [(target: String, session: String, p: Double)],
                        sessionOf: (String) -> String?) -> (ranked: [RouterDispatcher.Scored], sure: Bool) {
         let next = s.next.compactMap { id, p in f.targetOf[id].map { (target: $0, p: p) } }

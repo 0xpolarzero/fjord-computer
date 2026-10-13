@@ -3,8 +3,8 @@ import SwiftUI
 
 // What an @ in your message points to: a project, a session, a notification of the Triage inbox (a PR, an issue, a
 // workflow) or one of its categories. It is a pill in the composer and in the history. The models get the message with
-// each pill as "@name" where it stands and, after your words, a fenced block of what Fjord Computer knows of each
-// notification and category tagged (`RouterPointers.context`): what others wrote is never put in your words.
+// each pill as "@name" where it stands and, after your words, a fenced block of what Fjord knows of each notification
+// and category tagged (`RouterPointers.context`): what others wrote is never put in your words.
 
 /// What a pill points to.
 enum RouterPointer: Hashable, Codable {
@@ -298,13 +298,13 @@ enum RouterPointers {
             }
         }
         guard !blocks.isEmpty else { return nil }
-        return (["What the user's message tags (each \"@name\" in it), as Fjord Computer's Triage inbox has it:"] + blocks)
+        return (["What the user's message tags (each \"@name\" in it), as Fjord's Triage inbox has it:"] + blocks)
             .joined(separator: "\n\n")
     }
 
-    /// A notification's block (an inbox action's message has it too, its thing tagged): outside the fence only what has GitHub's
-    /// strict form (its reference, its link) and what Fjord Computer says itself (its kind, its state); its title, author,
-    /// category, the facts that put it there and its last comment inside, each bounded.
+    /// A notification's block (an inbox action's message has it too, its thing tagged): outside the fence only what has
+    /// GitHub's strict form (its reference, its link) and what Fjord says itself (its kind, its state); its title,
+    /// author, category, the facts that put it there and its last comment inside, each bounded.
     static func notification(name: String, thing: Thing, category: String?, facts: [Fact], done: Bool) -> String {
         let kind = switch thing.kind {
         case .pr: "a pull request"
@@ -343,7 +343,7 @@ enum RouterPointers {
         return line + "\n" + UntrustedFence.triage.warned(UntrustedFence.triage.neutralized(inside.joined(separator: "\n")))
     }
 
-    /// Your words to a session with the pills' blocks after them: what Fjord Computer adds, never inside your words.
+    /// Your words to a session with the pills' blocks after them: what Fjord adds, never inside your words.
     static func attach(_ context: String?, to words: String) -> String {
         guard let context, !context.isEmpty else { return words }
         return words + "\n\n" + context
@@ -535,7 +535,7 @@ extension RouterMentions {
     }
 
     /// How well a name fits the typed word (lower is better): it starts with it, a word in it does, it holds it, it holds
-    /// its letters in order; nil when none. Words typed across spaces ("fj co") are `spacedScore`'s.
+    /// its letters in order; nil when none. Words typed across spaces ("cl co") are `spacedScore`'s.
     static func score(_ name: String, query: String) -> Int? {
         if query.contains(where: \.isWhitespace) { return spacedScore(name, query: query) }
         let q = query.lowercased()
@@ -548,7 +548,7 @@ extension RouterMentions {
         return rest.isEmpty ? 3 : nil
     }
 
-    /// How well a name fits words typed across spaces ("fj co" for "Fjord Computer"): it starts with them, each starts one
+    /// How well a name fits words typed across spaces ("cl co" for "Claude Code"): it starts with them, each starts one
     /// of its words in order, in any order; nil when one starts none. Never looser (no letters in order, no word held in
     /// the middle of one), so prose typed after an @ soon matches nothing and the suggestions close.
     static func spacedScore(_ name: String, query: String) -> Int? {

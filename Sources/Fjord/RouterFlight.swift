@@ -1,12 +1,13 @@
 import SwiftUI
 
-// Your message on its way, in sight. Sent from the composer, it rises into a pill over the composer, Fjord's loader turning
-// while the Router finds where it goes, the destination's name coming in once it is chosen. Once it went, the pill flies
-// along a curve into the row of the session it went to (the card it answered, the new session's row, the history for the
-// Router's own answer) and that row flashes as it lands: a session that wasn't working comes into Working at once, so it has
-// somewhere to land. The Router not sure, the pill unfolds into "Where should this go?" where it is; failing, it stays with
-// why and a Retry. A place out of sight (scrolled away, a folded section, the other side) is landed on by its section's
-// chip or the Now/History switch; nothing scrolls for it. Under Reduce Motion nothing flies: the pill fades, the row flashes.
+// Your message on its way, in sight. Sent from the composer, it rises into a pill over the composer, Fjord's loader
+// turning while the Router finds where it goes, the destination's name coming in once it is chosen. Once it went, the
+// pill flies along a curve into the row of the session it went to (the card it answered, the new session's row, the
+// history for the Router's own answer) and that row flashes as it lands: a session that wasn't working comes into
+// Working at once, so it has somewhere to land. The Router not sure, the pill unfolds into "Where should this go?"
+// where it is; failing, it stays with why and a Retry. A place out of sight (scrolled away, a folded section, the other
+// side) is landed on by its section's chip or the Now/History switch; nothing scrolls for it. Under Reduce Motion
+// nothing flies: the pill fades, the row flashes.
 
 /// The page's space the pills fly in: the Router's page with its composer (`RouterMain`).
 enum FlightSpace {
@@ -272,7 +273,7 @@ struct FlightFramesKey: PreferenceKey {
 
     // MARK: Reading a run
 
-    /// It went somewhere: sent, a session started, a card answered, Fjord Computer changed.
+    /// It went somewhere: sent, a session started, a card answered, Fjord changed.
     static func went(_ entry: RouterDecision) -> Bool {
         entry.done.contains {
             switch $0 {
@@ -310,7 +311,7 @@ struct FlightFramesKey: PreferenceKey {
         if target.hasPrefix("new:") { return "New session in \(store.folderName(String(target.dropFirst(4))))" }
         switch target {
         case "question": return "the Router"
-        case "change_fjord", "compound": return "Fjord Computer"
+        case "change_fjord", "compound": return "Fjord"
         default: return nil
         }
     }

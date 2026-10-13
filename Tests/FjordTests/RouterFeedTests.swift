@@ -243,7 +243,7 @@ import Testing
     @Test func onceYouWriteInASessionFjordStartedTheUsualRulesApply() {
         var state = seen([session(turns: 1)])
         state.fjordStarted["local_a"] = at(-10)
-        // A message of yours, well after the start and none of Fjord Computer's runs sent it.
+        // A message of yours, well after the start and none of Fjord's runs sent it.
         update(&state, [session(turns: 1, message: 20)], viewing: "local_a", now: 21)
         #expect(state.fjordStarted["local_a"] == nil)
         update(&state, [session(turns: 2, message: 20)], viewing: "local_a", unread: [], now: 22)
