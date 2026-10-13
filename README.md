@@ -1,8 +1,6 @@
 <div align="center">
 
-<!-- TODO: app icon, once exported from Resources/AppIcon.icon
 <img src="docs/assets/icon.png" width="128" height="128" alt="Fjord icon">
--->
 
 # Fjord
 
