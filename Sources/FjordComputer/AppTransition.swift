@@ -509,8 +509,13 @@ enum AppTransition {
     /// Make the shared overlay at idle, without showing it or disturbing a morph already on screen.
     @discardableResult
     static func prepareOverlay(on screen: NSScreen) -> NSWindow {
-        if usesGlass, #available(macOS 26, *) { _ = sharedOverlay.glassPieces() }
-        return sharedOverlay.prepare(on: ScreenIdentity(screen), frame: screen.frame)
+        let overlay = sharedOverlay.prepare(on: ScreenIdentity(screen), frame: screen.frame)
+        // The glass pieces in it already: the first glass morph puts nothing in a window before its first frame.
+        if usesGlass, #available(macOS 26, *) {
+            let host = sharedOverlay.glassPieces().host
+            if !overlay.isVisible, overlay.contentView !== host { overlay.contentView = host }
+        }
+        return overlay
     }
 
     /// Where the layers are, and how they look.
@@ -616,7 +621,9 @@ enum AppTransition {
                 host.layer = root
                 host.wantsLayer = true
             }
-            overlay.contentView = host
+            // The glass pieces stay in the overlay between morphs (`end` only orders it out): taken up again, they are not
+            // put in a window again before the first frame.
+            if overlay.contentView !== host { overlay.contentView = host }
 
             root.contentsScale = scale
             shadow.contentsScale = scale
@@ -1090,7 +1097,12 @@ enum AppTransition {
             // The overlay is shared: a newer morph may have it already.
             guard overlay.contentView === host else { return }
             overlay.orderOut(nil)
-            overlay.contentView = nil
+            // The views stay in the overlay for the next morph; the pictures go (memory short lets go of the kept one).
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            windowLayer.contents = nil
+            barLayer.contents = nil
+            CATransaction.commit()
         }
     }
 
