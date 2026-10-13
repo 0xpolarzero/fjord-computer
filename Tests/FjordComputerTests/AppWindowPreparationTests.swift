@@ -42,6 +42,16 @@ import Testing
         #expect(done == [1, 2])
     }
 
+    /// A close hands the keyboard back only to a regular app still running: never to a menu-bar or launcher app (no window
+    /// to type in), nor to Fjord Computer itself.
+    @Test func theKeyboardGoesBackOnlyToARegularAppStillRunning() {
+        #expect(AppPolicy.canTakeFocusBack(policy: .regular, isSelf: false, terminated: false))
+        #expect(!AppPolicy.canTakeFocusBack(policy: .accessory, isSelf: false, terminated: false))
+        #expect(!AppPolicy.canTakeFocusBack(policy: .prohibited, isSelf: false, terminated: false))
+        #expect(!AppPolicy.canTakeFocusBack(policy: .regular, isSelf: true, terminated: false))
+        #expect(!AppPolicy.canTakeFocusBack(policy: .regular, isSelf: false, terminated: true))
+    }
+
     @Test(arguments: [NSEvent.ModifierFlags.command, .control, .option, .shift])
     func eachShortcutModifierPostponesPreparation(_ modifiers: NSEvent.ModifierFlags) {
         #expect(AppDelegate.preparationIsBlocked(mouseButtons: 0, modifiers: modifiers, barInteracting: false))

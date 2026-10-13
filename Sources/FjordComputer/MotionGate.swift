@@ -9,48 +9,72 @@ enum MotionGate {
     /// Longer than any morph (an opening and its handoff take some 0.5 s), so a missed `ended` only delays, never holds.
     static let longest: TimeInterval = 1.5
 
-    private(set) static var moving = false
-    private static var waiting: [() -> Void] = []
-    private static var generation = 0
+    /// The app's one gate (a test makes gates of its own).
+    static let shared = Gate()
 
-    static func began() {
-        moving = true
-        generation += 1
-        let mine = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + longest) {
-            MainActor.assumeIsolated { if generation == mine, moving { ended() } }
-        }
-    }
+    static var moving: Bool { shared.moving }
+    /// Something moves, or work held for a motion is still being let go: work that can wait goes behind it.
+    static var holding: Bool { shared.holding }
+    static func began() { shared.began() }
+    static func ended() { shared.ended() }
+    static func whenStill(_ work: @escaping () -> Void) { shared.whenStill(work) }
+    static func still() async { await shared.still() }
 
-    static func ended() {
-        guard moving else { return }
-        moving = false
-        release()
-    }
+    @MainActor
+    final class Gate {
+        private(set) var moving = false
+        private var waiting: [() -> Void] = []
+        private var generation = 0
+        let longest: TimeInterval
 
-    /// What waited goes one item per turn of the main run loop, starting with the next: not inside the turn that ends the
-    /// morph (its handoff), and with frames free to come between items. A motion that starts again meanwhile holds the rest.
-    private static func release() {
-        guard !waiting.isEmpty else { return }
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                guard !moving, !waiting.isEmpty else { return }
-                waiting.removeFirst()()
-                release()
+        init(longest: TimeInterval = MotionGate.longest) { self.longest = longest }
+
+        var holding: Bool { moving || !waiting.isEmpty }
+
+        func began() {
+            moving = true
+            generation += 1
+            let mine = generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + longest) { [weak self] in
+                MainActor.assumeIsolated { if let self, self.generation == mine, self.moving { self.ended() } }
             }
         }
-    }
 
-    /// Runs `work` now when nothing moves and nothing still waits, else once the motion ends, in the order it was asked.
-    static func whenStill(_ work: @escaping () -> Void) {
-        if moving || !waiting.isEmpty { waiting.append(work) } else { work() }
-    }
+        func ended() {
+            guard moving else { return }
+            moving = false
+            release()
+        }
 
-    /// Returns at once when nothing moves, else once the motion ends.
-    static func still() async {
-        guard moving else { return }
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            whenStill { done.resume() }
+        /// What waited goes one item per turn of the main run loop, starting with the next: not inside the turn that ends
+        /// the morph (its handoff), and with frames free to come between items. A motion that starts again meanwhile holds
+        /// the rest.
+        private func release() {
+            guard !waiting.isEmpty else { return }
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.moving, !self.waiting.isEmpty else { return }
+                    self.waiting.removeFirst()()
+                    self.release()
+                }
+            }
+        }
+
+        /// Runs `work` now when nothing moves and nothing still waits, else once the motion ends, in the order it was asked.
+        func whenStill(_ work: @escaping () -> Void) {
+            if holding { waiting.append(work) } else { work() }
+        }
+
+        /// Returns at once when nothing moves and nothing still waits, else once the motion ends, in its turn behind what
+        /// was asked before. What follows the await runs with nothing moving: a motion that began between its release and
+        /// its resuming is waited out too.
+        func still() async {
+            guard holding else { return }
+            repeat {
+                await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                    whenStill { done.resume() }
+                }
+            } while moving
         }
     }
 }

@@ -26,36 +26,52 @@ enum AppPolicy {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// The app that was in front before Fjord Computer last was: where the keyboard goes back to as the window closes.
-    private static weak var previous: NSRunningApplication?
+    /// The app with windows that was in front before Fjord Computer last was: where the keyboard goes back to as the
+    /// window closes. Held (a weak one would let go of it as the workspace does) and dropped once it has quit.
+    private static var previous: NSRunningApplication?
     private static var activations: NSObjectProtocol?
+
+    /// Whether the keyboard can go back to an app: a regular one (a menu-bar or launcher app, such as Raycast or a password
+    /// manager, has no window to type in) other than Fjord Computer, still running.
+    static func canTakeFocusBack(policy: NSApplication.ActivationPolicy, isSelf: Bool, terminated: Bool) -> Bool {
+        policy == .regular && !isSelf && !terminated
+    }
+
+    private static func remember(_ app: NSRunningApplication?) {
+        guard let app, canTakeFocusBack(policy: app.activationPolicy, isSelf: app == NSRunningApplication.current,
+                                        terminated: app.isTerminated) else { return }
+        previous = app
+    }
 
     private static func watchActivations() {
         guard activations == nil else { return }
         activations = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated {
-                if let app, app != NSRunningApplication.current { previous = app }
-            }
+            MainActor.assumeIsolated { remember(app) }
         }
-        if let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current { previous = front }
+        remember(NSWorkspace.shared.frontmostApplication)
     }
 
     /// The keyboard back to the app that had it before, as the window starts closing: what you type next goes there at
-    /// once rather than after the close's motion (the Dock icon still goes at its end, `update`). Nothing when Fjord
-    /// Computer is not in front, or under a test.
+    /// once rather than after the close's motion (the Dock icon still goes at its end, `update`). Fjord Computer yields its
+    /// activation to that app, which is then asked to the front; with no such app, or one that won't come, Fjord Computer
+    /// just stops being active. Nothing when it is not active, or under a test.
     static func yieldFocus() {
         guard !UnderTest.isRunning, NSApp.isActive else { return }
-        guard let previous, !previous.isTerminated else {
+        if let app = previous, app.isTerminated { previous = nil }
+        guard let previous else {
             NSApp.deactivate()
             return
         }
+        let asked: Bool
         if #available(macOS 14, *) {
-            previous.activate(from: .current, options: [])
+            NSApp.yieldActivation(to: previous)
+            asked = previous.activate(from: .current, options: [])
         } else {
-            previous.activate(options: [])
+            asked = previous.activate(options: [])
         }
+        if !asked { NSApp.deactivate() }
     }
 }
 
