@@ -1276,37 +1276,7 @@ struct HistoryCardLine: View, Equatable {
                     if opening { model.expanded.insert(card.id) } else { model.expanded.remove(card.id) }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    if unread { Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6).accessibilityHidden(true) }
-                    CardGlyph(store: store, sessionID: card.sessionID, symbol: card.kind.symbol)
-                    Text(card.title).cdsText(CDS.Transcript.text, unread ? .medium : .regular,
-                                             unread ? CDS.Text.primary : hovered || open ? CDS.Text.secondary : CDS.Text.muted)
-                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
-                    Text("· \(how)").cdsText((12, 16), .regular, unread ? CDS.Text.secondary : CDS.Text.muted).lineLimit(1)
-                    if unread {
-                        Button("Got it") { store.acknowledgeRouterCard(card.id) }
-                            .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
-                            .help("Seen: it reads as any other line")
-                    }
-                    StatusCaret(hot: hovered, open: open)
-                    Spacer(minLength: 8)
-                    // Open in Claude takes the time's place on hover, so the line lines up with the runs around it (and the
-                    // line, not the hidden age, shows the time on hover).
-                    Text(shortAgo(when, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
-                        .opacity(hovered ? 0 : 1)
-                        .overlay(alignment: .trailing) {
-                            HoverOpen(title: card.title, shown: hovered) { store.openAgent(card.sessionID) }
-                        }
-                }
-                .padding(.horizontal, CDS.Transcript.statusPad)
-                .frame(height: CDS.Transcript.statusRow)
-                .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                    .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : unread ? CDS.Fill.accent.opacity(0.08) : .clear))
-                .contentShape(Rectangle())
-                .overlay {
-                    RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
-                        .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
-                }
+                if canvasNode != nil { canvasLine } else { line }
             }
             .buttonStyle(.plain)
             .focused($focused)
@@ -1325,6 +1295,76 @@ struct HistoryCardLine: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .onHover { hovered = $0 }
         .contextMenu { CardSessionMenu(store: store, sessionID: card.sessionID) }
+    }
+
+    /// On the canvas: the same line in fixed columns, so every line of a group has its caret, age and Open in Claude in the
+    /// same place, and hovering one moves nothing: the unread dot's room is always kept, the words take what is left (Got
+    /// it with them), and the caret, the age and Open in Claude's room are always there at the end.
+    private var canvasLine: some View {
+        HStack(spacing: 8) {
+            Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6).opacity(unread ? 1 : 0).accessibilityHidden(true)
+            CardGlyph(store: store, sessionID: card.sessionID, symbol: card.kind.symbol)
+            HStack(spacing: 6) {
+                Text(card.title).cdsText(CDS.Transcript.text, unread ? .medium : .regular,
+                                         unread ? CDS.Text.primary : hovered || open ? CDS.Text.secondary : CDS.Text.muted)
+                    .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                Text("· \(how)").cdsText((12, 16), .regular, unread ? CDS.Text.secondary : CDS.Text.muted)
+                    .lineLimit(1).truncationMode(.tail).frame(minWidth: 56, alignment: .leading)
+                if unread {
+                    Button("Got it") { store.acknowledgeRouterCard(card.id) }
+                        .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
+                        .help("Seen: it reads as any other line")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            StatusCaret(hot: hovered, open: open).fixedSize()
+            Text(shortAgo(when, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                .lineLimit(1).frame(width: 30, alignment: .trailing)
+            HoverOpen(title: card.title, shown: hovered) { store.openAgent(card.sessionID) }.frame(width: 22)
+        }
+        .padding(.horizontal, CDS.Transcript.statusPad)
+        .frame(height: CDS.Transcript.statusRow)
+        .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+            .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : unread ? CDS.Fill.accent.opacity(0.08) : .clear))
+        .contentShape(Rectangle())
+        .overlay {
+            RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
+        }
+    }
+
+    private var line: some View {
+        HStack(spacing: 8) {
+            if unread { Circle().fill(CDS.Fill.accent).frame(width: 6, height: 6).accessibilityHidden(true) }
+            CardGlyph(store: store, sessionID: card.sessionID, symbol: card.kind.symbol)
+            Text(card.title).cdsText(CDS.Transcript.text, unread ? .medium : .regular,
+                                     unread ? CDS.Text.primary : hovered || open ? CDS.Text.secondary : CDS.Text.muted)
+                .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+            Text("· \(how)").cdsText((12, 16), .regular, unread ? CDS.Text.secondary : CDS.Text.muted).lineLimit(1)
+            if unread {
+                Button("Got it") { store.acknowledgeRouterCard(card.id) }
+                    .buttonStyle(.link).font(CDS.sans(12)).fixedSize()
+                    .help("Seen: it reads as any other line")
+            }
+            StatusCaret(hot: hovered, open: open)
+            Spacer(minLength: 8)
+            // Open in Claude takes the time's place on hover, so the line lines up with the runs around it (and the
+            // line, not the hidden age, shows the time on hover).
+            Text(shortAgo(when, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit()
+                .opacity(hovered ? 0 : 1)
+                .overlay(alignment: .trailing) {
+                    HoverOpen(title: card.title, shown: hovered) { store.openAgent(card.sessionID) }
+                }
+        }
+        .padding(.horizontal, CDS.Transcript.statusPad)
+        .frame(height: CDS.Transcript.statusRow)
+        .background(RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+            .fill(marked ? CDS.Fill.ghostSelected : hovered ? CDS.Fill.ghostHover : unread ? CDS.Fill.accent.opacity(0.08) : .clear))
+        .contentShape(Rectangle())
+        .overlay {
+            RoundedRectangle(cornerRadius: CDS.Density.compact.radius, style: .continuous)
+                .strokeBorder(CDS.Fill.accent, lineWidth: 1).opacity(focused ? 1 : 0)
+        }
     }
 }
 
@@ -2107,9 +2147,9 @@ struct WaitingCard: View {
                         Text(card.title).cdsText((13, 18), .medium, CDS.Text.secondary).lineLimit(1).layoutPriority(2)
                         Image(systemName: ready ? "checkmark.circle.fill" : "hourglass").font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(tint)
-                        // On the canvas the line is short and kept whole: the title gives way first.
+                        // On the canvas the line goes first: the title gives way, then the line itself in a narrow frame.
                         Text(line).cdsText((12, 16), ready ? .medium : .regular, tint).lineLimit(1).truncationMode(.tail)
-                            .fixedSize(horizontal: standalone, vertical: false)
+                            .layoutPriority(standalone ? 3 : 0)
                         Spacer(minLength: 4)
                         MinuteTicking { now in
                             Text(shortAgo(card.createdAt, now: now)).cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
