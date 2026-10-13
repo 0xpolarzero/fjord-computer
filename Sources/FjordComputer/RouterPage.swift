@@ -1936,7 +1936,7 @@ private struct WorkingCard: View, Equatable {
         // The line composed from its task list and narration, when there is one; the raw step otherwise.
         let explained = store.liveExplanation(row)
         let doing = explained ?? current
-        let marked = model.highlighted == RouterModel.workingID(row.id)
+        let marked = model.isMarked(RouterModel.workingID(row.id))
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Button { withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { expanded.toggle() } } label: {
@@ -2216,7 +2216,8 @@ struct CardView: View, Equatable {
 
     /// Wide enough for an open card's summary on one line.
     private var wide: Bool { columnWidth >= 620 }
-    private var marked: Bool { model.selection == card.id || model.highlighted == card.id }
+    /// Through the card's own mark: the pick moving elsewhere doesn't redraw it.
+    private var marked: Bool { model.isMarked(card.id) }
     private var when: Date { card.createdAt }
 
     /// What the card asks, on one line: its brief, else the first question still open, else its text (parsed once per text).

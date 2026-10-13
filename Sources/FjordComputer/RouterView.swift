@@ -316,7 +316,31 @@ final class RouterModel {
     /// Your messages on their way: pills over the composer, flying to where each went.
     @ObservationIgnored let flights = RouterFlights()
     /// The card the keys act on.
-    var selection: String?
+    var selection: String? {
+        didSet { if selection != oldValue { remark(oldValue); remark(selection) } }
+    }
+    /// Whether an item is picked or marked, by item, read by the item itself (`isMarked`): each card or row observes its
+    /// own, so the keys moving the pick redraw the two cards it left and reached, not every card of the page.
+    @ObservationIgnored private var marks: [String: Mark] = [:]
+    @Observable final class Mark {
+        var on: Bool
+        init(on: Bool) { self.on = on }
+    }
+
+    /// Whether `id` is the pick or the item marked for now (`highlighted`), observing only that item's mark.
+    func isMarked(_ id: String) -> Bool {
+        if let mark = marks[id] { return mark.on }
+        // The stored values, read without observing them.
+        let mark = Mark(on: _selection == id || _highlighted == id)
+        marks[id] = mark
+        return mark.on
+    }
+
+    private func remark(_ id: String?) {
+        guard let id, let mark = marks[id] else { return }
+        let on = _selection == id || _highlighted == id
+        if mark.on != on { mark.on = on }
+    }
     var draft = "" {
         didSet { if draft != oldValue { sendRefused = nil; mentionChanged() } }
     }
@@ -607,7 +631,9 @@ final class RouterModel {
     /// Asks the page to scroll to an item (a card, a message, a working session's card) and, for a moment, to mark it.
     var revealRequest: ScrollRequest?
     /// The item marked for a moment after it was scrolled to.
-    var highlighted: String?
+    var highlighted: String? {
+        didSet { if highlighted != oldValue { remark(oldValue); remark(highlighted) } }
+    }
     /// The card of Needs you shown in full (see `RouterPage.openNeed`); the others are summary rows.
     var expandedNeed: String?
     /// Addressed cards and runs opened out in the history.
