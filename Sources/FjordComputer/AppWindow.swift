@@ -22,7 +22,40 @@ enum AppPolicy {
     /// Fjord Computer to the front, unless this is a test run (which must not take the focus from whoever is at the Mac).
     static func activate() {
         guard !UnderTest.isRunning else { return }
+        watchActivations()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The app that was in front before Fjord Computer last was: where the keyboard goes back to as the window closes.
+    private static weak var previous: NSRunningApplication?
+    private static var activations: NSObjectProtocol?
+
+    private static func watchActivations() {
+        guard activations == nil else { return }
+        activations = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated {
+                if let app, app != NSRunningApplication.current { previous = app }
+            }
+        }
+        if let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current { previous = front }
+    }
+
+    /// The keyboard back to the app that had it before, as the window starts closing: what you type next goes there at
+    /// once rather than after the close's motion (the Dock icon still goes at its end, `update`). Nothing when Fjord
+    /// Computer is not in front, or under a test.
+    static func yieldFocus() {
+        guard !UnderTest.isRunning, NSApp.isActive else { return }
+        guard let previous, !previous.isTerminated else {
+            NSApp.deactivate()
+            return
+        }
+        if #available(macOS 14, *) {
+            previous.activate(from: .current, options: [])
+        } else {
+            previous.activate(options: [])
+        }
     }
 }
 
@@ -191,6 +224,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // One on its way in with its window still to come gets it then.
             if pending == nil { bringIn(window) }
         }
+        // The app regular and asked to the front in this turn, after the opening's first frame is submitted: the activation
+        // (the window's keyboard, and so the opening's fresh picture, wait for it) goes on while the window is brought in,
+        // rather than being asked only once it is.
+        AppPolicy.update(windowOpen: true)
+        AppPolicy.activate()
         // A card picked on the way in: the place may be the same, what it shows is not.
         if card != nil, arriving { contentChanged() }
         watchKeys()
@@ -216,8 +254,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         window.contentViewController = nil
     }
 
-    /// What shows the window: its content (built once, kept across closes), the app regular and active, the window in front
-    /// with the keyboard. The heavy part of an opening, which waits until its morph's first frame has been submitted.
+    /// What shows the window: its content (built once, kept across closes), the window in front with the keyboard (once the
+    /// app is active: `show` asks for that). The heavy part of an opening, which waits until its morph's first frame has
+    /// been submitted.
     private func bringIn(_ window: NSWindow) {
         let signpost = MorphSignposts.signposter.beginInterval("Bring in")
         defer { MorphSignposts.signposter.endInterval("Bring in", signpost) }
@@ -231,8 +270,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             window.contentViewController = content
         }
         Self.broughtIn.add(self)
-        AppPolicy.update(windowOpen: true)
-        AppPolicy.activate()
         window.makeKeyAndOrderFront(nil)
     }
 

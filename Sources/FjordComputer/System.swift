@@ -392,7 +392,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.onClose = { [weak hub] in hub?.setWindowOpen(false) }
         window.barScreen = { [weak hub] in hub?.dockedScreen }
         window.bar = { [weak hub] in hub?.morph }
-        window.onClosing = { [weak hub] in hub?.setWindowOpen(false) }
+        // As the close's motion starts: the bar fades back in, then the keyboard goes back to the app that had it (the Dock
+        // icon goes once the motion is over).
+        window.onClosing = { [weak hub] in
+            hub?.setWindowOpen(false)
+            AppPolicy.yieldFocus()
+        }
         // The bar is back on its edge while the window is out of sight (another app in front, minimized), away when it returns.
         window.onFront = { [weak hub] front in hub?.setWindowFront(front) }
         hub.openApp = { [weak self] in self?.showWindow($0) }
