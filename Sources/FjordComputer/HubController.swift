@@ -488,16 +488,21 @@ final class HubController {
                 syncTrigger()
             }
         }
-        // Leaving for the window: the store's refresh waits for the turn after the morph started.
+        // What the store is told (a refresh it may start, whose results land on the main thread; the avatars a frame later)
+        // waits for the window's morph to have played (`MotionGate`), and leaving for the window at least for the turn after
+        // the morph started.
         if leaving {
-            AppTransition.nextTurn { [weak self] in self?.reportOpen() }
+            AppTransition.nextTurn { MotionGate.whenStill { [weak self] in self?.reportOpen() } }
         } else {
-            reportOpen()
+            MotionGate.whenStill { [weak self] in self?.reportOpen() }
         }
     }
 
     /// Clear the peek only out of sight, so opening can capture the bar before its layout changes.
     private func clearPeek() {
+        // Already clear (the bar's fade-out cleared it out of sight): nothing written, so nothing in the bar redraws as the
+        // window's close starts.
+        guard hub.section != nil || hub.hovering || hub.selection != nil else { return }
         var instant = Transaction(animation: nil)
         instant.disablesAnimations = true
         withTransaction(instant) {
