@@ -155,9 +155,8 @@ final class HotKeys {
     private var heldSince: TimeInterval?
     /// Taps are ignored while this is true (e.g. while a shortcut is being recorded).
     var paused: () -> Bool = { false }
-    /// Whether Accessibility access was granted when last asked, and when (system uptime): see `isTrusted`.
-    private var trusted = false
-    private var trustedAt: TimeInterval?
+    /// Whether Accessibility access was granted when last asked: see `isTrusted`.
+    private let trust = TrustCache()
 
     init(backend: HotKeyBackend = CarbonHotKeys()) {
         self.backend = backend
@@ -233,7 +232,7 @@ final class HotKeys {
     }
 
     private func accessMayBeGranted() {
-        trustedAt = nil
+        trust.forget()
         guard AXIsProcessTrusted() else { return }
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
@@ -306,15 +305,10 @@ final class HotKeys {
         buttons[id]?.handler()
     }
 
-    /// Whether Accessibility access is granted, for a modifier tap that just completed: the system is asked (a call to
-    /// another process) at most every two seconds, and again as Fjord Computer comes to the front (`accessMayBeGranted`).
-    private func isTrusted() -> Bool {
-        let now = ProcessInfo.processInfo.systemUptime
-        if let trustedAt, now - trustedAt < 2 { return trusted }
-        trusted = AXIsProcessTrusted()
-        trustedAt = now
-        return trusted
-    }
+    /// Whether Accessibility access is granted, for a modifier tap that just completed: what the system said when last
+    /// asked (only the very first time, or after `accessMayBeGranted`, is it asked here and then), asked again off the
+    /// main thread as a modifier goes down once that answer is two seconds old, so a tap never waits on another process.
+    private func isTrusted() -> Bool { trust.value() }
 
     private func handle(_ event: NSEvent) {
         if Self.debug {
@@ -322,13 +316,59 @@ final class HotKeys {
         }
         let held = UInt(event.modifierFlags.rawValue) & Shortcut.sideBits != 0
         let since = heldSince
-        if held { if heldSince == nil { heldSince = event.timestamp } } else { heldSince = nil }
+        if held {
+            if heldSince == nil {
+                heldSince = event.timestamp
+                trust.refresh()
+            }
+        } else {
+            heldSince = nil
+        }
         // Without Accessibility the keys typed elsewhere are invisible, so right ⌘ + C would look like a tap.
         guard let key = tap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags.rawValue),
               !paused(), isTrusted() else { return }
         if let since, interrupted(since: since) { return }
         for entry in taps.values where entry.key == key { entry.handler() }
     }
+}
+
+/// Whether Accessibility access is granted (`AXIsProcessTrusted`, a call to another process), as last asked: asked at the
+/// first read, then again off the main thread when `refresh`ed once two seconds old.
+private final class TrustCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var trusted = false
+    private var at: TimeInterval?
+    private var refreshing = false
+
+    func value() -> Bool {
+        if let known = lock.withLock({ at == nil ? nil : trusted }) { return known }
+        let now = AXIsProcessTrusted()
+        lock.withLock {
+            trusted = now
+            at = ProcessInfo.processInfo.systemUptime
+        }
+        return now
+    }
+
+    func refresh() {
+        let due = lock.withLock {
+            guard let at, !refreshing, ProcessInfo.processInfo.systemUptime - at >= 2 else { return false }
+            refreshing = true
+            return true
+        }
+        guard due else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let now = AXIsProcessTrusted()
+            lock.withLock {
+                trusted = now
+                at = ProcessInfo.processInfo.systemUptime
+                refreshing = false
+            }
+        }
+    }
+
+    /// Asked again at the next read.
+    func forget() { lock.withLock { at = nil } }
 }
 
 /// The mouse-button shortcuts' event tap, on a thread and run loop of its own: the window server holds every side and
