@@ -92,7 +92,8 @@ struct SettingsView: View {
 
         static func remember(launchAtLogin on: Bool) {
             revision &+= 1
-            last?.launchAtLogin = on
+            // Before the system's first answer too: yours is what is known of it (an answer asked for before is older).
+            last = Known(launchAtLogin: on, accessibility: last?.accessibility ?? false)
         }
 
         /// What the system says now; the login item nil when you switched it while it was being asked (the answer is

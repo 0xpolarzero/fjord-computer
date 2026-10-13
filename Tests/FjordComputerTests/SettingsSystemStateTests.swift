@@ -15,6 +15,7 @@ struct SettingsSystemStateTests {
         gate.open()
         let answer = await read.value
         #expect(answer.launchAtLogin == nil && answer.accessibility)
+        #expect(State.known.launchAtLogin, "the page made again opens on your switch, not on the older answer")
         // Asked after the switch: its answer stands.
         let later = await State.read { .init(launchAtLogin: true, accessibility: true) }
         #expect(later.launchAtLogin == true)
