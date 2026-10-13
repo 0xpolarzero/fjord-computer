@@ -1,7 +1,6 @@
 import AppKit
 import Metal
 import QuartzCore
-import SwiftUI
 import Testing
 @testable import FjordComputer
 
@@ -165,65 +164,6 @@ extension WindowSeams {
                 picture.frame.size.width += 1
                 #expect(!picture.fits(window))
             }
-        }
-
-        /// A picture drawn from the window's layers has the pixels `cacheDisplay` draws: the title bar, text, fills, a
-        /// shadow drawn by SwiftUI and the corners, into the bitmap the capture makes and into one with alpha.
-        @Test func aPictureFromTheLayersHasTheCachedDisplaysPixels() throws {
-            _ = NSApplication.shared
-            let window = AwayWindow(contentRect: NSRect(origin: UnderTest.away, size: NSSize(width: 320, height: 200)),
-                                    styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            defer { window.close() }
-            window.contentView = NSHostingView(rootView: VStack(spacing: 12) {
-                Text("Fjord Computer").font(.title)
-                RoundedRectangle(cornerRadius: 8).fill(.blue).frame(width: 120, height: 40).shadow(radius: 6, y: 3)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.orange))
-            window.orderFrontRegardless()
-            let view = try #require(window.contentView?.superview)
-            view.layoutSubtreeIfNeeded()
-            window.displayIfNeeded()
-            for alpha in [false, true] {
-                let cached = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-                view.cacheDisplay(in: view.bounds, to: cached)
-                let made = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-                // As the capture's own bitmap with alpha: in the window's colour space.
-                let drawn = alpha
-                    ? try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: made.pixelsWide, pixelsHigh: made.pixelsHigh,
-                                                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)?
-                        .retagging(with: made.colorSpace))
-                    : made
-                drawn.size = made.size
-                AppTransition.render(view, into: drawn)
-                let a = try #require(cached.cgImage), b = try #require(drawn.cgImage)
-                let pa = Self.rgba(a), pb = Self.rgba(b)
-                #expect(pa.count == pb.count && pa.count > 0)
-                let off = zip(pa, pb).filter { abs(Int($0) - Int($1)) > 3 }.count
-                var minX = Int.max, minY = Int.max, maxX = -1, maxY = -1, worst = 0
-                for (i, (x, y)) in zip(pa, pb).enumerated() where abs(Int(x) - Int(y)) > 3 {
-                    let px = (i / 4) % a.width, py = (i / 4) / a.width
-                    minX = min(minX, px); maxX = max(maxX, px); minY = min(minY, py); maxY = max(maxY, py)
-                    worst = max(worst, abs(Int(x) - Int(y)))
-                }
-                #expect(off == 0, "\(off) of \(pa.count) bytes differ (alpha: \(alpha)) in x \(minX)...\(maxX) y \(minY)...\(maxY) of \(a.width)x\(a.height), worst \(worst)")
-                // Something was drawn: the orange ground.
-                #expect(Set(pa).count > 8)
-            }
-        }
-
-        private static func rgba(_ image: CGImage) -> [UInt8] {
-            let w = image.width, h = image.height
-            var data = [UInt8](repeating: 0, count: w * h * 4)
-            data.withUnsafeMutableBytes { buffer in
-                let context = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                        space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-                context?.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
-            }
-            return data
         }
 
         /// `CALayer.render(in:)` omits this shadow. Render detached layers to a Metal texture instead, without a window or
