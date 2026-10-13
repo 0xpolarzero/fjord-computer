@@ -402,7 +402,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// later, which gives it a fresh picture.
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
-        // A live close fade turned round stays above the bare overlay until the opening covers the window.
+        // A live close fade turned round stays above the bare overlay until that overlay is gone.
         let reversingLive = reversing && window.isVisible
         if !reversingLive { restoreLevel() }
         // Work that can wait holds until the window has handed over (`handedOver`), or a close that takes over ends.
@@ -661,7 +661,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     /// The real window, shown (under the overlay), with the keyboard.
     private func reveal(_ window: NSWindow) {
-        restoreLevel()
         window.alphaValue = 1
         window.ignoresMouseEvents = false
         window.makeKeyAndOrderFront(nil)
@@ -675,6 +674,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     private func finishOpening(_ mine: Int) {
         guard generation == mine else { return }
+        // A reopened live close stays above the opaque bare overlay through the refresh wait and its fade.
+        // The run has ordered that overlay out before calling us, so lowering the window cannot hide its content.
+        restoreLevel()
         // The picture the overlay handed over on is kept as it was taken (with the glance of what it shows), so a close at
         // once starts on it when the window is still that (near enough); the idle keeper takes another once it has moved on.
         if let run, let picture = run.picture, picture.key, picture.glance != nil, !memoryShort {

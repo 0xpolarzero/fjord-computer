@@ -85,6 +85,8 @@ After, without temporary instrumentation, release `open,close x10`: Open **308/3
 **308 ms**, first Handoff **25 ms**; no SafariPlatformSupport/AutoFill connection appeared in that process's log. A regression
 test reads the built executable's metadata through CoreFoundation, and the bundle metadata merge preserves its identity
 and accessory policy. Six more fresh launches (`open,close x1`) had first Open **306–317 ms** and first Handoff **22–36 ms**.
+The final release run with the live-close reopening fix also applied had Open **313/322 ms**, Handoff **35/40 ms**,
+first Open **304 ms** and first Handoff **23 ms** (`open,close x10`).
 
 ### Window and motion
 
@@ -98,7 +100,10 @@ and accessory policy. Six more fresh launches (`open,close x1`) had first Open *
   above the overlay while the glass shrinks. Focus goes back to the previous app at once.
 - **Open** starts from the kept picture (or the bare surface) and, at the handoff, cuts to the real window when the picture
   is exact (rechecked at the cut, `stillExact`) or fades over 0.12 s. The window is laid out and drawn in the turn it is
-  brought in, so its first draw never lands on the handoff. It takes clicks once revealed.
+  brought in, so its first draw never lands on the handoff. It takes clicks once revealed. Reversing a live close fade
+  keeps the window above the bare overlay through the handoff's two refreshes and the overlay fade; its normal level
+  returns only after the overlay is ordered out. The regression steps both refreshes and waits for removal, for glass
+  and opaque morphs with normal and reduced motion.
 - **Springs**: open and close are critically damped at 0.30 s (glass and opaque alike); they are now the floor.
 - **`MotionGate`** (`Sources/FjordComputer/MotionGate.swift`): the morph calls `began`/`ended`; main-thread work that can wait
   goes through `whenStill { }` / `await still()`. Released work runs one item per run-loop turn. A missed `ended` lets work go

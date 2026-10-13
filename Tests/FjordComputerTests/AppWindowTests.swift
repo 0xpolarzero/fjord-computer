@@ -662,6 +662,13 @@ extension WindowSeams {
         /// A morph with the frame ticks in the test's hands. Synchronous: nothing else sees the morph switched on. A window under
         /// test never has the keyboard (the test runner is not the active app): `AppTransition.isKey` may say otherwise.
         private func morphing(_ body: (AppWindowController, Ticks) throws -> Void) rethrows {
+            let (window, ticks, restore) = beginMorphing()
+            defer { restore() }
+            try body(window, ticks)
+        }
+
+        /// The same stepped morph kept alive while an asynchronous test waits for the overlay's real fade to finish.
+        private func beginMorphing() -> (AppWindowController, Ticks, @MainActor () -> Void) {
             let saved = (AppTransition.enabled, AppTransition.nextFrames, AppTransition.nextTurn, AppTransition.isKey,
                          AppTransition.isMiniaturized, AppTransition.flushInitial)
             // The app's policy as found: the morph's close never gets to its tidying turn here, which would put it back, and a
@@ -684,7 +691,7 @@ extension WindowSeams {
             window.bar = { BarMorph(frame: NSRect(x: 1400, y: 300, width: 46, height: 300)) }
             // Every seam put back, and the window closed while its turns are still the test's (none of them run), even
             // when the test stops early.
-            defer {
+            let restore: @MainActor () -> Void = {
                 window.run?.end()
                 window.close()
                 AppTransition.enabled = saved.0
@@ -698,7 +705,7 @@ extension WindowSeams {
                 // A morph the test left under way holds no other test's waiting work.
                 MotionGate.ended()
             }
-            try body(window, ticks)
+            return (window, ticks, restore)
         }
 
         @Test func theRealWindowIsShownBeforeTheOverlayGoes() {
@@ -835,35 +842,47 @@ extension WindowSeams {
             }
         }
 
-        @Test(arguments: [false, true]) func reopeningDuringTheLiveCloseFadeKeepsTheWindowVisible(reduced: Bool) throws {
-            try morphing { controller, ticks in
-                controller.show(.done)
-                ticks.runTurns()
-                controller.run?.complete()
-                ticks.blocks.removeFirst()()
-                ticks.blocks.removeFirst()()
-                controller.run?.end()
-                let window = try #require(controller.window)
-                if reduced { controller.bar = { nil } }
-                let level = window.level, fadeWindow = AppTransition.fadeWindow
-                var fades: [(from: CGFloat, to: CGFloat, done: @MainActor () -> Void)] = []
-                AppTransition.fadeWindow = { window, alpha, done in fades.append((window.alphaValue, alpha, done)) }
-                defer { AppTransition.fadeWindow = fadeWindow }
-                controller.close()
-                let run = try #require(controller.run)
-                #expect(fades.count == 1 && fades[0].to == 0 && run.image == nil)
-                window.alphaValue = 0.4 // Step the live fade to its presentation halfway through the close.
-                let lifted = window.level
-                controller.show(.done)
-                #expect(controller.phase == .opening && controller.run === run)
-                #expect(window.alphaValue == 0.4 && window.level == lifted && lifted.rawValue > run.overlay.level.rawValue)
-                #expect(fades.count == 2 && fades[1].from == 0.4 && fades[1].to == 1)
-                fades[0].done() // The superseded close cannot hide or lower the reopened window.
-                ticks.runTurns()
-                #expect(window.isVisible && window.alphaValue == 0.4 && window.level == lifted)
-                run.complete() // Once the overlay covers the window, handoff restores its ordinary level.
-                #expect(window.alphaValue == 1 && window.level == level && !window.ignoresMouseEvents)
-            }
+        @Test(arguments: [false, true], [false, true])
+        func reopeningDuringTheLiveCloseFadeKeepsTheWindowVisible(reduced: Bool, glass: Bool) async throws {
+            let (controller, ticks, restore) = beginMorphing()
+            defer { restore() }
+            let glassMorph = AppTransition.glassMorph
+            AppTransition.glassMorph = glass
+            defer { AppTransition.glassMorph = glassMorph }
+            controller.show(.done)
+            ticks.runTurns()
+            controller.run?.complete()
+            ticks.blocks.removeFirst()()
+            ticks.blocks.removeFirst()()
+            controller.run?.end()
+            let window = try #require(controller.window)
+            if reduced { controller.bar = { nil } }
+            let level = window.level, fadeWindow = AppTransition.fadeWindow
+            var fades: [(from: CGFloat, to: CGFloat, done: @MainActor () -> Void)] = []
+            AppTransition.fadeWindow = { window, alpha, done in fades.append((window.alphaValue, alpha, done)) }
+            defer { AppTransition.fadeWindow = fadeWindow }
+            controller.close()
+            let run = try #require(controller.run)
+            #expect(run.isGlass == (glass && GlassCapture.chromeIsGlass))
+            #expect(fades.count == 1 && fades[0].to == 0 && run.image == nil)
+            window.alphaValue = 0.4 // Step the live fade to its presentation halfway through the close.
+            let lifted = window.level
+            controller.show(.done)
+            #expect(controller.phase == .opening && controller.run === run)
+            #expect(window.alphaValue == 0.4 && window.level == lifted && lifted.rawValue > run.overlay.level.rawValue)
+            #expect(fades.count == 2 && fades[1].from == 0.4 && fades[1].to == 1)
+            fades[0].done() // The superseded close cannot hide or lower the reopened window.
+            ticks.runTurns()
+            #expect(window.isVisible && window.alphaValue == 0.4 && window.level == lifted)
+            run.complete()
+            #expect(window.alphaValue == 1 && window.level == lifted && !window.ignoresMouseEvents)
+            #expect(run.overlay.isVisible && !run.handedOver)
+            ticks.blocks.removeFirst()()
+            #expect(window.level == lifted && run.overlay.isVisible && !run.handedOver)
+            ticks.blocks.removeFirst()()
+            #expect(window.level == lifted && run.overlay.isVisible && run.handedOver)
+            await waitUntil { controller.phase == .idle }
+            #expect(run.ended && !run.overlay.isVisible && window.level == level && window.isVisible)
         }
 
         /// A close while the opening's picture is still fading into the real window goes on from that blend: the same
