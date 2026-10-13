@@ -30,53 +30,55 @@ import Testing
 
 /// Claude's fonts are registered from the cache while the archive they were taken from is the same one.
 @Suite struct ClaudeFontCache {
-    @Test func theCacheStandsOnlyForTheArchiveItWasTakenFromAndWithAllItsFonts() throws {
+    private func font(_ name: String, _ text: String) -> (name: String, bytes: () -> Data) { (name, { Data(text.utf8) }) }
+
+    @Test func eachArchiveHasAGenerationOfItsOwnMadeWholeOrNotAtAll() throws {
         let dir = TempDir()
-        let archive = dir.path("app.asar"), cache = dir.path("fonts")
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let archive = dir.path("app.asar"), root = dir.path("fonts")
         try Data("one".utf8).write(to: archive)
         let stamp = try #require(ClaudeFonts.archiveStamp(archive.path))
         #expect(ClaudeFonts.archiveStamp(dir.path("missing").path) == nil)
-        #expect(ClaudeFonts.cached(in: cache, stamp: stamp) == nil)
-        try Data().write(to: cache.appendingPathComponent("A.woff2"))
-        try ([stamp, "A.woff2", "B.woff2"]).joined(separator: "\n")
-            .write(to: cache.appendingPathComponent(ClaudeFonts.stampName), atomically: true, encoding: .utf8)
-        // One of its fonts gone: taken out of the archive again.
-        #expect(ClaudeFonts.cached(in: cache, stamp: stamp) == nil)
-        try Data().write(to: cache.appendingPathComponent("B.woff2"))
-        #expect(ClaudeFonts.cached(in: cache, stamp: stamp) == ["A.woff2", "B.woff2"])
-        // Another build of the app: another archive.
+        #expect(ClaudeFonts.fonts(in: ClaudeFonts.generation(root: root, stamp: stamp)) == nil)
+        let made = try #require(ClaudeFonts.store([font("A.woff2", "aaaa"), font("B.woff2", "bbbb")], root: root, stamp: stamp))
+        #expect(made == ClaudeFonts.generation(root: root, stamp: stamp))
+        #expect(ClaudeFonts.fonts(in: made) == ["A.woff2", "B.woff2"])
+        #expect(try Data(contentsOf: made.appendingPathComponent("A.woff2")) == Data("aaaa".utf8))
+        // Another build of the app, its fonts of the same names and sizes but other bytes: a generation of its own.
         try Data("another".utf8).write(to: archive)
-        #expect(ClaudeFonts.archiveStamp(archive.path) != stamp)
-        #expect(ClaudeFonts.cached(in: cache, stamp: try #require(ClaudeFonts.archiveStamp(archive.path))) == nil)
+        let next = try #require(ClaudeFonts.archiveStamp(archive.path))
+        #expect(next != stamp && ClaudeFonts.fonts(in: ClaudeFonts.generation(root: root, stamp: next)) == nil)
+        let second = try #require(ClaudeFonts.store([font("A.woff2", "AAAA")], root: root, stamp: next))
+        #expect(try Data(contentsOf: second.appendingPathComponent("A.woff2")) == Data("AAAA".utf8))
+        // The first is left as it was, for a process still running with it.
+        #expect(try Data(contentsOf: made.appendingPathComponent("A.woff2")) == Data("aaaa".utf8))
+        // One of its fonts gone: not whole.
+        try FileManager.default.removeItem(at: made.appendingPathComponent("B.woff2"))
+        #expect(ClaudeFonts.fonts(in: made) == nil)
     }
 
-    @Test func fontsTakenOutOfAnArchiveReplaceWhatWasCutShortAndTheOldOnesGo() throws {
+    @Test func olderGenerationsGoOnlyOnceTheNewestHasBeenInUseADay() throws {
         let dir = TempDir()
-        let cache = dir.path("fonts")
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        // A write cut short of A, and B and an old build's font from before.
-        try Data("A".utf8).write(to: cache.appendingPathComponent("A.woff2"))
-        try Data("bbbb".utf8).write(to: cache.appendingPathComponent("B.woff2"))
-        try Data("old".utf8).write(to: cache.appendingPathComponent("Old.woff2"))
-        var read: [String] = []
-        func font(_ name: String, _ text: String) -> (name: String, size: Int, bytes: () -> Data) {
-            (name, text.utf8.count, { read.append(name); return Data(text.utf8) })
-        }
-        let names = ClaudeFonts.cache([font("A.woff2", "aaaa"), font("B.woff2", "bbbb")], in: cache, stamp: "s1")
-        #expect(names == ["A.woff2", "B.woff2"])
-        #expect(try Data(contentsOf: cache.appendingPathComponent("A.woff2")) == Data("aaaa".utf8))
-        // Whole already: not taken out again.
-        #expect(read == ["A.woff2"])
-        #expect(!FileManager.default.fileExists(atPath: cache.appendingPathComponent("Old.woff2").path))
-        #expect(ClaudeFonts.cached(in: cache, stamp: "s1") == ["A.woff2", "B.woff2"])
-        // One that can't be written: nothing is noted, so they are taken out again next launch.
-        let readOnly = dir.path("readonly")
-        try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: true)
-        chmod(readOnly.path, 0o500)
-        defer { chmod(readOnly.path, 0o755) }
-        ClaudeFonts.cache([font("A.woff2", "aaaa")], in: readOnly, stamp: "s2")
-        #expect(ClaudeFonts.cached(in: readOnly, stamp: "s2") == nil)
+        let root = dir.path("fonts")
+        let old = try #require(ClaudeFonts.store([font("A.woff2", "a")], root: root, stamp: "1 1 1.0"))
+        try FileManager.default.setAttributes([.creationDate: Date(timeIntervalSinceNow: -7200)], ofItemAtPath: old.path)
+        let current = try #require(ClaudeFonts.store([font("A.woff2", "b")], root: root, stamp: "2 2 2.0"))
+        ClaudeFonts.sweep(root, keeping: current)
+        #expect(FileManager.default.fileExists(atPath: old.path))
+        ClaudeFonts.sweep(root, keeping: current, now: Date(timeIntervalSinceNow: 2 * 86400))
+        #expect(!FileManager.default.fileExists(atPath: old.path) && ClaudeFonts.fonts(in: current) != nil)
+    }
+
+    @Test func aGenerationThatCantBeMadeIsTriedAFewLaunchesOnly() throws {
+        let dir = TempDir()
+        let root = dir.path("fonts")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        chmod(root.path, 0o500)
+        defer { chmod(root.path, 0o755) }
+        #expect(ClaudeFonts.store([font("A.woff2", "a")], root: root, stamp: "1 1 1.0") == nil)
+        chmod(root.path, 0o755)
+        for _ in 0..<ClaudeFonts.maxFailures { ClaudeFonts.noteFailure(root, stamp: "1 1 1.0") }
+        #expect(ClaudeFonts.failures(root, stamp: "1 1 1.0") == ClaudeFonts.maxFailures)
+        #expect(ClaudeFonts.failures(root, stamp: "2 2 2.0") == 0)
     }
 }
 

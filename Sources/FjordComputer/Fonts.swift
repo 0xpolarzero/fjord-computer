@@ -12,76 +12,120 @@ enum ClaudeFonts {
 
     static let asar = "/Applications/Claude.app/Contents/Resources/app.asar"
 
-    /// Once, at launch, before any view is drawn. The fonts taken out of the archive are kept in the caches folder, with the
-    /// archive's stamp (`stampName`): while the archive is the one they came from, they are registered from there, without
-    /// reading the archive's header (a few MB of JSON, tens of milliseconds before the first frame).
+    /// Once, at launch, before any view is drawn. The fonts taken out of an archive are kept in a folder of the caches of
+    /// their own, named by the archive's stamp (`generation`) and never written again once made whole (`store`): while the
+    /// archive is that one, they are registered from there, without reading the archive's header (a few MB of JSON, tens of
+    /// milliseconds before the first frame).
     static func load() {
         guard !available, let stamp = archiveStamp(asar) else { return }
-        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("com.amontlabs.fjord/fonts", isDirectory: true)
-        if let names = cached(in: cache, stamp: stamp) {
-            for name in names where CTFontManagerRegisterFontsForURL(cache.appendingPathComponent(name) as CFURL, .process, nil) {
-                available = true
-            }
+        let folder = generation(root: root, stamp: stamp)
+        if let names = fonts(in: folder) {
+            register(names, in: folder)
+            // Made by an earlier launch: what older archives left goes now (a process still running with one of them
+            // started before this generation was made).
+            sweep(root, keeping: folder)
             return
         }
+        // Taking them out failed launch after launch (a full disk, a folder that can't be written): not tried again for
+        // this archive, so each launch doesn't read its header for nothing.
+        guard failures(root, stamp: stamp) < maxFailures else { return }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: asar), options: .alwaysMapped),
               let files = AsarIndex(data) else { return }
         let fonts = files.entries
             .filter { $0.0.hasPrefix(".vite/renderer/main_window/assets/AnthropicSans-") && $0.0.hasSuffix(".woff2") }
-            .map { entry in (name: (entry.0 as NSString).lastPathComponent, size: entry.1.count, bytes: { data.subdata(in: entry.1) }) }
-        for name in Self.cache(fonts, in: cache, stamp: stamp)
-        where CTFontManagerRegisterFontsForURL(cache.appendingPathComponent(name) as CFURL, .process, nil) {
+            .map { entry in (name: (entry.0 as NSString).lastPathComponent, bytes: { data.subdata(in: entry.1) }) }
+        guard let made = store(fonts, root: root, stamp: stamp), let names = Self.fonts(in: made) else {
+            noteFailure(root, stamp: stamp)
+            return
+        }
+        register(names, in: made)
+    }
+
+    private static func register(_ names: [String], in folder: URL) {
+        for name in names where CTFontManagerRegisterFontsForURL(folder.appendingPathComponent(name) as CFURL, .process, nil) {
             available = true
         }
     }
 
-    /// Puts the archive's fonts in `cache`, each written whole or not at all (`.atomic`), again unless the one there is
-    /// the same size (a write cut short, or another build's font of the same name, is not); takes out the fonts of other
-    /// archives; and notes `stamp` with their names only once every one was written (else they are taken out again next
-    /// launch). Their names, in the archive's order.
-    @discardableResult
-    static func cache(_ fonts: [(name: String, size: Int, bytes: () -> Data)], in cache: URL, stamp: String) -> [String] {
+    /// The folder of the fonts taken out of the archive with `stamp`.
+    static func generation(root: URL, stamp: String) -> URL {
+        root.appendingPathComponent("g-" + stamp.replacingOccurrences(of: " ", with: "-"), isDirectory: true)
+    }
+
+    /// In each generation: the fonts' names, a line each, written last.
+    static let manifestName = "fonts.list"
+
+    /// The fonts of a generation made whole; nil when it isn't (none, or one gone).
+    static func fonts(in folder: URL) -> [String]? {
+        guard let text = try? String(contentsOf: folder.appendingPathComponent(manifestName), encoding: .utf8) else { return nil }
+        let names = text.split(separator: "\n").map(String.init)
         let fm = FileManager.default
-        try? fm.createDirectory(at: cache, withIntermediateDirectories: true)
-        // Another archive: its stamp goes first, so a launch that stops midway takes the fonts out again.
-        try? fm.removeItem(at: cache.appendingPathComponent(stampName))
-        var written = true
-        for font in fonts {
-            let file = cache.appendingPathComponent(font.name)
-            let size = (try? fm.attributesOfItem(atPath: file.path)[.size] as? Int) ?? nil
-            if size != font.size {
-                do { try font.bytes().write(to: file, options: .atomic) } catch { written = false }
-            }
-        }
-        let names = fonts.map(\.name)
-        for old in (try? fm.contentsOfDirectory(atPath: cache.path)) ?? [] where old.hasSuffix(".woff2") && !names.contains(old) {
-            try? fm.removeItem(at: cache.appendingPathComponent(old))
-        }
-        if !names.isEmpty, written {
-            try? ([stamp] + names).joined(separator: "\n").write(to: cache.appendingPathComponent(stampName), atomically: true, encoding: .utf8)
-        }
+        guard !names.isEmpty,
+              names.allSatisfy({ !$0.contains("/") && fm.fileExists(atPath: folder.appendingPathComponent($0).path) }) else { return nil }
         return names
     }
 
-    /// Beside the cached fonts: the archive's stamp they were taken from, then their names, a line each.
-    static let stampName = "archive.stamp"
+    /// Writes the fonts into a folder of their own, whole (each written out, then the list of them), and only then puts it
+    /// where `generation` looks, in one rename: a launch stopped midway leaves nothing found, and a generation once made is
+    /// never written again, so another Fjord Computer running with it (the installed app beside a build) keeps its fonts.
+    /// Nil when that failed. One made meanwhile by another process is taken as it is.
+    static func store(_ fonts: [(name: String, bytes: () -> Data)], root: URL, stamp: String) -> URL? {
+        let fm = FileManager.default
+        let folder = generation(root: root, stamp: stamp)
+        guard !fonts.isEmpty, (try? fm.createDirectory(at: root, withIntermediateDirectories: true)) != nil else { return nil }
+        let making = root.appendingPathComponent(".making-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: making) }
+        do {
+            try fm.createDirectory(at: making, withIntermediateDirectories: false)
+            for font in fonts { try font.bytes().write(to: making.appendingPathComponent(font.name)) }
+            try fonts.map(\.name).joined(separator: "\n").write(to: making.appendingPathComponent(manifestName), atomically: false, encoding: .utf8)
+            try fm.moveItem(at: making, to: folder)
+        } catch {
+            return Self.fonts(in: folder) != nil ? folder : nil
+        }
+        return folder
+    }
+
+    /// Takes away the generations older than `current` (and what the cache held before generations), and folders left half
+    /// made by a launch that stopped: run only once `current` was made by an earlier launch, and a day ago at least, so a
+    /// Fjord Computer still running from before it (with an older generation's fonts registered) has long been relaunched.
+    static func sweep(_ root: URL, keeping current: URL, now: Date = Date()) {
+        let fm = FileManager.default
+        func made(_ url: URL) -> Date { ((try? fm.attributesOfItem(atPath: url.path))?[.creationDate] as? Date) ?? .distantPast }
+        let since = made(current)
+        guard now.timeIntervalSince(since) > sweepAfter else { return }
+        for name in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] where name != current.lastPathComponent {
+            let url = root.appendingPathComponent(name)
+            guard name.hasPrefix("g-") || name.hasPrefix(".making-") || name.hasSuffix(".woff2") || name == "archive.stamp"
+                    || name.hasPrefix("failed-") else { continue }
+            if made(url) < since { try? fm.removeItem(at: url) }
+        }
+    }
+
+    /// How long a generation is in use before the older ones go.
+    static let sweepAfter: TimeInterval = 86400
+
+    /// How many launches failed to take the fonts out of the archive with `stamp`, at most.
+    static let maxFailures = 3
+
+    static func failures(_ root: URL, stamp: String) -> Int {
+        let note = root.appendingPathComponent("failed-" + generation(root: root, stamp: stamp).lastPathComponent)
+        return (try? String(contentsOf: note, encoding: .utf8)).flatMap { Int($0) } ?? 0
+    }
+
+    static func noteFailure(_ root: URL, stamp: String) {
+        let note = root.appendingPathComponent("failed-" + generation(root: root, stamp: stamp).lastPathComponent)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? String(failures(root, stamp: stamp) + 1).write(to: note, atomically: true, encoding: .utf8)
+    }
 
     /// The archive's size, inode and modification time (to the nanosecond): another for any other build of the app.
     static func archiveStamp(_ path: String) -> String? {
         var info = stat()
         guard stat(path, &info) == 0 else { return nil }
         return "\(info.st_size) \(info.st_ino) \(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
-    }
-
-    /// The names of the fonts cached from the archive with `stamp`, when every one of them is there; nil otherwise.
-    static func cached(in cache: URL, stamp: String) -> [String]? {
-        guard let text = try? String(contentsOf: cache.appendingPathComponent(stampName), encoding: .utf8) else { return nil }
-        let lines = text.split(separator: "\n").map(String.init)
-        guard lines.first == stamp, lines.count > 1 else { return nil }
-        let names = Array(lines.dropFirst())
-        let fm = FileManager.default
-        return names.allSatisfy { !$0.contains("/") && fm.fileExists(atPath: cache.appendingPathComponent($0).path) } ? names : nil
     }
 }
 
