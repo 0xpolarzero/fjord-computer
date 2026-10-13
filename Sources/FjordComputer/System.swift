@@ -163,6 +163,9 @@ final class HotKeys {
         self.backend = backend
     }
 
+    /// The mouse-button tap's thread holds the tap until it is stopped: it goes with this.
+    deinit { buttonTap?.stop() }
+
     /// `nil` unregisters. A system-wide key that another app holds is refused (`false`), and what the action had stays
     /// registered until a replacement is.
     @discardableResult
@@ -346,6 +349,7 @@ private final class ButtonTap: @unchecked Sendable {
     private var swallowedUps: Set<Int> = []
     private var port: CFMachPort?
     private var loop: CFRunLoop?
+    private var stopped = false
     /// On the main queue: the shortcut whose button was pressed.
     private let pressed: (UInt32) -> Void
 
@@ -384,18 +388,25 @@ private final class ButtonTap: @unchecked Sendable {
         }
     }
 
-    /// The tap off and its thread ended.
+    /// The tap off for good and its thread ended (which lets go of it): once, by its owner, `HotKeys`, as the buttons go
+    /// or as it goes itself. Until then the thread holds it, so a tap nobody stops would go on keeping clicks.
     func stop() {
         guard let port else { return }
+        let loop: CFRunLoop? = lock.withLock {
+            guard !stopped else { return nil }
+            stopped = true
+            return self.loop
+        }
+        guard let loop else { return }
         CGEvent.tapEnable(tap: port, enable: false)
         CFMachPortInvalidate(port)
-        if let loop = lock.withLock({ loop }) { CFRunLoopStop(loop) }
+        CFRunLoopStop(loop)
     }
 
     /// On the tap's thread. Returns nil to keep the click from the app under the pointer.
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let port { CGEvent.tapEnable(tap: port, enable: true) }
+            if let port, !lock.withLock({ stopped }) { CGEvent.tapEnable(tap: port, enable: true) }
             return Unmanaged.passUnretained(event)
         }
         let number = Int(event.getIntegerValueField(.mouseEventButtonNumber))
