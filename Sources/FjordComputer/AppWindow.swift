@@ -186,6 +186,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// window has the keyboard (its buttons as they will be when it takes over), else just before it does.
     private var owed: (generation: Int, crossFade: Bool)?
     private var keyWatch: NSObjectProtocol?
+    /// The morph under way, from its request to its overlay gone: its signpost interval, and the motion gate it holds.
+    private var span = MorphSpan()
     /// Whether the window has the keyboard, or is about to (no banner for the Router then: you are looking at the cards).
     var isKey: Bool { window?.isKeyWindow == true || pending != nil }
 
@@ -285,7 +287,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private func startOpening(_ window: NSWindow, bar: BarMorph?, reversing: Bool) {
         phase = .opening
         // Work that can wait holds until the window has handed over (`finishOpening`), or a close that takes over ends.
-        MotionGate.began()
+        span.begin("Open")
         generation += 1
         let mine = generation
         let current: AppTransition.Run?
@@ -405,7 +407,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         stopKeyWatch()
         run = nil
         phase = .idle
-        MotionGate.ended()
+        span.end()
         // Used: the next close takes another.
         closedPicture = nil
         reportFront()
@@ -425,7 +427,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let interrupting = phase == .opening && run?.handedOver != true
         phase = .closing
         // Held until the overlay is gone (`finishClosing`), or an opening that turns it round has handed over.
-        MotionGate.began()
+        span.begin("Close")
         generation += 1
         let mine = generation
         pending = nil
@@ -478,7 +480,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         run?.end()
         run = nil
         phase = .idle
-        MotionGate.ended()
+        span.end()
         window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false

@@ -41,6 +41,30 @@ enum MorphSignposts {
     static let signposter = OSSignposter(subsystem: InboxLog.subsystem, category: "morph")
 }
 
+/// A window's whole morph, from the request to the overlay gone (or the window handed over): a signpost interval ("Open",
+/// "Close", category "morph") to see its total, and the motion gate held meanwhile (`MotionGate`), so work that can wait
+/// leaves the main thread to the motion. A morph that takes over from another (a close cutting an opening short, an
+/// opening turning a close round) ends the other's interval and holds the gate on.
+@MainActor
+struct MorphSpan {
+    private var current: (name: StaticString, state: OSSignpostIntervalState)?
+
+    var isOpen: Bool { current != nil }
+
+    mutating func begin(_ name: StaticString) {
+        if let current { MorphSignposts.signposter.endInterval(current.name, current.state) }
+        current = (name, MorphSignposts.signposter.beginInterval(name))
+        MotionGate.began()
+    }
+
+    mutating func end() {
+        guard let current else { return }
+        MorphSignposts.signposter.endInterval(current.name, current.state)
+        self.current = nil
+        MotionGate.ended()
+    }
+}
+
 /// Where the bar is, for the morph to start from or end at.
 struct BarMorph {
     /// On screen (AppKit coordinates).
@@ -142,11 +166,18 @@ enum AppTransition {
         let glass = GlassCapture.chromeIsGlass
         let cleared = glass ? hole : nil
         let draw = { () -> CGImage? in
+            let signposter = MorphSignposts.signposter
             // With alpha whatever the window's opacity, where there is a hole: its ground must come out clear, not black.
+            let making = signposter.beginInterval("Capture bitmap")
             let made = cleared != nil ? alphaRep(for: view) : view.bitmapImageRepForCachingDisplay(in: view.bounds)
+            signposter.endInterval("Capture bitmap", making)
             guard let rep = made else { return nil }
+            let drawing = signposter.beginInterval("Capture draw")
             view.cacheDisplay(in: view.bounds, to: rep)
+            signposter.endInterval("Capture draw", drawing)
             if let cleared { punch(rep, cleared) }
+            let imaging = signposter.beginInterval("Capture image")
+            defer { signposter.endInterval("Capture image", imaging) }
             return rep.cgImage
         }
         if let capture, glass {
@@ -155,8 +186,10 @@ enum AppTransition {
                                   settle: { GlassCapture.settle(host: window.contentView, root: view, window: window) },
                                   draw)
         }
+        let settling = MorphSignposts.signposter.beginInterval("Capture settle")
         view.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
+        MorphSignposts.signposter.endInterval("Capture settle", settling)
         return draw()
     }
 
