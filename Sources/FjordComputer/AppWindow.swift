@@ -734,7 +734,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 // must not take the policy from another that has opened since. Asked of the windows themselves, so a close
                 // whose tidying never came (or a controller gone) leaves nothing behind that reads as open.
                 Self.broughtIn.remove(self)
-                AppPolicy.update(windowOpen: Self.broughtIn.allObjects.contains { $0.isOpen })
+                let open = Self.broughtIn.allObjects.contains { $0.isOpen }
+                // Opened and closed at once, the activation the opening asked for may have landed after the close gave the
+                // keyboard back: active with no window, it is given back again (an accessory app can stay active).
+                if !open { AppPolicy.yieldFocus() }
+                AppPolicy.update(windowOpen: open)
             }
         }
     }
