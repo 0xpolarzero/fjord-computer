@@ -467,7 +467,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let name = CommandLine.arguments.dropFirst(i + 1).first ?? ""
             Demo.populate(store, Demo.Scenario(rawValue: name) ?? .busy)
         } else {
-            store.start()
+            // The state now, what runs on it (notifications, updates, polling, Claude's sessions, the Router, the code
+            // folders) once the bar has been drawn: see the end of this function.
+            store.load()
         }
         let demo = CommandLine.arguments.contains("--demo")
         let window = AppWindowController(store: store)
@@ -531,6 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The first launch opens on the onboarding, where the tools are picked.
         if CommandLine.arguments.contains("--open") || store.settings.toolsPicked != true { toggleWindow() }
         playMotionScript(demo: demo)
+        // The bar on screen first (its first frame shown, or a tenth of a second at most), the store's services after it.
+        if !demo { AppTransition.nextFrame(hub.dockedScreen) { [weak self] in self?.store.startServices() } }
         if CommandLine.arguments.contains(Lifecycle.flag) {
             Lifecycle.start(store)
         } else {
