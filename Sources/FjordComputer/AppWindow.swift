@@ -458,6 +458,13 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         guard pending == mine, generation == mine, phase == .opening, let window else { return }
         pending = nil
         bringIn(window)
+        // Laid out and drawn now, while the overlay moves on the render server (still invisible, its layers committed with
+        // this turn): the window's first drawing after a close (some 20 to 30 ms, far more on a first opening) is then
+        // done by the handoff, which otherwise waited on it before the real window could show.
+        let warming = MorphSignposts.signposter.beginInterval("Warm window")
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        MorphSignposts.signposter.endInterval("Warm window", warming)
     }
 
     /// What may have changed the window since a picture was taken, besides its pixels (see `AppTransition.Marks`).
