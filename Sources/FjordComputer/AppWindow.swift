@@ -285,6 +285,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         if let destination { navigator.go(destination.resolved(shown: shownIDs, tools: store.tools)) }
         let window = self.window ?? makeWindow()
         self.window = window
+        // Opened again: the kept picture is wanted after all.
+        pictureExpiry?.cancel()
+        pictureExpiry = nil
         // A window on its way out comes back from where it is (minimized on its way in included: its close's end would close
         // it otherwise); one on its way in just goes on.
         let reversing = phase == .closing && run != nil
@@ -369,8 +372,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         span.begin("Open")
         generation += 1
         let mine = generation
-        pictureExpiry?.cancel()
-        pictureExpiry = nil
         stopKeepingPicture()
         let current: AppTransition.Run?
         let chrome = glassWindow(window)
@@ -516,6 +517,23 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         pictureKeeper?.invalidate()
         pictureKeeper = nil
     }
+
+    /// The kept picture let go once the window has stayed closed `after` (an opening calls it off).
+    private func expireKeptPicture(after: TimeInterval) {
+        pictureExpiry?.cancel()
+        let expiry = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.phase == .idle, self.window?.isVisible != true else { return }
+                self.closedPicture = nil
+                self.pictureExpiry = nil
+            }
+        }
+        pictureExpiry = expiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: expiry)
+    }
+
+    /// Whether the kept picture is to be let go (the window closed, and not opened since).
+    var keptPictureExpires: Bool { pictureExpiry != nil }
 
     /// The idle keeper's timer, while it runs (the tests look).
     var keeperTimer: Timer? { pictureKeeper }
@@ -681,16 +699,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         run = nil
         phase = .idle
         span.end()
-        // Kept for an opening soon; let go once the window has stayed closed a while.
-        pictureExpiry?.cancel()
-        let expiry = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.phase == .idle, self.window?.isVisible != true else { return }
-                self.closedPicture = nil
-            }
-        }
-        pictureExpiry = expiry
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.keptPictureLife, execute: expiry)
         window.orderOut(nil)
         window.alphaValue = 1
         window.ignoresMouseEvents = false
@@ -902,6 +910,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Every close, a morph's or not (a window closed out of sight): the keeper stops, the picture is let go in a while.
+        stopKeepingPicture()
+        expireKeptPicture(after: Self.keptPictureLife)
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         observers.forEach(NotificationCenter.default.removeObserver)

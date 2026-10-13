@@ -880,6 +880,27 @@ extension WindowSeams {
             }
         }
 
+        /// Every close lets go of the kept picture in a while, a morph's or not (closed out of sight, it does not morph), and
+        /// an opening calls that off.
+        @Test func everyCloseLetsGoOfThePictureInAWhile() {
+            morphing { controller, ticks in
+                openAndStartClosing(controller, ticks, on: .done)
+                controller.run?.complete()
+                #expect(controller.keepsPicture && controller.keptPictureExpires)
+                controller.show(.done)
+                #expect(!controller.keptPictureExpires)
+                controller.close()
+                controller.run?.complete()
+                #expect(controller.phase == .idle && controller.keptPictureExpires)
+                // Opened and closed with no morph: the close still lets go of it in a while.
+                AppTransition.enabled = false
+                controller.show(.done)
+                #expect(controller.window?.isVisible == true && !controller.keptPictureExpires)
+                controller.close()
+                #expect(controller.window?.isVisible != true && controller.keptPictureExpires)
+            }
+        }
+
         /// Short of memory while open, a morphing close keeps no picture for the next open.
         @Test func memoryPressureWhileOpenKeepsNoPictureOnAMorphingClose() {
             morphing { controller, ticks in
