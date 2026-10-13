@@ -140,8 +140,7 @@ private final class Client: @unchecked Sendable {
         let (server, port) = try await start(limits)
         defer { server.stop() }
         let held = await off { [Client(port: port), Client(port: port)] }
-        let until = Date().addingTimeInterval(waitWatchdog)
-        while server.connectionCount() < 2, Date() < until { try await Task.sleep(nanoseconds: 10_000_000) }
+        await waitUntil { server.connectionCount() >= 2 }
         #expect(server.connectionCount() == 2)
         let third = await off { () -> (String, Bool) in
             guard let c = Client(port: port) else { return ("", false) }
@@ -165,7 +164,7 @@ private final class Client: @unchecked Sendable {
             return c.readToEnd().closed
         }
         #expect(slow)
-        await deadlines.wait { $0.contains("request") }
+        await waitUntil { deadlines.all.contains("request") }
         #expect(deadlines.all == ["request"])
         // A request answered, then quiet on the kept connection: closed by the idle deadline.
         let request = post(server.token, #"{"jsonrpc":"2.0","id":1,"method":"ping"}"#)
@@ -175,7 +174,7 @@ private final class Client: @unchecked Sendable {
             return (c.readResponse(), c.readToEnd().closed)
         }
         #expect(idle.0.hasPrefix("HTTP/1.1 200") && idle.1)
-        await deadlines.wait { $0.contains("idle") }
+        await waitUntil { deadlines.all.contains("idle") }
         #expect(deadlines.all == ["request", "idle"])
     }
 
@@ -195,15 +194,14 @@ private final class Client: @unchecked Sendable {
             c.send(request)
             return c.readToEnd()
         } }
-        while !gate.waiting { try await Task.sleep(nanoseconds: 5_000_000) }
+        await waitUntil { gate.waiting }
         server.stop()
         // Stopping cancelled the request being answered: waited for, not assumed after a pause.
-        let until = Date().addingTimeInterval(waitWatchdog)
-        while !cancelled.isSet, Date() < until { try await Task.sleep(nanoseconds: 5_000_000) }
+        await waitUntil { cancelled.isSet }
         #expect(cancelled.isSet)
         gate.open()
         let reply = await reading.value
-        while sawCancel == nil, Date() < until { try await Task.sleep(nanoseconds: 10_000_000) }
+        await waitUntil { sawCancel != nil }
         #expect(sawCancel == true)
         // The connection is dropped without the answer.
         #expect(reply.0.isEmpty && reply.1)
@@ -234,16 +232,10 @@ private final class Client: @unchecked Sendable {
     }
 }
 
-/// What a server's deadlines did, in order (from its queue), and a wait for it.
+/// What a server's deadlines did, in order (from its queue).
 final class Events: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String] = []
     var all: [String] { lock.withLock { items } }
     func add(_ item: String) { lock.withLock { items.append(item) } }
-
-    /// Until `done` holds, with a watchdog for a slow machine.
-    func wait(_ done: ([String]) -> Bool) async {
-        let until = Date().addingTimeInterval(waitWatchdog)
-        while !done(all), Date() < until { try? await Task.sleep(nanoseconds: 10_000_000) }
-    }
 }
