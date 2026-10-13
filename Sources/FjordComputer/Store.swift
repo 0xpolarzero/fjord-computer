@@ -883,32 +883,33 @@ final class Store {
 
     private final class EarlyRead: @unchecked Sendable {
         private let lock = NSLock()
-        private var pending: (file: URL, done: DispatchSemaphore)?
+        /// The read under way, as a work item: the main thread waiting on it (`take`) lends it its priority, which a
+        /// semaphore wouldn't.
+        private var pending: (file: URL, work: DispatchWorkItem)?
         private var result: SavedRead?
 
         func start(_ file: URL) {
-            let done = DispatchSemaphore(value: 0)
-            guard lock.withLock({ () -> Bool in
-                guard pending == nil else { return false }
-                pending = (file, done)
-                return true
-            }) else { return }
-            DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let work = DispatchWorkItem(qos: .userInteractive, flags: .enforceQoS) { [self] in
                 let data = Result { try Store.readExisting(file) }
                 let state = (try? data.get()).flatMap { $0 }.flatMap(Store.decodeState)
                 lock.withLock { result = SavedRead(file: file, data: data, state: state) }
-                done.signal()
             }
+            guard lock.withLock({ () -> Bool in
+                guard pending == nil else { return false }
+                pending = (file, work)
+                return true
+            }) else { return }
+            DispatchQueue.global(qos: .userInteractive).async(execute: work)
         }
 
         /// Once: the early read of `file`, waited for; nil when none was begun for it.
         func take(_ file: URL) -> SavedRead? {
-            guard let begun = lock.withLock({ () -> (file: URL, done: DispatchSemaphore)? in
+            guard let begun = lock.withLock({ () -> (file: URL, work: DispatchWorkItem)? in
                 guard let begun = pending, begun.file == file else { return nil }
                 pending = nil
                 return begun
             }) else { return nil }
-            begun.done.wait()
+            begun.work.wait()
             return lock.withLock { defer { result = nil }; return result }
         }
     }
