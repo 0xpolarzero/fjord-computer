@@ -569,12 +569,19 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         guard let window, window.isVisible else { return stopKeepingPicture() }
         guard phase == .idle, !memoryShort, AppTransition.isFront(window), AppTransition.isKey(window), !MotionGate.moving,
               !AppTransition.composing(in: window) else { return }
-        let full = window.backingScaleFactor
-        let scale = AppTransition.estimate(window, pixelScale: full) > AppTransition.idleCaptureBudget
-            ? AppTransition.reducedScale(of: window) : full
-        let cost = AppTransition.estimate(window, pixelScale: scale)
-        // Idle long enough that a key typed after a pause like this one is not likely to wait on the picture.
-        guard AppTransition.inputIdle(max(0.5, 3 * cost)) else {
+        let full = window.backingScaleFactor, soft = AppTransition.reducedScale(of: window)
+        let page = AppTransition.page(navigator.selection)
+        // The sharpest picture sure to be within the budget on this page, if any (`costs`).
+        func choice() -> (scale: CGFloat, cost: CFTimeInterval)? {
+            for scale in [full, soft] {
+                let cost = AppTransition.estimate(window, pixelScale: scale, page: page)
+                if cost <= AppTransition.idleCaptureBudget { return (scale, cost) }
+            }
+            return nil
+        }
+        // Idle long enough that a key typed after a pause like this one is not likely to wait on what the look draws.
+        let planned = choice()
+        guard AppTransition.inputIdle(max(0.5, 3 * (planned?.cost ?? AppTransition.idleCaptureBudget))) else {
             keeperPace = Self.keeperPaces.shortest
             return
         }
@@ -585,11 +592,11 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             $0.fits(window, glass: glass, sidebar: chrome.sidebar) && $0.destination == navigator.selection ? $0 : nil
         }
         // As good as the keeper would make it (sharp, or soft when sharp costs too much).
-        let good = kept.map { $0.exact || scale < full } ?? false
+        let good = kept.map { $0.exact || (planned?.scale ?? soft) < full } ?? false
         // Nothing typed, clicked, asked or synced since the kept picture: it still stands, with no glance (what moved
         // since is the window's own noise, a ticking duration or the thinking dots, which a close forgives).
         if let kept, good, kept.marks == marks { return slower() }
-        let now = AppTransition.glance(of: window)
+        let now = AppTransition.glance(of: window, page: page)
         if let kept, good, now?.same(as: kept.glance) == true {
             closedPicture?.marks = marks
             return slower()
@@ -601,7 +608,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             keeperPace = Self.keeperPaces.shortest
             return
         }
-        guard AppTransition.mayCaptureAtIdle(cost: cost) else { return }
+        // Never one that may cost more than the budget, by what this page has cost lately (the glance just drawn included):
+        // a close without a fresh picture fades the live window instead.
+        guard let (scale, cost) = choice(), AppTransition.mayCaptureAtIdle(cost: cost) else { return }
         if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
                                                destination: navigator.selection, glance: now, pixelScale: scale,
                                                marks: marks) {

@@ -156,48 +156,84 @@ enum AppTransition {
     static var costs = CaptureCosts()
     static var lastCapture: CFTimeInterval = -.infinity
 
-    /// What a picture costs, from the last few taken at that size and scale: their longest, not their mean (one that took
-    /// 520 ms among a few of 65 must keep a handoff from waiting on the next). A size or scale never taken is worked out
-    /// from the others by their pixels, and with none from a cost per pixel as high as heavy content has shown (520 ms
-    /// for a 1617 by 1188 pt window at 2x), so a first capture is never let in on hope.
+    /// What drawing the window costs the main thread, by its size, the page it shows and the pixel scale drawn at (its
+    /// glances, a quarter of a point a pixel, and its pictures): the idle keeper takes a picture only when it is sure to be
+    /// within its budget. What it costs depends on what the page shows far more than on its size (65 ms on a light page,
+    /// 160 to 520 on a heavy one at the same size), so each page is its own; a scale never drawn on that page is worked
+    /// out from the others drawn there (a glance is always drawn before a picture), and with none from a cost per pixel
+    /// as high as heavy content has shown. An estimate is the most of the last few drawn there in the last minute (a slow
+    /// one counts until it is a minute old, then no longer holds the page back), and a full picture's is never under the
+    /// latest soft one's times their pixels.
     struct CaptureCosts {
         struct Key: Hashable {
             let width: Int
             let height: Int
             /// Pixels per point, in hundredths.
             let scale: Int
+            let page: String
 
-            init(size: NSSize, pixelScale: CGFloat) {
+            init(size: NSSize, pixelScale: CGFloat, page: String) {
                 width = Int(size.width.rounded())
                 height = Int(size.height.rounded())
                 scale = Int((pixelScale * 100).rounded())
+                self.page = page
             }
 
             var pixels: Double { Double(width * height) * Double(scale * scale) / 10_000 }
+            func at(_ pixelScale: CGFloat) -> Key {
+                Key(size: NSSize(width: width, height: height), pixelScale: pixelScale, page: page)
+            }
         }
 
-        /// How many of the last costs are kept at each key.
+        /// How many of the last costs are kept at each key, for how long, and how many keys at most.
         static let kept = 5
+        static let life: TimeInterval = 60
+        static let keys = 24
         /// Seconds per pixel with nothing measured yet: 520 ms over 1617 × 1188 pt at 2x.
         static let prior: Double = 0.52 / (1617 * 1188 * 4)
+        /// How a cost grows with the pixels drawn, from one scale to another on the same page: less than in proportion (on
+        /// demo data a glance, a sixteenth of a 1x picture's pixels, costs a fifth to a sixth of it: 16^0.65 is 6.1).
+        static let growth = 0.65
 
-        private var recent: [Key: [CFTimeInterval]] = [:]
+        private var recent: [Key: [(cost: CFTimeInterval, at: CFTimeInterval)]] = [:]
 
-        mutating func record(_ cost: CFTimeInterval, size: NSSize, pixelScale: CGFloat) {
-            let key = Key(size: size, pixelScale: pixelScale)
-            recent[key, default: []].append(cost)
+        mutating func record(_ cost: CFTimeInterval, size: NSSize, pixelScale: CGFloat, page: String,
+                             at now: CFTimeInterval = CACurrentMediaTime()) {
+            let key = Key(size: size, pixelScale: pixelScale, page: page)
+            recent[key, default: []].append((cost, now))
             if recent[key, default: []].count > Self.kept { recent[key]?.removeFirst() }
+            if recent.count > Self.keys,
+               let stalest = recent.min(by: { ($0.value.last?.at ?? 0) < ($1.value.last?.at ?? 0) })?.key {
+                recent[stalest] = nil
+            }
         }
 
-        func estimate(size: NSSize, pixelScale: CGFloat) -> CFTimeInterval {
-            let key = Key(size: size, pixelScale: pixelScale)
-            if let known = recent[key]?.max() { return known }
-            // The others, scaled by pixels: the highest such guess.
-            let guesses = recent.compactMap { other, costs -> Double? in
-                guard let worst = costs.max(), other.pixels > 0 else { return nil }
-                return worst * key.pixels / other.pixels
+        private func worst(_ key: Key, _ now: CFTimeInterval) -> CFTimeInterval? {
+            recent[key]?.filter { now - $0.at < Self.life }.map(\.cost).max()
+        }
+
+        func estimate(size: NSSize, pixelScale: CGFloat, page: String,
+                      at now: CFTimeInterval = CACurrentMediaTime()) -> CFTimeInterval {
+            let key = Key(size: size, pixelScale: pixelScale, page: page)
+            // The other scales drawn on this page, by their pixels.
+            let guesses = recent.keys.filter {
+                $0.width == key.width && $0.height == key.height && $0.page == page && $0.scale != key.scale
+            }.compactMap { other -> Double? in
+                guard let cost = worst(other, now), other.pixels > 0 else { return nil }
+                return cost * pow(key.pixels / other.pixels, Self.growth)
             }
-            return guesses.max() ?? key.pixels * Self.prior
+            var estimate = worst(key, now) ?? guesses.max() ?? key.pixels * Self.prior
+            // Never under the latest softer picture's cost times the pixels.
+            let softer = recent.filter {
+                $0.key.width == key.width && $0.key.height == key.height && $0.key.page == page
+                    && $0.key.scale < key.scale && $0.key.scale >= key.scale / 2
+            }
+            for (other, costs) in softer {
+                if let latest = costs.last, now - latest.at < Self.life {
+                    estimate = max(estimate, latest.cost * key.pixels / other.pixels)
+                }
+            }
+            return estimate
         }
     }
 
@@ -207,11 +243,18 @@ enum AppTransition {
         window.backingScaleFactor / 2
     }
 
-    /// What a picture of `window` at `pixelScale` would cost now (`costs`).
-    static func estimate(_ window: NSWindow, pixelScale: CGFloat) -> CFTimeInterval {
-        let view = window.contentView?.superview ?? window.contentView
-        return costs.estimate(size: view?.bounds.size ?? window.frame.size, pixelScale: pixelScale)
+    /// What a picture of `window` showing `page` at `pixelScale` would cost now (`costs`).
+    static func estimate(_ window: NSWindow, pixelScale: CGFloat, page: String) -> CFTimeInterval {
+        costs.estimate(size: drawnSize(window), pixelScale: pixelScale, page: page)
     }
+
+    /// The size a window's pictures and glances are drawn at (its frame's points).
+    static func drawnSize(_ window: NSWindow) -> NSSize {
+        (window.contentView?.superview ?? window.contentView)?.bounds.size ?? window.frame.size
+    }
+
+    /// A page's name for `costs`.
+    static func page(_ destination: AppDestination) -> String { String(describing: destination) }
 
     /// The window's content drawn small (a quarter of its points, from its layers as they are, no glass stand-ins; not the
     /// title bar's buttons, whose colour says only whether the window has the keyboard, which a picture is never kept
@@ -303,13 +346,20 @@ enum AppTransition {
 
     /// The window's glance as it is drawn now (laid out and displayed first, as a picture would be); nil when it has no
     /// layers to draw.
-    static func glance(of window: NSWindow) -> Glance? {
+    /// `page`: what the window shows, to note what the glance cost there (`costs`).
+    static func glance(of window: NSWindow, page: String? = nil) -> Glance? {
         guard let view = window.contentView, let layer = view.layer, view.bounds.width > 0, view.bounds.height > 0 else {
             return nil
         }
         glances += 1
         let signpost = MorphSignposts.signposter.beginInterval("Glance drawn")
-        defer { MorphSignposts.signposter.endInterval("Glance drawn", signpost) }
+        let started = CACurrentMediaTime()
+        defer {
+            MorphSignposts.signposter.endInterval("Glance drawn", signpost)
+            if let page {
+                costs.record(CACurrentMediaTime() - started, size: drawnSize(window), pixelScale: glanceScale, page: page)
+            }
+        }
         (view.superview ?? view).layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         let width = max(1, Int((view.bounds.width * glanceScale).rounded(.up)))
@@ -369,8 +419,9 @@ enum AppTransition {
     /// `restoreLater`: the window goes out of sight in this turn, so its glass pieces are restored by SwiftUI's own update
     /// rather than drawn again here (`GlassCapture.around`).
     /// `pixelScale`: fewer pixels than the window's own (`reducedScale`), drawn as the window's points scaled down.
+    /// `page`: what the window shows, to note what the picture cost there (`costs`).
     static func snapshot(of window: NSWindow, capture: GlassCapture? = nil, hole: Hole? = nil,
-                         restoreLater: Bool = false, pixelScale: CGFloat? = nil) -> CGImage? {
+                         restoreLater: Bool = false, pixelScale: CGFloat? = nil, page: String? = nil) -> CGImage? {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
         captures += 1
         let reduced = pixelScale.map { $0 < window.backingScaleFactor } ?? false
@@ -385,7 +436,7 @@ enum AppTransition {
                 MorphSignposts.signposter.endInterval("Capture", signpost)
             }
             lastCapture = CACurrentMediaTime()
-            costs.record(lastCapture - started, size: view.bounds.size, pixelScale: scale)
+            if let page { costs.record(lastCapture - started, size: view.bounds.size, pixelScale: scale, page: page) }
         }
         let glass = GlassCapture.chromeIsGlass
         let cleared = glass ? hole : nil
@@ -611,7 +662,8 @@ enum AppTransition {
         let frame = window.frame, scale = window.backingScaleFactor, appearance = window.effectiveAppearance.name
         guard let image = snapshot(of: window, capture: glassWindow.capture,
                                    hole: glassWindow.hole(glass: glass, radius: cornerRadius(of: window)),
-                                   restoreLater: restoreLater, pixelScale: pixelScale) else { return nil }
+                                   restoreLater: restoreLater, pixelScale: pixelScale,
+                                   page: page(destination)) else { return nil }
         return Picture(image: image, frame: frame, scale: scale, destination: destination, glass: glass, glance: glance,
                        appearance: appearance, sidebar: glassWindow.sidebar, key: key,
                        pixelScale: min(pixelScale ?? scale, scale), marks: marks)

@@ -59,24 +59,36 @@ import Testing
         #expect(fresh(base, marks, .settings) == .stale && fresh(nil) == .stale)
     }
 
-    /// A capture's cost is the longest of the last few at that size and scale, so one slow capture keeps the next from being
-    /// let in on a mean; a size never taken is guessed from the others by pixels, and with none from a pessimistic prior.
-    @Test func aCapturesCostIsItsRecentWorst() {
-        var costs = AppTransition.CaptureCosts()
+    /// A capture's cost is the longest of the last few on that page at that size and scale, so one slow capture keeps the
+    /// next from being let in on a mean, until it is a minute old; another page is its own (a heavy one at the same size
+    /// is not let in on a light one's costs); a scale never drawn there is guessed from those drawn (a glance) and with
+    /// none from a pessimistic prior; a full picture is never guessed under the latest soft one times its pixels.
+    @Test func aCapturesCostIsItsPagesRecentWorst() {
+        typealias Costs = AppTransition.CaptureCosts
+        var costs = Costs()
         let size = NSSize(width: 1000, height: 500)
-        let prior = costs.estimate(size: size, pixelScale: 2)
-        #expect(abs(prior - 1000 * 500 * 4 * AppTransition.CaptureCosts.prior) < 1e-9 && prior > 0.1)
-        for cost in [0.06, 0.52, 0.06, 0.07] { costs.record(cost, size: size, pixelScale: 2) }
-        #expect(costs.estimate(size: size, pixelScale: 2) == 0.52)
-        // Five more and the slow one is out of the window.
-        for _ in 0..<5 { costs.record(0.065, size: size, pixelScale: 2) }
-        #expect(costs.estimate(size: size, pixelScale: 2) == 0.065)
-        // At 1x, a quarter of the pixels: a quarter of the cost until one is measured.
-        #expect(abs(costs.estimate(size: size, pixelScale: 1) - 0.065 / 4) < 1e-9)
-        costs.record(0.03, size: size, pixelScale: 1)
-        #expect(costs.estimate(size: size, pixelScale: 1) == 0.03)
-        // Twice the size: the highest guess of the others (the 1x one's, 0.03 × 8, over the 2x one's, 0.065 × 2).
-        #expect(abs(costs.estimate(size: NSSize(width: 2000, height: 500), pixelScale: 2) - 0.24) < 1e-9)
+        let prior = costs.estimate(size: size, pixelScale: 2, page: "router", at: 0)
+        #expect(abs(prior - 1000 * 500 * 4 * Costs.prior) < 1e-9)
+        for (n, cost) in [0.06, 0.52, 0.06, 0.07].enumerated() {
+            costs.record(cost, size: size, pixelScale: 2, page: "router", at: Double(n))
+        }
+        #expect(costs.estimate(size: size, pixelScale: 2, page: "router", at: 10) == 0.52)
+        // A minute on, the slow one no longer counts.
+        costs.record(0.065, size: size, pixelScale: 2, page: "router", at: 63.5)
+        #expect(costs.estimate(size: size, pixelScale: 2, page: "router", at: 63.5) == 0.065)
+        // Another page at the same size: nothing known there but the prior.
+        #expect(costs.estimate(size: size, pixelScale: 2, page: "settings", at: 62) == prior)
+        // A glance drawn there: the other scales follow from it, less than in proportion to their pixels.
+        costs.record(0.004, size: size, pixelScale: 0.25, page: "settings", at: 62)
+        let soft = costs.estimate(size: size, pixelScale: 1, page: "settings", at: 62)
+        #expect(abs(soft - 0.004 * pow(16, Costs.growth)) < 1e-9)
+        // A soft picture measured: a full one is never guessed under it times the pixels.
+        costs.record(0.02, size: size, pixelScale: 1, page: "settings", at: 63)
+        #expect(costs.estimate(size: size, pixelScale: 2, page: "settings", at: 63) >= 0.08)
+        // Keys are bounded: the stalest goes.
+        for n in 0..<40 { costs.record(0.01, size: size, pixelScale: 1, page: "p\(n)", at: 100 + Double(n)) }
+        #expect(costs.estimate(size: size, pixelScale: 2, page: "p0", at: 140) == prior)
+        #expect(costs.estimate(size: size, pixelScale: 1, page: "p39", at: 140) == 0.01)
     }
 }
 

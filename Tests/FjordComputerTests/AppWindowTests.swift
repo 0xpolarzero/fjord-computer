@@ -906,6 +906,14 @@ extension WindowSeams {
             AppTransition.isFront = { _ in true }
             AppTransition.inputIdle = { _ in true }
             AppTransition.lastCapture = -.infinity
+            // Pictures of this page known to be cheap (a debug build's own would not be).
+            AppTransition.costs = AppTransition.CaptureCosts()
+            if let window = controller.window {
+                for scale in [window.backingScaleFactor, AppTransition.reducedScale(of: window)] {
+                    AppTransition.costs.record(0.01, size: AppTransition.drawnSize(window), pixelScale: scale,
+                                               page: AppTransition.page(.done))
+                }
+            }
             return controller.window
         }
 
@@ -919,15 +927,21 @@ extension WindowSeams {
                 #expect(!controller.keepsPicture)
                 var asked: TimeInterval = 0
                 AppTransition.inputIdle = { asked = $0; return true }
-                let view = try #require(window.contentView?.superview)
-                AppTransition.costs.record(0.5, size: view.bounds.size, pixelScale: window.backingScaleFactor)
+                let size = AppTransition.drawnSize(window), page = AppTransition.page(.done)
+                // Sharp costs over the budget on this page: soft, and the wait is three times its cost (half a second).
+                AppTransition.costs.record(0.5, size: size, pixelScale: window.backingScaleFactor, page: page)
                 let soft = AppTransition.reducedScale(of: window)
-                let expected = max(0.5, 3 * AppTransition.estimate(window, pixelScale: soft))
                 // Two looks: a picture only of a window at rest.
                 controller.keepPicture()
                 controller.keepPicture()
-                #expect(controller.keepsPicture && asked == expected)
-                #expect(controller.keptPictureIsSoft == (soft < window.backingScaleFactor))
+                #expect(controller.keepsPicture && controller.keptPictureIsSoft && asked == 0.5)
+                // Soft over it too: no picture at all (a close fades the live window instead).
+                let taken = AppTransition.captures
+                AppTransition.costs.record(0.2, size: size, pixelScale: soft, page: page)
+                controller.pick(message: UUID())
+                controller.keepPicture()
+                controller.keepPicture()
+                #expect(AppTransition.captures == taken)
             }
         }
 
