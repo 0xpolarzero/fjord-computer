@@ -74,3 +74,19 @@ import Testing
         #expect(CardView.inline(text) == RouterText.inline(text))
     }
 }
+
+/// The listed rows name each session's project as the folders' names have it now.
+@MainActor @Suite struct AgentRowsFolderNames {
+    @Test func theListedRowsFollowAProjectRenamedAndWhatReadsThemIsTold() {
+        let store = Store()
+        Demo.populate(store, .router)
+        let row = store.allAgentRows.first { !$0.session.folderKey.isEmpty }!
+        let folder = row.session.folderKey
+        var notified = false
+        withObservationTracking { _ = store.allAgentRows } onChange: { notified = true }
+        // A scan finds another clone of the same name: the project is named by more of its path.
+        store.folderNames[folder] = "qqwwee"
+        #expect(notified)
+        #expect(store.allAgentRows.first { $0.id == row.id }?.project == "qqwwee")
+    }
+}

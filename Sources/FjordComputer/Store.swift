@@ -286,6 +286,8 @@ final class Store {
         // The history is searched by its cards' project names too.
         didSet {
             routerSearchRevision &+= 1
+            // The rows name each session's project.
+            agentCache = nil
             refreshSessionRows(sessionRowsChanged(names: oldValue))
         }
     }

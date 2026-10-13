@@ -211,7 +211,8 @@ extension Store {
     /// properties, so SwiftUI keeps tracking them; `agentCache` is dropped whenever one of them changes.
     private var cache: AgentCache {
         let state = agents, sessions = claudeSessions, activity = claudeActivity, tasks = claudeTasks
-        _ = recentTick
+        // Read for what observes the rows: each names its session's project.
+        _ = (recentTick, folderNames)
         if let agentCache { return agentCache }
         let built = buildAgentCache(state, sessions, activity, tasks)
         agentCache = built
