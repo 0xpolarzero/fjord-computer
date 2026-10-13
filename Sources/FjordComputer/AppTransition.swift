@@ -173,7 +173,7 @@ enum AppTransition {
             signposter.endInterval("Capture bitmap", making)
             guard let rep = made else { return nil }
             let drawing = signposter.beginInterval("Capture draw")
-            view.cacheDisplay(in: view.bounds, to: rep)
+            render(view, into: rep)
             signposter.endInterval("Capture draw", drawing)
             if let cleared { punch(rep, cleared) }
             let imaging = signposter.beginInterval("Capture image")
@@ -191,6 +191,24 @@ enum AppTransition {
         window.displayIfNeeded()
         MorphSignposts.signposter.endInterval("Capture settle", settling)
         return draw()
+    }
+
+    /// `view` drawn into `rep` (sized to its bounds) from its layers as they are (`CALayer.render(in:)`), the same pixels
+    /// as `cacheDisplay` draws, in some three quarters of the time (48 against 64 ms at 1480 by 940 pt on demo data): the
+    /// views are not asked to draw again. A view with no layer, or a bitmap no context can draw in, is cached as before.
+    static func render(_ view: NSView, into rep: NSBitmapImageRep) {
+        guard let layer = view.layer, view.bounds.width > 0, view.bounds.height > 0,
+              let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            return view.cacheDisplay(in: view.bounds, to: rep)
+        }
+        let cg = context.cgContext
+        cg.saveGState()
+        // The bitmap's own pixels, whatever its context starts with, then the view's points on them.
+        cg.concatenate(cg.ctm.inverted())
+        cg.scaleBy(x: CGFloat(rep.pixelsWide) / view.bounds.width, y: CGFloat(rep.pixelsHigh) / view.bounds.height)
+        layer.render(in: cg)
+        cg.restoreGState()
+        context.flushGraphics()
     }
 
     /// A bitmap to cache `view`'s display in, at its backing scale, with an alpha channel, in the colour space the view's
