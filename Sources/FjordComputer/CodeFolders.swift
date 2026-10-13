@@ -224,10 +224,14 @@ final class CodeFolderScanner {
     @ObservationIgnored private var lastScan: Date?
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var activation: NSObjectProtocol?
+    /// The scan coming to the front asked for, waiting to start (see `activationDelay`).
+    @ObservationIgnored private var activationScan: Task<Void, Never>?
 
     static let interval: TimeInterval = 300
     /// Coming to the front scans again only this long after the last scan.
     static let activationGap: TimeInterval = 60
+    /// How long after coming to the front its scan starts: past the window's opening, which activates the app.
+    static let activationDelay: Duration = .seconds(1)
 
     init(store: Store) { self.store = store }
 
@@ -250,7 +254,17 @@ final class CodeFolderScanner {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if let last = self.lastScan, Date().timeIntervalSince(last) < Self.activationGap { return }
-                self.refresh()
+                // Opening the window activates the app: the scan it asks for waits out the morph, and a moment more, so it
+                // never starts under it (`MotionGate`).
+                guard self.activationScan == nil else { return }
+                self.activationScan = Task { [weak self] in
+                    try? await Task.sleep(for: Self.activationDelay)
+                    await MotionGate.still()
+                    guard let self else { return }
+                    self.activationScan = nil
+                    if let last = self.lastScan, Date().timeIntervalSince(last) < Self.activationGap { return }
+                    self.refresh()
+                }
             }
         }
     }
@@ -300,7 +314,7 @@ final class CodeFolderScanner {
                 let unread = self.sessionFolders.filter { !$0.isEmpty && self.sessionRemotes[$0] == nil && self.clones[$0] == nil }
                 guard !unread.isEmpty else { break }
                 let read = self.readRemotes
-                let found = await OffMain.run { Dictionary(uniqueKeysWithValues: unread.map { ($0, read($0)) }) }
+                let found = await OffMain.run(qos: .utility) { Dictionary(uniqueKeysWithValues: unread.map { ($0, read($0)) }) }
                 self.sessionRemotes.merge(found) { _, new in new }
                 self.rebuild()
             }
@@ -315,9 +329,11 @@ final class CodeFolderScanner {
         lastScan = Date()
         let (scan, read) = (self.scan, self.readRemotes)
         // The sessions' folders are read again with each scan: a remote added since (a fork's upstream) is taken in.
-        let (found, sessionsRead) = await OffMain.run {
+        let (found, sessionsRead) = await OffMain.run(qos: .utility) {
             (roots.isEmpty ? CodeFolders.Found() : scan(roots), Dictionary(uniqueKeysWithValues: sessions.map { ($0, read($0)) }))
         }
+        // Taken in once the window's morph has played: the projects worked out again redraw what lists them.
+        await MotionGate.still()
         sessionRemotes = sessionRemotes.filter { sessionFolders.contains($0.key) }.merging(sessionsRead) { _, new in new }
         // The folders changed while it ran: what it found is old, and the change has asked for another scan.
         guard roots == self.roots else { rebuild(); return }

@@ -48,7 +48,7 @@ import Observation
     func refresh() {
         guard let root = codeRoot else { return }
         Task { [weak self] in
-            let found = await OffMain.run { Self.find(in: root) }
+            let found = await OffMain.run(qos: .utility) { Self.find(in: root) }
             self?.set(found)
         }
     }
