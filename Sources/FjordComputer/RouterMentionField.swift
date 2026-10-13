@@ -205,13 +205,20 @@ struct MentionField: NSViewRepresentable {
         c.onCommand = onCommand
         c.onSelection = onSelection
         model.editor = view
+        // Set only when they change: the text view's font set again lays out its whole storage, on every update (each
+        // keystroke's) otherwise.
         let (font, base) = Self.attributes()
-        view.base = base
-        view.font = font
-        view.isEditable = editable
-        view.isSelectable = editable
-        view.name = { [store] in store.pointerName($0) }
-        view.makePill = { [store] pointer in MentionAttachment(pointer: pointer, look: store.pointerLook(pointer), font: font) }
+        if view.font !== font {
+            view.base = base
+            view.font = font
+        }
+        if view.isEditable != editable { view.isEditable = editable }
+        if view.isSelectable != editable { view.isSelectable = editable }
+        if c.pillsFor !== store {
+            c.pillsFor = store
+            view.name = { [store] in store.pointerName($0) }
+            view.makePill = { [store] pointer in MentionAttachment(pointer: pointer, look: store.pointerLook(pointer), font: font) }
+        }
         view.onFocus = onFocus
         c.view = view
         c.follow(model)
@@ -247,7 +254,11 @@ struct MentionField: NSViewRepresentable {
         return CGSize(width: width, height: height)
     }
 
-    static func attributes() -> (NSFont, [NSAttributedString.Key: Any]) {
+    /// The text's font and attributes, made once.
+    static func attributes() -> (NSFont, [NSAttributedString.Key: Any]) { madeAttributes }
+    @MainActor private static let madeAttributes = makeAttributes()
+
+    private static func makeAttributes() -> (NSFont, [NSAttributedString.Key: Any]) {
         let font = CDS.nsSans(role.0)
         let style = NSMutableParagraphStyle()
         style.minimumLineHeight = role.1
@@ -264,6 +275,8 @@ struct MentionField: NSViewRepresentable {
         var store: Store?
         var focusTick = 0
         var syncing = false
+        /// The store the view's pill and name makers were made for.
+        weak var pillsFor: Store?
         var onCommand: ((Selector) -> Bool)?
         var onSelection: ((NSTextView) -> Void)?
         /// The text's height at a width, for the text it had then (a pill is one character of it; pills made anew clear it).
@@ -278,7 +291,10 @@ struct MentionField: NSViewRepresentable {
         /// input method composes, the text is the input method's: the change waits for the composition to end.
         func follow(_ model: RouterModel) {
             guard let view else { return }
-            let shown = MentionText.serialize(view.attributedString())
+            // What the view last told the model, or showed of it, is what it shows (every change of its text tells the
+            // model): the model holding just that, nothing is read back from the text.
+            if composing == nil, let told, told.draft == model.draft, told.pointers == model.pointers { return }
+            let shown = MentionText.serialize(view.textStorage ?? view.attributedString())
             if let base = composing {
                 if !view.hasMarkedText() { endComposing(base, shown: shown, model: model, view: view) }
                 return
@@ -323,7 +339,7 @@ struct MentionField: NSViewRepresentable {
         /// keep the same offsets (the @ word, a pick's range, a caret asked for).
         private func show(_ model: RouterModel, in view: MentionTextView) {
             told = (model.draft, model.pointers)
-            let shown = MentionText.serialize(view.attributedString())
+            let shown = MentionText.serialize(view.textStorage ?? view.attributedString())
             guard shown.draft != model.draft || shown.pointers != model.pointers else { return }
             syncing = true
             defer { syncing = false }
@@ -377,7 +393,7 @@ struct MentionField: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !syncing, let view, let model else { return }
-            var (draft, pointers) = MentionText.serialize(view.attributedString())
+            var (draft, pointers) = MentionText.serialize(view.textStorage ?? view.attributedString())
             if let base = composing {
                 // A change of the model's waits for the composition: it stays after what is typed meanwhile.
                 guard view.hasMarkedText() else {

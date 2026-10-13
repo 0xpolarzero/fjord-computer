@@ -170,13 +170,16 @@ final class RouterLiveTarget {
 
 extension RouterModel {
     /// What the draft goes with: the reply, the @projects, the target you pinned and the one you waved off.
-    func context(_ store: Store) -> RouterContext {
+    func context(_ store: Store) -> RouterContext { context(store, sent: sentDraft(store)) }
+
+    /// The same, for the draft as it will be sent, worked out once by the caller (`sentDraft` writes every pill's name).
+    func context(_ store: Store, sent: (text: String, mentions: [RouterMention])) -> RouterContext {
         let reply = replyTo.flatMap { id in store.router.cards.contains { $0.id == id } ? id : nil }
         var context = RouterContext(replyTo: reply, target: live.pinned, notTo: live.dismissed)
-        context.tag(sentDraft(store).mentions)
+        context.tag(sent.mentions)
         // Jev's pick shown over the composer for the draft as it is now: sending it goes with it, as it was shown (the
         // dispatcher's copy of it may have expired, and asking again could go elsewhere).
-        let shown = live.valid(text: plainDraft(store), context: context, store: store)
+        let shown = live.valid(text: sent.text, context: context, store: store)
         context.shown = shown?.target
         context.jev = shown?.found
         // Jev's pick you clicked, while the draft still goes there (as the pinned target or the reply to its card).
@@ -210,7 +213,9 @@ extension RouterModel {
 
     /// The draft changed: Jev's pick follows it.
     func predictTarget(store: Store) {
-        live.update(text: plainDraft(store), context: context(store), store: store)
+        // Once per keystroke: the draft as it will be sent, made once for both.
+        let sent = sentDraft(store)
+        live.update(text: sent.text, context: context(store, sent: sent), store: store)
     }
 
     /// The prediction's item changed (`from` → `to`): the page marks the new one; a mark of another (a reveal) isn't touched.
