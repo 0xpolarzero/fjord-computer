@@ -441,7 +441,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         } else {
             run?.end()
             current = AppTransition.makeRun(for: sender, bar: AppTransition.reduceMotion ? nil : bar(),
-                                            glassWindow: glassWindow(sender))
+                                            glassWindow: glassWindow(sender), closing: true)
             current?.shows = navigator.selection
         }
         guard let current else {
@@ -465,13 +465,13 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             guard self.generation == mine else { return }
             self.onClosing?()
         }
-        if interrupting {
-            start()
-        } else {
-            // The overlay shows the window before the real one goes: no frame without either.
+        if !interrupting {
+            // The overlay shows the window before the real one goes, in this turn: its frame is submitted to the render
+            // server ahead of the window's ordering out, which reaches the server after it, so no frame shows neither.
             current.present()
-            AppTransition.nextFrame(sender.screen, start)
+            CATransaction.flush()
         }
+        start()
         return false
     }
 

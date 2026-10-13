@@ -780,9 +780,8 @@ extension WindowSeams {
                 controller.close()
                 guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
                 #expect(controller.phase == .closing && closing !== opened && closing.image != nil)
-                // The overlay shows the window before the real one goes.
-                #expect(window.isVisible && closing.overlay.isVisible && ticks.blocks.count == 1)
-                ticks.blocks.removeFirst()()
+                // The overlay shows the window and the real one goes in the same turn: the motion starts at once.
+                #expect(closing.overlay.isVisible && ticks.blocks.isEmpty)
                 #expect(!window.isVisible && closing.startPose?.container == 1 && closing.startPose?.window == 1)
             }
         }
@@ -805,7 +804,6 @@ extension WindowSeams {
                 defer { controller.onClosing = nil }
                 controller.close()
                 guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
-                ticks.blocks.removeFirst()()
                 #expect(restored && controller.phase == .opening && controller.run === closing)
                 // The callback's opening is the animation completed now, so the real window takes over.
                 closing.complete()
@@ -823,7 +821,6 @@ extension WindowSeams {
             ticks.blocks.removeFirst()()
             ticks.blocks.removeFirst()()
             controller.close()
-            ticks.blocks.removeFirst()()
         }
 
         /// Short of memory as a morphing close is under way, its picture is not kept for the next open, and the content the

@@ -32,12 +32,15 @@ final class GlassCapture {
     /// `draw` (the capture) with the root's glass pieces drawn as stand-ins, all in this turn: the flag on, the root laid
     /// out and drawn (`settle`), the picture taken, the flag off, the root laid out and drawn again. With no glass on screen
     /// (`glass` false) only `draw` runs. Signposted ("Capture flag on", "Capture flag off", category "morph").
-    func around<T>(glass: Bool, settle: () -> Void, _ draw: () -> T) -> T {
-        Self.sequence(glass: glass, set: { self.set($0) }, settle: settle, draw: draw)
+    /// `restoreLater`: the window goes out of sight in this turn (a close), so the flag is turned off without drawing the
+    /// root again here: SwiftUI's own update at the turn's end does it, after the morph's first frame is submitted.
+    func around<T>(glass: Bool, restoreLater: Bool = false, settle: () -> Void, _ draw: () -> T) -> T {
+        Self.sequence(glass: glass, set: { self.set($0) }, settle: settle, draw: draw, restoreLater: restoreLater)
     }
 
     /// The sequence `around` runs, with its steps given (tests record their order).
-    static func sequence<T>(glass: Bool, set: (Bool) -> Void, settle: () -> Void, draw: () -> T) -> T {
+    static func sequence<T>(glass: Bool, set: (Bool) -> Void, settle: () -> Void, draw: () -> T,
+                            restoreLater: Bool = false) -> T {
         guard glass else { return draw() }
         let signposter = MorphSignposts.signposter
         let on = signposter.beginInterval("Capture flag on")
@@ -47,7 +50,7 @@ final class GlassCapture {
         let picture = draw()
         let off = signposter.beginInterval("Capture flag off")
         set(false)
-        settle()
+        if !restoreLater { settle() }
         signposter.endInterval("Capture flag off", off)
         return picture
     }

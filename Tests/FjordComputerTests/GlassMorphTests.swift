@@ -16,6 +16,14 @@ import Testing
         #expect(steps == ["on", "settle", "draw", "off", "settle"])
     }
 
+    /// A close's capture turns the flag off without drawing the root again: the window goes out of sight in that turn.
+    @Test func aCloseRestoresTheFlagWithoutDrawingTheRootAgain() {
+        var steps: [String] = []
+        _ = GlassCapture.sequence(glass: true, set: { steps.append($0 ? "on" : "off") }, settle: { steps.append("settle") },
+                                  draw: { steps.append("draw") }, restoreLater: true)
+        #expect(steps == ["on", "settle", "draw", "off"])
+    }
+
     @Test func withNoGlassOnlyTheCaptureRuns() {
         var steps: [String] = []
         let picture = GlassCapture.sequence(glass: false, set: { steps.append($0 ? "on" : "off") },

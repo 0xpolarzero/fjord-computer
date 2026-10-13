@@ -158,7 +158,10 @@ enum AppTransition {
     /// The window's pixels as they are now: its whole frame (title bar and buttons included) at the screen's scale. With
     /// the window's capture flag (`capture`) and glass on, its small glass pieces are drawn as their stand-ins for the
     /// picture and restored, in this turn (`GlassCapture.around`); the ground is then taken out of `hole` (`punch`).
-    static func snapshot(of window: NSWindow, capture: GlassCapture? = nil, hole: Hole? = nil) -> CGImage? {
+    /// `restoreLater`: the window goes out of sight in this turn, so its glass pieces are restored by SwiftUI's own update
+    /// rather than drawn again here (`GlassCapture.around`).
+    static func snapshot(of window: NSWindow, capture: GlassCapture? = nil, hole: Hole? = nil,
+                         restoreLater: Bool = false) -> CGImage? {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
         captures += 1
         let signpost = MorphSignposts.signposter.beginInterval("Capture")
@@ -182,7 +185,7 @@ enum AppTransition {
         }
         if let capture, glass {
             // The capture itself still runs on the theme frame; the flag is the content's root's.
-            return capture.around(glass: true,
+            return capture.around(glass: true, restoreLater: restoreLater,
                                   settle: { GlassCapture.settle(host: window.contentView, root: view, window: window) },
                                   draw)
         }
@@ -374,13 +377,14 @@ enum AppTransition {
     }
 
     /// An overlay for `window` (laid out at its frame) on the window's picture as it is now, ready to show; nil when there
-    /// is nothing to draw. `glass`: the glass morph (M1).
+    /// is nothing to draw. `glass`: the glass morph (M1). `closing`: the window goes out of sight in this turn (see
+    /// `snapshot`'s `restoreLater`).
     static func makeRun(for window: NSWindow, bar: BarMorph?, glassWindow: GlassWindow = GlassWindow(),
-                        glass: Bool? = nil) -> Run? {
+                        glass: Bool? = nil, closing: Bool = false) -> Run? {
         let isGlass = glass ?? usesGlass
         let radius = cornerRadius(of: window)
         guard let image = snapshot(of: window, capture: glassWindow.capture,
-                                   hole: glassWindow.hole(glass: isGlass, radius: radius)),
+                                   hole: glassWindow.hole(glass: isGlass, radius: radius), restoreLater: closing),
               let screen = window.screen ?? NSScreen.main else { return nil }
         return Run(window: window, image: image, imageIsKey: isKey(window), screen: screen, bar: bar,
                    radius: radius, glassWindow: glassWindow, glass: isGlass)
