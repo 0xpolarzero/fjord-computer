@@ -384,6 +384,15 @@ enum InboxSync {
         return pages
     }
 
+    /// A branch's CI as workflow things, keeping what was read of them (`keepingUnread`), each told its repo's default branch
+    /// when it is that one; off the main thread (nonisolated and async).
+    static func mapWorkflows(repo: String, branch: String, status: CIStatus, known: [String: Thing], isDefault: Bool) async -> [Thing] {
+        var things = keepingUnread(workflowThings(repo: repo, branch: branch, status: status), status: status, known: known,
+                                   repo: repo, branch: branch)
+        if isDefault { for i in things.indices { things[i].defaultBranch = branch } }
+        return things
+    }
+
     /// `Store.readCI`, off the main thread (nonisolated and async): what a branch's CI says, folded from its runs and checks.
     static func foldCI(runs: [GHWorkflowRuns.Run], sha: String?, checks: [GHCheckRuns.Run], combined: GHCombinedStatus,
                        complete: Bool) async -> Store.CIReading {
@@ -1680,10 +1689,9 @@ extension Store {
             status = try await fetchCI(repo)
             branch = status.branch
         }
-        var things = InboxSync.keepingUnread(InboxSync.workflowThings(repo: repo, branch: branch, status: status),
-                                             status: status, known: self.things, repo: repo, branch: branch)
-        if requested == nil { for i in things.indices { things[i].defaultBranch = branch } }
-        return things
+        // Mapped off the main thread, from the things as they are now.
+        return await InboxSync.mapWorkflows(repo: repo, branch: branch, status: status, known: self.things,
+                                            isDefault: requested == nil)
     }
 
     /// Replaces the things in one assignment, keeping what Jev said of them, and forgets marks of things gone for a month.
