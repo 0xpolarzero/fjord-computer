@@ -712,8 +712,14 @@ private struct RouterHistory: View {
                 }
                 .cdsTopFade()
                 .modifier(HistoryAnchoring(pinned: $pinned, laidOut: laidOut, ready: { if pending != nil { released = true } }) {
-                    // Once: geometry changing again while it waits asks for nothing more.
-                    if pending?.id != RouterModel.endID {
+                    // With no scroll waiting (the history opening, its lazy lines' heights settling under it; a line arriving),
+                    // a jump there and then: nothing of the page is redrawn for it, nor waits a turn.
+                    if pending == nil {
+                        var jump = Transaction(animation: nil)
+                        jump.disablesAnimations = true
+                        withTransaction(jump) { proxy.scrollTo(RouterModel.endID, anchor: .bottom) }
+                    } else if pending?.id != RouterModel.endID {
+                        // Once: geometry changing again while it waits asks for nothing more.
                         pending = HistoryScroll(id: RouterModel.endID, anchor: .bottom, animated: false)
                     }
                 })
