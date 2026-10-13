@@ -1668,6 +1668,7 @@ private struct RouterNow: View {
             ForEach(Array(page.working.enumerated()), id: \.element.id) { i, row in
                 if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
                 WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id], unanswered: page.unanswered[row.id] ?? [])
+                    .equatable()
                     .flightTarget("session:\(row.id)")
                     .id(RouterModel.workingID(row.id))
                     .matched(travellingWorking.contains(row.id) ? row.id : nil, in: ns)
@@ -1684,6 +1685,7 @@ private struct RouterNow: View {
             ForEach(Array(page.waiting.enumerated()), id: \.element.id) { i, card in
                 if i > 0 { Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline) }
                 WaitingCard(store: store, card: card)
+                    .equatable()
                     .flightTarget("session:\(card.sessionID)")
                     .id(RouterModel.workingID(card.sessionID))
                     .transition(.asymmetric(insertion: .opacity, removal: .opacity))
@@ -1707,6 +1709,7 @@ private struct RouterNow: View {
             ForEach(shown) { card in
                 CardView(store: store, model: model, card: card, expanded: card.id == open, form: nil,
                          project: store.routerProject(card), quiet: true)
+                    .equatable()
                     .flightTarget("card:\(card.id)", radius: 12)
                     .id(card.id)
                     .transition(.asymmetric(insertion: .opacity, removal: .scaleFade(0.97, reduce: reduceMotion)))
@@ -1724,6 +1727,7 @@ private struct RouterNow: View {
         return VStack(spacing: 6) {
             ForEach(page.asks) { ask in
                 AskBackCard(store: store, ask: ask)
+                    .equatable()
                     .id(ask.id.uuidString)
                     .transition(.asymmetric(insertion: .scaleFade(0.97, reduce: reduceMotion).combined(with: .opacity),
                                             removal: .scaleFade(0.97, reduce: reduceMotion)))
@@ -1733,6 +1737,7 @@ private struct RouterNow: View {
                 CardView(store: store, model: model, card: card, expanded: card.id == open,
                          form: store.pendingForm(for: card), project: store.routerProject(card),
                          formCap: card.id == open ? formCap : CardView.closedFormCap)
+                    .equatable()
                     .flightTarget("card:\(card.id)", radius: 12)
                     .id(card.id)
                     .matched(travelling.contains(card.sessionID) ? card.sessionID : nil, in: ns)
@@ -1742,6 +1747,7 @@ private struct RouterNow: View {
             // A wait that is over, not told yet: yours to continue.
             ForEach(page.ready) { card in
                 WaitingCard(store: store, card: card)
+                    .equatable()
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .id(card.id)
                     .transition(.opacity)
@@ -1884,6 +1890,12 @@ private struct WorkingSummary: View {
     }
 }
 
+/// The working rows' durations tick on the second, every one on the same whole second: one wake-up a second for all of
+/// them, rather than one per row at the moment it appeared.
+private enum Seconds {
+    static let epoch = Date(timeIntervalSinceReferenceDate: 0)
+}
+
 private extension View {
     @ViewBuilder func matched(_ id: String?, in ns: Namespace.ID) -> some View {
         if let id { matchedGeometryEffect(id: id, in: ns, properties: .position) } else { self }
@@ -1896,7 +1908,7 @@ private extension View {
 /// folder, what it left running, and for how long, then Open in Claude (in its menu too). A click expands it in place: every
 /// summary of it, newest first, and its subagents and commands with what each is on. Its sparkles button summarizes it,
 /// expanding it to show the summary come in; folded, its newest summary sits under it.
-private struct WorkingCard: View {
+private struct WorkingCard: View, Equatable {
     let store: Store
     @Bindable var model: RouterModel
     let row: AgentRow
@@ -1906,6 +1918,12 @@ private struct WorkingCard: View {
     @State private var expanded = false
     @Environment(\.cdsColumnWidth) private var columnWidth
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Drawn from its own values: another session's row changing doesn't redraw it (what it reads of the store and the
+    /// model, it observes itself).
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.row == b.row && a.summary == b.summary && a.unanswered == b.unanswered
+    }
 
     var body: some View {
         let summarizer = model.summarizer
@@ -1932,7 +1950,7 @@ private struct WorkingCard: View {
                         }
                         if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
                         if let start {
-                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                            TimelineView(.periodic(from: Seconds.epoch, by: 1)) { context in
                                 Text(AgentRow.duration(context.date.timeIntervalSince(start)))
                                     .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
                             }
@@ -1994,7 +2012,7 @@ private struct WorkingCard: View {
                                 Text(activity.text).cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1).truncationMode(.tail)
                             }
                             Spacer(minLength: 4)
-                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                            TimelineView(.periodic(from: Seconds.epoch, by: 1)) { context in
                                 Text(AgentRow.duration(context.date.timeIntervalSince(task.since)))
                                     .cdsText((12, 16), .regular, CDS.Text.muted).monospacedDigit().fixedSize()
                             }
@@ -2030,10 +2048,12 @@ private struct WorkingCard: View {
 /// A session whose turn ended waiting on something (CI, a deploy, another session): with the working ones, in a cool
 /// tint and an hourglass, saying what for. Once Fjord Computer sees that done it says the session is ready to continue,
 /// and Tell it sends the session so. Opening it, or the Claude button beside it, opens the session in Claude.
-private struct WaitingCard: View {
+private struct WaitingCard: View, Equatable {
     let store: Store
     let card: RouterCard
     @State private var hovered = false
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.card == b.card }
 
     private var triage: RouterTriage { card.triage ?? RouterTriage() }
 
@@ -2165,7 +2185,7 @@ typealias RouterProject = (name: String, color: Color?)
 /// An open card in Needs you, warm and solid: a summary row (icon, title, kind, a line of what it asks, project, time) and,
 /// for the one shown in full, its form or plan to answer in place, or its text and Archive. Clicking its header shows it
 /// in full with the composer ready to reply to it; hovering it shows Open in Claude. (Addressed, it is a `HistoryCardLine`.)
-struct CardView: View {
+struct CardView: View, Equatable {
     let store: Store
     @Bindable var model: RouterModel
     let card: RouterCard
@@ -2183,6 +2203,13 @@ struct CardView: View {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.cdsColumnWidth) private var columnWidth
+
+    /// Drawn from its own values: the zones redrawing for another card (or a session's activity) skip it; what it reads of
+    /// the model (the pick, the mark) it observes itself.
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.card == b.card && a.expanded == b.expanded && a.form == b.form && a.project.name == b.project.name
+            && a.project.color == b.project.color && a.formCap == b.formCap && a.quiet == b.quiet
+    }
 
     /// Wide enough for an open card's summary on one line.
     private var wide: Bool { columnWidth >= 620 }
@@ -2403,9 +2430,11 @@ struct CardView: View {
 /// lists every session and project. Only a click answers it: whatever is typed in the composer meanwhile is a message of its
 /// own, even one that reads like a target's name, so a session titled after what you'd say ("Don't deploy") is never picked
 /// for saying it. Nothing is sent until you pick.
-struct AskBackCard: View {
+struct AskBackCard: View, Equatable {
     let store: Store
     let ask: RouterAskBack
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.ask == b.ask }
 
     var body: some View {
         let warm = CDS.Fill.warning
