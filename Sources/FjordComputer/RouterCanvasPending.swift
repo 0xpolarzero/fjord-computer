@@ -104,6 +104,8 @@ extension RouterCanvasState {
             self.settled = RouterFlights.settled(recent)
             return
         }
+        // Most changes settle nothing of yours: the frames are worked out only for one that did.
+        guard !RouterFlights.settled(recent).subtracting(settled).isEmpty else { return }
         let folders = model.canvasFolders(store, page: page)
         let next = RouterFlights.departures(settled: settled, now: recent, folders: folders) { store.claudeSessions[$0]?.folderKey }
         self.settled = next.settled
@@ -111,8 +113,11 @@ extension RouterCanvasState {
             guard let target = departure.target else {
                 // The answer is the history's: in a narrow window it shows once the line has faded.
                 if narrow {
-                    Task { @MainActor in
+                    historyTask?.cancel()
+                    historyTask = Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(reduce ? 0 : 300))
+                        // Unless you've moved on meanwhile (the list, the history already).
+                        guard !Task.isCancelled, model.layout == .canvas, model.pane == .now else { return }
                         model.show(.history)
                     }
                 }
@@ -183,6 +188,9 @@ struct RouterPendingStack: View {
             }
             ForEach(asks) { ask in
                 AskBackCard(store: store, ask: ask)
+                    // Its wash over the page's ground, not over the canvas showing through it.
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(CDS.Surface.s1))
+                    .onDisappear { model.canvas.pendingFrames[ask.id] = nil }
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(RouterMain.space)) } action: { rect in
                         // Its message flies from it once you've picked.
                         model.canvas.pendingFrames[ask.id] = CGRect(x: rect.minX, y: rect.minY, width: min(rect.width, 320),
@@ -191,11 +199,20 @@ struct RouterPendingStack: View {
                     .transition(.scaleFade(0.97, reduce: reduceMotion))
             }
         }
+        // Over the canvas only, in a wide window (the composer is as wide as both columns): the history keeps its side.
+        .frame(maxWidth: room, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, pending.isEmpty && asks.isEmpty ? 0 : 8)
         .motion(.spatial, value: pending.map(\.id) + asks.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Your messages under way")
+    }
+
+    /// From the composer's start to the canvas's end, less a margin; none while either isn't laid out.
+    private var room: CGFloat? {
+        let canvas = model.canvas
+        guard canvas.viewportFrame.width > 0, canvas.composerFrame.width > 0 else { return nil }
+        return max(240, canvas.viewportFrame.maxX - canvas.composerFrame.minX - CanvasMetrics.pad)
     }
 }
 
@@ -217,11 +234,9 @@ struct CanvasPendingLine: View {
         .padding(.horizontal, 10)
         .frame(height: Self.height)
         .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(flying ? CDS.Surface.s3 : CDS.alpha(0.05))
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(flying ? CDS.Surface.s3 : CDS.Surface.s2)
         }
-        .overlay {
-            if flying { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
-        }
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
         .shadow(color: .black.opacity(flying ? 0.18 : 0), radius: 8, y: 3)
         .fixedSize()
         .accessibilityElement(children: .combine)
@@ -298,17 +313,23 @@ struct ArcFlight: ViewModifier, Animatable {
 
 // MARK: - Landing
 
-/// Under a node a message landed on: "You: …" for a few seconds, its ripple over the card as it lands.
+/// On the bottom edge of a node a message landed on: "You: …" for a few seconds, its ripple over the card as it lands.
 struct CanvasLanded: View {
     let landing: CanvasLanding
+
+    /// How much of your words it shows: it sits on the card's edge, not under it.
+    static let clip = 40
 
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: "arrowshape.turn.up.right").font(.system(size: 9, weight: .medium)).foregroundStyle(CDS.Fill.accent)
-            Text("You: \(landing.text)").cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).truncationMode(.tail)
+            Text("You: \(RouterDecision.clip(landing.text, Self.clip))").cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1)
         }
-        .padding(.leading, 8)
-        .frame(height: 18)
+        .padding(.horizontal, 8)
+        .frame(height: 20)
+        .background(Capsule().fill(CDS.Surface.s2))
+        .overlay { Capsule().strokeBorder(CDS.Fill.accent.opacity(0.5), lineWidth: 1) }
+        .fixedSize()
         .accessibilityElement(children: .combine)
     }
 }

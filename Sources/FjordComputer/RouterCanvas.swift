@@ -22,6 +22,10 @@ final class CanvasCamera {
 @MainActor
 final class RouterCanvasState {
     let camera = CanvasCamera()
+    /// The drag that pans it: one for the canvas's life, so a redraw in the middle of a drag doesn't start it again.
+    let pan: CanvasPan
+    /// The frames' columns: as many as the viewport holds (`CanvasMetrics.columns(width:)`), changed only as it is resized.
+    var columns = 1
     /// The groups shown, none for all.
     var filter: Set<CanvasGroup> = []
     /// Folds of yours over a frame's own (a frame of finished sessions only folds), by folder.
@@ -58,8 +62,13 @@ final class RouterCanvasState {
     @ObservationIgnored var pendingFrames: [UUID: CGRect] = [:]
     /// The composer's box, and the canvas's viewport, in the same space: where a message with no line leaves from, and how
     /// a node's box in the content is found in the window.
-    @ObservationIgnored var composerFrame: CGRect = .zero
-    @ObservationIgnored var viewportFrame: CGRect = .zero
+    /// Read by the pending area too, which keeps over the canvas (the composer is the page's, as wide as both columns).
+    var composerFrame: CGRect = .zero
+    var viewportFrame: CGRect = .zero
+    /// A narrow window's switch to the history for an answer of the Router's, under way.
+    @ObservationIgnored var historyTask: Task<Void, Never>?
+    /// The plan Esc went Back out of on the canvas: the next Esc folds it rather than going into revise again.
+    @ObservationIgnored var backedOutOf: String?
     /// The messages in the air.
     var flights: [CanvasFlight] = []
     /// What landed on a node, by its id: its ripple and "You: …" under it, for a few seconds.
@@ -72,6 +81,7 @@ final class RouterCanvasState {
 
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
+        pan = CanvasPan(camera: camera)
         folderFolds = defaults?.dictionary(forKey: Self.foldsKey) as? [String: Bool] ?? [:]
     }
 
@@ -92,14 +102,26 @@ final class RouterCanvasState {
         withAnimation(Motion.spatial.resolved(reduce: reduce)) { camera.transform = next }
     }
 
-    /// The first look: everything if it reads (at 0.6 or more), else the first column's top at full size.
+    /// The first look: everything if it reads (at 0.6 or more), else the columns' tops, as wide as the room shows them.
     func fitFirst() {
         guard !camera.moved, contentSize.width > 0, free.width > 0 else { return }
         let now = Date()
         if let firstFit, now.timeIntervalSince(firstFit) > 1.5 { return }
         if firstFit == nil { firstFit = now }
         let all = CanvasTransform.fit(CGRect(origin: .zero, size: contentSize), in: free)
-        camera.transform = all.scale >= 0.6 ? all : CanvasTransform(origin: free.origin, scale: 1)
+        guard all.scale < 0.6 else {
+            camera.transform = all
+            return
+        }
+        let scale = CanvasTransform.clamp(min(1, free.width / contentSize.width))
+        camera.transform = CanvasTransform(origin: CGPoint(x: free.midX - contentSize.width * scale / 2, y: free.minY), scale: scale)
+    }
+
+    /// What it shows changed (a search): the first look is taken again, as the content settles.
+    func refit() {
+        camera.moved = false
+        firstFit = nil
+        fitFirst()
     }
 
     /// A chip: only its group shown (with the others lit), or, lit, not.
@@ -155,6 +177,8 @@ final class RouterCanvasState {
     func stopFlights() {
         for task in landingTasks.values { task.cancel() }
         landingTasks = [:]
+        historyTask?.cancel()
+        historyTask = nil
         if freezeFlight == nil {
             flights = []
             landed = [:]
@@ -172,7 +196,8 @@ final class RouterCanvasState {
 extension RouterModel {
     /// The canvas's frames on Now's zones as the search leaves them (`page`).
     func canvasFolders(_ store: Store, page: RouterPage) -> [CanvasFolder] {
-        let picked = Set([selection, highlighted, expandedNeed].compactMap { $0 })
+        // Not Jev's highlight: it moves as you type, and the group would widen and narrow under you.
+        let picked = Set([selection, expandedNeed].compactMap { $0 })
         return RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
                                       name: store.folderName, color: store.projectColor, filter: canvas.filter,
                                       picked: picked, expanded: canvas.expandedMore, showsAll: searching)
@@ -198,6 +223,7 @@ extension RouterModel {
 
     /// One node open on the canvas at a time: every other folds as `id` opens (none: all fold).
     func canvasOpen(_ id: String?) {
+        canvas.backedOutOf = nil
         if expandedNeed != nil, expandedNeed != id { expandedNeed = nil }
         if canvas.openRow != nil, canvas.openRow != id { canvas.openRow = nil }
         if let done = canvas.openDone, done != id {
@@ -218,6 +244,9 @@ extension RouterModel {
     func showOnCanvas(_ id: String, store: Store, reveal shows: Bool, expand: Bool) {
         var node = id
         if let card = store.router.cards.first(where: { $0.id == id }) {
+            if card.isOpen {
+                uncover(card.kind == .waiting && store.routerTier(card) != .needsYou ? Self.workingID(card.sessionID) : id, store: store)
+            }
             if card.isOpen && card.kind == .waiting {
                 node = store.routerTier(card) == .needsYou ? id : Self.workingID(card.sessionID)
                 show(.now)
@@ -231,13 +260,27 @@ extension RouterModel {
                 let drawn = RouterCanvasModel.order(canvasFolders(store, page: zones(store)), folded: canvas.folded).contains(id)
                 if !drawn { show(.history) }
                 if expand {
-                    canvasOpen(id)
+                    // The history's line opens; the canvas's node only when it is drawn.
+                    if drawn { canvasOpen(id) }
                     expanded.insert(id)
                     if drawn { canvas.openDone = id }
                 }
             }
         }
         if shows { reveal(node) }
+    }
+
+    /// A node picked from elsewhere (a banner, the away strip, Jev) drawn: its group shown if the chips left it out, its
+    /// frame opened if folded, so what opens for it is seen and Esc folds what you see.
+    private func uncover(_ node: String, store: Store) {
+        let page = zones(store)
+        guard let folder = RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
+                                                  name: { $0 }, color: { _ in nil }, picked: [node], showsAll: true)
+            .first(where: { $0.groups.contains { $0.items.contains { $0.id == node } } }),
+              let group = folder.groups.first(where: { $0.items.contains { $0.id == node } })?.group else { return }
+        // The chips light the groups shown: its own lit with them.
+        if !canvas.filter.isEmpty, !canvas.filter.contains(group) { canvas.filter.insert(group) }
+        if canvas.folded(folder) { canvas.folderFolds[folder.key] = folder.doneOnly ? false : nil }
     }
 
     /// Each session's newest addressed card among the history's lines the search leaves (not the Unread filter: it is
@@ -288,13 +331,16 @@ struct RouterCanvas: View {
             canvas.bringIntoView(target, reduce: reduceMotion)
         }
         .onChange(of: model.highlighted) { _, id in
-            guard let id, let target = RouterCanvasModel.target(forReveal: id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
+            // A reveal marks what it goes to too: it pans once.
+            guard let id, id != model.revealRequest?.id, let target = RouterCanvasModel.target(forReveal: id, in: model.canvasFolders(store, page: page), folded: canvas.folded) else { return }
             canvas.bringIntoView(target, reduce: reduceMotion)
         }
         .onChange(of: [model.expandedNeed, canvas.openRow, canvas.openDone]) { _, open in
             guard let id = open.compactMap({ $0 }).first else { return }
             canvas.bringIntoView(id, reduce: reduceMotion)
         }
+        // A search changes what the frames hold: the first look is taken again, so what it found shows.
+        .onChange(of: model.search.query) { canvas.refit() }
         // A message of yours settled: it flies to its card (RouterCanvasPending.swift).
         .onChange(of: store.routerRevision, initial: true) {
             canvas.depart(store: store, model: model, page: page, narrow: narrow, reduce: reduceMotion)
@@ -309,10 +355,10 @@ struct RouterCanvas: View {
             let free = CGRect(x: CanvasMetrics.pad, y: CanvasMetrics.pad, width: max(0, size.width - 2 * CanvasMetrics.pad),
                               height: max(0, size.height - bottom - 2 * CanvasMetrics.pad))
             ZStack(alignment: .topLeading) {
-                CanvasGround(canvas: canvas, pan: CanvasPan(camera: canvas.camera))
+                CanvasGround(canvas: canvas, pan: canvas.pan)
                 Color.clear
                     .overlay(alignment: .topLeading) {
-                        CanvasContent(store: store, model: model, page: page, pan: CanvasPan(camera: canvas.camera))
+                        CanvasContent(store: store, model: model, page: page, pan: canvas.pan)
                             .fixedSize()
                             .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
                                 canvas.contentSize = size
@@ -322,10 +368,19 @@ struct RouterCanvas: View {
                     }
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
+            // What passes under the bar over it fades in rather than being cut.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 12)
+                    Color.black
+                }
+            }
             .clipped()
             .background(CanvasEvents(camera: canvas.camera, bottomInset: bottom))
             .onChange(of: free, initial: true) { _, free in
                 canvas.free = free
+                let columns = CanvasMetrics.columns(width: free.width)
+                if canvas.columns != columns { canvas.columns = columns }
                 canvas.fitFirst()
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(RouterMain.space)) } action: { canvas.viewportFrame = $0 }
@@ -347,9 +402,11 @@ struct CanvasContent: View {
 
     var body: some View {
         let folders = model.canvasFolders(store, page: page)
-        let columns = CanvasMetrics.columns(closed: folders.map { CanvasMetrics.closedHeight($0, folded: model.canvas.folded($0)) })
+        let count = model.canvas.columns
+        let columns = CanvasMetrics.columns(closed: folders.map { CanvasMetrics.closedHeight($0, folded: model.canvas.folded($0)) },
+                                            count: count)
         let column = Dictionary(zip(folders.map(\.id), columns), uniquingKeysWith: { a, _ in a })
-        CanvasMasonry {
+        CanvasMasonry(columns: count) {
             ForEach(folders) { folder in
                 CanvasFolderFrame(folder: folder, store: store, model: model, page: page, pan: pan)
                     .canvasColumn(column[folder.id] ?? 0)
@@ -390,19 +447,20 @@ private struct CanvasGround: View {
     }
 }
 
-/// A drag that pans the canvas, from its ground or a frame's: in the window's points, whatever the zoom.
+/// A drag that pans the canvas, from its ground or a frame's: in the window's points, whatever the zoom. Its start is kept
+/// by the drag's own start, so a drag cancelled (with no end) leaves nothing for the next.
 @MainActor
 final class CanvasPan {
     let camera: CanvasCamera
-    private var start: CGPoint?
+    private var start: (at: CGPoint, origin: CGPoint)?
 
     init(camera: CanvasCamera) { self.camera = camera }
 
     var gesture: some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .global)
             .onChanged { [self] drag in
-                let start = self.start ?? camera.transform.origin
-                self.start = start
+                if self.start?.at != drag.startLocation { self.start = (drag.startLocation, camera.transform.origin) }
+                let start = self.start?.origin ?? camera.transform.origin
                 camera.moved = true
                 camera.transform.origin = CGPoint(x: start.x + drag.translation.width, y: start.y + drag.translation.height)
             }
@@ -430,9 +488,11 @@ struct CanvasBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let done = model.canvasFolders(store, page: page).reduce(0) { n, folder in
-            n + (folder.groups.first { $0.group == .done }.map { $0.items.count + $0.more } ?? 0)
-        }
+        // The sessions done that aren't live on the page, as the frames' Done groups hold them.
+        let live = Set(page.needs.map(\.sessionID) + page.ready.map(\.sessionID) + page.notes.map(\.sessionID)
+                       + page.waiting.map(\.sessionID) + page.working.map(\.id))
+        let muted = Set(store.agents.mutedFolders)
+        let done = model.canvasDone(store).count { !live.contains($0.sessionID) && !muted.contains($0.folder ?? "") }
         let counts = CanvasGroup.allCases.map { ($0, $0.zone.map(page.count) ?? done) }.filter { $0.1 > 0 }
         HStack(spacing: 12) {
             if !counts.isEmpty {

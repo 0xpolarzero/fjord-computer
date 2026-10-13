@@ -94,6 +94,31 @@ import Testing
         page.notes = [card("n", "d", "/code/beta", kind: .done)]
         page.needs = [card("q", "e", "/code/gamma")]
         #expect(make(page).map(\.name) == ["gamma", "beta", "zeta", "alpha"])
+        // A frame of finished sessions only, however many, under every frame with something live.
+        let done = (0..<5).map { card("d\($0)", "s\($0)", "/code/aaa", kind: .done, addressed: true) }
+        #expect(make(page, done: done).map(\.name) == ["gamma", "beta", "zeta", "alpha", "aaa"])
+    }
+
+    @Test func theChipsMoreAndAPickNeverMoveAFrameToAnotherColumn() {
+        var page = RouterPage()
+        page.needs = [card("q", "a", "/code/a")]
+        page.notes = (0..<6).map { card("n\($0)", "n\($0)", "/code/a", kind: .done) }
+        page.working = [row("w", "/code/b"), row("v", "/code/c")]
+        func columns(_ folders: [CanvasFolder]) -> [String: Int] {
+            let c = CanvasMetrics.columns(closed: folders.map { CanvasMetrics.closedHeight($0, folded: false) }, count: 2)
+            return Dictionary(uniqueKeysWithValues: zip(folders.map(\.key), c))
+        }
+        let base = columns(make(page))
+        #expect(columns(make(page, filter: [.working])) == base)
+        #expect(columns(make(page, expanded: ["/code/a#notes"])) == base)
+        #expect(columns(make(page, picked: ["n5"])) == base)
+    }
+
+    @Test func asManyColumnsAsTheRoomHoldsAtPointEightyFiveUpToThree() {
+        #expect(CanvasMetrics.columns(width: 400) == 1)
+        #expect(CanvasMetrics.columns(width: 658) == 1)
+        #expect(CanvasMetrics.columns(width: 1000) == 2)
+        #expect(CanvasMetrics.columns(width: 4000) == 3)
     }
 
     @Test func filteredGroupsAreHiddenInPlaceAndTheOrderSkipsThem() throws {
@@ -116,8 +141,8 @@ import Testing
     }
 
     @Test func framesGoUnderTheShortestColumnByClosedHeights() {
-        #expect(CanvasMetrics.columns(closed: [300, 100, 100, 50]) == [0, 1, 1, 1])
-        #expect(CanvasMetrics.columns(closed: [100, 100, 100]) == [0, 1, 0])
+        #expect(CanvasMetrics.columns(closed: [300, 100, 100, 50], count: 2) == [0, 1, 1, 1])
+        #expect(CanvasMetrics.columns(closed: [100, 100, 100], count: 2) == [0, 1, 0])
     }
 
     @Test func nodesStackGapApartAndGroupGapBetweenGroupsLabelsCentredOnTheirHeaders() {

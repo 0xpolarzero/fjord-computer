@@ -61,7 +61,7 @@ struct CanvasFolderFrame: View {
         VStack(alignment: .leading, spacing: 0) {
             header(folded: folded)
             if !folded {
-                if folder.shown.isEmpty {
+                if folder.groups.isEmpty {
                     Text("Nothing here").cdsText((12, 16), .regular, CDS.Text.muted)
                         .frame(height: 20).padding(.leading, CanvasMetrics.pad).padding(.bottom, CanvasMetrics.pad)
                 } else {
@@ -83,6 +83,12 @@ struct CanvasFolderFrame: View {
                                 model.canvas.nodeRects[node.id] = rect
                             }
                             .canvasGroup(node.group)
+                            // Left out by the chips: gone in place, its room kept, so nothing else moves.
+                            .opacity(node.hidden ? 0 : 1)
+                            .allowsHitTesting(!node.hidden)
+                            .accessibilityHidden(node.hidden)
+                            // Gone from the canvas: a reveal or a flight no longer goes where it was.
+                            .onDisappear { model.canvas.nodeRects[node.id] = nil }
                             .transition(.scaleFade(0.97, reduce: reduceMotion))
                         }
                     }
@@ -93,11 +99,13 @@ struct CanvasFolderFrame: View {
         }
         .frame(width: CanvasMetrics.frameWidth, alignment: .leading)
         .motion(.spatial, value: nodes.map(\.id))
+        .motion(.spatial, value: nodes.map(\.hidden))
         // Where a message for a session not drawn yet lands (RouterCanvasPending.swift).
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CanvasContent.space)) } action: { rect in
             model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = CGRect(origin: rect.origin,
                                                                                size: CGSize(width: rect.width, height: CanvasMetrics.header))
         }
+        .onDisappear { model.canvas.nodeRects[CanvasFolder.frameID(folder.key)] = nil }
         // The lines under the cards, on the frame's ground; the labels over it.
         .backgroundPreferenceValue(CanvasHeaders.self) { heads in
             ZStack(alignment: .topLeading) {
@@ -154,30 +162,37 @@ struct CanvasFolderFrame: View {
 
     // MARK: Nodes
 
-    /// A node of the frame: an item, or a group's "+n more".
+    /// A node of the frame: an item, or a group's "+n more"; hidden while the chips leave its group out.
     struct Node: Identifiable {
         let id: String
         let group: CanvasGroup
         var item: CanvasItem?
         var more = 0
+        var hidden = false
     }
 
     private var nodes: [Node] {
-        folder.shown.flatMap { g in
-            g.items.map { Node(id: $0.id, group: g.group, item: $0) } + (g.more > 0 ? [Node(id: folder.moreID(g.group), group: g.group, more: g.more)] : [])
+        folder.groups.flatMap { g in
+            g.items.map { Node(id: $0.id, group: g.group, item: $0, hidden: g.hidden) }
+                + (g.more > 0 ? [Node(id: folder.moreID(g.group), group: g.group, more: g.more, hidden: g.hidden)] : [])
         }
     }
 
-    /// A node with what you sent it: its ripple as the message lands, then "You: …" under it for a few seconds.
+    /// A node with what you sent it: its ripple as the message lands, then "You: …" on its bottom edge for a few seconds,
+    /// over the card rather than under it, so nothing below moves.
     @ViewBuilder private func landed(_ id: String, @ViewBuilder node: () -> some View) -> some View {
         let landing = model.canvas.landed[id]
-        VStack(alignment: .leading, spacing: 2) {
-            node().overlay { if let landing { CanvasRipple(landing: landing, frozen: model.canvas.freezeFlight != nil) } }
-            if let landing {
-                CanvasLanded(landing: landing).transition(.opacity)
+        node()
+            .overlay { if let landing { CanvasRipple(landing: landing, frozen: model.canvas.freezeFlight != nil) } }
+            .overlay(alignment: .bottomTrailing) {
+                if let landing {
+                    // Astride the card's bottom edge, at its end: clear of its text and of the card under it.
+                    CanvasLanded(landing: landing)
+                        .offset(x: -12, y: 12)
+                        .transition(.opacity)
+                }
             }
-        }
-        .motion(.spatial, value: landing)
+            .motion(.spatial, value: landing)
     }
 
     private func more(_ node: Node) -> some View {
@@ -224,7 +239,7 @@ struct CanvasFolderFrame: View {
                         path.addCurve(to: line.to, control1: line.c1, control2: line.c2)
                     }
                 }
-                .stroke(label.group == .needs ? CDS.Fill.warning.opacity(0.45) : CDS.alpha(0.14), lineWidth: 1)
+                .stroke(label.group == .needs ? CDS.Fill.warning.opacity(0.45) : CDS.alpha(scheme == .dark ? 0.14 : 0.22), lineWidth: 1)
             }
         }
         .allowsHitTesting(false)
@@ -306,7 +321,8 @@ struct CanvasNode: View {
             CardView(store: store, model: model, card: card, expanded: model.expandedNeed == card.id,
                      form: store.pendingForm(for: card), project: store.routerProject(card), formCap: Self.formCap, showsProject: false)
         case .ready(let card), .waiting(let card):
-            WaitingCard(store: store, card: card, standalone: true, open: openRow(item.id))
+            WaitingCard(store: store, card: card, standalone: true, open: openRow(item.id),
+                        marked: model.selection == card.id || [card.id, item.id].contains(model.highlighted))
         case .note(let card):
             CardView(store: store, model: model, card: card, expanded: model.expandedNeed == card.id, form: nil,
                      project: store.routerProject(card), quiet: true, showsProject: false)
@@ -314,9 +330,15 @@ struct CanvasNode: View {
             WorkingCard(store: store, model: model, row: row, summary: page.summaries[row.id],
                         unanswered: page.unanswered[row.id] ?? [], standalone: true, open: openRow(item.id))
         case .done(let card):
+            // Open only as the canvas opened it: the history's line for the same card opens on its own.
             MinuteTicking { now in
-                HistoryCardLine(card: card, now: now, open: model.expanded.contains(card.id),
+                HistoryCardLine(card: card, now: now, open: model.canvas.openDone == card.id && model.expanded.contains(card.id),
                                 marked: model.selection == card.id || model.highlighted == card.id, store: store, model: model)
+            }
+            // A box as the Working cards have, so its group's line meets an edge.
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(CDS.alpha(0.03))
+                    .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CDS.border.opacity(0.7), lineWidth: 1) }
             }
         }
     }

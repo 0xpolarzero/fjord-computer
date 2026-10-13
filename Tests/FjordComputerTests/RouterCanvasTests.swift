@@ -32,7 +32,9 @@ import Testing
         let store = demo()
         let model = canvas(store)
         let page = model.zones(store)
-        let order = RouterCanvasModel.order(model.canvasFolders(store, page: page))
+        let all = RouterCanvasModel.make(page: page, done: model.canvasDone(store), name: store.folderName, color: { _ in nil },
+                                         showsAll: true)
+        let order = RouterCanvasModel.order(all)
         let open = Set((page.needs + page.ready + page.notes).map(\.id))
         let sections = model.sections(store)
         #expect(sections.needs.map(\.id) == order.filter(open.contains))
@@ -41,6 +43,51 @@ import Testing
         // The list keeps its own order.
         model.layout = .list
         #expect(model.sections(store).needs.map(\.id) == (page.needs + page.ready).map(\.id))
+    }
+
+    @Test func theKeysReachWorthALookPastItsThirdAndThePickDrawsIt() throws {
+        let store = demo()
+        let model = canvas(store)
+        let note = try #require(model.zones(store).notes.first)
+        for i in 0..<5 {
+            var copy = note
+            copy.id = "\(note.id)-\(i)"
+            copy.sessionID = "\(note.sessionID)-\(i)"
+            store.router.cards.append(copy)
+        }
+        let page = model.zones(store)
+        let folder = try #require(model.canvasFolders(store, page: page).first { $0.key == (note.folder ?? "") })
+        let notes = try #require(folder.groups.first { $0.group == .notes })
+        #expect(notes.more > 0)
+        let past = try #require(page.notes.filter { $0.folder == note.folder }.last)
+        #expect(!notes.items.contains { $0.id == past.id })
+        #expect(model.sections(store).needs.contains { $0.id == past.id })
+        model.select(past.id, store: store)
+        let drawn = try #require(model.canvasFolders(store, page: model.zones(store)).first { $0.key == (note.folder ?? "") })
+        #expect(drawn.groups.first { $0.group == .notes }?.items.contains { $0.id == past.id } == true)
+    }
+
+    @Test func aPickIntoAGroupTheChipsLeaveOutShowsItsGroup() throws {
+        let store = demo()
+        let model = canvas(store)
+        model.canvas.filter = [.working]
+        let need = try #require(model.zones(store).needs.first)
+        model.select(need.id, store: store)
+        #expect(model.canvas.filter == [.working, .needs])
+        #expect(RouterCanvasModel.order(model.canvasFolders(store, page: model.zones(store))).contains(need.id))
+    }
+
+    @Test func escWithAPlanOpenGoesIntoReviseThenBackThenFoldsIt() throws {
+        let store = demo()
+        let model = canvas(store)
+        let keys = RouterKeys(store: store, model: model) {}
+        let plan = try #require(model.zones(store).needs.first { store.pendingForm(for: $0)?.isPlan == true })
+        let form = try #require(store.pendingForm(for: plan))
+        model.select(plan.id, store: store)
+        model.replyTo = nil
+        #expect(keys.key(key(kVK_Escape), responder: nil) && model.revisingPlan == form.id)
+        #expect(keys.key(key(kVK_Escape), responder: nil) && model.revisingPlan == nil && model.expandedNeed == plan.id)
+        #expect(keys.key(key(kVK_Escape), responder: nil) && model.expandedNeed == nil && model.revisingPlan == nil)
     }
 
     @Test func nothingOpensByItselfAndOneNodeIsOpenAtATime() throws {

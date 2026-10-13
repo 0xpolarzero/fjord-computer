@@ -473,10 +473,13 @@ final class RouterModel {
             guard case .card(let card) = entry, let now = byID[card.id], !now.isOpen else { return nil }
             return now
         }
-        // On the canvas, the open cards as it draws them, frame by frame (its Done lines are the history's cards).
+        // On the canvas, the open cards as it draws them, frame by frame (its Done lines are the history's cards), those
+        // past "+n more" too: the pick moving onto one draws it.
         if layout == .canvas {
             let open = Dictionary((page.needs + page.ready + page.notes).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            let order = RouterCanvasModel.order(canvasFolders(store, page: page), folded: canvas.folded)
+            let all = RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
+                                             name: store.folderName, color: { _ in nil }, filter: canvas.filter, showsAll: true)
+            let order = RouterCanvasModel.order(all, folded: canvas.folded)
             return (order.compactMap { open[$0] }, [], earlier)
         }
         return (page.needs + page.ready, page.notes, earlier)

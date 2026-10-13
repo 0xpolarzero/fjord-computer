@@ -137,6 +137,8 @@ enum RouterCanvasModel {
             return CanvasFolder(key: key, name: name(key), color: key.isEmpty ? nil : color(key), groups: groups)
         }
         return folders.enumerated().sorted { a, b in
+            // A frame of finished sessions only folds: under every frame with something live.
+            if a.element.doneOnly != b.element.doneOnly { return !a.element.doneOnly }
             let x = a.element.weight, y = b.element.weight
             if x.needs != y.needs { return x.needs > y.needs }
             if x.notes != y.notes { return x.notes > y.notes }
@@ -176,8 +178,8 @@ enum RouterCanvasModel {
 
 // MARK: - Geometry
 
-/// The canvas's measures (the prototype's, canvas2-spec.md §2): frames 560 wide in two columns, the groups' labels at the
-/// frame's left and the cards at 124, 420 wide.
+/// The canvas's measures (the prototype's, canvas2-spec.md §2): frames 560 wide in as many columns as the room holds at
+/// 0.85 or more (up to 3), the groups' labels at the frame's left and the cards at 124, 420 wide.
 enum CanvasMetrics {
     static let frameWidth: CGFloat = 560
     static let pad: CGFloat = 16
@@ -194,27 +196,36 @@ enum CanvasMetrics {
     static let moreH: CGFloat = 24
     static let gap: CGFloat = 6
     static let groupGap: CGFloat = 16
-    static let columns = 2
     static let colGap: CGFloat = 40
     static let rowGap: CGFloat = 40
 
-    /// What a frame takes with every card folded (Done's lines and the "+n more" lines shorter than the cards).
+    /// How many columns of frames `width` (the viewport's room) holds at 0.85 or more: 1 to 3.
+    static func columns(width: CGFloat) -> Int {
+        max(1, min(3, Int((width / 0.85 + colGap) / (frameWidth + colGap))))
+    }
+
+    /// What a frame takes with every card folded (Done's lines and the "+n more" lines shorter than the cards), whatever
+    /// the chips leave out (they hide a group in place), whatever "+n more" or a pick drew past the first few: what its
+    /// column is chosen by, so none of them moves a frame sideways.
     static func closedHeight(_ folder: CanvasFolder, folded: Bool) -> CGFloat {
-        let groups = folder.shown
+        let groups = folder.groups
         guard !folded, !groups.isEmpty else { return header }
         var h = header + pad
         for (i, g) in groups.enumerated() {
             if i > 0 { h += groupGap }
             let one = g.group == .done ? lineH : closedH
-            h += CGFloat(g.items.count) * one + CGFloat(max(0, g.items.count - 1)) * gap
-            if g.more > 0 { h += gap + moreH }
+            let all = g.items.count + g.more
+            let capped = (g.group == .notes || g.group == .done) && all > RouterCanvasModel.shown + 1
+            let drawn = capped ? RouterCanvasModel.shown : all
+            h += CGFloat(drawn) * one + CGFloat(max(0, drawn - 1)) * gap
+            if capped { h += gap + moreH }
         }
         return h
     }
 
     /// Each frame's column: under the shortest so far (the first of equals), by the heights with every card folded, so
     /// opening one only pushes its own column down and no frame moves sideways.
-    static func columns(closed: [CGFloat], count: Int = columns) -> [Int] {
+    static func columns(closed: [CGFloat], count: Int) -> [Int] {
         var heights = Array(repeating: CGFloat(0), count: max(1, count))
         return closed.map { h in
             let c = heights.indices.min { heights[$0] < heights[$1] } ?? 0
@@ -309,9 +320,10 @@ extension View {
 
 /// The frames in columns, each at its column's bottom as measured: a frame that grows pushes its column down only.
 struct CanvasMasonry: Layout {
-    var columns = CanvasMetrics.columns
+    var columns = 1
 
     private func place(_ subviews: Subviews) -> (points: [CGPoint], size: CGSize) {
+        let columns = max(1, columns)
         var heights = Array(repeating: CGFloat(0), count: columns)
         var points: [CGPoint] = []
         for view in subviews {

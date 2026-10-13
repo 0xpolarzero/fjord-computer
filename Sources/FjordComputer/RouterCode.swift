@@ -63,10 +63,22 @@ struct RouterMain: View {
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 composer
                     .frame(maxWidth: .infinity)
-                    // The page's ground from the composer's middle down, so no line shows below it or through its glass.
+                    // The page's ground from the composer's middle down, so no line shows below it or through its glass. On
+                    // the canvas, which is no scroll view (no soft edge), the ground is under all of it, your messages waiting
+                    // too, faded in over 24 above it.
                     .background {
-                        LinearGradient(colors: [CDS.Surface.s1.opacity(0), CDS.Surface.s1], startPoint: .top, endPoint: .center)
+                        if model.layout == .canvas {
+                            VStack(spacing: 0) {
+                                LinearGradient(colors: [CDS.Surface.s1.opacity(0), CDS.Surface.s1], startPoint: .top, endPoint: .bottom)
+                                    .frame(height: 24)
+                                CDS.Surface.s1
+                            }
+                            .padding(.top, -24)
                             .allowsHitTesting(false)
+                        } else {
+                            LinearGradient(colors: [CDS.Surface.s1.opacity(0), CDS.Surface.s1], startPoint: .top, endPoint: .center)
+                                .allowsHitTesting(false)
+                        }
                     }
             }
             .scrollEdgeEffectStyle(.soft, for: .bottom)

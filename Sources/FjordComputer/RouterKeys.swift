@@ -7,8 +7,9 @@ import Foundation
 /// Elsewhere: ↑↓ pick a card, Return replies to it, and typing goes to the composer; Space is no key of the Router's (a card
 /// leaves only by its Archive button). The cards are walked in the order the page shows them (`RouterModel.cards`). Esc is
 /// first the Back of a plan in revise mode (its feedback field showing), then dismisses the suggestions, then Jev's pick of a
-/// target, then the pinned target, then the search, then the reply chip, then is the Revise… of the plan shown in full, then
-/// (on the canvas) folds the card open on it and clears its filter, then closes the window. ⌘F puts the keyboard in the search field (RouterSearch.swift), where ↑↓ walk what it lists, Return
+/// target, then the pinned target, then the search, then the reply chip, then is the Revise… of the plan shown in full (on
+/// the canvas, not again once Back left it), then (on the canvas) folds the card open on it and clears its filter, then
+/// closes the window. ⌘F puts the keyboard in the search field (RouterSearch.swift), where ↑↓ walk what it lists, Return
 /// replies to the pick and Esc ends the search first; typing elsewhere still goes to the composer.
 @MainActor
 final class RouterKeys {
@@ -53,7 +54,10 @@ final class RouterKeys {
                 if responder is NSText { event.window?.makeFirstResponder(nil) }
                 model.endSearch()
             }
-            else if let revising = model.revisingPlan, revising == plan?.id { model.revisingPlan = nil }
+            else if let revising = model.revisingPlan, revising == plan?.id {
+                model.revisingPlan = nil
+                if model.layout == .canvas { model.canvas.backedOutOf = revising }
+            }
             // The suggestions shown (an @ word that names nothing shows none, and Esc goes on to what is there).
             else if !model.suggestions(store).isEmpty { model.dismissMention() }
             else if model.live.prediction != nil { model.dismissPrediction() }
@@ -61,7 +65,7 @@ final class RouterKeys {
             // A search on, the field left: it ends before the pick's reply goes.
             else if !model.search.query.isEmpty { model.endSearch() }
             else if model.replyTo != nil { model.replyTo = nil }
-            else if let plan { model.revisingPlan = plan.id }
+            else if let plan, model.layout != .canvas || model.canvas.backedOutOf != plan.id { model.revisingPlan = plan.id }
             // On the canvas: the card open on it folds, then its filter goes, before the window closes.
             else if model.layout == .canvas, model.foldCanvasNode(store) {}
             else if model.layout == .canvas, !model.canvas.filter.isEmpty { model.canvas.filter = [] }
