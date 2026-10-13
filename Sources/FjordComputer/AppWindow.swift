@@ -23,6 +23,8 @@ enum AppPolicy {
     static func activate() {
         guard !UnderTest.isRunning else { return }
         watchActivations()
+        // An activation asked for, still to land (none comes when the app is active already).
+        if !NSApp.isActive { requestedAt = ProcessInfo.processInfo.systemUptime }
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -58,23 +60,40 @@ enum AppPolicy {
         remember(NSWorkspace.shared.frontmostApplication)
         becameActive = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
                                                               queue: .main) { _ in
-            MainActor.assumeIsolated {
-                if shouldYieldAgain(yieldedAt: yieldedAt, now: ProcessInfo.processInfo.systemUptime,
-                                    windowShown: AppWindowController.anyShown) { yieldFocus() }
-            }
+            MainActor.assumeIsolated { becameActiveNow() }
         }
     }
 
     private static var becameActive: NSObjectProtocol?
-    /// When the keyboard was last given back (system uptime).
-    private static var yieldedAt: TimeInterval?
+    /// When an activation `activate` asked for was asked (system uptime), until it lands.
+    private static var requestedAt: TimeInterval?
+    /// The user made Fjord Computer active (⌘-Tab, the Dock) while its window was closing: the app delegate opens it again.
+    static var reopen: (() -> Void)?
 
-    /// Whether Fjord Computer, just made active, gives the keyboard back again: it gave it back a moment ago (a close
-    /// started, or tidied) and no window is open or on its way in, so this is an opening's activation landing late (a
-    /// close under Reduce Motion, or at once, can end before it does), not someone asking for Fjord Computer.
-    static func shouldYieldAgain(yieldedAt: TimeInterval?, now: TimeInterval, windowShown: Bool) -> Bool {
-        guard let yieldedAt, !windowShown else { return false }
-        return now - yieldedAt < 2
+    private static func becameActiveNow() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let ours = requestedAt.map { now - $0 < requestLife } ?? false
+        requestedAt = nil
+        switch onActivation(ours: ours, windowShown: AppWindowController.anyShown, closing: AppWindowController.anyClosing) {
+        case .yield: yieldFocus()
+        case .reopen: reopen?()
+        case .stay: break
+        }
+    }
+
+    /// How long an activation asked for may take to land and still count as ours: past it (refused, say), an activation is
+    /// taken as the user's.
+    static let requestLife: TimeInterval = 1
+
+    enum Activation: Equatable { case stay, yield, reopen }
+
+    /// What Fjord Computer does as it becomes active. An activation it asked for (`ours`, an opening's) that lands with no
+    /// window open or on its way in (the close was quick: under Reduce Motion, or with no morph) gives the keyboard back
+    /// again. One it didn't ask for (⌘-Tab, the Dock) while the window closes is the user asking for it: the window opens
+    /// again. Anything else stays (the user's, or a banner's click, which opens what it opens).
+    static func onActivation(ours: Bool, windowShown: Bool, closing: Bool) -> Activation {
+        if ours { return windowShown ? .stay : .yield }
+        return closing ? .reopen : .stay
     }
 
     /// The keyboard back to the app that had it before, as the window starts closing: what you type next goes there at
@@ -83,7 +102,6 @@ enum AppPolicy {
     /// just stops being active. Nothing when it is not active, or under a test.
     static func yieldFocus() {
         guard !UnderTest.isRunning, NSApp.isActive else { return }
-        yieldedAt = ProcessInfo.processInfo.systemUptime
         // Asked again now: it may have quit, or turned into an app without windows, since it was remembered.
         previous = takingFocusBack(previous)
         guard let previous else {
@@ -109,6 +127,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private static let broughtIn = NSHashTable<AppWindowController>.weakObjects()
     /// Whether a window is open or on its way in (`isOpen`), of those brought in or the last one made.
     static var anyShown: Bool { active?.isOpen == true || broughtIn.allObjects.contains { $0.isOpen } }
+    /// Whether a window is on its way out (its close's motion playing).
+    static var anyClosing: Bool { active?.phase == .closing || broughtIn.allObjects.contains { $0.phase == .closing } }
     static let autosave = "FjordApp"
     static let minSize = NSSize(width: 1000, height: 600)
 
@@ -903,11 +923,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 // must not take the policy from another that has opened since. Asked of the windows themselves, so a close
                 // whose tidying never came (or a controller gone) leaves nothing behind that reads as open.
                 Self.broughtIn.remove(self)
-                let open = Self.broughtIn.allObjects.contains { $0.isOpen }
-                // Opened and closed at once, the activation the opening asked for may have landed after the close gave the
-                // keyboard back: active with no window, it is given back again (an accessory app can stay active).
-                if !open { AppPolicy.yieldFocus() }
-                AppPolicy.update(windowOpen: open)
+                // (An opening's activation landing after the close gave the keyboard back gives it back again as it
+                // lands: `AppPolicy.onActivation`.)
+                AppPolicy.update(windowOpen: Self.broughtIn.allObjects.contains { $0.isOpen })
             }
         }
     }

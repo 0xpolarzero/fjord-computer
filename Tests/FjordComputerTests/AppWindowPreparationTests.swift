@@ -69,13 +69,16 @@ import Testing
         #expect(opened == "card#1")
     }
 
-    /// Made active a moment after giving the keyboard back, with no window open or opening (an opening's activation landing
-    /// after a quick close), Fjord Computer gives it back again; not with a window shown, nor long after.
-    @Test func aLateActivationAfterAQuickCloseIsGivenBack() {
-        #expect(AppPolicy.shouldYieldAgain(yieldedAt: 10, now: 10.3, windowShown: false))
-        #expect(!AppPolicy.shouldYieldAgain(yieldedAt: 10, now: 10.3, windowShown: true))
-        #expect(!AppPolicy.shouldYieldAgain(yieldedAt: 10, now: 15, windowShown: false))
-        #expect(!AppPolicy.shouldYieldAgain(yieldedAt: nil, now: 10, windowShown: false))
+    /// Becoming active: an activation Fjord Computer asked for landing with no window shown (a quick close got there first)
+    /// gives the keyboard back; one the user made (⌘-Tab, the Dock) while the window closes opens it again rather than being
+    /// bounced; anything else stays, a banner's click shortly after a close included.
+    @Test func whatBecomingActiveDoes() {
+        #expect(AppPolicy.onActivation(ours: true, windowShown: false, closing: false) == .yield)
+        #expect(AppPolicy.onActivation(ours: true, windowShown: false, closing: true) == .yield)
+        #expect(AppPolicy.onActivation(ours: true, windowShown: true, closing: false) == .stay)
+        #expect(AppPolicy.onActivation(ours: false, windowShown: false, closing: true) == .reopen)
+        #expect(AppPolicy.onActivation(ours: false, windowShown: false, closing: false) == .stay)
+        #expect(AppPolicy.onActivation(ours: false, windowShown: true, closing: false) == .stay)
     }
 
     @Test(arguments: [NSEvent.ModifierFlags.command, .control, .option, .shift])

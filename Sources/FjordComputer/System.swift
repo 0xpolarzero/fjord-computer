@@ -581,6 +581,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hub?.setWindowOpen(false)
             AppPolicy.yieldFocus()
         }
+        // Made active by the user (⌘-Tab, the Dock) while the window closes: it opens again.
+        AppPolicy.reopen = { [weak self] in self?.showWindow(nil) }
         // The bar is back on its edge while the window is out of sight (another app in front, minimized), away when it returns.
         window.onFront = { [weak hub] front in hub?.setWindowFront(front) }
         hub.openApp = { [weak self] in self?.showWindow($0) }
