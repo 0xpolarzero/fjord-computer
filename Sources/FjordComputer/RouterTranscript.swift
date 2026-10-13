@@ -183,34 +183,77 @@ struct WorkingMark: View {
     static let step: TimeInterval = 0.35
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                dots(lit: 1)
-            } else {
-                // Drawn again when the bright dot moves, not on every frame in between.
-                TimelineView(Self.schedule(from: .now)) { context in dots(lit: Self.lit(at: context.date)) }
-            }
-        }
-        .accessibilityHidden(true)
-    }
-
-    /// A step at each moment the bright dot moves, from the last one before `date`.
-    static func schedule(from date: Date) -> PeriodicTimelineSchedule {
-        .periodic(from: Date(timeIntervalSinceReferenceDate: (date.timeIntervalSinceReferenceDate / step).rounded(.down) * step),
-                  by: step)
+        WorkingMarkRepresentable(still: reduceMotion)
+            .frame(width: CDS.Transcript.markBox, height: CDS.Transcript.markBox)
+            .accessibilityHidden(true)
     }
 
     /// The bright dot at `date` (a step's own moment counts as the step, rounding aside).
     static func lit(at date: Date) -> Int { Int((date.timeIntervalSinceReferenceDate + 0.001) / step) % 3 }
+}
 
-    private func dots(lit: Int) -> some View {
-        HStack(spacing: CDS.Transcript.markDots.pitch - CDS.Transcript.markDots.size) {
-            ForEach(0..<3) { i in
-                Circle().fill(CDS.clay.opacity(i == lit ? 1 : 0.55))
-                    .frame(width: CDS.Transcript.markDots.size, height: CDS.Transcript.markDots.size)
-            }
+private struct WorkingMarkRepresentable: NSViewRepresentable {
+    let still: Bool
+    func makeNSView(context: Context) -> WorkingMarkView { WorkingMarkView() }
+    func updateNSView(_ view: WorkingMarkView, context: Context) { view.still = still }
+}
+
+/// The 350 ms steps belong to the render server. No timeline writes or SwiftUI layout accompanies a dot changing.
+final class WorkingMarkView: NSView {
+    var still = false { didSet { if still != oldValue { animate() } } }
+    private let dots = (0..<3).map { _ in CAShapeLayer() }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        for dot in dots {
+            dot.actions = ["path": NSNull(), "fillColor": NSNull(), "opacity": NSNull()]
+            layer?.addSublayer(dot)
         }
-        .frame(width: CDS.Transcript.markBox, height: CDS.Transcript.markBox, alignment: .leading)
+        paint()
+        animate()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let size = CDS.Transcript.markDots.size, pitch = CDS.Transcript.markDots.pitch
+        for (i, dot) in dots.enumerated() {
+            dot.path = CGPath(ellipseIn: CGRect(x: CGFloat(i) * pitch, y: (bounds.height - size) / 2,
+                                              width: size, height: size), transform: nil)
+        }
+        CATransaction.commit()
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); paint() }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); animate() }
+    override func viewDidHide() { super.viewDidHide(); animate() }
+    override func viewDidUnhide() { super.viewDidUnhide(); animate() }
+
+    private func paint() {
+        var color = NSColor(CDS.clay).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance { color = NSColor(CDS.clay).cgColor }
+        for dot in dots { dot.fillColor = color }
+    }
+
+    private func animate() {
+        for (i, dot) in dots.enumerated() { dot.removeAllAnimations(); dot.opacity = i == 1 ? 1 : 0.55 }
+        guard !still, window != nil, !isHiddenOrHasHiddenAncestor else { return }
+        let period = 3 * WorkingMark.step
+        let phase = Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+        for (i, dot) in dots.enumerated() {
+            let animation = CAKeyframeAnimation(keyPath: "opacity")
+            animation.values = (0..<3).map { NSNumber(value: $0 % 3 == i ? 1.0 : 0.55) }
+            animation.keyTimes = [0, 1.0 / 3, 2.0 / 3, 1].map { NSNumber(value: $0) }
+            animation.calculationMode = .discrete
+            animation.duration = period
+            animation.repeatCount = .infinity
+            animation.timeOffset = phase
+            animation.isRemovedOnCompletion = false
+            dot.add(animation, forKey: "step")
+        }
     }
 }
 

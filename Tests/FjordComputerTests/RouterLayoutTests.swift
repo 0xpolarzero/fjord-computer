@@ -115,18 +115,11 @@ import Testing
 
     /// The working mark is drawn again each time its bright dot moves (every 0.35 s), on the moment it moves, rather than 15
     /// times a second.
-    @Test func theWorkingMarkStepsWhenItsDotMoves() {
-        let now = Date()
-        let steps = Array(WorkingMark.schedule(from: now).entries(from: now, mode: .normal).prefix(7))
-        #expect(steps.count == 7)
-        #expect(abs(steps[0].timeIntervalSince(now)) < WorkingMark.step)
-        let first = steps[0].timeIntervalSinceReferenceDate / WorkingMark.step
-        #expect(abs(first - first.rounded()) < 0.001, "on a step's moment")
-        for (a, b) in zip(steps, steps.dropFirst()) {
-            #expect(abs(b.timeIntervalSince(a) - WorkingMark.step) < 0.0001)
-            // Each step moves the dot, and it stays put until the next.
-            #expect(WorkingMark.lit(at: b) == (WorkingMark.lit(at: a) + 1) % 3)
-            #expect(WorkingMark.lit(at: b.addingTimeInterval(-0.01)) == WorkingMark.lit(at: a))
+    @Test func theWorkingMarkStepsOnWholeWallClockPhases() {
+        for i in 1..<12 {
+            let date = Date(timeIntervalSinceReferenceDate: Double(i) * WorkingMark.step)
+            #expect(WorkingMark.lit(at: date) == i % 3)
+            #expect(WorkingMark.lit(at: date.addingTimeInterval(-0.01)) == (i + 2) % 3)
         }
     }
 }
