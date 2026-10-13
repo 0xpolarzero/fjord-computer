@@ -706,7 +706,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
     private func plugin(_ inbox: RelayInbox, session: String, nonce: String, answer: String?) -> Task<String?, Never> {
         Task.detached {
             let folder = inbox.folder(for: session)
-            let deadline = Date().addingTimeInterval(60)
+            let deadline = Date().addingTimeInterval(waitWatchdog)
             while Date() < deadline {
                 if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
                     if let answer { try? Data((answer + "\n").utf8).write(to: folder.appendingPathComponent("\(nonce).ack"), options: .atomic) }
@@ -769,7 +769,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
     @Test func theSignedTextIsWrittenExactlyAndAnOkAckCompletes() async throws {
         let dir = TempDir()
         var inbox = RelayInbox(root: dir.path("relay"))
-        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
+        inbox.timeout = waitWatchdog  // a watchdog: the fake plugin answers as soon as it sees the file
         let signed = RelaySigner.sign(body: "Use Postgres\nand ship ⟦é⟧", target: "cli-a", key: key)
         let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
         let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
@@ -786,7 +786,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
     @Test func aRefusalIsReportedAndNotRetriedElsewhere() async throws {
         let dir = TempDir()
         var inbox = RelayInbox(root: dir.path("relay"))
-        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
+        inbox.timeout = waitWatchdog  // a watchdog: the fake plugin answers as soon as it sees the file
         let signed = RelaySigner.sign(body: "hi", target: "cli-a", key: key)
         let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
         let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "refused: bad signature")
@@ -836,7 +836,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
         // Let through: it is put in place, as the plugin reads it.
         let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
-        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
+        inbox.timeout = waitWatchdog  // a watchdog: the fake plugin answers as soon as it sees the file
         let fake = plugin(inbox, session: "cli-a", nonce: nonce, answer: "ok")
         try await inbox.deliver(signed, to: "cli-a") { nil }
         #expect(await fake.value == signed)

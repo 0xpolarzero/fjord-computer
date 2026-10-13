@@ -23,12 +23,12 @@ import Testing
     @Test func theAbortGoesThroughTheInboxAndItsAckSaysHowFarItHadGone() async throws {
         let dir = TempDir()
         var inbox = RelayInbox(root: dir.path("relay"))
-        inbox.timeout = 60  // a watchdog: the fake plugin answers as soon as it sees the file
+        inbox.timeout = waitWatchdog  // a watchdog: the fake plugin answers as soon as it sees the file
         let abort = RelaySigner.signAbort(target: "cli-a", cancels: RelaySigning.nonce, key: RelaySigning.key)
         let nonce = try #require(RelayInbox.header(of: abort)?.nonce)
         let folder = inbox.folder(for: "cli-a")
         let fake = Task.detached { () -> String? in
-            let deadline = Date().addingTimeInterval(60)
+            let deadline = Date().addingTimeInterval(waitWatchdog)
             while Date() < deadline {
                 if let text = try? String(contentsOf: folder.appendingPathComponent("\(nonce).msg"), encoding: .utf8) {
                     try? Data("ok aborted\n".utf8).write(to: folder.appendingPathComponent("\(nonce).ack"), options: .atomic)
