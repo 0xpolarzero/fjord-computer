@@ -472,6 +472,8 @@ final class RouterModel {
 
     /// Whether Claude Code was looked for and isn't there (see `checkClaudeCode`); nil until looked for.
     var claudeCodeMissing: Bool?
+    /// The folder it was last found in.
+    @ObservationIgnored private var claudeCodeFound: URL?
     /// Forms whose answer is being written.
     var sending: Set<String> = []
     /// The latest answer being written, for tests to wait on.
@@ -508,10 +510,20 @@ final class RouterModel {
 
     /// Looks for Claude Code once the window shows (the app updates its copy now and then): until the search has finished
     /// nothing is said, and Send waits. In a demo it is never missing.
+    /// Once found in a folder it is there for good (the app's updates put their copy beside the last): the window showing
+    /// again doesn't look again; a copy missing is looked for each time.
     func checkClaudeCode(_ store: Store) async {
-        if store.routerIsPretend || store.routerStatus.claudeCode != nil { claudeCodeMissing = false; return }
-        guard let root = store.routerStatus.codeRoot else { claudeCodeMissing = false; return }
+        if store.routerIsPretend || store.routerStatus.claudeCode != nil {
+            if claudeCodeMissing != false { claudeCodeMissing = false }
+            return
+        }
+        guard let root = store.routerStatus.codeRoot else {
+            if claudeCodeMissing != false { claudeCodeMissing = false }
+            return
+        }
+        if claudeCodeMissing == false, claudeCodeFound == root { return }
         let found = await Task.detached(priority: .utility) { RouterStatus.find(in: root) != nil }.value
+        claudeCodeFound = found ? root : nil
         if claudeCodeMissing != !found { claudeCodeMissing = !found }
     }
 
