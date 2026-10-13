@@ -360,10 +360,10 @@ struct AppSidebarRow<Leading: View, Trailing: View>: View {
                 leading(on)
                     .frame(width: M.leadingSlot, height: M.leadingSlot)
                     // The bar's corner count, small and within the row (the rows' gap leaves no room above it), on the rail
-                    // only; it comes in after the labels have gone.
+                    // only; it comes in once the labels have gone (their fade out takes 0.12 s), then takes 0.12 s itself.
                     .cornerBadge(badge?.count ?? 0, fill: badge?.fill ?? .clear, ink: badge?.ink ?? .clear, small: true,
                                  opacity: collapsed ? 1 : 0)
-                    .animation(collapsed ? .easeIn(duration: 0.16).delay(0.06) : .easeOut(duration: 0.08), value: collapsed)
+                    .animation(collapsed ? .easeIn(duration: 0.12).delay(0.12) : .easeOut(duration: 0.08), value: collapsed)
                     // The indent eases out with the sidebar's width, so a nested icon reaches its tile as the rail closes.
                     .padding(.leading, M.railShift + (collapsed ? 0 : indent))
                 Group {
@@ -417,8 +417,8 @@ private struct SidebarTextModifier: ViewModifier {
     let collapsed: Bool
     @Environment(\.accessibilityReduceMotion) private var reduce
 
-    /// Out early on collapse (before the width has gone far), in late on expand (once there is room), sliding a few points
-    /// toward the icons while it goes; Reduce Motion only fades, briefly.
+    /// Out at once on collapse (0.12 s, before the width has gone far), in soon on expand (after 0.06 s, as the width opens,
+    /// over 0.16 s), sliding a few points toward the icons while it goes; Reduce Motion only fades, briefly.
     func body(content: Content) -> some View {
         content
             .opacity(collapsed ? 0 : 1)
