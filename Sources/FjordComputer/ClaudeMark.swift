@@ -5,7 +5,15 @@ import SwiftUI
 /// `ClaudeFonts`): the white spark of its About window's 512px icon (inside its `app.asar`), as a mask, cropped to its rays.
 /// Without that, the app's menu bar icon (a small template image); without the app, nil, and an asterisk stands in.
 enum ClaudeMark {
-    @MainActor static let image: NSImage? = sparkMask() ?? trayIcon()
+    /// Made once, on first use, on whichever thread asks first: `warm()` asks off the main thread at launch, so the first
+    /// Open in Claude button drawn doesn't map the 44 MB archive, parse its header and walk the icon's pixels on the main
+    /// thread (one drawn before it is done waits for it, rather than making it again).
+    static let image: NSImage? = sparkMask() ?? trayIcon()
+
+    /// Makes `image` in the background.
+    static func warm() {
+        DispatchQueue.global(qos: .utility).async { _ = image }
+    }
 
     /// What `ClaudeButton` and the icon buttons take, in place of a symbol's name, for Open in Claude.
     static let openSymbol = "fjord.open-in-claude"

@@ -493,6 +493,7 @@ final class Store {
     /// Everything that runs once the state is loaded (`load()`): notifications, updates, the sleep observer, GitHub's
     /// polling, Claude's sessions, the Router, the code folders and the Keychain's read.
     func startServices() {
+        if !UnderTest.isRunning { ClaudeMark.warm() }
         notifier.onOpen = { [weak self] id, url in self?.openNotification(id: id, url: url) }
         notifier.setup()
         updater.automatic = { [weak self] in self?.settings.checkUpdates ?? true }
