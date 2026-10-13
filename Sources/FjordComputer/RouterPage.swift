@@ -1019,7 +1019,9 @@ private struct HistorySummaryLine: View, Equatable {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.summary == b.summary && a.now == b.now && a.open == b.open }
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.summary == b.summary && a.now == b.now && a.open == b.open
+    }
 
     var body: some View {
         let lit = hovered || open
@@ -1084,7 +1086,8 @@ private struct HistoryDecisionLine: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.decision == b.decision && a.now == b.now && a.open == b.open && a.cancel == b.cancel
+        a.store === b.store && a.model === b.model && a.decision == b.decision && a.now == b.now && a.open == b.open
+            && a.cancel == b.cancel
     }
 
     /// What Cancel does and doesn't, as its tooltip and beside it when the line is open.
@@ -1270,7 +1273,8 @@ private struct HistoryCardLine: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.card == b.card && a.now == b.now && a.open == b.open && a.marked == b.marked
+        a.store === b.store && a.model === b.model && a.card == b.card && a.now == b.now && a.open == b.open
+            && a.marked == b.marked
     }
 
     private var when: Date { card.addressedAt ?? card.createdAt }
@@ -1925,7 +1929,7 @@ private struct WorkingCard: View, Equatable {
     /// Drawn from its own values: another session's row changing doesn't redraw it (what it reads of the store and the
     /// model, it observes itself).
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.row == b.row && a.summary == b.summary && a.unanswered == b.unanswered
+        a.store === b.store && a.model === b.model && a.row == b.row && a.summary == b.summary && a.unanswered == b.unanswered
     }
 
     var body: some View {
@@ -2056,7 +2060,7 @@ private struct WaitingCard: View, Equatable {
     let card: RouterCard
     @State private var hovered = false
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.card == b.card }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store && a.card == b.card }
 
     private var triage: RouterTriage { card.triage ?? RouterTriage() }
 
@@ -2210,7 +2214,8 @@ struct CardView: View, Equatable {
     /// Drawn from its own values: the zones redrawing for another card (or a session's activity) skip it; what it reads of
     /// the model (the pick, the mark) it observes itself.
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.card == b.card && a.expanded == b.expanded && a.form == b.form && a.project.name == b.project.name
+        a.store === b.store && a.model === b.model && a.card == b.card && a.expanded == b.expanded && a.form == b.form
+            && a.project.name == b.project.name
             && a.project.color == b.project.color && a.formCap == b.formCap && a.quiet == b.quiet
     }
 
@@ -2450,7 +2455,7 @@ struct AskBackCard: View, Equatable {
     let store: Store
     let ask: RouterAskBack
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.ask == b.ask }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store && a.ask == b.ask }
 
     var body: some View {
         let warm = CDS.Fill.warning
