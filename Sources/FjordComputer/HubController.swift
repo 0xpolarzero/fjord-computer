@@ -503,13 +503,12 @@ final class HubController {
                 syncTrigger()
             }
         }
-        // What the store is told (a refresh it may start, whose results land on the main thread; the avatars a frame later)
-        // waits for the window's morph to have played (`MotionGate`), and leaving for the window at least for the turn after
-        // the morph started.
+        // Leaving for the window: what the store is told waits at least for the turn after the morph started (and then for
+        // the morph to have played, as every report does).
         if leaving {
-            AppTransition.nextTurn { MotionGate.whenStill { [weak self] in self?.reportOpen() } }
+            AppTransition.nextTurn { [weak self] in self?.reportOpen() }
         } else {
-            MotionGate.whenStill { [weak self] in self?.reportOpen() }
+            reportOpen()
         }
     }
 
@@ -577,8 +576,14 @@ final class HubController {
 
     /// Tells the store when the hub is more than the bare bar (a peek or the app window), so it refreshes stale
     /// data and polls faster meanwhile; warms the avatars the inbox is about to show, those of the page opened first (the
-    /// window's place, or the peek's tab).
+    /// window's place, or the peek's tab). Every report, from the bar's own changes (`observe`) as from the window's, waits
+    /// for the window's morph to have played (`MotionGate`): the refresh the store may start, and the avatars, put work on
+    /// the main thread. A peek, with nothing moving, is told at once.
     private func reportOpen() {
+        MotionGate.whenStill { [weak self] in self?.reportOpenNow() }
+    }
+
+    private func reportOpenNow() {
         let open = windowOpen || (hub.section != nil && !hub.quiet)
         // A peek turned into the window (or back) is told too: only the window syncs at once (`Store.setHubOpen`).
         let window = open && windowOpen
@@ -588,9 +593,12 @@ final class HubController {
         store.setHubOpen(open, window: window)
         if open {
             // A frame later: the opening's own work comes first.
-            AppTransition.nextFrame(screen) { [weak self] in
-                guard let self, self.reportedOpen else { return }
-                self.prefetchAvatars(self.store.avatarsToWarm(first: self.windowOpen ? self.windowPlace()?.tab : self.hub.tab))
+            AppTransition.nextFrame(screen) {
+                // A motion started meanwhile (the window closing at once, say): after it.
+                MotionGate.whenStill { [weak self] in
+                    guard let self, self.reportedOpen else { return }
+                    self.prefetchAvatars(self.store.avatarsToWarm(first: self.windowOpen ? self.windowPlace()?.tab : self.hub.tab))
+                }
             }
         }
     }
