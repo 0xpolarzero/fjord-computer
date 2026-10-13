@@ -60,6 +60,34 @@ After (release build, demo `busy`, `morph-timings "open,close x10"`, default siz
 
 ## The design now
 
+### First-open AutoFill stall (October 13, 2026)
+
+The reported release `open,close x10` run had Open p50/p95 **311/659 ms**, Handoff **37/378 ms**, and a first handoff of
+**378 ms** despite a 6 ms `Warm window`. A fresh unmodified run was already fast (Open **309/322**, Handoff **32/41**,
+first handoff **24 ms**): the stall is intermittent, not a fixed cost of revealing the window.
+
+Temporary spans around reveal's alpha and ordering, the transaction commit and flush, and display-link creation and
+registration measured at most 1 ms. Repeated fresh launches reproduced a **419 ms Handoff / 692 ms Open**. A two-second
+`sample` caught the main thread in `SPCompletionListRemoteViewController.resizeRemoteWindow` →
+`SPSafariPlatformSupport._updateWindowVisibility` → `SLSConnectionSynchronizeSLSCATransaction` →
+`_SLSTransactionWaitSource`, waiting for the WindowServer to order AutoFill's remote completion window. Other launches
+stalled before Handoff (Open 673–703 ms). The two-refresh fallback cannot run while this callback blocks the main thread.
+
+Fjord has search, editor and composer fields, but no security-code entry. Apple's
+[`NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac`](https://developer.apple.com/documentation/bundleresources/information-property-list/nsautofillrequirestextcontenttypeforonetimecodeonmac)
+opts these fields out of macOS 26's unsolicited security-code AutoFill; an explicitly marked `oneTimeCode` field can still
+opt in. `Resources/AppInfo.plist` supplies this policy both as the SwiftPM executable's embedded `__TEXT,__info_plist`
+and in the packaged app's Info.plist. No window is ordered in, no activation occurs, and no preparation work is added.
+The removed `NSAutoFillHeuristicControllerEnabled` default is unsuitable on macOS 26.2 and later
+([Chromium's current implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/app/mac_init.mm)).
+
+After, without temporary instrumentation, release `open,close x10`: Open **308/323 ms**, Handoff **28/41 ms**, first Open
+**308 ms**, first Handoff **25 ms**; no SafariPlatformSupport/AutoFill connection appeared in that process's log. A regression
+test reads the built executable's metadata through CoreFoundation, and the bundle metadata merge preserves its identity
+and accessory policy. Six more fresh launches (`open,close x1`) had first Open **306–317 ms** and first Handoff **22–36 ms**.
+
+### Window and motion
+
 - **No capture inside an open or a close, ever.** Only the idle keeper captures. It runs while the window is visible, key
   and front; captures only once two looks agree (content at rest), input has been idle for max(0.5 s, 3× the capture's cost),
   no text is being composed, and the content changed. "Changed" is a quarter-scale glance plus `Marks` (window input, asks,

@@ -1,9 +1,19 @@
 import AppKit
+import CoreFoundation
 import Testing
 @testable import FjordComputer
 
 @MainActor
 @Suite struct AppWindowPreparation {
+    @Test func securityCodeAutoFillRequiresAnExplicitCodeField() throws {
+        // The executable's metadata applies to bare SwiftPM runs too, before the first text field gets focus.
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let executable = package.appendingPathComponent(".build/debug/FjordComputer")
+        let info = try #require(CFBundleCopyInfoDictionaryForURL(executable as CFURL) as? [String: Any])
+        #expect(info["NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac"] as? Bool == true)
+    }
+
     @Test func launchPreparationRetriesUntilMouseModifiersAndBarAreIdle() {
         var mouseButtons = 1
         var modifiers: NSEvent.ModifierFlags = []
