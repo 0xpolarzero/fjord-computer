@@ -147,10 +147,68 @@ enum AppTransition {
 
     /// How many pictures of a window were taken (the tests count them).
     private(set) static var captures = 0
-    /// What a picture costs on the main thread (its last few, smoothed; seconds), and when the last was taken (media
-    /// time): an opening takes one only when it can be in before the handoff, and the idle keeper spaces them out.
-    private(set) static var captureCost: CFTimeInterval = 0.1
+    /// What pictures have cost on the main thread, by size and pixel scale (see `CaptureCosts`), and when the last was
+    /// taken (media time): an opening takes one only when it is sure to be in before the handoff, and the idle keeper
+    /// spaces them out.
+    static var costs = CaptureCosts()
     private(set) static var lastCapture: CFTimeInterval = -.infinity
+
+    /// What a picture costs, from the last few taken at that size and scale: their longest, not their mean (one that took
+    /// 520 ms among a few of 65 must keep a handoff from waiting on the next). A size or scale never taken is worked out
+    /// from the others by their pixels, and with none from a cost per pixel as high as heavy content has shown (520 ms
+    /// for a 1617 by 1188 pt window at 2x), so a first capture is never let in on hope.
+    struct CaptureCosts {
+        struct Key: Hashable {
+            let width: Int
+            let height: Int
+            /// Pixels per point, in hundredths.
+            let scale: Int
+
+            init(size: NSSize, pixelScale: CGFloat) {
+                width = Int(size.width.rounded())
+                height = Int(size.height.rounded())
+                scale = Int((pixelScale * 100).rounded())
+            }
+
+            var pixels: Double { Double(width * height) * Double(scale * scale) / 10_000 }
+        }
+
+        /// How many of the last costs are kept at each key.
+        static let kept = 5
+        /// Seconds per pixel with nothing measured yet: 520 ms over 1617 × 1188 pt at 2x.
+        static let prior: Double = 0.52 / (1617 * 1188 * 4)
+
+        private var recent: [Key: [CFTimeInterval]] = [:]
+
+        mutating func record(_ cost: CFTimeInterval, size: NSSize, pixelScale: CGFloat) {
+            let key = Key(size: size, pixelScale: pixelScale)
+            recent[key, default: []].append(cost)
+            if recent[key, default: []].count > Self.kept { recent[key]?.removeFirst() }
+        }
+
+        func estimate(size: NSSize, pixelScale: CGFloat) -> CFTimeInterval {
+            let key = Key(size: size, pixelScale: pixelScale)
+            if let known = recent[key]?.max() { return known }
+            // The others, scaled by pixels: the highest such guess.
+            let guesses = recent.compactMap { other, costs -> Double? in
+                guard let worst = costs.max(), other.pixels > 0 else { return nil }
+                return worst * key.pixels / other.pixels
+            }
+            return guesses.max() ?? key.pixels * Self.prior
+        }
+    }
+
+    /// The pixel scale of a picture that may be soft: half the window's (1x on a Retina screen, some 3.6 times cheaper to
+    /// draw), never under 1. A close's shrink and fade, or a picture under a cross-fade, hide it.
+    static func reducedScale(of window: NSWindow) -> CGFloat {
+        max(1, window.backingScaleFactor / 2)
+    }
+
+    /// What a picture of `window` at `pixelScale` would cost now (`costs`).
+    static func estimate(_ window: NSWindow, pixelScale: CGFloat) -> CFTimeInterval {
+        let view = window.contentView?.superview ?? window.contentView
+        return costs.estimate(size: view?.bounds.size ?? window.frame.size, pixelScale: pixelScale)
+    }
 
     /// The window's content drawn small (a quarter of its points, from its layers as they are, no glass stand-ins; not the
     /// title bar's buttons, whose colour says only whether the window has the keyboard, which a picture is never kept
@@ -230,19 +288,22 @@ enum AppTransition {
         return drawn ? Glance(width: width, height: height, pixels: pixels) : nil
     }
 
-    /// Whether a picture taken now would be in before `deadline` (media time) with `after` to spare: by what pictures
-    /// have cost lately.
-    static func pictureFits(before deadline: CFTimeInterval, after: TimeInterval = 0) -> Bool {
-        if let picturesFit { return picturesFit }
-        return CACurrentMediaTime() + captureCost * 1.25 + after <= deadline
+    /// Whether a picture of `window` at `pixelScale` taken now would be in before `deadline` (media time) with `after` to
+    /// spare, by the most such pictures have cost lately (`costs`) and a quarter more.
+    static func pictureFits(_ window: NSWindow, pixelScale: CGFloat, before deadline: CFTimeInterval,
+                            after: TimeInterval = 0) -> Bool {
+        if let picturesFit { return picturesFit(pixelScale < window.backingScaleFactor) }
+        return CACurrentMediaTime() + estimate(window, pixelScale: pixelScale) * 1.25 + after <= deadline
     }
 
-    /// Says whether a picture fits instead of the clock (a test, whose pictures take what a debug build takes).
-    static var picturesFit: Bool?
+    /// Says whether a picture (softer or not) fits instead of the clock (a test, whose pictures take what a debug build
+    /// takes).
+    static var picturesFit: ((_ soft: Bool) -> Bool)?
 
-    /// Whether the idle keeper may take a picture now: at most a twentieth of the main thread's time, every 2 s at most.
-    static var mayCaptureAtIdle: Bool {
-        CACurrentMediaTime() - lastCapture >= max(2, 20 * captureCost)
+    /// Whether the idle keeper may take a picture costing `cost` now: at most a twentieth of the main thread's time, every
+    /// 2 s at most.
+    static func mayCaptureAtIdle(cost: CFTimeInterval) -> Bool {
+        CACurrentMediaTime() - lastCapture >= max(2, 20 * cost)
     }
 
     /// No key, click or pointer move for `seconds`: the user is not in the middle of something a picture would hold up.
@@ -265,17 +326,24 @@ enum AppTransition {
     /// picture and restored, in this turn (`GlassCapture.around`); the ground is then taken out of `hole` (`punch`).
     /// `restoreLater`: the window goes out of sight in this turn, so its glass pieces are restored by SwiftUI's own update
     /// rather than drawn again here (`GlassCapture.around`).
+    /// `pixelScale`: fewer pixels than the window's own (`reducedScale`), drawn as the window's points scaled down.
     static func snapshot(of window: NSWindow, capture: GlassCapture? = nil, hole: Hole? = nil,
-                         restoreLater: Bool = false) -> CGImage? {
+                         restoreLater: Bool = false, pixelScale: CGFloat? = nil) -> CGImage? {
         guard let view = window.contentView?.superview ?? window.contentView, view.bounds.width > 0 else { return nil }
         captures += 1
-        let signpost = MorphSignposts.signposter.beginInterval("Capture")
+        let reduced = pixelScale.map { $0 < window.backingScaleFactor } ?? false
+        let scale = reduced ? pixelScale ?? 1 : window.backingScaleFactor
+        let signpost = reduced ? MorphSignposts.signposter.beginInterval("Capture reduced")
+            : MorphSignposts.signposter.beginInterval("Capture")
         let started = CACurrentMediaTime()
         defer {
-            MorphSignposts.signposter.endInterval("Capture", signpost)
+            if reduced {
+                MorphSignposts.signposter.endInterval("Capture reduced", signpost)
+            } else {
+                MorphSignposts.signposter.endInterval("Capture", signpost)
+            }
             lastCapture = CACurrentMediaTime()
-            let cost = lastCapture - started
-            captureCost = captures == 1 ? cost : (captureCost + cost) / 2
+            costs.record(lastCapture - started, size: view.bounds.size, pixelScale: scale)
         }
         let glass = GlassCapture.chromeIsGlass
         let cleared = glass ? hole : nil
@@ -283,7 +351,8 @@ enum AppTransition {
             let signposter = MorphSignposts.signposter
             // With alpha whatever the window's opacity, where there is a hole: its ground must come out clear, not black.
             let making = signposter.beginInterval("Capture bitmap")
-            let made = cleared != nil ? alphaRep(for: view) : view.bitmapImageRepForCachingDisplay(in: view.bounds)
+            let made = reduced ? alphaRep(for: view, pixelScale: scale)
+                : cleared != nil ? alphaRep(for: view) : view.bitmapImageRepForCachingDisplay(in: view.bounds)
             signposter.endInterval("Capture bitmap", making)
             guard let rep = made else { return nil }
             let drawing = signposter.beginInterval("Capture draw")
@@ -309,15 +378,25 @@ enum AppTransition {
 
     /// A bitmap to cache `view`'s display in, at its backing scale, with an alpha channel, in the colour space the view's
     /// own would have (a P3 display's included), so the picture matches the live window.
-    private static func alphaRep(for view: NSView) -> NSBitmapImageRep? {
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        if rep.hasAlpha { return rep }
-        guard let alpha = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh,
+    /// `pixelScale`: that many pixels a point rather than the view's own.
+    private static func alphaRep(for view: NSView, pixelScale: CGFloat? = nil) -> NSBitmapImageRep? {
+        let wide: Int, high: Int, space: NSColorSpace?
+        if let pixelScale {
+            // The window's colour space, as a bitmap of its own would be in (none of that size is made just to ask).
+            wide = max(1, Int((view.bounds.width * pixelScale).rounded()))
+            high = max(1, Int((view.bounds.height * pixelScale).rounded()))
+            space = view.window?.colorSpace
+        } else {
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+            if rep.hasAlpha { return rep }
+            (wide, high, space) = (rep.pixelsWide, rep.pixelsHigh, rep.colorSpace)
+        }
+        guard let alpha = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: wide, pixelsHigh: high,
                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
         // Retagged before anything is drawn: the pixels are converted to that space as they are drawn.
-        let tagged = alpha.colorSpace == rep.colorSpace ? alpha : (alpha.retagging(with: rep.colorSpace) ?? alpha)
-        tagged.size = rep.size
+        let tagged = space.map { alpha.colorSpace == $0 ? alpha : (alpha.retagging(with: $0) ?? alpha) } ?? alpha
+        tagged.size = view.bounds.size
         return tagged
     }
 
@@ -481,24 +560,27 @@ enum AppTransition {
     /// A picture of `window` as it is now, with everything it is taken with (its frame, scale, appearance and sidebar, the
     /// keyboard's, its glance), for the morph `glass` is or isn't, of `destination`. `glance`: the window's, when the
     /// caller has just drawn one (else one is drawn here). `restoreLater`: see `snapshot`.
+    /// `pixelScale`: a softer picture (`reducedScale`), not one an opening may cut to the real window on.
     static func takePicture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool, destination: AppDestination,
-                            glance: Glance? = nil, restoreLater: Bool = false) -> Picture? {
+                            glance: Glance? = nil, restoreLater: Bool = false, pixelScale: CGFloat? = nil) -> Picture? {
         let glance = glance ?? self.glance(of: window)
         let key = isKey(window)
         let frame = window.frame, scale = window.backingScaleFactor, appearance = window.effectiveAppearance.name
         guard let image = snapshot(of: window, capture: glassWindow.capture,
                                    hole: glassWindow.hole(glass: glass, radius: cornerRadius(of: window)),
-                                   restoreLater: restoreLater) else { return nil }
+                                   restoreLater: restoreLater, pixelScale: pixelScale) else { return nil }
         return Picture(image: image, frame: frame, scale: scale, destination: destination, glass: glass, glance: glance,
-                       appearance: appearance, sidebar: glassWindow.sidebar, key: key)
+                       appearance: appearance, sidebar: glassWindow.sidebar, key: key,
+                       pixelScale: min(pixelScale ?? scale, scale))
     }
 
     /// A picture of `window` to keep (see `Picture`): only one taken with the keyboard (a picture taken without has grey
     /// buttons).
     static func picture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool, destination: AppDestination,
-                        glance: Glance? = nil) -> Picture? {
+                        glance: Glance? = nil, pixelScale: CGFloat? = nil) -> Picture? {
         guard isKey(window) else { return nil }
-        return takePicture(of: window, glassWindow: glassWindow, glass: glass, destination: destination, glance: glance)
+        return takePicture(of: window, glassWindow: glassWindow, glass: glass, destination: destination, glance: glance,
+                           pixelScale: pixelScale)
     }
 
     /// The window's picture as it was last seen, taken while it had the keyboard (its buttons in colour, as the real
@@ -524,6 +606,10 @@ enum AppTransition {
         var sidebar: NSRect?
         /// Taken while the window had the keyboard: only such a picture is kept.
         var key = true
+        /// Its pixels per point: the window's own (`scale`), or fewer (a softer picture, `reducedScale`).
+        var pixelScale: CGFloat?
+        /// At the window's own scale: an opening may cut to the real window on it.
+        var exact: Bool { (pixelScale ?? scale) >= scale }
 
         /// Whether it can stand for `window` as it opens: the same size, at the scale a picture of it would be taken at now
         /// (the window's own, as `scale` is: a window off every screen keeps that of the last one it was on, which need not
@@ -797,9 +883,12 @@ enum AppTransition {
         /// A newer picture of the window (it was built, or its content changed since), of `destination`: the same frame.
         /// `crossFade`: the picture shown is another (none, or another place's), so the new one fades in over it rather
         /// than popping in. `glance`: the window's, taken just before (else one is taken here).
-        func refresh(_ window: NSWindow, destination: AppDestination, crossFade: Bool = false, glance: Glance? = nil) {
+        /// `pixelScale`: a softer picture (see `takePicture`).
+        func refresh(_ window: NSWindow, destination: AppDestination, crossFade: Bool = false, glance: Glance? = nil,
+                     pixelScale: CGFloat? = nil) {
             guard let picture = AppTransition.takePicture(of: window, glassWindow: GlassWindow(capture: capture, sidebar: sidebar),
-                                                          glass: isGlass, destination: destination, glance: glance)
+                                                          glass: isGlass, destination: destination, glance: glance,
+                                                          pixelScale: pixelScale)
             else { return }
             install(picture, crossFade: crossFade)
         }

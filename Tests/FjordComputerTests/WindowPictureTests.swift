@@ -32,6 +32,26 @@ import Testing
         #expect(stopped > 0.03 && stopped < 0.1)
         #expect(moved.within(0.1, of: base) && !moved.within(0.05, of: base))
     }
+
+    /// A capture's cost is the longest of the last few at that size and scale, so one slow capture keeps the next from being
+    /// let in on a mean; a size never taken is guessed from the others by pixels, and with none from a pessimistic prior.
+    @Test func aCapturesCostIsItsRecentWorst() {
+        var costs = AppTransition.CaptureCosts()
+        let size = NSSize(width: 1000, height: 500)
+        let prior = costs.estimate(size: size, pixelScale: 2)
+        #expect(abs(prior - 1000 * 500 * 4 * AppTransition.CaptureCosts.prior) < 1e-9 && prior > 0.1)
+        for cost in [0.06, 0.52, 0.06, 0.07] { costs.record(cost, size: size, pixelScale: 2) }
+        #expect(costs.estimate(size: size, pixelScale: 2) == 0.52)
+        // Five more and the slow one is out of the window.
+        for _ in 0..<5 { costs.record(0.065, size: size, pixelScale: 2) }
+        #expect(costs.estimate(size: size, pixelScale: 2) == 0.065)
+        // At 1x, a quarter of the pixels: a quarter of the cost until one is measured.
+        #expect(abs(costs.estimate(size: size, pixelScale: 1) - 0.065 / 4) < 1e-9)
+        costs.record(0.03, size: size, pixelScale: 1)
+        #expect(costs.estimate(size: size, pixelScale: 1) == 0.03)
+        // Twice the size: the highest guess of the others (the 1x one's, 0.03 × 8, over the 2x one's, 0.065 × 2).
+        #expect(abs(costs.estimate(size: NSSize(width: 2000, height: 500), pixelScale: 2) - 0.24) < 1e-9)
+    }
 }
 
 extension WindowSeams {

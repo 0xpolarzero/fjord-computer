@@ -674,7 +674,7 @@ extension WindowSeams {
             }
             AppTransition.nextTurn = { block in ticks.turns.append(block) }
             // A fresh picture is in before the handoff whatever a debug build's take: a test that has none fit says so.
-            AppTransition.picturesFit = true
+            AppTransition.picturesFit = { _ in true }
             _ = NSApplication.shared
             let store = Store()
             store.persists = false
@@ -1068,6 +1068,24 @@ extension WindowSeams {
             }
         }
 
+        /// A picture of the window's own scale that would not be in before the handoff is not taken: a softer one is, when it
+        /// would be, and the handoff then fades from it rather than cutting to it.
+        @Test func anOpeningTakesASofterPictureWhenOnlyThatFits() {
+            morphing { controller, ticks in
+                AppTransition.isKey = { _ in true }
+                AppTransition.picturesFit = { soft in soft }
+                controller.show(.settings)
+                ticks.runTurns()
+                guard let run = controller.run, let window = controller.window else { return #expect(Bool(false), "no morph") }
+                if window.backingScaleFactor >= 2 {
+                    #expect(run.picture?.exact == false && run.picture?.pixelScale == window.backingScaleFactor / 2)
+                } else {
+                    #expect(run.image == nil)
+                }
+                #expect(run.fadesOut)
+            }
+        }
+
         /// Another place asked for as the opening hands over: no picture is taken then (it would hold the handoff up), and the
         /// overlay, whose picture is no longer the window's, fades into the real window rather than cutting to it.
         @Test func anotherPlaceAskedForAsTheOpeningHandsOverFadesIntoIt() {
@@ -1079,7 +1097,7 @@ extension WindowSeams {
                 guard let run = controller.run else { return #expect(Bool(false), "no morph") }
                 run.complete()
                 #expect(!run.fadesOut && ticks.blocks.count == 1)
-                AppTransition.picturesFit = false
+                AppTransition.picturesFit = { _ in false }
                 let taken = AppTransition.captures
                 controller.show(.done)
                 ticks.runTurns()

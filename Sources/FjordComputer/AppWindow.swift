@@ -428,7 +428,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // The real window must be in before it takes over. No picture is taken now: it would hold the handoff up. The
             // overlay cuts to the real window when its picture is the window as drawn now, and fades into it otherwise.
             self.bringInPending(mine)
-            var exact = current.image != nil && current.glance != nil
+            var exact = current.picture?.exact == true && current.glance != nil
             if self.owed != nil {
                 self.owed = nil
                 self.stopKeyWatch()
@@ -494,21 +494,30 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
             return
         }
-        // The handoff is not held up for a picture: one that would be in late is not taken (the handoff fades instead).
+        // The handoff is never held up for a picture: one sure to be in before it (by the most such pictures have cost),
+        // else a softer one sure to be (the handoff then fades from it), else none (the handoff fades from what shows).
         let fade = owed.crossFade ? AppTransition.pictureFade * Double(AppTransition.slowdown) : 0
-        guard AppTransition.pictureFits(before: run.settlesAt, after: fade) else {
+        let full = window.backingScaleFactor, soft = AppTransition.reducedScale(of: window)
+        let scale: CGFloat
+        if AppTransition.pictureFits(window, pixelScale: full, before: run.settlesAt, after: fade) {
+            scale = full
+        } else if soft < full, AppTransition.pictureFits(window, pixelScale: soft, before: run.settlesAt, after: fade) {
+            scale = soft
+        } else {
             self.owed = owed
             run.fadeHandoff()
             return
         }
         askedFor = nil
-        refresh(run, window, crossFade: owed.crossFade, glance: now)
+        refresh(run, window, crossFade: owed.crossFade, glance: now, pixelScale: scale)
+        if run.picture?.exact != true { run.fadeHandoff() }
     }
 
-    /// The overlay's picture taken again, of the place the window shows now (`glance`: the window's, taken just before).
+    /// The overlay's picture taken again, of the place the window shows now (`glance`: the window's, taken just before;
+    /// `pixelScale`: see `AppTransition.takePicture`).
     private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false,
-                         glance: AppTransition.Glance? = nil) {
-        run.refresh(window, destination: navigator.selection, crossFade: crossFade, glance: glance)
+                         glance: AppTransition.Glance? = nil, pixelScale: CGFloat? = nil) {
+        run.refresh(window, destination: navigator.selection, crossFade: crossFade, glance: glance, pixelScale: pixelScale)
     }
 
     /// While the window is open and still, its picture is kept the window as drawn, so a close starts on it at once with
@@ -564,7 +573,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let now = AppTransition.glance(of: window)
         if let kept = closedPicture, kept.fits(window, glass: glass, sidebar: chrome.sidebar),
            kept.destination == navigator.selection, now?.same(as: kept.glance) == true { return }
-        guard AppTransition.mayCaptureAtIdle else { return }
+        guard AppTransition.mayCaptureAtIdle(cost: AppTransition.estimate(window, pixelScale: window.backingScaleFactor))
+        else { return }
         if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
                                                destination: navigator.selection, glance: now) {
             closedPicture = picture
