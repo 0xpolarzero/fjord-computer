@@ -343,4 +343,28 @@ import Testing
         await second.value
         #expect(!s.isSyncing && s.lastSync == nil && s.authError == nil)
     }
+
+    @Test func aSignInCancelledLeavesItsRetryAndTheBackoffAsTheyWere() async {
+        final class Count: @unchecked Sendable { var looks = 0; var open = false }
+        for retry in [false, true] {
+            let gate = MotionGate.Gate(longest: 600), count = Count()
+            let s = Store()
+            s.persists = false
+            s.settings.triage = true
+            s.motionGate = gate
+            s.me = nil
+            s.gh.token = nil
+            s.resolveToken = { count.looks += 1; while !count.open { Thread.sleep(forTimeInterval: 0.002) }; return nil }
+            s.authRetry = retry
+            let poll = Task { await s.pollAll() }
+            for _ in 0..<3000 where count.looks == 0 { try? await Task.sleep(for: .milliseconds(2)) }
+            poll.cancel()
+            count.open = true
+            await poll.value
+            #expect(s.authRetry == retry && s.authError == nil)
+            // The next poll looks for a token at once: the cancelled one used up neither the Retry nor the backoff.
+            await s.pollAll()
+            #expect(count.looks == 2 && s.authError != nil && !s.authRetry)
+        }
+    }
 }

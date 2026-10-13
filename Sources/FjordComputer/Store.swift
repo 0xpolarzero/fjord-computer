@@ -397,7 +397,7 @@ final class Store {
     /// A token was just saved or taken away: the sign-in that fails next is its result and is said aloud (a poll's isn't).
     @ObservationIgnored private(set) var awaitingSignIn = false
     @ObservationIgnored private var lastAuthAttempt: Date?
-    @ObservationIgnored private var authRetry = false
+    @ObservationIgnored var authRetry = false
     @ObservationIgnored private var refreshQueued = false
     /// Signed out, polls look for a new token this rarely: each look can spawn `gh auth token`.
     private static let authBackoff: TimeInterval = 300
@@ -1235,11 +1235,14 @@ final class Store {
         // What Settings changes while this waits (on the token found, or on /user) is about another token: nothing of it is kept.
         let asked = credentialsChanged
         if gh.token == nil || foundAt != credentialsChanged {
+            let attemptBefore = lastAuthAttempt
             lastAuthAttempt = Date()
             let find = resolveToken
             let resolved = await Task.detached(operation: find).value
             // What it found is said once the window's morph has played (`MotionGate`).
             await motionGate.still()
+            // Its poll cancelled meanwhile: nothing was found as far as the backoff goes, so the next poll looks again.
+            if Task.isCancelled { lastAuthAttempt = attemptBefore }
             guard asked == credentialsChanged, !Task.isCancelled else { return }
             guard let (token, source) = resolved else {
                 gh.token = nil
@@ -1384,6 +1387,8 @@ final class Store {
         // asked about at every poll: that is a request, not a look in the Keychain and `gh`.
         let asked = authRetry
         authRetry = false
+        // Cancelled (the loop started again): a Retry asked for is still to be made by the next poll.
+        defer { if asked, Task.isCancelled { authRetry = true } }
         // A 401 from outside a poll (adding a repo, suggestions) left the token and who it was cached.
         if gh.tokenRejected { dropRejectedToken() }
         if me == nil, asked || gh.token != nil || Date().timeIntervalSince(lastAuthAttempt ?? .distantPast) >= Self.authBackoff {
