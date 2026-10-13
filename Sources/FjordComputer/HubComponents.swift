@@ -1053,6 +1053,17 @@ struct UpdateAnnouncer: View {
 
 /// The Router in the bar: its symbol, and on its corner how many cards are open, amber while one needs you (a question, a
 /// plan, a stuck turn, a last step), blue when they are only worth a look, nothing at zero. A click opens the Router in the app window.
+/// The bar's Router cell with the Router's counts, read here (`Store.routerCounts`): only it redraws as they change.
+struct CountedRouterCell: View {
+    let store: Store
+    let action: () -> Void
+
+    var body: some View {
+        let counts = store.routerCounts
+        RouterCell(needsYou: counts.needsYou, notes: counts.notes, action: action)
+    }
+}
+
 struct RouterCell: View {
     let needsYou: Int
     let notes: Int

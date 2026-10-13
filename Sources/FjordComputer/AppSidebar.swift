@@ -119,32 +119,12 @@ struct AppSidebar: View {
                         .padding(.bottom, rowGap)
                     }
                     if store.routerOn {
-                        let routerCounts = store.routerCounts
                         // The Router stands apart from the inbox: a rule and a gap, no header over a single row.
                         if store.triageOn {
                             rule.padding(.top, 4)
                             Color.clear.frame(height: M.groupTop - 4)
                         }
-                        AppSidebarRow(title: "Router", on: navigator.selection == .router,
-                                      badge: routerCounts.needsYou + routerCounts.notes > 0
-                                          ? RailBadge(count: routerCounts.needsYou + routerCounts.notes,
-                                                      fill: CDS.solid(routerCounts.needsYou > 0 ? 0xFAB219 : 0x2A78D6),
-                                                      ink: routerCounts.needsYou > 0 ? CDS.solid(0x0B0B0B) : .white)
-                                          : nil,
-                                      tip: Self.routerTip(routerCounts),
-                                      action: { navigator.go(.router) }) { on in
-                            Image(systemName: "arrow.triangle.branch")
-                                .font(.system(size: M.symbol, weight: .medium))
-                                .chromeInk(on ? .primary : .secondary, glass: onGlass)
-                        } trailing: {
-                            HStack(spacing: 6) {
-                                if routerCounts.needsYou > 0 { CountText(routerCounts.needsYou, color: CDS.Fill.warning) }
-                                if routerCounts.notes > 0 { CountText(routerCounts.notes, color: CDS.Text.accent) }
-                            }
-                        }
-                        .accessibilityValue([routerCounts.needsYou > 0 ? "\(routerCounts.needsYou) need you" : nil,
-                                             routerCounts.notes > 0 ? "\(routerCounts.notes) worth a look" : nil]
-                            .compactMap { $0 }.joined(separator: ", ").nonEmpty ?? "Nothing open")
+                        RouterSidebarRow(store: store, navigator: navigator)
                     }
                 }
                 .padding(.bottom, 12)
@@ -275,9 +255,42 @@ struct AppSidebar: View {
             .accessibilityHidden(true)
     }
 
-    private static func routerTip(_ c: (needsYou: Int, notes: Int)) -> String {
+    static func routerTip(_ c: (needsYou: Int, notes: Int)) -> String {
         let parts = [c.needsYou > 0 ? "\(c.needsYou) need you" : nil, c.notes > 0 ? "\(c.notes) worth a look" : nil].compactMap { $0 }
         return parts.isEmpty ? "Router" : "Router · " + parts.joined(separator: ", ")
+    }
+}
+
+/// The Router's row, with what needs you and what is worth a look: its counts read here, so the cards and the sessions
+/// changing redraw this row and not the whole sidebar.
+private struct RouterSidebarRow: View {
+    let store: Store
+    let navigator: AppNavigator
+    @Environment(\.onGlass) private var onGlass
+    typealias M = CDS.Sidebar
+
+    var body: some View {
+        let routerCounts = store.routerCounts
+        AppSidebarRow(title: "Router", on: navigator.selection == .router,
+                      badge: routerCounts.needsYou + routerCounts.notes > 0
+                          ? RailBadge(count: routerCounts.needsYou + routerCounts.notes,
+                                      fill: CDS.solid(routerCounts.needsYou > 0 ? 0xFAB219 : 0x2A78D6),
+                                      ink: routerCounts.needsYou > 0 ? CDS.solid(0x0B0B0B) : .white)
+                          : nil,
+                      tip: AppSidebar.routerTip(routerCounts),
+                      action: { navigator.go(.router) }) { on in
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: M.symbol, weight: .medium))
+                .chromeInk(on ? .primary : .secondary, glass: onGlass)
+        } trailing: {
+            HStack(spacing: 6) {
+                if routerCounts.needsYou > 0 { CountText(routerCounts.needsYou, color: CDS.Fill.warning) }
+                if routerCounts.notes > 0 { CountText(routerCounts.notes, color: CDS.Text.accent) }
+            }
+        }
+        .accessibilityValue([routerCounts.needsYou > 0 ? "\(routerCounts.needsYou) need you" : nil,
+                             routerCounts.notes > 0 ? "\(routerCounts.notes) worth a look" : nil]
+            .compactMap { $0 }.joined(separator: ", ").nonEmpty ?? "Nothing open")
     }
 }
 
