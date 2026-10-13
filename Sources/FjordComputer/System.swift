@@ -448,27 +448,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains(Lifecycle.flag) {
             Lifecycle.start(store)
         } else {
-            // The window's content built once at idle, out of sight, so the first open only brings it in. Not under
-            // `--lifecycle`, whose idle measurement wants nothing done after launch.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) { [weak window, weak hub, weak self] in
-                guard let window, let hub else { return }
-                Self.prepareWhenIdle(interacting: { [weak hub] in
-                    Self.preparationIsBlocked(mouseButtons: NSEvent.pressedMouseButtons, modifiers: NSEvent.modifierFlags,
-                                              barInteracting: hub?.isInteracting == true)
-                }, prepare: { [weak window, weak hub, weak self] in
-                    // Short of memory: none of it (the overlay, once made, is kept for good).
+            // What the first open needs, made out of sight once launch is past, so the open only brings it in: the
+            // morph's overlay and glass pieces (and the Router's icons) first, the window's content next, each in its own
+            // slice at a moment the main run loop has nothing else to do and nobody is using the mouse, the modifiers or
+            // the bar. Not under `--lifecycle`, whose idle measurement wants nothing done after launch.
+            let blocked = { [weak hub] in
+                Self.preparationIsBlocked(mouseButtons: NSEvent.pressedMouseButtons, modifiers: NSEvent.modifierFlags,
+                                          barInteracting: hub?.isInteracting == true)
+            }
+            // Short of memory: none of it (the overlay, once made, is kept for good).
+            let steps: [@MainActor () -> Void] = [
+                { [weak window, weak hub, weak self] in
                     guard let window, let hub, !window.memoryShort else { return }
-                    if self?.store.router.enabled == true { _ = SessionIcons.drawable }
-                    window.prepare()
                     AppTransition.prepareOverlay(on: hub.dockedScreen)
-                })
+                    if self?.store.router.enabled == true { _ = SessionIcons.drawable }
+                },
+                { [weak window] in window?.prepare() },
+            ]
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.prepareDelay, qos: .utility) {
+                MainActor.assumeIsolated { Self.prepare(steps, interacting: blocked) }
             }
         }
     }
 
-    /// How long after launch the window's content is built (`AppWindowController.prepare`): past the store's first load
-    /// and the bar's first draw.
-    static let prepareDelay: TimeInterval = 2
+    /// How long after launch the first open's preparing starts (`prepare(_:interacting:)`): past the launch's own turns,
+    /// the store's load and the bar's first draw; each step then waits for the main run loop to be idle as well.
+    static let prepareDelay: TimeInterval = 0.5
+
+    /// `steps` one at a time, each once the main run loop is idle and nobody is interacting (see `prepareWhenIdle`).
+    static func prepare(_ steps: [@MainActor () -> Void], interacting: @escaping () -> Bool) {
+        guard let step = steps.first else { return }
+        atIdle {
+            prepareWhenIdle(interacting: interacting, prepare: {
+                step()
+                prepare(Array(steps.dropFirst()), interacting: interacting)
+            })
+        }
+    }
+
+    /// Runs `block` once the main run loop has nothing left to do (`NotificationQueue`'s idle posting): after whatever a
+    /// launch, a sync's results or the user had asked of it.
+    static func atIdle(_ block: @escaping @MainActor () -> Void) {
+        final class Token: @unchecked Sendable { var observer: NSObjectProtocol? }
+        let name = Notification.Name("FjordComputer.idle." + UUID().uuidString)
+        let token = Token()
+        token.observer = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
+            if let observer = token.observer { NotificationCenter.default.removeObserver(observer) }
+            token.observer = nil
+            MainActor.assumeIsolated { block() }
+        }
+        NotificationQueue.default.enqueue(Notification(name: name), postingStyle: .whenIdle, coalesceMask: [], forModes: nil)
+    }
 
     static func preparationIsBlocked(mouseButtons: Int, modifiers: NSEvent.ModifierFlags, barInteracting: Bool) -> Bool {
         mouseButtons != 0 || !modifiers.intersection(Shortcut.relevant).isEmpty || barInteracting

@@ -33,6 +33,15 @@ import Testing
         #expect(prepared == 1 && retries.isEmpty && delays.count == 3)
     }
 
+    /// The launch's preparing runs its steps one per idle moment of the main run loop, in order, none in the turn that asks.
+    @Test func launchPreparationRunsItsStepsInOrderEachAtIdle() async {
+        var done: [Int] = []
+        AppDelegate.prepare([{ done.append(1) }, { done.append(2) }], interacting: { false })
+        #expect(done.isEmpty)
+        await waitUntil { done.count == 2 }
+        #expect(done == [1, 2])
+    }
+
     @Test(arguments: [NSEvent.ModifierFlags.command, .control, .option, .shift])
     func eachShortcutModifierPostponesPreparation(_ modifiers: NSEvent.ModifierFlags) {
         #expect(AppDelegate.preparationIsBlocked(mouseButtons: 0, modifiers: modifiers, barInteracting: false))
