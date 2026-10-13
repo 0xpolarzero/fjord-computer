@@ -38,10 +38,10 @@ $DRY && say "Dry run: nothing is changed."
 step "1. Apps running"
 running=""
 pgrep -x Lookout >/dev/null && running="Lookout"
-pgrep -x FjordComputer >/dev/null && running="${running:+$running and }Fjord"
+pgrep -x FjordComputer >/dev/null && running="${running:+$running and }Fjord Computer"
 pgrep -x Fjord >/dev/null && running="${running:+$running and }Fjord"
 if [ -z "$running" ]; then
-  say "Neither Lookout nor Fjord is running."
+  say "None of Lookout, Fjord Computer and Fjord is running."
 elif $DRY; then
   say "$running is running: a real run would stop here until you quit it."
 else
