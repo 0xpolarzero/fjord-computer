@@ -479,17 +479,19 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let now = AppTransition.glance(of: window)
         let first = checked != mine
         checked = mine
-        if run.image != nil, let now, now.same(as: run.glance) { return }
+        let unchanged = run.image != nil && now?.same(as: run.glance) == true
+        if unchanged, run.picture?.exact == true { return }
         // Moved on by a detail of its own (a scroller shown again, a count, a hover; not something asked for): no picture
         // for that, the handoff fades into the real window over it instead of cutting to it.
-        if run.image != nil, askedFor != mine, now?.within(AppTransition.Glance.closeTolerance, of: run.glance) == true {
+        if run.image != nil, !unchanged, askedFor != mine,
+           now?.within(AppTransition.Glance.closeTolerance, of: run.glance) == true {
             self.owed = owed
             run.fadeHandoff()
             return
         }
         // Just brought in, the window may still be drawing what changed while it was out (its appearing runs a turn
         // later): the first look is taken again a turn on before a picture is.
-        if run.image != nil, first {
+        if run.image != nil, !unchanged, first {
             self.owed = owed
             AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
             return
@@ -501,7 +503,9 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let scale: CGFloat
         if AppTransition.pictureFits(window, pixelScale: full, before: run.settlesAt, after: fade) {
             scale = full
-        } else if soft < full, AppTransition.pictureFits(window, pixelScale: soft, before: run.settlesAt, after: fade) {
+        } else if soft < full, !unchanged,
+                  AppTransition.pictureFits(window, pixelScale: soft, before: run.settlesAt, after: fade) {
+            // (A soft picture of the window as it still is would gain nothing over the one shown.)
             scale = soft
         } else {
             self.owed = owed
@@ -671,7 +675,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             let glass = AppTransition.usesGlass
             let barMorph = AppTransition.reduceMotion ? nil : bar()
             // The picture kept at idle, when the window is still (near enough, `Glance.closeTolerance`) as it was drawn
-            // then: the close starts on it at once. Otherwise one is taken now, before anything moves.
+            // then: the close starts on it at once. Otherwise a soft one is taken now, before anything moves.
             let now = AppTransition.glance(of: sender)
             if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar),
                kept.destination == navigator.selection, AppTransition.isKey(sender), let then = kept.glance,
@@ -679,7 +683,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 current = AppTransition.makeRun(for: sender, picture: kept, bar: barMorph, glassWindow: chrome, glass: glass)
             } else if let taken = AppTransition.takePicture(of: sender, glassWindow: chrome, glass: glass,
                                                            destination: navigator.selection, glance: now,
-                                                           restoreLater: true) {
+                                                           restoreLater: true,
+                                                           pixelScale: AppTransition.reducedScale(of: sender)) {
+                // Never one at the window's own scale (520 ms on heavy content): a softer one, a quarter of its pixels,
+                // which the shrink and its fade (gone by half of it) hide.
                 current = AppTransition.makeRun(for: sender, picture: taken, bar: barMorph, glassWindow: chrome, glass: glass)
             } else {
                 current = nil

@@ -796,6 +796,8 @@ extension WindowSeams {
                 controller.close()
                 guard let closing = controller.run else { return #expect(Bool(false), "no close morph") }
                 #expect(controller.phase == .closing && closing !== opened && closing.image != nil)
+                // Never one at the window's own scale: a softer one.
+                #expect(closing.picture?.pixelScale == AppTransition.reducedScale(of: window))
                 // The overlay shows the window and the real one goes in the same turn: the motion starts at once.
                 #expect(closing.overlay.isVisible && ticks.blocks.isEmpty)
                 #expect(!window.isVisible && closing.startPose?.container == 1 && closing.startPose?.window == 1)
@@ -1035,16 +1037,22 @@ extension WindowSeams {
         }
 
         /// Any close turned round checks its picture against the window (what it shows may have changed meanwhile: the store,
-        /// a message asked for, with nothing to say so), and keeps it when it still is the window as drawn.
+        /// a message asked for, with nothing to say so), and keeps it when it still is the window as drawn at its own scale;
+        /// a close's softer picture of an unchanged window is taken again at full scale when that fits.
         @Test func everyCloseTurnedRoundChecksThePicture() {
             morphing { controller, ticks in
                 openAndStartClosing(controller, ticks, on: .done)
                 guard let run = controller.run, let shown = run.image else { return #expect(Bool(false), "no close morph") }
                 let taken = AppTransition.captures
+                let soft = run.picture?.exact == false
                 controller.show(.done)
                 #expect(controller.phase == .opening && controller.run === run)
                 ticks.runTurns()
-                #expect(run.image === shown && AppTransition.captures == taken)
+                if soft {
+                    #expect(run.image !== shown && run.picture?.exact == true && AppTransition.captures == taken + 1)
+                } else {
+                    #expect(run.image === shown && AppTransition.captures == taken)
+                }
             }
         }
 
