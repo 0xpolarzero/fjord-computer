@@ -519,22 +519,37 @@ private struct AnchorView: NSViewRepresentable {
 }
 
 /// Where a message can go now, watched in a view of its own (the composer doesn't redraw for every session's activity): when
-/// it changes, Jev's pick and the target you pinned are checked against it (`RouterModel.revalidateTarget`).
+/// it changes, Jev's pick and the target you pinned are checked against it (`RouterModel.revalidateTarget`). Only while
+/// there is a pick or a pin to check: with neither, nothing is worked out as the sessions change.
 private struct LiveTargetWatch: View {
     let store: Store
     let model: RouterModel
 
     var body: some View {
-        Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
-            .onChange(of: RouterModel.targets(store)) { model.revalidateTarget(store: store) }
+        if model.live.pinned != nil || model.live.prediction != nil {
+            Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+                .onChange(of: RouterModel.targets(store)) { model.revalidateTarget(store: store) }
+        }
     }
 }
 
 extension RouterModel {
     /// What a pick or a pin can go to, and where the page shows it: the open cards, the working sessions, the sessions kept.
-    static func targets(_ store: Store) -> [String] {
-        store.routerShownOpenCards.map(\.id) + store.routerWorkingRows.map { workingID($0.id) }
-            + store.claudeSessions.values.filter { !$0.isArchived }.map(\.id).sorted()
+    struct Targets: Equatable {
+        var cards: [String]
+        var working: [String]
+        var sessions: Set<String>
+
+        func contains(_ id: String) -> Bool { cards.contains(id) || working.contains(id) || sessions.contains(id) }
+    }
+
+    /// The open cards as stored (the page's order doesn't matter here: no sort of every card), the working rows, the
+    /// sessions kept as a set.
+    static func targets(_ store: Store) -> Targets {
+        let tasks = store.routerTasks
+        return Targets(cards: store.router.cards.filter { $0.isOpen && RouterPage.shows($0, tasks: tasks) }.map(\.id),
+                       working: store.routerWorkingRows.map { workingID($0.id) },
+                       sessions: Set(store.claudeSessions.values.lazy.filter { !$0.isArchived }.map(\.id)))
     }
 
     /// The targets changed: a pick or pin that can't go there any more goes (and Jev is asked again for the draft as it is).
