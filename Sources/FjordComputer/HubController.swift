@@ -580,8 +580,15 @@ final class HubController {
     /// for the window's morph to have played (`MotionGate`): the refresh the store may start, and the avatars, put work on
     /// the main thread. A peek, with nothing moving, is told at once.
     private func reportOpen() {
-        MotionGate.whenStill { [weak self] in self?.reportOpenNow() }
+        // One report waiting for the motion at most: it reads the hub as it is when it runs.
+        guard !reportQueued else { return }
+        reportQueued = true
+        MotionGate.whenStill { [weak self] in
+            self?.reportQueued = false
+            self?.reportOpenNow()
+        }
     }
+    private var reportQueued = false
 
     private func reportOpenNow() {
         let open = windowOpen || (hub.section != nil && !hub.quiet)
