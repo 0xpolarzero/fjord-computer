@@ -729,6 +729,14 @@ import Testing
         #expect(reader.read(root: root) == nil)
         chmod(project.path, 0o755)
         #expect(reader.read(root: root)?.keys.sorted() == ["cli-b"])
+        // Only the sessions asked about are looked for: one that can't be looked into, not asked about, says nothing.
+        try fm.createDirectory(at: root.appendingPathComponent("project/cli-d/tasks"), withIntermediateDirectories: true)
+        #expect(reader.read(root: root, only: ["cli-d", "cli-x"])?.keys.sorted() == ["cli-d"])
+        let other = root.appendingPathComponent("project/cli-b")
+        chmod(other.path, 0o600)
+        defer { chmod(other.path, 0o755) }
+        #expect(reader.read(root: root, only: ["cli-d"])?.keys.sorted() == ["cli-d"])
+        #expect(reader.read(root: root, only: ["cli-b", "cli-d"]) == nil)
     }
 
     @Test func aTaskReaderListsAgainOnlyAFolderThatChangedAndSeesWhatChanged() throws {

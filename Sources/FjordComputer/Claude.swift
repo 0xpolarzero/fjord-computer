@@ -373,9 +373,10 @@ enum Claude {
     /// per queue: it keeps what it listed.
     final class TaskFolderReader {
         private var rootListing: (stamp: FolderStamp, projects: [URL])?
-        private var projectListings: [URL: (stamp: FolderStamp, sessions: [URL])] = [:]
+        private var projectListings: [URL: (stamp: FolderStamp, sessions: [URL], names: Set<String>)] = [:]
 
-        func read(root: URL = tasksRoot) -> [String: URL]? {
+        /// `only`: the sessions (Claude Code ids) asked about, whose tasks folders alone are looked for; nil: every one.
+        func read(root: URL = tasksRoot, only: Set<String>? = nil) -> [String: URL]? {
             let fm = FileManager.default
             guard fm.fileExists(atPath: root.path) else {
                 rootListing = nil
@@ -398,21 +399,25 @@ enum Claude {
                 rootListing = rootStamp.map { ($0, projects) }
             }
             var folders: [String: URL] = [:]
-            var listings: [URL: (stamp: FolderStamp, sessions: [URL])] = [:]
+            var listings: [URL: (stamp: FolderStamp, sessions: [URL], names: Set<String>)] = [:]
             for project in projects {
                 // Gone (or no longer a folder) since the root was listed: as if it hadn't been there.
                 guard let stamp = FolderStamp(project.path) else { continue }
-                let sessions: [URL]
+                let listing: (stamp: FolderStamp, sessions: [URL], names: Set<String>)
                 if let kept = projectListings[project], kept.stamp == stamp {
-                    sessions = kept.sessions
+                    listing = kept
                 } else {
                     guard let listed = try? fm.contentsOfDirectory(at: project, includingPropertiesForKeys: nil) else {
                         projectListings = listings
                         return nil
                     }
-                    sessions = listed
+                    listing = (stamp, listed, Set(listed.map(\.lastPathComponent)))
                 }
-                listings[project] = (stamp, sessions)
+                listings[project] = listing
+                // Only the sessions asked about are looked into: a stat each, not one for every session ever run.
+                let sessions = only.map { asked in
+                    asked.filter(listing.names.contains).map { project.appendingPathComponent($0, isDirectory: true) }
+                } ?? listing.sessions
                 for session in sessions {
                     let tasks = session.appendingPathComponent("tasks", isDirectory: true)
                     // No folder is none; one that can't be looked into (no permission) isn't known.
@@ -908,7 +913,7 @@ final class ClaudeFeed: @unchecked Sendable {
             watched.insert(cli)
             if let found = activityReader.activity(for: cli) { activity[session.id] = found }
         }
-        let folders = Claude.isRunning ? taskFolderReader.read() : [:]
+        let folders = Claude.isRunning ? taskFolderReader.read(only: Set(sessions.compactMap(\.cliID))) : [:]
         let reader = activityReader
         let found = Self.readTasks(sessions: sessions, folders: folders, reader: taskReader, outputs: openOutputs,
                                    transcript: { reader.transcript($0) })
