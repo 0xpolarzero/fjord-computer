@@ -1342,15 +1342,15 @@ extension Store {
         for (id, thing) in workflows where thing.defaultBranch == nil {
             workflows[id]?.defaultBranch = defaults[thing.repo.lowercased()] ?? defaultBranches[thing.repo]
         }
-        inboxError = searchFailure ?? fetched.error ?? workflowFailure ?? scopeFailure
+        // Said once the results are taken in, after the gate below, as the search cursor moves then: a refresh dropped
+        // before (signed out meanwhile) says nothing and moves nothing.
+        var error = searchFailure ?? fetched.error ?? workflowFailure ?? scopeFailure
         // A search that failed can't say what is gone: the PRs and issues stay as they were, as when the points are spent,
         // and the workflows read are still taken.
         let searchesKept = searchesWait || searchFailure != nil
         var next = found
         if searchesKept {
             for (id, old) in things where old.kind != .workflow { next[id] = old }
-        } else {
-            inboxSyncState.searchCursor = plan.next
         }
         // Nor can an answer GitHub gave in part: what it left out stays, and so does a thing it gave without some of its
         // parts (its comments, its threads), which would otherwise lose facts and announce them again when they come back.
@@ -1372,13 +1372,15 @@ extension Store {
                                               keepsClosed: plan.all.contains { $0.contains("is:closed") })
                 guard current() else { return }
                 for (id, thing) in rechecked.things { next[id] = thing }
-                if inboxError == nil, let failure = rechecked.error { inboxError = failure }
+                if error == nil, let failure = rechecked.error { error = failure }
             }
         }
         // Taken in once the window's morph has played (`MotionGate`): the things, the inbox worked out again and the
         // banners are main-thread work that can wait. What is kept from before is read after it.
-        await MotionGate.still()
+        await motionGate.still()
         guard current() else { return }
+        inboxError = error
+        if !searchesKept { inboxSyncState.searchCursor = plan.next }
         for (id, thing) in workflows { next[id] = thing }
         if !failedRepos.isEmpty {
             let kept = things.filter { $0.value.kind == .workflow && failedRepos.contains($0.value.repo) && next[$0.key] == nil }

@@ -30,6 +30,8 @@ enum MotionGate {
         init(longest: TimeInterval = MotionGate.longest) { self.longest = longest }
 
         var holding: Bool { moving || !waiting.isEmpty }
+        /// How much work waits (tests).
+        var waitingCount: Int { waiting.count }
 
         func began() {
             moving = true

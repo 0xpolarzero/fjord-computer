@@ -358,6 +358,8 @@ final class Store {
     var suggestions: [String] = []
 
     @ObservationIgnored let gh = GitHubClient()
+    /// What the window's morph holds the store's results back with (`MotionGate`); a test gives one of its own.
+    @ObservationIgnored var motionGate = MotionGate.shared
     @ObservationIgnored let notifier = Notifier()
     @ObservationIgnored let updater = Updater()
     @ObservationIgnored private var pollTask: Task<Void, Never>?

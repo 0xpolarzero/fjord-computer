@@ -271,7 +271,7 @@ extension Store {
         do {
             let answers = try await throughJevGate(.inbox, generation: generation) { try await ask(questions, state) }
             // Taken in once the window's morph has played (`MotionGate`): new labels mean the inbox is worked out again.
-            await MotionGate.still()
+            await motionGate.still()
             inboxReadError = nil
             // Onto the things as they are now: the refresh may have moved on while Jev answered. Signed in as someone else
             // meanwhile, the answers were about another's inbox.

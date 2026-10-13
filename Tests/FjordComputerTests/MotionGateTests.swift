@@ -117,3 +117,35 @@ import Testing
         #expect(ok.merging(other) == nil)
     }
 }
+
+/// A sync's results, and what it says of them, wait for the window's morph.
+@MainActor @Suite struct SyncHeldByMotion {
+    @Test func aSyncsResultsAndItsErrorWaitForTheMotion() async {
+        let gate = MotionGate.Gate()
+        let s = Store()
+        s.persists = false
+        s.settings.triage = true
+        s.motionGate = gate
+        s.me = GHUser(login: "me", avatarUrl: nil, type: "User")
+        s.gh.session = StubbedGitHub.session { request in
+            switch request.url?.path ?? "" {
+            case "/repos/a/x": return .init(200, #"{"full_name":"a/x","default_branch":"main"}"#)
+            case "/repos/a/x/branches/main": return .init(200, #"{"commit":{"sha":"s1","commit":{"message":"Fix"}}}"#)
+            default: return .init(500, #"{"message":"Server Error"}"#)
+            }
+        }
+        var ci = InboxStore.ci
+        ci.rules = [Rule(scope: Scope(kinds: [.workflow], in: Pick(include: [.repo("a/x")])), conditions: [.workflow([.failing])],
+                         createdAt: .distantPast)]
+        s.categories = [ci]
+        gate.began()
+        let sync = Task { await s.syncInbox() }
+        for _ in 0..<500 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.waitingCount == 1)
+        // Answered, but nothing said or taken while the window moves.
+        #expect(s.inboxError == nil)
+        gate.ended()
+        await sync.value
+        #expect(s.inboxError != nil)
+    }
+}
