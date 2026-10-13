@@ -716,12 +716,12 @@ final class Store {
         let windowWas = hubWindowOpen
         hubWindowOpen = open && window
         guard open != hubOpen || hubWindowOpen != windowWas else { return }
-        let opened = open && !hubOpen
         hubOpen = open
-        if opened {
-            MotionGate.whenStill { [weak self] in
-                // Due later than the open hub's interval from the last poll: woken, it sleeps again for the shorter one.
-                guard let self, self.hubOpen, let wakes = self.sleeperWakes,
+        // The window opened (not a peek, which polls nothing at once): once its morph has played, a sleeper due later than
+        // the open hub's interval from the last poll is woken, and sleeps again for the shorter one.
+        if hubWindowOpen, !windowWas {
+            motionGate.whenStill { [weak self] in
+                guard let self, self.hubWindowOpen, let wakes = self.sleeperWakes,
                       wakes > (self.lastSync ?? .distantPast).addingTimeInterval(self.effectivePollInterval) else { return }
                 self.sleeper?.cancel()
             }

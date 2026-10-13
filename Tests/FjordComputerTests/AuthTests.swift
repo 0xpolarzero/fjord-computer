@@ -197,6 +197,23 @@ final class StubAuthGitHub: URLProtocol, @unchecked Sendable {
         #expect(s.lastSync != stale)
     }
 
+    @Test func aPeekLeavesTheNextPollWhereItWas() async {
+        StubAuthGitHub.handler = { _ in (200, "[]") }
+        let s = store()
+        s.resolveToken = { nil }
+        s.restartPolling()
+        defer { s.stopPolling() }
+        for _ in 0..<300 where s.sleeperWakes == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        let wakes = s.sleeperWakes
+        let last = s.lastSync
+        // Last polled 45 s ago, with the 60 s interval: the hub's 30 s is past, but a peek starts no poll.
+        s.lastSync = Date(timeIntervalSinceNow: -45)
+        s.setHubOpen(true, window: false)
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(s.sleeperWakes == wakes && !s.isSyncing && last != nil)
+        #expect(s.lastSync.map { $0 < Date(timeIntervalSinceNow: -40) } == true)
+    }
+
     @Test func openingTheHubSetsTheNextPollForItsShorterInterval() async {
         StubAuthGitHub.handler = { _ in (200, "[]") }
         let s = store()
