@@ -277,8 +277,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// close starts on it with nothing captured, then kept from the close for the next opening to start on (see
     /// `startOpening`), until the window has stayed closed `keptPictureLife`.
     private var closedPicture: AppTransition.Picture?
-    /// The opening whose picture was checked against its window once already (see `payPicture`).
-    private var checked: Int?
     /// Input to the window and what was asked of it, counted (see `AppTransition.Marks`).
     private var changes = 0
     private var inputWatch: Any?
@@ -295,10 +293,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     static let keptPictureLife: TimeInterval = 300
     /// An opening whose window is still to be brought in: its generation.
     private var pending: Int?
-    /// A fresh picture the overlay of an opening still needs, and whether it fades in over the one shown. Taken once the
-    /// window has the keyboard (its buttons as they will be when it takes over), else just before it does.
-    private var owed: (generation: Int, crossFade: Bool)?
-    private var keyWatch: NSObjectProtocol?
     /// The morph under way, from its request to its overlay gone: its signpost interval, and the motion gate it holds.
     private var span = MorphSpan()
     /// Whether the window has the keyboard, or is about to (no banner for the Router then: you are looking at the cards).
@@ -433,13 +427,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             finishOpening(mine)
             return
         }
-        // Whatever the overlay starts on is checked against the window once it is in and has the keyboard (`payPicture`): a
-        // picture still the window's stays, another is taken when it can be in before the handoff, faded in over the one
-        // shown (none, another place's, or one the window has moved on from since: the store, a message or a card asked
-        // for while it was closed or on its way out).
-        let other = current.shows != navigator.selection
+        // Whatever the overlay starts on is checked against the window at the handoff, and nothing is captured on the way:
+        // a picture still the window's is cut to the real window on, any other (none, another place's, one the window has
+        // moved on from since) fades into it.
         pending = mine
-        owed = (generation: mine, crossFade: reversing || other || kept == nil)
         current.open(reduced: AppTransition.reduceMotion || current.bar == nil, arriving: { [weak self, weak window] in
             // Within 1% of its frame: the real window takes clicks already (a window wholly transparent takes none, one
             // at 1% shows nothing past the overlay that all but covers it), rather than two refreshes before the end.
@@ -451,8 +442,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // The real window must be in before it takes over. No picture is taken now: it would hold the handoff up. The
             // overlay cuts to the real window when its picture is the window as drawn now, and fades into it otherwise.
             self.bringInPending(mine)
-            self.owed = nil
-            self.stopKeyWatch()
             // Looked at again whatever was checked before (a few ms, within the handoff's two-refresh lead): what the
             // window's appearing changed a turn after the last look must not pop as the overlay cuts away.
             let exact = current.picture?.exact == true && current.glance != nil
@@ -471,68 +460,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         guard pending == mine, generation == mine, phase == .opening, let window else { return }
         pending = nil
         bringIn(window)
-        payPicture(mine)
-    }
-
-    /// The picture the opening `mine` shows checked against its window, once the window is in and has the keyboard (the
-    /// app becomes active a little after it is asked to: the check waits for it, as the picture would): still the window
-    /// as drawn (a glance, a few ms), it stays; otherwise a fresh one is taken if it can be in before the handoff (by what
-    /// pictures cost lately), else the handoff fades into the real window from what the overlay shows.
-    private func payPicture(_ mine: Int) {
-        guard let owed, owed.generation == mine, generation == mine, pending == nil, let window, let run else { return }
-        // The overlay has let go of its picture: the real window shows itself, nothing is owed.
-        guard !run.handedOver else {
-            self.owed = nil
-            stopKeyWatch()
-            return
-        }
-        guard AppTransition.isKey(window) else {
-            guard keyWatch == nil else { return }
-            keyWatch = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window,
-                                                              queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.stopKeyWatch()
-                    self?.payPicture(mine)
-                }
-            }
-            return
-        }
-        self.owed = nil
-        stopKeyWatch()
-        let now = AppTransition.glance(of: window)
-        let first = checked != mine
-        checked = mine
-        let marks = self.marks
-        let fresh = run.picture.map {
-            AppTransition.freshness(of: $0, glance: now, marks: marks, destination: navigator.selection,
-                                    tolerance: AppTransition.Glance.openTolerance)
-        } ?? .stale
-        if fresh == .same, run.picture?.exact == true { return }
-        // Just brought in, the window may still be drawing what changed while it was out (its appearing runs a turn
-        // later): the first look is taken again a turn on before a picture is.
-        if fresh == .stale, run.image != nil, first {
-            self.owed = owed
-            AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
-            return
-        }
-        // The handoff is never held up for a picture: one sure to be in before it (by the most such pictures have cost),
-        // else for a window that moved on a softer one sure to be (the handoff then fades from it), else none (the
-        // handoff fades from what shows). A picture off by noise only, or soft, is taken again only at full scale.
-        let fade = owed.crossFade ? AppTransition.pictureFade * Double(AppTransition.slowdown) : 0
-        let full = window.backingScaleFactor, soft = AppTransition.reducedScale(of: window)
-        let scale: CGFloat
-        if AppTransition.pictureFits(window, pixelScale: full, before: run.settlesAt, after: fade) {
-            scale = full
-        } else if fresh == .stale, soft < full,
-                  AppTransition.pictureFits(window, pixelScale: soft, before: run.settlesAt, after: fade) {
-            scale = soft
-        } else {
-            self.owed = owed
-            run.fadeHandoff()
-            return
-        }
-        refresh(run, window, crossFade: owed.crossFade, glance: now, pixelScale: scale)
-        if run.picture?.exact != true { run.fadeHandoff() }
     }
 
     /// What may have changed the window since a picture was taken, besides its pixels (see `AppTransition.Marks`).
@@ -554,14 +481,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             }
             return event
         }
-    }
-
-    /// The overlay's picture taken again, of the place the window shows now (`glance`: the window's, taken just before;
-    /// `pixelScale`: see `AppTransition.takePicture`).
-    private func refresh(_ run: AppTransition.Run, _ window: NSWindow, crossFade: Bool = false,
-                         glance: AppTransition.Glance? = nil, pixelScale: CGFloat? = nil) {
-        run.refresh(window, destination: navigator.selection, crossFade: crossFade, glance: glance, pixelScale: pixelScale,
-                    marks: marks)
     }
 
     /// While the window is open, in front and has the keyboard (started as it opens or becomes key, stopped as it resigns
@@ -696,21 +615,10 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// What an opening's window shows changed after its overlay's picture was taken (another place, a card, a row or a
-    /// section asked for): a fresh one fades in over it, a turn later (once the change has been drawn), at the latest as
-    /// the real window takes over. Not once it has (its live pixels show).
+    /// Something else asked of the window (another place, a card, a row or a section), open or on its way in: no picture
+    /// taken before stands for it, whatever its pixels (an opening's handoff then fades).
     private func contentChanged() {
-        // Asked of the window open or not: no picture taken before stands for it, whatever its pixels.
         changes &+= 1
-        guard phase == .opening, let run, !run.handedOver else { return }
-        let mine = generation
-        owed = (mine, crossFade: true)
-        AppTransition.nextTurn { [weak self] in self?.payPicture(mine) }
-    }
-
-    private func stopKeyWatch() {
-        if let keyWatch { NotificationCenter.default.removeObserver(keyWatch) }
-        keyWatch = nil
     }
 
     /// What the glass morph needs of `window`: its capture flag, and its inset sidebar's frame (none during the onboarding,
@@ -738,7 +646,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
 
     private func finishOpening(_ mine: Int) {
         guard generation == mine else { return }
-        stopKeyWatch()
         // The picture the overlay handed over on is kept as it was taken (with the glance of what it shows), so a close at
         // once starts on it when the window is still that (near enough); the idle keeper takes another once it has moved on.
         if let picture = run?.picture, picture.key, picture.glance != nil, !memoryShort {
@@ -776,8 +683,6 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         generation += 1
         let mine = generation
         pending = nil
-        owed = nil
-        stopKeyWatch()
         sender.ignoresMouseEvents = true
         stopKeepingPicture()
         let existing = interrupting ? run : nil

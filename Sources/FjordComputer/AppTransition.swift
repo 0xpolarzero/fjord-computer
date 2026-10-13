@@ -329,18 +329,6 @@ enum AppTransition {
         return drawn ? Glance(width: width, height: height, pixels: pixels) : nil
     }
 
-    /// Whether a picture of `window` at `pixelScale` taken now would be in before `deadline` (media time) with `after` to
-    /// spare, by the most such pictures have cost lately (`costs`) and a quarter more.
-    static func pictureFits(_ window: NSWindow, pixelScale: CGFloat, before deadline: CFTimeInterval,
-                            after: TimeInterval = 0) -> Bool {
-        if let picturesFit { return picturesFit(pixelScale < window.backingScaleFactor) }
-        return CACurrentMediaTime() + estimate(window, pixelScale: pixelScale) * 1.25 + after <= deadline
-    }
-
-    /// Says whether a picture (softer or not) fits instead of the clock (a test, whose pictures take what a debug build
-    /// takes).
-    static var picturesFit: ((_ soft: Bool) -> Bool)?
-
     /// Whether the idle keeper may take a picture costing `cost` now: at most a twentieth of the main thread's time, every
     /// 2 s at most.
     static func mayCaptureAtIdle(cost: CFTimeInterval) -> Bool {
@@ -942,19 +930,6 @@ enum AppTransition {
         /// The overlay, in front of the screen.
         func show() {
             overlay.orderFrontRegardless()
-        }
-
-        /// A newer picture of the window (it was built, or its content changed since), of `destination`: the same frame.
-        /// `crossFade`: the picture shown is another (none, or another place's), so the new one fades in over it rather
-        /// than popping in. `glance`: the window's, taken just before (else one is taken here).
-        /// `pixelScale`: a softer picture (see `takePicture`).
-        func refresh(_ window: NSWindow, destination: AppDestination, crossFade: Bool = false, glance: Glance? = nil,
-                     pixelScale: CGFloat? = nil, marks: Marks? = nil) {
-            guard let picture = AppTransition.takePicture(of: window, glassWindow: GlassWindow(capture: capture, sidebar: sidebar),
-                                                          glass: isGlass, destination: destination, glance: glance,
-                                                          pixelScale: pixelScale, marks: marks)
-            else { return }
-            install(picture, crossFade: crossFade)
         }
 
         /// Back on `picture`, whole, after the handoff had begun to let go (a close taking over the overlay as it fades out
