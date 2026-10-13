@@ -55,7 +55,8 @@ struct SettingsView: View {
         // was last read, and changes only if the system changed since.
         .task {
             let now = await SystemState.read()
-            if launchAtLogin != now.launchAtLogin { launchAtLogin = now.launchAtLogin }
+            // A switch of yours made while the system was asked stands: the answer is from before it.
+            if let launch = now.launchAtLogin, launchAtLogin != launch { launchAtLogin = launch }
             if accessibilityTrusted != now.accessibility { accessibilityTrusted = now.accessibility }
         }
     }
@@ -64,7 +65,7 @@ struct SettingsView: View {
     /// asked for, then again each time Settings shows (`read`), never as the page's view is made (which is on every redraw
     /// of what holds it).
     @MainActor enum SystemState {
-        struct Known { var launchAtLogin: Bool; var accessibility: Bool }
+        struct Known: Sendable { var launchAtLogin: Bool; var accessibility: Bool }
         private static var last: Known?
 
         static var known: Known {
@@ -74,14 +75,30 @@ struct SettingsView: View {
             return now
         }
 
-        static func remember(launchAtLogin on: Bool) { last?.launchAtLogin = on }
-
-        static func read() async -> Known {
-            let now = await Task.detached(priority: .userInitiated) {
+        /// The system asked, off the main thread.
+        nonisolated static func ask() async -> Known {
+            await Task.detached(priority: .userInitiated) {
                 Known(launchAtLogin: LaunchAtLogin.isEnabled, accessibility: AXIsProcessTrusted())
             }.value
-            last = now
-            return now
+        }
+
+        /// Bumped by each switch of the login item: an answer asked for before one is older than it.
+        private static var revision = 0
+
+        static func remember(launchAtLogin on: Bool) {
+            revision &+= 1
+            last?.launchAtLogin = on
+        }
+
+        /// What the system says now; the login item nil when you switched it while it was being asked (the answer is
+        /// from before your switch, which stands).
+        static func read(ask: @Sendable () async -> Known = SystemState.ask) async -> (launchAtLogin: Bool?, accessibility: Bool) {
+            let asked = revision
+            let now = await ask()
+            let current = asked == revision
+            last = Known(launchAtLogin: current ? now.launchAtLogin : last?.launchAtLogin ?? now.launchAtLogin,
+                         accessibility: now.accessibility)
+            return (current ? now.launchAtLogin : nil, now.accessibility)
         }
     }
 
