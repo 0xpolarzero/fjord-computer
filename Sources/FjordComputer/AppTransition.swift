@@ -164,14 +164,23 @@ enum AppTransition {
         /// Whether it is `other` (none is never), to within two levels a channel.
         func same(as other: Glance?) -> Bool {
             guard let other else { return false }
-            return self == other || difference(from: other) == 0
+            return self == other || difference(from: other, limit: 0) == 0
+        }
+
+        /// Whether it differs from `other` (none: entirely) by at most `share` of its pixels; stops counting past it.
+        func within(_ share: Double, of other: Glance?) -> Bool {
+            guard let other else { return false }
+            return difference(from: other, limit: share) <= share
         }
 
         /// The share of pixels (0…1) that differ from `other`'s by more than two levels in a channel; 1 for another size.
-        func difference(from other: Glance) -> Double {
+        /// `limit`: the count stops once the share passes it (the result is then only known to be over it).
+        func difference(from other: Glance, limit: Double = 1) -> Double {
             guard width == other.width, height == other.height, !pixels.isEmpty, pixels.count == other.pixels.count else {
                 return 1
             }
+            let total = width * height
+            let most = Int((limit * Double(total)).rounded(.down))
             var differing = 0
             pixels.withUnsafeBufferPointer { a in
                 other.pixels.withUnsafeBufferPointer { b in
@@ -180,12 +189,13 @@ enum AppTransition {
                         if abs(Int(a[i]) - Int(b[i])) > 2 || abs(Int(a[i + 1]) - Int(b[i + 1])) > 2
                             || abs(Int(a[i + 2]) - Int(b[i + 2])) > 2 || abs(Int(a[i + 3]) - Int(b[i + 3])) > 2 {
                             differing += 1
+                            if differing > most { return }
                         }
                         i += 4
                     }
                 }
             }
-            return Double(differing) / Double(width * height)
+            return Double(differing) / Double(total)
         }
 
         /// How far the window may have moved on from the picture a close starts on: a hover come or gone, a count or a
@@ -489,9 +499,10 @@ enum AppTransition {
 
     /// A picture of `window` as it is now, to keep (see `Picture`): its glance first, then the picture itself, for the
     /// morph `glass` is or isn't, of `destination`. Nil without the keyboard (a picture taken then has grey buttons).
-    static func picture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool,
-                        destination: AppDestination) -> Picture? {
-        guard isKey(window), let glance = glance(of: window),
+    /// `glance`: the window's, when the caller has just drawn one (else one is drawn here).
+    static func picture(of window: NSWindow, glassWindow: GlassWindow, glass: Bool, destination: AppDestination,
+                        glance: Glance? = nil) -> Picture? {
+        guard isKey(window), let glance = glance ?? self.glance(of: window),
               let image = snapshot(of: window, capture: glassWindow.capture,
                                    hole: glassWindow.hole(glass: glass, radius: cornerRadius(of: window))) else { return nil }
         return Picture(image: image, frame: window.frame, scale: window.backingScaleFactor, destination: destination,

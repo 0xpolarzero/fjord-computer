@@ -464,8 +464,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         }
         // Moved on by a detail of its own (a scroller shown again, a count, a hover; not something asked for): no picture
         // for that, the handoff fades into the real window over it instead of cutting to it.
-        if run.image != nil, askedFor != mine, let now, let then = run.glance,
-           now.difference(from: then) <= AppTransition.Glance.closeTolerance {
+        if run.image != nil, askedFor != mine, now?.within(AppTransition.Glance.closeTolerance, of: run.glance) == true {
             self.owed = owed
             run.fadeHandoff()
             return
@@ -523,11 +522,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
               AppTransition.inputIdle(for: 0.5) else { return }
         let chrome = glassWindow(window)
         let glass = AppTransition.usesGlass
+        let now = AppTransition.glance(of: window)
         if let kept = closedPicture, kept.fits(window, glass: glass, sidebar: chrome.sidebar),
-           kept.destination == navigator.selection, AppTransition.glance(of: window)?.same(as: kept.glance) == true { return }
+           kept.destination == navigator.selection, now?.same(as: kept.glance) == true { return }
         guard AppTransition.mayCaptureAtIdle else { return }
         if let picture = AppTransition.picture(of: window, glassWindow: chrome, glass: glass,
-                                               destination: navigator.selection) {
+                                               destination: navigator.selection, glance: now) {
             closedPicture = picture
         }
     }
@@ -628,8 +628,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
             // then: the close starts on it at once. Otherwise one is taken now, before anything moves.
             let now = AppTransition.glance(of: sender)
             if let kept = closedPicture, kept.fits(sender, glass: glass, sidebar: chrome.sidebar),
-               kept.destination == navigator.selection, AppTransition.isKey(sender), let then = kept.glance, let now,
-               now.difference(from: then) <= AppTransition.Glance.closeTolerance {
+               kept.destination == navigator.selection, AppTransition.isKey(sender), let then = kept.glance,
+               now?.within(AppTransition.Glance.closeTolerance, of: then) == true {
                 current = AppTransition.makeRun(for: sender, image: kept.image, bar: barMorph, glassWindow: chrome,
                                                 glass: glass, glance: then)
             } else {
