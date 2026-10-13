@@ -132,6 +132,16 @@ struct HubRoot: View {
     }
 }
 
+/// What the bar's views do (see `HubController.rootActions`).
+private struct HubActions {
+    let openApp: (AppDestination) -> Void
+    let openUpdates: () -> Void
+    let openRouter: (String?) -> Void
+    let openRouterMessage: (UUID) -> Void
+    let pickRouterCard: (String) -> Void
+    let openInRouter: (String) -> Void
+}
+
 /// The bar on its screen edge. The window spans the edge (so a peek can open without the window being resized mid-animation)
 /// and lets the mouse through everywhere but the bar and its peek. While the app window is open the bar is away.
 @MainActor
@@ -180,17 +190,11 @@ final class HubController {
     /// The bar's frame on screen.
     var barScreenFrame: NSRect { barOnScreen ?? hubScreenFrame }
     /// Opens the app window on a place (the app's delegate owns it).
-    var openApp: (AppDestination) -> Void = { _ in } {
-        didSet { host.rootView.openApp = { [weak self] in self?.opened($0) } }
-    }
+    var openApp: (AppDestination) -> Void = { _ in }
     /// Opens the app window on Settings, scrolled to Updates: the window's own Settings is the one that scrolls.
-    var openUpdates: () -> Void = {} {
-        didSet { host.rootView.openUpdates = { [weak self] in self?.openedUpdates() } }
-    }
+    var openUpdates: () -> Void = {}
     /// Picks a card in the Router, before the window opens on it.
-    var pickRouterCard: (String) -> Void = { _ in } {
-        didSet { host.rootView.pickRouterCard = pickRouterCard }
-    }
+    var pickRouterCard: (String) -> Void = { _ in }
     /// Scrolls the Router's conversation to a message, before the window opens on it.
     var pickRouterMessage: (UUID) -> Void = { _ in }
     /// Tags a thing (its id) in the Router's composer, before the window opens on it: a row's "Open in Router".
@@ -264,16 +268,25 @@ final class HubController {
             withTransaction(instant) { layout.stretch = BarStretch.rest }
         }
         stretched = false
-        host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout,
-                                openApp: { [weak self] in self?.opened($0) },
-                                openUpdates: { [weak self] in self?.openedUpdates() },
-                                openRouter: { [weak self] in self?.opened(.router, card: $0) },
-                                openRouterMessage: { [weak self] in self?.pickRouterMessage($0); self?.opened(.router) },
-                                pickRouterCard: pickRouterCard,
-                                openInRouter: { [weak self] in self?.prefillRouter($0); self?.opened(.router) })
+        let actions = rootActions
+        host.rootView = HubRoot(store: store, ui: ui, hub: hub, layout: layout, openApp: actions.openApp,
+                                openUpdates: actions.openUpdates, openRouter: actions.openRouter,
+                                openRouterMessage: actions.openRouterMessage, pickRouterCard: actions.pickRouterCard,
+                                openInRouter: actions.openInRouter)
         window.setFrame(dockFrame(), display: true)
         syncTrigger()
     }
+
+    /// What the bar's views do, made once: the root is given the same closures each time it is made again (docking on
+    /// another edge or screen), so the environment that carries them never tells their readers they changed. Each asks
+    /// for what this controller is told to do (`openApp`, `pickRouterCard`, ...) when it is called.
+    private lazy var rootActions = HubActions(
+        openApp: { [weak self] in self?.opened($0) },
+        openUpdates: { [weak self] in self?.openedUpdates() },
+        openRouter: { [weak self] in self?.opened(.router, card: $0) },
+        openRouterMessage: { [weak self] in self?.pickRouterMessage($0); self?.opened(.router) },
+        pickRouterCard: { [weak self] in self?.pickRouterCard($0) },
+        openInRouter: { [weak self] in self?.prefillRouter($0); self?.opened(.router) })
 
     /// The hub's frame on screen (AppKit coordinates).
     private var hubScreenFrame: NSRect { screenFrame(layout.frame) }
