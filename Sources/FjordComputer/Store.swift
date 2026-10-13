@@ -1230,7 +1230,7 @@ final class Store {
             let resolved = await Task.detached(operation: find).value
             // What it found is said once the window's morph has played (`MotionGate`).
             await motionGate.still()
-            guard asked == credentialsChanged else { return }
+            guard asked == credentialsChanged, !Task.isCancelled else { return }
             guard let (token, source) = resolved else {
                 gh.token = nil
                 me = nil
@@ -1248,7 +1248,7 @@ final class Store {
             user = try await gh.get("/user", as: GHUser.self)
         } catch {
             await motionGate.still()
-            guard asked == credentialsChanged else { return }
+            guard asked == credentialsChanged, !Task.isCancelled else { return }
             if error is URLError {
                 // Only a missing or refused token is a sign-in problem: an earlier one is not this attempt's.
                 authError = nil
@@ -1261,7 +1261,7 @@ final class Store {
             return
         }
         await motionGate.still()
-        guard asked == credentialsChanged else { return }
+        guard asked == credentialsChanged, !Task.isCancelled else { return }
         me = user
         authError = nil
         awaitingSignIn = false
@@ -1324,12 +1324,21 @@ final class Store {
     /// Nothing with Triage off, a refresh asked for meanwhile included.
     /// Started, and its end said (`isSyncing`, `lastSync`, a token GitHub refused), once the window's morph has played
     /// (`MotionGate`): all of it is observed.
+    /// A poll whose task was cancelled meanwhile (the loop started again) commits nothing, and lets go of `isSyncing`.
     func pollAll() async {
         await motionGate.still()
-        guard triageOn, !isSyncing else { return }
+        guard !Task.isCancelled, triageOn, !isSyncing else { return }
         isSyncing = true
         let synced = await pollOnce()
         await motionGate.still()
+        guard !Task.isCancelled else {
+            isSyncing = false
+            if refreshQueued {
+                refreshQueued = false
+                Task { await pollAll() }
+            }
+            return
+        }
         if synced, gh.tokenRejected { dropRejectedToken() }
         finishPoll()
     }

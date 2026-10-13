@@ -295,3 +295,39 @@ import Testing
         #expect(SessionIcons.drawableCount != nil)
     }
 }
+
+/// A poll whose task is cancelled while it waits for the window commits nothing.
+@MainActor @Suite struct CancelledPollHeldByMotion {
+    @Test func aPollCancelledAtTheGateLeavesNothingAndLetsGoOfSyncing() async {
+        final class Count: @unchecked Sendable { var looks = 0 }
+        let gate = MotionGate.Gate(longest: 600), count = Count()
+        let s = Store()
+        s.persists = false
+        s.settings.triage = true
+        s.motionGate = gate
+        s.me = nil
+        s.gh.token = nil
+        s.resolveToken = { count.looks += 1; return nil }
+        gate.began()
+        let poll = Task { await s.pollAll() }
+        for _ in 0..<3000 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        poll.cancel()
+        gate.ended()
+        await poll.value
+        #expect(!s.isSyncing && s.lastSync == nil && s.authError == nil && count.looks == 0)
+        // Cancelled while it signed in: what it found isn't said, and syncing is let go of.
+        final class Latch: @unchecked Sendable { var open = false }
+        let latch = Latch()
+        s.resolveToken = { count.looks += 1; while !latch.open { Thread.sleep(forTimeInterval: 0.002) }; return nil }
+        let second = Task { await s.pollAll() }
+        for _ in 0..<3000 where count.looks == 0 { try? await Task.sleep(for: .milliseconds(2)) }
+        #expect(s.isSyncing)
+        gate.began()
+        second.cancel()
+        latch.open = true
+        for _ in 0..<3000 where gate.waitingCount == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        gate.ended()
+        await second.value
+        #expect(!s.isSyncing && s.lastSync == nil && s.authError == nil)
+    }
+}

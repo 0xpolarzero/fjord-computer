@@ -1226,7 +1226,8 @@ extension Store {
         // Signed in as someone else, or with other credentials, while it waits (suggestions sign in too): what it was
         // answered is about the last sign-in, and nothing of it is taken, said or acted on.
         let fence = inboxFence
-        func current() -> Bool { inboxFence == fence }
+        // (A poll's task cancelled meanwhile, the loop started again: what it was answered isn't taken either.)
+        func current() -> Bool { inboxFence == fence && !Task.isCancelled }
         // In the background: the refresh never waits on it.
         if !repoNamesChecked, !repoNamesChecking {
             repoNamesChecking = true
@@ -1786,7 +1787,7 @@ extension Store {
             throw error
         }
         await motionGate.still()
-        guard inboxFence == fence else { return }
+        guard inboxFence == fence, !Task.isCancelled else { return }
         guard let data = json["data"] as? [String: Any] else {
             throw GitHubError(message: ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer")
         }
@@ -1865,12 +1866,12 @@ extension Store {
             // Said (by the refresh) once the window's morph has played, as what it found is taken in.
             await motionGate.still()
             // Asked for an account signed out since: its failure isn't the new one's to wait on.
-            guard inboxFence == fence else { return nil }
+            guard inboxFence == fence, !Task.isCancelled else { return nil }
             inboxSyncState.teamsFailedAt = Date()
             return error.localizedDescription
         }
         await motionGate.still()
-        guard inboxFence == fence else { return nil }
+        guard inboxFence == fence, !Task.isCancelled else { return nil }
         guard let data = json["data"] as? [String: Any] else {
             inboxSyncState.teamsFailedAt = Date()
             return ((json["errors"] as? [[String: Any]])?.first?["message"] as? String) ?? "GitHub gave no answer"
