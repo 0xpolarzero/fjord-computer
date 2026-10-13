@@ -1104,13 +1104,13 @@ enum AppTransition {
 
         /// How the layers look now, mid-flight included (the render server's own values).
         var pose: Pose {
-            guard let c = container.presentation(), let s = shadow.presentation() else {
-                return Pose(rect: windowFrame, radius: windowRadius)
-            }
+            let c = container.presentation() ?? container
+            let s = shadow.presentation() ?? shadow
             let rect = CGRect(x: c.position.x - c.bounds.width / 2, y: c.position.y - c.bounds.height / 2,
                               width: c.bounds.width, height: c.bounds.height)
             return Pose(rect: geometry.screen(rect), radius: c.cornerRadius,
-                        window: windowLayer.presentation()?.opacity ?? windowLayer.opacity,
+                        // On glass the picture lives above the container, in its own fading clip.
+                        window: (windowLayer.presentation()?.opacity ?? windowLayer.opacity) * (glass?.pictureOpacity ?? 1),
                         bar: barLayer.presentation()?.opacity ?? barLayer.opacity,
                         shadow: Pose.shadow(drawn: s.shadowOpacity, container: c.opacity),
                         container: c.opacity,
@@ -1593,6 +1593,9 @@ enum AppTransition {
 
         /// G1's opacity now (the render server's value mid-flight).
         var opacity: Float { g1.layer?.presentation()?.opacity ?? Float(g1.alphaValue) }
+
+        /// The picture's clip fades independently of the window layer at handoff; a resumed pose carries both.
+        var pictureOpacity: Float { clip.presentation()?.opacity ?? clip.opacity }
 
         /// G2's frame for the window-shaped rect `rect` (overlay coordinates), and its radius.
         private func sidebarPlace(in rect: CGRect) -> (frame: NSRect, radius: CGFloat)? {
