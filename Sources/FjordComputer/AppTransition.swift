@@ -85,9 +85,12 @@ struct BarMorph {
 
 @MainActor
 enum AppTransition {
-    /// The bar's own fade-in on a close (the morph's overlay shrinks over it).
-    static let duration: TimeInterval = 0.38
+    /// The bar's own fade-in on a close (the morph's overlay shrinks over it): as long as the close's spring.
+    static let duration: TimeInterval = 0.30
     static let reducedDuration: TimeInterval = 0.15
+    /// A window's alpha that shows nothing under the overlay yet takes clicks (the window server passes those of a wholly
+    /// transparent window through).
+    static let clickableAlpha: CGFloat = 0.01
     /// A fresh picture fading in over another (or over the bare surface) during an opening.
     static let pictureFade: TimeInterval = 0.12
     static let curve = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
@@ -799,9 +802,13 @@ enum AppTransition {
     struct Spring {
         var stiffness: CGFloat
         var damping: CGFloat
-        /// Critically damped: no overshoot to see. Stiff, so the window is there soon (settled in 0.4 s).
-        static let opening = Spring(stiffness: 600, damping: 49)
-        static let closing = Spring(stiffness: 400, damping: 40)
+        /// Critically damped: no overshoot to see. Stiff, so the window is there soon: settled (within 0.1%) in 0.30 s
+        /// both ways, against 0.377 s opening and 0.46 s closing before.
+        static let opening = Spring(stiffness: 946, damping: 61.5)
+        static let closing = Spring(stiffness: 946, damping: 61.5)
+        /// The share of the settling time by which the spring is within 1% of its end (ωt = 6.64 of 9.23): the real
+        /// window may take clicks from then, the overlay all but where it ends.
+        static let nearlyThere = 6.64 / GlassMorph.settledOmegaT
     }
 
     /// A morph in progress. `end` takes the overlay away at once.
@@ -1065,7 +1072,8 @@ enum AppTransition {
 
         /// Grows from where the overlay is now (or the bar's cell, when it was not showing) to the window. `done` runs once
         /// it is there (not if another animation takes over first). The caller flushes it (`AppTransition.flushInitial`).
-        func open(reduced: Bool, done: @escaping () -> Void) {
+        /// `arriving`: once the overlay is within about 1% of the window's frame (`Spring.nearlyThere`), ahead of `done`.
+        func open(reduced: Bool, arriving: (() -> Void)? = nil, done: @escaping () -> Void) {
             let wasShowing = showing
             show()
             // Not showing: the start is set here, and taken as it is (its layers are not on screen yet, so they have no
@@ -1081,6 +1089,15 @@ enum AppTransition {
             // overlay over it stays until it has.
             play(to: windowPose, from: wasShowing ? nil : cell, spring: .opening,
                  opacities: isGlass ? .glassOpening : .opening, lead: 2 * frameDuration, done: done)
+            guard let arriving else { return }
+            let mine = token
+            let at = motionLength(.opening) * Spring.nearlyThere * Double(AppTransition.slowdown)
+            DispatchQueue.main.asyncAfter(deadline: .now() + at) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.ended, self.token == mine else { return }
+                    arriving()
+                }
+            }
         }
 
         /// One refresh of the overlay's screen.

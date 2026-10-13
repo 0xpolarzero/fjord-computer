@@ -236,10 +236,12 @@ import Testing
     }
 
     @Test func theGlassMorphLastsTheSpringsSettlingTime() {
-        #expect(abs(GlassMorph.duration(.opening) - 9.23 / 600.0.squareRoot()) < 0.0001)
-        #expect(abs(GlassMorph.duration(.closing) - 9.23 / 20) < 0.0001)
-        #expect(GlassMorph.duration(.opening) < GlassMorph.duration(.closing))
-        #expect(GlassMorph.duration(.opening) < 0.4)
+        #expect(abs(GlassMorph.duration(.opening) - 9.23 / 946.0.squareRoot()) < 0.0001)
+        #expect(abs(GlassMorph.duration(.closing) - 9.23 / 946.0.squareRoot()) < 0.0001)
+        // About 0.30 s each way.
+        #expect(abs(GlassMorph.duration(.opening) - 0.30) < 0.005 && abs(GlassMorph.duration(.closing) - 0.30) < 0.005)
+        // Within 1% of its end by `nearlyThere` of it.
+        #expect(abs(GlassMorph.springProgress(AppTransition.Spring.nearlyThere) - 0.99) < 0.001)
     }
 
     /// Opening: G1 in at once, the container (and G2 with it) over the second half, in before the handoff; closing: the
