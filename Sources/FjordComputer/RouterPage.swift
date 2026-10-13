@@ -155,6 +155,13 @@ extension Store {
     /// What sessions whose turn is over still have running, as the Working rows have it (a running session's row has none).
     var routerTasks: [String: [ClaudeTask]] { claudeTasks.filter { claudeSessions[$0.key]?.running != true } }
 
+    /// What `routerTasks` is worked out from, for the memos to compare (`RouterMemo.TaskKey`).
+    var routerTaskKey: RouterMemo.TaskKey {
+        let tasks = claudeTasks
+        guard !tasks.isEmpty else { return RouterMemo.TaskKey(tasks: tasks, running: []) }
+        return RouterMemo.TaskKey(tasks: tasks, running: Set(tasks.keys.filter { claudeSessions[$0]?.running == true }))
+    }
+
     /// The Router's cards less those the page doesn't show (`RouterPage.shows`): what the keys and the away strip go by.
     var routerShownCards: [RouterCard] {
         let tasks = routerTasks
@@ -181,10 +188,10 @@ extension Store {
     /// (`RouterMemo`). Its reads are those of the work, so a view reading it still redraws on any of them.
     var routerZones: RouterPage {
         let inputs = RouterMemo.ZoneInputs(cards: router.cards, rows: allAgentRows, asks: routerDispatcher.askBacks,
-                                           summaries: router.summaries, tasks: routerTasks)
+                                           summaries: router.summaries, tasks: routerTaskKey)
         if let memo = RouterMemo.zones, memo.inputs == inputs { return memo.page }
         let page = RouterPage.make(cards: inputs.cards, working: routerWorkingRows, asks: routerAsksInNeeds, history: [],
-                                   summaries: inputs.summaries, tasks: inputs.tasks)
+                                   summaries: inputs.summaries, tasks: routerTasks)
         RouterMemo.zones = (inputs, page)
         return page
     }
@@ -200,13 +207,20 @@ enum RouterMemo {
         var rows: [AgentRow]
         var asks: [RouterAskBack]
         var summaries: [RouterSummary]
-        var tasks: [String: [ClaudeTask]]
+        var tasks: TaskKey
     }
     static var zones: (inputs: ZoneInputs, page: RouterPage)?
 
     struct CountInputs: Equatable {
         var cards: [RouterCard]
+        var tasks: TaskKey
+    }
+
+    /// What `Store.routerTasks` is made of, without making it: what runs in the background by session, and which of those
+    /// sessions are running (their tasks then aren't counted). Nothing is allocated while nothing runs in the background.
+    struct TaskKey: Equatable {
         var tasks: [String: [ClaudeTask]]
+        var running: Set<String>
     }
     static var counts: (inputs: CountInputs, counts: (needsYou: Int, notes: Int))?
 }

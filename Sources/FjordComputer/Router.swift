@@ -891,11 +891,11 @@ extension Store {
     /// to the history unread (RouterTiers.swift).
     var routerCounts: (needsYou: Int, notes: Int) {
         // As on the page: a turn whose session still has subagents or commands running isn't counted yet.
-        let tasks = routerTasks
         // Read by the sidebar, the bar and the page's switch on every redraw: counted again only when the cards or what
-        // runs changed (`RouterMemo`).
-        let inputs = RouterMemo.CountInputs(cards: router.cards, tasks: tasks)
+        // runs changed (`RouterMemo`), compared without working out what runs.
+        let inputs = RouterMemo.CountInputs(cards: router.cards, tasks: routerTaskKey)
         if let memo = RouterMemo.counts, memo.inputs == inputs { return memo.counts }
+        let tasks = routerTasks
         var needsYou = 0, notes = 0
         for card in router.cards where card.isOpen && RouterPage.shows(card, tasks: tasks) {
             switch routerTier(card) {
