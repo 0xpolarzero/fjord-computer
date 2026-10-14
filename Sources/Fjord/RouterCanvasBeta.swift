@@ -10,10 +10,6 @@ extension RouterModel {
         layout = .canvas
     }
 
-    /// Lanes picked (shots).
-    func pickLanes() {
-        layout = .lanes
-    }
 
     /// The Brief picked (shots).
     func pickBrief() {
@@ -90,8 +86,6 @@ struct RouterLayoutSwitch: View {
                 segment(.list, "List", icon: "list.bullet", help: "Now as sections, one under the other")
                 segment(.canvas, "Canvas", icon: "square.on.square.dashed",
                         help: "Beta: each project a frame on an infinite canvas; pan, pinch, drag a frame to move it, double-click to fit")
-                segment(.lanes, "Lanes", icon: "rectangle.split.3x1",
-                        help: "Prototype: a project to a row, a state to a column; what needs you numbered in visit order")
                 segment(.brief, "Brief", icon: "text.alignleft",
                         help: "Prototype: what's going on, written for you; hover a highlight for its card, click to answer it")
             }

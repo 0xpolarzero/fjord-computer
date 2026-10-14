@@ -12,7 +12,7 @@ enum RouterPane: String {
 /// group by lines), a beta picked in the Router's top bar; the list by default. Kept across launches with the window's other
 /// preferences.
 enum RouterLayout: String {
-    case list, canvas, lanes, brief
+    case list, canvas, brief
 
     static let key = "routerLayout"
 }

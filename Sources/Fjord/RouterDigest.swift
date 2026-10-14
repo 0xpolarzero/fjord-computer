@@ -313,6 +313,8 @@ struct DigestPage: View {
     let model: RouterModel
 
     static let column: CGFloat = 720
+    /// The room under the text for the composer floating over it.
+    static let bottom: CGFloat = 150
 
     var body: some View {
         let page = model.zones(store)
@@ -349,7 +351,7 @@ struct DigestPage: View {
             .frame(maxWidth: Self.column, alignment: .leading)
             .padding(.horizontal, 32)
             .padding(.top, 20)
-            .padding(.bottom, LaneMetrics.bottom)
+            .padding(.bottom, DigestPage.bottom)
             .frame(maxWidth: .infinity)
         }
         // The history, a column on the right, beside the text rather than over it.
@@ -611,7 +613,7 @@ private struct DigestHistory: View {
                     ForEach(digest.history) { revision in entry(revision) }
                 }
                 .padding(.vertical, 4)
-                .padding(.bottom, LaneMetrics.bottom)
+                .padding(.bottom, DigestPage.bottom)
             }
         }
         .background(CDS.Surface.s2)
@@ -1018,5 +1020,20 @@ struct DigestFlow: Layout {
             lines[lines.count - 1] = line
         }
         return lines
+    }
+}
+
+/// A scroll view, or in a shot run the content flat from the top: the shots' capture doesn't draw a scroll view's content
+/// on the Router's page.
+struct Scrolling<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if ShotRun.active {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            ScrollView { content }
+        }
     }
 }

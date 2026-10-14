@@ -363,8 +363,8 @@ enum Demo {
     }
 
     /// A day with more projects on top of the triage's: seven projects, some asking, some only running, one quiet. What
-    /// the lanes prototype is judged on (`router-lanes` shots).
-    static func routerLanes(_ store: Store, now: Date = Date()) {
+    /// the Brief and the busy canvas shots are made on.
+    static func routerBusyDay(_ store: Store, now: Date = Date()) {
         routerTriage(store, now: now)
         let added = [
             (session("local_demo-silo-ckpt", "Checkpoint restore over vsock", "silo", minutes: 1, running: true), "externaldrive"),
@@ -414,11 +414,11 @@ enum Demo {
         ]
     }
 
-    /// The Brief over the lanes' day, as its agent would write it: what's for you, what's worth a look, then each project;
+    /// The Brief over the busy day, as its agent would write it: what's for you, what's worth a look, then each project;
     /// and the five rewrites that led to it (sessions finishing, an answer of yours, a new project), each paragraph's text
     /// chaining from one to the next.
     static func routerDigest(_ store: Store, now: Date = Date()) {
-        routerLanes(store, now: now)
+        routerBusyDay(store, now: now)
         func need(_ s: String, _ t: String) -> String { "<need s=\"local_demo-\(s)\">\(t)</need>" }
         func look(_ s: String, _ t: String) -> String { "<look s=\"local_demo-\(s)\">\(t)</look>" }
         func run(_ s: String, _ t: String) -> String { "<run s=\"local_demo-\(s)\">\(t)</run>" }

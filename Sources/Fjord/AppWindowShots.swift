@@ -326,20 +326,7 @@ enum AppWindowShots {
             for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
         // Now as a canvas: each project a frame, its sessions grouped and joined to their groups by lines.
-        // Lanes (a prototype): a project to a row, a state to a column, on a day of seven projects.
-        Shot(name: "router-lanes", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340), compose: { model, store in
-            Demo.routerLanes(store)
-            model.pickLanes()
-        }, appearance: .aqua),
-        Shot(name: "router-lanes-dark", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340), compose: { model, store in
-            Demo.routerLanes(store)
-            model.pickLanes()
-        }, appearance: .darkAqua),
-        Shot(name: "router-lanes-sidebar", destination: { _ in .router }, size: CGSize(width: 1440, height: 1340), compose: { model, store in
-            Demo.routerLanes(store)
-            model.pickLanes()
-        }, appearance: .aqua),
-        // The Brief (a prototype): the day written as prose, at rest, a highlight hovered, one opened, dark, narrow.
+        // The Brief: the day written as prose, at rest, a highlight hovered, one opened, dark, narrow.
         Shot(name: "router-brief", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1420),
              compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .aqua),
         Shot(name: "router-brief-dark", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1420),
@@ -387,10 +374,10 @@ enum AppWindowShots {
         // No brief yet, the Router on: it is about to be written.
         Shot(name: "router-brief-empty", destination: { _ in .router }, sidebarHidden: true,
              size: CGSize(width: 1400, height: 800), compose: { model, store in
-                 Demo.routerLanes(store); model.pickBrief()
+                 Demo.routerBusyDay(store); model.pickBrief()
              }, appearance: .aqua),
-        Shot(name: "router-canvas-lanesdata", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1000), compose: { model, store in
-            Demo.routerLanes(store)
+        Shot(name: "router-canvas-busy", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1000), compose: { model, store in
+            Demo.routerBusyDay(store)
             model.pickCanvas()
         }, appearance: .aqua),
         Shot(name: "router-canvas", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.pickCanvas() },
