@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Fjord
 
@@ -92,7 +93,9 @@ import Testing
         let computerID = try #require(staleLinux.computers.first?.id)
         staleLinux.computers[0].state = .stopped
         staleLinux.computers[0].stateDetail = "Stopped"
-        client.inventory.linux = staleLinux
+        var staleInventory = client.inventory
+        staleInventory.linux = staleLinux
+        client.replaceInventory(staleInventory)
         client.suspendNextComputersList = true
         let refresh = Task { try await model.refresh() }
         await client.waitForSuspendedComputersList()
@@ -116,7 +119,7 @@ import Testing
 
         var afterGap = client.inventory
         afterGap.linux.computers.removeAll()
-        client.inventory = afterGap
+        client.replaceInventory(afterGap)
         client.deliver(.event(sequence: 3, event: .operationsQueueChanged(.empty)))
         await model.waitForRecovery()
         #expect(client.computersListCallCount > initialReads)
@@ -124,7 +127,7 @@ import Testing
 
         var afterReconnect = client.inventory
         afterReconnect.macos.computers.removeAll()
-        client.inventory = afterReconnect
+        client.replaceInventory(afterReconnect)
         let readsBeforeReconnect = client.computersListCallCount
         client.deliver(.reconnected)
         await model.waitForRecovery()
@@ -205,8 +208,8 @@ import Testing
         let macosRequests = client.createRequests.compactMap(\.request)
         let names = linuxRequests.map(\.name) + macosRequests.map(\.name)
         #expect(names == ["linux-new", "linux-new-2", "macos-new", "macos-new-2"])
-        #expect(names.allSatisfy(ComputerName.isValid))
-        #expect(Set(names.map(\.lowercased())).count == names.count)
+        #expect(names.allSatisfy { ComputerName.isValid($0) })
+        #expect(Set(names.map { $0.lowercased() }).count == names.count)
         #expect(linuxRequests.allSatisfy { $0.maxCPUs <= smallFacts.deviceCapacity!.logicalCpus })
         #expect(linuxRequests.allSatisfy { $0.maxMemoryGiB <= smallFacts.deviceCapacity!.maxMemoryGib })
         #expect(linuxRequests.allSatisfy { $0.cpus <= $0.maxCPUs && $0.memoryGiB <= $0.maxMemoryGiB })
@@ -233,7 +236,7 @@ import Testing
         #expect(forkNames.allSatisfy { ComputerName.isValid($0) && $0.count == ComputerName.maximumLength })
         #expect(forkNames.contains { $0.hasSuffix("-fork") })
         #expect(forkNames.contains { $0.hasSuffix("-fork-2") })
-        #expect(Set(forkNames.map(\.lowercased())).count == 2)
+        #expect(Set(forkNames.map { $0.lowercased() }).count == 2)
     }
 
     @Test func completedCheckpointJobsApplyDelayedCheckpointEvents() async throws {

@@ -1298,6 +1298,10 @@ final class MockEngineClient: EngineClient {
         }
     }
 
+    func replaceInventory(_ inventory: ComputerInventory) {
+        self.inventory = inventory
+    }
+
     func publishOperationQueueChange(_ queue: OperationsList) {
         operationQueue = queue
         publish(.operationsQueueChanged(queue))
