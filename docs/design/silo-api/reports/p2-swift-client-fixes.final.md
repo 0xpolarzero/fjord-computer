@@ -1,0 +1,5 @@
+Fixed all nine findings and added fake socket regressions for reconnect restoration, backpressure, cancellation, handshake disconnects, unsubscribe races, sequence gaps, null results, and fragmented frames. The generator now removes duplicate declarations structurally; the job fixtures’ IDs are checked against the pinned schema pattern.
+
+**Verification:** `swift build` passed; `scripts/test.sh` passed with 1,617 tests across 161 suites. The focused client suite passed all 11 tests, generator tests passed 2/2, and the generated-client check passed. Build and test ran in a clean export because concurrent edits in the shared tree previously interrupted a test build.
+
+Commits: `9d2e98cd` (`fix: harden Silo socket client`) and `198490a0` (`docs: record Silo Swift client fixes`). The report is in [p2-swift-client-fixes.md](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/p2-swift-client-fixes.md). Other track changes remain unstaged and uncommitted.

@@ -1,0 +1,5 @@
+Implemented and committed on `engine/p2-silod` as `9a7a4cc8` (`feat(silod): add macOS engine process scaffold`).
+
+The crate and full workspace tests passed: **24 silod unit tests + 1 integration test**, **60 engine tests**, and **2,229 UI tests**; 30 UI tests were ignored. `cargo fmt --check` and `git diff --check` passed. The integration test covers a handshake and two sequential state requests.
+
+The report is at [p2-silod-scaffold.md](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/p2-silod-scaffold.md). It records remaining work: provide the production signing requirement, add a macOS CI job because default workspace members omit `silod`, and qualify live AppKit and LaunchAgent behavior. No LaunchAgent was registered during testing; Apple’s [`SMAppService.register()` documentation](https://developer.apple.com/documentation/servicemanagement/smappservice/register%28%29) also notes that registration does not guarantee the agent has started.
