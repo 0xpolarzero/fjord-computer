@@ -7,6 +7,62 @@ private actor GuestRelayStateRecorder {
     func append(_ value: GuestRelayRecord) { values.append(value) }
 }
 
+private actor GuestAccountBarrier {
+    private var shouldPause = true
+    private var entered = false
+    private var released = false
+    private var entryWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func pauseOnce() async {
+        guard shouldPause else { return }
+        shouldPause = false
+        entered = true
+        entryWaiter?.resume()
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiter = $0 }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
+private struct AccountPausingGuestClient: GuestClient {
+    var base: MockGuestClient
+    var barrier: GuestAccountBarrier
+
+    func account(for computer: GuestReference) async throws -> GuestAccount {
+        await barrier.pauseOnce()
+        return try await base.account(for: computer)
+    }
+    func filesRead(computer: GuestReference, path: String, offset: Int64?, length: Int?) async throws -> GuestFileReadResult {
+        try await base.filesRead(computer: computer, path: path, offset: offset, length: length)
+    }
+    func filesList(computer: GuestReference, path: String) async throws -> [GuestFileEntry] {
+        try await base.filesList(computer: computer, path: path)
+    }
+    func filesWrite(_ request: GuestFileWriteRequest) async throws -> GuestFileWriteResult { try await base.filesWrite(request) }
+    func filesRemove(computer: GuestReference, paths: [String]) async throws -> [String] {
+        try await base.filesRemove(computer: computer, paths: paths)
+    }
+    func filesWatch(computer: GuestReference, paths: [String]) async throws -> GuestFilesWatch {
+        try await base.filesWatch(computer: computer, paths: paths)
+    }
+    func sshAliasEnsure(computer: GuestReference, installInclude: Bool) async throws -> GuestSSHAlias {
+        try await base.sshAliasEnsure(computer: computer, installInclude: installInclude)
+    }
+    func sshAliasRemove(computer: GuestReference) async throws { try await base.sshAliasRemove(computer: computer) }
+    func exec(_ request: GuestExecRequest) async throws -> GuestExecResult { try await base.exec(request) }
+}
+
 @Suite(.serialized) struct GuestRouterTests {
     private let computer = GuestReference(deviceId: "owner-1", computerId: "computer-1")
     private var localComputer: GuestReference { GuestReference(deviceId: nil, computerId: computer.computerId) }
@@ -104,6 +160,48 @@ private actor GuestRelayStateRecorder {
         let markerRead = try #require(log.firstIndex(of: "read:\(GuestRouterPaths.join(paths.forms, FormBridge.marker))"))
         #expect(watch < markerRead)
         await #expect(throws: FormWriter.AlreadyAnswered.self) { try await reader.answer(pending, answers: ["Ship?": "Yes"]) }
+    }
+
+    @MainActor @Test func routerOffDuringGuestAccountLookupRejectsAStaleFormApproval() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        store.agents.enabled = true
+        store.setRouterEnabled(true)
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        let desktopID = "local_guest_stale"
+        let form = PendingForm(id: "guest-form-stale", cliSessionID: "cli-guest-stale", transcriptPath: "/guest/transcript.jsonl",
+            questions: [.init(question: "Ship?", header: "Ship", multiSelect: false, options: [.init(label: "Yes", description: "")])],
+            createdAt: Date(), pid: 42, toolUseID: "tool-stale")
+        let guestForm = GuestPendingForm(computer: computer, location: location, form: form)
+        var state = store.router
+        state.pendingDesktopStarts = [PendingDesktopStart(projectID: UUID(), location: location,
+            alias: "ssh-guest-1", folder: "/workspace/repo", prompt: "Start", state: .matched,
+            desktopSessionID: desktopID, guestSessionID: form.cliSessionID)]
+        state.guestPendingForms = [guestForm]
+        state.cards = [RouterCard(id: "\(desktopID)#w1", sessionID: desktopID, kind: .question, title: "Ship?",
+            folder: "/workspace/repo", text: "Ship?", createdAt: Date(), toolUseID: form.toolUseID)]
+        store.router = state
+
+        let base = client()
+        let barrier = GuestAccountBarrier()
+        let guest = AccountPausingGuestClient(base: base, barrier: barrier)
+        GuestRouterRuntime.shared.registerInstallationTarget(store: store, client: guest, computer: computer)
+        let answer = Task {
+            try await GuestRouterRuntime.shared.answer(guestForm, answers: ["Ship?": "Yes"], cardID: "\(desktopID)#w1")
+        }
+        await barrier.waitUntilEntered()
+        store.setRouterEnabled(false)
+        await barrier.release()
+        do {
+            try await answer.value
+            Issue.record("a guest answer was admitted after Router-off")
+        } catch {
+            #expect(error is FormWriter.Cancelled)
+        }
+
+        let paths = try GuestRouterPaths(home: account.home)
+        #expect(await base.filesSnapshot(for: computer)[GuestRouterPaths.join(paths.forms, "\(form.id).answer.json")] == nil)
     }
 
     @Test func guestRelaySubscribesBeforeWriteAndConsumesAck() async throws {

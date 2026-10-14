@@ -169,8 +169,10 @@ import Foundation
 
     func answer(_ guestForm: GuestPendingForm, answers: [String: String], cardID: String) async throws {
         guard let store, let client = clients[guestForm.computer.key] else { throw FormWriter.Cancelled() }
+        let generation = store.routerGeneration
         try await GuestForms(client: client).answer(guestForm, answers: answers) { [weak store] in
-            guard let store, let card = store.router.cards.first(where: { $0.id == cardID }), card.isOpen,
+            guard let store, store.routerOn, store.routerGeneration == generation,
+                  let card = store.router.cards.first(where: { $0.id == cardID }), card.isOpen,
                   let current = store.guestPendingForm(for: card) else { return false }
             return current.form.id == guestForm.form.id && current.form.toolUseID == guestForm.form.toolUseID
         }
@@ -178,8 +180,10 @@ import Foundation
 
     func answer(_ guestForm: GuestPendingForm, plan decision: PendingForm.PlanDecision, cardID: String) async throws {
         guard let store, let client = clients[guestForm.computer.key] else { throw FormWriter.Cancelled() }
+        let generation = store.routerGeneration
         try await GuestForms(client: client).answer(guestForm, plan: decision) { [weak store] in
-            guard let store, let card = store.router.cards.first(where: { $0.id == cardID }), card.isOpen,
+            guard let store, store.routerOn, store.routerGeneration == generation,
+                  let card = store.router.cards.first(where: { $0.id == cardID }), card.isOpen,
                   let current = store.guestPendingForm(for: card) else { return false }
             return current.form.id == guestForm.form.id && current.form.toolUseID == guestForm.form.toolUseID
         }

@@ -70,8 +70,13 @@ struct GuestForms: Sendable {
 
     private func writeAnswer(_ guestForm: GuestPendingForm, data: Data,
                              stillValid: @escaping @MainActor @Sendable () async -> Bool) async throws {
+        try Task.checkCancellation()
         guard await stillValid() else { throw FormWriter.Cancelled() }
-        let paths = try GuestRouterPaths(home: try await client.account(for: guestForm.computer).home)
+        let account = try await client.account(for: guestForm.computer)
+        try Task.checkCancellation()
+        guard await stillValid() else { throw FormWriter.Cancelled() }
+        try Task.checkCancellation()
+        let paths = try GuestRouterPaths(home: account.home)
         let path = GuestRouterPaths.join(paths.forms, "\(guestForm.form.id).answer.json")
         do {
             try await client.filesWrite(GuestFileWriteRequest(computer: guestForm.computer, path: path, data: data,
