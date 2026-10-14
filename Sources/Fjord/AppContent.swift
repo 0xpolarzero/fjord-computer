@@ -38,7 +38,7 @@ struct InboxListView: View {
             if case .category(let id) = tab, store.rulesOff(id) > 0 {
                 RulesOffMark(count: store.rulesOff(id), size: 12) { store.editCategory(id, go: openApp) }
             }
-            InboxSearchField(search: search)
+            PaletteTrigger()
             if unread > 0 {
                 IconButton(symbol: "envelope.open", help: "Mark all as read", detail: store.shortcut(.markAllRead).display,
                            size: IconButton.Size.header) {

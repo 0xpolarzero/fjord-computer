@@ -16,6 +16,8 @@ final class RouterKeys {
     let store: Store
     let model: RouterModel
     let close: () -> Void
+    /// Opens the palette (⌘F).
+    var openPalette: () -> Void = {}
 
     static let pickKeys = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4]
 
@@ -42,9 +44,9 @@ final class RouterKeys {
             store.routerDispatcher.pick(ask.id, target: options[index].target)
             return true
         }
-        // ⌘F: the search field takes the keyboard (by key position, as the inbox's).
+        // ⌘F: the palette opens (by key position, as the inbox's).
         if flags == .command, code == kVK_ANSI_F {
-            model.search.start()
+            openPalette()
             return true
         }
         if code == kVK_Escape, flags.isEmpty {

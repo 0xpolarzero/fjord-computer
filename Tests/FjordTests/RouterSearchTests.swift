@@ -156,14 +156,16 @@ import Testing
         #expect(model.shownFolds == RouterZone.foldedAtFirst && model.searchFolds.isEmpty)
     }
 
-    @Test func commandFFocusesTheSearchEscEndsItAndTypingStillGoesToTheComposer() {
+    @Test func commandFOpensThePaletteEscEndsASearchAndTypingStillGoesToTheComposer() {
         let store = demo()
         let model = RouterModel()
         var closed = false
+        var opened = 0
         let keys = RouterKeys(store: store, model: model) { closed = true }
+        keys.openPalette = { opened += 1 }
         let request = model.search.focusRequest
         #expect(keys.key(key(kVK_ANSI_F, "f", .command), responder: nil))
-        #expect(model.search.focusRequest == request + 1)
+        #expect(opened == 1 && model.search.focusRequest == request)
         // In the field: ↑ and ↓ pick, everything else is the field's.
         let field = NSTextView()
         model.search.focused = true

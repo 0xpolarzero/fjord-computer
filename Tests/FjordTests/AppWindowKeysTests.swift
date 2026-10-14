@@ -15,7 +15,10 @@ import Testing
         let keys: AppWindowKeys
         let category: UUID
         var closed: Closed
+        /// What the keys asked the palette to open with: nil for no key, else the key to type into it.
+        let opened: Opened
         final class Closed { var count = 0 }
+        final class Opened { var requests: [NSEvent?] = [] }
     }
 
     private func rig() -> Rig {
@@ -33,7 +36,10 @@ import Testing
         let closed = Rig.Closed()
         let keys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search) { closed.count += 1 }
         keys.isDeadKey = { _ in false }
-        return Rig(store: store, navigator: navigator, hub: hub, search: search, keys: keys, category: category, closed: closed)
+        let opened = Rig.Opened()
+        keys.openPalette = { opened.requests.append($0) }
+        return Rig(store: store, navigator: navigator, hub: hub, search: search, keys: keys, category: category, closed: closed,
+                   opened: opened)
     }
 
     private func key(_ code: Int, _ chars: String = "", _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
@@ -170,11 +176,11 @@ import Testing
         r.hub.selection = ids(r)[0]
         #expect(r.keys.key(key(kVK_ANSI_D, "d")))
         #expect(r.store.entries(in: .done).count == 1)
-        #expect(r.search.focusRequest == 0)
+        #expect(r.opened.requests.isEmpty)
         // Nothing picked: it is a letter like any other.
         r.hub.selection = nil
         #expect(r.keys.key(key(kVK_ANSI_D, "d")))
-        #expect(r.search.focusRequest == 1)
+        #expect(r.opened.requests.count == 1)
     }
 
     // MARK: Undo
@@ -262,11 +268,10 @@ import Testing
 
     // MARK: Search
 
-    @Test func typingStartsASearchAndTheFieldGetsTheKey() {
+    @Test func typingOpensThePaletteWithTheKeyAndCommandFOpensItBare() {
         let r = rig()
         #expect(r.keys.key(key(kVK_ANSI_B, "b")))
-        #expect(r.search.focusRequest == 1)
-        #expect(r.search.pendingKeys.count == 1)
+        #expect(r.opened.requests.count == 1 && r.opened.requests[0]?.characters == "b")
         // A space is not a start, nor is a chord.
         let spaceFirst = rig()
         #expect(!spaceFirst.keys.key(key(kVK_Space, " ")))
@@ -274,7 +279,9 @@ import Testing
         // ⌘F asks for the field with no key.
         let find = rig()
         #expect(find.keys.key(key(kVK_ANSI_F, "f", .command)))
-        #expect(find.search.focusRequest == 1 && find.search.pendingKeys.isEmpty)
+        #expect(find.opened.requests.count == 1 && find.opened.requests[0] == nil)
+        // The page's own search is out of reach.
+        #expect(find.search.focusRequest == 0 && find.search.pendingKeys.isEmpty)
     }
 
     @Test func searchFiltersAcrossCategoriesAndDoneByTitleRepoAuthorAndFacts() {

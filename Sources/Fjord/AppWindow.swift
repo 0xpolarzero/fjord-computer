@@ -191,17 +191,26 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     private let checksClaudeCode: Bool
     /// The rows' picked state, Settings' scroll requests and the category editor's step back, shared by the destinations.
     let hub = HubState()
-    private lazy var keys = RouterKeys(store: store, model: routerModel) { [weak self] in self?.close() }
+    private lazy var keys: RouterKeys = {
+        let keys = RouterKeys(store: store, model: routerModel) { [weak self] in self?.close() }
+        keys.openPalette = { [weak self] in self?.palette.open() }
+        return keys
+    }()
     /// The inbox's search, and the keys of the inbox destinations (see `AppWindowKeys`).
     let search = InboxSearch()
     private(set) lazy var inboxKeys: AppWindowKeys = {
         let keys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search) { [weak self] in self?.close() }
+        keys.openPalette = { [weak self] event in self?.palette.open(replaying: event) }
         keys.openInRouter = { [weak self] thing in
             guard let self else { return }
             routerModel.open(thing: thing, in: navigator)
         }
         return keys
     }()
+    /// The ⌘K palette over the window (see `PaletteModel`).
+    private let remembers: Bool
+    private(set) lazy var palette = PaletteModel(store: store, navigator: navigator, routerModel: routerModel, hub: hub,
+                                                 usage: remembers ? PaletteUsage(defaults: .standard) : nil)
     private var monitor: Any?
     /// The window's corner radius, for the root's shapes.
     let corner = WindowCorner()
@@ -214,6 +223,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         self.store = store
         self.routerModel = routerModel ?? RouterModel(defaults: remembers ? .standard : nil)
         self.checksClaudeCode = checksClaudeCode
+        self.remembers = remembers
         navigator = AppNavigator(fallback: store.firstPlace, defaults: remembers ? .standard : nil)
         super.init()
         // The place changed by whatever changes it (the Go menu, back and forward, a chip) while the window is on its way
@@ -707,6 +717,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// Closing morphs the window into the bar: an overlay takes the window's place first, then the real window goes and the
     /// overlay shrinks into the bar's cell, then it really closes.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        palette.close(restoringFocus: false)
         guard AppTransition.enabled, phase != .closing, phase == .opening || isFront else { return phase != .closing }
         // Until the close's first frame is flushed: the time to the first moving frame.
         let asked = MorphSignposts.signposter.beginInterval("Close to first flush")
@@ -972,7 +983,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// would size it to its own minimum, too small to see).
     private func makeContent(size: NSSize) -> NSViewController {
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, search: search,
-                               checksClaudeCode: checksClaudeCode, corner: corner, capture: capture)
+                               palette: palette, checksClaudeCode: checksClaudeCode, corner: corner, capture: capture)
         let controller = NSHostingController(rootView: root)
         // The window sizes the content, not the other way round.
         controller.sizingOptions = []
@@ -1017,6 +1028,12 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                 guard let window = self.window, window.isKeyWindow, event.window === window,
                       !self.store.isRecordingShortcut, self.store.settings.toolsPicked == true else { return false }
                 if TipCenter.dismissVisible(for: event) { return true }
+                // The palette: ⌘K opens and closes it, and while it is open every other key is its own field's.
+                if Shortcut(event) == Palette.shortcut {
+                    self.palette.toggle()
+                    return true
+                }
+                if self.palette.isOpen { return false }
                 return self.navigator.selection == .router ? self.keys.key(event) : self.inboxKeys.key(event)
             }
             return consumed ? nil : event
@@ -1180,6 +1197,8 @@ struct AppRootView: View {
     let routerModel: RouterModel
     let hub: HubState
     let search: InboxSearch
+    /// The ⌘K palette drawn over the window.
+    let palette: PaletteModel
     let checksClaudeCode: Bool
     let sidebar: SidebarState
     /// How the sidebar and the floating controls draw: the app's, or a fixed one in tests and shots.
@@ -1197,19 +1216,21 @@ struct AppRootView: View {
 
     @MainActor
     init(store: Store, navigator: AppNavigator, routerModel: RouterModel, hub: HubState, search: InboxSearch? = nil,
-         checksClaudeCode: Bool = true, sidebar: SidebarState = .shared, chrome: Chrome = .shared,
+         palette: PaletteModel? = nil, checksClaudeCode: Bool = true, sidebar: SidebarState = .shared, chrome: Chrome = .shared,
          corner: WindowCorner? = nil, capture: GlassCapture? = nil) {
         self.store = store
         self.navigator = navigator
         self.routerModel = routerModel
         self.hub = hub
         self.search = search ?? InboxSearch()
+        self.palette = palette ?? PaletteModel(store: store, navigator: navigator, routerModel: routerModel, hub: hub)
         self.checksClaudeCode = checksClaudeCode
         self.sidebar = sidebar
         self.chrome = chrome
         self.corner = corner ?? WindowCorner()
         self.capture = capture
-        actions = AppRootActions(store: store, navigator: navigator, routerModel: routerModel, hub: hub)
+        actions = AppRootActions(store: store, navigator: navigator, routerModel: routerModel, hub: hub,
+                                 palette: self.palette)
     }
 
     // Reads nothing that changes: what does is read by the small pieces below (the page, the corner, the follow-ups and the
@@ -1235,6 +1256,7 @@ struct AppRootView: View {
             .environment(\.openApp, actions.openApp)
             .environment(\.openRouterMessage, actions.openRouterMessage)
             .environment(\.openChange, actions.openChange)
+            .environment(\.openPalette, actions.openPalette)
             .modifier(AppRootRouterOffer(store: store, openInRouter: actions.openInRouter))
             // Its content put back in after a close draws what changed meanwhile as it is (`WindowArrival`).
             .windowArrival()
@@ -1245,6 +1267,7 @@ struct AppRootView: View {
                         .zIndex(100)
                 }
             }
+            .overlay { PaletteOverlay(palette: palette, store: store) }
     }
 }
 
@@ -1257,8 +1280,10 @@ final class AppRootActions {
     let openApp: (AppDestination) -> Void
     let openRouterMessage: (UUID) -> Void
     let openChange: (FjordChange) -> Void
+    let openPalette: () -> Void
 
-    init(store: Store, navigator: AppNavigator, routerModel: RouterModel, hub: HubState) {
+    init(store: Store, navigator: AppNavigator, routerModel: RouterModel, hub: HubState, palette: PaletteModel) {
+        openPalette = { palette.open(pointer: true) }
         openRouter = { card in
             if let card { routerModel.select(card, store: store) }
             navigator.go(.router)

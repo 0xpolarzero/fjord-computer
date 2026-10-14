@@ -74,6 +74,8 @@ final class AppWindowKeys {
     /// "Open in Router" on a thing (its id): the window on the Router, the thing tagged in its composer. Done only while
     /// the Router is on.
     var openInRouter: (String) -> Void = { _ in }
+    /// Opens the palette (⌘F, or typing: the key that started it is typed into the palette's field).
+    var openPalette: (NSEvent?) -> Void = { _ in }
 
     init(store: Store, navigator: AppNavigator, hub: HubState, search: InboxSearch, close: @escaping () -> Void) {
         self.store = store
@@ -115,7 +117,7 @@ final class AppWindowKeys {
         }
         guard navigator.selection.tab != nil else { return false }
         if flags == .command, Int(event.keyCode) == kVK_ANSI_F {
-            search.start()
+            openPalette(nil)
             return true
         }
         if Int(event.keyCode) == kVK_Escape, flags.isEmpty { return escape(window: window, editing: editing) }
@@ -133,7 +135,7 @@ final class AppWindowKeys {
         // Once a search has text, a bound letter is a letter like any other.
         if (!search.isSearching || !typesText(event)), isBound(shortcut), act(shortcut) { return true }
         if startsSearch(event, flags: flags) {
-            search.start(replaying: event)
+            openPalette(event)
             return true
         }
         if flags.isEmpty, Int(event.keyCode) == kVK_DownArrow || Int(event.keyCode) == kVK_UpArrow {

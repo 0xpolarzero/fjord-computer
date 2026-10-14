@@ -59,6 +59,16 @@ enum AppWindowShots {
         var prepare: ((Store) -> Void)? = nil
         /// The window's look; nil follows the Mac.
         var appearance: NSAppearance.Name?
+        /// Opens the ⌘K palette over the window.
+        var palette: PaletteShot?
+    }
+
+    /// How a shot opens the palette: with a query typed, on the first row's actions page, on fixture items rather than the
+    /// demo data's.
+    struct PaletteShot {
+        var query = ""
+        var actions = false
+        var fixture = false
     }
 
     static let catalog: [Shot] = [
@@ -159,6 +169,18 @@ enum AppWindowShots {
             }
         }),
         Shot(name: "router") { _ in .router },
+        Shot(name: "palette", destination: { $0.shownCategories[0].id.asCategory }, palette: PaletteShot()),
+        Shot(name: "palette-search", destination: { $0.shownCategories[0].id.asCategory }, palette: PaletteShot(query: "fix")),
+        Shot(name: "palette-actions", destination: { $0.shownCategories[0].id.asCategory },
+             palette: PaletteShot(query: "fix", actions: true)),
+        Shot(name: "palette-router", destination: { _ in .router }, palette: PaletteShot()),
+        Shot(name: "palette-fixture", destination: { $0.shownCategories[0].id.asCategory }, palette: PaletteShot(fixture: true)),
+        Shot(name: "palette-fixture-search", destination: { $0.shownCategories[0].id.asCategory },
+             palette: PaletteShot(query: "fix", fixture: true)),
+        Shot(name: "palette-fixture-many", destination: { $0.shownCategories[0].id.asCategory },
+             palette: PaletteShot(query: "e", fixture: true)),
+        Shot(name: "palette-fixture-actions", destination: { $0.shownCategories[0].id.asCategory },
+             palette: PaletteShot(query: "fix", actions: true, fixture: true)),
         Shot(name: "router-placement-popover", destination: { _ in .router }, compose: { model, store in
             model.draft = "@lookout"
             model.caret = nil
@@ -607,7 +629,15 @@ enum AppWindowShots {
         let navigator = AppNavigator(start: shot.destination(store), defaults: nil)
         let routerModel = RouterModel()
         shot.compose?(routerModel, store)
-        let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: HubState(),
+        let hub = HubState()
+        let palette = PaletteModel(store: store, navigator: navigator, routerModel: routerModel, hub: hub,
+                                   sources: shot.palette?.fixture == true ? PaletteFixture.sources(store) : nil)
+        if let open = shot.palette {
+            palette.open()
+            if !open.query.isEmpty { palette.setQuery(open.query) }
+            if open.actions { palette.showActions() }
+        }
+        let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, palette: palette,
                                checksClaudeCode: false,
                                sidebar: SidebarState(defaults: nil, collapsed: shot.sidebarHidden),
                                // Glass can't be captured: shots draw the opaque chrome, whatever the Mac's settings.
