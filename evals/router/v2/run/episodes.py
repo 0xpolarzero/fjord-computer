@@ -117,12 +117,13 @@ def _legacy_modules(format_name, policy_name):
     import formats
     import jev
     import run
-    from explore import cal, combo, final3, fusion
+    from explore import cal, capabilities, combo, final3, fusion
     lexical = adapter.install_lexical()
     # Register the shipped format directly. Avoid importing every explorer just
     # to discover combo-o (some explorers install their own fusion functions).
     formats.FORMATS.update(combo.FORMATS)
     formats.FORMATS.update(cal.FORMATS)
+    formats.FORMATS.update(capabilities.FORMATS)
     lexical.install()
     lexical.STATE["fields"] = True
     fusion.case_features = final3.case_features
