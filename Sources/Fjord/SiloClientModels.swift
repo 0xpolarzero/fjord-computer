@@ -70,6 +70,7 @@ struct DeviceFacts: Codable, Equatable {
 }
 
 extension SiloWireComputerKind: CaseIterable {
+    static var allCases: [SiloWireComputerKind] { [.linux, .macos] }
     var title: String { rawValue == "macos" ? "macOS" : "Linux" }
 }
 

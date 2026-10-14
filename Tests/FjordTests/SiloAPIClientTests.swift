@@ -33,7 +33,7 @@ import Testing
         let server = try FakeSiloUnixServer()
         defer { server.stop() }
         let deliveries = SocketDeliveryRecorder()
-        let client = SocketEngineClient(path: server.path, protocolRange: SiloWireProtocolRange(min: 1, max: 2))
+        let client = SocketEngineClient(path: server.path, protocolRange: SiloWireProtocolRange(max: 2, min: 1))
 
         let subscription = try await client.eventsSubscribe(events: ["computers.*", "operations.*"]) { delivery in
             deliveries.append(delivery)

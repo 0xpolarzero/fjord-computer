@@ -1107,7 +1107,7 @@ final class MockEngineClient: EngineClient {
         let sizes = checkpoints.map(\.sizeBytes)
         let total = sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(UInt64(0), +) : nil
         let usage = CheckpointUsage(totalBytes: total, checkpoints: checkpoints.map {
-            CheckpointUsageEntry(id: $0.id, sizeBytes: $0.sizeBytes)
+            CheckpointUsageEntry(deleteBlocker: nil, id: $0.id, sizeBytes: $0.sizeBytes, usedBy: nil)
         })
         let payload: CheckpointsChangedPayload
         switch row {

@@ -265,7 +265,7 @@ private actor SocketRequestTransport {
 /// issuing any other request and reconnects with fresh subscriptions after socket loss.
 @MainActor
 final class SocketEngineClient: EngineClient {
-    static let defaultProtocolRange = SiloWireProtocolRange(min: 1, max: 1)
+    static let defaultProtocolRange = SiloWireProtocolRange(max: 1, min: 1)
     static var defaultSocketPath: String {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".silo/engine.sock").path
     }
@@ -290,8 +290,8 @@ final class SocketEngineClient: EngineClient {
     private var unmatchedEvents: [SiloWireEventEnvelope] = []
     private(set) var handshakeResult: SiloWireHandshakeResult?
 
-    init(path: String = Self.defaultSocketPath, protocolRange: SiloWireProtocolRange = Self.defaultProtocolRange) {
-        self.path = path
+    init(path: String? = nil, protocolRange: SiloWireProtocolRange = SiloWireProtocolRange(max: 1, min: 1)) {
+        self.path = path ?? Self.defaultSocketPath
         self.protocolRange = protocolRange
     }
 
