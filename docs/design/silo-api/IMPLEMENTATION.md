@@ -31,6 +31,10 @@ P3-guest (`guest.exec`/`guest.files`/`guest.sshAlias`) · P3-checkpoints (automa
 
 Computers tool, complete · Router "Runs on" (sshConfigs, plugin and hook installed in the guest, delivery over `guest.files`) · Triage "Run in a computer" (headless runs, an automatic checkpoint first, proof recordings) · bundling `silod` and registering the LaunchAgent
 
+## Process (2026-10-14 update)
+
+Implementation runs on Claude Sonnet subagents, many in parallel. Codex gpt-6.1-sol (high) reviews are non-blocking: a branch merges into Silo `main` once its gate is green, and the review findings become follow-up fix tasks.
+
 ## Push policy
 
 Owner, 2026-10-14: push Silo `main` to GitHub only once everything is merged. Fjord's release build needs the pinned Silo commit to be published.
