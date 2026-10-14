@@ -112,6 +112,76 @@ import Testing
         #expect(client.checkpointListCallCount == 0)
     }
 
+    @Test func setupProgressDecodesEveryCanonicalFieldAndDrivesPresentation() throws {
+        let fixture = Data("""
+        {
+          "jobId":"setup:linux-setup-1",
+          "kind":"computerConfiguration",
+          "computerId":"computer-1",
+          "source":"setup",
+          "data":{
+            "schemaVersion":1,"type":"computer-configuration","requestId":"linux-setup-1",
+            "phase":"computer-configuration","step":"download-image","computer":"devbox",
+            "fraction":0.625,"message":"Downloading the runtime image","safeForDisplay":true,
+            "timestamp":"2026-10-14T10:00:00Z","level":"warning","elapsedSeconds":12.5,
+            "downloadedBytes":640,"totalBytes":1024,"failureCode":"network","exitCode":7,
+            "diagnostic":"connection dropped","partial":true
+          }
+        }
+        """.utf8)
+        let progress = try JSONDecoder().decode(OperationJobProgress.self, from: fixture)
+        guard case .setup(let setup) = progress.data else {
+            Issue.record("Setup source must decode to its own progress type.")
+            return
+        }
+
+        #expect(setup.schemaVersion == 1)
+        #expect(setup.type == "computer-configuration")
+        #expect(setup.requestId == "linux-setup-1")
+        #expect(setup.phase == "computer-configuration")
+        #expect(setup.step == "download-image")
+        #expect(setup.computer == "devbox")
+        #expect(setup.fraction == 0.625)
+        #expect(setup.message == "Downloading the runtime image")
+        #expect(setup.safeForDisplay)
+        #expect(setup.timestamp == "2026-10-14T10:00:00Z")
+        #expect(setup.level == "warning")
+        #expect(setup.elapsedSeconds == 12.5)
+        #expect(setup.downloadedBytes == 640)
+        #expect(setup.totalBytes == 1024)
+        #expect(setup.failureCode == "network")
+        #expect(setup.exitCode == 7)
+        #expect(setup.diagnostic == "connection dropped")
+        #expect(setup.partial)
+        #expect(progress.data.presentationProgress == 0.625)
+        #expect(progress.data.presentationTitle == "Downloading the runtime image")
+
+        let encoded = try JSONEncoder().encode(progress)
+        #expect(try JSONDecoder().decode(OperationJobProgress.self, from: encoded) == progress)
+
+        let lifecycle = try JSONDecoder().decode(OperationJobProgress.self, from: Data("""
+        {"jobId":"job:lifecycle-1","source":"lifecycle","data":{"computerId":"computer-1","action":"start","step":"network"}}
+        """.utf8))
+        guard case .lifecycle(let lifecycleData) = lifecycle.data else {
+            Issue.record("Lifecycle source must decode to its own progress type.")
+            return
+        }
+        #expect(lifecycleData == LifecycleJobProgressData(computerId: "computer-1", action: "start", step: "network"))
+
+        let macos = try JSONDecoder().decode(OperationJobProgress.self, from: Data("""
+        {"jobId":"job:macos-1","source":"macos","data":{"computerId":"computer-2","state":"running","progress":0.75,"detail":"Booting","checkpointOperation":{"kind":"capture","status":"running","stage":"Saving memory"}}}
+        """.utf8))
+        guard case .macos(let macosData) = macos.data else {
+            Issue.record("macOS source must decode to its own progress type.")
+            return
+        }
+        #expect(macosData.computerId == "computer-2")
+        #expect(macosData.state == "running")
+        #expect(macosData.progress == 0.75)
+        #expect(macosData.detail == "Booting")
+        #expect(macosData.checkpointOperation?.stage == "Saving memory")
+    }
+
     @Test func cancelLeavesEngineConnectedAndDoesNotStopComputers() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client)

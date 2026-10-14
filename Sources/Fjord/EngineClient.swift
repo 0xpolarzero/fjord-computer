@@ -364,17 +364,153 @@ struct CheckpointsChangedPayload: Codable, Equatable {
     var usage: [String: CheckpointUsage]? = nil
 }
 
-enum JobProgressSource: String, Codable { case setup, lifecycle, transfer, backup, push, macos, update }
+enum JobProgressSource: String, Codable, Equatable { case setup, lifecycle, transfer, backup, push, macos, update }
 
-/// The source-specific `data` fields from `operations.job.progress` (05 §4.2 E).
-struct OperationJobProgressData: Codable, Equatable {
-    var computerId: String? = nil
-    var action: String? = nil
-    var step: String? = nil
-    var state: String? = nil
+struct SetupJobProgressData: Codable, Equatable {
+    var schemaVersion: Int
+    var type: String
+    var requestId: String
+    var phase: String
+    var step: String
+    var computer: String? = nil
+    var fraction: Double? = nil
+    var message: String
+    var safeForDisplay: Bool
+    var timestamp: String
+    var level: String
+    var elapsedSeconds: Double
+    var downloadedBytes: UInt64? = nil
+    var totalBytes: UInt64? = nil
+    var failureCode: String? = nil
+    var exitCode: Int? = nil
+    var diagnostic: String? = nil
+    var partial: Bool
+}
+
+struct LifecycleJobProgressData: Codable, Equatable {
+    var computerId: String
+    var action: String
+    var step: String
+}
+
+struct TransferJobProgressData: Codable, Equatable {
+    var id: String
+    var computer: String
+    var direction: String
+    var state: String
+    var name: String
+    var fileIndex: UInt64
+    var fileCount: UInt64
+    var bytesDone: UInt64
+    var bytesTotal: UInt64
+}
+
+struct BackupJobProgressArchive: Codable, Equatable {
+    var name: String
+    var archivePath: String
+    var completedLabel: String
+    var size: UInt64
+    var destination: String
+    var computers: [String]
+    var checkpointName: String? = nil
+}
+
+struct BackupJobProgressPhase: Codable, Equatable {
+    var title: String
+    var detail: String
+    var tone: String
+}
+
+struct BackupJobProgressData: Codable, Equatable {
+    var operation: String
+    var archive: BackupJobProgressArchive
+    var runningNames: [String]
+    var targetName: String? = nil
+    var progress: UInt8
+    var indeterminate: Bool? = nil
+    var canCancel: Bool? = nil
+    var phases: [BackupJobProgressPhase]
+}
+
+struct PushJobProgressData: Codable, Equatable {
+    var operationId: String
+    var computer: String
+    var repositoryPath: String
+    var status: String
+    var commitCount: Int
+    var message: String? = nil
+    var target: JSONValue
+}
+
+struct MacosJobProgressData: Codable, Equatable {
+    var computerId: String
+    var state: String
     var progress: Double? = nil
     var detail: String? = nil
     var checkpointOperation: ComputerCheckpointOperation? = nil
+}
+
+struct UpdateJobProgressData: Codable, Equatable {
+    var phase: String
+    var lastChecked: String? = nil
+    var retryAction: String? = nil
+    var currentVersion: String
+    var availableVersion: String? = nil
+    var releaseNotes: String? = nil
+    var downloadedBytes: UInt64? = nil
+    var totalBytes: UInt64? = nil
+    var automaticChecks: Bool
+    var packageKind: String
+    var releaseUrl: String
+    var error: String? = nil
+    var errorDetails: String? = nil
+    var runningComputers: [String]
+    var canInstall: Bool
+    var installBlockReason: String? = nil
+}
+
+enum OperationJobProgressData: Equatable {
+    case setup(SetupJobProgressData)
+    case lifecycle(LifecycleJobProgressData)
+    case transfer(TransferJobProgressData)
+    case backup(BackupJobProgressData)
+    case push(PushJobProgressData)
+    case macos(MacosJobProgressData)
+    case update(UpdateJobProgressData)
+
+    var presentationProgress: Double? {
+        switch self {
+        case .setup(let value): value.fraction
+        case .lifecycle: nil
+        case .transfer(let value): value.bytesTotal == 0 ? nil : Double(value.bytesDone) / Double(value.bytesTotal)
+        case .backup(let value): Double(value.progress) / 100
+        case .push: nil
+        case .macos(let value): value.progress
+        case .update(let value):
+            guard let total = value.totalBytes, total > 0, let done = value.downloadedBytes else { return nil }
+            Double(done) / Double(total)
+        }
+    }
+
+    var presentationTitle: String? {
+        switch self {
+        case .setup(let value): value.message
+        case .lifecycle(let value): "\(value.action.capitalized) · \(value.step)"
+        case .transfer(let value): value.name
+        case .backup(let value): value.phases.last?.detail ?? "Backup"
+        case .push(let value): value.message ?? "Pushing changes"
+        case .macos(let value): value.detail ?? value.state.capitalized
+        case .update(let value): value.error ?? value.phase.capitalized
+        }
+    }
+
+    var presentationComputerId: String? {
+        switch self {
+        case .lifecycle(let value): value.computerId
+        case .macos(let value): value.computerId
+        case .setup, .transfer, .backup, .push, .update: nil
+        }
+    }
 }
 
 struct OperationJobProgress: Codable, Equatable {
@@ -383,6 +519,51 @@ struct OperationJobProgress: Codable, Equatable {
     var computerId: String? = nil
     var source: JobProgressSource
     var data: OperationJobProgressData
+
+    private enum CodingKeys: String, CodingKey { case jobId, kind, computerId, source, data }
+
+    init(jobId: String, kind: String? = nil, computerId: String? = nil, source: JobProgressSource,
+         data: OperationJobProgressData) {
+        self.jobId = jobId
+        self.kind = kind
+        self.computerId = computerId
+        self.source = source
+        self.data = data
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        jobId = try container.decode(String.self, forKey: .jobId)
+        kind = try container.decodeIfPresent(String.self, forKey: .kind)
+        computerId = try container.decodeIfPresent(String.self, forKey: .computerId)
+        source = try container.decode(JobProgressSource.self, forKey: .source)
+        switch source {
+        case .setup: data = .setup(try container.decode(SetupJobProgressData.self, forKey: .data))
+        case .lifecycle: data = .lifecycle(try container.decode(LifecycleJobProgressData.self, forKey: .data))
+        case .transfer: data = .transfer(try container.decode(TransferJobProgressData.self, forKey: .data))
+        case .backup: data = .backup(try container.decode(BackupJobProgressData.self, forKey: .data))
+        case .push: data = .push(try container.decode(PushJobProgressData.self, forKey: .data))
+        case .macos: data = .macos(try container.decode(MacosJobProgressData.self, forKey: .data))
+        case .update: data = .update(try container.decode(UpdateJobProgressData.self, forKey: .data))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(jobId, forKey: .jobId)
+        try container.encodeIfPresent(kind, forKey: .kind)
+        try container.encodeIfPresent(computerId, forKey: .computerId)
+        try container.encode(source, forKey: .source)
+        switch data {
+        case .setup(let value): try container.encode(value, forKey: .data)
+        case .lifecycle(let value): try container.encode(value, forKey: .data)
+        case .transfer(let value): try container.encode(value, forKey: .data)
+        case .backup(let value): try container.encode(value, forKey: .data)
+        case .push(let value): try container.encode(value, forKey: .data)
+        case .macos(let value): try container.encode(value, forKey: .data)
+        case .update(let value): try container.encode(value, forKey: .data)
+        }
+    }
 }
 
 enum JSONValue: Codable, Equatable {
@@ -596,8 +777,8 @@ final class MockEngineClient: EngineClient {
     private static var demoProgress: OperationJobProgress {
         OperationJobProgress(jobId: "job:starting-macos-demo", kind: "lifecycle", computerId: startingID,
                              source: .macos,
-                             data: OperationJobProgressData(computerId: startingID, state: "starting", progress: 0.42,
-                                                            detail: "Starting macOS", checkpointOperation: nil))
+                             data: .macos(MacosJobProgressData(computerId: startingID, state: "starting", progress: 0.42,
+                                                             detail: "Starting macOS")))
     }
 
     func computersList(deviceId: String? = nil) async throws -> ComputerInventory { inventory }
@@ -641,7 +822,7 @@ final class MockEngineClient: EngineClient {
                                       freshness: "fresh", checkpoints: [])
         inventory.linux.computers.append(row)
         publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
-        setProgress(jobId: jobId, computerId: row.id, state: "setting-up", progress: 0.4, detail: "Preparing computer")
+        setProgress(jobId: jobId, computerId: row.id, state: "setting-up", progress: 0.4, detail: "Preparing computer", source: .setup)
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             self?.finish(jobId)
@@ -749,8 +930,10 @@ final class MockEngineClient: EngineClient {
                                             scope: row.displayState == .running ? .full : .disk, reason: .manual,
                                             kind: request.kind ?? .manual, sizeBytes: nil)
         appendCheckpoint(checkpoint, to: request.computerId)
-        setProgress(jobId: jobId, computerId: request.computerId, state: "running", progress: 0.65,
-                    detail: "Saving checkpoint")
+        if case .macos = row {
+            setProgress(jobId: jobId, computerId: request.computerId, state: "running", progress: 0.65,
+                        detail: "Saving checkpoint", source: .macos)
+        }
         scheduleCheckpointFinish(jobId, computerId: request.computerId, after: .milliseconds(350))
         return ComputerJob(jobId: jobId)
     }
@@ -897,10 +1080,37 @@ final class MockEngineClient: EngineClient {
 
     private func setProgress(jobId: String, computerId: String, state: String, progress: Double, detail: String,
                              source: JobProgressSource = .macos, action: String? = nil, step: String? = nil) {
-        let event = OperationJobProgress(
-            jobId: jobId, kind: "lifecycle", computerId: computerId, source: source,
-            data: OperationJobProgressData(computerId: computerId, action: action, step: step,
-                                           state: state, progress: progress, detail: detail))
+        let data: OperationJobProgressData
+        switch source {
+        case .setup:
+            data = .setup(SetupJobProgressData(schemaVersion: 1, type: "computer-configuration", requestId: jobId,
+                                               phase: state, step: step ?? state, computer: computerId, fraction: progress,
+                                               message: detail, safeForDisplay: true,
+                                               timestamp: ISO8601DateFormatter().string(from: Date()), level: "info",
+                                               elapsedSeconds: 0, partial: false))
+        case .lifecycle:
+            data = .lifecycle(LifecycleJobProgressData(computerId: computerId, action: action ?? "start", step: step ?? state))
+        case .transfer:
+            data = .transfer(TransferJobProgressData(id: jobId, computer: computerId, direction: "download",
+                                                     state: "transferring", name: detail, fileIndex: 0, fileCount: 1,
+                                                     bytesDone: 0, bytesTotal: 1))
+        case .backup:
+            data = .backup(BackupJobProgressData(operation: jobId,
+                                                 archive: BackupJobProgressArchive(name: "backup", archivePath: "", completedLabel: "Backup",
+                                                                                  size: 0, destination: "", computers: []),
+                                                 runningNames: [], progress: UInt8(max(0.0, min(100.0, progress * 100))),
+                                                 phases: [BackupJobProgressPhase(title: state, detail: detail, tone: "info")]))
+        case .push:
+            data = .push(PushJobProgressData(operationId: jobId, computer: computerId, repositoryPath: "", status: "pushing",
+                                             commitCount: 0, message: detail, target: .null))
+        case .macos:
+            data = .macos(MacosJobProgressData(computerId: computerId, state: state, progress: progress, detail: detail))
+        case .update:
+            data = .update(UpdateJobProgressData(phase: state, currentVersion: "0", automaticChecks: true,
+                                                 packageKind: "macos", releaseUrl: "", runningComputers: [], canInstall: false))
+        }
+        let kind = source == .setup ? "computerConfiguration" : "lifecycle"
+        let event = OperationJobProgress(jobId: jobId, kind: kind, computerId: computerId, source: source, data: data)
         currentProgress = event
         publish(.jobProgress(event))
     }

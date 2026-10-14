@@ -276,10 +276,10 @@ private struct ComputerJobCard: View {
     let job: OperationJobProgress
     let inventory: ComputerInventory?
 
-    private var percent: Double? { job.data.progress.map { min(max($0, 0), 1) } }
-    private var title: String { job.data.detail ?? job.data.step ?? job.data.state?.capitalized ?? "Working" }
+    private var percent: Double? { job.data.presentationProgress.map { min(max($0, 0), 1) } }
+    private var title: String { job.data.presentationTitle ?? "Working" }
     private var subject: String {
-        let id = job.computerId ?? job.data.computerId
+        let id = job.computerId ?? job.data.presentationComputerId
         return id.flatMap { inventory?.computer($0) }.map { "\($0.name) · \($0.kind.title)" } ?? job.jobId
     }
 
