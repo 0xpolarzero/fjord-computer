@@ -103,6 +103,7 @@ struct ComputerResourcesPanel: View {
     @State private var confirmsStop = false
 
     private var isRunning: Bool { row.displayState == .running }
+    private var isMacos: Bool { row.kind == .macos }
 
     var body: some View {
         ComputerPanel(title: "Resources", action: {
@@ -110,11 +111,16 @@ struct ComputerResourcesPanel: View {
                 if isRunning { confirmsStop = true }
                 else { save() }
             }
-            .disabled(!hostLimitsLoaded || (cpus == currentCPUs && memoryGiB == currentMemory)
+            .disabled(isMacos || !hostLimitsLoaded || (cpus == currentCPUs && memoryGiB == currentMemory)
                       || (row.displayState != .running && row.displayState != .stopped))
         }) {
             VStack(alignment: .leading, spacing: 9) {
-                if let limitError {
+                if isMacos {
+                    Label("Mac resource editing is coming soon.", systemImage: "clock")
+                        .font(CDS.sans(11, .medium)).foregroundStyle(CDS.Text.secondary)
+                    Text("The engine API contract for changing Mac resources is not ready yet.")
+                        .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+                } else if let limitError {
                     ComputerNotice(text: limitError, tone: .warning)
                 } else if !hostLimitsLoaded {
                     ProgressView("Reading host limits…").font(CDS.sans(10))
@@ -147,19 +153,6 @@ struct ComputerResourcesPanel: View {
                 maxCPUs = max(2, cpus)
                 maxMemoryGiB = max(4, memoryGiB)
                 hostLimitsLoaded = false
-            }
-        }
-        .task {
-            if row.kind == .macos {
-                do {
-                    let limits = try await model.resourceLimits(for: .macos)
-                    maxCPUs = max(cpus, limits.maxCPUs)
-                    maxMemoryGiB = max(memoryGiB, limits.maxMemoryGiB)
-                    hostLimitsLoaded = true
-                    limitError = nil
-                } catch {
-                    limitError = error.localizedDescription
-                }
             }
         }
     }

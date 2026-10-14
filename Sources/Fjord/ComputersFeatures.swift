@@ -80,25 +80,6 @@ struct ComputerResourceLimits: Equatable {
     }
 }
 
-/// The generated API currently models Linux's optimistic configuration row. The owner spec leaves the macOS edit payload
-/// open (10 §3, Q13), so this uses a small tagged payload on the same canonical method and keeps disk size immutable.
-private struct MacosResourceChange: Encodable, Sendable {
-    struct Change: Encodable, Sendable {
-        var kind = "macosResources"
-        var computerId: String
-        var expected: Expected
-        var cpus: Int
-        var memoryGiB: Int
-    }
-    struct Expected: Encodable, Sendable {
-        var cpus: UInt64
-        var memoryGiB: UInt64
-        var diskGiB: UInt64
-    }
-    var change: Change
-    var requestId: String
-}
-
 extension SiloWireBackupOperation {
     var operationClass: SiloWireOperationClass {
         SiloWireOperationClass(archive: archive, canCancel: canCancel, indeterminate: indeterminate,
@@ -178,6 +159,10 @@ extension ComputersModel {
 
     func updateResources(for computerId: String, cpus: Int, memoryGiB: Int) async {
         guard var row = inventory?.computer(computerId) else { return }
+        guard case .linux = row else {
+            actionError = "Mac resource editing is coming soon while the engine API contract is being finalized."
+            return
+        }
         actionError = nil
         do {
             if row.displayState == .running {
@@ -210,22 +195,9 @@ extension ComputersModel {
                 let result = try await client.invoke(SiloGeneratedMethods.computersConfigurationChange(
                     SiloWireComputerConfigurationChangeParams(change: change, requestId: UUID().uuidString)))
                 await waitForFeatureJob(result.jobId, label: "Update computer resources")
-            case .macos(let computer):
-                let limits = try await resourceLimits(for: .macos)
-                guard (limits.minCPUs...limits.maxCPUs).contains(cpus),
-                      (limits.minMemoryGiB...limits.maxMemoryGiB).contains(memoryGiB) else {
-                    throw EngineClientError.invalidAction("CPU and memory values exceed this Mac's host limits.")
-                }
-                let params = MacosResourceChange(change: .init(computerId: computerId,
-                                                              expected: .init(cpus: computer.cpus,
-                                                                              memoryGiB: computer.memoryGiB,
-                                                                              diskGiB: computer.diskGiB),
-                                                              cpus: cpus, memoryGiB: memoryGiB),
-                                                 requestId: UUID().uuidString)
-                let call = SiloGeneratedMethodCall<MacosResourceChange, SiloWireJobStartResult>(
-                    name: "computers.configuration.change", kind: .job, params: params)
-                let result = try await client.invoke(call)
-                await waitForFeatureJob(result.jobId, label: "Update computer resources")
+            case .macos:
+                throw EngineClientError.invalidAction(
+                    "Mac resource editing is coming soon while the engine API contract is being finalized.")
             }
         } catch { actionError = error.localizedDescription }
     }

@@ -104,7 +104,7 @@ import Testing
         #expect(model.actionError == nil)
     }
 
-    @Test func resourceEditAppliesCpuAndMemoryToStoppedMacComputer() async throws {
+    @Test func macosResourceEditStaysDisabledUntilTheWireContractExists() async {
         var inventory = MockEngineClient.demoInventory
         inventory.macos.computers = inventory.macos.computers.map { computer in
             var computer = computer
@@ -116,13 +116,11 @@ import Testing
         }
         let client = MockEngineClient(inventory: inventory)
         let model = ComputersModel(client: client, initialInventory: inventory)
-        try await model.connect()
 
         await model.updateResources(for: MockEngineClient.devID, cpus: 6, memoryGiB: 20)
 
-        #expect(client.inventory.computer(MockEngineClient.devID)?.resources == "6 CPU · 20 GB memory · 128 GB disk")
-        #expect(client.generatedCalls.contains("computers.configuration.change"))
-        #expect(model.actionError == nil)
+        #expect(!client.generatedCalls.contains("computers.configuration.change"))
+        #expect(model.actionError?.localizedCaseInsensitiveContains("coming soon") == true)
     }
 
     @Test func failedConnectedMacRemovalKeepsDeviceUntilKeyRevocationSucceeds() async {
